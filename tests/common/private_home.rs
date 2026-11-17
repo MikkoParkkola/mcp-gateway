@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A private gateway home for integration tests that resolve the home
-//! in-process, and the child-process protocol their rows share.
+//! A private gateway home for integration tests that resolve the home in-process, and the
+//! child-process protocol their rows share.
 //!
-//! An integration binary links the library without `cfg(test)`, so its
-//! in-process code resolves the home through the debug arm: the test-home
-//! override if set, else the account's real home. `require_private_home!()`,
-//! the first statement of every such test, refuses to run unless the override
-//! names a private directory, so a bare `cargo test` never reads or writes the
-//! real home. Harnesses set the override (`scripts/ci/shard_tests.py`,
-//! `spark-cargo`).
+//! An integration binary links the library without `cfg(test)`, so its in-process code resolves
+//! the home through the debug arm: the test-home override if set, else the account's real home.
+//! `require_private_home!()`, the first statement of every such test, refuses to run unless the
+//! override names a private directory, so a bare `cargo test` never reads or writes the real
+//! home. Harnesses set the override (`scripts/ci/shard_tests.py`, `spark-cargo`). The override
+//! must be a fresh empty directory (`mktemp -d`); pointing it at a directory the real home links
+//! into is unsupported.
 #![allow(dead_code, reason = "each test crate uses part of this helper")]
 
 use std::ffi::OsString;

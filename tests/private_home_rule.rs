@@ -458,12 +458,12 @@ fn r20_a_hard_link_to_real_config_is_refused() {
 
 /// R21: a test-home file is refused when the real home's file at the same path
 /// cannot be read: the comparison fails closed. The decoy real home's `.cursor`
-/// cannot be searched (mode 0o600), and the test home holds a hard link to the
-/// file inside it, made before the mode change.
+/// cannot be searched (mode 0o600), and the test home holds its own file with one
+/// name at the same path (R20 covers the hard link).
 #[cfg(unix)]
 #[test]
 fn r21_an_unreadable_real_counterpart_is_refused() {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let home = fresh_private_dir();
     let decoy = fresh_private_dir();
     let real_dir = decoy.path().join(".cursor");
@@ -472,15 +472,15 @@ fn r21_an_unreadable_real_counterpart_is_refused() {
     std::fs::create_dir(&real_dir).expect("the decoy's .cursor");
     std::fs::create_dir(home.path().join(".cursor")).expect("the test home's .cursor");
     std::fs::write(&real, "{}").expect("the decoy's config");
-    std::fs::hard_link(&real, &at).expect("a hard link");
+    std::fs::write(&at, "{}").expect("the test home's own config");
     std::fs::set_permissions(&real_dir, std::fs::Permissions::from_mode(0o600))
         .expect("unsearchable");
     let _restore = RestoreMode(real_dir.clone());
     let denied =
         std::fs::metadata(&real).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     assert!(
-        denied && at.is_file(),
-        "premise: the real file cannot be read, the test-home file exists (fails as root)"
+        denied && std::fs::metadata(&at).is_ok_and(|m| m.nlink() == 1),
+        "premise: the real file cannot be read, the test-home file has one name (fails as root)"
     );
     let mut command = with_override(home.path());
     command.env("HOME", decoy.path());
