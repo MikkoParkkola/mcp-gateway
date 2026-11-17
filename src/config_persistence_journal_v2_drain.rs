@@ -441,13 +441,11 @@ mod decide;
 mod deliver;
 #[path = "config_persistence_journal_v2_drain_fault_tests.rs"]
 pub(crate) mod fault;
-#[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_file.rs"]
 pub(crate) mod file;
 #[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
-#[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_handover.rs"]
 pub(crate) mod handover;
 #[cfg(tp3)]
