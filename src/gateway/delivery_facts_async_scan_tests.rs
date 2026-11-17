@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! No `async fn` wrapper holds the future it scopes twice.
 
-use super::*;
-
 /// The wrappers that stay `async fn`, and the scan behind
 /// [`no_async_fn_holds_the_future_it_scopes_twice`].
 // (file, function, why it stays an `async fn`): each reads or joins
