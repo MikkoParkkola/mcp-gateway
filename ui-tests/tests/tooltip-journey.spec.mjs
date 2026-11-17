@@ -32,6 +32,7 @@ test('J1 Tools › Status: the load note opens on hover after 300 ms, shows its 
   await toolsScreen(page);
   await page.goto('/ui/tools/status');
   await shellReady(page);
+  await expect(triggerOf(page, LOAD), 'Tools › Status draws its load note').toBeVisible();
   await pauseClock(page);
   const tip = tipOf(page, LOAD);
   await triggerOf(page, LOAD).hover();
@@ -49,6 +50,7 @@ test('J1b Tools › Status: by keyboard the load note opens at once, Enter keeps
   await toolsScreen(page);
   await page.goto('/ui/tools/status');
   await shellReady(page);
+  await expect(triggerOf(page, LOAD), 'Tools › Status draws its load note').toBeVisible();
   const tip = tipOf(page, LOAD);
   const trigger = triggerOf(page, LOAD);
   await trigger.focus();
@@ -78,8 +80,9 @@ test.describe('touch', () => {
 
   test('J1c Tools › Status: a tap opens the load note and a tap outside closes it', async ({ page }) => {
     await toolsScreen(page);
-  await page.goto('/ui/tools/status');
+    await page.goto('/ui/tools/status');
     await shellReady(page);
+    await expect(triggerOf(page, LOAD), 'Tools › Status draws its load note').toBeVisible();
     const tip = tipOf(page, LOAD);
     await triggerOf(page, LOAD).tap();
     await expect(tip).toHaveClass(/open/);
