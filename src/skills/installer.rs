@@ -73,7 +73,13 @@ pub async fn install_bundle(
     out_dir: &Path,
     agent_paths: &[PathBuf],
 ) -> Result<InstallResult> {
-    install_bundle_kept(bundle, out_dir, agent_paths, &InstallKeep::default()).await
+    install_bundle_kept(
+        bundle,
+        out_dir,
+        agent_paths,
+        &InstallKeep::silent(out_dir, agent_paths),
+    )
+    .await
 }
 
 /// What every write on the install path holds while it runs: the temp dirs a
@@ -83,6 +89,33 @@ pub(crate) struct InstallKeep {
     kept: crate::spawn_keep::Kept,
     #[cfg(test)]
     pub(crate) seams: Option<std::sync::Arc<Seams>>,
+}
+
+impl InstallKeep {
+    /// The keep a detached regen loop takes when it spawns: its output dir
+    /// and every agent root, each reported when no test kept it.
+    pub(crate) fn at_spawn(out_dir: &Path, agent_paths: &[PathBuf]) -> Self {
+        let roots = std::iter::once(out_dir).chain(agent_paths.iter().map(PathBuf::as_path));
+        Self {
+            kept: crate::spawn_keep::union(roots.map(|root| {
+                crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SKILL_BUNDLE, root)
+            })),
+            #[cfg(test)]
+            seams: None,
+        }
+    }
+
+    /// The same keep, silent: an awaited install starts no detached writer
+    /// of its own, so it reports nothing, but a write it started still
+    /// holds the dir if the caller's task is cancelled.
+    pub(crate) fn silent(out_dir: &Path, agent_paths: &[PathBuf]) -> Self {
+        let roots = std::iter::once(out_dir).chain(agent_paths.iter().map(PathBuf::as_path));
+        Self {
+            kept: crate::spawn_keep::union(roots.map(crate::spawn_keep::kept_dirs_at_spawn)),
+            #[cfg(test)]
+            seams: None,
+        }
+    }
 }
 
 /// Test-only holds inside the install path's writes (rows K4-K4w), each one

@@ -16,6 +16,10 @@ pub(crate) const SHUTDOWN_SAVE: &str = "shutdown save";
 /// The kind a periodic saver (spawn_periodic_save) reports as, once at start.
 pub(crate) const PERIODIC_SAVE: &str = "periodic save";
 
+/// The kind the skills regen loop reports as, for its output dir and each
+/// agent root.
+pub(crate) const SKILL_BUNDLE: &str = "skill bundle";
+
 /// The temp dirs a detached writer keeps: test builds only.
 #[cfg(test)]
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
@@ -56,5 +60,17 @@ pub(crate) fn kept_at_spawn(kind: &'static str, path: &Path) -> Kept {
 /// Nothing to keep or report in a release build.
 #[cfg(not(test))]
 pub(crate) fn kept_at_spawn(_kind: &'static str, _path: &Path) -> Kept {
+    Kept
+}
+
+/// One keep holding every dir `parts` keeps.
+#[cfg(test)]
+pub(crate) fn union(parts: impl IntoIterator<Item = Kept>) -> Kept {
+    parts.into_iter().flatten().collect()
+}
+
+/// Nothing to keep in a release build.
+#[cfg(not(test))]
+pub(crate) fn union(_parts: impl IntoIterator<Item = Kept>) -> Kept {
     Kept
 }

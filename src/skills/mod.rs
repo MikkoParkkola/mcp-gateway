@@ -73,7 +73,7 @@ pub async fn regenerate_for_capability(
         cap,
         out_dir,
         agent_paths,
-        &installer::InstallKeep::default(),
+        &installer::InstallKeep::silent(out_dir, agent_paths),
     )
     .await
 }

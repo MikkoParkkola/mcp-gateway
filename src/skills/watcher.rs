@@ -228,10 +228,10 @@ impl SkillsWatcher {
         out_dir: PathBuf,
         agent_paths: Vec<PathBuf>,
     ) -> tokio::task::JoinHandle<()> {
-        // Staging: the keep for out_dir and each agent root is taken here in
-        // the next commit; the loop holds it for its life.
+        // Taken here, while the caller (a test) still holds its share; the
+        // loop holds it for its life and each write holds a clone.
         #[allow(unused_mut)]
-        let mut keep = InstallKeep::default();
+        let mut keep = InstallKeep::at_spawn(&out_dir, &agent_paths);
         #[cfg(test)]
         {
             keep.seams.clone_from(&source.seams);
