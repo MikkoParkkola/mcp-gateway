@@ -112,15 +112,23 @@ pub(super) fn answer(
             let _ = line_tx.send(line);
         });
     }
-    // The group's id is the child's pid; the kernel does not reuse it while
-    // any member, the descendants included, is alive.
+    // The group's id is the child's pid. The child is watched without being
+    // reaped (WNOWAIT) and reaped only after its group is signalled: until
+    // then its pid stays taken, so the id cannot name another group.
     let group = rustix::process::Pid::from_child(&child);
     let end_group = || {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     };
-    while child.try_wait().ok().flatten().is_none() {
+    let exited = || {
+        use rustix::process::{WaitId, WaitIdOptions, waitid};
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        waitid(WaitId::Pid(group), options).ok().flatten().is_some()
+    };
+    while !exited() {
         if Instant::now() >= deadline {
             end_group();
+            // The child itself too, should it have left its group.
+            let _ = child.kill();
             let _ = child.wait();
             return Err(late());
         }
@@ -132,6 +140,7 @@ pub(super) fn answer(
     // Whatever the call started is ended with it: nothing it left holds the
     // pipe or runs on after the answer.
     end_group();
+    let _ = child.wait();
     answered
 }
 

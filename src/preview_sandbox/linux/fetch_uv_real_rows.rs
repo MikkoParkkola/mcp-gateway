@@ -339,47 +339,46 @@ async fn u_tls_only_the_bundles_ca_is_trusted() {
     assert_eq!(index.requests(), Vec::<String>::new());
 }
 
-/// U-uv-runs-alone (code review r1 delta to design 1): uv bound as its real
-/// file alone still runs. The real uv and uvx are copied into a runtime
-/// tree with a canary beside them; the fetch and the run succeed, so uv
-/// needs nothing beside it, and the canary reads denied, so the tree was
-/// not bound.
+/// U-uv-runs-alone (code review r1 delta to design 1; gpt G2): uv bound as
+/// its real file alone still runs, beside the interpreter in one prefix.
+/// The real uv and uvx are copied into a linked pyenv-shaped Python's `bin`,
+/// so uv and the run's Python share the tree and its config canaries; the
+/// fetch and the run succeed, so uv needs nothing beside it, and every canary
+/// reads denied, so neither placement bound the tree.
 #[tokio::test]
 async fn u_uv_runs_alone_a_uv_inside_a_runtime_tree_runs_bound_alone() {
     use super::fetch_rows::Bundle;
     let Some(ready) = ready("u_uv_runs_alone").await else {
         return;
     };
-    let scratch = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch");
-    let bin = scratch.path().join(".pyenv/versions/3.12.1/bin");
-    std::fs::create_dir_all(&bin).expect("bin");
+    let layout = Layout::pyenv("uv shared");
     for name in ["uv", "uvx"] {
-        std::fs::copy(ready.uv_dir().join(name), bin.join(name)).expect("a copy of the real uv");
+        std::fs::copy(ready.uv_dir().join(name), layout.bin.join(name))
+            .expect("a copy of the real uv");
     }
-    let canary = bin.join("other-tool");
-    std::fs::write(&canary, "canary").expect("canary");
-    assert!(
-        std::fs::read(&canary).is_ok(),
-        "the canary is readable on the host"
-    );
-    let read = format!("--read={}", canary.display());
+    let read_args: Vec<String> = layout
+        .canaries
+        .iter()
+        .map(|c| format!("--read={}", c.display()))
+        .collect();
+    let args: Vec<&str> = read_args.iter().map(String::as_str).collect();
     let (out, _) = real_uvx(
-        &ready.with_uv_dir(bin.clone()),
-        None,
+        &ready.with_uv_dir(layout.bin.clone()),
+        Some(&layout),
         "probe-cli",
-        fixed(&[read.as_str()]),
+        fixed(&args),
         Bundle::Registry,
     )
     .await;
     let out = out.expect("the fetch and the run succeeded with uv bound alone");
-    assert_eq!(
-        lines(&out),
-        [
-            "cli-ran".to_owned(),
-            read.clone(),
-            "proxy unset".to_owned(),
-            format!("denied {}", canary.display()),
-        ],
-        "{out}"
+    let mut want = vec!["cli-ran".to_owned()];
+    want.extend(read_args.iter().cloned());
+    want.push("proxy unset".to_owned());
+    want.extend(
+        layout
+            .canaries
+            .iter()
+            .map(|c| format!("denied {}", c.display())),
     );
+    assert_eq!(lines(&out), want, "{out}");
 }

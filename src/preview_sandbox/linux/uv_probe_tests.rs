@@ -370,6 +370,70 @@ fn u_uv_place_uv_binds_its_real_file_alone() {
     );
 }
 
+/// Whether the process whose pid `pid_file` holds has ended, waiting up to
+/// 10 s: SIGKILL lands asynchronously and init then reaps an orphan, so ended
+/// is gone from /proc or a zombie ('Z' after the command name's ')'). The
+/// wait cannot hide a missing kill: the rows' processes sleep 300 s, far past
+/// it. One still running is killed here, only so a red run leaves nothing
+/// behind; the caller's assert fails it.
+fn gone(pid_file: &Path) -> bool {
+    let pid = std::fs::read_to_string(pid_file).expect("the process started");
+    let pid = pid.trim();
+    let ended = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+    };
+    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ended() && std::time::Instant::now() < wait_until {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let ended = ended();
+    if !ended {
+        let _ = std::process::Command::new("kill").arg("-9").arg(pid).status();
+    }
+    ended
+}
+
+/// U-floor deadline (code review r1 fold, gpt IMPROVEMENT and muse MEDIUM),
+/// kills m-deadline-group-left and m-leader-unkilled: a version call that
+/// never answers is refused at the bound and leaves nothing behind. Its
+/// descendant, still in the call's group, is ended by the group kill; the
+/// call itself, which moved to its parent's group (a group leader cannot
+/// setsid), is ended by its own kill, so the reap cannot wait on it.
+#[test]
+fn u_floor_a_silent_call_that_left_its_group_is_refused_at_the_bound_and_ended() {
+    let dir = tempfile::tempdir().expect("dir");
+    let descendant = dir.path().join("descendant.pid");
+    let leader = dir.path().join("leader.pid");
+    let uv = uv_answering(
+        dir.path(),
+        &format!(
+            "sleep 300 & echo $! > '{}'; echo $$ > '{}'; exec /usr/bin/python3 -c \
+             'import os, time; os.setpgid(0, os.getpgid(os.getppid())); time.sleep(300)'",
+            descendant.display(),
+            leader.display()
+        ),
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(check_uv(&uv));
+    });
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(30));
+    let descendant_alive = !gone(&descendant);
+    let leader_alive = !gone(&leader);
+    assert_eq!(
+        answered,
+        Ok(Err(Refusal::Step(
+            "uv --version did not answer within 10 s".into()
+        ))),
+        "the call was refused at the bound"
+    );
+    assert!(!descendant_alive, "the descendant outlived the call");
+    assert!(!leader_alive, "the call outlived its refusal");
+}
+
 /// U-floor (code review r1, muse MEDIUM; lead: the bound covers the whole
 /// read), kills m-read-to-eof and m-group-left: a version call whose
 /// descendant keeps the output pipe open answers once its line is out, and
@@ -391,27 +455,7 @@ fn u_floor_a_descendant_holding_the_pipe_neither_holds_the_call_nor_outlives_it(
         let _ = tx.send(check_uv(&uv));
     });
     let answered = rx.recv_timeout(std::time::Duration::from_secs(30));
-    let pid = std::fs::read_to_string(&pid_file).expect("the descendant started");
-    let pid = pid.trim().to_owned();
-    // SIGKILL lands asynchronously and init then reaps the orphan: ended is
-    // gone from /proc or a zombie ('Z' after the command name's ')'). The
-    // wait cannot hide a missing kill: unkilled, the descendant sleeps 300 s,
-    // far past the 10 s wait, so it is still running when the wait ends.
-    let ended = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(_) => true,
-        Ok(stat) => stat
-            .rsplit_once(')')
-            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
-    };
-    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !ended() && std::time::Instant::now() < wait_until {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let alive = !ended();
-    if alive {
-        // Only so a red run leaves nothing behind; the assert below fails it.
-        let _ = std::process::Command::new("kill").arg(&pid).status();
-    }
+    let alive = !gone(&pid_file);
     assert_eq!(answered, Ok(Ok(())), "the call answered with its line");
     assert!(!alive, "the descendant outlived the call");
 }
