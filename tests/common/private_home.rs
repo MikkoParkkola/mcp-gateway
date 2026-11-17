@@ -141,23 +141,51 @@ fn judge() -> Result<(), Refusal> {
             );
         }
     }
-    // 7. Leaves that exist must stay inside the override (no link out).
-    for name in [".config", ".mcp-gateway"] {
-        let leaf = home.join(name);
-        if leaf.symlink_metadata().is_err() {
-            continue;
-        }
-        let inside =
-            std::fs::canonicalize(&leaf).is_ok_and(|real| real == canonical_home.join(name));
-        if !inside {
-            return refused(
-                7,
-                format!("{name} resolves outside the override: {}", leaf.display()),
-                true,
-            );
-        }
+    // 7. Nothing under the override leads out of it. Discovery reads more than
+    // `.config` and `.mcp-gateway` (`.cursor`, `.claude.json`, ...), so every link
+    // and directory, at any depth, must resolve inside.
+    if let Some((rel, at)) = first_way_out(&home, &canonical_home, "") {
+        return refused(
+            7,
+            format!("{rel} resolves outside the override: {}", at.display()),
+            true,
+        );
     }
     Ok(())
+}
+
+/// The first entry under `dir` that resolves outside `canonical_home`, with its
+/// path relative to the override, `/`-joined. Links and directories are judged
+/// by where they resolve (a Windows junction too, whichever it reports as);
+/// only real directories are descended, so a link is never followed. A dangling
+/// link counts as outside; an entry removed meanwhile (a concurrent test) is
+/// skipped. Plain files need no check: their directory was already judged.
+fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String, PathBuf)> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let at = entry.path();
+        let name = entry.file_name();
+        let rel = if rel.is_empty() {
+            name.to_string_lossy().into_owned()
+        } else {
+            format!("{rel}/{}", name.to_string_lossy())
+        };
+        let Ok(meta) = at.symlink_metadata() else {
+            continue;
+        };
+        let link = meta.file_type().is_symlink();
+        if !link && !meta.is_dir() {
+            continue;
+        }
+        match std::fs::canonicalize(&at) {
+            Ok(real) if real.starts_with(canonical_home) => {}
+            Err(_) if at.symlink_metadata().is_err() => continue,
+            _ => return Some((rel, at)),
+        }
+        if !link && let Some(found) = first_way_out(&at, canonical_home, &rel) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// The variable a row's child reads to know it is the child of that row.

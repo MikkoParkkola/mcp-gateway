@@ -292,6 +292,7 @@ fn refuse_leaf(leaf: &str, link: impl FnOnce(&Path, &Path)) {
     let home = fresh_private_dir();
     let decoy = fresh_private_dir();
     let at = home.path().join(leaf);
+    std::fs::create_dir_all(at.parent().expect("a parent")).expect("the leaf's parent");
     assert!(!at.exists(), "premise: the leaf is absent before the link");
     assert!(
         decoy.path().is_absolute() && decoy.path().is_dir(),
@@ -329,6 +330,60 @@ fn r15_a_data_leaf_symlink_out_is_refused() {
     });
 }
 
+/// R16: a discovery input other than the two leaves, `<override>/.cursor`, is a
+/// symlink out of the override.
+#[cfg(unix)]
+#[test]
+fn r16_a_discovery_input_symlink_out_is_refused() {
+    refuse_leaf(".cursor", |decoy, at| {
+        std::os::unix::fs::symlink(decoy, at).expect("a symlink");
+    });
+}
+
+/// R17: a link below the top level, `<override>/.cursor/mcp.json`, out of the override.
+#[cfg(unix)]
+#[test]
+fn r17_a_nested_symlink_out_is_refused() {
+    refuse_leaf(".cursor/mcp.json", |decoy, at| {
+        std::os::unix::fs::symlink(decoy, at).expect("a symlink");
+    });
+}
+
+/// R18: a dangling link counts as outside: a write through it would create its target.
+#[cfg(unix)]
+#[test]
+fn r18_a_dangling_symlink_is_refused() {
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    let target = decoy.path().join("absent");
+    let at = home.path().join(".claude.json");
+    std::os::unix::fs::symlink(&target, &at).expect("a symlink");
+    assert!(
+        at.symlink_metadata().is_ok() && !target.exists(),
+        "premise: the link dangles"
+    );
+    probe(
+        with_override(home.path()),
+        &refuse(
+            &["(check 7)", ".claude.json resolves outside the override", FIX_ENV],
+            &[],
+        ),
+        vec![home, decoy],
+    );
+}
+
+/// R0c: a link that stays inside the override is accepted: check 7 judges where
+/// a link resolves, not that it is one.
+#[cfg(unix)]
+#[test]
+fn r0c_a_link_that_stays_inside_is_accepted() {
+    let home = fresh_private_dir();
+    let real = home.path().join("real-cursor");
+    std::fs::create_dir(&real).expect("a dir");
+    std::os::unix::fs::symlink(&real, home.path().join(".cursor")).expect("a symlink");
+    probe(with_override(home.path()), &Expect::Pass, vec![home]);
+}
+
 /// A directory junction at `at` to `decoy`; `mklink /J` needs no admin rights.
 #[cfg(windows)]
 fn junction(decoy: &Path, at: &Path) {
@@ -354,6 +409,13 @@ fn r14w_a_config_leaf_junction_out_is_refused() {
 #[test]
 fn r15w_a_data_leaf_junction_out_is_refused() {
     refuse_leaf(".mcp-gateway", junction);
+}
+
+/// R16w: `<override>\.cursor` is a junction out of the override. Required on Windows.
+#[cfg(windows)]
+#[test]
+fn r16w_a_discovery_input_junction_out_is_refused() {
+    refuse_leaf(".cursor", junction);
 }
 
 /// R9 (Windows): the real profile spelt three other ways is still the real home.
