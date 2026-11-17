@@ -18,22 +18,22 @@ async fn silent_answers_end_at_their_waits() {
     let mut reply = answer(200, "text/event-stream", Vec::new(), false);
     reply.body = keep_alive.boxed();
     let (out, outcome, sends) = run(&args(STREAM, Some(1), false), Some(reply)).await;
-    assert_eq!((outcome.exit, out.len(), sends), (CliExit::Network, 0, 1));
+    assert_eq!((outcome.exit(), out.len(), sends), (CliExit::Network, 0, 1));
     assert!(
-        outcome.stderr.contains("No event arrived"),
+        outcome.stderr().contains("No event arrived"),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
     let (_, outcome, sends) = run(
         &args(EXPORT, None, false),
         Some(answer(200, "text/csv", vec![b"a\n".to_vec()], true)),
     )
     .await;
-    assert_eq!((outcome.exit, sends), (CliExit::Network, 1));
+    assert_eq!((outcome.exit(), sends), (CliExit::Network, 1));
     assert!(
-        outcome.stderr.contains("stopped sending"),
+        outcome.stderr().contains("stopped sending"),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
 }
 
@@ -144,7 +144,7 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
         send,
     )
     .await;
-    assert_eq!(outcome.exit, CliExit::Ok, "{}", outcome.stderr);
+    assert_eq!(outcome.exit(), CliExit::Ok, "{}", outcome.stderr());
     let printed = out.bytes();
     let lines: Vec<&str> = std::str::from_utf8(&printed)
         .expect("text")
@@ -235,7 +235,7 @@ async fn a_streamed_request_has_no_total_limit() {
         gateway.release.notify_one();
     };
     let (outcome, ()) = tokio::join!(streamed, release_after_a_timed_out_buffered_call);
-    assert_eq!(outcome.exit, CliExit::Ok, "{}", outcome.stderr);
+    assert_eq!(outcome.exit(), CliExit::Ok, "{}", outcome.stderr());
     assert_eq!(
         text(&out.bytes()),
         "event: message\ndata: one\n\nevent: message\ndata: two\n\n"
@@ -281,7 +281,7 @@ async fn a_download_prints_before_the_body_ends() {
         chunks.close_channel();
     };
     let (outcome, ()) = tokio::join!(streamed, feed);
-    assert_eq!(outcome.exit, CliExit::Ok);
+    assert_eq!(outcome.exit(), CliExit::Ok);
     assert_eq!(printed.bytes(), b"first\nsecond\n");
 }
 
@@ -353,11 +353,11 @@ async fn a_stalled_reader_ends_at_the_overall_deadline() {
         .await
         .expect("a parked write does not hold the run past its deadline")
         .expect("the run task");
-    assert_eq!(outcome.exit, CliExit::Network, "{}", outcome.stderr);
+    assert_eq!(outcome.exit(), CliExit::Network, "{}", outcome.stderr());
     assert!(
-        outcome.stderr.contains("overall time limit"),
+        outcome.stderr().contains("overall time limit"),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
 }
 
@@ -383,15 +383,15 @@ async fn no_response_headers_end_at_the_headers_wait() {
         .await
         .expect("the headers deadline ends a run whose gateway never answers");
     assert_eq!(
-        (outcome.exit, out.bytes().len()),
+        (outcome.exit(), out.bytes().len()),
         (CliExit::Network, 0),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
     assert!(
-        outcome.stderr.contains("no response headers"),
+        outcome.stderr().contains("no response headers"),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
 }
 
@@ -425,7 +425,7 @@ async fn nothing_more_is_printed_after_the_deadline() {
         .await
         .expect("the run ends at its deadline")
         .expect("the run task");
-    assert_eq!(outcome.exit, CliExit::Network, "{}", outcome.stderr);
+    assert_eq!(outcome.exit(), CliExit::Network, "{}", outcome.stderr());
     drop(release);
     // A hang guard: once its parked write returns, the thread finds the run
     // gone and ends, dropping its copy of the sink.
@@ -459,14 +459,16 @@ async fn an_always_ready_fallback_body_ends_at_its_total() {
         .expect("the fallback total ends an always-ready body")
         .expect("the run task");
     assert_eq!(
-        (outcome.exit, out.len()),
+        (outcome.exit(), out.len()),
         (CliExit::Network, 0),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
     assert!(
-        outcome.stderr.contains("did not finish its answer in time"),
+        outcome
+            .stderr()
+            .contains("did not finish its answer in time"),
         "{}",
-        outcome.stderr
+        outcome.stderr()
     );
 }

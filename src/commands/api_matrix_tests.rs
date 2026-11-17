@@ -79,9 +79,9 @@ async fn line(
     .await;
     format!(
         "{case}\t{}\t{}\t{}",
-        out.exit.code(),
-        out.stdout.escape_ascii(),
-        out.stderr.as_bytes().escape_ascii()
+        out.exit().code(),
+        out.stdout().escape_ascii(),
+        out.stderr().as_bytes().escape_ascii()
     )
 }
 

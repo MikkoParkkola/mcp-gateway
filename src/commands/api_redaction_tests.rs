@@ -138,9 +138,9 @@ async fn a_token_equal_to_a_fixed_error_field_never_reaches_stderr() {
         ("Refused", StatusCode::UNAUTHORIZED),
     ] {
         let out = answered(token, status, "{}", true).await;
-        assert!(out.stdout.is_empty(), "{token}: stdout");
-        assert!(!out.stderr.contains(token), "{token}: {}", out.stderr);
-        assert!(!out.stderr.is_empty(), "{token}: something is reported");
+        assert!(out.stdout().is_empty(), "{token}: stdout");
+        assert!(!out.stderr().contains(token), "{token}: {}", out.stderr());
+        assert!(!out.stderr().is_empty(), "{token}: something is reported");
     }
 }
 
@@ -157,8 +157,8 @@ async fn the_token_is_absent_from_every_stream_whatever_the_redactor_says() {
         (StatusCode::BAD_REQUEST, true),
     ] {
         let out = answered(token, status, &echo, json_output).await;
-        assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
-        assert!(!out.stderr.contains(token));
+        assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
+        assert!(!out.stderr().contains(token));
     }
 }
 
@@ -173,8 +173,8 @@ async fn dropped_entry_refusal_in_json_mode_is_one_local_failure_object() {
         true,
     )
     .await;
-    assert!(out.stdout.is_empty(), "nothing printed on stdout");
-    let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("one JSON error");
+    assert!(out.stdout().is_empty(), "nothing printed on stdout");
+    let printed: serde_json::Value = serde_json::from_str(&out.stderr()).expect("one JSON error");
     assert_eq!(printed["error"]["kind"], "LocalFailure");
     assert_eq!(
         printed["error"]["message"],

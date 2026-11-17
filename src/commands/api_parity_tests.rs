@@ -55,7 +55,7 @@ async fn each_ui_change_cli_form_sends_that_method_and_path() {
             "{form}: must send that method and path once"
         );
         assert_eq!(
-            outcome.exit,
+            outcome.exit(),
             CliExit::Ok,
             "{form}: a 204 answer must exit 0"
         );

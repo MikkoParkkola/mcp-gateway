@@ -177,10 +177,11 @@ fn assert_error(
     status: Option<u16>,
     request_id: Option<&str>,
 ) {
-    assert_eq!(out.exit.code(), code, "{}", out.stderr);
-    assert!(out.stdout.is_empty(), "errors must never reach stdout");
+    assert_eq!(out.exit().code(), code, "{}", out.stderr());
+    assert!(out.stdout().is_empty(), "errors must never reach stdout");
     if json_output {
-        let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("one JSON error");
+        let printed: serde_json::Value =
+            serde_json::from_str(&out.stderr()).expect("one JSON error");
         assert_eq!(
             printed,
             json!({
@@ -195,9 +196,9 @@ fn assert_error(
             })
         );
     } else {
-        assert_eq!(out.stderr, format!("error: {message}\n{remedy}\n"));
+        assert_eq!(out.stderr(), format!("error: {message}\n{remedy}\n"));
     }
-    assert!(!out.stderr.contains(TOKEN));
+    assert!(!out.stderr().contains(TOKEN));
 }
 
 async fn refused(base: &str, path: &str, message: &str, remedy: &str) {
@@ -323,9 +324,9 @@ async fn a11_non_json_2xx_body_printed_raw() {
         send,
     )
     .await;
-    assert_eq!(out.exit.code(), 0, "{}", out.stderr);
-    assert_eq!(out.stdout, raw.as_bytes());
-    assert!(out.stderr.contains("non-JSON"), "{}", out.stderr);
+    assert_eq!(out.exit().code(), 0, "{}", out.stderr());
+    assert_eq!(out.stdout(), raw.as_bytes());
+    assert!(out.stderr().contains("non-JSON"), "{}", out.stderr());
     let seen = listener.seen.lock().expect("requests");
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].authorization, format!("Bearer {TOKEN}"));
@@ -461,7 +462,7 @@ async fn data_sources_and_query_are_sent_unchanged() {
             send,
         )
         .await;
-        assert_eq!(out.exit.code(), 0, "{}", out.stderr);
+        assert_eq!(out.exit().code(), 0, "{}", out.stderr());
         assert_eq!(stdin_calls.load(Ordering::SeqCst), usize::from(reads_stdin));
         let seen = listener.seen.lock().expect("requests");
         assert_eq!(seen.len(), 1);
@@ -553,16 +554,16 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
                 },
             )
             .await;
-            assert_eq!(out.exit, CliExit::AuthRefused);
-            assert!(out.stdout.is_empty());
-            assert!(!out.stderr.contains(TOKEN));
+            assert_eq!(out.exit(), CliExit::AuthRefused);
+            assert!(out.stdout().is_empty());
+            assert!(!out.stderr().contains(TOKEN));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
                 assert_eq!(printed["error"]["remedy"], remedy);
                 assert_eq!(printed["error"]["http_status"], status.as_u16());
             } else {
-                assert!(out.stderr.contains(remedy));
+                assert!(out.stderr().contains(remedy));
             }
         }
     }
@@ -590,9 +591,9 @@ async fn echoed_json_credentials_are_redacted_without_corrupting_json() {
             },
         )
         .await;
-        assert_eq!(out.exit.code(), 0);
-        assert!(out.stderr.is_empty());
-        let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+        assert_eq!(out.exit().code(), 0);
+        assert!(out.stderr().is_empty());
+        let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
         assert!(!printed["echo"].as_str().expect("string").contains(token));
         assert!(
             !printed["nested"][0]

@@ -122,11 +122,11 @@ fn output_failure_with_a_token_inside_json_null_prints_the_fixed_sentence() {
         "output errors never reach stdout"
     );
     let captured = CliOutcome::raw(Vec::new(), String::from_utf8(stderr).expect("stderr"), exit);
-    assert_eq!(captured.exit, CliExit::LocalFailure);
+    assert_eq!(captured.exit(), CliExit::LocalFailure);
     // The token is "null", which JSON's own null fields contain: the report
     // becomes the fixed sentence instead.
     assert_eq!(
-        captured.stderr,
+        captured.stderr(),
         "error: The error report could not be printed without exposing the credential.\n"
     );
 }
@@ -151,12 +151,12 @@ async fn unsupported_methods_redact_credentials_before_quoting() {
                 },
             )
             .await;
-            assert_eq!(out.exit, CliExit::Usage);
-            assert!(out.stdout.is_empty());
-            assert!(!out.stderr.contains(token));
+            assert_eq!(out.exit(), CliExit::Usage);
+            assert!(out.stdout().is_empty());
+            assert!(!out.stderr().contains(token));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
                 assert!(
                     !printed["error"]["message"]
                         .as_str()
@@ -193,7 +193,7 @@ async fn stderr_output_failure_is_local_io_without_stdout_fallback() {
             None,
             None,
         );
-        let attempted = out.stderr.as_bytes().to_vec();
+        let attempted = out.stderr().as_bytes().to_vec();
         let mut stdout = Vec::new();
         let mut stderr = FailedOutput::new(io::ErrorKind::PermissionDenied);
         let exit = emit_to(&out, json_output, &[TOKEN], &mut stdout, &mut stderr);
@@ -272,10 +272,10 @@ async fn the_raw_2xx_body_is_redacted() {
         send,
     )
     .await;
-    assert_eq!(out.exit.code(), 0);
+    assert_eq!(out.exit().code(), 0);
     let expected = mcp_gateway::cli::redact::text("echo api-unit-credential", &[TOKEN.to_string()]);
-    assert_eq!(String::from_utf8(out.stdout).expect("text"), expected);
-    assert!(!out.stderr.contains(TOKEN));
+    assert_eq!(String::from_utf8(out.stdout().to_vec()).expect("text"), expected);
+    assert!(!out.stderr().contains(TOKEN));
 }
 
 #[tokio::test]
@@ -404,9 +404,9 @@ async fn if_match_controls_capability_delete() {
             )
             .await;
             if args.if_match.is_some() {
-                assert_eq!(out.exit.code(), 0);
+                assert_eq!(out.exit().code(), 0);
                 assert_eq!(
-                    serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("JSON"),
+                    serde_json::from_slice::<serde_json::Value>(&out.stdout()).expect("JSON"),
                     json!({"deleted":true})
                 );
             } else {
@@ -518,8 +518,8 @@ async fn decoded_response_limit_preserves_mutation_uncertainty() {
                 )
                 .await;
                 if size == 16 * 1024 * 1024 {
-                    assert_eq!(out.exit.code(), 0);
-                    assert_eq!(out.stdout.len(), size);
+                    assert_eq!(out.exit().code(), 0);
+                    assert_eq!(out.stdout().len(), size);
                 } else {
                     assert_error(
                         &out,
@@ -565,12 +565,12 @@ async fn lost_response_request_ids_use_safe_text() {
                 },
             )
             .await;
-            assert_eq!(out.exit, CliExit::UncertainOutcome);
-            assert!(out.stdout.is_empty());
-            assert!(!out.stderr.contains(TOKEN));
+            assert_eq!(out.exit(), CliExit::UncertainOutcome);
+            assert!(out.stdout().is_empty());
+            assert!(!out.stderr().contains(TOKEN));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
                 let id = &printed["error"]["request_id"];
                 if retained {
                     assert!(!id.as_str().expect("request id").contains(TOKEN));
@@ -608,7 +608,7 @@ async fn request_sources_accept_exactly_sixteen_mib() {
             },
         )
         .await;
-        assert_eq!(out.exit.code(), 0, "{}", out.stderr);
+        assert_eq!(out.exit().code(), 0, "{}", out.stderr());
     }
 }
 
@@ -616,9 +616,9 @@ async fn request_sources_accept_exactly_sixteen_mib() {
 async fn a_token_echoed_as_a_json_number_is_redacted() {
     let token = "1234567890123456";
     let out = echoed_body(token, br#"{"echo":1234567890123456}"#.to_vec()).await;
-    assert_eq!(out.exit, CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
-    serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("valid JSON");
+    assert_eq!(out.exit(), CliExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
+    serde_json::from_slice::<serde_json::Value>(&out.stdout()).expect("valid JSON");
 }
 
 #[tokio::test]
@@ -626,9 +626,9 @@ async fn a_key_collision_keeps_every_field() {
     let marker = mcp_gateway::cli::redact::text(TOKEN, &[TOKEN.to_string()]);
     let body = json!({(TOKEN): "renamed", (marker.clone()): "original", "other": 42});
     let out = echoed_body(TOKEN, serde_json::to_vec(&body).expect("body")).await;
-    assert_eq!(out.exit, CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains(TOKEN));
-    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(out.exit(), CliExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout()).contains(TOKEN));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
     let fields = printed.as_object().expect("object");
     assert_eq!(fields.len(), 3);
     assert_eq!(printed[&marker], "original");
@@ -640,9 +640,9 @@ async fn a_key_collision_keeps_every_field() {
 async fn a_token_inside_the_marker_is_not_copied_back() {
     let token = "redacted";
     let out = echoed_body(token, br#"{"echo":"redacted"}"#.to_vec()).await;
-    assert_eq!(out.exit, CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
-    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(out.exit(), CliExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
     // The facade's marker-rotation row checks this value with contains_marker.
     assert_eq!(
         printed["echo"],
@@ -654,8 +654,8 @@ async fn a_token_inside_the_marker_is_not_copied_back() {
 async fn invalid_utf8_is_preserved_only_without_token_bytes() {
     let clean = vec![0xff, 0xfe];
     let out = echoed_body(TOKEN, clean.clone()).await;
-    assert_eq!(out.exit, CliExit::Ok);
-    assert_eq!(out.stdout, clean);
+    assert_eq!(out.exit(), CliExit::Ok);
+    assert_eq!(out.stdout(), clean);
 
     let mut unsafe_body = vec![0xff];
     unsafe_body.extend_from_slice(TOKEN.as_bytes());
@@ -692,7 +692,7 @@ async fn dropped_object_entries_refuse_the_entire_success_body() {
             None,
             None,
         );
-        assert!(!out.stderr.contains('#'));
+        assert!(!out.stderr().contains('#'));
     }
 }
 
@@ -723,13 +723,13 @@ async fn a_token_inside_a_fixed_key_or_number_replaces_the_json_report() {
         // "1" is the schema version and "error" a fixed key, so the JSON report
         // would carry the token: it becomes the fixed sentence, or nothing when
         // the sentence itself contains the token ("error").
-        assert_eq!(out.exit.code(), 3, "{token}");
-        assert!(out.stdout.is_empty(), "{token}: stdout");
+        assert_eq!(out.exit().code(), 3, "{token}");
+        assert!(out.stdout().is_empty(), "{token}: stdout");
         let expected = if token == "error" {
             ""
         } else {
             "error: The error report could not be printed without exposing the credential.\n"
         };
-        assert_eq!(out.stderr, expected, "{token}");
+        assert_eq!(out.stderr(), expected, "{token}");
     }
 }
