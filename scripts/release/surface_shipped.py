@@ -204,14 +204,16 @@ def _walk(
     """Walk one gateway invocation starting at `tokens[start]`.
 
     Returns (hits as line/class/item, the full command path, the index to resume).
-    A child command always extends the path, including right after a flag.
-    A token that is neither a flag nor a child ends the invocation, unless it
-    is the value of a flag written without `=`. `--` ends flag reading.
+    A child command extends the path, including right after a flag, until the
+    first positional: a token that is neither a flag, a child, nor the value of
+    a flag written without `=`. Flags after a positional still count. `--` ends
+    flag reading; a shell operator ends the invocation.
     """
     path = ("mcp-gateway",)
     found: list[tuple[int, str, str]] = []
     taking = False
     flags_done = False
+    extending = True
     i = start
     n = len(tokens)
     while i < n:
@@ -223,6 +225,10 @@ def _walk(
             taking = False
             i += 1
             continue
+        if i > start and not taking and _is_gateway_bin(token):
+            # Another gateway binary (not a flag's value) starts its own invocation (the caller
+            # resumes here): `kubectl -n mcp-gateway exec x -- mcp-gateway ...`.
+            return found, path, i
         flag = None if flags_done else _flag_name(token)
         if flag:
             got = _lookup_flag(table, path, flag)
@@ -232,7 +238,7 @@ def _walk(
             i += 1
             continue
         child = path + (token,)
-        if child in table.commands:
+        if extending and child in table.commands:
             path = child
             cls = table.commands[path]
             if cls in _REPORT:
@@ -244,7 +250,8 @@ def _walk(
             taking = False
             i += 1
             continue
-        return found, path, i
+        extending = False
+        i += 1
     return found, path, n
 
 
@@ -263,14 +270,13 @@ def command_hits(
         for line, cls, item in found:
             hits.append(Hit(file, line, cls, item, invocation))
 
-    if implied:
-        if not tokens:
-            return []
-        found, invocation, _ = _walk(tokens, 0, table)
-        take(found, invocation, None)
-        return hits
     i = 0
     n = len(tokens)
+    if implied and tokens:
+        # The arguments of the image ENTRYPOINT; a later gateway binary in them
+        # starts its own invocation, scanned by the loop below.
+        found, invocation, i = _walk(tokens, 0, table)
+        take(found, invocation, None)
     while i < n:
         token, line = tokens[i]
         if _is_gateway_bin(token):
@@ -690,10 +696,78 @@ def scan_text(file: str, text: str, table: CliTable, rows: sd.Rows) -> list[Hit]
 # A command entry covers its command, everything under it and, within an
 # invocation that reaches it, its ancestors; only while the command is non-KEEP,
 # and only the ids in its reviewed snapshot. A variable entry covers that name in
-# that file. Each entry needs a reason saying why the page cannot drop the mention.
-# Empty: the pages that would need an entry still name the hidden items, and this
-# change does not edit them. A filled table hides those hits.
-ALLOWED: dict[tuple[str, str], tuple[str, frozenset[str]]] = {}
+# that file. Each entry needs a reason saying why the page cannot drop the mention;
+# every new entry is shown to a review seat.
+ALLOWED: dict[tuple[str, str], tuple[str, frozenset[str]]] = {
+    ("docs/catalog_trust_lab.md", "mcp-gateway trust lab"): (
+        "the certification lab's reference for catalogue maintainers and CI; the hidden command is its only interface, so the page cannot drop it without dropping itself",
+        frozenset({
+            "mcp-gateway trust",
+            "mcp-gateway trust lab",
+            "mcp-gateway trust lab evaluate",
+            "mcp-gateway trust lab evaluate --active-fixtures",
+            "mcp-gateway trust lab evaluate --baseline",
+            "mcp-gateway trust lab evaluate --baseline-id",
+            "mcp-gateway trust lab evaluate --baseline-registry",
+            "mcp-gateway trust lab evaluate --capabilities",
+            "mcp-gateway trust lab evaluate --enforce",
+            "mcp-gateway trust lab evaluate --execute-active-fixtures",
+            "mcp-gateway trust lab evaluate --format",
+            "mcp-gateway trust lab evaluate --runtime-image",
+            "mcp-gateway trust lab evaluate --runtime-provider-plan",
+            "mcp-gateway trust lab evaluate --update-baseline-registry",
+            "mcp-gateway trust lab evaluate --write-baseline",
+        }),
+    ),
+    ("docs/trustcard.md", "mcp-gateway trust"): (
+        "the TrustCard reference for catalogue maintainers; the hidden command is its only interface, so the page cannot drop it without dropping itself",
+        frozenset({
+            "mcp-gateway trust",
+            "mcp-gateway trust generate",
+            "mcp-gateway trust generate --capabilities",
+            "mcp-gateway trust generate --format",
+            "mcp-gateway trust inspect",
+            "mcp-gateway trust inspect --capabilities",
+            "mcp-gateway trust validate",
+            "mcp-gateway trust validate --capabilities",
+            "mcp-gateway trust validate --file",
+            "mcp-gateway trust validate --format",
+            "mcp-gateway trust validate --strict",
+        }),
+    ),
+    ("docs/adaptive_ranking.md", "mcp-gateway ranking"): (
+        "the adaptive ranker's offline evaluation for developers; the page documents that hidden tool and has no other route to describe",
+        frozenset({
+            "mcp-gateway ranking",
+            "mcp-gateway ranking eval",
+            "mcp-gateway ranking eval --format",
+        }),
+    ),
+    ("deploy/kubernetes/enterprise-alpha/README.md", "mcp-gateway kubernetes"): (
+        "the enterprise-alpha controller's own package README, where surface-4.0.md moved its docs; the controller is that command",
+        frozenset({
+            "mcp-gateway kubernetes",
+            "mcp-gateway kubernetes apply-plan",
+            "mcp-gateway kubernetes apply-plan --execute",
+            "mcp-gateway kubernetes apply-plan --format",
+            "mcp-gateway kubernetes apply-plan --namespace",
+            "mcp-gateway kubernetes controller",
+            "mcp-gateway kubernetes controller --cycles",
+            "mcp-gateway kubernetes controller --format",
+            "mcp-gateway kubernetes controller --interval-seconds",
+            "mcp-gateway kubernetes controller --namespace",
+            "mcp-gateway kubernetes plan",
+            "mcp-gateway kubernetes plan --format",
+            "mcp-gateway kubernetes plan --namespace",
+        }),
+    ),
+    ("deploy/helm/mcp-gateway/templates/_helpers.tpl", "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW"): (
+        "the chart's extraEnv guard must name the one CLI-owned variable it lets through (the operator's measurement window); the guard is code, not prose",
+        frozenset({
+            "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW",
+        }),
+    ),
+}
 
 
 def _command_entry(entry_id: str, table: CliTable) -> tuple[str, ...] | None:
