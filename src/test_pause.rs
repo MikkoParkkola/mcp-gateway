@@ -184,8 +184,9 @@ mod tests {
         });
         within("thread reached", reached.notified()).await;
         slot.pause_on_thread();
-        let early =
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut finished).await;
+        let window = std::time::Duration::from_millis(100);
+        // timing: absence
+        let early = tokio::time::timeout(window, &mut finished).await;
         assert!(early.is_err(), "the armed thread did not wait for release");
         release.notify_one();
         let after = within("thread finishes", finished).await;
