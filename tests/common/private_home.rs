@@ -177,7 +177,7 @@ fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String
             continue;
         }
         match std::fs::canonicalize(&at) {
-            Ok(real) if real.starts_with(canonical_home) => {}
+            Ok(resolved) if resolved.starts_with(canonical_home) => {}
             Err(_) if at.symlink_metadata().is_err() => continue,
             _ => return Some((rel, at)),
         }
