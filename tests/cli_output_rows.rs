@@ -116,10 +116,14 @@ fn cap_discover_format_json_prints_one_json_document() {
 /// Records `left != right` in `misses` instead of stopping at the first mismatch, so one run shows every case.
 macro_rules! check_eq {
     ($misses:ident, $left:expr, $right:expr, $($case:tt)+) => {{
-        let (left, right) = (&$left, &$right);
-        if left != right {
-            let case = format!($($case)+);
-            $misses.push(format!("{case}\n  left: {left:?}\n right: {right:?}"));
+        // A match, as assert_eq! uses, keeps temporaries in the operands alive for the comparison.
+        match (&$left, &$right) {
+            (left, right) => {
+                if left != right {
+                    let case = format!($($case)+);
+                    $misses.push(format!("{case}\n  left: {left:?}\n right: {right:?}"));
+                }
+            }
         }
     }};
 }

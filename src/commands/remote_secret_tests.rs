@@ -5,6 +5,7 @@
 //! the stand-in echoes), so a site that bypasses `CliError::outcome` prints the raw token and fails its own case.
 //! The expected text is the site's T5-T7 literal with the token's runs written as `[redacted]`.
 
+use super::input::{INPUT_REMEDY, Unreadable, lookup_reading};
 use super::*;
 
 /// The three commands with `token`, against `base` (events as a list).
