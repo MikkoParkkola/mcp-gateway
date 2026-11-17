@@ -126,6 +126,21 @@ class CoveragePartsWiring(unittest.TestCase):
                          "plan 4 must expose every numbered lib part before swap coverage can be proved")
         self.assertEqual(matches, expected_lib, f"add-swap {condition!r} matches {sorted(matches)}")
 
+    def test_W3_scripts_run_by_path_are_executable(self) -> None:
+        # The coverage part step runs these by path, not through `bash`: the workflow runs the first three, and
+        # lib-parts.sh runs the gate. A tracked mode of 100644 fails on the runner with "Permission denied" (found by
+        # the hosted-runner probe; the unit rows run the gate through bash, so they cannot see it).
+        listed = subprocess.run(["git", "ls-files", "-s", "--", *RUN_BY_PATH], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout.splitlines()
+        modes = {line.split("\t", 1)[1]: line.split()[0] for line in listed}
+        self.assertEqual(sorted(modes), sorted(RUN_BY_PATH), "a script run by path is not tracked")
+        self.assertEqual({path: mode for path, mode in modes.items() if mode != "100755"}, {},
+                         "scripts run by path must be tracked executable (100755)")
+
+
+RUN_BY_PATH = ("scripts/ci/with-memory-log.sh", "scripts/ci/lib-parts.sh", "scripts/ci/memory-tripwire.sh",
+               "scripts/ci/compile-cgroup.sh")
+
 
 if __name__ == "__main__":
     unittest.main()
