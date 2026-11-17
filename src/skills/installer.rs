@@ -340,6 +340,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "installer_keep_tests.rs"]
+mod keep_tests;
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
