@@ -15,7 +15,7 @@ fn a_new_transport_sink_or_send_fails() {
         fails_with(&scan, "unlisted transport: FakeTransport"),
         "a new transport passed"
     );
-    let cases: [(&str, syn::Block, &str); 4] = [
+    let cases: [(&str, syn::Block, &str); 6] = [
         (
             "src/gateway/fake.rs",
             syn::parse_quote!({
@@ -41,6 +41,20 @@ fn a_new_transport_sink_or_send_fails() {
             "src/backend/fake.rs",
             syn::parse_quote!({
                 tx.try_send(note);
+            }),
+            "send",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                DeliveryHandle::deliver(&destination, note);
+            }),
+            "deliver",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                tokio::sync::mpsc::Sender::try_send(&tx, note);
             }),
             "send",
         ),
@@ -145,6 +159,9 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
         syn::parse_quote!({
             let _ = scrub_note(None, note);
         }),
+        syn::parse_quote!({
+            let _ = scrub_note(Option::None, note);
+        }),
     ] {
         let scan = with(scanned(), "src/transport/fake.rs", "fake", &block);
         assert!(
@@ -152,6 +169,7 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
             "a None needle set passed"
         );
     }
+    const MAPBY: &str = "stored map unapplied, unscrubbed or built elsewhere: HttpTransport listen";
     let stray = with(
         scanned(),
         "src/transport/http/fake.rs",
@@ -163,12 +181,37 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
             };
         }),
     );
+    assert!(fails_with(&stray, MAPBY), "a map built elsewhere passed");
+    let unscrubbed_map = replaced(
+        scanned(),
+        "src/transport/http/sse_listen.rs",
+        "handshake",
+        &syn::parse_quote!({
+            let needles = t.needles.get().cloned();
+            let _ = scrubbed(needles.as_deref(), probe);
+            let sink = Sink {
+                tx,
+                map: Box::new(move |data| unsolicited_frame(data)),
+            };
+        }),
+    );
     assert!(
-        fails_with(
-            &stray,
-            "map not built by its scrubber: HttpTransport listen"
-        ),
-        "a map built elsewhere passed"
+        fails_with(&unscrubbed_map, MAPBY),
+        "a scrub beside the map, not inside it, passed"
+    );
+    let bypassed = replaced(
+        scanned(),
+        "src/transport/http/sse_channel.rs",
+        "route",
+        &syn::parse_quote!({
+            if let Some(note) = unsolicited_frame(&event.data) {
+                let _ = open.tx.try_send(note);
+            }
+        }),
+    );
+    assert!(
+        fails_with(&bypassed, MAPBY),
+        "a route bypassing its map passed"
     );
 }
 
@@ -176,11 +219,15 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
 /// notifications fails, while one that drops them to `_` passes.
 #[test]
 fn a_direct_route_that_keeps_its_notifications_fails() {
-    let kept: [syn::Block; 2] = [
+    let kept: [syn::Block; 3] = [
         syn::parse_quote!({
             let (response, notifications) =
                 crate::transport::notification_sink::collect(None, call).await;
             forward(notifications);
+        }),
+        syn::parse_quote!({
+            let (response, _) = crate::transport::notification_sink::collect(None, first).await;
+            let kept = crate::transport::notification_sink::collect(None, second).await;
         }),
         syn::parse_quote!({
             let (response, _discarded) =

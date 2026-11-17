@@ -178,8 +178,12 @@ struct Body {
     sinks: Vec<(&'static str, usize)>,
     /// Scrub or needle-taking calls given a literal `None`.
     none_needles: Vec<String>,
-    /// `Sink { .. }` literals built here.
+    /// `Sink { .. }` literals built here whose `map` closure scrubs.
     maps: usize,
+    /// `Sink { .. }` literals built here whose `map` does not scrub (or is absent).
+    unscrubbed_maps: usize,
+    /// `notification_sink::collect(..)` calls.
+    collects: usize,
     /// Names bound to `collect`'s notifications.
     discarded: Vec<String>,
     /// How often each identifier appears outside macros.
@@ -206,8 +210,10 @@ fn collects(expr: &syn::Expr) -> bool {
         if ends_with(&segments(&p.path), ["notification_sink", "collect"])))
 }
 
+/// `None`, however qualified (`Option::None`).
 fn is_none(arg: &syn::Expr) -> bool {
-    matches!(arg, syn::Expr::Path(p) if p.path.is_ident("None"))
+    matches!(arg, syn::Expr::Path(p)
+        if p.qself.is_none() && p.path.segments.last().is_some_and(|s| s.ident == "None"))
 }
 
 impl Body {
@@ -261,15 +267,41 @@ impl Body {
 impl<'ast> Visit<'ast> for Body {
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         syn::visit::visit_expr_call(self, call);
+        let field = match call.func.as_ref() {
+            syn::Expr::Paren(inner) => inner.expr.as_ref(),
+            other => other,
+        };
+        // `(open.map)(data)`: a call through a stored closure, recorded as
+        // `(map)` so an ordinary `.map(..)` method never stands in for it.
+        if let syn::Expr::Field(syn::ExprField {
+            member: syn::Member::Named(name),
+            ..
+        }) = field
+        {
+            self.called(&format!("({name})"), call.args.iter(), None);
+            return;
+        }
         if let syn::Expr::Path(p) = call.func.as_ref() {
             let path = segments(&p.path);
+            let qualified = path.len() >= 2;
+            let last = path.last().map(String::as_str);
             let sink = if ends_with(&path, ["notification_sink", "publish"]) {
                 Some("publish")
             } else if path.len() == 1 && path[0] == "publish" {
                 Some("bare publish")
+            // `DeliveryHandle::deliver(&handle, note)`, `Sender::send(&tx, note)`:
+            // the receiver is the first argument.
+            } else if qualified && last == Some("deliver") {
+                Some("deliver")
+            } else if qualified && matches!(last, Some("send" | "try_send")) && call.args.len() == 2
+            {
+                Some("send")
             } else {
                 None
             };
+            if ends_with(&path, ["notification_sink", "collect"]) {
+                self.collects += 1;
+            }
             if let Some(name) = path.last() {
                 self.called(name, call.args.iter(), sink);
             }
@@ -294,7 +326,19 @@ impl<'ast> Visit<'ast> for Body {
     fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
         syn::visit::visit_expr_struct(self, expr);
         if expr.path.segments.last().is_some_and(|s| s.ident == "Sink") {
-            self.maps += 1;
+            // The scrub must sit inside the stored map itself, not merely nearby.
+            let scrubs = expr.fields.iter().any(|field| {
+                matches!(&field.member, syn::Member::Named(name) if name == "map") && {
+                    let mut map = Self::default();
+                    map.visit_expr(&field.expr);
+                    map.first_scrub().is_some()
+                }
+            });
+            if scrubs {
+                self.maps += 1;
+            } else {
+                self.unscrubbed_maps += 1;
+            }
         }
     }
 
@@ -373,14 +417,26 @@ impl Body {
                 && matches!(&trees[i - 3], proc_macro2::TokenTree::Ident(m) if m == "notification_sink");
             let sink = match name.as_str() {
                 "send" | "try_send" if method && args.len() == 1 => Some("send"),
-                "deliver" if method => Some("deliver"),
+                "send" | "try_send" if pathed && args.len() == 2 => Some("send"),
+                "deliver" if method || pathed => Some("deliver"),
                 "publish" if sink_path => Some("publish"),
                 "publish" if !method && !pathed => Some("bare publish"),
                 _ => None,
             };
-            let none_arg = args.iter().any(
-                |arg| matches!(arg.as_slice(), [proc_macro2::TokenTree::Ident(n)] if n == "None"),
-            );
+            if name == "collect"
+                && i >= 3
+                && pathed
+                && matches!(&trees[i - 3], proc_macro2::TokenTree::Ident(m) if m == "notification_sink")
+            {
+                self.collects += 1;
+            }
+            // `None` or `Option::None`: the argument's last token, alone or after `::`.
+            let none_arg = args.iter().any(|arg| match arg.as_slice() {
+                [.., proc_macro2::TokenTree::Ident(n)] if n == "None" => {
+                    arg.len() == 1 || punct(arg.get(arg.len() - 2), ':')
+                }
+                _ => false,
+            });
             if none_arg
                 && (SCRUB_CALLS.contains(&name.as_str()) || NEEDLE_TAKERS.contains(&name.as_str()))
             {
@@ -494,17 +550,26 @@ fn holds(scan: &Egress, file: &str, func: &str, proof: Proof) -> bool {
             scrubs_first && sole_caller
         }
         Proof::MapBy(by_file, by_func) => {
+            // The row's function sends what its stored map returned: it calls
+            // `(map)`, and its last send comes after that call. (It also answers
+            // waiting calls, so an earlier send is allowed.)
+            let applies_map = bodies.iter().all(|body| {
+                matches!((body.first_call("(map)"), body.sinks.last()),
+                    (Some(map), Some((_, sink))) if map < *sink)
+            });
             let builders = scan.bodies_of(by_file, by_func);
-            let builds_and_scrubs = !builders.is_empty()
+            let builds_scrubbing_maps = !builders.is_empty()
                 && builders
                     .iter()
-                    .all(|body| body.maps > 0 && body.first_scrub().is_some());
+                    .all(|body| body.maps > 0 && body.unscrubbed_maps == 0);
             let sole_builder = scan.bodies.iter().all(|((f, n), found)| {
                 !f.starts_with(MAP_FILES)
                     || (f == by_file && n == by_func)
-                    || found.iter().all(|body| body.maps == 0)
+                    || found
+                        .iter()
+                        .all(|body| body.maps == 0 && body.unscrubbed_maps == 0)
             });
-            builds_and_scrubs && sole_builder
+            applies_map && builds_scrubbing_maps && sole_builder
         }
     }
 }
@@ -513,7 +578,7 @@ fn failure(proof: Proof) -> &'static str {
     match proof {
         Proof::Own => "scrub not before sink",
         Proof::By(..) => "scrubber does not scrub first, or another function calls it",
-        Proof::MapBy(..) => "map not built by its scrubber",
+        Proof::MapBy(..) => "stored map unapplied, unscrubbed or built elsewhere",
     }
 }
 
@@ -602,9 +667,13 @@ fn differences(scan: &Egress, sends: &str) -> Vec<String> {
     }
     wrong.extend(helper_failures(scan));
     let direct = scan.bodies_of(DIRECT.0, DIRECT.1);
+    // Every `collect` call's notifications are bound unread: one kept beside a
+    // dropped one fails.
     let dropped = !direct.is_empty()
         && direct.iter().all(|body| {
-            !body.discarded.is_empty() && body.discarded.iter().all(|name| body.unread(name))
+            body.collects > 0
+                && body.discarded.len() == body.collects
+                && body.discarded.iter().all(|name| body.unread(name))
         });
     if !dropped {
         wrong.push(format!(
