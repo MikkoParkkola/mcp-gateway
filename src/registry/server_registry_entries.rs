@@ -207,22 +207,6 @@ pub(super) static REGISTRY: &[ServerCatalogEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-    ServerCatalogEntry {
-        name: "asana",
-        description: "Asana tasks, projects, and workspaces (Asana-hosted, OAuth)",
-        command: "",
-        required_env: &[],
-        optional_env: &[],
-        transport: CatalogTransport::Http {
-            default_url: "https://mcp.asana.com/sse",
-            flavor: HttpFlavor::Sse,
-        },
-        category: "dev-tools",
-        homepage: "https://developers.asana.com/docs/using-asanas-mcp-server",
-        auth: Auth::OAuth,
-        reach: Reach::Bounded,
-        setup: Setup::Ready,
-    },
     // ── cloud ───────────────────────────────────────────────────────────────────────
     ServerCatalogEntry {
         name: "aws",
