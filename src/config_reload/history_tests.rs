@@ -315,15 +315,21 @@ const ONE_VERSION: &[u8] =
 fn t9_a_loose_or_linked_history_file_is_refused_and_left_alone() {
     use std::os::unix::fs::PermissionsExt;
 
-    // The premise: the same bytes, owner-only, load.
+    // The store opens with its first record in hand, as startup and the first
+    // reload do, and a refused file sends that record to memory. Each case
+    // takes the same steps (open, record r1) and reads back exactly what the
+    // store holds.
+
+    // The premise: the same bytes, owner-only, load under the same steps.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(ConfigHistory::FILE);
     std::fs::write(&path, ONE_VERSION).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let history = ConfigHistory::open_eagerly(dir.path(), Bounds::default(), 5);
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
+    record_version(&history, "r1", 6, b"a: 1\n", "r1");
     assert_eq!(
         revision_names(&history),
-        expect(&["r0"]),
+        expect(&["r0", "r1"]),
         "owner-only loads"
     );
 
@@ -332,13 +338,12 @@ fn t9_a_loose_or_linked_history_file_is_refused_and_left_alone() {
     let path = dir.path().join(ConfigHistory::FILE);
     std::fs::write(&path, ONE_VERSION).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let history = ConfigHistory::open_eagerly(dir.path(), Bounds::default(), 5);
-    assert!(history.snapshots().is_empty(), "a loose file is not loaded");
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
     record_version(&history, "r1", 6, b"a: 1\n", "r1");
     assert_eq!(
         revision_names(&history),
         expect(&["r1"]),
-        "history runs in memory"
+        "a loose file is not loaded; history runs in memory"
     );
     assert_eq!(
         std::fs::read(&path).unwrap(),
@@ -355,12 +360,13 @@ fn t9_a_loose_or_linked_history_file_is_refused_and_left_alone() {
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
     let path = dir.path().join(ConfigHistory::FILE);
     std::os::unix::fs::symlink(&target, &path).unwrap();
-    let history = ConfigHistory::open_eagerly(dir.path(), Bounds::default(), 5);
-    assert!(
-        history.snapshots().is_empty(),
-        "a linked file is not loaded"
-    );
+    let history = ConfigHistory::open(dir.path(), Bounds::default(), 5);
     record_version(&history, "r1", 6, b"a: 1\n", "r1");
+    assert_eq!(
+        revision_names(&history),
+        expect(&["r1"]),
+        "a linked file is not loaded; history runs in memory"
+    );
     let link = std::fs::symlink_metadata(&path).unwrap();
     assert!(link.file_type().is_symlink(), "the link is left in place");
     assert_eq!(
