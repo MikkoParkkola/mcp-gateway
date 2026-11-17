@@ -12,18 +12,25 @@ use std::process::Command;
 
 /// The variables that give a child the parent's resolved home: the override,
 /// and the config and data directories beneath it.
-///
-/// Red-stage stub: empty.
 pub(crate) fn child_env() -> Vec<(&'static str, OsString)> {
-    Vec::new()
+    let home = crate::home_dir::home_dir().expect("a test process always has a home");
+    vec![
+        ("MCP_GATEWAY_TEST_HOME_DIR", home.clone().into_os_string()),
+        ("XDG_CONFIG_HOME", home.join(".config").into_os_string()),
+        (
+            "MCP_GATEWAY_CONFIG_DIR",
+            home.join(".mcp-gateway").into_os_string(),
+        ),
+    ]
 }
 
 /// The running test binary with [`child_env`] applied. A test's own `.env()`
-/// or `.env_remove()` after this still wins.
-///
-/// Red-stage stub: the environment is not applied.
+/// or `.env_remove()` after this still wins. A tokio site takes
+/// `tokio::process::Command::from(test_binary())`.
 pub(crate) fn test_binary() -> Command {
-    Command::new(std::env::current_exe().expect("the running test binary"))
+    let mut command = Command::new(std::env::current_exe().expect("the running test binary"));
+    command.envs(child_env());
+    command
 }
 
 /// The call the scan looks for, built so this file's own text never matches it.

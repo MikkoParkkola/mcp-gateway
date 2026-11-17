@@ -18,6 +18,7 @@ fn in_child(case: &str) {
     let out = std::process::Command::new("sh")
         .args(["-c", "umask 022; exec \"$0\" \"$@\""])
         .arg(std::env::current_exe().unwrap())
+        .envs(crate::test_home::child_env())
         .args([
             "--exact",
             "file_mode_inherit_tests::child",

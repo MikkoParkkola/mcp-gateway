@@ -533,8 +533,7 @@ async fn child(fake: &Fake, mode: &str, env: &[(&str, &str)]) -> String {
         let _ = write!(hex, "{b:02x}");
         hex
     });
-    let exe = std::env::current_exe().expect("the test binary");
-    let mut command = tokio::process::Command::new(exe);
+    let mut command = tokio::process::Command::from(crate::test_home::test_binary());
     command
         .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
         .env_clear()

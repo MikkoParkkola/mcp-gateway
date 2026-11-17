@@ -248,9 +248,8 @@ done
 #[test]
 #[cfg(unix)] // Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 fn backend_subprocess_receives_only_safe_and_explicit_environment() {
-    let current_test_binary = std::env::current_exe().expect("resolve current test binary");
     let scenario_name = "transport::stdio::tests::stdio_child_environment_isolation_scenario";
-    let output = std::process::Command::new(current_test_binary)
+    let output = crate::test_home::test_binary()
         .args(["--exact", scenario_name, "--nocapture"])
         .env(CHILD_SCENARIO_ENV, "1")
         .env(

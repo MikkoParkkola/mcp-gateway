@@ -278,6 +278,23 @@ def contents(path: str, most: int | None = 3) -> str:
     return shown + (f", +{len(found) - most} more" if len(found) > most else "")
 
 
+@contextlib.contextmanager
+def private_home(base: dict[str, str] | None, tmp: str | None):
+    """A gateway home of the shard's own for its test binaries, on every OS: without one, every
+    shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
+    (not inside it, so the leftover check never reads it) and removed after the shard, also when a
+    step fails. The config and data dirs the lib resolves are set beneath it."""
+    home = tempfile.mkdtemp(prefix="shard-home-", dir=os.path.dirname(tmp) if tmp else None)
+    env = dict(os.environ if base is None else base)
+    env["MCP_GATEWAY_TEST_HOME_DIR"] = home
+    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    try:
+        yield env
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     failed = run_steps(os_kind, shard, program)
     for f in failed:
@@ -318,27 +335,27 @@ def runner_config(path: str) -> list[str]:
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
-    env = {**os.environ, "TMPDIR": tmp} if tmp else None
     runner = runner_config(write_runner(tmp)) if tmp else []
-    for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
-        rc, lines = cargo(
-            [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-            program,
-            env,
-        )
-        n = selected(lines)
-        results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
-        print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
-              f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
-              f"ignored {sum(r[2] for r in results)}, rc {rc}")
-        if rc != 0:
-            failed.append(f"{step}: cargo exited {rc}")
-        if n < floor:
-            failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
-    if EXAMPLES.get(os_kind) == shard:
-        rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
-        if rc != 0:
-            failed.append(f"examples: cargo build exited {rc}")
+    with private_home({**os.environ, "TMPDIR": tmp} if tmp else None, tmp) as env:
+        for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
+            rc, lines = cargo(
+                [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                program,
+                env,
+            )
+            n = selected(lines)
+            results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
+            print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
+                  f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
+                  f"ignored {sum(r[2] for r in results)}, rc {rc}")
+            if rc != 0:
+                failed.append(f"{step}: cargo exited {rc}")
+            if n < floor:
+                failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+        if EXAMPLES.get(os_kind) == shard:
+            rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
+            if rc != 0:
+                failed.append(f"examples: cargo build exited {rc}")
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return failed
@@ -578,7 +595,10 @@ def self_test() -> int:
         assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
         assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
         if os_kind in TMP_GUARDED:
+            # A prebuilt binary gets its BY_BINARY folder; the shard's own TMPDIR is above it.
             shard_tmp = seen["TMPDIR"]
+            while shard_tmp and not os.path.basename(shard_tmp).startswith("shard-tmp-"):
+                shard_tmp = os.path.dirname(shard_tmp) if os.path.dirname(shard_tmp) != shard_tmp else ""
             assert shard_tmp and os.path.dirname(home) == os.path.dirname(shard_tmp), (os_kind, seen)
             assert not os.path.commonpath([home, shard_tmp]) == shard_tmp, "beside, not inside, TMPDIR"
         return home
@@ -912,15 +932,16 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
         # What the cargo runner gives this binary: its own folder, so a leftover is reported under it.
         env["TMPDIR"] = os.path.join(tmp, BY_BINARY, LIB_TARGET)
         os.makedirs(env["TMPDIR"])
-    p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
     lines = []
-    assert p.stdout is not None
-    for raw in p.stdout:
-        sys.stdout.buffer.write(raw)
-        sys.stdout.buffer.flush()
-        lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-    rc = p.wait()
+    with private_home(env, tmp) as home_env:
+        p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=home_env, cwd=ROOT)
+        assert p.stdout is not None
+        for raw in p.stdout:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.flush()
+            lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+        rc = p.wait()
     # The binary prints no cargo `Running` header: arm the count as cargo's would.
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
     print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")

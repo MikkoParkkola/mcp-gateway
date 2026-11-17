@@ -52,22 +52,30 @@ fn a_nested_command_object_is_not_a_zed_shape() {
     assert!(parse(&entry).is_none());
 }
 
+/// The per-OS folder Zed's settings live in, beneath the routed config dir. A
+/// test build routes to its private test home, so the platform's own answer is
+/// not observable here; the row pins the composition.
 #[test]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "the oracle is the platform answer, independent of the routed lookup"
-)]
 fn zed_config_path_matches_zed_config_dir() {
     let path = ConfigScanner::zed_config_path().expect("home dir");
-    if cfg!(target_os = "macos") {
-        assert!(
-            path.ends_with(".config/zed/settings.json"),
-            "{}",
-            path.display()
-        );
-    } else if cfg!(target_os = "linux") {
-        assert_eq!(path, dirs::config_dir().unwrap().join("zed/settings.json"));
-    } else {
-        assert_eq!(path, dirs::config_dir().unwrap().join("Zed/settings.json"));
-    }
+    #[cfg(target_os = "macos")]
+    assert!(
+        path.ends_with(".config/zed/settings.json"),
+        "{}",
+        path.display()
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        path,
+        crate::home_dir::config_dir()
+            .expect("a config dir")
+            .join("zed/settings.json")
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    assert_eq!(
+        path,
+        crate::home_dir::config_dir()
+            .expect("a config dir")
+            .join("Zed/settings.json")
+    );
 }

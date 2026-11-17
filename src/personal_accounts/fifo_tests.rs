@@ -5,7 +5,7 @@
 use super::{PersonalAccountStore, config};
 use std::io::{BufRead as _, Write as _};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -46,7 +46,7 @@ struct AuthorityProbe {
 
 impl AuthorityProbe {
     fn spawn(root: &Path) -> Self {
-        let mut command = Command::new(std::env::current_exe().unwrap());
+        let mut command = crate::test_home::test_binary();
         command
             .args([
                 "--exact",

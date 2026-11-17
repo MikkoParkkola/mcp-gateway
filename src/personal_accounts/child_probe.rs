@@ -14,7 +14,7 @@
 
 use std::io::{BufRead as _, Write as _};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -102,7 +102,7 @@ pub(super) fn run(
     abort_at: Option<&str>,
     answer: Duration,
 ) -> Outcome {
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let mut command = crate::test_home::test_binary();
     command
         .args([
             "--exact",

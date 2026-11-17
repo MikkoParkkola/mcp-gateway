@@ -13,11 +13,25 @@ use std::path::PathBuf;
 #[must_use]
 pub fn gateway_data_dir() -> PathBuf {
     absolutize(resolve_gateway_data_dir(
-        // `var_os`: a directory that is not UTF-8 is still the operator's
-        // (MIK-8147); `var` would drop it for the default under home.
-        std::env::var_os("MCP_GATEWAY_CONFIG_DIR"),
+        configured_data_dir(),
         crate::home_dir::home_dir(),
     ))
+}
+
+/// The operator's data-dir override. `var_os`: a directory that is not UTF-8 is
+/// still the operator's; `var` would drop it for the default under home.
+#[cfg(not(test))]
+fn configured_data_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
+}
+
+/// In a test build the override counts only beside the test-home override: a
+/// value inherited from a developer's shell would otherwise point a bare run
+/// at their real data dir. A harness, or a test passing `child_env`, sets both.
+#[cfg(test)]
+fn configured_data_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR")?;
+    std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
 }
 
 /// `path` made absolute against the working directory, or kept as given when

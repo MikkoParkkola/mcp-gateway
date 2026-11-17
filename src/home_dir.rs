@@ -8,13 +8,18 @@
 //! home. Release builds compile the override out, and the release job greps
 //! the binary for its name.
 //!
+//! The lib's own tests never use the account's home. In a test build, in every
+//! profile, home resolves to the override, else to a private per-process home,
+//! so tests on a shared host never contend for one vault lock or read a
+//! developer's data dir.
+//!
 //! Everything else resolves home through here: `clippy.toml` disallows a direct
 //! `dirs::home_dir` or `dirs::config_dir` anywhere else in the crate (MIK-8001).
 
 use std::path::PathBuf;
 
 /// The user's home directory.
-#[cfg(debug_assertions)]
+#[cfg(all(not(test), debug_assertions))]
 #[allow(
     clippy::disallowed_methods,
     reason = "the one place the platform lookups are called"
@@ -26,13 +31,43 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 }
 
 /// The user's home directory.
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(test), not(debug_assertions)))]
 #[allow(
     clippy::disallowed_methods,
     reason = "the one place the platform lookups are called"
 )]
 pub(crate) fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
+}
+
+/// The home a test process resolves: the override, else a private home of its
+/// own. Read in every profile, so `cargo test --release` honours the override
+/// too. The private home is built only when the override is absent.
+#[cfg(test)]
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    let override_home = test_override();
+    let test_home = override_home.is_none().then(test_home);
+    resolve_home(override_home, None, test_home)
+}
+
+#[cfg(test)]
+fn test_override() -> Option<PathBuf> {
+    std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").map(PathBuf::from)
+}
+
+/// This test process's private home: randomized, owner-only, kept for the
+/// whole process and never removed, so a late write cannot find it gone. A
+/// bare local run leaves one per process in the user's temp dir; harness runs
+/// set the override and build none.
+#[cfg(test)]
+fn test_home() -> PathBuf {
+    static HOME: std::sync::OnceLock<std::sync::Arc<tempfile::TempDir>> =
+        std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        crate::test_dir_keep::kept_private_tempdir_prefixed("mcp-gateway-test-home-")
+    })
+    .path()
+    .to_path_buf()
 }
 
 /// No home directory could be determined for a `~` path.
@@ -86,7 +121,7 @@ pub(crate) fn expand_or_cwd(path: &str) -> PathBuf {
 
 /// The OS config directory. Under the test override it follows
 /// `XDG_CONFIG_HOME` (which Windows `dirs` ignores), else `<home>/.config`.
-#[cfg(all(debug_assertions, not(target_os = "macos")))]
+#[cfg(all(not(test), debug_assertions, not(target_os = "macos")))]
 #[allow(
     clippy::disallowed_methods,
     reason = "the one place the platform lookups are called"
@@ -102,7 +137,7 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
 }
 
 /// The OS config directory.
-#[cfg(all(not(debug_assertions), not(target_os = "macos")))]
+#[cfg(all(not(test), not(debug_assertions), not(target_os = "macos")))]
 #[allow(
     clippy::disallowed_methods,
     reason = "the one place the platform lookups are called"
@@ -111,35 +146,48 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
     dirs::config_dir()
 }
 
+/// The OS config directory a test process resolves: under the override,
+/// `XDG_CONFIG_HOME` else `<override>/.config`; otherwise `<test home>/.config`,
+/// with an inherited `XDG_CONFIG_HOME` ignored.
+#[cfg(all(test, not(target_os = "macos")))]
+pub(crate) fn config_dir() -> Option<PathBuf> {
+    let override_home = test_override();
+    let test_home = override_home.is_none().then(test_home);
+    resolve_config(
+        override_home,
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        None,
+        test_home,
+    )
+}
+
 /// The home a lookup resolves to: the test override, else the private test
 /// home when one is given, else the platform home.
-///
-/// Red-stage stub: today's rule, which ignores `test_home`.
 #[cfg(test)]
 pub(crate) fn resolve_home(
     override_home: Option<PathBuf>,
     platform_home: Option<PathBuf>,
-    _test_home: Option<PathBuf>,
+    test_home: Option<PathBuf>,
 ) -> Option<PathBuf> {
-    override_home.or(platform_home)
+    override_home.or(test_home).or(platform_home)
 }
 
 /// The config directory a lookup resolves to. Under the override,
 /// `XDG_CONFIG_HOME` else `<override>/.config`; without it, `<test_home>/.config`
 /// when a test home is given (an inherited `XDG_CONFIG_HOME` is ignored), else
 /// the platform config directory.
-///
-/// Red-stage stub: today's rule, which ignores `test_home`.
 #[cfg(test)]
 pub(crate) fn resolve_config(
     override_home: Option<PathBuf>,
     xdg: Option<PathBuf>,
     platform_config: Option<PathBuf>,
-    _test_home: Option<PathBuf>,
+    test_home: Option<PathBuf>,
 ) -> Option<PathBuf> {
     match override_home {
         Some(home) => Some(xdg.unwrap_or_else(|| home.join(".config"))),
-        None => platform_config,
+        None => test_home
+            .map(|home| home.join(".config"))
+            .or(platform_config),
     }
 }
 

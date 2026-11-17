@@ -86,12 +86,12 @@ fn envfile_19_the_overlay_opens_the_tilde_path_startup_recorded() {
 /// (`dirs-sys-0.5.0/src/lib.rs:33-37`) — testing only the unset spelling lets an
 /// implementation that special-cases one and not the other pass.
 #[test]
-fn envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback() {
+fn envfile_19d_home_unset_and_home_empty_both_resolve_to_the_routed_home() {
     for variant in ["unset", "empty"] {
-        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        let mut cmd = crate::test_home::test_binary();
         cmd.args([
             "--exact",
-            "config::tests::envfile_19d_child_resolves_against_dirs_home_dir",
+            "config::tests::envfile_19d_child_resolves_against_the_routed_home",
             "--ignored",
             "--nocapture",
         ]);

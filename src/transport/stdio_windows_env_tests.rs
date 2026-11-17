@@ -69,7 +69,7 @@ const NESTED_RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(60)
 
 #[tokio::test]
 async fn windows_backend_receives_the_allowlist_and_nothing_else() {
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", SCENARIO, "--nocapture"])
         .env(SCENARIO_ENV, "1")
@@ -132,7 +132,7 @@ async fn windows_child_environment_scenario() {
         "the override must be observable"
     );
 
-    let mut cmd = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut cmd = tokio::process::Command::from(crate::test_home::test_binary());
     cmd.args(["--exact", DUMP, "--nocapture"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

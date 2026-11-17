@@ -521,7 +521,7 @@ fn b19_a_second_process_meets_the_vault_lock() {
     use std::io::BufRead as _;
     let dir = tempfile::tempdir().expect("tempdir");
     let lock = dir.path().join("vault.lock");
-    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let mut child = crate::test_home::test_binary()
         .args([
             "--exact",
             "secret_store::tests::vault_lock_child",

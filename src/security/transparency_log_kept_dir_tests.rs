@@ -161,8 +161,7 @@ fn a_child_process_honours_its_parents_kept_dirs() {
     let dir = kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let run = |kept: Option<&Path>| {
-        let mut child =
-            std::process::Command::new(std::env::current_exe().expect("this test binary"));
+        let mut child = crate::test_home::test_binary();
         child
             .args(["--exact", &child_test_name(), "--test-threads=1"])
             .env(KEPT_CHILD, &path)
