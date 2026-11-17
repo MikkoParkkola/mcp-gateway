@@ -139,7 +139,7 @@ pub(crate) enum Observed {
     },
     /// The overlay published for `revision`.
     Overlay { revision: String },
-    /// A refused reload, at record_refused's point under lock_reload.
+    /// A refused reload, at the point `record_refused` records it, under `lock_reload`.
     Refusal,
 }
 
