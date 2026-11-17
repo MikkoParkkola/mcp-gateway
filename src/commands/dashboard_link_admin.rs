@@ -18,20 +18,31 @@ pub(crate) const UNSUPPORTED_REMEDY: &str =
     "Check that the gateway supports this command (update the gateway or the CLI), then retry.";
 
 /// The remedy lines that differ per command (design D4).
-pub(crate) struct Remedies<'a> {
-    /// The origin the token sentences name.
-    pub(crate) origin: &'a str,
+pub(crate) struct Remedies {
+    /// The origin the token sentences name: scheme, host and port only (see [`origin_of`]).
+    pub(crate) origin: String,
     /// The remedy for a 404.
     pub(crate) not_found: String,
     /// The remedy for an answer lost to a read.
     pub(crate) lost_read: &'static str,
 }
 
-impl<'a> Remedies<'a> {
+/// The origin of `base` as api names it in remedies, so userinfo, a path or a query token in `--url` never
+/// reaches stderr; a fixed phrase when `base` has no such origin.
+pub(crate) fn origin_of(base: &str) -> String {
+    reqwest::Url::parse(base)
+        .ok()
+        .map(|url| url.origin())
+        .filter(url::Origin::is_tuple)
+        .map(|origin| origin.ascii_serialization())
+        .unwrap_or_else(|| "the configured gateway".to_string())
+}
+
+impl Remedies {
     /// A read's remedies for the gateway at `base`.
-    pub(crate) fn read(base: &'a str) -> Self {
+    pub(crate) fn read(base: &str) -> Self {
         Self {
-            origin: base.trim_end_matches('/'),
+            origin: origin_of(base),
             not_found: UNSUPPORTED_REMEDY.to_string(),
             lost_read: "Repeat the read request.",
         }
@@ -78,7 +89,7 @@ pub(crate) async fn admin_call(
     token: &str,
     tls: &LinkTls,
     request: Request,
-    remedies: &Remedies<'_>,
+    remedies: &Remedies,
 ) -> Result<serde_json::Value, CliError> {
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
     let sent = send_admin_request(
@@ -128,7 +139,7 @@ pub(crate) fn transport(
     error: AdminCallError,
     request: Request,
     token: &str,
-    remedies: &Remedies<'_>,
+    remedies: &Remedies,
     tls: &LinkTls,
 ) -> CliError {
     let kind = error.kind;
@@ -152,7 +163,7 @@ pub(crate) fn transport(
             | AdminFailureKind::Tls
             | AdminFailureKind::ResponseLost
     ) {
-        for hint in missing_tls_flags(remedies.origin, tls) {
+        for hint in missing_tls_flags(&remedies.origin, tls) {
             failure.remedy.push(' ');
             failure.remedy.push_str(&hint[..1].to_uppercase());
             failure.remedy.push_str(&hint[1..]);
@@ -168,7 +179,7 @@ pub(crate) fn transport(
 pub(crate) fn refusal(
     response: &AdminResponse,
     request: Request,
-    remedies: &Remedies<'_>,
+    remedies: &Remedies,
 ) -> Option<CliError> {
     let parsed = serde_json::from_slice::<serde_json::Value>(&response.body);
     let kind = status_kind(
@@ -176,8 +187,16 @@ pub(crate) fn refusal(
         parsed.as_ref().unwrap_or(&serde_json::Value::Null),
         request,
     )?;
+    // api's safe_text bounds: a reason holding a control character (a newline, a terminal escape) or over 4 KiB
+    // is named, never printed; the token is redacted later, by the gate.
     let reason = match &parsed {
-        Ok(body) => gateway_reason(body).unwrap_or("no reason given"),
+        Ok(body) => match gateway_reason(body) {
+            None | Some("") => "no reason given",
+            Some(reason) if reason.len() > 4096 || reason.chars().any(char::is_control) => {
+                "its reason cannot be printed"
+            }
+            Some(reason) => reason,
+        },
         Err(_) => "its error body is not JSON",
     };
     let wait = match response.headers.get(reqwest::header::RETRY_AFTER) {
@@ -191,7 +210,7 @@ pub(crate) fn refusal(
             None => "; retry after: unreadable".to_owned(),
         },
     };
-    let origin = remedies.origin;
+    let origin = &remedies.origin;
     let remedy = match kind {
         CliExit::AuthRefused if response.status == reqwest::StatusCode::FORBIDDEN => {
             format!("Use a token permitted to perform this operation for {origin}, then retry.")

@@ -165,7 +165,7 @@ pub(crate) use admin::admin_call_url_with_options;
 pub(crate) use admin::{
     AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, Remedies,
     UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link, gateway_reason,
-    redact_body, refusal, transport,
+    origin_of, redact_body, refusal, transport,
 };
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
@@ -265,7 +265,7 @@ pub(crate) fn resolved(
             )
             .outcome(false, &[&secret])
         })?;
-    let token = resolve_token(token, base.trim_end_matches('/'))
+    let token = resolve_token(token, &origin_of(&base))
         .map_err(|error| error.outcome(false, &[&secret]))?;
     Ok((base, tls, token))
 }
