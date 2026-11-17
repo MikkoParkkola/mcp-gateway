@@ -382,7 +382,7 @@ fn u_floor_a_descendant_holding_the_pipe_neither_holds_the_call_nor_outlives_it(
     let uv = uv_answering(
         dir.path(),
         &format!(
-            "sleep 120 & echo $! > '{}'; echo 'uv 0.13.1 (x86_64-linux-gnu)'",
+            "sleep 300 & echo $! > '{}'; echo 'uv 0.13.1 (x86_64-linux-gnu)'",
             pid_file.display()
         ),
     );
@@ -394,7 +394,9 @@ fn u_floor_a_descendant_holding_the_pipe_neither_holds_the_call_nor_outlives_it(
     let pid = std::fs::read_to_string(&pid_file).expect("the descendant started");
     let pid = pid.trim().to_owned();
     // SIGKILL lands asynchronously and init then reaps the orphan: ended is
-    // gone from /proc or a zombie ('Z' after the command name's ')').
+    // gone from /proc or a zombie ('Z' after the command name's ')'). The
+    // wait cannot hide a missing kill: unkilled, the descendant sleeps 300 s,
+    // far past the 10 s wait, so it is still running when the wait ends.
     let ended = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Err(_) => true,
         Ok(stat) => stat
