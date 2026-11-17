@@ -315,3 +315,32 @@ async fn c12_a_save_in_another_process_waits_for_the_sidecar_and_never_writes() 
     assert_eq!(sources, ["start", "file"], "exactly the parent's state");
     drop(installed);
 }
+
+/// C14 (code review r2): startup whose worker cannot spawn touches no file,
+/// keeps the startup record in memory and says why once.
+#[test]
+fn c14_startup_without_its_worker_keeps_the_record_in_memory_and_touches_no_file() {
+    let dir = first_start();
+    let path = dir.path().to_path_buf();
+    let before = bytes_of(&path);
+    let installed = seams::install(&path);
+    installed.seams.fail_startup_spawn();
+    let Some((rig, logged, took)) = start_bounded(dir) else {
+        panic!("startup did not hand back within {SAVE_DEADLINE:?} and {MARGIN:?}");
+    };
+    assert!(took < SAVE_DEADLINE + MARGIN, "took {took:?}");
+    assert_eq!(bytes_of(&path), before, "no file is touched");
+    let events = rig.store.events();
+    assert_eq!(
+        events.len(),
+        1,
+        "memory-only with the startup record: {events:?}"
+    );
+    assert_eq!(events[0].source, Source::Start);
+    assert!(
+        logged.contains("the startup worker could not start")
+            && logged.contains(&path.join("config-history.json").display().to_string()),
+        "one warning naming the file and the cause: {logged}"
+    );
+    drop(installed);
+}

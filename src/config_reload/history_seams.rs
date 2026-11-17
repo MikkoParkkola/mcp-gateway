@@ -151,6 +151,7 @@ pub(crate) struct Seams {
     record_reached: Mutex<Option<Arc<Gate>>>,
     log: Mutex<Vec<Observed>>,
     guard_waits: Notify,
+    fail_spawn: AtomicBool,
     /// Every gate handed out, taken by the code under test or not, so a
     /// dropped [`Installed`] can release them all.
     handed_out: Mutex<Vec<Arc<Gate>>>,
@@ -206,6 +207,16 @@ impl Seams {
     /// Code under test: the fault for this job, taken once.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
         self.fault.lock().expect("fault").take()
+    }
+
+    /// The next startup's worker fails to spawn.
+    pub(crate) fn fail_startup_spawn(&self) {
+        self.fail_spawn.store(true, Ordering::SeqCst);
+    }
+
+    /// Code under test: whether this startup's worker spawn is to fail, taken once.
+    pub(crate) fn take_spawn_failure(&self) -> bool {
+        self.fail_spawn.swap(false, Ordering::SeqCst)
     }
 
     /// Code under test: a reload found the record guard held and waits for it.

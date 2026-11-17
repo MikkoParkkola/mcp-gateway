@@ -375,36 +375,44 @@ impl super::ConfigHistory {
         let (tx, rx) = std::sync::mpsc::channel();
         let store = std::sync::Arc::clone(self);
         let job_record = record.clone();
-        let spawned = std::thread::Builder::new()
-            .name("config-history-start".to_string())
-            .spawn(move || {
-                if let Err(cause) = store.open_now(ticket, deadline) {
-                    let _ = done.send(Some(SaveOutcome::ReadFailed(cause)));
-                    return;
-                }
-                let file = {
-                    let mut mode = store.mode.lock();
-                    match &mut *mode {
-                        super::StoreMode::MemoryOnly { state } => {
-                            if store.generation.load(Ordering::SeqCst) == ticket {
-                                apply(state, job_record, store.bounds);
-                            }
-                            let _ = done.send(None);
-                            return;
-                        }
-                        _ => store.file(),
+        #[cfg(test)]
+        let injected = super::seams::for_file(&self.file()).is_some_and(|s| s.take_spawn_failure());
+        #[cfg(not(test))]
+        let injected = false;
+        let spawned = if injected {
+            Err(std::io::Error::other("injected spawn failure"))
+        } else {
+            std::thread::Builder::new()
+                .name("config-history-start".to_string())
+                .spawn(move || {
+                    if let Err(cause) = store.open_now(ticket, deadline) {
+                        let _ = done.send(Some(SaveOutcome::ReadFailed(cause)));
+                        return;
                     }
-                };
-                let outcome = save_record(
-                    &file,
-                    store.bounds,
-                    job_record,
-                    (&store.generation, ticket),
-                    deadline,
-                    tx,
-                );
-                let _ = done.send(Some(outcome));
-            });
+                    let file = {
+                        let mut mode = store.mode.lock();
+                        match &mut *mode {
+                            super::StoreMode::MemoryOnly { state } => {
+                                if store.generation.load(Ordering::SeqCst) == ticket {
+                                    apply(state, job_record, store.bounds);
+                                }
+                                let _ = done.send(None);
+                                return;
+                            }
+                            _ => store.file(),
+                        }
+                    };
+                    let outcome = save_record(
+                        &file,
+                        store.bounds,
+                        job_record,
+                        (&store.generation, ticket),
+                        deadline,
+                        tx,
+                    );
+                    let _ = done.send(Some(outcome));
+                })
+        };
         if let Err(error) = spawned {
             // No unbounded fallback on this thread: without its worker, startup
             // touches no file and keeps this record in memory (code review r2).
