@@ -38,6 +38,11 @@ class OwaspCitations(unittest.TestCase):
         found = self.problems_in("Policy (`src/security/ssrf.rs`).\n")
         self.assertEqual(found, ["cited path does not exist: src/security/ssrf.rs"])
 
+    def test_a_part_tagged_test_fn_is_still_a_test_fn(self):
+        # The lib test split puts a separate `#[cfg(tpK)]` line above the test attribute.
+        found = load().TEST_FN.findall("#[cfg(tp2)]\n#[test]\nfn tagged() {}\n#[cfg(tp2)]\nfn plain() {}\n")
+        self.assertEqual(found, ["tagged"])
+
     def test_a_validation_command_matching_no_test_is_reported(self):
         found = self.problems_in("```bash\ncargo test --lib no_such_test\n```\n")
         self.assertEqual(found, ["validation command matches no test: cargo test --lib no_such_test"])

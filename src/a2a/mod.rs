@@ -22,6 +22,7 @@
 pub(crate) mod client;
 pub(crate) mod delegation;
 /// The outbound A2A rows that drive a whole gateway.
+#[cfg(tp2)]
 #[cfg(all(test, feature = "a2a"))]
 mod outbound_tests;
 #[cfg(test)]

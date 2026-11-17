@@ -218,6 +218,7 @@ pub(crate) fn hand_off(holds: &CarriedHolds) {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use futures::FutureExt as _;

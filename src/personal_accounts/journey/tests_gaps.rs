@@ -21,6 +21,7 @@ fn start_rate(per_minute: u32) -> JourneyLimits {
 }
 
 /// Gap 1. Kills: `admit_start` not called, or its window/limit ignored.
+#[cfg(tp1)]
 #[test]
 fn start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window() {
     // GIVEN: alice may start 2 times a minute, and has 3 journeys to start,
@@ -63,6 +64,7 @@ fn start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window()
 }
 
 /// Gap 2. Kills: a re-start re-arming `callback_by`, or keeping old secrets.
+#[cfg(tp1)]
 #[test]
 fn restart_keeps_the_first_callback_by_and_rotates_the_secrets() {
     // GIVEN: a started journey.
@@ -105,6 +107,7 @@ fn restart_keeps_the_first_callback_by_and_rotates_the_secrets() {
 
 /// Gap 3. Kills: a mismatch that refuses without terminating, or that keeps
 /// the binding/verifier, or a `Failed` record accepting a later callback.
+#[cfg(tp1)]
 #[test]
 fn browser_mismatch_fails_the_journey_clears_secrets_and_refuses_the_right_cookie_later() {
     // GIVEN: a started journey.
@@ -137,6 +140,7 @@ fn browser_mismatch_fails_the_journey_clears_secrets_and_refuses_the_right_cooki
 
 /// Gap 4. Kills: collecting at or before 24 h, never collecting, or a
 /// collected id answering anything but `not_found`.
+#[cfg(tp1)]
 #[test]
 fn terminal_records_are_collected_exactly_24h_after_terminal_at() {
     // GIVEN: a journey cancelled at T0 + 5.
@@ -159,6 +163,7 @@ fn terminal_records_are_collected_exactly_24h_after_terminal_at() {
 }
 
 /// Gap 5. Kills: dropping the `is_active` guard in `finish_journey`.
+#[cfg(tp1)]
 #[test]
 fn finish_on_a_terminal_record_is_refused_and_leaves_it_unchanged() {
     // GIVEN: a journey already Connected.
@@ -193,6 +198,7 @@ fn unavailable<T: std::fmt::Debug>(result: Result<T, JourneyError>) {
 /// §5.2 heal. Kills: poisoning the authority on a journeys write failure;
 /// serving the in-memory table after a rename; a stale slot healed without a
 /// good reread, or never reread at all.
+#[cfg(tp1)]
 #[test]
 fn journeys_parent_sync_fault_poisons_only_the_journey_slot_until_a_good_reread() {
     // GIVEN: a connected grant and an armed journeys directory-sync fault.
@@ -240,6 +246,7 @@ fn journeys_parent_sync_fault_poisons_only_the_journey_slot_until_a_good_reread(
 /// a started record past `callback_by` is `Started` before and `Expired`
 /// after, and a terminal record past retention is present before and gone
 /// after. Reading the post-sweep table as `before` turns both asserts red.
+#[cfg(tp1)]
 #[test]
 fn transition_before_is_the_pre_sweep_table_and_table_is_the_swept_one() {
     // GIVEN: one started journey and one cancelled one.
@@ -279,6 +286,7 @@ fn transition_before_is_the_pre_sweep_table_and_table_is_the_swept_one() {
 /// replay. A consumed journey whose deadline then passes is a REPLAY
 /// (counted), not an expiry, even though the sweep expires it in the same
 /// acquisition.
+#[cfg(tp1)]
 #[test]
 fn a_consumed_journey_replayed_after_its_deadline_is_replay_not_expiry() {
     let (_root, config, store) = fresh();

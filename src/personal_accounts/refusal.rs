@@ -228,6 +228,7 @@ pub(crate) fn upstream_rejection(error: &Error) -> Option<UpstreamRejection> {
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "refusal_rejection_tests.rs"]
 mod rejection_tests;

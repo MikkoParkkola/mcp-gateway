@@ -618,6 +618,7 @@ pub(in crate::gateway) fn plain_rows() -> Vec<PlainRow> {
         .collect()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "access_table_tests.rs"]
 mod tests;

@@ -762,6 +762,7 @@ pub(super) fn with_dummy_digest<R>(digest: [u8; 32], f: impl FnOnce() -> R) -> R
     f()
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_one_reading_tests.rs"]
 mod one_reading_tests;

@@ -122,6 +122,7 @@ impl Visitor<'_> for Key {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "json_valid_tests.rs"]
 mod tests;

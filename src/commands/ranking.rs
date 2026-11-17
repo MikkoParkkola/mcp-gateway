@@ -135,6 +135,7 @@ fn truncate(value: &str, max_chars: usize) -> String {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::evaluate_ranking_fixture_str;

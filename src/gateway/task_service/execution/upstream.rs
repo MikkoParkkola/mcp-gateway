@@ -105,10 +105,12 @@ impl QueryLease {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "upstream/failed_policy_tests.rs"]
 mod failed_policy_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "upstream/refusal_tests.rs"]
 mod refusal_tests;

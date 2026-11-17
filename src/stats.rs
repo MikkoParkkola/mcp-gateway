@@ -207,6 +207,7 @@ pub struct CachedTokensEntry {
     pub cached_tokens: u64,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

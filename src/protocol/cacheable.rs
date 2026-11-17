@@ -310,6 +310,7 @@ pub(crate) fn is_cacheable_answer(result: &Value) -> bool {
     is_final(result) && !is_error(result)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::is_error;
@@ -340,5 +341,6 @@ mod tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod clamp_tests;

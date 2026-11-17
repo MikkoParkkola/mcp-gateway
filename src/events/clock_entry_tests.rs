@@ -234,6 +234,17 @@ fn the_scanner_finds_a_read_and_skips_test_code() {
     assert_eq!(found.get("t"), None);
 }
 
+/// The lib test split's part tag sits above the unchanged `#[cfg(test)]`, so
+/// a tagged test module is still skipped.
+#[test]
+fn the_scanner_skips_a_part_tagged_test_module() {
+    let source = "fn decide() {\n    let now = crate::clock::utc_now();\n}\n\
+                  #[cfg(tp5)]\n#[cfg(test)]\nmod tests {\n    fn t() { crate::clock::utc_now(); }\n}\n";
+    let found = reads_in(source);
+    assert_eq!(found.get("decide"), Some(&1));
+    assert_eq!(found.get("t"), None);
+}
+
 #[test]
 fn the_scanner_walks_subdirectories() {
     let root = tempfile::tempdir().expect("tempdir");

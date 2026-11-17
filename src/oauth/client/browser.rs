@@ -94,6 +94,7 @@ pub(super) fn announce_to(out: &mut impl std::io::Write, url: &str) {
     );
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;

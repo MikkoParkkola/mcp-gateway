@@ -77,6 +77,7 @@ impl Provider for CapabilityProvider {
 // Tests
 // ============================================================================
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

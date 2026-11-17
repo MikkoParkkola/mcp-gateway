@@ -85,6 +85,7 @@ pub fn load(path: &Path) -> crate::Result<PersistedProfiles> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

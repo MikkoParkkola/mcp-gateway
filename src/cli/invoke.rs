@@ -292,6 +292,7 @@ fn try_parse_scalar(raw: &str) -> Value {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

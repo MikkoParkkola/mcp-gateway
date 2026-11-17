@@ -415,6 +415,7 @@ pub(super) fn build_persisted_costs(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "support_tests.rs"]
 mod tests;
@@ -685,9 +686,11 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "support_network_bind_tests.rs"]
 mod network_bind_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "support_peer_identity_tests.rs"]
 mod peer_identity_tests;

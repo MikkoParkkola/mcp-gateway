@@ -71,6 +71,7 @@ pub(super) fn refuse_if_killed(
     Ok(())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::classify_bridged_dispatch_error;

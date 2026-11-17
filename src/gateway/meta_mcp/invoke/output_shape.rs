@@ -151,6 +151,7 @@ pub(super) fn apply_validated_output(result: &Value, validated: Value) -> Value 
     Value::Object(obj)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "output_shape_tests.rs"]
 mod tests;

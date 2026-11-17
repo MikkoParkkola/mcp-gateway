@@ -110,6 +110,7 @@ fn push_cell(out: &mut String, cell: &str) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "csv_tests.rs"]
 mod tests;

@@ -387,11 +387,13 @@ fn validity_to_date(days: u32) -> Result<time::OffsetDateTime> {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cert_manager_tests.rs"]
 mod tests;
 
 // Unix-only (W-L1): asserts POSIX mode bits on the written key; Windows uses DACLs (win_acl).
+#[cfg(tp2)]
 #[cfg(all(test, unix))]
 mod private_key_permission_tests {
     use super::*;

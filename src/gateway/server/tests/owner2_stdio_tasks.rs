@@ -205,6 +205,7 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
 /// U1: the worker's rebuilt context keeps the stdio mark, so the reserved
 /// owner keys the call's cache and retry entries and provenance is the local
 /// transport. The pinned path: without the carry the owner falls away.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
     let fixture = Box::pin(fixture(None)).await;
@@ -231,6 +232,7 @@ async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
 }
 
 /// U3: HTTP owner text cannot name the local operator's task.
+#[cfg(tp5)]
 #[tokio::test]
 async fn http_owner_text_cannot_name_the_local_operator() {
     let fixture = Box::pin(fixture(None)).await;
@@ -257,6 +259,7 @@ async fn http_owner_text_cannot_name_the_local_operator() {
 }
 
 /// U4: a worker that outlives its stdio session cannot reach the host.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_stdio_worker_outliving_its_session_settles_before_dispatch() {
     let fixture = Box::pin(fixture(None)).await;
@@ -376,6 +379,7 @@ async fn reads(tasks: &StdioTasks, owner: &TaskOwnerText, id: &str) -> bool {
 /// synchronous repeat of the same call is served without a second round.
 /// Without the carried mark the task's cache principal is unresolved, nothing
 /// is stored, and the repeat reaches the backend again.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
     let fixture = Box::pin(fixture(None)).await;
@@ -395,6 +399,7 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
 /// with the policy's own refusal, exactly as its synchronous call is, and no
 /// task (MIK-8315); a neighbour still runs. The worker re-checks at run time
 /// through the dispatch chokepoint.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let denying = ToolPolicyConfig {
@@ -440,6 +445,7 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
 
 /// U7: a `tasks/*` method the stdio body does not name is not found, never
 /// handled as one it does (a cancel, say) on the caller's task id.
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_unnamed_tasks_method_fails_closed() {
     let fixture = Box::pin(fixture(None)).await;
@@ -487,6 +493,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
 /// U8: a legacy `tools/call` carrying a `task` member is answered
 /// synchronously, as before stdio had a store: a legacy shape cannot declare
 /// the extension, so it is neither refused nor made a task.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_legacy_task_member_is_answered_synchronously() {
     let fixture = Box::pin(fixture(None)).await;
@@ -591,6 +598,7 @@ pub(super) async fn held_backend() -> (
 }
 
 /// The stdio task store at the end of a session.
+#[cfg(tp5)]
 #[path = "owner2_stdio_shutdown_tests.rs"]
 mod shutdown;
 
@@ -624,6 +632,7 @@ async fn registered_gateway_tasks(
         .expect("gateway task runtime starts")
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn registered_gateway_task_directory_lives_until_the_last_store_handle() {
     use crate::gateway::task_service::CreateOutcome;
@@ -681,6 +690,7 @@ async fn registered_gateway_task_directory_lives_until_the_last_store_handle() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 #[should_panic(expected = "kept_tempdir")]
 async fn registered_gateway_task_opener_refuses_a_plain_tempdir() {

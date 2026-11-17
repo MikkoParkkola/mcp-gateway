@@ -194,6 +194,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

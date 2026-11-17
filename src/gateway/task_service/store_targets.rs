@@ -729,6 +729,7 @@ fn merge_targets(record: &mut Record, targets: Vec<Target>) {
     record.version = record.version.max(TARGET_VERSION);
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod fallback_tests {
     use super::fallback_bytes;

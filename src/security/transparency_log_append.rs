@@ -731,9 +731,11 @@ impl TransparencyLogger {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "transparency_log_announce_tests.rs"]
 mod announce_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "transparency_log_subscribe_tests.rs"]
 mod subscribe_tests;

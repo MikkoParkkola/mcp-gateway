@@ -54,6 +54,7 @@ fn parent_if_absolute(path: &str) -> Option<PathBuf> {
         .flatten()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

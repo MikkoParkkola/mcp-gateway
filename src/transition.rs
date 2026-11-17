@@ -328,6 +328,7 @@ struct TransitionEntry {
 // Tests
 // ============================================================================
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

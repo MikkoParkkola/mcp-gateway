@@ -293,6 +293,7 @@ pub fn compile_descriptor(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "provision_tests.rs"]
 mod tests;

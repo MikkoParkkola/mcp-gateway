@@ -277,6 +277,7 @@ impl ConfigScanner {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "config_scanner_client_scan_tests.rs"]
 mod tests;

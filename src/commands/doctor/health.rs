@@ -360,6 +360,7 @@ fn runtime_base_url(config: &Config) -> String {
     format!("http://{}:{}", host, config.server.port)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod redirect_tests {
     use super::*;

@@ -17,6 +17,7 @@ const K3: [u8; 32] = [11; 32];
 
 /// An id collision draws once more; a second collision refuses, and neither
 /// ever overwrites or supersedes a live record.
+#[cfg(tp1)]
 #[test]
 fn create_journey_redraws_a_colliding_id_once_then_refuses() {
     // GIVEN: bob holds id X
@@ -47,6 +48,7 @@ fn create_journey_redraws_a_colliding_id_once_then_refuses() {
 
 /// The callback lookup HMACs the state once per distinct `digest_key_id`,
 /// and still compares every record's digest in constant time.
+#[cfg(tp1)]
 #[test]
 fn callback_lookup_computes_one_hmac_per_digest_key_id() {
     // GIVEN: two started journeys under k1 and two under k3
@@ -72,6 +74,7 @@ fn callback_lookup_computes_one_hmac_per_digest_key_id() {
 
 /// A pending journey never started by `start_by` is `Expired`, and a late
 /// start is refused rather than reviving it.
+#[cfg(tp1)]
 #[test]
 fn pending_journey_past_start_by_expires_and_refuses_start() {
     // GIVEN

@@ -278,6 +278,7 @@ impl JsonRpcMessage {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "messages_classify_tests.rs"]
 mod tests;

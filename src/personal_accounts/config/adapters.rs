@@ -619,10 +619,12 @@ impl AdapterConfig {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "adapter_secret_tests.rs"]
 mod secret_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod debug_redaction_tests {
     use super::{AdapterConfig, AdapterKind};

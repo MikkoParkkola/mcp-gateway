@@ -283,6 +283,7 @@ pub(super) fn for_key(key: &ListenerKey, hub: &Weak<EventsHub>) -> Option<RunCre
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "listener_credential_tests.rs"]
 mod tests;

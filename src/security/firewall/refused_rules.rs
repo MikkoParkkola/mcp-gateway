@@ -205,6 +205,7 @@ pub(crate) fn refuse_authored(before: Option<&Config>, after: &Config) -> Result
     Ok(())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "refused_rules_tests.rs"]
 mod tests;

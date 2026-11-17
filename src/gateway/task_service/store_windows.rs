@@ -85,6 +85,7 @@ pub(super) fn open_record(path: &Path) -> Result<fs::File, StoreError> {
     Ok(file)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "store_windows_tests.rs"]
 mod tests;

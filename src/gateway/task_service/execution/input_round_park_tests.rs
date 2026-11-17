@@ -235,6 +235,7 @@ fn own(fx: &Fixture) -> Ids<'_> {
 /// A plan's calls are written to the row, so the round may be parked; a row a
 /// cancel already moved is not parked either way, and is not a failure.
 /// Mutant: the store result is not read, or a conflict counts as a failure.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_plans_calls_are_durable_or_the_row_has_already_moved() {
     let fx = fixture().await;
@@ -252,6 +253,7 @@ async fn a_plans_calls_are_durable_or_the_row_has_already_moved() {
 
 /// A plan whose owner cannot be resolved cannot record its calls, so the
 /// round must not be parked. Mutant: the owner failure reads as durable.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_plan_with_no_resolvable_owner_is_not_durable() {
     let fx = fixture().await;
@@ -265,6 +267,7 @@ async fn a_plan_with_no_resolvable_owner_is_not_durable() {
 
 /// A plan whose calls the store cannot write is not durable either.
 /// Mutant: any store error reads as durable.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_plan_the_closed_store_cannot_record_is_not_durable() {
     let fx = fixture().await;
@@ -276,6 +279,7 @@ async fn a_plan_the_closed_store_cannot_record_is_not_durable() {
 /// A plan that cannot record its calls is not parked: no round write is
 /// attempted, so no commit failure is logged.
 /// Mutant: the round is committed after a failed target write.
+#[cfg(tp3)]
 #[test]
 fn a_plan_that_cannot_record_its_calls_is_not_parked() {
     let records = logged(async {
@@ -289,6 +293,7 @@ fn a_plan_that_cannot_record_its_calls_is_not_parked() {
 
 /// An owner that cannot be resolved leaves the row unparked.
 /// Mutant: the round is parked without an owner to write it under.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_round_with_no_resolvable_owner_is_not_parked() {
     let fx = fixture().await;
@@ -303,6 +308,7 @@ async fn a_round_with_no_resolvable_owner_is_not_parked() {
 }
 
 /// Control: a well-formed round for the owned row parks as `input_required`.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_well_formed_round_parks_the_row() {
     let fx = fixture().await;
@@ -315,6 +321,7 @@ async fn a_well_formed_round_parks_the_row() {
 /// A continuation that does not fit the record settles today's abandoned
 /// result instead of parking. Mutant: the capacity refusal leaves the row
 /// `working`, or parks it.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_round_too_large_for_the_record_settles_abandoned() {
     let fx = fixture().await;
@@ -331,6 +338,7 @@ async fn a_round_too_large_for_the_record_settles_abandoned() {
 /// A cancel that already moved the row is the answer: nothing more is
 /// written and no failure is logged. Mutant: the revision conflict is treated
 /// as a write failure.
+#[cfg(tp3)]
 #[test]
 fn a_round_for_a_row_that_moved_leaves_it_alone() {
     let mut after = None;
@@ -349,6 +357,7 @@ fn a_round_for_a_row_that_moved_leaves_it_alone() {
 }
 
 /// A row that is gone is likewise left alone, without a logged failure.
+#[cfg(tp3)]
 #[test]
 fn a_round_for_a_row_that_is_gone_writes_nothing() {
     let mut after = None;
@@ -368,6 +377,7 @@ fn a_round_for_a_row_that_is_gone_writes_nothing() {
 
 /// A round the store cannot write is logged with the task and the cause.
 /// Mutant: the failure is swallowed silently.
+#[cfg(tp3)]
 #[test]
 fn a_round_the_store_cannot_write_is_logged_with_its_cause() {
     let mut task_id = String::new();
@@ -386,6 +396,7 @@ fn a_round_the_store_cannot_write_is_logged_with_its_cause() {
 
 /// A late round whose owner cannot be resolved closes nothing.
 /// Mutant: the round is closed (or an error logged) without an owner.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_late_round_with_no_resolvable_owner_is_left_open() {
     let fx = fixture().await;
@@ -400,6 +411,7 @@ async fn a_late_round_with_no_resolvable_owner_is_left_open() {
 /// A close that fails for a reason other than a moved row is tried again, and
 /// when it fails again it is logged with the task. Mutant: no retry, or the
 /// second failure is silent.
+#[cfg(tp3)]
 #[test]
 fn a_late_round_that_cannot_be_closed_twice_is_logged() {
     let records = logged(async {
@@ -416,6 +428,7 @@ fn a_late_round_that_cannot_be_closed_twice_is_logged() {
 
 /// A close that finds the row moved is final: not retried, not logged.
 /// Mutant: a moved row is treated as a failure.
+#[cfg(tp3)]
 #[test]
 fn a_late_round_for_a_moved_row_is_not_retried_or_logged() {
     let records = logged(async {
@@ -432,6 +445,7 @@ fn a_late_round_for_a_moved_row_is_not_retried_or_logged() {
 /// A close whose first write fails is retried once, and the retry settles the
 /// round cancelled without logging a failure. Mutant: no second attempt, so
 /// the row stays `working`.
+#[cfg(tp3)]
 #[test]
 fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
     use std::sync::atomic::{AtomicBool, Ordering};

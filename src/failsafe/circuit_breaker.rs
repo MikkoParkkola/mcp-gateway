@@ -511,18 +511,22 @@ pub fn build_circuit_breaker_error(server: &str, stats: &CircuitBreakerStats) ->
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "circuit_breaker_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "circuit_breaker_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "circuit_breaker_clock_compile_red_tests.rs"]
 mod clock_compile_red_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "circuit_breaker_logging_tests.rs"]
 mod logging_tests;

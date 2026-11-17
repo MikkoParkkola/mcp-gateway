@@ -131,6 +131,7 @@ pub(crate) fn assert_row(decision: &Value, row: &DecisionRow) {
     assert_str_key(decision, "decided", Some(row.decided), n);
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

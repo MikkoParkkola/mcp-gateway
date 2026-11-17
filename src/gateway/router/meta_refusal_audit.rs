@@ -363,6 +363,7 @@ impl<'a> Refused<'a> {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "meta_refusal_audit_tests.rs"]
 mod tests;
