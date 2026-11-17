@@ -254,7 +254,7 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
-          python3 scripts/ci/test_memory_peak.py
+          python3 scripts/ci/test_memory_tripwire.py
           python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/job_time_watch.py --self-test
@@ -1145,11 +1145,12 @@ jobs:
           retention-days: 1
           overwrite: true
           if-no-files-found: error
-      # A whole lib test build peaks near 15 GB here and a part near 11 GB: above 13 GB a whole build came back,
-      # however it was launched. `always()`, so a step timeout still reports the peak.
+      # A part writes nothing to swap here and a whole lib test build about 7 GiB (E1, 2026-11-17): past 2 GiB a whole
+      # build came back, however it was launched. The kernel keeps the count, so `always()` still reports after a step
+      # timeout. memory.peak is printed for the trend only.
       - name: Memory tripwire
         if: always()
-        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
   # Every run: each part's binary lists exactly the tests the source puts in that part (scripts/dev/test_parts.py
   # expect, every cfg evaluated with CI's compiler), parts exactly 1..N, none empty, no test in two parts
