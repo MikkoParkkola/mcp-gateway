@@ -410,13 +410,18 @@ fn u_floor_a_silent_call_that_left_its_group_is_refused_at_the_bound_and_ended()
     let dir = tempfile::tempdir().expect("dir");
     let descendant = dir.path().join("descendant.pid");
     let leader = dir.path().join("leader.pid");
+    // Written only once the move succeeded: without it the row would pass on
+    // the descendant's held pipe alone and never test the escape.
+    let moved = dir.path().join("moved");
     let uv = uv_answering(
         dir.path(),
         &format!(
             "sleep 300 & echo $! > '{}'; echo $$ > '{}'; exec /usr/bin/python3 -c \
-             'import os, time; os.setpgid(0, os.getpgid(os.getppid())); time.sleep(300)'",
+             'import os, time; os.setpgid(0, os.getpgid(os.getppid())); \
+             open(\"{}\", \"w\").close(); time.sleep(300)'",
             descendant.display(),
-            leader.display()
+            leader.display(),
+            moved.display()
         ),
     );
     let (tx, rx) = std::sync::mpsc::channel();
@@ -426,6 +431,7 @@ fn u_floor_a_silent_call_that_left_its_group_is_refused_at_the_bound_and_ended()
     let answered = rx.recv_timeout(std::time::Duration::from_secs(30));
     let descendant_alive = !gone(&descendant);
     let leader_alive = !gone(&leader);
+    assert!(moved.exists(), "premise: the call moved out of its group");
     assert_eq!(
         answered,
         Ok(Err(Refusal::Step(
