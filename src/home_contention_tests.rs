@@ -384,19 +384,20 @@ fn control_suite() -> Suite {
 
 /// A green Suite in which every name in E passed.
 fn green_suite() -> Suite {
-    let mut seen = Suite::default();
-    seen.passed = E.iter().map(|(name, _)| (*name).to_owned()).collect();
-    seen.runs = FILTERS
-        .iter()
-        .map(|filter| {
-            (
-                *filter,
-                Some(0),
-                Some("test result: ok. 12 passed; 0 failed".to_owned()),
-            )
-        })
-        .collect();
-    seen
+    Suite {
+        passed: E.iter().map(|(name, _)| (*name).to_owned()).collect(),
+        runs: FILTERS
+            .iter()
+            .map(|filter| {
+                (
+                    *filter,
+                    Some(0),
+                    Some("test result: ok. 12 passed; 0 failed".to_owned()),
+                )
+            })
+            .collect(),
+        ..Suite::default()
+    }
 }
 
 /// The judge's own rows: each check refuses the case it exists for, and the
@@ -412,6 +413,15 @@ fn r3b_judge_refuses_aborted_runs_and_unrelated_failures() {
         Vec::<String>::new()
     );
 
+    let mut stray_failure = green_suite();
+    stray_failure
+        .failed
+        .insert("gateway::ui::settings::unused_route_tests::other".to_owned());
+    assert_eq!(
+        judge(Variant::Fallback, &stray_failure).len(),
+        1,
+        "a failure the summaries did not show still fails a green variant"
+    );
     let mut aborted = green_suite();
     aborted.runs[0].1 = None;
     assert_eq!(

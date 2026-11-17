@@ -108,15 +108,20 @@ fn cleared_without_home(rel: &str, text: &str) -> Vec<(String, String)> {
         // a commented-out restore does not count.
         let mut pending = false;
         let mut lost = false;
-        for line in body
-            .iter()
-            .filter(|line| !line.trim_start().starts_with("//"))
-        {
-            if let Some(at) = line.find(CLEAR) {
-                lost |= pending;
-                pending = !line[at + CLEAR.len()..].contains(RESTORE);
-            } else if line.contains(RESTORE) {
+        for line in body {
+            // Code only: a restore inside a trailing comment does not count.
+            let code = line.split("//").next().unwrap_or_default();
+            let mut segments = code.split(CLEAR);
+            if segments
+                .next()
+                .is_some_and(|before| before.contains(RESTORE))
+            {
                 pending = false;
+            }
+            // Each segment follows one clear, so two clears on a line are two.
+            for after in segments {
+                lost |= pending;
+                pending = !after.contains(RESTORE);
             }
         }
         if (lost || pending)
@@ -294,6 +299,22 @@ fn the_spawn_scan_finds_a_planted_call() {
         cleared_without_home("src/x_tests.rs", &imported).len(),
         1,
         "an imported test_binary()"
+    );
+    let inline_comment = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR}; // c.envs(crate::test_home::{RESTORE});\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &inline_comment).len(),
+        1,
+        "a restore in a trailing comment"
+    );
+    let two_on_a_line = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR}.envs(crate::test_home::{RESTORE}){CLEAR};\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &two_on_a_line).len(),
+        1,
+        "a second clear on the same line"
     );
     let commented = format!("// std::env::{CALL}\n");
     assert_eq!(spawn_sites("src/x_tests.rs", &commented), Vec::new());
