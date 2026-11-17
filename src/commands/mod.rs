@@ -173,7 +173,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "# Capabilities - direct REST API integration (no MCP server needed)\n",
             "# The local profile writes zero-key sample tools into ./capabilities/.\n",
             "capabilities:\n",
-            "  enabled: true\n",
             "  directories:\n",
             "    - capabilities\n",
             "\n",
@@ -185,7 +184,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "\n",
             "# Capabilities - direct REST API integration\n",
             "capabilities:\n",
-            "  enabled: true\n",
             "  directories:\n",
             "    - capabilities\n",
             "\n",
@@ -547,6 +545,9 @@ fn read_ca_files(
         })?;
     Ok((cert, key))
 }
+#[cfg(all(test, feature = "webui"))]
+#[path = "api_parity_tests.rs"]
+mod api_parity_tests;
 #[cfg(all(test, feature = "webui"))]
 #[path = "api_tests.rs"]
 mod api_tests;

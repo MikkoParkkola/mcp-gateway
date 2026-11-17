@@ -242,7 +242,7 @@ impl Payload {
             origin_replica,
             issued_at: now,
             expires_at: expiry_for(now),
-            jti: uuid::Uuid::new_v4().to_string(),
+            jti: crate::ids::new_v4().to_string(),
             hold_key,
             next_step: None,
             rounds_used: 0,

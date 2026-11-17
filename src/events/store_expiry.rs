@@ -125,7 +125,8 @@ impl Store {
         let mut keys: Vec<(DateTime<Utc>, String)> = state
             .outbox
             .values()
-            .filter(|r| r.state == OutboxState::Pending)
+            // A notice maps to its ended row, never to a live row's expiry.
+            .filter(|r| r.is_event() && r.state == OutboxState::Pending)
             .filter(|r| {
                 state
                     .subs
@@ -179,7 +180,12 @@ impl Store {
             .subs
             .values()
             .filter(|s| !s.live(now))
-            .filter(|s| !state.outbox.values().any(|r| r.subscription_id == s.id))
+            .filter(|s| {
+                !state
+                    .outbox
+                    .values()
+                    .any(|r| r.is_event() && r.subscription_id == s.id)
+            })
             .map(|s| s.id.clone())
             .collect();
         if !settled.is_empty()

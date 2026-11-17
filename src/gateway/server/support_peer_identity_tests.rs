@@ -5,6 +5,10 @@
 //! identity layer refuses the connection's requests exactly as before (401,
 //! -32000), so it is never served as "no certificate" or as a nameless
 //! identity.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

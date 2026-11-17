@@ -21,12 +21,12 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
-        "activity.112f99b1ee7c.js",
-        include_bytes!("shell/activity.112f99b1ee7c.js"),
-    ),
-    (
         "activity.237d685089d2.css",
         include_bytes!("shell/activity.237d685089d2.css"),
+    ),
+    (
+        "activity.9e2da65e3333.js",
+        include_bytes!("shell/activity.9e2da65e3333.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,16 +49,16 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.72b16b622995.js",
-        include_bytes!("shell/gateway.72b16b622995.js"),
+        "gateway.2985d5dbe249.js",
+        include_bytes!("shell/gateway.2985d5dbe249.js"),
+    ),
+    (
+        "shell.4190e6b7e107.js",
+        include_bytes!("shell/shell.4190e6b7e107.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
-    ),
-    (
-        "shell.f6002da4e5df.js",
-        include_bytes!("shell/shell.f6002da4e5df.js"),
     ),
     (
         "tips.f472c300c624.json",
@@ -69,8 +69,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.73637c570595.js",
-        include_bytes!("shell/tools.73637c570595.js"),
+        "tools.949ee5144de5.js",
+        include_bytes!("shell/tools.949ee5144de5.js"),
     ),
     (
         "tooltip.5251c22696fd.css",

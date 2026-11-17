@@ -188,7 +188,7 @@ impl Store {
             entry.earliest_expiry = either(entry.earliest_expiry, end, std::cmp::min);
             entry.latest_expiry = either(entry.latest_expiry, end, std::cmp::max);
         }
-        for record in state.outbox.values() {
+        for record in state.outbox.values().filter(|r| r.is_event()) {
             let held_type = state
                 .held
                 .contains_key(&record.subscription_id)

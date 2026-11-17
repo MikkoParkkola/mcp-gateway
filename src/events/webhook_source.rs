@@ -110,7 +110,7 @@ impl EventsHub {
                 return Ok(());
             }
         }
-        let upstream = key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let upstream = key.unwrap_or_else(|| crate::ids::new_v4().to_string());
         self.emit(SourceEvent {
             kind: SourceKind::Webhook,
             name: format!("webhook.{route}.received"),

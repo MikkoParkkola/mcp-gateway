@@ -1,0 +1,2 @@
+src/gateway/server/run_wiring.rs	warn_cold_surfaced_tools	1	Warns at startup for each surfaced tool whose backend is not warmed; decides nothing (moved from Gateway::run)
+src/gateway/server/run_wiring.rs	load_playbooks	1	Loads playbook files into the meta-tool layer at startup; decides nothing about access (moved from Gateway::run)

@@ -291,7 +291,7 @@ impl A2aClient {
         }
         let body = json!({
             "jsonrpc": "2.0",
-            "id": uuid::Uuid::new_v4().to_string(),
+            "id": crate::ids::new_v4().to_string(),
             "method": method,
             "params": params,
         });

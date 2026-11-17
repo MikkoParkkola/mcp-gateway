@@ -270,6 +270,7 @@ fn a_revoked_nobody_rows_queued_record_is_cancelled() {
             attribution_keys: Vec::new(),
             firewall: None,
             observed: None,
+            ended_incarnation: None,
         };
         let caps = OutboxCaps {
             global: 10,
