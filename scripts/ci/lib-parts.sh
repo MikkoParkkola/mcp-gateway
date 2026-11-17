@@ -52,9 +52,9 @@ if [ "$mode" = cov ]; then
     check_part "$k" "$n"
     deps=target/llvm-cov-target/debug/deps
     mkdir -p "$deps"
+    # mktemp creates the marker now, so its mtime is this run's start.
     marker="$(mktemp "$deps/.coverage-start.XXXXXX")"
     trap 'rm -f "$marker"' EXIT
-    touch "$marker"
     MCP_GATEWAY_TEST_PART="$k" "$root/scripts/ci/compile-cgroup.sh" \
       python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
     # The one lib test executable this run built: an executable mcp_gateway-HASH with no extension. A binary already
@@ -65,7 +65,12 @@ if [ "$mode" = cov ]; then
     done < <(find "$deps" -maxdepth 1 -type f -perm -u+x -newer "$marker" \
       -name 'mcp_gateway-*' ! -name '*.*' ! -name '*-p[0-9]*' -print0)
     if [ "${#executables[@]}" -ne 1 ]; then
-      echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}" >&2
+      hint=""
+      # In a reused target dir cargo may not relink an unchanged binary, so it stays older than the marker.
+      if [ "${#executables[@]}" -eq 0 ]; then
+        hint=" (only executables newer than this run's start count; delete stale $deps/mcp_gateway-* and rerun)"
+      fi
+      echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}$hint" >&2
       exit 1
     fi
     mv "${executables[0]}" "${executables[0]}-p$k"
