@@ -1104,10 +1104,16 @@ jobs:
   # instead of each building the same one (the same cargo hash in all five). Each consumer `needs` this job and
   # runs even when it fails, so it ends red, never skipped (scripts/ci/check_shared_lib.py).
   linux-lib-build:
-    name: Linux lib test binary
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    # Throwaway measurement only (lib test split fail-fast): each leg builds one part, or the whole binary as today's
+    # baseline, on the runner the real job uses, with the same job id so the dependency cache is the real one's.
+    name: Linux lib test binary (measure ${{ matrix.part }})
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/lib-parts') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ['1', '2', '3', '4', '5', all]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1117,23 +1123,13 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Build the shared lib test binary
-        # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
-        # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
-        # one that thrashes on memory (scripts/ci/test_upgrading_step_bounds.py).
-        timeout-minutes: 25
-        run: |
-          echo "phase compile: the lib test binary at $(date -u +%T), runner user processes: $(ps -u "$(id -u)" -o pid= | wc -l), memory MB: $(free -m | awk '/^(Mem|Swap):/ {printf "%s total %s used %s free %s; ", $1, $2, $3, $4}')"
-          scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
-      - name: Hand the lib test binary to its consumers
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          # One name per run: a rerun of a consumer alone finds this attempt's binary.
-          name: linux-lib-tests
-          path: ${{ runner.temp }}/lib-bin/lib-tests
-          retention-days: 1
-          overwrite: true
-          if-no-files-found: error
+          save-if: false
+      - name: Build one part of the lib test binary and measure it
+        timeout-minutes: 25
+        env:
+          PART: ${{ matrix.part }}
+        run: scripts/ci/measure-lib-part.sh "$PART"
 
   test-shards:
     name: Linux shard ${{ matrix.shard }}
@@ -1286,7 +1282,7 @@ jobs:
   # literal on both, so the hosted-runner guard still reads every label.
   test-throwaway-hosted:
     name: Tests (throwaway)
-    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER != 'ready' }}
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && !startsWith(github.head_ref, 'throwaway/lib-parts') && vars.MCPGW_TRUSTED_RUNNER != 'ready' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -1340,7 +1336,7 @@ jobs:
   # No secrets and a read-only token, since the runner is persistent.
   test-trusted:
     name: Tests (throwaway)
-    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER == 'ready' }}
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && !startsWith(github.head_ref, 'throwaway/lib-parts') && vars.MCPGW_TRUSTED_RUNNER == 'ready' }}
     runs-on: mcpgw-trusted-arm64
     timeout-minutes: 60
     permissions:
