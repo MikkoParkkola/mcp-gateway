@@ -734,4 +734,13 @@ fn a_bounded_timezone_answers_like_a_name_that_is_no_zone() {
         assert_eq!(error.expect("ran"), no_zone, "{bad:?}");
         assert_eq!(parses, 0, "{bad:?} reached the parser through parts");
     }
+    // The parse counter sits inside the check, so a call site that parses the
+    // client's name directly counts no parse: a valid name sent through the
+    // arguments must reach the parser exactly once, through the check.
+    let parses = parses_during(|| {
+        super::parts(&json!({"cron": "0 9 * * *", "timezone": "Europe/Helsinki"}))
+            .map(drop)
+            .expect("a valid zone");
+    });
+    assert_eq!(parses, 1, "a valid zone bypassed the check");
 }
