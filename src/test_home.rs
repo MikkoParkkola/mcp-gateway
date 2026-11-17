@@ -37,7 +37,8 @@ pub(crate) fn test_binary() -> Command {
 const CALL: &str = concat!("current_", "exe()");
 /// The calls the clear check looks for, built the same way.
 const CLEAR: &str = concat!(".env_", "clear()");
-const BINARY: &str = concat!("test_home::test_", "binary()");
+/// The bare call, so an imported `test_binary()` counts as well as the path form.
+const BINARY: &str = concat!("test_", "binary()");
 const RESTORE: &str = concat!("child_", "env()");
 
 /// Every `(file, enclosing fn)` that calls [`CALL`] in `text`, skipping comment
@@ -103,10 +104,26 @@ fn cleared_without_home(rel: &str, text: &str) -> Vec<(String, String)> {
         if !body.iter().any(|line| line.contains(BINARY)) {
             continue;
         }
-        let clear = body.iter().position(|line| line.contains(CLEAR));
-        let restored =
-            clear.is_some_and(|at| body[at + 1..].iter().any(|line| line.contains(RESTORE)));
-        if !restored {
+        // Every clear must be restored before the next clear or the fn's end;
+        // a commented-out restore does not count.
+        let mut pending = false;
+        let mut lost = false;
+        for line in body
+            .iter()
+            .filter(|line| !line.trim_start().starts_with("//"))
+        {
+            if let Some(at) = line.find(CLEAR) {
+                lost |= pending;
+                pending = !line[at + CLEAR.len()..].contains(RESTORE);
+            } else if line.contains(RESTORE) {
+                pending = false;
+            }
+        }
+        if (lost || pending)
+            && !found
+                .iter()
+                .any(|(file, fn_name)| file == rel && *fn_name == name)
+        {
             found.push((rel.to_owned(), name));
         }
     }
@@ -247,6 +264,36 @@ fn the_spawn_scan_finds_a_planted_call() {
     assert_eq!(
         cleared_without_home("src/x_tests.rs", &restored),
         Vec::new()
+    );
+    let twice_cleared = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR};\n    c.envs(crate::test_home::{RESTORE});\n    c{CLEAR};\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &twice_cleared).len(),
+        1,
+        "a second clear"
+    );
+    let commented_restore = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR};\n    // c.envs(crate::test_home::{RESTORE});\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &commented_restore).len(),
+        1,
+        "a commented restore"
+    );
+    let same_line = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR}.envs(crate::test_home::{RESTORE});\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &same_line),
+        Vec::new(),
+        "restored on the same line"
+    );
+    let imported = format!("fn hermetic() {{\n    let mut c = {BINARY};\n    c{CLEAR};\n}}\n");
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &imported).len(),
+        1,
+        "an imported test_binary()"
     );
     let commented = format!("// std::env::{CALL}\n");
     assert_eq!(spawn_sites("src/x_tests.rs", &commented), Vec::new());

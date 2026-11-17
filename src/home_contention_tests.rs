@@ -27,57 +27,58 @@ const FILTERS: [&str; 2] = [
 /// The tests that failed in the red run against the held lock (the expected
 /// set E, recorded by name in the red record: 12, all in the unused-route
 /// module; no journal row touches the vault lock), each with the text its
-/// failure printed when the held lock caused it (observed in the control run,
+/// failure printed when the held lock caused it: the label and the observed
+/// value, both required (observed in the control run,
 /// observe-control.log): a save answering 500, a delete answering 409, or an
 /// index left empty by the failed save.
-const E: &[(&str, &str)] = &[
+const E: &[(&str, &[&str])] = &[
     (
         "gateway::ui::settings::unused_route_tests::delete_is_audited",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_refuses_capability_named",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_refuses_env_named",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_refuses_hard_linked_entry_behind_symlinked_config",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_refuses_named_after_listing",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_route_refuses_pending_write",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_route_removes_entry",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::delete_route_unlisted",
-        "left: 409",
+        &["left: 409", "right: 404"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::failed_commit_entry_listed",
-        "one indexed entry",
+        &["one indexed entry", "left: 0"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::locks_released_after_refusals",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::routes_need_admin",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
     (
         "gateway::ui::settings::unused_route_tests::unused_listed_with_write_time",
-        "the save did not complete",
+        &["the save did not complete", "left: 500"],
     ),
 ];
 
@@ -234,6 +235,51 @@ fn assert_busy(lock: &Path) {
 
 /// R3b for one variant: the suite runs while P's lock is held. Afterwards, the
 /// witness shows which home the children resolved.
+/// Whether a filtered run completed: exit 0 with a passing summary, or, when
+/// `failures_allowed`, exit 101 with a failing one. An abort prints neither.
+fn completed(code: Option<i32>, summary: Option<&str>, failures_allowed: bool) -> bool {
+    match code {
+        Some(0) => summary.is_some_and(|s| s.starts_with("test result: ok.")),
+        Some(101) if failures_allowed => {
+            summary.is_some_and(|s| s.starts_with("test result: FAILED."))
+        }
+        _ => false,
+    }
+}
+
+/// What is wrong with a variant's runs, empty when it proves what it should.
+/// The green variants need every run complete and passing, with every name in
+/// E among the passes. The control needs every run complete, every name in E
+/// failed, and each failure's section showing all of that test's markers.
+fn judge(variant: Variant, seen: &Suite) -> Vec<String> {
+    let mut problems = Vec::new();
+    let control = matches!(variant, Variant::Control);
+    for (filter, code, summary) in &seen.runs {
+        if !completed(*code, summary.as_deref(), control) {
+            problems.push(format!("{filter} did not complete: {code:?} {summary:?}"));
+        }
+    }
+    for (name, markers) in E {
+        if control {
+            let Some(section) = seen.sections.get(*name) else {
+                problems.push(format!("{name} did not fail against the held lock"));
+                continue;
+            };
+            for marker in *markers {
+                if !section.contains(marker) {
+                    problems.push(format!("{name} failed without the held lock's {marker:?}"));
+                }
+            }
+        } else if !seen.passed.contains(*name) {
+            problems.push(format!("{name} did not pass"));
+        }
+    }
+    if !control && !seen.failed.is_empty() {
+        problems.push(format!("failed: {:?}", seen.failed));
+    }
+    problems
+}
+
 fn r3b(variant: Variant) {
     let platform = tempfile::tempdir().expect("stand-in home P");
     let tmp = tempfile::tempdir().expect("tmp");
@@ -266,62 +312,8 @@ fn r3b(variant: Variant) {
             );
         }
     }
-    let expected: BTreeSet<String> = E.iter().map(|(name, _)| (*name).to_owned()).collect();
-    match variant {
-        Variant::Control => {
-            // Every run completed: test failures (101) or a pass (0), never an abort.
-            for (filter, code, summary) in &seen.runs {
-                let completed = match code {
-                    Some(0) => summary
-                        .as_deref()
-                        .is_some_and(|s| s.starts_with("test result: ok.")),
-                    Some(101) => summary
-                        .as_deref()
-                        .is_some_and(|s| s.starts_with("test result: FAILED.")),
-                    _ => false,
-                };
-                assert!(
-                    completed,
-                    "control: {filter} did not complete: {code:?} {summary:?}"
-                );
-            }
-            assert!(
-                expected.is_subset(&seen.failed),
-                "the control must fail every name in E against the held lock: {seen:?}"
-            );
-            for (name, marker) in E {
-                let section = seen
-                    .sections
-                    .get(*name)
-                    .map(String::as_str)
-                    .unwrap_or_default();
-                assert!(
-                    section.contains(marker),
-                    "control: {name} failed, but not with the held lock's {marker:?}:\n{section}"
-                );
-            }
-        }
-        Variant::Harness | Variant::Fallback => {
-            for (filter, code, summary) in &seen.runs {
-                assert_eq!(*code, Some(0), "{variant:?}: {filter} exited {code:?}");
-                assert!(
-                    summary
-                        .as_deref()
-                        .is_some_and(|s| s.starts_with("test result: ok.")),
-                    "{variant:?}: {filter} printed no completed passing summary: {summary:?}"
-                );
-            }
-            assert!(
-                expected.is_subset(&seen.passed),
-                "{variant:?}: E must pass: {seen:?}"
-            );
-            assert!(
-                seen.failed.is_empty(),
-                "{variant:?} failed: {:?}",
-                seen.failed
-            );
-        }
-    }
+    let problems = judge(variant, &seen);
+    assert!(problems.is_empty(), "{variant:?}: {problems:#?}\n{seen:?}");
 }
 
 #[test]
@@ -365,5 +357,110 @@ fn home_isolation_harness_probe() {
     assert!(
         parts.iter().rev().skip(1).any(|part| part == "mirrors"),
         "a home beside the mirror: {injected:?}"
+    );
+}
+
+/// A control Suite in which every name in E failed with all its markers.
+fn control_suite() -> Suite {
+    let mut seen = Suite::default();
+    for (name, markers) in E {
+        seen.failed.insert((*name).to_owned());
+        seen.sections.insert((*name).to_owned(), markers.join("\n"));
+    }
+    seen.runs = vec![
+        (
+            FILTERS[0],
+            Some(101),
+            Some("test result: FAILED. 0 passed; 12 failed".to_owned()),
+        ),
+        (
+            FILTERS[1],
+            Some(0),
+            Some("test result: ok. 9 passed; 0 failed".to_owned()),
+        ),
+    ];
+    seen
+}
+
+/// A green Suite in which every name in E passed.
+fn green_suite() -> Suite {
+    let mut seen = Suite::default();
+    seen.passed = E.iter().map(|(name, _)| (*name).to_owned()).collect();
+    seen.runs = FILTERS
+        .iter()
+        .map(|filter| {
+            (
+                *filter,
+                Some(0),
+                Some("test result: ok. 12 passed; 0 failed".to_owned()),
+            )
+        })
+        .collect();
+    seen
+}
+
+/// The judge's own rows: each check refuses the case it exists for, and the
+/// well-formed runs pass (both sides).
+#[test]
+fn r3b_judge_refuses_aborted_runs_and_unrelated_failures() {
+    assert_eq!(
+        judge(Variant::Control, &control_suite()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        judge(Variant::Harness, &green_suite()),
+        Vec::<String>::new()
+    );
+
+    let mut aborted = green_suite();
+    aborted.runs[0].1 = None;
+    assert_eq!(
+        judge(Variant::Fallback, &aborted).len(),
+        1,
+        "a run killed by a signal"
+    );
+    let mut no_summary = green_suite();
+    no_summary.runs[1].2 = None;
+    assert_eq!(
+        judge(Variant::Harness, &no_summary).len(),
+        1,
+        "a run with no summary"
+    );
+    let mut failing_green = green_suite();
+    failing_green.runs[0] = (
+        FILTERS[0],
+        Some(101),
+        Some("test result: FAILED.".to_owned()),
+    );
+    assert_eq!(
+        judge(Variant::Harness, &failing_green).len(),
+        1,
+        "101 is no pass for green"
+    );
+
+    let (name, markers) = E[8];
+    assert_eq!(markers, ["one indexed entry", "left: 0"]);
+    let mut wrong_count = control_suite();
+    wrong_count
+        .sections
+        .insert(name.to_owned(), "one indexed entry\n  left: 2".to_owned());
+    assert_eq!(
+        judge(Variant::Control, &wrong_count),
+        vec![format!("{name} failed without the held lock's \"left: 0\"")],
+        "the label alone is not the lock's failure"
+    );
+    let mut missing = control_suite();
+    missing.sections.remove(E[0].0);
+    assert_eq!(
+        judge(Variant::Control, &missing).len(),
+        1,
+        "an E name that did not fail"
+    );
+    let mut aborted_control = control_suite();
+    aborted_control.runs[0].1 = Some(137);
+    assert_eq!(
+        judge(Variant::Control, &aborted_control).len(),
+        1,
+        "a killed control run"
     );
 }
