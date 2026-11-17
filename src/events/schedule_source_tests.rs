@@ -705,3 +705,33 @@ fn a_valid_timezone_still_parses() {
         assert_eq!(parses, 1, "{name} did not reach the parser once");
     }
 }
+
+/// Every zone chrono-tz compiles in passes the bound and the characters and
+/// parses back to itself: the check refuses no name the parser knows.
+#[test]
+fn every_compiled_zone_name_passes_the_check() {
+    for tz in chrono_tz::TZ_VARIANTS {
+        assert_eq!(super::zone(tz.name()).ok(), Some(tz), "{}", tz.name());
+    }
+}
+
+/// Through the subscription's own arguments: a name the check refuses and a
+/// name that is no zone get the same whole error, so the bound tells a client
+/// nothing new.
+/// Mutant: the call site parsing without the check.
+#[test]
+fn a_bounded_timezone_answers_like_a_name_that_is_no_zone() {
+    let refused = |zone: &str| {
+        super::parts(&json!({"cron": "0 9 * * *", "timezone": zone}))
+            .map(drop)
+            .expect_err("refused")
+    };
+    let no_zone = refused("Mars/Olympus_Mons");
+    let over = "A".repeat(super::MAX_ZONE + 1);
+    for bad in [over.as_str(), "Europe/Hel sinki", ""] {
+        let mut error = None;
+        let parses = parses_during(|| error = Some(refused(bad)));
+        assert_eq!(error.expect("ran"), no_zone, "{bad:?}");
+        assert_eq!(parses, 0, "{bad:?} reached the parser through parts");
+    }
+}
