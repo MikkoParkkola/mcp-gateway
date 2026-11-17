@@ -62,8 +62,8 @@ test.describe('script off', () => {
     const origin = new URL(baseURL).origin;
     await page.goto('/ui/overview/status');
     const field = page.locator('#signin-key');
-    await field.fill(KEY, { force: true });
-    await field.press('Enter', { force: true });
+    await field.fill(KEY);
+    await field.press('Enter');
     await expect(page).toHaveURL(`${origin}/dashboard`);
     await expect(page.getByText('Signed in', { exact: true })).toBeVisible();
     const log = await read();
@@ -79,6 +79,21 @@ test.describe('script off', () => {
     expect(cookies[0].secure).toBe(false);
   });
 
+  test('N2b on a phone-sized screen with script off, a tap on Sign in posts the key and opens the dashboard', async ({ page, request, baseURL }, testInfo) => {
+    const read = await openSigninLog(page, request, testInfo);
+    const origin = new URL(baseURL).origin;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/ui/overview/status');
+    await page.getByLabel('API key').fill(KEY);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(`${origin}/dashboard`);
+    const log = await read();
+    expect(log).toHaveLength(1);
+    expect(log[0].method).toBe('POST');
+    expect(log[0].body).toBe('key=mcpg_fixture_key_0123456789');
+    expect(await productCookies(page)).toHaveLength(1);
+  });
+
   test('N3 with script off a wrong key shows the refused line only at the fixed address, and sets no cookie', async ({ page, baseURL }) => {
     const origin = new URL(baseURL).origin;
     const line = page.getByText('That key was not accepted.', { exact: true });
@@ -86,8 +101,8 @@ test.describe('script off', () => {
     await expect(line).toBeHidden();
 
     const field = page.locator('#signin-key');
-    await field.fill('mcpg_wrong', { force: true });
-    await field.press('Enter', { force: true });
+    await field.fill('mcpg_wrong');
+    await field.press('Enter');
     await expect(page).toHaveURL(`${origin}/ui/overview/status#signin-refused`);
     await expect(line).toBeVisible();
     expect(await page.context().cookies()).toEqual([]);
