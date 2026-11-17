@@ -55,7 +55,10 @@ async fn settles<T>(task: &tokio::task::JoinHandle<T>) -> bool {
 /// The deadline's both sides: 1 ms short leaves the reload pending; past it,
 /// the reload is done.
 async fn cut_at_the_deadline<T>(reload: &tokio::task::JoinHandle<T>) {
-    tokio::time::advance(SAVE_DEADLINE - MS).await;
+    let short = SAVE_DEADLINE
+        .checked_sub(MS)
+        .expect("the deadline is over 1 ms");
+    tokio::time::advance(short).await;
     assert!(
         !settles(reload).await,
         "the reload ended before the deadline"
@@ -93,60 +96,54 @@ fn c3(at: ParkAt) {
         assert_eq!(events.len(), held, "{at:?}: {events:?}");
         gate.release();
         gate.completion().await;
-        match at {
-            ParkAt::AfterCheck => {
-                // Past its check, the job renames its own state and nothing else.
-                let file: serde_json::Value =
-                    serde_json::from_slice(&bytes_of(rig.dir.path())).expect("the file parses");
-                let stored = file["events"].as_array().expect("events").len();
-                assert_eq!(stored, 2, "{at:?}: the job's own state: {file}");
-                // Exactly the job's versions, read back by a store of its own:
-                // the start bytes, then the reload's under its published revision.
-                let persisted =
-                    super::ConfigHistory::open(rig.dir.path(), super::Bounds::default(), 1)
-                        .snapshots();
-                let gateway = rig.path.display().to_string();
-                let bytes_at = |index: usize| {
-                    persisted
-                        .get(index)
-                        .and_then(|snapshot| {
-                            snapshot.files.iter().find(|file| file.path == gateway)
-                        })
-                        .map(|file| file.bytes.clone())
-                };
-                assert_eq!(persisted.len(), 2, "{at:?}: two versions: {persisted:?}");
-                assert_eq!(bytes_at(0), Some(Some(ONE_BACKEND.as_bytes().to_vec())));
-                assert_eq!(bytes_at(1), Some(Some(TWO_BACKENDS.as_bytes().to_vec())));
-                let published = rig
-                    .ctx
-                    .live_config
-                    .applied_now()
-                    .map(|applied| applied.revision.clone());
-                assert_eq!(
-                    persisted.last().map(|snapshot| snapshot.revision.clone()),
-                    published,
-                    "{at:?}: under the revision the reload published"
-                );
-                let now = bytes_of(rig.dir.path());
-                write_owner_only(&rig.path, ONE_BACKEND).expect("drop the backend");
-                rig.ctx
-                    .reload_outcome()
-                    .await
-                    .expect("the next reload applies");
-                assert_eq!(
-                    bytes_of(rig.dir.path()),
-                    now,
-                    "{at:?}: a later record writes nothing"
-                );
-            }
-            _ => {
-                assert_eq!(
-                    bytes_of(rig.dir.path()),
-                    before,
-                    "{at:?}: still byte-identical"
-                );
-                assert_eq!(names_in(rig.dir.path()), names, "{at:?}: no temp file left");
-            }
+        if at == ParkAt::AfterCheck {
+            // Past its check, the job renames its own state and nothing else.
+            let file: serde_json::Value =
+                serde_json::from_slice(&bytes_of(rig.dir.path())).expect("the file parses");
+            let stored = file["events"].as_array().expect("events").len();
+            assert_eq!(stored, 2, "{at:?}: the job's own state: {file}");
+            // Exactly the job's versions, read back by a store of its own:
+            // the start bytes, then the reload's under its published revision.
+            let persisted =
+                super::ConfigHistory::open(rig.dir.path(), super::Bounds::default(), 1).snapshots();
+            let gateway = rig.path.display().to_string();
+            let bytes_at = |index: usize| {
+                persisted
+                    .get(index)
+                    .and_then(|snapshot| snapshot.files.iter().find(|file| file.path == gateway))
+                    .map(|file| file.bytes.clone())
+            };
+            assert_eq!(persisted.len(), 2, "{at:?}: two versions: {persisted:?}");
+            assert_eq!(bytes_at(0), Some(Some(ONE_BACKEND.as_bytes().to_vec())));
+            assert_eq!(bytes_at(1), Some(Some(TWO_BACKENDS.as_bytes().to_vec())));
+            let published = rig
+                .ctx
+                .live_config
+                .applied_now()
+                .map(|applied| applied.revision.clone());
+            assert_eq!(
+                persisted.last().map(|snapshot| snapshot.revision.clone()),
+                published,
+                "{at:?}: under the revision the reload published"
+            );
+            let now = bytes_of(rig.dir.path());
+            write_owner_only(&rig.path, ONE_BACKEND).expect("drop the backend");
+            rig.ctx
+                .reload_outcome()
+                .await
+                .expect("the next reload applies");
+            assert_eq!(
+                bytes_of(rig.dir.path()),
+                now,
+                "{at:?}: a later record writes nothing"
+            );
+        } else {
+            assert_eq!(
+                bytes_of(rig.dir.path()),
+                before,
+                "{at:?}: still byte-identical"
+            );
+            assert_eq!(names_in(rig.dir.path()), names, "{at:?}: no temp file left");
         }
         drop(installed);
     });

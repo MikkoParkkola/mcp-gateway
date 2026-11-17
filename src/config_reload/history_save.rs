@@ -331,9 +331,8 @@ impl super::ConfigHistory {
             gate.park_blocking();
             gate.finished();
         }
-        let now = match *self.mode.lock() {
-            super::StoreMode::Unopened { now } => now,
-            _ => return Ok(()),
+        let super::StoreMode::Unopened { now } = *self.mode.lock() else {
+            return Ok(());
         };
         let held = match take_sidecar(&sidecar_path(&file), deadline) {
             Ok(held) => held,
