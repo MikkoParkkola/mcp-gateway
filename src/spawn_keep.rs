@@ -13,6 +13,9 @@ use std::path::Path;
 /// The kind a shutdown save (run_shutdown_saves) reports as.
 pub(crate) const SHUTDOWN_SAVE: &str = "shutdown save";
 
+/// The kind a periodic saver (spawn_periodic_save) reports as, once at start.
+pub(crate) const PERIODIC_SAVE: &str = "periodic save";
+
 /// The temp dirs a detached writer keeps: test builds only.
 #[cfg(test)]
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;

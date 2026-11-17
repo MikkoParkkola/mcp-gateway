@@ -202,8 +202,11 @@ pub(super) fn spawn_periodic_save(
     let save = Arc::new(save);
     #[cfg(test)]
     let seams = periodic_seams_for(root.as_deref());
-    // Staging: the report and the per-tick keep come in the next commit.
-    let _ = &root;
+    // Reported once, here, before the loop: an unkept saver prints one line,
+    // not one per tick. Each tick keeps silently.
+    if let Some(root) = &root {
+        let _ = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, root);
+    }
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
         interval.tick().await;
@@ -222,6 +225,8 @@ pub(super) fn spawn_periodic_save(
             tokio::select! {
                 _ = interval.tick() => {
                     let save = Arc::clone(&save);
+                    // Taken before the thread exists; the thread holds it to its end.
+                    let kept = root.as_deref().map(crate::spawn_keep::kept_dirs_at_spawn);
                     #[cfg(test)]
                     let gate = seams.clone();
                     let spawned = std::thread::Builder::new()
@@ -231,6 +236,8 @@ pub(super) fn spawn_periodic_save(
                             if let Some(gate) = gate {
                                 gate.pre_save.pause_on_thread();
                             }
+                            // Bound, not `_`: the thread owns the keep until it ends.
+                            let _kept = kept;
                             save();
                         });
                     match spawned {
