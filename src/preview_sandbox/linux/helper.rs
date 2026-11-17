@@ -37,6 +37,11 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
             return ExitCode::from(super::REFUSED);
         }
     }
+    // Nothing the fetch step opened may reach the target.
+    if let Err(step) = check_descriptors() {
+        eprintln!("preview-sandbox: refused at {step}");
+        return ExitCode::from(super::REFUSED);
+    }
     supervise(plan)
 }
 
@@ -57,9 +62,35 @@ fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
     // process's environ, fd table or memory through /proc/1.
     set_dumpable_behavior(DumpableBehavior::NotDumpable)
         .map_err(|e| format!("making the helper non-dumpable ({e})"))?;
-    super::mounts::build_root(plan)?;
+    // The CA snapshot, opened before staging covers host /tmp; it is bound
+    // from this descriptor, which is closed once bound, before any child.
+    let ca = plan
+        .fetch
+        .as_ref()
+        .map(|paths| open_snapshot(&paths.ca))
+        .transpose()?;
+    super::mounts::build_root(plan, ca.as_ref().map(|(fd, _)| fd))?;
+    if let Some((fd, identity)) = ca {
+        drop(fd);
+        super::mounts::check_preview_config(identity)?;
+    }
     super::mounts::enter_root()?;
     Ok(control)
+}
+
+/// The CA snapshot at `path`, opened `O_PATH` (no symlink followed) and
+/// checked to be a regular file; its device and inode for the check that
+/// `ca.pem` is this file once bound.
+fn open_snapshot(path: &str) -> Result<(rustix::fd::OwnedFd, (u64, u64)), String> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    let flags = OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let fd = rustix::fs::open(path, flags, Mode::empty())
+        .map_err(|e| format!("opening the CA snapshot ({e})"))?;
+    let stat = rustix::fs::fstat(&fd).map_err(|e| format!("checking the CA snapshot ({e})"))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err("checking the CA snapshot (not a regular file)".into());
+    }
+    Ok((fd, (stat.st_dev, stat.st_ino)))
 }
 
 /// The fetch step's handshake: the credential, then `fetch_done` and the wait
