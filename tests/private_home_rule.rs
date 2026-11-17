@@ -219,7 +219,7 @@ fn r8b_data_dir_with_another_name_is_refused() {
     );
 }
 
-/// R11: an empty XDG_CONFIG_HOME, which the library would take as the working dir.
+/// R11: an empty `XDG_CONFIG_HOME`, which the library would take as the working dir.
 #[test]
 fn r11_an_empty_xdg_is_refused() {
     refuse_var(
@@ -230,7 +230,7 @@ fn r11_an_empty_xdg_is_refused() {
     );
 }
 
-/// R12: an empty MCP_GATEWAY_CONFIG_DIR, likewise.
+/// R12: an empty `MCP_GATEWAY_CONFIG_DIR`, likewise.
 #[test]
 fn r12_an_empty_data_dir_is_refused() {
     refuse_var(
@@ -241,7 +241,7 @@ fn r12_an_empty_data_dir_is_refused() {
     );
 }
 
-/// R13a: XDG_CONFIG_HOME under a parent that cannot be resolved.
+/// R13a: `XDG_CONFIG_HOME` under a parent that cannot be resolved.
 #[test]
 fn r13a_xdg_under_a_missing_parent_is_refused() {
     refuse_var(
@@ -252,7 +252,7 @@ fn r13a_xdg_under_a_missing_parent_is_refused() {
     );
 }
 
-/// R13b: MCP_GATEWAY_CONFIG_DIR under a parent that cannot be resolved.
+/// R13b: `MCP_GATEWAY_CONFIG_DIR` under a parent that cannot be resolved.
 #[test]
 fn r13b_data_dir_under_a_missing_parent_is_refused() {
     refuse_var(
@@ -293,7 +293,7 @@ fn refuse_leaf(leaf: &str, link: impl FnOnce(&Path, &Path)) {
 #[test]
 fn r14_a_config_leaf_symlink_out_is_refused() {
     refuse_leaf(".config", |decoy, at| {
-        std::os::unix::fs::symlink(decoy, at).expect("a symlink")
+        std::os::unix::fs::symlink(decoy, at).expect("a symlink");
     });
 }
 
@@ -302,7 +302,7 @@ fn r14_a_config_leaf_symlink_out_is_refused() {
 #[test]
 fn r15_a_data_leaf_symlink_out_is_refused() {
     refuse_leaf(".mcp-gateway", |decoy, at| {
-        std::os::unix::fs::symlink(decoy, at).expect("a symlink")
+        std::os::unix::fs::symlink(decoy, at).expect("a symlink");
     });
 }
 
@@ -415,10 +415,10 @@ fn removals_and_switch(expected: &mut std::collections::BTreeMap<String, Option<
 }
 
 fn s(path: &Path) -> Option<String> {
-    Some(path.to_string_lossy().into_owned())
+    path.to_str().map(str::to_owned)
 }
 
-/// T2: isolated_with_env_home puts the override at A and every platform-home
+/// T2: `isolated_with_env_home` puts the override at A and every platform-home
 /// variable at B, removes inherited gateway variables, and sets nothing else.
 #[test]
 fn t2_isolated_with_env_home_maps_two_homes() {
@@ -467,7 +467,7 @@ fn t2_isolated_with_env_home_maps_two_homes() {
     );
 }
 
-/// T7: the existing command() and command_with_env_home() keep today's env.
+/// T7: the existing `command()` and `command_with_env_home()` keep today's env.
 #[test]
 fn t7_existing_gateway_bin_envs_are_unchanged() {
     if private_home::is_row_child("t7_existing_gateway_bin_envs_are_unchanged") {
