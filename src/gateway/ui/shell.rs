@@ -41,16 +41,16 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.a15765357c1f.js",
-        include_bytes!("shell/gateway.a15765357c1f.js"),
+        "gateway.a18d7389a108.js",
+        include_bytes!("shell/gateway.a18d7389a108.js"),
     ),
     (
-        "shell.8a1ede0f5317.css",
-        include_bytes!("shell/shell.8a1ede0f5317.css"),
+        "shell.4a10a657d852.js",
+        include_bytes!("shell/shell.4a10a657d852.js"),
     ),
     (
-        "shell.b410045c062e.js",
-        include_bytes!("shell/shell.b410045c062e.js"),
+        "shell.c3a77326a918.css",
+        include_bytes!("shell/shell.c3a77326a918.css"),
     ),
     (
         "tips.93dac071a1b5.json",
@@ -61,8 +61,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.3ec2d575eff3.js",
-        include_bytes!("shell/tools.3ec2d575eff3.js"),
+        "tools.de4fdffd8c4c.js",
+        include_bytes!("shell/tools.de4fdffd8c4c.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
@@ -120,7 +120,9 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::REFERRER_POLICY, "no-referrer"),
+            // A no-referrer document posts Origin null, which the origin gate refuses.
+            // same-origin still sends no Referer off this origin.
+            (header::REFERRER_POLICY, "same-origin"),
         ],
         Html(DOCUMENT),
     )

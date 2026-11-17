@@ -201,6 +201,28 @@ impl OriginPolicy {
         canonical_authority(authority, default_port) == origin
     }
 
+    /// The sign-in form's own origin.
+    ///
+    /// When `public_url` is set, only that origin: a loopback address the
+    /// guard still admits is not the page a browser signed in from. Otherwise
+    /// only a loopback origin this listener admits. An unparseable `public_url`
+    /// admits nothing. Compared by [`same_origin`], so a default port written
+    /// out and one a browser omits are the same origin.
+    pub(crate) fn admits_signin(&self, origin: &str) -> bool {
+        let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
+        let config = self.live_config.get();
+        if let Some(url) = config.server.public_url.as_deref() {
+            let Ok(parsed) = url::Url::parse(url) else {
+                return false;
+            };
+            let public_origin = parsed.origin().ascii_serialization().to_ascii_lowercase();
+            return same_origin(&public_origin, &candidate);
+        }
+        self.allowed_origins
+            .iter()
+            .any(|allowed| same_origin(allowed, &candidate))
+    }
+
     /// `true` when a `Host` value names this gateway.
     ///
     /// A rebound name arrives here as the attacker's hostname, which is neither

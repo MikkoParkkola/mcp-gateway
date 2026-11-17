@@ -62,6 +62,7 @@ pub(crate) mod helpers;
 #[cfg(feature = "webui")]
 mod lookup_budget;
 mod origin_guard;
+pub(crate) use origin_guard::OriginPolicy;
 mod process_facts;
 #[cfg(feature = "webui")]
 pub(crate) use lookup_budget::{Charge, LookupBudget};

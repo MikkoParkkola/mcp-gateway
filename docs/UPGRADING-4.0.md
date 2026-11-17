@@ -4808,7 +4808,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 
 | Item | Class | What 4.0 does | Why |
 |---|---|---|---|
-| `/accounts/v1/{*rest}`, `/dashboard/logout`, `/ui/classic`, `/ui/{*path}` | hidden | still served unchanged; left out of the route reference; UPGRADING names it |  |
+| `/accounts/v1/{*rest}`, `/dashboard/logout`, `/ui/classic`, `/ui/signin`, `/ui/{*path}` | hidden | still served unchanged; left out of the route reference; UPGRADING names it |  |
 | `/sse` | hidden | unchanged; listed as a deprecation helper |  |
 | `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
