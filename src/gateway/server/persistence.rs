@@ -191,7 +191,8 @@ pub(super) fn spawn_cost_saver(
 /// than piling up threads.
 ///
 /// `root` is the file or dir the save writes (none for a saver that writes
-/// nothing): a test's temp dir holding it is kept by each tick's thread.
+/// nothing): a test's temp dir holding it is kept by the saver for its whole
+/// life, and by each tick's thread until that save returns.
 pub(super) fn spawn_periodic_save(
     name: &'static str,
     every: std::time::Duration,
@@ -202,11 +203,13 @@ pub(super) fn spawn_periodic_save(
     let save = Arc::new(save);
     #[cfg(test)]
     let seams = periodic_seams_for(root.as_deref());
-    // Reported once, here, before the loop: an unkept saver prints one line,
-    // not one per tick. Each tick keeps silently.
-    if let Some(root) = &root {
-        let _ = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, root);
-    }
+    // Taken and reported once, here, before the loop: an unkept saver prints
+    // one line, not one per tick. The saver holds it between ticks, so a test
+    // that dropped its share cannot lose the dir before the next tick writes.
+    let kept = root
+        .as_deref()
+        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, root))
+        .unwrap_or_default();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
         interval.tick().await;
@@ -225,11 +228,9 @@ pub(super) fn spawn_periodic_save(
             tokio::select! {
                 _ = interval.tick() => {
                     let save = Arc::clone(&save);
-                    // Taken before the thread exists; the thread holds it to its end.
-                    let kept = root
-                        .as_deref()
-                        .map(crate::spawn_keep::kept_dirs_at_spawn)
-                        .unwrap_or_default();
+                    // The tick's thread holds its own clone to its end, past
+                    // a saver that was aborted meanwhile.
+                    let kept = kept.clone();
                     #[cfg(test)]
                     let gate = seams.clone();
                     let spawned = std::thread::Builder::new()

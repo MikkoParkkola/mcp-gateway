@@ -588,6 +588,23 @@ def unkept_rows() -> None:
     clean = ["running 2 tests", "test a::b::row ... ok", "test a::b::other ... ok",
              "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
     assert unkept(clean) == [], unkept(clean)
+    # One raw line per kind the writers emit, from the full-lib sizing run (only the Spark mirror prefix of each
+    # path is replaced by /tmp), and the worker-thread creator a multi-thread runtime gives.
+    sized = [
+        ("package cache", "/tmp/.tmpOpr9CV/pkg-cache",
+         "backend::package_cache::retry_tests::a_backend_that_dies_for_an_unrelated_reason_is_not_retried"),
+        ("config lock", "/tmp/.tmpTQ6JVm/capabilities",
+         "capability::file_writer::tests::create_race_has_one_winner"),
+        ("shutdown save", "/tmp/.tmpBsItVX/ranker.json",
+         "gateway::server::persistence::shutdown_deadline_tests::the_state_saves_end_at_the_deadline_they_are_given"),
+        ("periodic save", "/tmp/.tmpnwcyRg", "gateway::server::persistence::tests::cost_saver_stops_on_shutdown"),
+        ("skill bundle", "/tmp/.tmp6oTLRb/skills",
+         "skills::watcher::burst_tests::a_pass_that_leaves_changes_behind_warns_once"),
+        ("config lock", "/tmp/.tmpzYfy13/gateway.yaml", "tokio-rt-worker"),
+    ]
+    for kind, path, creator in sized:
+        line = f"{kind} at {path} is in a temp dir no test kept; created by {creator}"
+        assert unkept([line]) == [f"unkept temp dir: {kind} at {path}; created by {creator}"], line
 
 
 def prebuilt_rows() -> None:
