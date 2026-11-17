@@ -135,11 +135,16 @@ HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNING = re.compile(r"^running (\d+) tests?$")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
+# test_dir_keep.rs report_unkept: "<kind> at <path> is in a temp dir no test kept; created by <test>",
+# on raw stderr, so it can start mid-line. The kind is read, never listed: a new writer's kind fails too.
+UNKEPT = re.compile(r"([a-z][a-z -]*) at (\S+) is in a temp dir no test kept; created by (\S+)")
 
 
 def unkept(lines: list[str]) -> list[str]:
     """One failure per distinct unkept-dir report in a step's output, whatever its kind."""
-    return []
+    return list(dict.fromkeys(
+        f"unkept temp dir: {m.group(1)} at {m.group(2)}; created by {m.group(3)}"
+        for line in lines for m in UNKEPT.finditer(line)))
 
 
 def selected(lines: list[str]) -> int:
