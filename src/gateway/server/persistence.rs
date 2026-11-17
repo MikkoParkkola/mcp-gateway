@@ -226,7 +226,10 @@ pub(super) fn spawn_periodic_save(
                 _ = interval.tick() => {
                     let save = Arc::clone(&save);
                     // Taken before the thread exists; the thread holds it to its end.
-                    let kept = root.as_deref().map(crate::spawn_keep::kept_dirs_at_spawn);
+                    let kept = root
+                        .as_deref()
+                        .map(crate::spawn_keep::kept_dirs_at_spawn)
+                        .unwrap_or_default();
                     #[cfg(test)]
                     let gate = seams.clone();
                     let spawned = std::thread::Builder::new()
@@ -236,9 +239,7 @@ pub(super) fn spawn_periodic_save(
                             if let Some(gate) = gate {
                                 gate.pre_save.pause_on_thread();
                             }
-                            // Bound, not `_`: the thread owns the keep until it ends.
-                            let _kept = kept;
-                            save();
+                            crate::spawn_keep::holding(kept, || save());
                         });
                     match spawned {
                         Ok(_) => {
@@ -327,7 +328,7 @@ pub(super) struct ShutdownSave {
     /// Its name, for the log.
     step: &'static str,
     /// The file or dir the save writes: a test's temp dir holding it is kept
-    /// while the save runs (crate::spawn_keep). None for a save that writes
+    /// while the save runs (`crate::spawn_keep`). None for a save that writes
     /// nothing.
     root: Option<PathBuf>,
     /// The write.
@@ -401,7 +402,8 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
         // still holds its share of the dir; the save thread holds it to its end.
         let kept = root
             .as_deref()
-            .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SHUTDOWN_SAVE, root));
+            .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SHUTDOWN_SAVE, root))
+            .unwrap_or_default();
         let (done, finished) = tokio::sync::oneshot::channel();
         let spawned = std::thread::Builder::new()
             .name(format!("shutdown: {step}"))
@@ -410,9 +412,7 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
                 if let Some(gate) = gate {
                     gate.pause_on_thread();
                 }
-                // Bound, not `_`: the thread owns the keep until it ends.
-                let _kept = kept;
-                save();
+                crate::spawn_keep::holding(kept, save);
                 let _ = done.send(());
             });
         match spawned {

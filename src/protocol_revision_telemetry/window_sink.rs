@@ -65,7 +65,7 @@ pub(crate) struct HttpSegmentSink {
 
 /// The temp dirs a detached open was asked to keep, taken when its thread was
 /// spawned: test builds carry them, a release build carries nothing. Shared
-/// with every detached writer (crate::spawn_keep).
+/// with every detached writer (`crate::spawn_keep`).
 pub(crate) use crate::spawn_keep::Kept;
 
 impl HttpSegmentSink {

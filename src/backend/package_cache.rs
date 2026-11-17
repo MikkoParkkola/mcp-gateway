@@ -479,10 +479,11 @@ fn discard_tombstone(tombstone: PathBuf) {
     drop(tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         crate::spawn_keep::pause_if_held(&tombstone);
-        let _kept = kept;
-        if !remove_now(&tombstone) {
-            warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
-        }
+        crate::spawn_keep::holding(kept, || {
+            if !remove_now(&tombstone) {
+                warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
+            }
+        });
     }));
 }
 
@@ -503,8 +504,7 @@ fn sweep_tombstones_once(root: &Path) {
     drop(tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         crate::spawn_keep::pause_if_held(&root);
-        let _kept = kept;
-        sweep_now(&root);
+        crate::spawn_keep::holding(kept, || sweep_now(&root));
     }));
 }
 

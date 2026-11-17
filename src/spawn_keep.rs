@@ -10,10 +10,10 @@
 
 use std::path::Path;
 
-/// The kind a shutdown save (run_shutdown_saves) reports as.
+/// The kind a shutdown save (`run_shutdown_saves`) reports as.
 pub(crate) const SHUTDOWN_SAVE: &str = "shutdown save";
 
-/// The kind a periodic saver (spawn_periodic_save) reports as, once at start.
+/// The kind a periodic saver (`spawn_periodic_save`) reports as, once at start.
 pub(crate) const PERIODIC_SAVE: &str = "periodic save";
 
 /// The kind the skills regen loop reports as, for its output dir and each
@@ -30,9 +30,10 @@ pub(crate) const CONFIG_LOCK: &str = "config lock";
 /// The temp dirs a detached writer keeps: test builds only.
 #[cfg(test)]
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
-/// Nothing to keep in a release build.
+/// Nothing to keep in a release build. Clone, not Copy: a writer clones its
+/// keep the same way in either build.
 #[cfg(not(test))]
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Kept;
 
 /// Test-only holds by path, for writers handed a path and nothing else (the
@@ -101,6 +102,22 @@ pub(crate) fn kept_at_spawn(kind: &'static str, path: &Path) -> Kept {
 #[cfg(not(test))]
 pub(crate) fn kept_at_spawn(_kind: &'static str, _path: &Path) -> Kept {
     Kept
+}
+
+/// Run a detached writer's `work` while it holds `kept`, then let the keep go:
+/// the keep lives exactly as long as the work. A writer's closure ends through
+/// this, so the keep is moved into the closure and never bound unread.
+#[cfg(test)]
+pub(crate) fn holding<R>(kept: Kept, work: impl FnOnce() -> R) -> R {
+    let out = work();
+    drop(kept);
+    out
+}
+
+/// Nothing is held in a release build.
+#[cfg(not(test))]
+pub(crate) fn holding<R>(Kept: Kept, work: impl FnOnce() -> R) -> R {
+    work()
 }
 
 /// One keep holding every dir `parts` keeps.

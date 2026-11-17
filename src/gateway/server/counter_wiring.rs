@@ -27,7 +27,7 @@ pub(super) struct Counters {
     pub(super) store: Arc<CounterStore>,
     file: Arc<CounterFile>,
     /// Where `file` saves (`<data_dir>/counters.json`): the root a detached
-    /// save keeps for a test while it writes (crate::spawn_keep).
+    /// save keeps for a test while it writes (`crate::spawn_keep`).
     path: std::path::PathBuf,
     /// The version change this start's restore marked, kept as a value for
     /// `GET /ui/api/gateway` rather than read back from marker history.

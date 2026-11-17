@@ -506,7 +506,7 @@ const LEFT: u8 = 2;
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
 /// it finishes, even if the awaiting caller is dropped. `root` is the config
 /// path the work touches: a test's temp dir holding it is kept while the
-/// thread runs (crate::spawn_keep); none for work that writes nothing.
+/// thread runs (`crate::spawn_keep`); none for work that writes nothing.
 async fn off_runtime<T: Send + 'static>(
     root: Option<&Path>,
     work: impl FnOnce() -> T + Send + 'static,
@@ -540,8 +540,9 @@ async fn off_runtime_in<T: Send + 'static>(
     // Taken before the thread exists, while the caller (a test) still holds
     // its share of the dir; the thread holds it to its end, past a caller
     // that left.
-    let kept =
-        root.map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::CONFIG_LOCK, root));
+    let kept = root
+        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::CONFIG_LOCK, root))
+        .unwrap_or_default();
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
@@ -549,15 +550,16 @@ async fn off_runtime_in<T: Send + 'static>(
             if let Some(held) = &held {
                 crate::spawn_keep::pause_if_held(held);
             }
-            let _kept = kept;
-            let out = work();
-            // A result nobody received (a held lock) is dropped before the
-            // thread counts as returned: closing it can stall on the same
-            // mount. A panic marks it returned too, as the guard drops.
-            if let Err(out) = done.send(out) {
-                drop(out);
-            }
-            drop(ended);
+            crate::spawn_keep::holding(kept, || {
+                let out = work();
+                // A result nobody received (a held lock) is dropped before the
+                // thread counts as returned: closing it can stall on the same
+                // mount. A panic marks it returned too, as the guard drops.
+                if let Err(out) = done.send(out) {
+                    drop(out);
+                }
+                drop(ended);
+            });
         })
         .map_err(|_| NoResult::Lost)?;
     let mut caller = Left {
