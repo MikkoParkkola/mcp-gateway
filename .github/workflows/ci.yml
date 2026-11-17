@@ -1151,7 +1151,7 @@ jobs:
       # timeout. memory.peak is printed for the trend only.
       - name: Memory tripwire
         if: always()
-        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
       # THROWAWAY (E1 run 2): the swap-out the tripwire will read, kernel-kept, so a step timeout still reports it.
       - name: Swap-out (E1 measurement)
         if: always()
@@ -1266,7 +1266,7 @@ jobs:
           if-no-files-found: error
       - name: Memory tripwire
         if: always()
-        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
       - name: Swap-out (E1 measurement)
         if: always()
         run: |
@@ -1292,7 +1292,7 @@ jobs:
         run: scripts/ci/throwaway-nested-outer.sh
       - name: Memory tripwire
         if: always()
-        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
       - name: Swap-out (E1 measurement)
         if: always()
         run: |
@@ -1327,7 +1327,7 @@ jobs:
           if-no-files-found: error
       - name: Memory tripwire
         if: always()
-        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
       - name: Swap-out (E1 measurement)
         if: always()
         run: |
@@ -1876,7 +1876,12 @@ jobs:
   # running them happens after a merge, in packaged-suite.yml.
   package-tests:
     name: Tests build from the packaged crate
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # THROWAWAY (E1 run 3): runs here, twice, to measure the part-by-part packaged build for its limits.
+    if: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2]
     runs-on: ubuntu-24.04
     timeout-minutes: 80
     steps:
