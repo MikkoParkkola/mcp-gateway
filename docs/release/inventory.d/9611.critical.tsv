@@ -1,0 +1,1 @@
+src/gateway/router/origin_guard.rs	admits_signin	1	critical	b	OriginPolicy::admits_signin	Decides the sign-in form's own origin before POST /ui/signin reads its body: only the public_url origin when one is set (none when it does not parse), otherwise a loopback origin this listener admits.

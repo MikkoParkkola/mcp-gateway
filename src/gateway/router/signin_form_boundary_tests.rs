@@ -277,6 +277,34 @@ async fn n6b_loopback_origin_is_refused_when_a_public_url_is_set() {
     });
 }
 
+/// An unparseable `public_url` names no origin, so the route admits none. The
+/// guard reads such a value as unset and still admits a loopback Origin, so
+/// the refusal is the route's own (401, not the guard's 403) and the body is
+/// never read. With no `public_url` the same Origin mints (N6c).
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn n6d_an_unparseable_public_url_admits_no_signin_origin() {
+    let (mut state, _dir) = fixture().await;
+    let (log, _audit_dir) = with_audit(&mut state);
+    reload(&state, |config| {
+        config.server.public_url = Some("not a url".to_string());
+    });
+    let loopback = http_origin(&state, "127.0.0.1");
+    let (body, polls) = counted(&format!("key={ADMIN_SECRET}"));
+    let refused = send(
+        &state,
+        form_post(SIGNIN, Some(&loopback), body, FORM, None, true),
+    )
+    .await;
+    assert_route_origin_refusal(&refused);
+    assert_eq!(polls.load(Ordering::SeqCst), 0, "the body was read");
+    assert!(
+        signin_records(&log).is_empty(),
+        "{:?}",
+        signin_records(&log)
+    );
+}
+
 /// `http://127.0.0.2` and `https://gw.example:8443` are the guard's 403s,
 /// green today. The loopback spellings the guard admits mint on a gateway
 /// with no public URL, and `https://gw.example` mints when `public_url`
