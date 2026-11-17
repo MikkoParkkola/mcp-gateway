@@ -431,6 +431,12 @@ impl CapabilityBackend {
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
         validate_cli_templates(&capability)?;
+        // The loader's rules for rate_limit and attribution hold for a
+        // definition registered directly too, before the catalogue changes.
+        super::definition::maps_rules::check_parsed(
+            std::path::Path::new(&capability.name),
+            &capability,
+        )?;
         let name = capability.name.clone();
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);

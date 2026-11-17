@@ -291,3 +291,18 @@ fn ld3b_a_paced_provider_with_no_host_is_refused() {
         ),
     );
 }
+
+#[test]
+fn ld4d_attribution_on_a_type_list_root_is_refused() {
+    let text = with(
+        "  output:\n    type: object\n",
+        "  output:\n    type: [array, \"null\"]\n",
+    );
+    assert_eq!(
+        refusal(&text),
+        format!(
+            "Configuration error: {FILE}: attribution is declared, so schema.output must be an \
+             object; this one is [\"array\",\"null\"]"
+        ),
+    );
+}

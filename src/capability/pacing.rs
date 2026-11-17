@@ -98,7 +98,11 @@ pub(crate) fn declared_intervals<'a>(
             .values()
             .chain(&capability.providers.fallback);
         for provider in providers {
-            let Some(rate) = provider.rate_limit else {
+            // An interval outside the loader's bounds never reaches a bucket.
+            let Some(rate) = provider
+                .rate_limit
+                .filter(|rate| (1..=600_000).contains(&rate.interval_ms))
+            else {
                 continue;
             };
             // The loader refuses a paced provider with no host key, so none

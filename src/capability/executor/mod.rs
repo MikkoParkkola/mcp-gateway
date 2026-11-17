@@ -480,30 +480,34 @@ impl CapabilityExecutor {
             Error::Config(format!("Invalid HTTP method '{}': {}", config.method, e))
         })?;
 
+        // Add headers; skip Authorization when auth.param is set (credential
+        // goes as a query param instead of a header).
+        let headers = self
+            .build_headers(config, &capability.auth, params, context)
+            .await?;
+        // Inject auth credential as a query parameter when auth.param is specified
+        // (e.g., Spoonacular uses ?apiKey=..., Google Maps uses ?key=...)
+        let query_credential = match capability.auth.param {
+            Some(ref param_name) if capability.auth.required => Some((
+                param_name.as_str(),
+                self.fetch_credential(&capability.auth, context).await?,
+            )),
+            _ => None,
+        };
+
         // Per-host pacing: one lookup decides admission, the client (no
-        // redirects, no protocol retries) and the attempts together.
+        // redirects, no protocol retries) and the attempts together. Taken
+        // after every await but the send, so a slow credential lookup cannot
+        // hold an admitted call back until the next one is admitted beside it.
         let paced = crate::capability::pacing::admit(&url)?;
         let client = if paced {
             &self.client.paced
         } else {
             &self.client.http
         };
-        let mut request = client.request(method, &url);
-
-        // Add headers; skip Authorization when auth.param is set (credential
-        // goes as a query param instead of a header).
-        let headers = self
-            .build_headers(config, &capability.auth, params, context)
-            .await?;
-        request = request.headers(headers);
-
-        // Inject auth credential as a query parameter when auth.param is specified
-        // (e.g., Spoonacular uses ?apiKey=..., Google Maps uses ?key=...)
-        if let Some(ref param_name) = capability.auth.param
-            && capability.auth.required
-        {
-            let credential = self.fetch_credential(&capability.auth, context).await?;
-            request = request.query(&[(param_name.as_str(), credential.as_str())]);
+        let mut request = client.request(method, &url).headers(headers);
+        if let Some((param_name, credential)) = &query_credential {
+            request = request.query(&[(*param_name, credential.as_str())]);
         }
 
         // Add query parameters (from config.params with substitution)
@@ -549,13 +553,15 @@ impl CapabilityExecutor {
         )
         .await?;
         // The paced client follows no redirect: its 3xx is the call's answer,
-        // an error naming where it pointed.
+        // an error naming the host it pointed to. Only the host: a Location
+        // can carry a signed token or a credential in its path or query.
         if paced && response.status().is_redirection() {
             let target = response
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
-                .unwrap_or("(no Location)");
+                .and_then(crate::capability::pacing::host_key)
+                .map_or_else(|| "another host".to_owned(), |k| k.host);
             return Err(Error::Protocol(format!(
                 "a paced provider does not follow redirects; {} answered {} pointing to {target}",
                 crate::capability::pacing::host_key(&url).map_or_else(String::new, |k| k.host),

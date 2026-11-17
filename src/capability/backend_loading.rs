@@ -110,6 +110,9 @@ impl CapabilityBackend {
             }
             tokio::task::yield_now().await;
         }
+        // A directory loaded earlier may hold a GraphQL or JSON-RPC provider
+        // on a host this one paces: the end state must not depend on order.
+        self.unload_unpaced_protocols();
 
         info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
         Ok(report)
@@ -291,6 +294,28 @@ impl CapabilityBackend {
             }
         }
         gate
+    }
+
+    /// Unload every registered capability that puts a GraphQL or JSON-RPC
+    /// provider on a host the whole catalogue now paces, logging each at
+    /// WARN. It may come from an earlier directory, so no directory's count
+    /// is adjusted.
+    fn unload_unpaced_protocols(&self) {
+        let refused: Vec<(String, String)> = {
+            let caps = self.capabilities.read();
+            let intervals = crate::capability::pacing::declared_intervals(caps.entries.iter());
+            caps.entries
+                .iter()
+                .filter_map(|c| {
+                    crate::capability::pacing::unpaced_protocol_refusal(c, &intervals)
+                        .map(|reason| (c.name.clone(), reason))
+                })
+                .collect()
+        };
+        for (name, reason) in refused {
+            warn!(backend = %self.name, capability = %name, error = %reason, "Failed to load capability");
+            self.unload_capability(&name);
+        }
     }
 
     /// Take out of `files` every capability that puts a GraphQL or JSON-RPC

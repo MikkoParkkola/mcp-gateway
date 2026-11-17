@@ -427,7 +427,8 @@ async fn rl12_control_an_unpaced_redirect_is_followed() {
 #[tokio::test]
 async fn rl12_a_paced_provider_does_not_follow_a_redirect() {
     let target = Stub::start(Reply::json("{}")).await;
-    let to = target.url("rl12pt.test", "/t");
+    // A Location carrying a signed token: only its host may be named.
+    let to = target.url("rl12pt.test", "/t?token=s3cr3t-sig");
     let from = redirect_to(&to).await;
     let b = backend(
         Names::default(),
@@ -441,7 +442,11 @@ async fn rl12_a_paced_provider_does_not_follow_a_redirect() {
     let err = call(&b, "rl12p", "a").await.expect_err("not followed");
     assert!(
         err.to_string().contains("rl12pt.test"),
-        "names the target: {err}"
+        "names the target's host: {err}"
+    );
+    assert!(
+        !err.to_string().contains("s3cr3t-sig"),
+        "never the Location's query: {err}"
     );
     assert_eq!(target.count(), 0);
 }
@@ -858,4 +863,99 @@ async fn rl19_a_weaker_backend_does_not_loosen_a_stricter_one() {
         .expect_err("the strictest interval holds");
     refusal_wait(&err, "rl19.test", 30_000);
     assert_eq!(stub.count(), 1);
+}
+
+// ── RL20: no permit is spent on a call that never reaches the wire ───
+
+/// A call that fails while its credential is prepared takes no permit: it
+/// is admitted only after every await but the send.
+#[tokio::test]
+async fn rl20_a_call_failing_before_the_send_takes_no_permit() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl20.test", "/s");
+    let needs_key = format!(
+        "fulcrum: \"1.0\"\nname: rl20key\ndescription: d\nschema:\n  input:\n    type: object\n    \
+         properties:\n      q:\n        type: string\nauth:\n  required: true\n  key: \
+         env:MAPS_RL20_UNSET_KEY_FOR_TEST\n  param: key\nproviders:\n  primary:\n    service: rest\n    \
+         rate_limit:\n      interval_ms: 30000\n    config:\n      endpoint: {url}\n      method: GET\n"
+    );
+    let b = backend(
+        Names::default(),
+        vec![
+            crate::capability::parse_capability(&needs_key).expect("capability"),
+            cap("rl20open", &url, None, false),
+        ],
+    );
+    assert!(
+        call(&b, "rl20key", "a").await.is_err(),
+        "premise: no key, so the call fails before the send"
+    );
+    call(&b, "rl20open", "b")
+        .await
+        .expect("the failed call took no permit");
+    assert_eq!(stub.count(), 1);
+}
+
+// ── RL15e: directory order decides nothing ───────────────────────────
+
+#[tokio::test]
+async fn rl15e_a_graphql_directory_loaded_first_is_still_refused() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl15e.test", "/g");
+    let first = tempfile::TempDir::new().expect("dir");
+    let second = tempfile::TempDir::new().expect("dir");
+    std::fs::write(
+        first.path().join("rl15egql.yaml"),
+        rpc_yaml("rl15egql", "graphql", &url),
+    )
+    .expect("write");
+    std::fs::write(
+        second.path().join("rl15erest.yaml"),
+        cap_yaml("rl15erest", &url, 30_000),
+    )
+    .expect("write");
+    let backend = CapabilityBackend::new("rl15e", Arc::new(executor(Names::default())));
+    backend
+        .load_from_directory(first.path().to_str().expect("utf-8"))
+        .await
+        .expect("loaded");
+    assert!(
+        backend.has_capability("rl15egql"),
+        "premise: loads while unpaced"
+    );
+    backend
+        .load_from_directory(second.path().to_str().expect("utf-8"))
+        .await
+        .expect("loaded");
+    assert!(backend.has_capability("rl15erest"));
+    assert!(
+        !backend.has_capability("rl15egql"),
+        "unloaded once its host is paced"
+    );
+}
+
+// ── LD8: direct registration obeys the loader's rules ────────────────
+
+#[test]
+fn ld8_registering_a_zero_interval_directly_is_refused_and_changes_nothing() {
+    // parse_capability applies no load rules; register_capability must.
+    let definition = cap("ld8", "http://ld8.test:9/s", Some(0), false);
+    let backend = CapabilityBackend::new("ld8", Arc::new(executor(Names::default())));
+    let err = backend
+        .register_capability(definition)
+        .expect_err("refused before the catalogue changes");
+    assert!(
+        err.to_string().contains("rate_limit.interval_ms is 0"),
+        "names the bound: {err}"
+    );
+    assert!(!backend.has_capability("ld8"));
+    assert!(
+        crate::capability::pacing::host_key("http://ld8.test:9/s").is_some_and(|key| {
+            !crate::capability::pacing::pacers()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&key)
+        }),
+        "no bucket was made for it"
+    );
 }

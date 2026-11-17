@@ -200,17 +200,21 @@ fn check_attribution(file: &Path, text: &str, output: &Value) -> Result<()> {
     if text.trim().is_empty() {
         return Err(refuse(file, "attribution is empty"));
     }
-    match output.get("type").and_then(Value::as_str) {
-        Some("object") | None => {}
-        Some(other) => {
-            return Err(refuse(
-                file,
-                format!(
-                    "attribution is declared, so schema.output must be an object; this one is \
-                     {other}"
-                ),
-            ));
-        }
+    // The same judgement publication makes: a root that is not an object
+    // (a type list included) is published under `items`, where a credit
+    // cannot be set.
+    if crate::capability::output_root_is_wrapped(output) {
+        let shown = match output.get("type") {
+            Some(Value::String(ty)) => ty.clone(),
+            Some(other) => other.to_string(),
+            None => "untyped".to_owned(),
+        };
+        return Err(refuse(
+            file,
+            format!(
+                "attribution is declared, so schema.output must be an object; this one is {shown}"
+            ),
+        ));
     }
     let declared = output
         .pointer("/properties/attribution/type")
