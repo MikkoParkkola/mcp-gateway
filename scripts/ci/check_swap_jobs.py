@@ -28,6 +28,7 @@ import contextlib
 import io
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -116,11 +117,9 @@ PART_CALL = re.compile(r"""MCP_GATEWAY_TEST_PART="\$k"\s+cargo\s+test\b.*\s--lib
 REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
 SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
 PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
-# The packaged build's one assignment of n: read from the build script, nothing else.
-N_FROM_BUILD = re.compile(r'^\s*n="\$\(sed\b[^\n]*\sscripts/dev/test-parts-build\.rs\)"\s*$', re.M)
-N_ASSIGNED = re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+)?n=", re.M)
-SHELL_SEPARATOR = re.compile(r"\s*(?:;|&&|\|\||\|)\s*")
-SHELL_COMMENT = re.compile(r"(?:^|\s)#.*$")
+# The packaged build's one assignment of n (one shell command each): read from the build script, nothing else.
+N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"$')
+N_ASSIGNED = re.compile(r"^(?:(?:export|local|readonly|declare|typeset)\s+(?:-\w+\s+)*)?n=")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -138,26 +137,58 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no part")
     if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
         out.append("the build mode builds no non-lib test target")
-    # Every part: the part builds sit inside a loop over 1..N, with n assigned once, from the build script, so a
-    # shortened loop or a part built outside it cannot pass.
-    joined = block.replace("\\\n", " ")
+    # Every part: the part builds sit inside a loop over 1..N, with n assigned once (in any command of the block), by
+    # the build script's read, so a shortened loop or a part built outside it cannot pass.
+    commands = [cmd for line in block.replace("\\\n", " ").splitlines() for cmd in (shell_commands(line) or [line])]
+    assigns = [cmd for cmd in commands if N_ASSIGNED.match(cmd)]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
-    if (not loop or len(N_ASSIGNED.findall(joined)) != 1 or not N_FROM_BUILD.search(joined)
+    if (not loop or len(assigns) != 1 or not N_FROM_BUILD.match(assigns[0])
             or any(PART_CALL.search(line) for line in outside.splitlines())):
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n assigned once, from '
                    "scripts/dev/test-parts-build.rs")
     return out
 
 
+def shell_commands(line: str) -> list[str] | None:
+    """The commands on one shell line (continuations already joined), split at `;`, `&`, `&&`, `||` and `|` outside
+    quotes, a word starting with `#` ending the line as bash's comments do; None when the line does not tokenize (an
+    unbalanced quote). A guard against a whole build coming back by accident, not a shell parser: command
+    substitution and eval are not looked into."""
+    lex = shlex.shlex(line, posix=False, punctuation_chars=";&|")
+    lex.whitespace_split = True
+    lex.commenters = ""
+    out: list[str] = []
+    cur: list[str] = []
+    try:
+        for tok in lex:
+            if tok.startswith("#"):
+                break
+            if set(tok) <= set(";&|"):
+                out += [" ".join(cur)] if cur else []
+                cur = []
+            else:
+                cur.append(tok)
+    except ValueError:
+        return None
+    return out + ([" ".join(cur)] if cur else [])
+
+
 def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | None = None) -> bool:
-    """Whether every command in `job` that builds the library tests goes through one of `marks`. Judged per shell
-    command (continuations joined, lines split at `;`, `&&`, `||` and `|`), so a helper call cannot vouch for a whole
-    build beside it in the same job, step or line."""
-    commands = [cmd for step in job.get("steps", []) if isinstance(step, dict)
-                for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()
-                for cmd in SHELL_SEPARATOR.split(SHELL_COMMENT.sub("", line))]
-    builds = [cmd for cmd in commands if builds_library(cmd, aliases)]
+    """Whether every command in `job` that builds the library tests goes through one of `marks`, judged per shell
+    command (shell_commands), so a helper call cannot vouch for a whole build beside it in the same job, step or
+    line. A line that does not tokenize and builds the library counts as not through."""
+    builds: list[str] = []
+    for step in job.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        for line in str(step.get("run", "")).replace("\\\n", " ").splitlines():
+            commands = shell_commands(line)
+            if commands is None:
+                if builds_library(line, aliases):
+                    return False
+                continue
+            builds += [cmd for cmd in commands if builds_library(cmd, aliases)]
     return bool(builds) and all(any(m in cmd for m in marks) for cmd in builds)
 
 
@@ -175,7 +206,7 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
     # or timed-out step; one placed before the build would measure nothing.
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
-        last_build = max(i for i, s in enumerate(steps) if builds_library(str(s.get("run", ""))))
+        last_build = max((i for i, s in enumerate(steps) if builds_library(str(s.get("run", "")))), default=-1)
         if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
@@ -476,9 +507,16 @@ def self_test() -> int:
         ("a helper job with a whole build on another line of the same step",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "\n" + whole_job["steps"][0]["run"]},
                                                    tripwire]}}, True, True),
-        ("a helper job with a whole build after a separator on the same line",
-         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "; " + whole_job["steps"][0]["run"]},
-                                                   tripwire]}}, True, True),
+        *[(f"a helper job with a whole build after {sep.strip()!r} on the same line",
+           {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + sep + whole_job["steps"][0]["run"]},
+                                                     tripwire]}}, True, True)
+          for sep in ("; ", " && ", " || ", " | ", " & ")],
+        ("a quoted # before a whole build on the helper's next line",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + '\necho " #"; '
+                                                           + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
+        ("an unbalanced quote on a line that builds the library",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + '; echo "x; '
+                                                           + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
         ("a whole build whose trailing comment names the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": whole_job["steps"][0]["run"] + "  # scripts/ci/lib-parts.sh"},
                                                    tripwire]}}, True, True),
@@ -519,6 +557,7 @@ def self_test() -> int:
         ("a fixed list of parts, not 1..N", shape.format(part, rest).replace('$(seq 1 "$n")', "1 2"), True),
         ("N not read from the build script", shape.format(part, rest).replace(n_line, "  n=2\n"), True),
         ("n overridden after it is read", shape.format(part, rest).replace(n_line, n_line + "  n=2\n"), True),
+        ("n overridden after a separator", shape.format(part, rest).replace(n_line, n_line + "  true; n=2\n"), True),
         ("a part built outside the loop", shape.format(part, rest + "\n  " + part), True),
     ]
     for label, text, want_bad in packaged_cases:
