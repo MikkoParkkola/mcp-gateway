@@ -172,5 +172,5 @@ impl crate::security::ssrf::HostResolver for Names {
 
 /// An executor in normal mode whose clients resolve through `names`.
 pub(crate) fn executor(names: Names) -> CapabilityExecutor {
-    CapabilityExecutor::with_test_resolver(&names)
+    CapabilityExecutor::with_test_resolver(names)
 }

@@ -50,12 +50,14 @@ fn channels(result: &ToolsCallResult) -> (Value, Value) {
 }
 
 fn object_output(fields: &[&str]) -> String {
-    let props: String = fields
-        .iter()
-        .chain(["attribution"].iter())
-        .map(|f| format!("      {f}:\n        type: string\n"))
-        .collect();
-    format!("    type: object\n    properties:\n{props}")
+    use std::fmt::Write as _;
+    fields.iter().chain(["attribution"].iter()).fold(
+        String::from("    type: object\n    properties:\n"),
+        |mut out, f| {
+            let _ = write!(out, "      {f}:\n        type: string\n");
+            out
+        },
+    )
 }
 
 fn wrapped_output(results_type: &str) -> String {

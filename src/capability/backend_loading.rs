@@ -166,10 +166,7 @@ impl CapabilityBackend {
         // The same admission gate the initial load applies.
         let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        for name in self.drop_unpaced_protocols(&mut loaded_files) {
-            total -= 1;
-            refused.insert(name);
-        }
+        total -= self.drop_unpaced_protocols(&mut loaded_files, &mut refused);
         for file in loaded_files {
             match validate_capability_account_binding(
                 &file.definition,
@@ -217,10 +214,7 @@ impl CapabilityBackend {
             super::super::op_gate::reach(super::super::op_gate::Step::Swap);
             caps.install(admitted);
             caps.settle_absent(refused);
-            // With the swap, under the same lock.
-            crate::capability::pacing::seed(&crate::capability::pacing::declared_intervals(
-                caps.entries.iter(),
-            ));
+            crate::capability::pacing::seed_from(&caps.entries);
             // With the entries, under the same lock: the part names this
             // catalogue and the coverage of the operation that wrote it.
             caps.unread = self.recording.lock().clone();
@@ -268,17 +262,18 @@ impl CapabilityBackend {
 
 impl CapabilityBackend {
     /// Take out of `files` every capability that puts a GraphQL or JSON-RPC
-    /// provider on a host the new catalogue paces, logging each at WARN, and
-    /// return their names. Judged on the whole catalogue, so file order
-    /// decides nothing.
+    /// provider on a host the new catalogue paces, logging each at WARN and
+    /// adding its name to `refused`; return how many. Judged on the whole
+    /// catalogue, so file order decides nothing.
     fn drop_unpaced_protocols(
         &self,
         files: &mut Vec<crate::capability::loader::LoadedCapability>,
-    ) -> Vec<String> {
+        refused: &mut std::collections::HashSet<String>,
+    ) -> usize {
         let intervals = crate::capability::pacing::declared_intervals(
             files.iter().map(|file| &file.definition),
         );
-        let mut dropped = Vec::new();
+        let before = files.len();
         files.retain(|file| {
             let Some(reason) =
                 crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
@@ -291,9 +286,9 @@ impl CapabilityBackend {
                 error = %reason,
                 "Capability refused on reload"
             );
-            dropped.push(file.definition.name.clone());
+            refused.insert(file.definition.name.clone());
             false
         });
-        dropped
+        before - files.len()
     }
 }

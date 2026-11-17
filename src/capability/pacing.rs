@@ -91,6 +91,11 @@ pub(crate) fn declared_intervals<'a>(
     intervals
 }
 
+/// Seed the map from a whole catalogue: its strictest interval per host.
+pub(crate) fn seed_from(capabilities: &[CapabilityDefinition]) {
+    seed(&declared_intervals(capabilities));
+}
+
 /// Seed the map with `intervals`. A host whose interval is unchanged keeps
 /// its bucket; a changed one gets a new bucket, whose first permit is taken
 /// before it is inserted when the old bucket was used, so no request is

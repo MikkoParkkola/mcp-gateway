@@ -48,12 +48,12 @@ impl CapabilityExecutor {
     /// name, so the cache and the hop checks run as in production.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_test_resolver<R>(resolver: &R) -> Self
+    pub(crate) fn with_test_resolver<R>(resolver: R) -> Self
     where
         R: crate::security::ssrf::HostResolver + Clone + 'static,
     {
         let mut executor = Self::new();
-        executor.client = client::build_over(|| {
+        executor.client = client::build_over(move || {
             reqwest::Client::builder().no_proxy().dns_resolver(
                 crate::security::ssrf::PinningResolver::new(resolver.clone())
                     .with_policy(crate::security::ssrf::DestinationPolicy::Configured),

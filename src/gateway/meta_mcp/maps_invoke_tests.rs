@@ -77,12 +77,14 @@ fn cap(name: &str, url: &str, top: &str, output: &str, extra: &str) -> Capabilit
 
 /// An object output schema with `fields` (each a string) and `attribution`.
 fn object_output(fields: &[&str]) -> String {
-    let props: String = fields
-        .iter()
-        .chain(["attribution"].iter())
-        .map(|f| format!("      {f}:\n        type: string\n"))
-        .collect();
-    format!("    type: object\n    properties:\n{props}")
+    use std::fmt::Write as _;
+    fields.iter().chain(["attribution"].iter()).fold(
+        String::from("    type: object\n    properties:\n"),
+        |mut out, f| {
+            let _ = write!(out, "      {f}:\n        type: string\n");
+            out
+        },
+    )
 }
 
 // ── RL16: a paced refusal through gateway_invoke ─────────────────────
