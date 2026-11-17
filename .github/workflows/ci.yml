@@ -254,6 +254,10 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
+          python3 scripts/ci/test_lib_parts_cov.py
+          python3 scripts/ci/test_compile_cgroup.py
+          python3 scripts/ci/test_coverage_parts_wiring.py
+          scripts/gate-env/.venv/bin/python scripts/ci/test_coverage_union_merge.py
           python3 scripts/ci/test_memory_tripwire.py
           python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test

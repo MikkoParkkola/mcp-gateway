@@ -163,13 +163,17 @@ jobs:
       - name: Run the part
         env:
           PART: ${{ matrix.part }}
-        # Healthy parts take up to 41 min; a stall ends here with its log, and the memory log samples it every 30 s
-        # (scripts/ci/check_swap_jobs.py). Its lines go to stderr, so they are in run.log too, as "memory ..." lines.
+        # A lib part builds and runs one compile-time test part (scripts/ci/lib-parts.sh cov), under the memory gate
+        # (scripts/ci/compile-cgroup.sh); the int parts run as before. A stall ends here with its log, and the memory
+        # log samples it every 30 s (scripts/ci/check_swap_jobs.py); its lines go to stderr, so they are in run.log too.
         timeout-minutes: 70
         run: |
-          set -o pipefail
           cargo llvm-cov clean --workspace
-          scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
+          scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh cov "$COVERAGE_PARTS" "$PART" > run.log 2>&1
+      # The part's output went to run.log (bundled for the grade, uploaded on failure); show it here too.
+      - name: Show the part's log
+        if: always()
+        run: cat run.log
       - name: Bundle
         env:
           PART: ${{ matrix.part }}
@@ -187,6 +191,11 @@ jobs:
           retention-days: 7
           compression-level: 1
           path: bundle/
+      # A part writes nothing to swap and a whole lib test build about 7 GiB (ci.yml's tripwire): past 2 GiB a whole
+      # build came back. The kernel keeps the count, so `always()` still reports after a step timeout.
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
   linux-grade:
     name: llvm-cov Linux, grade
@@ -227,6 +236,21 @@ jobs:
           bash scripts/ci/coverage_shard_merge.sh "${expected[@]}"
           cp shards/cov-shard-sdk/run.log sdk-run.log
           for p in "${expected[@]}"; do [ "$p" = sdk ] || cat "shards/cov-shard-$p/run.log"; done > all-run.log
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      # Every graded run: each lib part ran exactly the tests the source puts in that part, parts exactly 1..N, none
+      # empty, no test in two parts. The lists come from each part's own tests.tsv (bundled already); the expected sets
+      # and the check are the Linux lib gate's (ci.yml), unchanged.
+      - name: Lib test parts union
+        run: |
+          python3 scripts/ci/coverage_shards.py lists "$RUNNER_TEMP/lib-lists" shards
+          scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
+          python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-lists" "$RUNNER_TEMP/expected"
       - name: Reports
         run: |
           set -o pipefail

@@ -56,7 +56,7 @@ WRAPPERS = (
     # The shared lib test binary: `export-lib` compiles it once for the run.
     re.compile(r"scripts/ci/shard_tests\.py\s+export-lib\b"),
     # The Linux lib test binary in parts: the helper compiles each part through export-lib.
-    re.compile(r"scripts/ci/lib-parts\.sh\s+export\b"),
+    re.compile(r"scripts/ci/lib-parts\.sh\s+(export|cov)\b"),
     re.compile(r"scripts/ci/coverage_shards\.py\s+run\b"),
     re.compile(r"scripts/ci/packaged-tests\.sh\s+(build|run)\b"),
     # The mutant harness, run from the repo or from the copy mutants.yml takes
@@ -96,12 +96,11 @@ EXPECTED = {
 
 # The lib test split (SPLIT.6): every in-scope job builds the library tests through scripts/ci/lib-parts.sh, so each
 # compile is one part, never the whole binary, or it is listed here with why. Shrink-only: the jobs PR's second half
-# converts the first four rows' jobs and deletes their rows; the stage B jobs keep the whole build until then.
+# converts the packaged-suite and release jobs and deletes their rows; the stage B jobs keep the whole build until then.
 HELPER = "scripts/ci/lib-parts.sh"
 WHOLE_BUILD_ALLOWED = {
     ("packaged-suite.yml", "packaged-suite"): "converted by the jobs PR's second half (post-merge packaged suite)",
     ("release.yml", "verify"): "converted by the jobs PR's second half (release verify)",
-    ("coverage-probe.yml", "linux-part"): "converted by the jobs PR's second half (llvm-cov Linux lib parts)",
     ("ci.yml", "test-throwaway-hosted"): "stage B: the throwaway full-test job",
     ("mutants.yml", "linux-hosted"): "stage B: mutant batches",
     ("ci.yml", "test-shards"): "builds the integration targets only (int-a, int-b): no lib test target",

@@ -9,12 +9,45 @@
 # against 1..N, N read from the build script, before anything builds. A part whose binary lists no test fails.
 set -euo pipefail
 
+# lib-parts.sh cov PLAN PART: validate lib-K, run coverage under the compile gate with the part prefix,
+# then rename the sole lib executable to mcp_gateway-HASH-pK for bundling. Other parts run with the
+# part variable removed, without the gate or rename. A failed run keeps its status and renames nothing.
 mode="${1:-}"
 if { [ "$mode" != export ] && [ "$mode" != cov ]; } || [ $# -ne 3 ]; then
   echo "usage: $0 export PARTS DEST | cov PLAN PART" >&2
   exit 2
 fi
 if [ "$mode" = cov ]; then
+  plan="$2"
+  part="$3"
+  root="$(cd "$(dirname "$0")/../.." && pwd)"
+  if [[ "$part" = lib-* ]]; then
+    k="${part#lib-}"
+    n="$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*;.*/\1/p' \
+      "$root/scripts/dev/test-parts-build.rs")"
+    if [ -z "$n" ]; then
+      echo "::error::lib-parts: the build script declares no const N: u32" >&2
+      exit 1
+    fi
+    if ! [[ "$k" =~ ^[1-9][0-9]*$ ]] || [ "${#k}" -gt "${#n}" ] || [ "$k" -gt "$n" ]; then
+      echo "::error::lib-parts: part '$k' is outside 1..$n" >&2
+      exit 1
+    fi
+    MCP_GATEWAY_TEST_PART="$k" "$root/scripts/ci/compile-cgroup.sh" \
+      python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
+    executables=()
+    while IFS= read -r -d '' executable; do
+      executables+=("$executable")
+    done < <(find target/llvm-cov-target/debug/deps -maxdepth 1 -type f -perm -u+x \
+      -name 'mcp_gateway-*' ! -name '*.*' -print0)
+    if [ "${#executables[@]}" -ne 1 ]; then
+      echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}" >&2
+      exit 1
+    fi
+    mv "${executables[0]}" "${executables[0]}-p$k"
+  else
+    env -u MCP_GATEWAY_TEST_PART python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
+  fi
   exit 0
 fi
 parts="$2"

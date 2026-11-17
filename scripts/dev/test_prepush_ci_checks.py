@@ -93,9 +93,12 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/coverage_shards.py", ("check", "$COVERAGE_PARTS", "metadata.json")): "cargo: reads cargo metadata output",
     ("scripts/ci/coverage_shards.py", ("objects", "$log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
     ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
-    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "$PART"),
-     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1', "tee run.log")): (
-        "cargo: runs an instrumented cargo test part"),
+    ("scripts/ci/coverage_shards.py", ("lists", "<TMP>/lib-lists", "shards")): (
+        "artifact: reads the downloaded coverage lib parts' test lists"),
+    ("scripts/ci/lib-parts.sh", ("cov", "$COVERAGE_PARTS", "$PART")): (
+        "cargo: builds and runs one instrumented coverage part under the memory gate"),
+    ("scripts/ci/lib_union.py", ("<TMP>/lib-lists", "<TMP>/expected")): (
+        "artifact: compares the coverage lib parts' lists with the source's sets"),
     ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "sdk"),
      ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1', "tee run.log")): (
         "cargo: runs the instrumented SDK journey"),

@@ -9,21 +9,27 @@ it). A trial splits that step across runners and merges the profiles. Each
 shard is the same command over a subset, and the shards of one plan are exact
 complements of it:
 
-- the library is split by a libtest filter and the matching `--skip`;
+- plan 4 compiles the library as parts `lib-1` through `lib-N`, with no
+  libtest filter; N comes from the shared build script reader;
+- plan 3 splits the library by a libtest filter and the matching `--skip`,
+  while plan 1 runs every target together;
 - the bins go whole into one shard;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`).
 
 `check` reads `cargo metadata` and fails when a target that `--tests` builds
-falls in no shard or in two, so a new kind of target cannot drop out of the
-merged grade unnoticed. Unlike `shard_tests.py`, nothing else is skipped (the
+falls in no shard or has unexpected owners. Plan 4 requires exactly the N
+library parts; every other target has one owner. `lists` adapts downloaded
+library test inventories for the union check, which verifies their contents
+against the source. Unlike `shard_tests.py`, nothing else is skipped (the
 grade runs the full-burst test), and there are no doctests, examples or
 TMPDIR guard, as in the single job.
 
   coverage_shards.py plan <n>              print the plan's shards as JSON
   coverage_shards.py check <n> <metadata>  check the partition (file or -)
   coverage_shards.py run <n> <shard>       run one shard, or `sdk` (exit 1 on failure)
-  coverage_shards.py lists <out> <shards>  write the downloaded lib parts' test lists
+  coverage_shards.py lists OUT SHARDS     write OUT/lib-K/pK/list.txt from
+                                           SHARDS/cov-shard-lib-K/tests.tsv
   coverage_shards.py objects <report-log> <manifest>...
                                            every manifest executable with coverage
                                            sections is read by each llvm-cov command
@@ -36,9 +42,12 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lib_union  # noqa: E402
 from shard_tests import GLOB_A, GLOB_ALL, GLOB_B, HEADER, LIB_SPLIT, RESULT, SDK, cargo  # noqa: E402
 
 # Every plan also runs the SDK journey's binary as its own part, as the single
@@ -61,8 +70,6 @@ PLANS: dict[int, dict[str, tuple[list[str], list[str]]]] = {
         "int": (["--bins", "--test", GLOB_ALL], []),
     },
     4: {
-        "lib-a": _LIB_A,
-        "lib-b": _LIB_B,
         "int-a": (["--bins", "--test", GLOB_A], []),
         "int-b": (["--test", GLOB_B], []),
     },
@@ -70,13 +77,23 @@ PLANS: dict[int, dict[str, tuple[list[str], list[str]]]] = {
 
 
 def plan(n: int) -> dict[str, tuple[list[str], list[str]]]:
-    """RED stub: keep this builder name; P2 patches lib_union.part_count before calling plan(4)."""
+    """Build numbered parts on demand, retaining the current plan in the registry.
+
+    Bundle readers can import this module without a build script. Resolve the
+    reader's path against this checkout so callers can change working directory.
+    """
+    if n == 4:
+        count = lib_union.part_count(Path(__file__).resolve().parents[2] / lib_union.BUILD_SCRIPT)
+        PLANS[4] = {
+            **{f"lib-{k}": (["--lib"], []) for k in range(1, count + 1)},
+            "int-a": (["--bins", "--test", GLOB_A], []),
+            "int-b": (["--test", GLOB_B], []),
+        }
     return PLANS[n]
 
 
 def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -> list[str]:
-    """The shards that run target `name` of `kind`. The library is split by a
-    filter and its complement, so its two shards together are one owner."""
+    """The shards that run target `name` of `kind`, including every library part."""
     found = []
     for shard, (args, _test) in plan.items():
         if "--tests" in args:
@@ -94,9 +111,12 @@ def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -
 
 def check(n: int, metadata: dict) -> list[str]:
     """Every target `cargo test --tests` builds, with the shards that own it:
-    the problems, empty when the library is split in exactly two shards by a
-    filter and its `--skip`, and every other target is in exactly one."""
-    plan = PLANS[n]
+    the problems, empty when the library has exactly its plan's owners and
+    filters, and every other target is in exactly one shard."""
+    selected = plan(n)
+    parts = ([f"lib-{k}" for k in range(1, lib_union.part_count(
+        Path(__file__).resolve().parents[2] / lib_union.BUILD_SCRIPT) + 1)]
+        if n not in (1, 3) else None)
     problems = []
     # The grade runs without `--workspace`, so cargo builds the workspace's
     # default members; an older cargo that omits them means the root package.
@@ -113,11 +133,15 @@ def check(n: int, metadata: dict) -> list[str]:
             # `--tests` builds every target whose `test` flag is set.
             if not target.get("test", kind in ("lib", "bin", "test")):
                 continue
-            found = owners(plan, kind, target["name"])
+            found = owners(selected, kind, target["name"])
             if kind == "lib":
-                # Whole in one shard, or split by the filter and its `--skip`.
-                filters = sorted(" ".join(plan[s][1]) for s in found)
-                if filters not in ([""], sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"])):
+                # Numbered compile parts must each run without a libtest filter.
+                # The older plans retain their whole or complementary-filter run.
+                filters = sorted(" ".join(selected[s][1]) for s in found)
+                if parts is not None:
+                    if sorted(found) != sorted(parts) or any(selected[s][1] for s in found):
+                        problems.append(f"lib {target['name']}: in {found}, filters {filters}; expected {parts}")
+                elif filters not in ([""], sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"])):
                     problems.append(f"lib {target['name']}: split as {filters}")
             elif len(found) != 1:
                 problems.append(f"{kind} {target['name']}: in {found or 'no shard'}")
@@ -129,7 +153,7 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
         # The SDK journey's binary alone, single-threaded, the same in every plan.
         select = [*BASE, "--test", SDK_TARGET, "--", "--test-threads", "1"]
     else:
-        args, test_args = PLANS[n][shard]
+        args, test_args = plan(n)[shard]
         select = [*BASE, *args, "--", *test_args, "--skip", SDK]
     # The tests come from libtest's own listing, before anything runs, so no
     # output can interleave with a name; the run's per-binary result lines then
@@ -152,6 +176,35 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     print(f"::notice::coverage {n}/{shard}: {sum(map(len, listed.values()))} tests "
           f"in {len(listed)} binaries, rc {rc}")
     return rc or (1 if problems else 0)
+
+
+def lists(out: Path, shards: Path) -> list[str]:
+    """Adapt downloaded numbered lib inventories, preserving ignored test names.
+
+    Missing parts remain absent for lib_union to diagnose; a present artifact
+    must supply a nonempty library inventory before it can become a list.
+    """
+    problems = []
+    for shard in sorted(shards.glob("cov-shard-lib-*")):
+        match = re.fullmatch(r"cov-shard-lib-([1-9][0-9]*)", shard.name)
+        if match is None or not shard.is_dir():
+            continue
+        source = shard / "tests.tsv"
+        try:
+            rows = source.read_text(encoding="utf-8").splitlines()
+        except OSError as error:
+            problems.append(f"{source}: {error}")
+            continue
+        names = [fields[1] for row in rows if len(fields := row.split("\t")) == 3
+                 and fields[0] == "unittests src/lib.rs" and fields[1]]
+        if not names:
+            problems.append(f"{source}: lists no library test")
+            continue
+        k = match.group(1)
+        destination = out / f"lib-{k}" / f"p{k}" / "list.txt"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("".join(f"{name}: test\n" for name in names), encoding="utf-8")
+    return problems
 
 
 def binary_of(header: str) -> str:
@@ -632,8 +685,10 @@ def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
     if len(argv) == 4 and argv[1] == "lists":
-        # RED stub: implementation writes OUT/lib-K/pK/list.txt from SHARDS.
-        return 0
+        problems = lists(Path(argv[2]), Path(argv[3]))
+        for problem in problems:
+            print(f"::error::coverage lists: {problem}")
+        return 1 if problems else 0
     if len(argv) == 3 and argv[1] == "canary":
         problems = canary(open(argv[2], encoding="utf-8", errors="replace").read())
         for p in problems:
@@ -655,7 +710,7 @@ def main(argv: list[str]) -> int:
                 print(f"{digest(f.read())}  {path}")
         return 0
     if len(argv) == 3 and argv[1] == "plan" and argv[2].isdigit() and int(argv[2]) in PLANS:
-        print(json.dumps(sorted(PLANS[int(argv[2])])))
+        print(json.dumps(sorted(plan(int(argv[2])))))
         return 0
     if len(argv) == 4 and argv[1] == "check" and argv[2].isdigit() and int(argv[2]) in PLANS:
         raw = sys.stdin.read() if argv[3] == "-" else open(argv[3], encoding="utf-8").read()
@@ -664,7 +719,7 @@ def main(argv: list[str]) -> int:
             print(f"::error::coverage partition: {p}")
         return 1 if problems else 0
     if (len(argv) == 4 and argv[1] == "run" and argv[2].isdigit() and int(argv[2]) in PLANS
-            and (argv[3] == SDK_PART or argv[3] in PLANS[int(argv[2])])):
+            and (argv[3] == SDK_PART or argv[3] in plan(int(argv[2])))):
         return run(int(argv[2]), argv[3])
     print(__doc__, file=sys.stderr)
     return 2
