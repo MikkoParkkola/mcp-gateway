@@ -461,7 +461,8 @@ mod r9_windows_aliases {
             .output()
             .expect("cmd runs");
         assert!(out.status.success(), "cmd failed: {}", out.status);
-        let (pairs, _) = out.stdout.as_chunks::<2>();
+        let (pairs, odd) = out.stdout.as_chunks::<2>();
+        assert!(odd.is_empty(), "cmd /u printed an odd byte count: not UTF-16");
         let units: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
         let short = String::from_utf16_lossy(&units).trim().to_string();
         assert!(!short.is_empty(), "cmd printed no short form");
