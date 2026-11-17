@@ -156,6 +156,15 @@ pub(super) async fn start_fetching(
 ) -> Result<Started, Refusal> {
     use super::proxy::System;
     use std::sync::Arc;
+    // Staged dark until the uv rows are required in CI: the rows reach the
+    // uv fetch below this entry, through `start_fetching_with`.
+    if let Ok(super::fetch::Phases {
+        fetch: Some(super::fetch::Fetch::Uv(_)),
+        ..
+    }) = super::fetch::plan(target)
+    {
+        return Err(Refusal::Step("the uv fetch is not built yet".into()));
+    }
     let ambient = Ambient {
         ca_bundle,
         runtime_dir,
@@ -222,12 +231,12 @@ async fn start_fetching_with(
                 bundle.source.display()
             ))
         })?;
-    let npm = npm_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
+    let (npm, uv) = npm_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
         ca: utf8(&ca)?,
         npm,
-        uv: None,
+        uv,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {
@@ -298,19 +307,22 @@ fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
 /// The npm fetch a target needs, or `None` when it names no package (the
 /// handshake alone). npm and node are the ones beside the target's `npx`, its
 /// version floor checked; `ip` and both must lie in the plan's bound trees,
-/// where the root shows them at the same paths. uv is refused here until its
-/// fetch is built.
+/// where the root shows them at the same paths. A `uvx` target is planned by
+/// [`uv_probe::uv_fetch`].
 fn npm_fetch(
     target: &Target,
     plan: &mut Plan,
     path: Option<&OsStr>,
     proxy: &Path,
-) -> Result<Option<plan::NpmFetch>, Refusal> {
+) -> Result<(Option<plan::NpmFetch>, Option<plan::UvFetch>), Refusal> {
     use super::fetch::Fetch;
     let phases = super::fetch::plan(target)?;
     let spec = match phases.fetch {
-        None => return Ok(None),
-        Some(Fetch::Uv(_)) => return Err(Refusal::Step("the uv fetch is not built yet".into())),
+        None => return Ok((None, None)),
+        Some(Fetch::Uv(spec)) => {
+            return uv_probe::uv_fetch(target, plan, path, proxy, spec, &phases.run_args)
+                .map(|uv| (None, Some(uv)));
+        }
         Some(Fetch::Npm(spec)) => spec,
     };
     let requested = target.program.to_str().unwrap_or("npx");
@@ -326,14 +338,17 @@ fn npm_fetch(
         .map(|a| a.to_str().map(str::to_owned))
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| Refusal::Step("reading an argument (not UTF-8)".to_owned()))?;
-    Ok(Some(plan::NpmFetch {
-        spec,
-        run_args,
-        npm: utf8(&npm)?,
-        node_dir: utf8(&node_dir)?,
-        ip,
-        proxy: utf8(proxy)?,
-    }))
+    Ok((
+        Some(plan::NpmFetch {
+            spec,
+            run_args,
+            npm: utf8(&npm)?,
+            node_dir: utf8(&node_dir)?,
+            ip,
+            proxy: utf8(proxy)?,
+        }),
+        None,
+    ))
 }
 
 /// A step refusal with the time it came after the fetch step began.

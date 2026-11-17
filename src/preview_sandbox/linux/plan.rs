@@ -83,6 +83,16 @@ pub(crate) enum Fetcher<'a> {
     Uv(&'a UvFetch),
 }
 
+impl Fetcher<'_> {
+    /// The proxy's Unix socket the fetcher reaches the network through.
+    pub(crate) fn proxy(&self) -> &str {
+        match self {
+            Self::Npm(npm) => &npm.proxy,
+            Self::Uv(uv) => &uv.proxy,
+        }
+    }
+}
+
 impl FetchPaths {
     /// The fetcher this plan names, if any; a plan naming both refuses.
     pub(crate) fn fetcher(&self) -> Result<Option<Fetcher<'_>>, String> {

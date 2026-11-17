@@ -4,8 +4,8 @@
 //! from outside the registry, and the run's argv comes from the installed
 //! package's own metadata, never from a listing of a bin directory.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Linux fetch step, a later part, calls these")
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step calls these so far")
 )]
 
 use std::io::Read as _;

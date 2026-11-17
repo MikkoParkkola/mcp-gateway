@@ -4,19 +4,87 @@
 //! the canonical `uvx` the target names, and the host's `python3` placed by
 //! narrow binds, never its whole tree, with every globally installed package
 //! directory masked.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the uv fetch's plan calls these (the uv fetch part)"
-    )
-)]
 
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::plan::{Plan, UvFetch};
 use super::{ProgramBind, program_bind, utf8};
-use crate::preview_sandbox::Refusal;
+use crate::preview_sandbox::install::uv_name;
+use crate::preview_sandbox::{Refusal, Target};
+
+/// The uv fetch a `uvx` target needs (design 1, 2 and 4): uv beside the
+/// real `uvx`, its floor checked; `python3` on `path`, probed with `-S`, and
+/// placed by narrow binds and masks; uv placed by the program rule. `uvx`
+/// itself is never run, so what was bound for it as the program goes first.
+pub(super) fn uv_fetch(
+    target: &Target,
+    plan: &mut Plan,
+    path: Option<&OsStr>,
+    proxy: &Path,
+    spec: String,
+    run_args: &[OsString],
+) -> Result<UvFetch, Refusal> {
+    let requested = target.program.to_str().unwrap_or("uvx");
+    let uvx = super::resolve_command(requested, path, None)
+        .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
+    let uv = uv_beside(&uvx)?;
+    check_uv(&uv)?;
+    let python = super::resolve_command("python3", path, None)
+        .map_err(|e| Refusal::Step(format!("finding python3 ({e})")))?;
+    let python = python_real(&python)?;
+    let xy = python_xy(&python)?;
+    let uvx_real = fs::canonicalize(&uvx).unwrap_or_else(|_| uvx.clone());
+    let uvx_tree = super::runtime_tree(&uvx_real);
+    plan.bound_back.clear();
+    plan.read_only
+        .retain(|r| Path::new(r) != uvx_real && uvx_tree.as_deref() != Some(Path::new(r)));
+    let place = place_python(&python, xy, &plan.read_only)?;
+    plan.read_only.extend(place.read_only);
+    plan.bound_back.extend(place.bound_back);
+    plan.hidden.extend(place.masks);
+    match program_bind(&uv, &plan.read_only) {
+        ProgramBind::Refused => {
+            return Err(Refusal::Step(format!(
+                "placing uv ({} lies under a masked secret path)",
+                uv.display()
+            )));
+        }
+        ProgramBind::System => {}
+        ProgramBind::UsrLocal(dirs) => {
+            for dir in dirs {
+                plan.bound_back.push(utf8(&dir)?);
+            }
+        }
+        ProgramBind::Runtime(tree) => plan.read_only.push(utf8(&tree)?),
+        ProgramBind::File(file) => plan.read_only.push(utf8(&file)?),
+    }
+    let ip = super::probe::find_ip(&super::probe::IP_CANDIDATES, &|p: &Path| {
+        super::placed(p, plan)
+    })?;
+    let run_args = run_args
+        .iter()
+        .map(|a| a.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| Refusal::Step("reading an argument (not UTF-8)".to_owned()))?;
+    let python_dir = python.parent().ok_or_else(|| {
+        Refusal::Step(format!(
+            "placing python3 ({} has no directory)",
+            python.display()
+        ))
+    })?;
+    Ok(UvFetch {
+        name: uv_name(&spec),
+        spec,
+        run_args,
+        uv: utf8(&uv)?,
+        python: utf8(&python)?,
+        python_dir: utf8(python_dir)?,
+        ip,
+        proxy: utf8(proxy)?,
+    })
+}
 
 /// The largest interpreter binary read for its library names.
 const MAX_BINARY: u64 = 256 << 20;
