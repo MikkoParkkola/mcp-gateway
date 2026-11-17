@@ -168,6 +168,7 @@ def _cut_shell_comment(text: str) -> str:
     must not reach the lexer: an unbalanced quote drops the whole line."""
     quote: str | None = None
     i = 0
+    at_word_start = True
     while i < len(text):
         ch = text[i]
         if quote:
@@ -180,13 +181,16 @@ def _cut_shell_comment(text: str) -> str:
             continue
         if ch == "\\":
             i += 2
+            at_word_start = False
             continue
         if ch in "\"'":
             quote = ch
             i += 1
+            at_word_start = False
             continue
-        if ch == "#" and (i == 0 or text[i - 1] in " \t"):
+        if ch == "#" and at_word_start:
             return text[:i].rstrip()
+        at_word_start = ch in " \t"
         i += 1
     return text
 
@@ -200,9 +204,9 @@ def _tokenize(group: list[tuple[int, str]]) -> list[tuple[str, int]]:
     """
     chars: list[tuple[str, int]] = []
     for index, (lineno, raw) in enumerate(group):
-        # Backticks wrap a command in prose (`run `mcp-gateway --host``). They are
-        # not shell syntax this lexer understands, and they glue onto the binary.
-        text = _cut_shell_comment(_strip_marker(raw)).replace("`", "")
+        # A backtick bounds a command: prose wraps one in it (`run `mcp-gateway
+        # --host``), and shell substitutes one, so the words after it are not its.
+        text = _cut_shell_comment(_strip_marker(raw)).replace("`", " ; ")
         if text.rstrip().endswith("\\"):
             text = text.rstrip()[:-1]
         for ch in text:
@@ -320,6 +324,11 @@ def command_hits(
             take(found, invocation, line)
             i = nxt
             continue
+        # A quoted command line is one token (`sh -c "mcp-gateway ..."`, a JSON or
+        # prose quote): scan its words as a command of their own.
+        words = token.split()
+        if len(words) > 1 and _is_gateway_bin(words[0]):
+            hits.extend(command_hits(_tokenize([(line, token)]), file, table))
         i += 1
     return hits
 
@@ -440,7 +449,7 @@ def _flow_items(lines: list[str], start: int) -> list[tuple[str, int]]:
                 buf_line = i + 1
                 j += 1
                 continue
-            if ch == "#":
+            if ch == "#" and (j == 0 or line[j - 1] in " \t"):
                 break
             if ch in " \t" and not "".join(buf).strip():
                 j += 1
@@ -733,9 +742,12 @@ def _scan_dockerfile(file: str, text: str, table: CliTable) -> list[Hit]:
     hits: list[Hit] = []
     for stage in stages:
         entry_gateway = False
-        for kind, _group, items in stage:
+        for kind, group, items in stage:
             if kind == "ENTRYPOINT":
                 entry_gateway = bool(items) and _is_gateway_bin(items[0][0])
+            elif kind == "OTHER" and re.match(r"ENTRYPOINT\b", group[0][1].strip()):
+                # Shell form runs through `sh -c`, which ignores CMD.
+                entry_gateway = False
         for kind, group, items in stage:
             if items is not None and kind in {"ENTRYPOINT", "CMD"}:
                 hits += _hits_exec(items, kind, entry_gateway, file, table)

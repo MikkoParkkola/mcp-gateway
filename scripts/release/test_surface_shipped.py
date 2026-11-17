@@ -618,6 +618,46 @@ def test_f5_a_hash_inside_a_word_is_not_a_comment() -> None:
     assert scan("docs/f5.md", text) == expect("docs/f5.md", [(2, "mcp-gateway --host")]), scan("docs/f5.md", text)
 
 
+def test_f13_a_hash_inside_a_plain_flow_item_is_not_a_comment() -> None:
+    # YAML starts a comment only after whitespace: `/c#1` is one plain scalar.
+    text = "services:\n  gateway:\n    image: mcp-gateway:1\n    command: [--config, /c#1, --host, 0.0.0.0]\n"
+    assert scan(K5_FILE, text) == expect(K5_FILE, [(4, "mcp-gateway --host")]), scan(K5_FILE, text)
+
+
+def test_f14_an_escaped_space_keeps_the_hash_inside_the_word() -> None:
+    text = sh("mcp-gateway --config c\\ #1 --host 0.0.0.0")
+    assert scan("docs/f14.md", text) == expect("docs/f14.md", [(2, "mcp-gateway --host")]), scan("docs/f14.md", text)
+
+
+def test_f15_a_backtick_substitution_is_its_own_command() -> None:
+    # The flag after the substitution belongs to echo, not to the gateway inside it.
+    assert scan("docs/f15.md", sh("echo `mcp-gateway --config c` --host 0.0.0.0")) == []
+
+
+def test_f15_a_command_inside_backticks_still_counts() -> None:
+    text = sh("echo `mcp-gateway --host 0.0.0.0`")
+    assert scan("docs/f15.md", text) == expect("docs/f15.md", [(2, "mcp-gateway --host")]), scan("docs/f15.md", text)
+
+
+def test_f16_a_final_shell_form_entrypoint_ignores_cmd() -> None:
+    text = 'CMD ["--host", "0.0.0.0"]\nENTRYPOINT ["mcp-gateway"]\nENTRYPOINT /bin/sh -c "exec other"\n'
+    assert scan(K8_FILE, text) == [], scan(K8_FILE, text)
+
+
+def test_f6_an_escaped_json_string_is_decoded() -> None:
+    file = "deploy/helm/mcp-gateway/values.schema.json"
+    text = '{\n  "description": "run \\"mcp-gateway --host 0.0.0.0\\"\\nthen check"\n}\n'
+    assert scan(file, text) == expect(file, [(2, "mcp-gateway --host")]), scan(file, text)
+
+
+def test_f12_every_selected_user_doc_is_scanned() -> None:
+    root = ss.ROOT.resolve()
+    docs = {path.resolve().relative_to(root).as_posix() for path in sd.doc_set()}
+    files, _errs = ss.shipped_files()
+    missing = sorted(docs - rels(files, ss.ROOT))
+    assert docs and not missing, missing[:5]
+
+
 def test_g1_serve_host_resolves_through_parent() -> None:
     text = sh("mcp-gateway serve --host x")
     assert scan("docs/g1.md", text) == expect("docs/g1.md", [(2, "mcp-gateway --host")]), scan("docs/g1.md", text)
