@@ -35,7 +35,6 @@ use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 use super::notification_sink::DeliveryHandle;
 use super::write_claim::WriteClaim;
@@ -173,7 +172,7 @@ impl WebSocketSession {
     /// Create a new session with a randomly-generated UUID v4 identifier.
     pub fn new() -> Self {
         Self {
-            session_id: Uuid::new_v4().to_string(),
+            session_id: crate::ids::new_v4().to_string(),
             messages_received: 0,
             messages_sent: 0,
         }

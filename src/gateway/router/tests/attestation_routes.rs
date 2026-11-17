@@ -96,7 +96,7 @@ fn token_with(capabilities: &[&str]) -> String {
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
-                task_uuid: uuid::Uuid::new_v4(),
+                task_uuid: crate::ids::new_v4(),
                 capabilities: capabilities.iter().map(|c| (*c).to_string()).collect(),
             },
             chrono::Utc::now(),
@@ -328,7 +328,7 @@ async fn a_token_minted_for_another_audience_is_refused_on_both_routes() {
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
-                task_uuid: uuid::Uuid::new_v4(),
+                task_uuid: crate::ids::new_v4(),
                 capabilities: vec![TOOL.to_string()],
             },
             chrono::Utc::now(),

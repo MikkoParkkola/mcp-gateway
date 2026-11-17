@@ -1,0 +1,2 @@
+src/gateway/server/run_wiring.rs	open_tasks	1	standard	borderline	Gateway::open_tasks	Opens the durable task store fail-closed, importing its ownership bindings into admission, installs the upstream recovery adapter and starts the expiry sweep before any listener exists (moved from Gateway::run)
+src/gateway/server/run_wiring.rs	stop_custody_and_backends	1	standard	borderline	Gateway::stop_custody_and_backends	Releases personal-account custody after the in-flight drain, then stops every backend by the stop budget's backend deadline (moved from Gateway::run)

@@ -4,6 +4,7 @@
 //! the gateway itself makes no namespace syscall, and the gateway's own binary
 //! runs inside them as `__preview-sandbox` and `__preview-drop`.
 
+mod control_client;
 mod drop;
 mod helper;
 mod mounts;
@@ -81,15 +82,27 @@ pub(super) fn start(
     target: &Target,
     protected: &[PathBuf],
 ) -> Result<Started, Refusal> {
-    let unshare = UNSHARE
+    let unshare = find_unshare()?;
+    let plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
+    let child = launch(unshare, helper, &plan)?;
+    Ok(Started {
+        child,
+        isolation: super::Isolation::linux(&plan),
+    })
+}
+
+fn find_unshare() -> Result<&'static Path, Refusal> {
+    UNSHARE
         .iter()
         .map(Path::new)
         .find(|p| p.is_file())
-        .ok_or(Refusal::MissingTool("util-linux unshare"))?;
-    let plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let encoded = serde_json::to_string(&plan)
-        .map_err(|e| Refusal::Step(format!("encoding the plan ({e})")))?;
+        .ok_or(Refusal::MissingTool("util-linux unshare"))
+}
 
+/// Start `unshare` with the helper and its plan.
+fn launch(unshare: &Path, helper: &Path, plan: &Plan) -> Result<tokio::process::Child, Refusal> {
+    let encoded = serde_json::to_string(plan)
+        .map_err(|e| Refusal::Step(format!("encoding the plan ({e})")))?;
     let mut command = tokio::process::Command::new(unshare);
     command
         .args([
@@ -118,13 +131,105 @@ pub(super) fn start(
         // Killing `unshare` makes `--kill-child` kill the helper, PID 1 of the
         // namespace, and with it every process inside.
         .kill_on_drop(true);
-    let child = command
+    command
         .spawn()
-        .map_err(|e| Refusal::Step(format!("starting unshare ({e})")))?;
-    Ok(Started {
-        child,
-        isolation: super::Isolation::linux(&plan),
-    })
+        .map_err(|e| Refusal::Step(format!("starting unshare ({e})")))
+}
+
+/// [`start`] after the fetch step's handshake (`preview_sandbox::start_fetching`):
+/// the preview's own proxy and control socket, then the helper's session to
+/// `expired`, raced against `unshare` exiting. Any refusal after the spawn
+/// kills `unshare` (and with it the namespace) and reaps it before returning.
+pub(super) async fn start_fetching(
+    helper: &Path,
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+) -> Result<Started, Refusal> {
+    use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
+    use super::proxy::{AllowlistProxy, System};
+    use std::sync::Arc;
+
+    let begun = tokio::time::Instant::now();
+    let unshare = find_unshare()?;
+    let mut plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
+    let proxy = AllowlistProxy::bind(Arc::new(System), Arc::new(System), Arc::new(System))
+        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
+    // Beside the proxy socket, in the proxy's owner-only directory, removed
+    // with it when the proxy drops.
+    let control = proxy.unix_path().with_file_name("control.sock");
+    let listener = tokio::net::UnixListener::bind(&control)
+        .map_err(|e| Refusal::Step(format!("binding the control socket ({e})")))?;
+    plan.fetch = Some(plan::FetchPaths {
+        control: utf8(&control)?,
+    });
+    let mut child = launch(unshare, helper, &plan)?;
+    let outcome = match child.id() {
+        None => Err(Refusal::Step("unshare ended as it started".into())),
+        Some(unshare_pid) => {
+            let uid = rustix::process::getuid().as_raw();
+            let session = async {
+                let stream =
+                    accept_helper(listener, unshare_pid, uid, CONTROL_BOUNDS, deadline).await?;
+                serve_session(stream, &proxy, deadline, CONTROL_BOUNDS).await
+            };
+            let ended_first = tokio::select! {
+                served = session => Some(served),
+                _ = child.wait() => None,
+            };
+            match ended_first {
+                Some(served) => served,
+                None => Err(helper_ended(&mut child).await),
+            }
+        }
+    };
+    match outcome {
+        Ok(()) => Ok(Started {
+            child,
+            isolation: super::Isolation::linux(&plan),
+        }),
+        Err(refusal) => {
+            // Ignored: unshare may already be gone. The reap is bounded by the
+            // lesser of a short bound and the deadline, so an unshare stuck in
+            // the kernel cannot hold the refusal; kill_on_drop and tokio's
+            // orphan reaping finish it.
+            let _ = child.start_kill();
+            let reap =
+                REAP_BOUND.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            let _ = tokio::time::timeout(reap, child.wait()).await;
+            Err(with_elapsed(refusal, begun))
+        }
+    }
+}
+
+/// How long a refused start waits for its killed `unshare` to be reaped.
+const REAP_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Why the sandbox ended before its fetch step finished, from what the
+/// helper (or `unshare`) printed.
+async fn helper_ended(child: &mut tokio::process::Child) -> Refusal {
+    use tokio::io::AsyncReadExt as _;
+    let mut text = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let read = stderr.read_to_string(&mut text);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), read).await;
+    }
+    if text.trim().is_empty() {
+        Refusal::Step("the sandbox helper ended before its fetch step".into())
+    } else {
+        classify(&text)
+    }
+}
+
+/// A step refusal with the time it came after the fetch step began.
+fn with_elapsed(refusal: Refusal, begun: tokio::time::Instant) -> Refusal {
+    match refusal {
+        Refusal::Step(why) => Refusal::Step(format!(
+            "{why} ({} ms into the fetch step)",
+            begun.elapsed().as_millis()
+        )),
+        other => other,
+    }
 }
 
 /// Turn a target into the helper's plan, refusing what the root cannot hold.
@@ -233,6 +338,7 @@ fn build_plan(
         env,
         program: utf8(&exec)?,
         target: argv,
+        fetch: None,
     })
 }
 

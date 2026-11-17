@@ -524,7 +524,7 @@ impl InputBridge<'_> {
     ) -> Result<Vec<(String, Value)>, BridgeError> {
         let mut answers = Vec::with_capacity(prompts.len());
         for prompt in prompts {
-            let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
+            let id = format!("{}{}", prompt.kind.prefix(), crate::ids::new_v4());
             let left = self.bounds.aggregate.saturating_sub(started.elapsed());
             let wait = self.bounds.per_prompt.min(left);
             let sent =

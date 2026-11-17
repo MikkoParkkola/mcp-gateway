@@ -522,12 +522,17 @@ fn generate_pkce() -> (String, String) {
 
 /// Generate a random state parameter
 fn generate_state() -> String {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "nonce: the OAuth state; the PKCE verifier comes from random_secret"
+    )]
     let state_bytes: [u8; 16] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(state_bytes)
 }
 
 /// Generate a random client ID
 fn generate_client_id() -> String {
+    #[allow(clippy::disallowed_methods, reason = "id: a 16-byte OAuth client id")]
     let id_bytes: [u8; 16] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(id_bytes)
 }

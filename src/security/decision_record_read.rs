@@ -7,7 +7,7 @@
 use serde::Deserialize as _;
 use serde_json::Value;
 
-use super::{Decided, Decision, Effect};
+use super::{Coverage, Decided, Decision, Effect};
 
 /// The decision object version that writes request findings and the declared
 /// effect. A record below it predates both.
@@ -107,6 +107,19 @@ pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
         None => Some(not_recorded(decision)),
         Some(Effect::Undeclared) => Some(UNDECLARED),
         Some(Effect::ReadOnly | Effect::MayWrite) => None,
+    }
+}
+
+/// Receipt and API wording for the capability coverage a record carries.
+///
+/// No field and `not_loaded` share a sentence: that id does not cover the
+/// files. `partial` names the directories that could be read. `covered`
+/// adds nothing.
+pub(crate) fn capabilities_line(coverage: Option<Coverage>) -> &'static str {
+    match coverage {
+        None | Some(Coverage::NotLoaded) => "capabilities not included",
+        Some(Coverage::Partial) => "capabilities included from the directories that could be read",
+        Some(Coverage::Covered) => "",
     }
 }
 

@@ -59,9 +59,43 @@ fn receipt_v2_record_serves_the_full_decision_projection() {
             "flags": evidence::FLAGS_NOT_SET, "findings": [found.clone()],
             "effect": "read_only", "decided": evidence::DECIDED_FRESH,
             "config_revision": "cfg-1", "running_revision": "run-1",
+            "config_revision_capabilities": "capabilities not included",
         })
     );
     assert_eq!(body["findings"], json!([found]));
+}
+
+/// The coverage a record's id carries, as the receipt words it: a record
+/// written before coverage was recorded and `not_loaded` share a sentence,
+/// `partial` has its own, `covered` adds no key, and no id adds none.
+#[test]
+fn receipt_says_what_the_config_revision_covers() {
+    let none = "capabilities not included";
+    let partial = "capabilities included from the directories that could be read";
+    for (coverage, line) in [
+        (None, Some(none)),
+        (Some("not_loaded"), Some(none)),
+        (Some("partial"), Some(partial)),
+        (Some("covered"), None),
+    ] {
+        let mut patch = json!({"config_revision": "cfg-1"});
+        if let Some(stored) = coverage {
+            patch["config_revision_capabilities"] = json!(stored);
+        }
+        let body = receipt_of(Some(with(&patch)));
+        assert_eq!(
+            body["decision"].get("config_revision_capabilities"),
+            line.map(|line| json!(line)).as_ref(),
+            "stored {coverage:?}"
+        );
+    }
+    let no_id = receipt_of(Some(with(
+        &json!({"config_revision_capabilities": "partial"}),
+    )));
+    assert!(
+        !keys(&no_id["decision"]).contains(&"config_revision_capabilities"),
+        "no id, nothing to qualify"
+    );
 }
 
 #[test]

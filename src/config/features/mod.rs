@@ -24,6 +24,7 @@ mod streaming;
 mod tasks;
 mod webhooks;
 
+pub(crate) use api_key::MIN_SECRET_LEN;
 pub use api_key::{ApiKeyBinding, ApiKeyConfig, ApiKeyKind, api_key_digest_spec};
 pub(crate) use api_key::{api_key_expired, api_key_expired_now, parse_api_key_digest};
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, AuthConfig, DashboardSessionConfig};
