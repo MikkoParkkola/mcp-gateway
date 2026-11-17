@@ -33,6 +33,9 @@
 //!   is signed;
 //! - a legacy client must declare elicitation, and an unconfirmable legacy
 //!   destructive call is refused;
+//! - a literal or `env:` `auth.bearer_token` under 20 characters refuses the
+//!   load (`standard` only warns, and `auto`, `file:` and
+//!   `keychain:` tokens are not measured);
 //! - startup is refused on a build without the `firewall` feature.
 //!
 //! Changing the posture needs a restart; a reload that changes it is refused.
