@@ -93,6 +93,7 @@ pub(crate) mod comments;
 
 #[path = "config_persistence_atomic.rs"]
 mod atomic;
+pub(crate) use atomic::write_atomic_checked;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use atomic::write_atomic_observed_for_test;
 pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};

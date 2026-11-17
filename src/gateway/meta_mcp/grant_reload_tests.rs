@@ -627,7 +627,7 @@ async fn t9_a_config_refusal_still_reports_and_applies_the_revocation() {
     );
 
     let err = meta
-        .reload_config()
+        .reload_config(&crate::security::audit::AuditWho::gateway())
         .await
         .expect_err("T9 premise: the config half must refuse")
         .to_string();
@@ -728,7 +728,10 @@ async fn a_posture_refusal_is_an_invalid_request_on_the_meta_tool() {
         Arc::new(BackendRegistry::new()),
     )));
 
-    let err = meta.reload_config().await.expect_err("a refused reload");
+    let err = meta
+        .reload_config(&crate::security::audit::AuditWho::gateway())
+        .await
+        .expect_err("a refused reload");
 
     assert_eq!(err.to_rpc_code(), -32600, "{err}");
     assert!(err.to_string().contains("config reload refused:"), "{err}");
@@ -743,7 +746,10 @@ async fn a_reload_cut_short_by_shutdown_keeps_the_internal_code_on_the_meta_tool
     let file = "backends:\n  added:\n    command: \"true\"\n";
     meta.set_reload_context(Arc::new(plain_ctx(&dir, file, registry)));
 
-    let err = meta.reload_config().await.expect_err("an aborted reload");
+    let err = meta
+        .reload_config(&crate::security::audit::AuditWho::gateway())
+        .await
+        .expect_err("an aborted reload");
 
     assert_eq!(err.to_rpc_code(), -32603, "{err}");
     assert!(err.to_string().contains("shutting down"), "{err}");

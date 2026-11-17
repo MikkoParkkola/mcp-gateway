@@ -25,6 +25,7 @@ use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
+use crate::config_reload::history::Source;
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
@@ -208,6 +209,7 @@ async fn spawn_locked(
     ctx: Arc<ReloadContext>,
     replace: Replace,
     audit: Audit,
+    source: Source,
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
 ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
@@ -220,7 +222,7 @@ async fn spawn_locked(
         .admit(AdmitKind::Write)
         .map_err(ReplaceError::Gated)?;
     tokio::spawn(async move {
-        ctx.replace_locked(replace, audit, wait, receipt, admitted)
+        ctx.replace_locked(replace, audit, source, wait, receipt, admitted)
             .await
     })
     .await
@@ -397,6 +399,7 @@ impl ReloadContext {
         &self,
         replace: Replace,
         mut audit: Audit,
+        source: Source,
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
         admitted: AdmissionGuard,
@@ -488,6 +491,7 @@ impl ReloadContext {
                     &current,
                     (new, replace.replaced),
                     &mut entries,
+                    source,
                 )
                 .await
             }
@@ -526,6 +530,7 @@ impl ReloadContext {
         current: &[u8],
         (new, replaced): (Vec<u8>, Replaced),
         entries: &mut Entries,
+        source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         if std::str::from_utf8(&new).is_err() {
             return Err(ReplaceError::Refused(
@@ -552,8 +557,9 @@ impl ReloadContext {
             // Nothing to write, but still a reload, so a retry after a failed
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
+            // The principal arrives with its own row (H8).
             let reload = self
-                .reload_outcome_locked_at(target)
+                .reload_outcome_locked_at(target, source)
                 .await
                 .map_err(|refusal| ReplaceError::ReloadRefused {
                     class: post_write_class(&refusal),
@@ -568,7 +574,8 @@ impl ReloadContext {
                 secrets: Vec::new(),
             });
         }
-        self.commit(target, current, &new, replaced, entries).await
+        self.commit(target, current, &new, replaced, entries, source)
+            .await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
@@ -579,6 +586,7 @@ impl ReloadContext {
         new: &[u8],
         replaced: Replaced,
         entries: &mut Entries,
+        source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         // Every step uses `target`, resolved once and checked against the
         // trusted path, so a link re-pointed mid-write cannot split them.
@@ -622,7 +630,8 @@ impl ReloadContext {
         }
         #[cfg(test)]
         order::record(target, "commit");
-        let reloaded = self.reload_outcome_locked_at(target).await;
+        // The principal arrives with its own row (H8).
+        let reloaded = self.reload_outcome_locked_at(target, source).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.
