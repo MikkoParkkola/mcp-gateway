@@ -278,7 +278,14 @@ fn key() -> &'static RandomState {
 pub(super) fn replay_epoch() -> u64 {
     use rand::RngExt as _;
     static EPOCH: OnceLock<u64> = OnceLock::new();
-    *EPOCH.get_or_init(|| rand::rng().random())
+    *EPOCH.get_or_init(|| {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "id: this process's replay fingerprint epoch"
+        )]
+        let epoch: u64 = rand::rng().random();
+        epoch
+    })
 }
 
 /// `MIK-8066` D6: a second, independent per-process key, used only by

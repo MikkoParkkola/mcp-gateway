@@ -24,9 +24,11 @@ const CLS_BUDGET = 0.1;
 
 // Which budgets fail a row (and the CI step). LCP blocks: its spread on the CI
 // runner (20 loads per row) cleared the budget by 2x or more with max - p50 of
-// 44 ms or less. CLS is reported only until the shell holds its layout from
-// first paint; that change turns it on with its own before and after numbers.
-const BLOCKING = { lcp: true, cls: false };
+// 44 ms or less. CLS blocks since the shell holds its layout from first paint:
+// Tools p75 desktop 0.0995 -> 0.0019 and phone 0.0453 -> 0.0209 (20 loads per row,
+// max before 0.1130 and 0.1151; CI measured desktop 0.1137 before), every row
+// now far under 0.1.
+const BLOCKING = { lcp: true, cls: true };
 
 /**
  * The budgets a row misses, as text, split by whether they block. A p75 at or
@@ -421,13 +423,14 @@ test('the gate: a blocking budget missed fails the row, a reported one does not'
   // Both sides of each budget: at the budget is a miss, just under is not.
   expect(misses(row(2500, 0.05))).toEqual({ blocking: ['lcp p75 2500 ms is not under 2500 ms'], reported: [] });
   expect(misses(row(2499, 0.05))).toEqual({ blocking: [], reported: [] });
-  // CLS over its budget is reported and does not block while BLOCKING says so.
-  expect(BLOCKING).toEqual({ lcp: true, cls: false });
-  expect(misses(row(900, 0.1137))).toEqual({ blocking: [], reported: ['cls p75 0.1137 is not under 0.1'] });
-  // The same reading blocks once CLS is turned on: the flag decides, not the number.
-  expect(misses(row(900, 0.1137), { lcp: true, cls: true })).toEqual({ blocking: ['cls p75 0.1137 is not under 0.1'], reported: [] });
+  // Both budgets block: CLS over its budget fails the row.
+  expect(BLOCKING).toEqual({ lcp: true, cls: true });
+  expect(misses(row(900, 0.1137))).toEqual({ blocking: ['cls p75 0.1137 is not under 0.1'], reported: [] });
+  expect(misses(row(900, 0.0999))).toEqual({ blocking: [], reported: [] });
+  // The flag decides, not the number: the same reading is only reported when CLS does not block.
+  expect(misses(row(900, 0.1137), { lcp: true, cls: false })).toEqual({ blocking: [], reported: ['cls p75 0.1137 is not under 0.1'] });
   // A p75 that was never measured is a miss on its side: a blocking gate never passes on a missing number.
-  expect(misses(row(null, null))).toEqual({ blocking: ['lcp p75 was not measured'], reported: ['cls p75 was not measured'] });
+  expect(misses(row(null, null))).toEqual({ blocking: ['lcp p75 was not measured', 'cls p75 was not measured'], reported: [] });
   expect(misses(row(Number.NaN, 0.05)).blocking).toEqual(['lcp p75 was not measured']);
 });
 

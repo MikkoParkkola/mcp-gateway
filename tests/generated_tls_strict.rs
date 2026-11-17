@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7212.TLSCERT.1–2: inspect actual generated X.509 extensions.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use mcp_gateway::mtls::{CaParams, CertGenerator, GeneratedCert, LeafCertParams};
 use rcgen::{

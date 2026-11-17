@@ -140,9 +140,10 @@ async fn accept_from_self(parent: u32, uid: u32) -> Result<(), crate::preview_sa
     let path = dir.path().join("control.sock");
     let listener = tokio::net::UnixListener::bind(&path).expect("bind");
     let connect = tokio::spawn(tokio::net::UnixStream::connect(path));
-    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, parent, uid, B))
-        .await
-        .expect("the accept did not end within the guard");
+    let accepted =
+        tokio::time::timeout(GUARD, super::accept_helper(listener, parent, uid, B, far()))
+            .await
+            .expect("the accept did not end within the guard");
     let _peer = connect.await.expect("join");
     accepted.map(drop)
 }
@@ -173,7 +174,7 @@ async fn t8_a_real_peer_is_judged_by_its_kernel_credentials() {
 async fn t8_no_connection_within_the_bound_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
     let listener = tokio::net::UnixListener::bind(dir.path().join("control.sock")).expect("bind");
-    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, B))
+    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, B, far()))
         .await
         .expect("the accept did not end within the guard");
     assert!(accepted.is_err());
@@ -190,21 +191,60 @@ fn t8_a_duplicated_status_field_is_refused() {
     assert!(peer_is_helper(&forged, 4241, 1000).is_err());
 }
 
-/// T8, kills "the listener outlives the accept": once the helper's one
-/// connection is taken, whatever the peer check said, no second connection
-/// is served.
+/// T8, kills "the listener outlives the accept" and "a second connection is
+/// taken": once the helper's one connection is taken, whatever the peer check
+/// said, no second connection is served. A connect that goes through must be
+/// reset (when read, or already while connecting): it was queued on a copy of
+/// the listener's fd that a child another test forks holds until its exec, and
+/// closing the last copy resets it. An accepted connection reads an end or a byte instead, or hangs. The
+/// row then waits for a refused connect: a live listener never refuses (once
+/// its backlog is full it answers "try again"), so the guard fails the row.
+/// Linux only: the sandbox runs nowhere else, and on macOS a full backlog
+/// refuses.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn t8_no_second_connection_is_served() {
+    use tokio::io::AsyncReadExt as _;
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("control.sock");
     let listener = tokio::net::UnixListener::bind(&path).expect("bind");
     let first = tokio::spawn(tokio::net::UnixStream::connect(path.clone()));
-    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, B))
+    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, B, far()))
         .await
         .expect("the accept did not end within the guard");
     drop(accepted);
     let _first = first.await.expect("join");
-    assert!(tokio::net::UnixStream::connect(&path).await.is_err());
+    let mut last = String::from("none");
+    let refused = tokio::time::timeout(GUARD, async {
+        loop {
+            match tokio::net::UnixStream::connect(&path).await {
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => break,
+                Ok(mut taken) => {
+                    let read = taken.read(&mut [0_u8; 1]).await;
+                    assert!(
+                        matches!(&read, Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset),
+                        "a second connection was served: its read gave {read:?}"
+                    );
+                    last = "a queued connect, reset".into();
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    last = "a full backlog's try again".into();
+                }
+                // Queued, then reset before the connect finished: the same
+                // closed copy as a taken connect reset on its read.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                    last = "a queued connect, reset while connecting".into();
+                }
+                Err(e) => panic!("a connect after the accept failed otherwise: {e}"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        refused.is_ok(),
+        "a listener still took connections after the accept; last answer: {last}"
+    );
 }
 
 /// A `/proc/<pid>/stat` line: field 22, the start time, is `start`.
@@ -320,6 +360,62 @@ impl tokio::io::AsyncWrite for Stuck {
 #[tokio::test(start_paused = true)]
 async fn t4_a_peer_that_stops_reading_is_cut_off() {
     let written = tokio::time::timeout(GUARD, super::write_line(&mut Stuck, "x", B))
+        .await
+        .expect("the write did not end within the guard");
+    assert!(written.is_err());
+}
+
+/// A deadline no row reaches.
+fn far() -> tokio::time::Instant {
+    tokio::time::Instant::now() + Duration::from_secs(60)
+}
+
+/// R7e, kills "the accept outlives the preview's deadline": a deadline
+/// sooner than the accept bound cuts the wait off (the accept bound here is
+/// past the guard, so only the deadline can end it in time).
+#[tokio::test]
+async fn r7e_the_accept_ends_at_the_preview_deadline() {
+    let dir = tempfile::tempdir().expect("dir");
+    let listener = tokio::net::UnixListener::bind(dir.path().join("control.sock")).expect("bind");
+    let bounds = ControlBounds {
+        accept: Duration::from_secs(30),
+        ..B
+    };
+    let soon = tokio::time::Instant::now() + Duration::from_secs(1);
+    let accepted = tokio::time::timeout(GUARD, super::accept_helper(listener, 1, 0, bounds, soon))
+        .await
+        .expect("the accept did not end within the guard");
+    assert!(accepted.is_err());
+}
+
+/// R7j, kills "a step is still polled after the preview's deadline": once the
+/// deadline has passed, a step that would finish at once (a ready write) is
+/// refused without being polled.
+#[tokio::test(start_paused = true)]
+async fn r7j_a_step_after_the_deadline_is_never_polled() {
+    let polled = std::cell::Cell::new(false);
+    let passed = tokio::time::Instant::now();
+    let step = async {
+        polled.set(true);
+        Ok(())
+    };
+    assert!(super::by_deadline(passed, "a write", step).await.is_err());
+    assert!(!polled.get(), "the step ran after the deadline");
+}
+
+/// R7k, kills "a write outlives the preview's deadline": a helper that stops
+/// reading is cut off at the deadline, not at the frame bound (past the guard
+/// here).
+#[tokio::test(start_paused = true)]
+async fn r7k_a_stuck_write_ends_at_the_deadline() {
+    let bounds = ControlBounds {
+        frame: Duration::from_secs(3600),
+        ..B
+    };
+    let soon = tokio::time::Instant::now() + Duration::from_secs(1);
+    let mut stuck = Stuck;
+    let write = super::write_line(&mut stuck, "x", bounds);
+    let written = tokio::time::timeout(GUARD, super::by_deadline(soon, "a write", write))
         .await
         .expect("the write did not end within the guard");
     assert!(written.is_err());

@@ -47,12 +47,12 @@ pub enum IdentityGrantsCommand {
         #[arg(long)]
         grant_id: String,
 
-        /// Subject as AUTHORITY:SUBJECT. Use --subject-label for display text.
+        /// Subject as AUTHORITY:SUBJECT.
         #[arg(long)]
         subject: String,
 
         /// Optional subject display label.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         subject_label: Option<String>,
 
         /// Exact proven agent: `mtls:<SAN URI or CN>` or `jwt:<client_id>`.
@@ -81,7 +81,7 @@ pub enum IdentityGrantsCommand {
         owner: Option<String>,
 
         /// Optional owner display label.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         owner_label: Option<String>,
 
         /// Absolute RFC3339 expiry timestamp, for example 2026-06-29T13:00:00Z.
@@ -89,11 +89,11 @@ pub enum IdentityGrantsCommand {
         expires_at: Option<String>,
 
         /// Relative expiry in seconds from now. Mutually exclusive with --expires-at.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         ttl_seconds: Option<i64>,
 
         /// Provenance string recorded with the grant.
-        #[arg(long, default_value = "mcp-gateway identity grants grant")]
+        #[arg(hide = true, long, default_value = "mcp-gateway identity grants grant")]
         provenance: String,
 
         /// Operator-visible reason for the grant.
@@ -121,7 +121,7 @@ pub enum IdentityGrantsCommand {
         grant_id: String,
 
         /// Absolute RFC3339 revocation timestamp. Defaults to now.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         revoked_at: Option<String>,
 
         /// Output format.

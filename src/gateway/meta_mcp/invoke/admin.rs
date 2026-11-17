@@ -554,6 +554,10 @@ mod cost_section_tests {
 #[path = "admin_reload_tests.rs"]
 mod reload_tests;
 
+#[cfg(test)]
+#[path = "admin_publish_tests.rs"]
+mod publish_tests;
+
 /// `gateway_cost_report` refusing a non-admin caller an admin view is the
 /// gateway refusing the call: it records refused.
 #[cfg(test)]

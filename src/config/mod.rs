@@ -46,6 +46,7 @@ pub(crate) mod secret_ref;
 pub(crate) mod secret_values;
 mod server_config;
 mod strict_keys;
+pub(crate) use strict_keys::is_retired_key;
 mod validation;
 pub(crate) use validation::CLEARTEXT_REFUSAL;
 mod ws_backend;
@@ -572,7 +573,7 @@ impl Config {
         // secrets this evaluation read.
         let inputs = match expansion {
             Expansion::Resolve => {
-                Self::raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
+                config.raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
             }
             Expansion::Literal => RawInputs::default(),
         };

@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Store-level Windows rows for the task store (test plan §3). Each decisive
 //! assertion starts `WT-ASSERT <row>`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use super::*;
 use crate::private_fs::test_support::{assert_owner_only, icacls};

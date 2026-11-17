@@ -1,8 +1,8 @@
-# MIK-8387 T1b: every production allow of the registry ban (file, fn, kind, class, banned names inside with counts).
+# T1b: every production allow of a clippy ban, the registry's or the root list's (file, fn, kind, class, banned names inside with counts).
 src/backend/registry.rs	resolve_unwarmed	statement	Lifecycle	getx1
 src/capability/backend_listing.rs	announce_listing_change	statement	Lifecycle	nudge_cataloguex1
-src/capability/backend_listing.rs	finish_initial_scan	statement	Lifecycle	nudge_catalogue_scannedx1
-src/clock.rs	-	module	the one place the wall clock is read	
+src/capability/backend_listing.rs	announce_scanned	statement	Lifecycle	nudge_catalogue_scannedx1
+src/clock.rs	-	module	the one place the wall clock is read	SystemTime::nowx1
 src/config_reload/grant_reload.rs	reload_identity_grants	statement	Lifecycle	allx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1
@@ -64,10 +64,10 @@ src/gateway/ui/dashboard.rs	dashboard_handler	statement	Admin	allx1
 src/gateway/ui/mod.rs	config	statement	Admin	allx1
 src/gateway/ui/status.rs	status_body	statement	Admin	allx1
 src/gateway/ui/mod.rs	tools	statement	Admin	allx1
-src/home_dir.rs	-	item	the one place the platform lookups are called	
-src/home_dir.rs	-	item	the one place the platform lookups are called	
-src/home_dir.rs	-	item	the one place the platform lookups are called	
-src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/home_dir.rs	-	item	the one place the platform lookups are called	dirs::config_dirx1
+src/home_dir.rs	-	item	the one place the platform lookups are called	dirs::config_dirx1
+src/home_dir.rs	-	item	the one place the platform lookups are called	dirs::home_dirx1
+src/home_dir.rs	-	item	the one place the platform lookups are called	dirs::home_dirx1
 src/gateway/ui/overview.rs	backends_by_name	statement	Admin	allx1
 src/config_reload/override_audit.rs	drain	statement	Lifecycle	lock_reloadx1
 src/config_reload/override_audit.rs	in_effect	statement	Lifecycle	allx1

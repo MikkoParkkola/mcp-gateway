@@ -68,11 +68,12 @@ docker run -d --name mcp-gateway --stop-timeout 31 \
   -e MCP_GATEWAY_TOKEN \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
+  -e MCP_GATEWAY_SERVER__HOST=0.0.0.0 \
   -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
   mcp-gateway:latest \
-  --config /config.yaml --host 0.0.0.0 --port 39400
+  --config /config.yaml --port 39400
 ```
 
 The container must bind `0.0.0.0` or the published port reaches nothing, and
@@ -102,12 +103,13 @@ services:
     image: ghcr.io/mikkoparkkola/mcp-gateway:latest
     restart: unless-stopped
     stop_grace_period: 31s  # see Stop grace below
-    command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
+    command: ["--config", "/config.yaml", "--port", "39400"]
     ports: ["127.0.0.1:39400:39400"]
     volumes:
       - ./gateway.yaml:/config.yaml:ro
       - ./capabilities:/capabilities:ro
     environment:
+      MCP_GATEWAY_SERVER__HOST: "0.0.0.0"
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
@@ -256,8 +258,7 @@ scripts/dev/service-template-smoke.sh  # repo checkout: service template paths +
 to a version npm marks deprecated. That lookup is on by default: it sends only
 package names from the gateway's own registry to registry.npmjs.org (never
 backend names, versions or settings), and npm sees this host's IP address.
-Skip it with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK=1`,
-or `security.posture: hardened`; a failed lookup prints nothing and never
+Skip it with `--no-registry-check` or `security.posture: hardened`; a failed lookup prints nothing and never
 fails doctor. This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
 The lookup uses only the proxy named by `HTTPS_PROXY` or `ALL_PROXY` (either case; an
 `http`/`https` proxy without credentials, honouring `NO_PROXY`), never an OS proxy setting,
@@ -457,7 +458,7 @@ Config merges from three sources (later overrides earlier):
 
 1. YAML config file (`--config` or `MCP_GATEWAY_CONFIG`)
 2. Environment variables (`MCP_GATEWAY_` prefix, `__` for nesting)
-3. CLI flags (`--port`, `--host`, `--no-meta-mcp`)
+3. CLI flags (`--port`, `--log-level`)
 
 ### Environment Variables
 
@@ -465,11 +466,11 @@ Config merges from three sources (later overrides earlier):
 |----------|---------|-------------|
 | `MCP_GATEWAY_CONFIG` | -- | Config file path |
 | `MCP_GATEWAY_PORT` | `39400` | Listen port |
-| `MCP_GATEWAY_HOST` | `127.0.0.1` | Bind address |
 | `MCP_GATEWAY_LOG_LEVEL` | `info` | trace/debug/info/warn/error |
 | `MCP_GATEWAY_LOG_FORMAT` | `text` | `text` or `json` |
 
-Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
+Nested values: `MCP_GATEWAY_<SECTION>__<KEY>` sets `<section>.<key>`; for example
+`MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish` sets `server.cleartext_http`.
 
 Config values support `${VAR}` and `${VAR:-default}` expansion. In an enabled backend's
 `headers` and `env`, and in `capabilities.directories`, a `${VAR}` with no default that is unset
@@ -1491,7 +1492,7 @@ tab signs out at the idle limit. These limits are fixed defaults in 4.0; a
 hidden setting a 3.x config still carries keeps applying, and
 `mcp-gateway doctor` lists it.
 
-**Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
+**Log out** on `/dashboard` ends the session
 on the server as well as in the browser and redirects to `/ui`. It answers `303`
 whether or not the session was still live, and it works while the audit log is
 unavailable. A logout that ends a session writes one `admin_action` audit record.
@@ -1664,7 +1665,7 @@ A single instance handles thousands of RPS with sub-2ms routing overhead. This i
 
 For horizontal scaling (organizational isolation, not throughput): run separate instances, each with its own config and clients. Instances share nothing, so one logical gateway behind a load balancer is limited by "Replica Count and per-process state". Stdio backends run per-instance; HTTP/SSE backends can be shared across instances.
 
-### Resource Tuning
+### Advanced Tuning
 
 ```yaml
 error_budget:

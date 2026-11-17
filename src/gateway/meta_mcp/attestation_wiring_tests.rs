@@ -15,7 +15,6 @@ use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
 };
 use chrono::Utc;
-use uuid::Uuid;
 
 const KEY: &[u8] = b"gateway-invoke-wiring-key";
 
@@ -35,7 +34,7 @@ fn token_with(capabilities: Vec<String>) -> String {
         .issue(
             &TokenRequest {
                 agent_identity: "agent-9".to_string(),
-                task_uuid: Uuid::new_v4(),
+                task_uuid: crate::ids::new_v4(),
                 capabilities,
             },
             Utc::now(),

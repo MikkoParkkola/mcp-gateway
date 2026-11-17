@@ -481,7 +481,6 @@ src/personal_accounts/journey/limits.rs	wait	1	critical	d	wait	Decides whether a
 src/personal_accounts/journey/mod.rs	digests_equal	1	critical	b	digests_equal	Constant-time digest equality for state, binding and owner
 src/personal_accounts/journey/mod.rs	keyed_digest	1	standard	borderline	keyed_digest	HKDF+HMAC used by state/binding verification
 src/personal_accounts/journey/mod.rs	principal_digest	1	standard	borderline	principal_digest	Principal key used for owner-scoped status/supersede
-src/personal_accounts/journey/mod.rs	random_secret	1	standard	borderline	random_secret	256-bit state/binding/verifier randomness
 src/personal_accounts/journey/offer.rs	offer_journey	1	critical	d	PersonalAccountStore::offer_journey	Refuses oversized journey input before any store access, as create_journey does.
 src/personal_accounts/journey/ops.rs	arm	1	critical	a/c	arm	Owner-digest match (constant-time); only pending or unconsumed-started journeys
 src/personal_accounts/journey/ops.rs	journey_status_owned	1	critical	c	PersonalAccountStore::journey_status_owned	Status only for the owning principal; others get NotFound

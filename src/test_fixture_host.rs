@@ -13,6 +13,10 @@
 //! cleartext-credential rule counts only loopback hosts as this machine, and
 //! the fixture host is not one. [`fixture_client`] trusts the fixture CA and
 //! nothing else; no production client or root store sees it.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::OnceLock;

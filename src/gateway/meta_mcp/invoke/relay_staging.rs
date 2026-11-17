@@ -252,7 +252,7 @@ impl DeferredReceipts {
 /// A delivery found no published generation, so nothing is recorded; the
 /// witness refuses in that state ([`unpublished_refusal`]), so no relay gets
 /// past it unrecorded. Unreachable in production: startup publishes before
-/// serving (HTTP `server/run.rs:217`, before `listener::serve` at `:630`;
+/// serving (HTTP `Gateway::run` calls `set_live_config` before `listener::serve`;
 /// stdio `server/stdio_loop.rs:127`, before the first read at `:319`; the
 /// bridge commits only inside a call already being served), and the
 /// `boundary_pins::live_config` rows fail on a reorder. Logged as an error,
