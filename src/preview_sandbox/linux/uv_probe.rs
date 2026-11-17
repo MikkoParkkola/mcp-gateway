@@ -74,22 +74,9 @@ pub(super) fn uv_fetch(
     plan.read_only.extend(place.read_only);
     plan.bound_back.extend(place.bound_back);
     plan.hidden.extend(place.masks);
-    match program_bind(&uv, &plan.read_only) {
-        ProgramBind::Refused => {
-            return Err(Refusal::Step(format!(
-                "placing uv ({} lies under a masked secret path)",
-                uv.display()
-            )));
-        }
-        ProgramBind::System => {}
-        ProgramBind::UsrLocal(dirs) => {
-            for dir in dirs {
-                plan.bound_back.push(utf8(&dir)?);
-            }
-        }
-        ProgramBind::Runtime(tree) => plan.read_only.push(utf8(&tree)?),
-        ProgramBind::File(file) => plan.read_only.push(utf8(&file)?),
-    }
+    let uv_place = place_uv(&uv, &plan.read_only)?;
+    plan.read_only.extend(uv_place.read_only);
+    plan.bound_back.extend(uv_place.bound_back);
     let ip = super::probe::find_ip(&super::probe::IP_CANDIDATES, &|p: &Path| {
         super::placed(p, plan)
     })?;
@@ -206,6 +193,15 @@ fn refuse_script(what: &str, file: &Path) -> Result<(), Refusal> {
     }
     Ok(())
 }
+/// What the root must show of uv: its real file alone, wherever it lives. uv
+/// is one self-contained binary, so the program rule's wider binds (a
+/// runtime tree, or `/usr/local`'s `bin` and `lib` bound back) would only
+/// show the run more of the host, and would undo the interpreter's narrow
+/// binds when both share a tree.
+pub(super) fn place_uv(uv: &Path, system: &[String]) -> Result<PythonPlace, Refusal> {
+    narrow_place(&program_bind(uv, system), vec![utf8(uv)?], "uv", uv)
+}
+
 /// What the root must show of the interpreter in both phases, and what it
 /// covers with an empty directory after every bind and bind-back.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -270,24 +266,37 @@ pub(super) fn place_python(
         libs.sort();
         binds.extend(libs);
     }
-    let mut place = PythonPlace {
-        masks,
-        ..PythonPlace::default()
-    };
-    // Never the tree the program rule would bind for a runtime: the
-    // interpreter's own pieces only.
-    match program_bind(real, system) {
-        ProgramBind::Refused => {
-            return Err(Refusal::Step(format!(
-                "placing python3 ({} lies under a masked secret path)",
-                real.display()
-            )));
-        }
-        ProgramBind::System => {}
-        ProgramBind::UsrLocal(_) => place.bound_back = binds,
-        ProgramBind::Runtime(_) | ProgramBind::File(_) => place.read_only = binds,
-    }
+    let mut place = narrow_place(&program_bind(real, system), binds, "python3", real)?;
+    place.masks = masks;
     Ok(place)
+}
+
+/// Where a program's narrow `binds` go, by the class the program rule gives
+/// its real file `real`: bound back under the masked `/usr/local`, read-only
+/// in a runtime tree or anywhere else, nothing under the system roots, and
+/// refused by name under a masked secret path. Never the tree or the
+/// directories the program rule itself would bind.
+pub(super) fn narrow_place(
+    class: &ProgramBind,
+    binds: Vec<String>,
+    what: &str,
+    real: &Path,
+) -> Result<PythonPlace, Refusal> {
+    match class {
+        ProgramBind::Refused => Err(Refusal::Step(format!(
+            "placing {what} ({} lies under a masked secret path)",
+            real.display()
+        ))),
+        ProgramBind::System => Ok(PythonPlace::default()),
+        ProgramBind::UsrLocal(_) => Ok(PythonPlace {
+            bound_back: binds,
+            ..PythonPlace::default()
+        }),
+        ProgramBind::Runtime(_) | ProgramBind::File(_) => Ok(PythonPlace {
+            read_only: binds,
+            ..PythonPlace::default()
+        }),
+    }
 }
 
 /// Whether the interpreter's binary names `libpythonX.Y.so` (the dynamic

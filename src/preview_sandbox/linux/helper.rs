@@ -191,7 +191,6 @@ fn check_descriptors() -> Result<(), String> {
     }
 }
 
-/// Start the target through `__preview-drop` and stay as PID 1 until it
 /// The one fetcher the plan names, if any; a plan naming both refuses.
 fn fetcher(plan: &Plan) -> Result<Option<Fetcher<'_>>, String> {
     plan.fetch
@@ -201,6 +200,7 @@ fn fetcher(plan: &Plan) -> Result<Option<Fetcher<'_>>, String> {
         .map(Option::flatten)
 }
 
+/// Start the target through `__preview-drop` and stay as PID 1 until it
 /// exits, reaping every orphan the namespace hands this process.
 fn supervise(plan: &Plan, run: Option<&super::fetch_step::Run>) -> ExitCode {
     let limits = match serde_json::to_string(&plan.limits) {

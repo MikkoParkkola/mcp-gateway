@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use super::super::elf_fixture::{placement_elfs, sh_elf};
 use super::super::{ProgramBind, READ_ONLY, program_bind};
-use super::{PythonPlace, check_uv, place_python, python_real, python_xy, uv_beside};
+use super::{
+    PythonPlace, check_uv, narrow_place, place_python, place_uv, python_real, python_xy, uv_beside,
+};
 use crate::preview_sandbox::Refusal;
 
 /// A file that is not a script: the probe reads only its first two bytes.
@@ -313,4 +315,135 @@ fn u_probe_runs_the_interpreter_without_site_and_reads_its_version() {
             "{answer}"
         );
     }
+}
+
+/// U-uv-place (code review r1), kills m-uv-program-rule: uv is bound as its
+/// real file alone wherever it lives: inside a runtime tree (never the
+/// tree), under `/usr/local` (the file bound back, never `bin` and `lib`),
+/// as a lone file, and not at all under the system root.
+#[test]
+fn u_uv_place_uv_binds_its_real_file_alone() {
+    let root = tempfile::tempdir().expect("root");
+    let in_tree = root.path().join(".pyenv/versions/3.12.1/bin/uv");
+    binary(&in_tree);
+    assert_eq!(
+        place_uv(&in_tree, &system()).expect("runtime tree"),
+        PythonPlace {
+            read_only: vec![s(&in_tree)],
+            ..PythonPlace::default()
+        }
+    );
+    // Classified by its path alone: nothing is created under /usr/local.
+    let usr_local = place_uv(Path::new("/usr/local/bin/uv"), &system()).expect("usr local");
+    assert_eq!(
+        usr_local,
+        PythonPlace {
+            bound_back: vec!["/usr/local/bin/uv".to_owned()],
+            ..PythonPlace::default()
+        }
+    );
+    for dir in ["/usr/local/bin", "/usr/local/lib"] {
+        assert!(
+            !usr_local.bound_back.iter().any(|b| b == dir),
+            "{dir} is bound back"
+        );
+    }
+    let lone = root.path().join("tools/uv");
+    binary(&lone);
+    assert_eq!(
+        place_uv(&lone, &system()).expect("lone"),
+        PythonPlace {
+            read_only: vec![s(&lone)],
+            ..PythonPlace::default()
+        }
+    );
+    assert_eq!(
+        place_uv(Path::new("/usr/bin/uv"), &system()).expect("system"),
+        PythonPlace::default()
+    );
+    // Under a masked secret path: refused by name (classified by its path).
+    assert_eq!(
+        place_uv(Path::new("/etc/ssl/private/uv"), &system()),
+        Err(Refusal::Step(
+            "placing uv (/etc/ssl/private/uv lies under a masked secret path)".into()
+        ))
+    );
+}
+
+/// U-floor (code review r1, muse MEDIUM; lead: the bound covers the whole
+/// read), kills m-read-to-eof and m-group-left: a version call whose
+/// descendant keeps the output pipe open answers once its line is out, and
+/// the call leaves no process behind: the descendant is gone when it
+/// returns, ended by the probe itself.
+#[test]
+fn u_floor_a_descendant_holding_the_pipe_neither_holds_the_call_nor_outlives_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let pid_file = dir.path().join("descendant.pid");
+    let uv = uv_answering(
+        dir.path(),
+        &format!(
+            "sleep 120 & echo $! > '{}'; echo 'uv 0.13.1 (x86_64-linux-gnu)'",
+            pid_file.display()
+        ),
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(check_uv(&uv));
+    });
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(30));
+    let pid = std::fs::read_to_string(&pid_file).expect("the descendant started");
+    let alive = std::path::Path::new("/proc").join(pid.trim()).exists();
+    if alive {
+        // Only so a red run leaves nothing behind; the assert below fails it.
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
+    assert_eq!(answered, Ok(Ok(())), "the call answered with its line");
+    assert!(!alive, "the descendant outlived the call");
+}
+
+/// U-place (code review r1, muse LOW and gpt), kills m-usrlocal-arm: each
+/// class of the program rule sends the narrow binds where it must, the
+/// `/usr/local` arm included (a fixture tree in a temp dir never reaches
+/// it, so the classes are given here): bound back, read-only, nothing, or
+/// refused by name.
+#[test]
+fn u_place_each_program_class_sends_the_narrow_binds_its_way() {
+    let binds = || {
+        vec![
+            "/x/bin/python3.12".to_owned(),
+            "/x/lib/python3.12".to_owned(),
+        ]
+    };
+    let real = Path::new("/x/bin/python3.12");
+    let usr_local = ProgramBind::UsrLocal(vec![PathBuf::from("/usr/local/bin")]);
+    assert_eq!(
+        narrow_place(&usr_local, binds(), "python3", real),
+        Ok(PythonPlace {
+            bound_back: binds(),
+            ..PythonPlace::default()
+        })
+    );
+    for class in [
+        ProgramBind::Runtime(PathBuf::from("/x")),
+        ProgramBind::File(PathBuf::from("/x/bin/python3.12")),
+    ] {
+        assert_eq!(
+            narrow_place(&class, binds(), "python3", real),
+            Ok(PythonPlace {
+                read_only: binds(),
+                ..PythonPlace::default()
+            }),
+            "{class:?}"
+        );
+    }
+    assert_eq!(
+        narrow_place(&ProgramBind::System, binds(), "python3", real),
+        Ok(PythonPlace::default())
+    );
+    assert_eq!(
+        narrow_place(&ProgramBind::Refused, binds(), "python3", real),
+        Err(Refusal::Step(
+            "placing python3 (/x/bin/python3.12 lies under a masked secret path)".into()
+        ))
+    );
 }

@@ -357,6 +357,14 @@ impl Layout {
             }
         }
         let (tree, version) = found.expect("a linked Python in the runner's toolcache");
+        // Premise: the binary itself names its libpython (a linked build), so
+        // the row's missing-libpython-bind mutant is killed end to end.
+        let binary = std::fs::read(tree.join("bin").join(&version)).expect("the toolcache binary");
+        let soname = format!("lib{version}.so");
+        assert!(
+            binary.windows(soname.len()).any(|w| w == soname.as_bytes()),
+            "the toolcache {version} links {soname}"
+        );
         let scratch = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch");
         let prefix = scratch.path().join(under).join(".pyenv/versions/3.0.0");
         let lib = tree.join("lib").join(format!("lib{version}.so.1.0"));
@@ -422,6 +430,21 @@ impl Layout {
 pub(super) struct Ready {
     gateway: PathBuf,
     uv_dir: PathBuf,
+}
+
+impl Ready {
+    /// The real uv's directory.
+    pub(super) fn uv_dir(&self) -> &Path {
+        &self.uv_dir
+    }
+
+    /// The same host, with uv and uvx taken from `dir` instead.
+    pub(super) fn with_uv_dir(&self, dir: PathBuf) -> Self {
+        Self {
+            gateway: self.gateway.clone(),
+            uv_dir: dir,
+        }
+    }
 }
 
 /// `Some` where this host can run the real-uv rows (a gateway binary, user

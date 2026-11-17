@@ -249,12 +249,16 @@ pub(crate) fn check_direct_url(
         }
         let entry = entry.map_err(|_| unreadable())?;
         let name = entry.file_name();
-        let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".dist-info")) else {
+        // Matched on the name's bytes: a dist-info named in non-UTF-8 bytes is
+        // checked like any other, never skipped.
+        let Some(stem) = name.as_encoded_bytes().strip_suffix(b".dist-info") else {
             continue;
         };
         match std::fs::symlink_metadata(entry.path().join("direct_url.json")) {
             Ok(_) => return Err(refuse("the install holds a package from a direct URL")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => checked.push(stem.to_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                checked.push(String::from_utf8_lossy(stem).into_owned());
+            }
             Err(_) => return Err(unreadable()),
         }
     }

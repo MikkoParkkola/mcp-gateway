@@ -757,3 +757,20 @@ fn u_direct_an_empty_site_passes_and_the_lookup_refuses() {
         ))
     );
 }
+
+/// U-direct (code review r1, muse HIGH), kills m-utf8-skip: a dist-info
+/// whose name is not UTF-8 is checked like any other, so a tainted one
+/// refuses. Linux only: macOS file systems refuse a non-UTF-8 name.
+#[cfg(target_os = "linux")]
+#[test]
+fn u_direct_a_dist_info_named_in_raw_bytes_is_checked() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &["a-1.0".to_owned()]);
+    let raw = env
+        .join("lib/python3.12/site-packages")
+        .join(std::ffi::OsStr::from_bytes(b"x\xff-1.0.dist-info"));
+    std::fs::create_dir(&raw).expect("a raw-named dist-info");
+    std::fs::write(raw.join("direct_url.json"), "{}").expect("taint");
+    assert_eq!(check_direct_url(&env, far()), Err(direct_url_refusal()));
+}

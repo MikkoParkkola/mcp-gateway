@@ -71,8 +71,10 @@ pub(super) fn answer(
     path: Option<&std::ffi::OsStr>,
     label: &str,
 ) -> Result<String, Refusal> {
+    use std::os::unix::process::CommandExt as _;
     let mut command = Command::new(program);
-    command.args(args).env_clear();
+    // Its own process group, so the call and anything it started end with it.
+    command.args(args).env_clear().process_group(0);
     if let Some(path) = path {
         command.env("PATH", path);
     }
@@ -89,22 +91,48 @@ pub(super) fn answer(
             ))
         })?;
     let deadline = Instant::now() + VERSION_BOUND;
+    let late = || {
+        Refusal::Step(format!(
+            "{label} did not answer within {} s",
+            VERSION_BOUND.as_secs()
+        ))
+    };
+    // The answer is one line, read on its own thread: a descendant that keeps
+    // the pipe open after the line cannot hold the call past the bound.
+    // ponytail: the reader thread outlives a call refused at the bound until
+    // the pipe closes; bounded by the caller's own descendants.
+    let (line_tx, line_rx) = std::sync::mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(stdout.take(256)),
+                &mut line,
+            );
+            let _ = line_tx.send(line);
+        });
+    }
+    // The group's id is the child's pid; the kernel does not reuse it while
+    // any member, the descendants included, is alive.
+    let group = rustix::process::Pid::from_child(&child);
+    let end_group = || {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    };
     while child.try_wait().ok().flatten().is_none() {
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            end_group();
             let _ = child.wait();
-            return Err(Refusal::Step(format!(
-                "{label} did not answer within {} s",
-                VERSION_BOUND.as_secs()
-            )));
+            return Err(late());
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let mut out = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        let _ = stdout.take(256).read_to_string(&mut out);
-    }
-    Ok(out)
+    let answered = line_rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| late());
+    // Whatever the call started is ended with it: nothing it left holds the
+    // pipe or runs on after the answer.
+    end_group();
+    answered
 }
 
 /// The first of `candidates` that exists, followed to its real file, and is
