@@ -372,7 +372,7 @@ async fn n6g_a_reloaded_listener_setting_does_not_refuse_the_running_origin() {
     let cases: [(&str, Edit); 3] = [
         ("port", |config| config.server.port += 1),
         ("host", |config| {
-            config.server.host = "192.0.2.10".to_string()
+            config.server.host = "192.0.2.10".to_string();
         }),
         ("tls", |config| config.mtls.enabled = true),
     ];
