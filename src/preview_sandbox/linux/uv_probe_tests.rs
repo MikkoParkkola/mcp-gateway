@@ -391,7 +391,10 @@ fn gone(pid_file: &Path) -> bool {
     }
     let ended = ended();
     if !ended {
-        let _ = std::process::Command::new("kill").arg("-9").arg(pid).status();
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid)
+            .status();
     }
     ended
 }
