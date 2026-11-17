@@ -405,6 +405,75 @@ fn r19_an_unlistable_directory_is_refused() {
     );
 }
 
+/// R20: a test-home file that is the real home's file at the same path (a hard
+/// link: same device and inode) is refused. The real home is a decoy (HOME), never
+/// the developer's own. Unix only: std has no stable file id on Windows, so there
+/// a hard link to real config is a declared limit of check 7.
+#[cfg(unix)]
+#[test]
+fn r20_a_hard_link_to_real_config_is_refused() {
+    use std::os::unix::fs::MetadataExt;
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    let real = decoy.path().join(".cursor").join("mcp.json");
+    let at = home.path().join(".cursor").join("mcp.json");
+    for dir in [decoy.path(), home.path()] {
+        std::fs::create_dir(dir.join(".cursor")).expect("a .cursor dir");
+    }
+    std::fs::write(&real, "{}").expect("the decoy's config");
+    std::fs::hard_link(&real, &at).expect("a hard link");
+    let (a, b) = (
+        std::fs::metadata(&at).expect("linked"),
+        std::fs::metadata(&real).expect("real"),
+    );
+    assert!(
+        a.dev() == b.dev() && a.ino() == b.ino(),
+        "premise: one file under both names"
+    );
+    let mut command = with_override(home.path());
+    command.env("HOME", decoy.path());
+    probe(
+        command,
+        &refuse(
+            &[
+                "(check 7)",
+                ".cursor/mcp.json is a hard link to the real home's .cursor/mcp.json",
+                FIX_ENV,
+            ],
+            &[],
+        ),
+        vec![home, decoy],
+    );
+}
+
+/// R0d: the gateway's own hard links inside the test home are accepted (a
+/// journal publish or a kept backup gives one file two names), though the real
+/// home (a decoy) holds a different file at the same relative path.
+#[cfg(unix)]
+#[test]
+fn r0d_hard_links_inside_the_test_home_are_accepted() {
+    use std::os::unix::fs::MetadataExt;
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    for root in [home.path(), decoy.path()] {
+        std::fs::create_dir(root.join(".mcp-gateway")).expect("a data dir");
+        std::fs::write(root.join(".mcp-gateway").join("journal.json"), "{}").expect("a journal");
+    }
+    let journal = home.path().join(".mcp-gateway").join("journal.json");
+    let kept = home.path().join(".mcp-gateway").join("journal.json.kept");
+    std::fs::hard_link(&journal, &kept).expect("a kept backup");
+    let ours = std::fs::metadata(&journal).expect("the journal");
+    let theirs = std::fs::metadata(decoy.path().join(".mcp-gateway").join("journal.json"))
+        .expect("the decoy's journal");
+    assert!(
+        ours.nlink() == 2 && ours.ino() != theirs.ino(),
+        "premise: two names inside the test home, another file at the same path in the real home"
+    );
+    let mut command = with_override(home.path());
+    command.env("HOME", decoy.path());
+    probe(command, &Expect::Pass, vec![home, decoy]);
+}
+
 /// R0c: a link that stays inside the override is accepted: check 7 judges where
 /// a link resolves, not that it is one.
 #[cfg(unix)]

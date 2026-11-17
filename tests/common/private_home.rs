@@ -144,7 +144,8 @@ fn judge() -> Result<(), Refusal> {
     // 7. Nothing under the override leads out of it. Discovery reads more than
     // `.config` and `.mcp-gateway` (`.cursor`, `.claude.json`, ...), so every link
     // and directory, at any depth, must resolve inside.
-    if let Some((why, at)) = first_way_out(&home, &canonical_home, "") {
+    let real_home = real_home_raw();
+    if let Some((why, at)) = first_way_out(&home, &canonical_home, real_home.as_deref(), "") {
         return refused(7, format!("{why}: {}", at.display()), true);
     }
     Ok(())
@@ -157,9 +158,15 @@ fn judge() -> Result<(), Refusal> {
 /// directories are descended, so a link is never followed. A dangling link
 /// counts as outside. Any error but "not found" refuses: a directory that cannot
 /// be listed may still open by a known path (an execute-only one does). Only an
-/// entry removed meanwhile (a concurrent test) is skipped. Plain files need no
-/// check: their directory was already judged.
-fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String, PathBuf)> {
+/// entry removed meanwhile (a concurrent test) is skipped. A plain file is
+/// refused only when it is the real home's file at the same relative path (a
+/// hard link to real config; unix only, see `is_the_real_file`).
+fn first_way_out(
+    dir: &Path,
+    canonical_home: &Path,
+    real_home: Option<&Path>,
+    rel: &str,
+) -> Option<(String, PathBuf)> {
     let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     let here = if rel.is_empty() { "the override" } else { rel };
     let entries = match std::fs::read_dir(dir) {
@@ -187,6 +194,9 @@ fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String
         };
         let link = meta.file_type().is_symlink();
         if !link && !meta.is_dir() {
+            if is_the_real_file(&meta, real_home, &rel) {
+                return Some((format!("{rel} is a hard link to the real home's {rel}"), at));
+            }
             continue;
         }
         match std::fs::canonicalize(&at) {
@@ -194,11 +204,30 @@ fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String
             Err(_) if at.symlink_metadata().is_err_and(|e| gone(&e)) => continue,
             _ => return Some((format!("{rel} resolves outside the override"), at)),
         }
-        if !link && let Some(found) = first_way_out(&at, canonical_home, &rel) {
+        if !link && let Some(found) = first_way_out(&at, canonical_home, real_home, &rel) {
             return Some(found);
         }
     }
     None
+}
+
+/// Unix: the test-home file is the very file at the same relative path under
+/// the real home (same device and inode), so a write through it changes real
+/// config. The gateway's own hard links (journal publishes, kept backups) stay
+/// inside the test home, so they never match.
+#[cfg(unix)]
+fn is_the_real_file(meta: &std::fs::Metadata, real_home: Option<&Path>, rel: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    real_home
+        .and_then(|real| std::fs::metadata(real.join(rel)).ok())
+        .is_some_and(|real| real.dev() == meta.dev() && real.ino() == meta.ino())
+}
+
+/// Not unix: std has no stable file id, so a hard link to real config is not
+/// detected here. A declared limit of check 7.
+#[cfg(not(unix))]
+fn is_the_real_file(_: &std::fs::Metadata, _: Option<&Path>, _: &str) -> bool {
+    false
 }
 
 /// The variable a row's child reads to know it is the child of that row.
