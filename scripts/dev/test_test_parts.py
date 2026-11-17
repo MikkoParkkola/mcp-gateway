@@ -122,6 +122,14 @@ class Invariant(Rows):
         body = "#[cfg(tp1)]\n#[cfg(test)]\nmod tests {\n    #[cfg(tp1)]\n    #[test]\n    fn t() {}\n}\n"
         self.assert_refused(with_files(src__a_DOT_rs=body), "two-tags")
 
+    def test_a_compound_or_conditional_part_predicate_is_refused(self):
+        """C1-C3: only the exact one-line `#[cfg(tpK)]` may name a part; anything else could hide a test."""
+        for attr in ("#[cfg(all(tp1, unix))]", "#[cfg(not(tp1))]", "#[cfg_attr(tp1, ignore)]"):
+            with self.subTest(attr=attr):
+                body = A_UNTAGGED.replace("#[cfg(test)]", f"#[cfg(tp1)]\n#[cfg(test)]").replace(
+                    "    #[test]", f"    {attr}\n    #[test]")
+                self.assert_refused(with_files(src__a_DOT_rs=body), "stray-cfg")
+
     def test_a_stray_untagged_test_in_a_production_module_is_refused(self):
         self.assert_refused(with_files(src__b__mod_DOT_rs=BASE["src/b/mod.rs"] + "\n#[test]\nfn stray() {}\n"), "untagged")
 
