@@ -87,6 +87,9 @@ async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
 async fn a_plain_dir_periodic_saver_is_recorded_once_at_start() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let file = dir.path().join("saved.json");
+    // The loop-started signal only: the saver's interval starts inside its
+    // task, so a tick advanced before the task first ran would never come.
+    let seams = periodic_seams(&file);
     let runs = Arc::new(AtomicUsize::new(0));
     let unkept = expect_unkept();
     let saver = spawn_periodic_save("k8p save", EVERY, None, Some(file.clone()), {
@@ -97,6 +100,7 @@ async fn a_plain_dir_periodic_saver_is_recorded_once_at_start() {
     });
     let want = vec![("periodic save", file.clone(), this_test())];
     assert_eq!(unkept.recorded(), want, "not recorded once at start");
+    crate::test_pause::within("the saver's loop started", seams.loop_started.notified()).await;
     for tick in 1..=3 {
         tokio::time::advance(EVERY).await;
         let ran =
