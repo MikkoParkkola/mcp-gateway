@@ -4,3 +4,8 @@
 # Other targets read nothing from this file.
 [target.aarch64-unknown-linux-gnu]
 linker = "scripts/ci/aarch64-lld-cc.sh"
+
+# THROWAWAY (E1, never merged): an alias that hides a whole lib test build behind a name, for the tripwire's
+# end-to-end row.
+[alias]
+wholelib = "test --lib --all-features --no-run"
