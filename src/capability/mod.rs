@@ -62,6 +62,8 @@ mod maps_attribution_tests;
 #[cfg(test)]
 pub(crate) mod maps_harness;
 #[cfg(test)]
+mod maps_live_tests;
+#[cfg(test)]
 mod maps_pacing_tests;
 #[cfg(test)]
 mod maps_tools_tests;

@@ -246,3 +246,35 @@ async fn at10_an_array_answer_without_results_declared_is_refused() {
         "the refusal names the undeclared key: {text}"
     );
 }
+
+// ── AT4: no declared attribution, no change ──────────────────────────
+
+/// A capability that declares no attribution answers through
+/// gateway_invoke exactly as its provider sent it, in both channels, with
+/// and without `_full`. The expected value is the stub's own literal body.
+#[tokio::test]
+async fn at4_without_attribution_the_answer_is_untouched() {
+    let body = r#"{"name":"Helsinki","attribution":"the provider's own field"}"#;
+    let stub = Stub::start(Reply::json(body)).await;
+    let output = "    type: object\n    properties:\n      name:\n        type: string\n      attribution:\n        type: string\n";
+    let meta = gateway(vec![cap(
+        "at4",
+        &stub.url("at4.test", "/s"),
+        "",
+        output,
+        "",
+    )]);
+    let want: Value = serde_json::from_str(body).expect("literal");
+    for full in [false, true] {
+        let mut args = json!({ "q": format!("full-{full}") });
+        if full {
+            args["_full"] = json!(true);
+        }
+        let (text, structured) = channels(&invoke(&meta, "at4", args).await);
+        assert_eq!(text, want, "_full {full}: text untouched");
+        assert_eq!(
+            structured, want,
+            "_full {full}: structuredContent untouched"
+        );
+    }
+}
