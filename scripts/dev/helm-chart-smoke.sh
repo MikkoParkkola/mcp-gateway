@@ -127,7 +127,8 @@ fi
 if grep -qE '^ *- "?--host"?$' <<<"$dep"; then
   fail "rendered args pass the hidden --host flag"
 fi
-grep -A1 -E '^ *- name: MCP_GATEWAY_SERVER__HOST$' <<<"$dep" | grep -qE 'value: "?0\.0\.0\.0"?$' \
+host_env="$(grep -A1 -E '^ *- name: MCP_GATEWAY_SERVER__HOST$' <<<"$dep" || true)"
+grep -qE 'value: "?0\.0\.0\.0"?$' <<<"$host_env" \
   || fail "rendered env does not bind 0.0.0.0 through MCP_GATEWAY_SERVER__HOST"
 if "$HELM" template t "$CHART" --set 'extraEnv[0].name=MCP_GATEWAY_SERVER__HOST' \
   --set 'extraEnv[0].value=127.0.0.1' >/dev/null 2>&1; then
