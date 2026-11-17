@@ -307,14 +307,14 @@ pub(super) static STARTED_ROOTS: parking_lot::Mutex<Vec<(&'static str, Option<Pa
 /// runtime's drop after it.
 pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
     let mut running = Vec::new();
-    for ShutdownSave {
-        step,
-        root,
-        save,
+    for one in saves {
+        // The gate moves out first, outside the pattern: a cfg on a field
+        // pattern is valid Rust, but the gates' source parser cannot read it.
         #[cfg(test)]
-        gate,
-    } in saves
-    {
+        let gate = one.gate;
+        let ShutdownSave {
+            step, root, save, ..
+        } = one;
         #[cfg(test)]
         STARTED_ROOTS.lock().push((step, root.clone()));
         // Taken here, before the thread exists, while the caller (a test)

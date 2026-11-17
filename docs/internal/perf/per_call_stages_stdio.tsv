@@ -119,7 +119,13 @@ src/gateway/server/mod.rs	leaky_single_user_backends	-	startup config, not per c
 src/gateway/server/persistence.rs	advance_until_saved	-	shutdown and periodic cost-save catch-up, off the request path
 src/gateway/server/persistence.rs	boot_cost_governance	-	startup cost-governance restore, once per serve
 src/gateway/server/persistence.rs	ensure_data_dir	-	startup data-directory creation, once per serve
+src/gateway/server/persistence.rs	gated	-	test-only: holds one shutdown save's thread for a row, never built in production
 src/gateway/server/persistence.rs	load_if_exists	-	startup state loading, once per serve
+src/gateway/server/persistence.rs	new	-	shutdown save construction, off the request path
+src/gateway/server/persistence.rs	periodic_seams	-	test-only: registers a row's periodic-saver seams, never called in production
+src/gateway/server/persistence.rs	periodic_seams_for	-	test-only: a periodic saver's seam lookup at startup, compiled only in tests
+src/gateway/server/persistence.rs	root	-	test-only: reads a shutdown save's root for a row
+src/gateway/server/persistence.rs	run_now	-	test-only: runs a shutdown save's write inline for a row
 src/gateway/server/persistence.rs	run_shutdown_saves	-	shutdown saves, off the request path
 src/gateway/server/persistence.rs	save_costs	-	periodic cost saver task and shutdown saves, off the request path
 src/gateway/server/persistence.rs	save_costs_unless_busy	-	periodic cost saver task, off the request path
