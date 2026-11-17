@@ -273,15 +273,9 @@ impl Gateway {
             .config_path
             .as_deref()
             .or(self.watched_config.as_deref())?;
-        let grants = &self.config.security.identity_grants;
-        let grants_path = grants
-            .enabled
-            .then(|| expand_home_path(&grants.path).display().to_string());
-        Some(crate::config_reload::history::hook_for(
-            data_dir,
-            path,
-            grants_path,
-        ))
+        // A config version holds gateway.yaml and the env files; grants
+        // versions are recorded separately.
+        Some(crate::config_reload::history::hook_for(data_dir, path))
     }
 }
 
