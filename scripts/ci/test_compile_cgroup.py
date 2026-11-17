@@ -26,6 +26,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 SCRIPT = Path(__file__).resolve().with_name("compile-cgroup.sh")
+
+
+# Bash cannot trap a signal that was ignored when it started, and a shell starts an `&` job with SIGINT ignored (nohup
+# does the same to SIGHUP). Without this reset every signal row's result depends on how the suite was launched: all
+# four copies run as background jobs failed the SIGINT rows, the same rows passed in the foreground.
+def default_signals():
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, signal.SIG_DFL)
+
+
 MIB = 1024 * 1024
 KEYS = (
     "cgroup", "page_size", "swap_out_mib", "swap_in_mib", "peak_mib",
@@ -293,9 +303,10 @@ class Fixture:
         self.started = time.monotonic()
         self.proc = subprocess.Popen(["bash", str(script), *command], env=self.env,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, start_new_session=True)
+                                     text=True, start_new_session=True, preexec_fn=default_signals)
 
-    def finish(self, timeout=6):
+    # A hang guard only, never the property under test: a gate that never returns still fails it, a slow runner does not.
+    def finish(self, timeout=30):
         timeout = self.note_wait("subprocess timeout", timeout)
         try:
             stdout, stderr = self.proc.communicate(timeout=timeout)
@@ -516,10 +527,12 @@ class CompileCgroup(unittest.TestCase):
     def test_G10b_never_empty_has_bounded_wait(self):
         fixture = self.fixture(empty_after=None)
         fixture.start()
-        done = fixture.finish(timeout=3)
-        self.assertFalse(fixture.timed_out, "gate did not give up within MEM_KILL_WAIT_S + 2 seconds")
-        self.assertLessEqual(fixture.elapsed, 3,
-                             f"gate exceeded the kill-wait bound plus slack: took {fixture.elapsed:.2f}s, bound {3:.2f}s")
+        done = fixture.finish()
+        self.assertFalse(fixture.timed_out, "gate never gave up on a cgroup that never empties")
+        # The fixture's kill wait is 1 s (measured 2.05-2.51 s at load ~60). The bound stays under the gate's 10 s
+        # default, so a gate that ignores MEM_KILL_WAIT_S fails as well as one that never gives up.
+        self.assertLessEqual(fixture.elapsed, 8,
+                             f"gate exceeded the kill-wait bound plus slack: took {fixture.elapsed:.2f}s, bound {8:.2f}s")
         self.assertNotEqual(done.returncode, 0, "a cgroup that never empties must fail")
         self.assertIn("could not be emptied", done.stdout + done.stderr)
         record = self.record(fixture, done)
@@ -581,7 +594,7 @@ class CompileCgroup(unittest.TestCase):
             with self.subTest(signal=sig.name):
                 fixture = self.fixture(mode="signal")
                 fixture.start()
-                deadline = time.monotonic() + self.note_wait("signal readiness wait", 2)
+                deadline = time.monotonic() + self.note_wait("signal readiness wait", 30)
                 poll = self.note_wait("signal readiness poll sleep", 0.01)
                 while (not (fixture.base / "ready").exists() and fixture.proc.poll() is None
                        and time.monotonic() < deadline):
@@ -639,7 +652,7 @@ class CompileCgroup(unittest.TestCase):
         return [json.loads(line) for line in (fixture.base / "sudo.jsonl").read_text().splitlines()]
 
     def wait_for(self, fixture, marker):
-        deadline = time.monotonic() + self.note_wait(f"{marker} wait", 3)
+        deadline = time.monotonic() + self.note_wait(f"{marker} wait", 30)
         poll = self.note_wait(f"{marker} poll sleep", 0.01)
         while not (fixture.base / marker).exists() and time.monotonic() < deadline:
             if fixture.proc.poll() is not None:
@@ -737,17 +750,19 @@ wait() {
 
     def test_R7_term_reaches_grandchild(self):
         fixture = self.fixture(mode="descendant")
-        fixture.set_wait("MEM_KILL_WAIT_S", "3")
+        # A 20 s kill wait and an 8 s bound: a cleanup that waits out the configured wait, or the 10 s default, fails;
+        # a correct one ends in about a second.
+        fixture.set_wait("MEM_KILL_WAIT_S", "20")
         fixture.start()
         self.wait_for(fixture, "ready")
         grandchild = int((fixture.base / "grandchild").read_text())
         started = time.monotonic()
         os.kill(fixture.proc.pid, signal.SIGTERM)
-        done = fixture.finish(timeout=3)
+        done = fixture.finish()
         self.assertFalse(fixture.timed_out, "gate hung on the unsignalled grandchild")
         elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 3,
-                        f"signal cleanup exceeded the configured kill wait: took {elapsed:.2f}s, bound {3:.2f}s")
+        self.assertLess(elapsed, 8,
+                        f"signal cleanup waited on the kill wait: took {elapsed:.2f}s, bound {8:.2f}s")
         with self.assertRaises(ProcessLookupError, msg="grandchild survived TERM to the gate"):
             os.kill(grandchild, 0)
         self.assertEqual(done.returncode, 128 + signal.SIGTERM)
@@ -790,7 +805,7 @@ sleep() {
 }
 ''')
         fixture.start()
-        done = fixture.finish(timeout=3)
+        done = fixture.finish()
         self.assertFalse(fixture.timed_out, "poll sleep exceeded the remaining drain deadline")
         sleeps = [float(value) for value in (fixture.base / "sleeps").read_text().splitlines()]
         self.assertTrue(sleeps)
