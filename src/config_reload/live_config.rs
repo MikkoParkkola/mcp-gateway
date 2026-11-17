@@ -10,14 +10,25 @@ use parking_lot::RwLock;
 
 use super::Generation;
 use super::diff::pending_restart_fields;
-use super::revision::{self, AppliedInputs, RawInputs};
+use super::revision::{self, AppliedInputs, CapabilityPart, PartDigest, RawInputs};
 use super::with_env_restart;
 use crate::config::Config;
 
-/// A published generation and the revision naming it.
+/// A published generation and the revision naming it, with the running
+/// revision beside it so one read cannot tear the pair.
 struct Published {
     generation: Arc<Generation>,
     applied: Option<Arc<Applied>>,
+    /// Startup revision, then the startup inputs with the first published
+    /// capability part. Later publishes leave it.
+    running_revision: Option<String>,
+    /// Inputs `with_applied` published. The first capability publish names
+    /// these with only the capability part replaced. A gateway.yaml or grants
+    /// reload changes `applied` and leaves this baseline.
+    startup_inputs: Option<Arc<AppliedInputs>>,
+    /// The first capability publish has written `running_revision` from the
+    /// baseline. Later publishes do not.
+    capability_running_set: bool,
 }
 
 /// The keyed digests a published config was built from, its revision, and
@@ -27,6 +38,25 @@ pub(crate) struct Applied {
     inputs: AppliedInputs,
     pub(crate) revision: String,
     pub(crate) pending_restart: Vec<&'static str>,
+}
+
+impl Applied {
+    /// The capability part this revision names. The record's coverage is this
+    /// part, so the two cannot drift.
+    pub(crate) fn capability_part(&self) -> &CapabilityPart<PartDigest> {
+        &self.inputs.capabilities
+    }
+}
+
+/// The published revision and the running revision, taken in one read.
+///
+/// `published` is the applied snapshot a record reads. `running` is the
+/// startup revision, or after the first capability publish the startup inputs
+/// with that part. One read, so a record never pairs one moment's published
+/// revision with another moment's running revision.
+pub(crate) struct AppliedNow {
+    pub(crate) published: Option<Arc<Applied>>,
+    pub(crate) running: Option<String>,
 }
 
 /// Live, atomically-swappable config snapshot shared across the gateway.
@@ -40,8 +70,6 @@ pub struct LiveConfig {
     inner: RwLock<Published>,
     /// Derived from the record key; `None` publishes no revision at all.
     revision_key: Option<[u8; 32]>,
-    /// The revision of what this process applied at startup.
-    running_revision: Option<String>,
     /// What the running process actually applied, fixed at startup.
     ///
     /// Kept apart from `inner` because the diff compares the file against the
@@ -97,9 +125,11 @@ impl LiveConfig {
             inner: RwLock::new(Published {
                 generation: Arc::new(seed),
                 applied: None,
+                running_revision: None,
+                startup_inputs: None,
+                capability_running_set: false,
             }),
             revision_key: None,
-            running_revision: None,
             running,
             policy_epoch: None,
             admission: RwLock::new(()),
@@ -181,11 +211,15 @@ impl LiveConfig {
     /// both the running and the published one.
     #[must_use]
     pub(crate) fn with_applied(mut self, raw: RawInputs) -> Self {
-        let applied = self
-            .digest_over(raw, None)
+        let inputs = self.digest_over(raw, None);
+        let applied = inputs
+            .clone()
             .and_then(|inputs| self.applied(inputs, Vec::new()));
-        self.running_revision = applied.as_ref().map(|a| a.revision.clone());
-        self.inner.get_mut().applied = applied;
+        let inner = self.inner.get_mut();
+        inner.running_revision = applied.as_ref().map(|a| a.revision.clone());
+        inner.startup_inputs = inputs.map(Arc::new);
+        inner.capability_running_set = false;
+        inner.applied = applied;
         self
     }
 
@@ -204,10 +238,15 @@ impl LiveConfig {
         }
     }
 
-    /// The revision this process applied at startup.
+    /// The revision this process applied at startup, then, after the first
+    /// capability publish, the startup inputs with that publish's part.
+    ///
+    /// Owned: the value lives beside the published revision, behind the same
+    /// lock, so a borrow cannot outlive the read.
+    #[cfg(test)]
     #[must_use]
-    pub(crate) fn running_revision(&self) -> Option<&str> {
-        self.running_revision.as_deref()
+    pub(crate) fn running_revision(&self) -> Option<String> {
+        self.inner.read().running_revision.clone()
     }
 
     fn applied(
@@ -224,22 +263,27 @@ impl LiveConfig {
         }))
     }
 
-    /// The published revision and its restart state, for a record: one read
-    /// lock and one `Arc` clone.
+    /// The published revision and the running revision, from one read.
     #[must_use]
-    pub(crate) fn applied_now(&self) -> Option<Arc<Applied>> {
-        self.inner.read().applied.clone()
+    pub(crate) fn applied_now(&self) -> AppliedNow {
+        let inner = self.inner.read();
+        AppliedNow {
+            published: inner.applied.clone(),
+            running: inner.running_revision.clone(),
+        }
     }
 
     /// `raw` digested, with the grants and capability digests their own sinks
     /// last published carried over from `current`: a config reload reads
-    /// neither.
+    /// neither. The capability sequence is copied with the part. It is not an
+    /// input, and a reload must not look like sequence zero.
     fn digest_over(&self, raw: RawInputs, current: Option<&Applied>) -> Option<AppliedInputs> {
         let key = self.revision_key?;
         let mut inputs = AppliedInputs::digest(&key, raw);
         if let Some(current) = current {
             inputs.grants = current.inputs.grants;
             inputs.capabilities.clone_from(&current.inputs.capabilities);
+            inputs.capability_seq = current.inputs.capability_seq;
         }
         Some(inputs)
     }
@@ -280,6 +324,63 @@ impl LiveConfig {
         self.replace_part(|key, inputs| {
             inputs.grants = grants.map(|g| revision::part_digest(key, g));
         });
+    }
+
+    /// Publish `part` at load sequence `seq`, under the same locks as the
+    /// other applied inputs.
+    ///
+    /// A seq at or below the stored one is a stale or repeated handoff: the
+    /// stored part stays, and the applied snapshot is not replaced. `<=`,
+    /// not `<`, because the same seq delivered twice must change nothing,
+    /// including which snapshot is published. The first publish sets the
+    /// running revision to the startup inputs with this part. A later one
+    /// leaves it, so a gateway.yaml reload during the scan stays visible as
+    /// published versus running.
+    pub(crate) fn set_capabilities(&self, seq: u64, part: CapabilityPart<PartDigest>) {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let Some(key) = self.revision_key else {
+            return;
+        };
+        let (pending, mut inputs) = {
+            let Some(current) = inner.applied.as_deref() else {
+                return;
+            };
+            if seq <= current.inputs.capability_seq {
+                return;
+            }
+            (current.pending_restart.clone(), current.inputs.clone())
+        };
+        inputs.capabilities = part.clone();
+        inputs.capability_seq = seq;
+        if !inner.capability_running_set {
+            if let Some(startup) = inner.startup_inputs.clone() {
+                let mut baseline = (*startup).clone();
+                baseline.capabilities = part;
+                inner.running_revision = Some(revision::config_revision(&key, &baseline));
+            }
+            inner.capability_running_set = true;
+        }
+        inner.applied = self.applied(inputs, pending);
+    }
+
+    /// The capability load sequence the last publish recorded.
+    ///
+    /// Zero when nothing has published a part. A gateway.yaml reload keeps
+    /// the sequence `digest_over` copied onto the new inputs.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "production call sites are a later slice; the tests are the caller until then"
+        )
+    )]
+    pub(crate) fn capability_seq(&self) -> u64 {
+        self.inner
+            .read()
+            .applied
+            .as_ref()
+            .map_or(0, |applied| applied.inputs.capability_seq)
     }
 
     fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
@@ -355,11 +456,17 @@ impl LiveConfig {
             let mut inner = self.inner.write();
             let pending = pending_restart_fields(&self.running, generation.config());
             let applied = applied(inner.applied.as_deref(), pending);
+            let running_revision = inner.running_revision.clone();
+            let startup_inputs = inner.startup_inputs.clone();
+            let capability_running_set = inner.capability_running_set;
             std::mem::replace(
                 &mut *inner,
                 Published {
                     generation,
                     applied,
+                    running_revision,
+                    startup_inputs,
+                    capability_running_set,
                 },
             )
         };
@@ -410,3 +517,8 @@ impl LiveConfig {
         admit()
     }
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "live_config_capability_tests.rs"]
+mod capability_tests;

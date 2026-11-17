@@ -211,7 +211,7 @@ pub(crate) fn recover_before_start(
 
 /// [`recover_before_start`] under the lock: `record` given the config the
 /// recovery leaves, then the recovery.
-fn recover_recorded(
+pub(crate) fn recover_recorded(
     locked: &lock::Locked,
     record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
 ) -> Result<(), String> {

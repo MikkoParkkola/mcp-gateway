@@ -473,9 +473,7 @@ async fn authenticate_request(
             // one is refused here too, never handed the anonymous identity
             // below (MIK-8286).
             live::KsCredential::Refused => {
-                auth_failure(AuthFailureKind::InvalidCredential);
-                warn!(path = %path, "Invalid token");
-                return bearer_unauthorized_response("Invalid token");
+                return invalid_token(AuthFailureKind::InvalidCredential, path, &request);
             }
             live::KsCredential::NotOurs => {}
         }
@@ -538,12 +536,30 @@ async fn authenticate_request(
 
     // 3. Reject. An expired key was matched and refused above, so it is
     // counted as its own kind rather than as a wrong credential.
-    auth_failure(if auth_config.is_expired_key(token) {
+    let kind = if auth_config.is_expired_key(token) {
         AuthFailureKind::ExpiredApiKey
     } else {
         AuthFailureKind::InvalidCredential
-    });
-    warn!(path = %path, "Invalid token");
+    };
+    invalid_token(kind, path, &request)
+}
+
+/// The IP of the socket the kernel accepted for `request`, when the serve
+/// path installed connect info (both do). Never a forwarding header: a client
+/// writes those.
+pub(super) fn peer_ip(request: &Request<Body>) -> Option<std::net::IpAddr> {
+    request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip())
+}
+
+/// A refused credential: counted as `kind`, logged with the peer so a guesser
+/// can be found, answered 401.
+fn invalid_token(kind: AuthFailureKind, path: &str, request: &Request<Body>) -> Response {
+    auth_failure(kind);
+    let peer = peer_ip(request).map(tracing::field::display);
+    warn!(path = %path, peer, "Invalid token");
     bearer_unauthorized_response("Invalid token")
 }
 

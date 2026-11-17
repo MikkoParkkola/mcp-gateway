@@ -25,6 +25,12 @@ pub fn api_key_digest_spec(key: &[u8]) -> String {
     crate::hashing::sha256_tagged(key)
 }
 
+/// The shortest credential an operator may choose: `hash-key`
+/// refuses a new key under this many BYTES, and a literal or `env:`
+/// `auth.bearer_token` under this many CHARACTERS warns at load (refuses under
+/// `security.posture: hardened`).
+pub(crate) const MIN_SECRET_LEN: usize = 20;
+
 /// Parse `sha256:` followed by exactly 64 lowercase hex characters.
 #[must_use]
 pub(crate) fn parse_api_key_digest(spec: &str) -> Option<[u8; 32]> {

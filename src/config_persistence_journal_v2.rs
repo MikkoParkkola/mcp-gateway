@@ -609,10 +609,10 @@ mod observe;
 mod state_tests;
 
 /// `<config>.abandoned`: the sidecar an abandoned journal's handover writes, beside the
-/// resolved config in the journal's own directory. The drain's handover and the restart
-/// checkpoint both name it through this one function.
+/// resolved config in the journal's own directory. The drain's handover, the restart
+/// checkpoint and the Settings unsettled check all name it through this one function.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "the restart coordinator wiring, a later slice, reaches it through the config floor"
@@ -621,6 +621,15 @@ mod state_tests;
 pub(crate) fn abandoned_path(target: &std::path::Path) -> std::path::PathBuf {
     let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
     name.push(".abandoned");
+    target.with_file_name(name)
+}
+
+/// `<config>.abandoned.retired`: the manifest of retired abandoned outcomes, beside the resolved
+/// config. Startup without the lock refuses while one is present, since nothing reads it there.
+#[cfg(test)]
+pub(crate) fn retired_path(target: &std::path::Path) -> std::path::PathBuf {
+    let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
+    name.push(".abandoned.retired");
     target.with_file_name(name)
 }
 

@@ -10,6 +10,8 @@
 
 #[cfg(unix)]
 mod control;
+#[cfg(unix)]
+mod control_msg;
 mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -32,6 +34,15 @@ mod os {
         _: &std::path::Path,
         _: &Target,
         _: &[std::path::PathBuf],
+    ) -> Result<Started, Refusal> {
+        Err(Refusal::Unsupported)
+    }
+
+    pub(super) async fn start_fetching(
+        _: &std::path::Path,
+        _: &Target,
+        _: &[std::path::PathBuf],
+        _: tokio::time::Instant,
     ) -> Result<Started, Refusal> {
         Err(Refusal::Unsupported)
     }
@@ -201,6 +212,40 @@ pub fn start_with_helper(
     os::start(gateway, target, protected)
 }
 
+/// [`start`] after the helper's fetch step: the gateway serves the helper's
+/// control connection and the preview's own proxy until the fetch's
+/// credential has expired, and returns only then, so the run never overlaps
+/// a live credential. `deadline` is the preview's shared deadline.
+///
+/// # Errors
+///
+/// As [`start`], plus any refusal of the fetch step.
+pub async fn start_fetching(
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+) -> Result<Started, Refusal> {
+    let gateway = std::env::current_exe()
+        .map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))?;
+    os::start_fetching(&gateway, target, protected, deadline).await
+}
+
+/// [`start_fetching`] with the gateway binary named, for integration tests,
+/// as [`start_with_helper`] is for [`start`].
+///
+/// # Errors
+///
+/// As [`start_fetching`].
+#[doc(hidden)]
+pub async fn start_fetching_with_helper(
+    gateway: &Path,
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+) -> Result<Started, Refusal> {
+    os::start_fetching(gateway, target, protected, deadline).await
+}
+
 /// How long the probe's `/bin/true` may take through the whole setup.
 const PROBE_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -251,3 +296,18 @@ mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]
 mod staged_tests;
+
+/// Off Linux a fetching preview is refused as unsupported, like every other
+/// preview there (the non-Linux `os` stub).
+#[cfg(tp1)]
+#[cfg(all(test, not(target_os = "linux")))]
+#[tokio::test]
+async fn start_fetching_is_unsupported_off_linux() {
+    let target = Target {
+        program: PathBuf::from("/bin/true"),
+        args: Vec::new(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let started = start_fetching_with_helper(Path::new("/bin/true"), &target, &[], deadline).await;
+    assert!(matches!(started, Err(Refusal::Unsupported)));
+}
