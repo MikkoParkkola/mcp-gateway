@@ -56,6 +56,22 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
     command
 }
 
+/// Any `command` isolated as [`command`] isolates the gateway binary, with
+/// `home` as the test-home override and every platform-home variable (`HOME`,
+/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) under a second directory,
+/// `env_home`. A pure addition: no existing caller changes.
+///
+/// RED STUB: returns the command unchanged until the implementation lands.
+pub fn isolated_with_env_home(
+    command: Command,
+    home: &Path,
+    env_home: &Path,
+    inherit: Inherit,
+) -> Command {
+    let _ = (home, env_home, inherit);
+    command
+}
+
 /// The binary run through `wrapper` (for example `sh -c '...; exec "$0" "$@"'`),
 /// isolated the same way: the wrapper's child inherits it.
 pub fn wrapped(wrapper: &[&str], home: &Path, inherit: Inherit) -> Command {
