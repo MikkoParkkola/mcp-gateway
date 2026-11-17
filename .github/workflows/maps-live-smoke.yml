@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#
+# Opt-in live smoke for the key-free map tools, and the only place provider
+# answers are recorded as fixtures. Never on push, PR open or synchronize: it
+# runs when someone dispatches it or labels a PR live-smoke.
+name: maps-live-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maps-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  record:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'live-smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UA: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Record raw provider answers (8 requests, paced)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          echo "head ${HEAD_SHA} run ${RUN_ID}" > out/MANIFEST
+          # name | gap before it, seconds | URL. Each URL is the exact request
+          # its fixture row asserts.
+          while IFS='|' read -r name gap url; do
+            sleep "$gap"
+            when=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+            meta=$(curl -sS -A "$UA" -o "out/${name}.json" -w '%{http_code} %{content_type}' "$url")
+            printf '%s %s %s %s\n' "$name" "$when" "$meta" "$url" >> out/MANIFEST
+          done <<'REQUESTS'
+          geocode|0|https://geocoding-api.open-meteo.com/v1/search?name=Helsinki&count=5
+          geocode_none|0.25|https://geocoding-api.open-meteo.com/v1/search?name=Qxzvqzzyx&count=5
+          weather|0.25|https://api.open-meteo.com/v1/forecast?latitude=60.1699&longitude=24.9384&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,sunrise,sunset&timezone=auto
+          nominatim_search|1.1|https://nominatim.openstreetmap.org/search?q=Helsinki+Cathedral&format=jsonv2&limit=5
+          nominatim_reverse|1.1|https://nominatim.openstreetmap.org/reverse?lat=60.1699&lon=24.9384&format=jsonv2&zoom=18
+          photon_search|1.1|https://photon.komoot.io/api/?q=Helsinki+Cathedral&limit=5
+          overpass_nearby|1.1|https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bnwr%28around%3A500%2C60.1699%2C24.9384%29%5Bamenity%3Dcafe%5D%3Bout%20center%2020%3B
+          osrm_route|1.1|https://router.project-osrm.org/route/v1/driving/24.9384,60.1699;22.2666,60.4518?overview=false
+          REQUESTS
+          cat out/MANIFEST
+
+      - name: Upload the raw answers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maps-live-${{ github.run_id }}
+          path: out/
+          retention-days: 14
