@@ -40,7 +40,9 @@ _REPORT = {"INTERNAL", "AUTO", "REMOVE"}
 _READER_SUFFIXES = {".md", ".yaml", ".yml", ".tpl", ".json", ".txt", ".sh", ".service", ".plist"}
 _OPS = frozenset("|;&><")
 _SHELLS = {"sh", "bash"}
-_KEY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:(?:\s*(.*))?$")
+# Dashes and dots: a compose name (`b-x:`, `other.service:`) is a key, and a
+# shallower one closes the service open above it.
+_KEY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_.-]*)\s*:(?:\s*(.*))?$")
 _ITEM = re.compile(r"^(\s*)-\s+\S")
 _EXEC = re.compile(r"^(ENTRYPOINT|CMD)\s+(\[.*\])\s*$")
 _PLIST_STRING = re.compile(r"<string>(.*?)</string>")
@@ -160,15 +162,47 @@ def _groups(lines: list[tuple[int, str]]) -> list[list[tuple[int, str]]]:
     return groups
 
 
+def _cut_shell_comment(text: str) -> str:
+    """Drop a `#` comment outside quotes: at the line start or after whitespace,
+    as the shell reads one (`x#y` is one word). An apostrophe in the comment
+    must not reach the lexer: an unbalanced quote drops the whole line."""
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            continue
+        if ch == "#" and (i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+        i += 1
+    return text
+
+
 def _tokenize(group: list[tuple[int, str]]) -> list[tuple[str, int]]:
     """Posix-tokenize one continuation group. Punctuation (`|;&><`) is its own token.
 
     A trailing backslash is removed before lexing so it joins the next physical
     line, and each token is stamped with the line its first character came from.
+    A `#` outside quotes is a comment, cut before lexing.
     """
     chars: list[tuple[str, int]] = []
     for index, (lineno, raw) in enumerate(group):
-        text = _strip_marker(raw)
+        # Backticks wrap a command in prose (`run `mcp-gateway --host``). They are
+        # not shell syntax this lexer understands, and they glue onto the binary.
+        text = _cut_shell_comment(_strip_marker(raw)).replace("`", "")
         if text.rstrip().endswith("\\"):
             text = text.rstrip()[:-1]
         for ch in text:
@@ -300,7 +334,11 @@ def _shell_hits(lines: list[tuple[int, str]], file: str, table: CliTable) -> lis
 def _scan_markdown(file: str, text: str, table: CliTable) -> list[Hit]:
     hits: list[Hit] = []
     blocks, inside = sd.fences(text)
-    for _lang, body, line0 in blocks:
+    for lang, body, line0 in blocks:
+        if lang in {"yaml", "yml"}:
+            for hit in _scan_yaml_commands(file, body, table):
+                hits.append(Hit(file, hit.line + line0 - 1, hit.cls, hit.item, hit.invocation))
+            continue
         indexed = [(line0 + i, line) for i, line in enumerate(body.splitlines())]
         hits += _shell_hits(indexed, file, table)
     for n, line in enumerate(text.splitlines(), 1):
@@ -311,12 +349,29 @@ def _scan_markdown(file: str, text: str, table: CliTable) -> list[Hit]:
     return hits
 
 
+def _cut_unquoted(text: str, marker: str) -> str:
+    """Text up to `marker` when it sits outside quotes. Quotes keep their contents."""
+    quote: str | None = None
+    escape = False
+    for i, ch in enumerate(text):
+        if quote:
+            if escape:
+                escape = False
+            elif ch == "\\" and quote == '"':
+                escape = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            continue
+        if ch == marker and (marker != "#" or i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+    return text
+
+
 def _unquote(value: str) -> str:
-    value = value.strip()
-    if value and value[0] not in "\"'":
-        comment = value.find(" #")
-        if comment >= 0:
-            value = value[:comment].rstrip()
+    value = _cut_unquoted(value.strip(), "#")
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
         return value[1:-1]
     return value
@@ -385,6 +440,8 @@ def _flow_items(lines: list[str], start: int) -> list[tuple[str, int]]:
                 buf_line = i + 1
                 j += 1
                 continue
+            if ch == "#":
+                break
             if ch in " \t" and not "".join(buf).strip():
                 j += 1
                 continue
@@ -397,6 +454,10 @@ def _flow_items(lines: list[str], start: int) -> list[tuple[str, int]]:
 
 
 def _block_items(lines: list[str], start: int, key_indent: int) -> list[tuple[str, int]]:
+    """Block sequence under `key`, including items at the key's own column.
+
+    A sibling key at that column ends the sequence. A deeper non-item does too.
+    """
     items: list[tuple[str, int]] = []
     i = start + 1
     while i < len(lines):
@@ -406,9 +467,9 @@ def _block_items(lines: list[str], start: int, key_indent: int) -> list[tuple[st
             i += 1
             continue
         indent = len(line) - len(line.lstrip())
-        if indent <= key_indent:
-            break
         item = re.match(r"\s*-\s*(.*)$", line)
+        if indent < key_indent or (indent == key_indent and not item):
+            break
         if not item:
             break
         items.append((_unquote(item.group(1)), i + 1))
@@ -462,10 +523,38 @@ def _transparent(line: str) -> bool:
     return not stripped or stripped.startswith("#") or stripped.startswith("{{")
 
 
+def _note_key(
+    found: list[_Container],
+    cur: _Container | None,
+    lines: list[str],
+    idx: int,
+    indent: int,
+    name: str,
+    raw: str,
+) -> _Container | None:
+    """Record one mapping key. A shallower key closes the open mapping."""
+    if cur and indent < cur.key_indent:
+        found.append(cur)
+        cur = None
+    if name not in {"image", "command", "args"}:
+        return cur
+    slot = "image" if name == "image" else name
+    if cur is None or indent != cur.key_indent or getattr(cur, slot) is not None:
+        if cur:
+            found.append(cur)
+        cur = _Container(key_indent=indent)
+    if name == "image":
+        cur.image = raw.strip()
+    else:
+        setattr(cur, name, _value_at(lines, idx, raw, indent))
+    return cur
+
+
 def _containers(lines: list[str]) -> list[_Container]:
     """Mappings that carry image, command or args, grouped by key indent.
 
     A shallower line (the next list item, the next service) closes the mapping.
+    `- image:` is that mapping's first key, at the key's column, not the dash.
     Keys may arrive in any order, so args above image still see the image.
     """
     found: list[_Container] = []
@@ -482,28 +571,19 @@ def _containers(lines: list[str]) -> list[_Container]:
             if cur and indent < cur.key_indent:
                 found.append(cur)
                 cur = None
+            dash = re.match(r"^(\s*)-\s+", line)
+            key = _KEY.match(line[dash.end() :]) if dash else None
+            if key:
+                cur = _note_key(
+                    found, cur, lines, i, dash.end() + len(key.group(1)), key.group(2), key.group(3) or ""
+                )
             i += 1
             continue
         key = _KEY.match(line)
         if not key:
             i += 1
             continue
-        indent = len(key.group(1))
-        name = key.group(2)
-        raw = key.group(3) or ""
-        if cur and indent < cur.key_indent:
-            found.append(cur)
-            cur = None
-        if name in {"image", "command", "args"}:
-            slot = "image" if name == "image" else name
-            if cur is None or indent != cur.key_indent or getattr(cur, slot) is not None:
-                if cur:
-                    found.append(cur)
-                cur = _Container(key_indent=indent)
-            if name == "image":
-                cur.image = raw.strip()
-            else:
-                setattr(cur, name, _value_at(lines, i, raw, indent))
+        cur = _note_key(found, cur, lines, i, len(key.group(1)), key.group(2), key.group(3) or "")
         i += 1
     if cur:
         found.append(cur)
@@ -580,32 +660,93 @@ def _scan_config(file: str, text: str, rows: sd.Rows) -> list[Hit]:
     return hits
 
 
+def _joined(group: list[tuple[int, str]]) -> str:
+    """One Dockerfile instruction: a trailing backslash joins the next physical line."""
+    parts: list[str] = []
+    last = len(group) - 1
+    for i, (_n, raw) in enumerate(group):
+        text = raw.rstrip()
+        if i != last and text.endswith("\\"):
+            text = text[:-1]
+        parts.append(text)
+    return "".join(parts).strip()
+
+
+def _exec_items(blob: str, group: list[tuple[int, str]]) -> list[tuple[str, int]] | None:
+    """Exec-form array items, each stamped with the physical line it is written on."""
+    try:
+        arr = json.loads(blob)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(arr, list) or not arr or not all(isinstance(item, str) for item in arr):
+        return None
+    found: list[tuple[str, int]] = []
+    line_i, col = 0, 0
+    for item in arr:
+        needle = json.dumps(item)
+        placed = False
+        while line_i < len(group):
+            pos = group[line_i][1].find(needle, col)
+            if pos >= 0:
+                found.append((item, group[line_i][0]))
+                col = pos + len(needle)
+                placed = True
+                break
+            line_i += 1
+            col = 0
+        if not placed:
+            found.append((item, group[0][0]))
+    return found
+
+
+def _hits_exec(
+    tokens: list[tuple[str, int]], kind: str, entry_gateway: bool, file: str, table: CliTable
+) -> list[Hit]:
+    """ENTRYPOINT/CMD exec form. `sh -c` is the script. The stage's last
+    ENTRYPOINT decides whether a CMD array is arguments of the gateway."""
+    if len(tokens) >= 3 and _is_shell(tokens[0][0]) and tokens[1][0] == "-c":
+        script, line = tokens[2]
+        return command_hits(_tokenize([(line, script)]), file, table, implied=False)
+    if kind == "CMD":
+        starts = bool(tokens) and _is_gateway_bin(tokens[0][0])
+        return command_hits(tokens, file, table, implied=entry_gateway and not starts)
+    return command_hits(tokens, file, table, implied=False)
+
+
 def _scan_dockerfile(file: str, text: str, table: CliTable) -> list[Hit]:
     indexed = [(n, line) for n, line in enumerate(text.splitlines(), 1)]
-    hits: list[Hit] = []
+    # kind, source lines, exec-form tokens (None when the instruction is not exec form).
+    logical: list[tuple[str, list[tuple[int, str]], list[tuple[str, int]] | None]] = []
     for group in _groups(indexed):
-        if len(group) == 1 and _EXEC.match(group[0][1].strip()):
-            continue
-        hits += command_hits(_tokenize(group), file, table, implied=False)
-    entry_gateway = False
-    for n, line in indexed:
-        got = _EXEC.match(line.strip())
-        if not got:
-            continue
-        try:
-            arr = json.loads(got.group(2))
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(arr, list) or not all(isinstance(item, str) for item in arr):
-            continue
-        tokens = [(item, n) for item in arr]
-        if got.group(1) == "ENTRYPOINT":
-            entry_gateway = bool(tokens) and _is_gateway_bin(tokens[0][0])
-            hits += command_hits(tokens, file, table, implied=False)
+        got = _EXEC.match(_joined(group))
+        items = _exec_items(got.group(2), group) if got else None
+        if got and items:
+            logical.append((got.group(1), group, items))
         else:
-            implied = entry_gateway and not (tokens and _is_gateway_bin(tokens[0][0]))
-            hits += command_hits(tokens, file, table, implied=implied)
+            logical.append(("OTHER", group, None))
+    stages: list[list[tuple[str, list[tuple[int, str]], list[tuple[str, int]] | None]]] = [[]]
+    for kind, group, items in logical:
+        if kind == "OTHER" and re.match(r"FROM\b", group[0][1].strip()):
+            if stages[-1]:
+                stages.append([])
+        stages[-1].append((kind, group, items))
+    hits: list[Hit] = []
+    for stage in stages:
+        entry_gateway = False
+        for kind, _group, items in stage:
+            if kind == "ENTRYPOINT":
+                entry_gateway = bool(items) and _is_gateway_bin(items[0][0])
+        for kind, group, items in stage:
+            if items is not None and kind in {"ENTRYPOINT", "CMD"}:
+                hits += _hits_exec(items, kind, entry_gateway, file, table)
+            else:
+                hits += command_hits(_tokenize(group), file, table, implied=False)
     return hits
+
+
+_SYSTEMD_EXEC = re.compile(r"(ExecStartPre|ExecStartPost|ExecStart|ExecReload|ExecStop)\s*=(.*)$")
+# systemd exec prefixes, any combination, sit in front of the executable path.
+_EXEC_PREFIX = re.compile(r"^[-@+!]+")
 
 
 def _scan_systemd(file: str, text: str, table: CliTable) -> list[Hit]:
@@ -613,15 +754,21 @@ def _scan_systemd(file: str, text: str, table: CliTable) -> list[Hit]:
     hits: list[Hit] = []
     i = 0
     while i < len(lines):
-        got = re.match(r"ExecStart\s*=(.*)$", lines[i].strip())
+        got = _SYSTEMD_EXEC.match(lines[i].strip())
         if not got:
             i += 1
             continue
-        parts = [(i + 1, got.group(1))]
+        parts = [(i + 1, got.group(2))]
         while parts[-1][1].rstrip().endswith("\\") and i + 1 < len(lines):
             i += 1
             parts.append((i + 1, lines[i].strip()))
-        hits += command_hits(_tokenize(parts), file, table, implied=False)
+        tokens = _tokenize(parts)
+        if tokens:
+            path, line = tokens[0]
+            stripped = _EXEC_PREFIX.sub("", path)
+            if stripped and stripped != path:
+                tokens = [(stripped, line), *tokens[1:]]
+        hits += command_hits(tokens, file, table, implied=False)
         i += 1
     return hits
 
@@ -648,11 +795,82 @@ def _scan_plist(file: str, text: str, table: CliTable) -> list[Hit]:
     return command_hits(items, file, table, implied=False)
 
 
+_JSON_ESC = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
+
+
+def _json_strings(text: str) -> list[tuple[int, str]]:
+    """Decoded JSON strings, each stamped with the line of its opening quote."""
+    out: list[tuple[int, str]] = []
+    i, n, line = 0, len(text), 1
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            line += 1
+            i += 1
+            continue
+        if ch != '"':
+            i += 1
+            continue
+        start = line
+        i += 1
+        buf: list[str] = []
+        closed = False
+        while i < n:
+            c = text[i]
+            if c == "\\":
+                i += 1
+                if i >= n:
+                    break
+                esc = text[i]
+                if esc in _JSON_ESC:
+                    buf.append(_JSON_ESC[esc])
+                elif esc == "u" and i + 4 < n:
+                    try:
+                        buf.append(chr(int(text[i + 1 : i + 5], 16)))
+                        i += 4
+                    except ValueError:
+                        buf.append(esc)
+                else:
+                    buf.append(esc)
+                i += 1
+                continue
+            if c == "\n":
+                line += 1
+            if c == '"':
+                i += 1
+                closed = True
+                break
+            buf.append(c)
+            i += 1
+        if closed:
+            out.append((start, "".join(buf)))
+    return out
+
+
+def _scan_json(file: str, text: str, table: CliTable) -> list[Hit]:
+    """Command hits in decoded string values. The raw file is not shell-lexed:
+    a quoted command is one JSON string, not a token stream."""
+    hits: list[Hit] = []
+    for line, value in _json_strings(text):
+        hits += _shell_hits([(line, value)], file, table)
+    return hits
+
+
 def _scan_env(file: str, text: str, rows: sd.Rows) -> list[Hit]:
     hits: list[Hit] = []
     for n, line in enumerate(text.splitlines(), 1):
         for got in sd.ENV.finditer(line):
-            if line[got.end() : got.end() + 1] == "<":
+            # `MCP_GATEWAY_<SECTION>` is a placeholder. `</key>` is a plist close.
+            if line[got.end() :].startswith("<") and not line[got.end() :].startswith("</"):
                 continue
             hit = sd.env_hit(got.group(), rows)
             if hit and hit[0] in _REPORT:
@@ -681,7 +899,9 @@ def scan_text(file: str, text: str, table: CliTable, rows: sd.Rows) -> list[Hit]
     elif suffix in {".yaml", ".yml"}:
         hits += _scan_yaml_commands(file, text, table)
         hits += _scan_config(file, text, rows)
-    elif suffix in {".tpl", ".json", ".txt", ".sh"}:
+    elif suffix == ".json":
+        hits += _scan_json(file, text, table)
+    elif suffix in {".tpl", ".txt", ".sh"}:
         indexed = [(n, line) for n, line in enumerate(text.splitlines(), 1)]
         hits += _shell_hits(indexed, file, table)
     elif suffix == ".service":
@@ -852,38 +1072,14 @@ NOT_SHIPPED: dict[str, str] = {
 }
 
 
-def _in_user_docs(rel: str) -> bool:
-    """surface_docs.doc_set rules: user docs, examples and gateway.example.yaml."""
-    name = Path(rel).name
-    if inv.ENV_DOC_SKIP.search(name):
-        return False
-    suffix = Path(rel).suffix
-    if suffix == ".md":
-        ok = True
-    elif suffix in {".yaml", ".yml"} and name not in sd.NOT_GATEWAY_CONFIGS:
-        ok = True
-    else:
-        ok = False
-    if not ok:
-        return False
-    if rel in {"README.md", "gateway.example.yaml"} or rel.startswith("examples/"):
-        return True
-    if not rel.startswith("docs/"):
-        return False
-    rest = rel[len("docs/") :]
-    if "/" not in rest:
-        return suffix == ".md"
-    return rest.split("/", 1)[0] in {"runbooks", "runtime", "capabilities"}
-
-
-def _selected(rel: str) -> bool:
+def _selected(rel: str, user_docs: set[str]) -> bool:
     if rel in NOT_SHIPPED:
         return False
     if Path(rel).name == "Dockerfile" or rel.startswith("deploy/"):
         return True
     if rel.startswith("tests/fixtures/helm-golden/") and Path(rel).suffix in {".yaml", ".yml"}:
         return True
-    return _in_user_docs(rel)
+    return rel in user_docs
 
 
 def _has_reader(rel: str) -> bool:
@@ -910,9 +1106,11 @@ def shipped_files(root: Path = ROOT) -> tuple[list[Path], list[str]]:
         for name in sorted(NOT_SHIPPED)
         if name not in names
     ]
+    # The docs check's own selection, never a second copy of its rules.
+    user_docs = {path.relative_to(root).as_posix() for path in sd.doc_set(root)}
     files: list[Path] = []
     for name in sorted(names):
-        if not _selected(name):
+        if not _selected(name, user_docs):
             continue
         if not _has_reader(name):
             errors.append(f"{name}: no reader")

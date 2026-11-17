@@ -612,6 +612,12 @@ def test_g9_a_flag_value_spelled_like_the_binary_starts_nothing() -> None:
     assert ("docs/g9.md", 2, "INTERNAL", "mcp-gateway kubernetes controller --cycles") in hits, hits
 
 
+def test_f5_a_hash_inside_a_word_is_not_a_comment() -> None:
+    # Shell starts a comment only at a word: `x#y` is one word, flags after it count.
+    text = sh("mcp-gateway --config c#1 --host 0.0.0.0")
+    assert scan("docs/f5.md", text) == expect("docs/f5.md", [(2, "mcp-gateway --host")]), scan("docs/f5.md", text)
+
+
 def test_g1_serve_host_resolves_through_parent() -> None:
     text = sh("mcp-gateway serve --host x")
     assert scan("docs/g1.md", text) == expect("docs/g1.md", [(2, "mcp-gateway --host")]), scan("docs/g1.md", text)
@@ -805,6 +811,343 @@ def test_sh3_not_shipped_name_with_no_file() -> None:
             ss.NOT_SHIPPED.pop(key, None)
         else:
             ss.NOT_SHIPPED[key] = saved
+
+
+# ── Fold: comments, containers, readers ──────────────────────────────────────
+
+# Quoted block item, trailing comment. `--host` is line 4.
+F1_BLOCK = """\
+image: mcp-gateway:1
+args:
+  - "--config"
+  - "--host" # bind
+  - "0.0.0.0"
+"""
+F1_BLOCK_KEEP = F1_BLOCK.replace('"--host" # bind', '"--port" # bind')
+# Comment inside a flow list. `--host` is line 5.
+F1_FLOW = """\
+services:
+  gateway:
+    image: mcp-gateway:1
+    command: ["--config", "/c", # note
+      "--host", "0.0.0.0"]
+"""
+F1_FLOW_KEEP = """\
+services:
+  gateway:
+    image: mcp-gateway:1
+    command: ["--config", "/c", # note
+      "--port", "1"]
+"""
+F1_FILE = "deploy/single-node/docker-compose.yaml"
+
+
+def test_f1_quoted_block_item_trailing_comment_reports_host() -> None:
+    assert scan(F1_FILE, F1_BLOCK) == expect(F1_FILE, [(4, "mcp-gateway --host")]), scan(F1_FILE, F1_BLOCK)
+
+
+def test_f1_keep_quoted_block_item_port_comment() -> None:
+    assert scan(F1_FILE, F1_BLOCK_KEEP) == []
+
+
+def test_f1_flow_list_comment_reports_host() -> None:
+    assert scan(F1_FILE, F1_FLOW) == expect(F1_FILE, [(5, "mcp-gateway --host")]), scan(F1_FILE, F1_FLOW)
+
+
+def test_f1_keep_flow_list_port_comment() -> None:
+    assert scan(F1_FILE, F1_FLOW_KEEP) == []
+
+
+# The mapping's first key is on the dash line. `--host` is line 4.
+F2_GATEWAY = """\
+containers:
+  - image: mcp-gateway:1
+    args:
+      - "--host"
+"""
+F2_SIDECAR = """\
+containers:
+  - image: busybox
+    args:
+      - "--host"
+"""
+F2_FILE = "deploy/kubernetes/enterprise-alpha/base/pod.yaml"
+
+
+def test_f2_image_on_the_dash_line_reports_host() -> None:
+    assert scan(F2_FILE, F2_GATEWAY) == expect(F2_FILE, [(4, "mcp-gateway --host")]), scan(F2_FILE, F2_GATEWAY)
+
+
+def test_f2_keep_busybox_image_on_the_dash_line() -> None:
+    assert scan(F2_FILE, F2_SIDECAR) == []
+
+
+# Sequence items sit at the same column as `args:` and stop at the next sibling key.
+# `--host` is line 6.
+F3 = """\
+spec:
+  containers:
+    - name: gateway
+      image: mcp-gateway:1
+      args:
+      - "--host"
+      ports:
+      - "80"
+"""
+F3_KEEP = F3.replace('- "--host"', '- "--port"')
+F3_FILE = "deploy/kubernetes/enterprise-alpha/base/deployment.yaml"
+
+
+def test_f3_indentless_args_report_host() -> None:
+    assert scan(F3_FILE, F3) == expect(F3_FILE, [(6, "mcp-gateway --host")]), scan(F3_FILE, F3)
+
+
+def test_f3_keep_indentless_port() -> None:
+    assert scan(F3_FILE, F3_KEEP) == []
+
+
+def _f4(service: str, image_first: bool) -> str:
+    body = (
+        '    image: busybox\n    command: ["--host", "x"]\n'
+        if image_first
+        else '    command: ["--host", "x"]\n    image: busybox\n'
+    )
+    return f"services:\n  a:\n    image: mcp-gateway\n  {service}:\n{body}"
+
+
+F4_FILE = "deploy/single-node/docker-compose.yaml"
+
+
+def test_f4_dashed_service_does_not_combine() -> None:
+    # Command before the sidecar image: a missed service key glues it to a's image.
+    text = _f4("b-x", image_first=False)
+    assert scan(F4_FILE, text) == [], scan(F4_FILE, text)
+    text = _f4("b-x", image_first=True)
+    assert scan(F4_FILE, text) == [], scan(F4_FILE, text)
+
+
+def test_f4_dotted_service_does_not_combine() -> None:
+    text = _f4("other.service", image_first=False)
+    assert scan(F4_FILE, text) == [], scan(F4_FILE, text)
+
+
+def test_f4_keep_plain_service_name() -> None:
+    assert scan(F4_FILE, _f4("b", image_first=False)) == []
+
+
+F5 = "mcp-gateway --host 0.0.0.0 # user's bind\n"
+F5_KEEP = "mcp-gateway --port 1 # user's bind\n"
+
+
+def test_f5_apostrophe_in_trailing_comment_reports_host() -> None:
+    text = sh(F5.strip())
+    assert scan("docs/f5.md", text) == expect("docs/f5.md", [(2, "mcp-gateway --host")]), scan("docs/f5.md", text)
+
+
+def test_f5_keep_port_with_apostrophe_comment() -> None:
+    assert scan("docs/f5.md", sh(F5_KEEP.strip())) == []
+
+
+F6_FILE = "deploy/helm/mcp-gateway/values.schema.json"
+# The command sits in a string on line 2, not in the raw punctuation around it.
+F6_HOST = """\
+{
+  "description": "run mcp-gateway --host 0.0.0.0"
+}
+"""
+F6_PORT = """\
+{
+  "description": "mcp-gateway --port 1"
+}
+"""
+F6_VAR = '{"description": "MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT"}\n'
+
+
+def test_f6_json_string_reports_host_at_the_string_line() -> None:
+    assert scan(F6_FILE, F6_HOST) == expect(F6_FILE, [(2, "mcp-gateway --host")]), scan(F6_FILE, F6_HOST)
+
+
+def test_f6_keep_json_string_port() -> None:
+    assert scan(F6_FILE, F6_PORT) == []
+
+
+def test_f6_json_hidden_variable_still_reports() -> None:
+    assert scan(F6_FILE, F6_VAR) == expect(F6_FILE, [(1, "server.shutdown_timeout")]), scan(F6_FILE, F6_VAR)
+
+
+F7_CONT = """\
+ENTRYPOINT ["mcp-gateway"]
+CMD ["--config", "/c", \\
+"--host", "0.0.0.0"]
+"""
+F7_SHELL = 'CMD ["sh", "-c", "mcp-gateway --host 0.0.0.0"]\n'
+F7_BEFORE = """\
+CMD ["--config", "/c", "--host", "0.0.0.0"]
+ENTRYPOINT ["mcp-gateway"]
+"""
+F7_BEFORE_KEEP = """\
+CMD ["--config", "/c", "--port", "1"]
+ENTRYPOINT ["mcp-gateway"]
+"""
+F7_LAST = """\
+ENTRYPOINT ["mcp-gateway"]
+CMD ["--host", "0.0.0.0"]
+ENTRYPOINT ["busybox"]
+"""
+F7_STAGE = """\
+FROM a
+CMD ["--host", "0.0.0.0"]
+ENTRYPOINT ["mcp-gateway"]
+FROM b
+ENTRYPOINT ["busybox"]
+"""
+
+
+def test_f7_continued_exec_form_reports_host() -> None:
+    assert scan(K8_FILE, F7_CONT) == expect(K8_FILE, [(3, "mcp-gateway --host")]), scan(K8_FILE, F7_CONT)
+
+
+def test_f7_cmd_shell_c_reports_host() -> None:
+    assert scan(K8_FILE, F7_SHELL) == expect(K8_FILE, [(1, "mcp-gateway --host")]), scan(K8_FILE, F7_SHELL)
+
+
+def test_f7_cmd_before_entrypoint_reports_host() -> None:
+    assert scan(K8_FILE, F7_BEFORE) == expect(K8_FILE, [(1, "mcp-gateway --host")]), scan(K8_FILE, F7_BEFORE)
+
+
+def test_f7_keep_cmd_before_entrypoint_port() -> None:
+    assert scan(K8_FILE, F7_BEFORE_KEEP) == []
+
+
+def test_f7_last_entrypoint_of_the_stage_decides() -> None:
+    assert scan(K8_FILE, F7_LAST) == [], scan(K8_FILE, F7_LAST)
+
+
+def test_f7_stage_boundary_keeps_the_earlier_entrypoint() -> None:
+    assert scan(K8_FILE, F7_STAGE) == expect(K8_FILE, [(2, "mcp-gateway --host")]), scan(K8_FILE, F7_STAGE)
+
+
+# Fence opener is line 1, so the args item is file line 9.
+F8 = """\
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: gateway
+      image: mcp-gateway:1
+      args:
+        - "--host"
+```
+"""
+F8_KEEP = F8.replace('- "--host"', '- "--port"')
+
+
+def test_f8_yaml_fence_reports_host_at_file_line() -> None:
+    assert scan("docs/f8.md", F8) == expect("docs/f8.md", [(9, "mcp-gateway --host")]), scan("docs/f8.md", F8)
+
+
+def test_f8_keep_yaml_fence_port() -> None:
+    assert scan("docs/f8.md", F8_KEEP) == []
+
+
+F9 = "run `mcp-gateway --host 0.0.0.0`"
+F9_KEEP = "run `mcp-gateway --port 1`"
+
+
+def test_f9_yaml_comment_backticks_report_host() -> None:
+    text = f"# {F9}\n"
+    assert scan("examples/f9.yaml", text) == expect("examples/f9.yaml", [(1, "mcp-gateway --host")]), scan("examples/f9.yaml", text)
+
+
+def test_f9_txt_backticks_report_host() -> None:
+    text = f"{F9}\n"
+    assert scan("deploy/f9.txt", text) == expect("deploy/f9.txt", [(1, "mcp-gateway --host")]), scan("deploy/f9.txt", text)
+
+
+def test_f9_keep_txt_backticks_port() -> None:
+    assert scan("deploy/f9.txt", f"{F9_KEEP}\n") == []
+
+
+def _unit(line: str) -> str:
+    return line if line.endswith("\n") else line + "\n"
+
+
+def test_f10_exec_verbs_report_host() -> None:
+    misses = []
+    for verb in ("ExecStartPre", "ExecStartPost", "ExecReload", "ExecStop"):
+        text = _unit(f"{verb}=/usr/local/bin/mcp-gateway --host 127.0.0.1")
+        got = scan(K6_FILE, text)
+        want = expect(K6_FILE, [(1, "mcp-gateway --host")])
+        if got != want:
+            misses.append((verb, got))
+    assert not misses, misses
+
+
+def test_f10_dash_prefix_reports_host() -> None:
+    text = _unit("ExecStart=-/usr/local/bin/mcp-gateway --host 127.0.0.1")
+    assert scan(K6_FILE, text) == expect(K6_FILE, [(1, "mcp-gateway --host")]), scan(K6_FILE, text)
+
+
+def test_f10_mixed_prefix_reports_host() -> None:
+    text = _unit("ExecStart=-@+!/usr/local/bin/mcp-gateway --host 127.0.0.1")
+    assert scan(K6_FILE, text) == expect(K6_FILE, [(1, "mcp-gateway --host")]), scan(K6_FILE, text)
+
+
+def test_f10_keep_execstartpre_port() -> None:
+    assert scan(K6_FILE, _unit("ExecStartPre=/usr/local/bin/mcp-gateway --port 1")) == []
+
+
+F11_SERVICE = "Environment=MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT=1\n"
+F11_SERVICE_KEEP = "Environment=MCP_GATEWAY_SERVER__HOST=1\n"
+F11_DOCKER = "ENV MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT=1\n"
+F11_DOCKER_KEEP = "ENV MCP_GATEWAY_SERVER__HOST=1\n"
+F11_PLIST = """\
+<key>EnvironmentVariables</key>
+<dict>
+  <key>MCP_GATEWAY_SERVER__SHUTDOWN_TIMEOUT</key>
+  <string>1</string>
+</dict>
+"""
+F11_PLIST_KEEP = F11_PLIST.replace("SHUTDOWN_TIMEOUT", "HOST")
+HIDDEN = (1, "server.shutdown_timeout")
+
+
+def test_f11_service_environment_reports_shutdown_timeout() -> None:
+    assert scan(K6_FILE, F11_SERVICE) == expect(K6_FILE, [HIDDEN]), scan(K6_FILE, F11_SERVICE)
+
+
+def test_f11_keep_service_environment_host() -> None:
+    assert scan(K6_FILE, F11_SERVICE_KEEP) == []
+
+
+def test_f11_plist_environment_reports_shutdown_timeout() -> None:
+    assert scan(K7_FILE, F11_PLIST) == expect(K7_FILE, [(3, "server.shutdown_timeout")]), scan(K7_FILE, F11_PLIST)
+
+
+def test_f11_keep_plist_environment_host() -> None:
+    assert scan(K7_FILE, F11_PLIST_KEEP) == []
+
+
+def test_f11_dockerfile_env_reports_shutdown_timeout() -> None:
+    assert scan(K8_FILE, F11_DOCKER) == expect(K8_FILE, [HIDDEN]), scan(K8_FILE, F11_DOCKER)
+
+
+def test_f11_keep_dockerfile_env_host() -> None:
+    assert scan(K8_FILE, F11_DOCKER_KEEP) == []
+
+
+def test_f12_doc_set_file_is_scanned_and_a_skip_is_not() -> None:
+    root = ss.ROOT.resolve()
+    docs = [path.resolve().relative_to(root).as_posix() for path in sd.doc_set()]
+    assert docs
+    files, errs = ss.shipped_files()
+    scanned = rels(files, ss.ROOT)
+    assert docs[0] in scanned, (docs[0], errs)
+    skipped = "docs/design/surface-4.0.md"
+    assert (root / skipped).is_file()
+    assert skipped not in docs
+    assert skipped not in scanned
 
 
 def test_r1_repo_errors_on_this_checkout() -> None:
