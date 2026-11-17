@@ -389,3 +389,32 @@ async fn s1_gateway_search_finds_each_map_tool_by_name() {
         );
     }
 }
+
+// ── AT11b: an error result through gateway_invoke carries no credit ──
+
+/// The backend refuses a call that breaks its input schema with an error
+/// result (not an `Err`); the gateway's attribution step must leave it
+/// alone, so no credit is added to an error.
+#[tokio::test]
+async fn at11b_an_error_result_through_the_gateway_carries_no_credit() {
+    let stub = Stub::start(Reply::json(r#"{"name":"n"}"#)).await;
+    let required = "    type: object\n    properties:\n      name:\n        type: string\n      attribution:\n        type: string\n";
+    let mut definition = cap(
+        "at11b",
+        &stub.url("at11b.test", "/s"),
+        &attributed(),
+        required,
+        "",
+    );
+    definition.schema.input["required"] = json!(["q"]);
+    let meta = gateway(vec![definition]);
+    // `q` is required and left out: refused before any request.
+    let response = invoke(&meta, "at11b", json!({})).await;
+    let text = response.to_string();
+    assert_eq!(stub.count(), 0, "premise: refused before any request");
+    assert!(
+        text.contains("isError") || text.contains("\"error\""),
+        "premise: an error: {text}"
+    );
+    assert!(!text.contains(OSM), "no credit on an error result: {text}");
+}
