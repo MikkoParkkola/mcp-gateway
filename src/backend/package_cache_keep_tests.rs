@@ -28,7 +28,7 @@ fn tombstone_in(root: &Path) -> PathBuf {
 /// K13. A tombstone delete, held before it starts, keeps the test's dir after
 /// the test drops its share; the dir goes once the delete returns, and the
 /// tombstone was deleted.
-/// Mutant: discard_tombstone without the keep.
+/// Mutant: `discard_tombstone` without the keep.
 #[tokio::test]
 async fn a_tombstone_delete_keeps_its_dir_until_it_returns() {
     let dir = kept_tempdir();
@@ -46,7 +46,7 @@ async fn a_tombstone_delete_keeps_its_dir_until_it_returns() {
 /// K14. The startup sweep of a cache root, held before it reads the root,
 /// keeps the test's dir after the test drops its share; the dir goes once the
 /// sweep returns.
-/// Mutant: sweep_tombstones_once without the keep.
+/// Mutant: `sweep_tombstones_once` without the keep.
 #[tokio::test]
 async fn a_tombstone_sweep_keeps_its_dir_until_it_returns() {
     let dir = kept_tempdir();

@@ -17,10 +17,10 @@ fn this_test() -> String {
         .to_owned()
 }
 
-/// K15. A lock_config call whose thread is held before its work starts, and
+/// K15. A `lock_config` call whose thread is held before its work starts, and
 /// whose caller then leaves, keeps the test's dir after the test drops its
 /// share; the dir goes once the thread's work returns.
-/// Mutant: off_runtime_in without the keep.
+/// Mutant: `off_runtime_in` without the keep.
 #[tokio::test]
 async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
     let dir = kept_tempdir();
@@ -47,7 +47,7 @@ async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
     held_then_gone(&root, || release.now()).await;
 }
 
-/// K15p. A lock_config call in a plain temp dir is recorded once, at spawn,
+/// K15p. A `lock_config` call in a plain temp dir is recorded once, at spawn,
 /// with its kind, the config path and this test; the lock is still taken.
 /// Mutant: the keep taken but not reported.
 #[tokio::test]

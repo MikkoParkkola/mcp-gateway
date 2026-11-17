@@ -50,7 +50,7 @@ async fn hold_one_tick(
 /// K8. One tick's save in a kept dir, held before it runs while the saver is
 /// aborted and the test drops its share: the dir stays until that save
 /// returns, then goes, and the save ran exactly once.
-/// Mutant: spawn_periodic_save left without the per-tick keep.
+/// Mutant: `spawn_periodic_save` left without the per-tick keep.
 #[tokio::test(start_paused = true)]
 async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
     let dir = kept_tempdir();
@@ -78,7 +78,7 @@ async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
 }
 
 /// K8p. A periodic saver on a plain temp dir is recorded once, when
-/// spawn_periodic_save returns, before any tick; three ticks later the count
+/// `spawn_periodic_save` returns, before any tick; three ticks later the count
 /// is still one. The save writes nothing, so no tick can leave a file behind.
 /// Mutant: the report taken per tick, or on a tick's thread.
 #[tokio::test(start_paused = true)]
