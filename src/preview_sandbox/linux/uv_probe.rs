@@ -29,15 +29,41 @@ pub(super) const VERSION_SCRIPT: &str = "import sys; print('%d.%d' % sys.version
 /// Refuse a uv older than [`UV_FLOOR`]: `uv --version`, environment cleared,
 /// within 10 s.
 pub(super) fn check_uv(uv: &Path) -> Result<(), Refusal> {
-    let _ = uv;
+    let out = super::probe::answer(uv, &["--version"], None, "uv --version")?;
+    let line = out.trim();
+    let found = line
+        .strip_prefix("uv ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .filter(|v| v.split('.').count() == 3)
+        .and_then(|v| {
+            let parts: Option<Vec<u32>> = v.split('.').map(|p| p.parse().ok()).collect();
+            parts.map(|p| (v, p))
+        });
+    let Some((version, parts)) = found else {
+        return Err(Refusal::Step(format!("reading uv's version ({line:?})")));
+    };
+    if parts.as_slice() < UV_FLOOR.as_slice() {
+        let [x, y, z] = UV_FLOOR;
+        return Err(Refusal::Step(format!(
+            "uv {version} is older than {x}.{y}.{z}"
+        )));
+    }
     Ok(())
 }
 
 /// The interpreter's `X.Y`: `python -S -I -c` [`VERSION_SCRIPT`], environment
 /// cleared, within 10 s, so no site processing runs on the host either.
 pub(super) fn python_xy(python: &Path) -> Result<(u32, u32), Refusal> {
-    let _ = python;
-    Ok((3, 12))
+    let out = super::probe::answer(
+        python,
+        &["-S", "-I", "-c", VERSION_SCRIPT],
+        None,
+        "python3's version probe",
+    )?;
+    let line = out.trim();
+    line.split_once('.')
+        .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))
+        .ok_or_else(|| Refusal::Step(format!("reading python3's version ({line:?})")))
 }
 
 /// uv beside the real file of `uvx` (both come from one install), as its

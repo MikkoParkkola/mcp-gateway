@@ -24,11 +24,13 @@ pub(super) const WRAPPER: &str = ".preview-python";
 /// `-S`, so no site processing (`.pth`, `sitecustomize`, `usercustomize`)
 /// runs while the credential is live. Mode 0555; a failure is setup's.
 pub(super) fn write_wrapper(home: &Path, python: &str) -> Result<(), FetchFailure> {
-    std::fs::write(
-        home.join(WRAPPER),
-        format!("#!/bin/sh\nexec {python} \"$@\"\n"),
-    )
-    .map_err(|e| FetchFailure::at(FetchStep::Setup)(format!("writing the wrapper ({e})")))
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = home.join(WRAPPER);
+    let quoted = python.replace('\'', "'\\''");
+    std::fs::write(&path, format!("#!/bin/sh\nexec '{quoted}' -S \"$@\"\n"))
+        // Set after the write, so the gateway's umask cannot narrow it.
+        .and_then(|()| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)))
+        .map_err(|e| FetchFailure::at(FetchStep::Setup)(format!("writing the wrapper ({e})")))
 }
 
 #[cfg(test)]

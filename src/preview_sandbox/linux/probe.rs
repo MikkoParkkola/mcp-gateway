@@ -40,31 +40,12 @@ pub(super) fn npm_beside(npx: &Path) -> Result<(PathBuf, PathBuf), Refusal> {
 /// Refuse an npm older than 9: `npm --version` (within `VERSION_BOUND`, environment cleared but
 /// PATH = `node_dir`, since npm starts through `/usr/bin/env node`).
 pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
-    let mut child = Command::new(npm)
-        .arg("--version")
-        .env_clear()
-        .env("PATH", node_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| Refusal::Step(format!("starting {} --version ({e})", npm.display())))?;
-    let deadline = Instant::now() + VERSION_BOUND;
-    while child.try_wait().ok().flatten().is_none() {
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(Refusal::Step(format!(
-                "npm --version did not answer within {} s",
-                VERSION_BOUND.as_secs()
-            )));
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut out = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        let _ = stdout.take(256).read_to_string(&mut out);
-    }
+    let out = answer(
+        npm,
+        &["--version"],
+        Some(node_dir.as_os_str()),
+        "npm --version",
+    )?;
     let version = out.trim();
     match version
         .split('.')
@@ -79,6 +60,51 @@ pub(super) fn check_npm(npm: &Path, node_dir: &Path) -> Result<(), Refusal> {
             "reading npm's version ({version:?})"
         ))),
     }
+}
+
+/// The first 256 bytes `program` prints on stdout, run with `args`, its
+/// environment cleared (PATH = `path` when given), within `VERSION_BOUND`;
+/// `label` names it when it does not answer in time.
+pub(super) fn answer(
+    program: &Path,
+    args: &[&str],
+    path: Option<&std::ffi::OsStr>,
+    label: &str,
+) -> Result<String, Refusal> {
+    let mut command = Command::new(program);
+    command.args(args).env_clear();
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            Refusal::Step(format!(
+                "starting {} {} ({e})",
+                program.display(),
+                args.join(" ")
+            ))
+        })?;
+    let deadline = Instant::now() + VERSION_BOUND;
+    while child.try_wait().ok().flatten().is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Refusal::Step(format!(
+                "{label} did not answer within {} s",
+                VERSION_BOUND.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut out = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        let _ = stdout.take(256).read_to_string(&mut out);
+    }
+    Ok(out)
 }
 
 /// The first of `candidates` that exists, followed to its real file, and is

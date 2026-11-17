@@ -232,22 +232,31 @@ pub(crate) fn check_direct_url(
     env: &Path,
     deadline: std::time::Instant,
 ) -> Result<Vec<String>, Refusal> {
-    let _ = deadline;
+    let unreadable = || refuse("the install's site-packages could not be read");
     let site = site_packages(env)?;
     let mut checked = Vec::new();
-    for entry in std::fs::read_dir(&site)
-        .map_err(|_| no_metadata())?
-        .flatten()
+    for (read, entry) in std::fs::read_dir(&site)
+        .map_err(|_| unreadable())?
+        .enumerate()
     {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(stem) = name.strip_suffix(".dist-info") else {
+        if read >= MAX_SITE_ENTRIES {
+            return Err(refuse(
+                "the install's site-packages holds over 4096 entries",
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(refuse("the direct-URL check passed the fetch's deadline"));
+        }
+        let entry = entry.map_err(|_| unreadable())?;
+        let name = entry.file_name();
+        let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".dist-info")) else {
             continue;
         };
-        checked.push(stem.to_owned());
-        if entry.path().join("direct_url.json").exists() {
-            return Err(refuse("the install holds a package from a direct URL"));
+        match std::fs::symlink_metadata(entry.path().join("direct_url.json")) {
+            Ok(_) => return Err(refuse("the install holds a package from a direct URL")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => checked.push(stem.to_owned()),
+            Err(_) => return Err(unreadable()),
         }
-        break;
     }
     Ok(checked)
 }

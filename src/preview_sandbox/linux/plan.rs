@@ -86,7 +86,14 @@ pub(crate) enum Fetcher<'a> {
 impl FetchPaths {
     /// The fetcher this plan names, if any; a plan naming both refuses.
     pub(crate) fn fetcher(&self) -> Result<Option<Fetcher<'_>>, String> {
-        Ok(self.npm.as_ref().map(Fetcher::Npm))
+        match (&self.npm, &self.uv) {
+            (Some(_), Some(_)) => {
+                Err("checking the plan (it names both an npm and a uv fetch)".to_owned())
+            }
+            (Some(npm), None) => Ok(Some(Fetcher::Npm(npm))),
+            (None, Some(uv)) => Ok(Some(Fetcher::Uv(uv))),
+            (None, None) => Ok(None),
+        }
     }
 }
 
