@@ -201,6 +201,9 @@ class Item(NamedTuple):
     start: int  # byte extent, for the grammar-gap overlap
     end: int
     indent: str
+    cfgs: tuple[str, ...] = ()  # every other `#[cfg(..)]` predicate on the item (not part tags), for `expect`
+    raw_name: str = ""  # the name as written, `r#` kept (libtest prints it so)
+    attr_paths: tuple[str, ...] = ()  # every attribute path on the item, those inside a cfg_attr included
 
 
 class FileWalk(NamedTuple):
@@ -211,6 +214,11 @@ class FileWalk(NamedTuple):
     errors: list[tuple[int, int]]  # error byte ranges
     parse_ok: bool
     attr_problems: list[tuple[int, str, str]]  # (line, code, message), from _attr_problems
+    inner_cfgs: tuple[str, ...] = ()  # the file's own `#![cfg(..)]` predicates
+    calls: tuple[tuple[str, int, int | None, tuple[str, ...], str, str], ...] = ()  # item-level macro calls:
+    # (last path segment, line, enclosing module item, cfg predicates on the call, first fragment, path as written)
+    gen_bodies: dict[str, str] = {}  # macro_rules name -> its blanked body, for the generator shape rule
+    bindings: tuple[tuple[str, int, int | None], ...] = ()  # (use / extern crate text, line, enclosing module item)
 
 
 TEST_ATTRS = ("test", "tokio::test")
@@ -262,11 +270,28 @@ def walk_file(rel: str, text: str) -> FileWalk:
     generators: set[str] = set()
     macro_calls: dict[str, set[str]] = {}
     invocations: list[tuple[str, int, int | None]] = []
+    calls: list[tuple[str, int, int | None, tuple[str, ...], str, str]] = []
+    gen_bodies: dict[str, str] = {}
+    bindings: list[tuple[str, int, int | None]] = []
+
+    def cfg_preds(attrs) -> list[str]:
+        """The non-tag `#[cfg(..)]` predicates among `attrs`."""
+        out = []
+        for a in attrs:
+            apath, args = _attr_path_and_args(src, a)
+            inner = args.strip()[1:-1].strip() if args.strip().startswith("(") else ""
+            if apath == "cfg" and not TAG.match(inner):
+                out.append(inner)
+        return out
 
     def visit(container, path: tuple[str, ...], parent: int | None) -> None:
         for node in container.named_children:
+            outer = node
             if node.type == "expression_statement" and node.named_child_count == 1:
                 node = node.named_children[0]  # an item-level `gen!(..);` parses as a statement around the call
+            if node.type in ("use_declaration", "extern_crate_declaration"):
+                bindings.append((_text(src, node), _line(src, node.start_byte), parent))
+                continue
             if node.type == "macro_definition":
                 # Blanked, so a comment between a name and `!` hides nothing; unioned, so a same-named definition
                 # elsewhere in the file adds to the edges instead of replacing them (code review r2).
@@ -276,22 +301,30 @@ def walk_file(rel: str, text: str) -> FileWalk:
                     own = _text(src, name).removeprefix("r#")
                     called = {c.removeprefix("r#") for c in re.findall(r"(?:r#)?(\w+)\s*!", body)} - {"macro_rules"}
                     macro_calls.setdefault(own, set()).update(called)
+                    gen_bodies[own] = gen_bodies.get(own, "") + body
                     if re.search(r"#\s*\[\s*(?:tokio\s*::\s*)?test\b", body):
                         generators.add(own)
                 continue
             if node.type == "macro_invocation":
                 macro = node.child_by_field_name("macro")
                 if macro is not None:
-                    last = "".join(_text(src, macro).split()).rsplit("::", 1)[-1]
+                    written = "".join(_text(src, macro).split())
+                    last = written.rsplit("::", 1)[-1]
                     invocations.append((last.removeprefix("r#"), _line(src, node.start_byte), parent))
+                    first = re.match(r"[\s(\[{]*((?:r#)?\w+)", _text(src, node)[len(_text(src, macro)) + 1 :])
+                    calls.append((last.removeprefix("r#"), _line(src, node.start_byte), parent,
+                                  tuple(cfg_preds(_attributes(outer))), first.group(1) if first else "", written))
                 continue
             if node.type not in ("mod_item", "function_item"):
                 continue
             attrs = _attributes(node)
-            tags, test_cfg, odd, is_test, cfg_alone = [], None, [], False, False
+            tags, test_cfg, odd, is_test, cfg_alone, paths = [], None, [], False, False, []
             for a in attrs:
                 apath, args = _attr_path_and_args(src, a)
                 inner = args.strip()[1:-1].strip() if args.strip().startswith("(") else ""
+                paths.append(apath)
+                if apath == "cfg_attr":
+                    paths += ["".join(re.split(r"[(=]", x, maxsplit=1)[0].split()) for x in _cfg_attr_applied(_text(src, a))]
                 if apath == "cfg" and TAG.match(inner):
                     tags.append((int(TAG.match(inner).group(1)), _line(src, a.start_byte), _shares_line(src, a)))
                 elif apath == "cfg" and g.cfg_is_test(inner):
@@ -323,13 +356,24 @@ def walk_file(rel: str, text: str) -> FileWalk:
                     start=first.start_byte,
                     end=node.end_byte,
                     indent=src[line_start : first.start_byte].decode("utf-8", "replace"),
+                    cfgs=tuple(cfg_preds(attrs)),
+                    raw_name=_text(src, node.child_by_field_name("name")),
+                    attr_paths=tuple(paths),
                 )
             )
             if kind == "mod" and body is not None:
                 visit(body, (*path, name), len(items) - 1)
 
     visit(root, (), None)
-    return FileWalk(items, generators, macro_calls, invocations, errors, parse_ok, _attr_problems(rel, src, root))
+    inner_cfgs = []
+    for node in root.named_children:
+        if node.type == "inner_attribute_item":
+            text = g.blank(_text(src, node))[0]
+            m = re.match(r"#\s*!\s*\[\s*cfg\s*\((.*)\)\s*\]\s*$", text, re.S)
+            if m:
+                inner_cfgs.append(_text(src, node)[m.start(1) : m.end(1)].strip())
+    return FileWalk(items, generators, macro_calls, invocations, errors, parse_ok, _attr_problems(rel, src, root),
+                    tuple(inner_cfgs), tuple(calls), gen_bodies, tuple(bindings))
 
 
 TEST_ATTR_TEXT = re.compile(r"(?:tokio\s*::\s*)?test\s*[\](]")
@@ -397,6 +441,7 @@ class Crate(NamedTuple):
     files: dict[str, FileWalk]
     texts: dict[str, str]
     remounts: list[tuple[str, tuple[str, ...]]]  # (file, crate path) of a second mount of a walked file
+    owners: dict[str, int | None] = {}  # file -> the node of the `mod` declaration that mounted it
 
 
 def walk_crate(root: Path) -> Crate:
@@ -407,6 +452,7 @@ def walk_crate(root: Path) -> Crate:
     files: dict[str, FileWalk] = {}
     texts: dict[str, str] = {}
     remounts: list[tuple[str, tuple[str, ...]]] = []
+    owners: dict[str, int | None] = {}
     # (file, owns its directory, parent node of the file's top level, crate path of the file's module)
     queue = [(base / "src" / "lib.rs", True, None, ())]
     while queue:
@@ -417,6 +463,7 @@ def walk_crate(root: Path) -> Crate:
         if rel in files:
             remounts.append((rel, prefix))
             continue
+        owners[rel] = parent
         texts[rel] = path.read_text(encoding="utf-8")
         walk = walk_file(rel, texts[rel])
         files[rel] = walk
@@ -434,7 +481,7 @@ def walk_crate(root: Path) -> Crate:
             if it.out_of_line and targets.get(it.path):
                 child, via = targets[it.path].pop(0)
                 queue.append((child, via, local[ix], (*prefix, *it.path)))
-    return Crate(nodes, files, texts, remounts)
+    return Crate(nodes, files, texts, remounts, owners)
 
 
 def _ancestors(crate: Crate, ix: int):
@@ -628,8 +675,30 @@ def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -
             add("empty-part", TABLE.as_posix(), 1, f"part {k} has {units_in[k]} units and {tests_in[k]} tests")
 
 
-def check(root: Path) -> list[Finding]:
-    return analyse(root).findings
+def check(root: Path, configs=None) -> list[Finding]:
+    """Every finding; with `configs` (the CI configurations, each a `rustc --print cfg` text and a feature set),
+    also the refusals that keep `expect` exact (test_parts_expect.py)."""
+    found = analyse(root).findings
+    if configs is not None:
+        found += _expect_module().refusals(_walk_api(), root, configs)
+    return found
+
+
+def expect(root: Path, target_cfg: str) -> dict[int, list[str]]:
+    """Part -> the lib test names its binary lists on the target `target_cfg` describes, all features on."""
+    return _expect_module().expect(_walk_api(), root, target_cfg)
+
+
+def _walk_api():
+    """What test_parts_expect.py needs from here (this module may be loaded by path, unregistered)."""
+    return type("WalkApi", (), {"walk_crate": staticmethod(walk_crate), "Finding": Finding})
+
+
+def _expect_module():
+    spec = importlib.util.spec_from_file_location("test_parts_expect", Path(__file__).with_name("test_parts_expect.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 BLOCKS_APPLY = ("parse", "cross-check", "same-line")
@@ -705,13 +774,16 @@ def main(argv: list[str], root: Path | None = None) -> int:
         for f in left:
             print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
         return 1 if left else 0
+    if len(argv) == 4 and argv[1] == "expect":  # expect TARGET OUTDIR: the union job's per-part name lists
+        print(f"test_parts: expected per part {_expect_module().write_expect(_walk_api(), root, argv[2], Path(argv[3]))}")
+        return 0
     if argv[1:] == ["check"]:
-        findings = check(root)
+        findings = check(root, configs=_expect_module().ci_configs(root) or None)
         for f in findings:
             print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
         print(f"test_parts: {len(findings)} findings")
         return 1 if findings else 0
-    print("usage: test_parts.py check|apply", file=sys.stderr)
+    print("usage: test_parts.py check|apply|expect TARGET OUTDIR", file=sys.stderr)
     return 2
 
 
