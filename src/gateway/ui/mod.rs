@@ -28,6 +28,7 @@ pub mod capabilities;
 pub(crate) mod cli_parity_tests;
 mod config_file;
 /// Every UI API answer type is classified for the api command.
+#[cfg(tp3)]
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;

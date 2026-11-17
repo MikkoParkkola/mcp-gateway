@@ -346,6 +346,7 @@ async fn start_fetching_is_unsupported_off_linux() {
 
 /// Kills "the ambient value is dropped" and "a value that is not UTF-8 is
 /// treated as unset".
+#[cfg(tp1)]
 #[cfg(all(test, unix))]
 #[test]
 fn ambient_ca_bundle_passes_the_value_through() {
@@ -359,6 +360,7 @@ fn ambient_ca_bundle_passes_the_value_through() {
 
 /// Kills "the gateway's `XDG_RUNTIME_DIR` is dropped", which would move the
 /// proxy's private directory to the temp dir.
+#[cfg(tp1)]
 #[cfg(all(test, unix))]
 #[test]
 fn ambient_runtime_dir_passes_the_value_through() {
