@@ -584,12 +584,22 @@ async fn rf2_an_unlisted_step_is_refused_without_echo() {
 }
 
 /// RF7 (G1), kills "the start is reported before the helper acknowledges
-/// `expired`": a helper that reads `expired` and then sends nothing, or sends
-/// `run` false, gets no start; the session refuses at its deadline or on the
-/// false line.
+/// `expired`": a helper that reads `expired` and then sends nothing, `run`
+/// false, `run` of the wrong type, an extra key, the credential as the value,
+/// half a line, or the right line after the deadline, gets no start; the
+/// session refuses at its deadline or on the line, without echoing it.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn rf7_no_start_without_the_runs_acknowledgement() {
-    for ack in [None, Some("{\"run\":false}\n")] {
+    let kinds = [
+        "none",
+        "false",
+        "string",
+        "extra",
+        "credential",
+        "truncated",
+        "late",
+    ];
+    for kind in kinds {
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
         let soon = tokio::time::Instant::now() + 5 * SEC;
@@ -603,25 +613,43 @@ async fn rf7_no_start_without_the_runs_acknowledgement() {
                 .expect("write");
             let mut line = String::new();
             read.read_line(&mut line).await.expect("credential");
+            let secret = secret_of(&line);
             write
                 .write_all(b"{\"fetch_done\":true}\n")
                 .await
                 .expect("write");
             line.clear();
             read.read_line(&mut line).await.expect("expired");
-            if let Some(ack) = ack {
-                write.write_all(ack.as_bytes()).await.expect("write");
-            }
-            // The write half stays open: only the missing or false line ends it.
+            let ack = match kind {
+                "none" => String::new(),
+                "false" => "{\"run\":false}\n".to_owned(),
+                "string" => "{\"run\":\"true\"}\n".to_owned(),
+                "extra" => "{\"run\":true,\"step\":\"npm-ci\"}\n".to_owned(),
+                "credential" => format!("{{\"run\":\"{secret}\"}}\n"),
+                "truncated" => "{\"run\":tr".to_owned(),
+                _ => {
+                    // Past the session's 5 s deadline.
+                    tokio::time::sleep(6 * SEC).await;
+                    "{\"run\":true}\n".to_owned()
+                }
+            };
+            // The session may have refused already; a failed write is fine.
+            let _ = write.write_all(ack.as_bytes()).await;
+            // The write half stays open: only the line, or its absence, ends it.
             let mut rest = String::new();
             let _ = read.read_line(&mut rest).await;
-            line
+            (line, secret)
         };
-        let (served, expired) =
+        let (served, (expired, secret)) =
             tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
                 .await
                 .expect("the session did not end within the guard");
-        assert_eq!(expired, "{\"expired\":true}\n", "{ack:?}");
-        assert!(served.is_err(), "{ack:?}: {served:?}");
+        assert_eq!(expired, "{\"expired\":true}\n", "{kind}");
+        let refusal = served.expect_err(kind);
+        let text = format!("{refusal:?} {refusal}");
+        assert!(
+            !text.contains(&secret),
+            "{kind}: the refusal echoes the line"
+        );
     }
 }
