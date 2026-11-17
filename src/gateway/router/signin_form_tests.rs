@@ -526,8 +526,7 @@ async fn n3d_unexpected_field_is_400_and_the_key_only_body_mints() {
 }
 
 /// A presented handle is revoked and the answer carries a new one. H1 is
-/// live before the POST. The POST fails while the route answers 501, before
-/// the new cookie is parsed.
+/// live before the POST, and not live after it.
 #[tokio::test]
 async fn n7_a_presented_handle_is_replaced_and_the_old_one_is_not_live() {
     let (state, _dir) = fixture().await;
@@ -554,8 +553,7 @@ async fn n7_a_presented_handle_is_replaced_and_the_old_one_is_not_live() {
 
 /// The session is bound to its key, observed through the authenticated
 /// middleware: `GET /ui/api/status` is 200, stays 200 when an unrelated key
-/// is rotated, and is 401 after the admin key's digest is dropped. The mint
-/// fails while the route answers 501, before either status check.
+/// is rotated, and is 401 after the admin key's digest is dropped.
 #[tokio::test]
 async fn n7b_rotating_the_admin_key_ends_the_session_through_the_middleware() {
     let (state, _dir) = fixture().await;
@@ -589,7 +587,6 @@ async fn n7b_rotating_the_admin_key_ends_the_session_through_the_middleware() {
 /// check is a synthetic `Now`: `backdate` moves `issued` and `last_seen`, not
 /// `not_after`, and sleeping to cross the cap is ruled out. Idle is longer
 /// than the window, and the session is touched one second before the cap.
-/// The mint fails while the route answers 501.
 #[tokio::test]
 async fn n7c_an_expiring_key_caps_the_session_at_the_key_expiry() {
     let (state, _dir) = fixture().await;

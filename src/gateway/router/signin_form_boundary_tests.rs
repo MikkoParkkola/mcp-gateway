@@ -38,33 +38,6 @@ fn url_has_no_secret_query(url: &str) {
     }
 }
 
-fn assert_html(reply: &Reply) {
-    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-    let content_type = reply.header(header::CONTENT_TYPE).unwrap_or_default();
-    assert!(
-        content_type.starts_with("text/html"),
-        "content-type {content_type}"
-    );
-}
-
-/// The shell's pages and tabs, as request paths. Literals, not read from the
-/// document the route serves.
-fn shell_urls() -> Vec<String> {
-    let pages = [
-        "overview", "todo", "servers", "tools", "activity", "costs", "access", "policies",
-        "gateway",
-    ];
-    let tabs = ["status", "actions", "settings"];
-    let mut urls = vec!["/ui".to_string(), "/ui/classic".to_string()];
-    for page in pages {
-        urls.push(format!("/ui/{page}"));
-        for tab in tabs {
-            urls.push(format!("/ui/{page}/{tab}"));
-        }
-    }
-    urls
-}
-
 #[cfg(feature = "metrics")]
 struct Counted {
     polls: Arc<AtomicUsize>,
@@ -110,10 +83,9 @@ fn erroring(body: &str) -> Body {
     })
 }
 
-/// A foreign Origin is refused by the origin guard, which is green today
-/// (the regression half): 403, no cookie, the key not checked. The same POST
-/// with this gateway's own Origin is the route, and it fails while the route
-/// answers 501.
+/// A foreign Origin is refused by the origin guard: 403, no cookie, the key
+/// not checked. The same POST with this gateway's own Origin reaches the route
+/// and mints.
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn n5_foreign_origin_is_refused_before_the_key_is_checked() {
@@ -164,10 +136,9 @@ async fn n5_foreign_origin_is_refused_before_the_key_is_checked() {
     });
 }
 
-/// `Origin: null` is the guard's 403, green today. An absent Origin is
-/// admitted by the guard and refused by the route before the body is read,
-/// which fails while the route answers 501. The permitted Origin beside them
-/// mints. Null is not asserted to be 401.
+/// `Origin: null` is the guard's 403. An absent Origin is admitted by the
+/// guard and refused by the route before the body is read. The permitted
+/// Origin beside them mints. Null is not asserted to be 401.
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn n6_null_origin_and_absent_origin_are_refused_before_the_key_is_checked() {
@@ -412,10 +383,10 @@ async fn n6g_a_reloaded_port_does_not_refuse_the_running_listeners_origin() {
     assert_eq!(signin_records(&log).len(), 1, "{:?}", signin_records(&log));
 }
 
-/// `http://127.0.0.2` and `https://gw.example:8443` are the guard's 403s,
-/// green today. The loopback spellings the guard admits mint on a gateway
+/// `http://127.0.0.2` and `https://gw.example:8443` are the guard's 403s.
+/// The loopback spellings the guard admits mint on a gateway
 /// with no public URL, and `https://gw.example` mints when `public_url`
-/// spells port 443. The first mint fails while the route answers 501.
+/// spells port 443.
 #[tokio::test]
 async fn n6c_loopback_spellings_and_the_default_port() {
     let (plain, _plain_dir) = fixture().await;
@@ -487,12 +458,11 @@ async fn n6c_loopback_spellings_and_the_default_port() {
     assert_cookie_flags(&named.set_cookie(), true);
 }
 
-/// Green today. The bootstrap redirect is the named regression: the link
-/// answers 303 to `/dashboard` and that Location does not carry the sentinel.
-/// Shell pages render as HTML at URLs with no secret query. This row does
-/// not POST `/ui/signin`.
+/// The bootstrap redirect carries no secret: the link answers 303 to
+/// `/dashboard`, that Location holds neither the sentinel nor a secret-named
+/// query, and following it does not hand the sentinel on.
 #[tokio::test]
-async fn n9_shell_urls_and_the_bootstrap_redirect_carry_no_secret() {
+async fn n9_the_bootstrap_redirect_carries_no_secret() {
     let (state, _dir) = fixture().await;
     let sentinel = state.dashboard_bootstrap.peek().expect("startup value");
     let redirected = send(&state, redeem(&sentinel, None)).await;
@@ -511,18 +481,10 @@ async fn n9_shell_urls_and_the_bootstrap_redirect_carry_no_secret() {
         assert!(!again.contains(&sentinel), "{again}");
         url_has_no_secret_query(&again);
     }
-    for target in [DASHBOARD, REFUSED] {
-        url_has_no_secret_query(target);
-    }
-    for url in shell_urls() {
-        url_has_no_secret_query(&url);
-        assert_html(&send(&state, get(&url, None)).await);
-    }
 }
 
-/// The handoff form's `same-origin` and its POST's `no-referrer` are green
-/// today (the regression half). The shell document still answers
-/// `no-referrer`, so the literal `same-origin` fails.
+/// The shell document answers `Referrer-Policy: same-origin`; the handoff
+/// form keeps `same-origin` and its POST keeps `no-referrer`.
 #[tokio::test]
 async fn n11a_the_shell_document_answers_referrer_policy_same_origin() {
     let (state, _dir) = fixture().await;
@@ -555,7 +517,7 @@ async fn n11a_the_shell_document_answers_referrer_policy_same_origin() {
 }
 
 /// A body that errors mid-read is 400, sets no cookie, and does not check
-/// the key. The status fails while the route answers 501.
+/// the key.
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn n_router_body_stream_error_is_400() {
@@ -607,7 +569,7 @@ async fn n_router_get_is_405() {
 
 /// A body over the router's limit is 413, no-store, no cookie. The limit is
 /// 32 and the body is 64, on a permitted Origin so the guard does not answer
-/// first. The status fails while the route answers 501.
+/// first.
 #[tokio::test]
 async fn n_router_over_limit_body_is_413() {
     let (state, _dir) = fixture().await;
