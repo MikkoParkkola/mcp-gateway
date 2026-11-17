@@ -203,9 +203,38 @@ export function rowFormProblems(copy) {
   return out;
 }
 
+// Frame 36's contract order; the unit goes in Window's text and "Automatic" is
+// the Default row's value; rows that don't apply are left out.
+const ROW_LABELS = ['What', 'Window', 'Source', 'Default', 'Why'];
+
 /**
- * C11 (red-first stub): each row tip's labels are the frame-36 five, in contract order.
+ * C11: each row tip's labels are the frame-36 five, in contract order.
  */
-export function orderProblems(_copy) {
-  return [];
+export function orderProblems(copy) {
+  const out = [];
+  const filled = (v) => typeof v === 'string' && v.trim() !== '';
+  for (const [id, entry] of Object.entries(copy)) {
+    if (META.has(id) || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    // Free text is not this check, and a malformed rows value belongs to shapeProblems.
+    if ('text' in entry || !Array.isArray(entry.rows)) continue;
+    const rows = entry.rows;
+    if (rows.length === 0 || !rows.every((r) => Array.isArray(r) && r.length === 2 && r.every(filled))) continue;
+    const seen = new Set();
+    let furthest = -1;
+    for (const [label] of rows) {
+      const at = ROW_LABELS.indexOf(label);
+      if (at < 0) {
+        out.push(`${id}: label ${label} is not one of ${ROW_LABELS.join(', ')}`);
+        continue;
+      }
+      if (seen.has(label)) {
+        out.push(`${id}: label ${label} appears twice`);
+        continue;
+      }
+      seen.add(label);
+      if (at < furthest) out.push(`${id}: rows out of order: ${ROW_LABELS[furthest]} before ${label}`);
+      else furthest = at;
+    }
+  }
+  return out;
 }
