@@ -294,7 +294,8 @@ fn assert_key_set(record: &Value, expected: &[&str]) {
 }
 
 fn record_principal(state: &AppState, secret: &str) -> String {
-    let auth = state.live_config.generation().auth();
+    let generation = state.live_config.generation();
+    let auth = generation.auth();
     let client = auth.validate_token(secret).expect("the admin key resolves");
     client
         .principal
@@ -1045,7 +1046,8 @@ async fn n8_mint_and_refusal_are_audited_and_the_key_stays_out_of_the_log() {
         assert_no_store(&over);
         assert_no_cookie(&over);
     });
-    let raw = String::from_utf8_lossy(&std::fs::read(log.path()).expect("the audit log reads"));
+    let bytes = std::fs::read(log.path()).expect("the audit log reads");
+    let raw = String::from_utf8_lossy(&bytes);
     for secret in [N8_SECRET, N8_WRONG] {
         assert!(!raw.contains(secret), "the audit log contains the key");
         assert!(!captured.contains(secret), "a log line contains the key");
