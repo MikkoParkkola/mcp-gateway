@@ -814,8 +814,8 @@ async fn rl7b_an_upper_case_spelling_shares_the_bucket() {
 
 // ── RL18, RL19: base_url providers; the strictest backend wins ───────
 
-/// A paced provider configured as `base_url` plus `path` (as MusicBrainz
-/// is), not `endpoint`.
+/// A paced provider configured as `base_url` plus `path` (as
+/// `musicbrainz_search` is), not `endpoint`.
 fn base_url_cap(name: &str, base: &str, interval_ms: u64) -> CapabilityDefinition {
     let yaml = format!(
         "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input:\n    type: object\n    \
