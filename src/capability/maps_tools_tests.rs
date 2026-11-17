@@ -846,3 +846,32 @@ fn ld7_a_catalogue_load_logs_the_refused_file_at_warn() {
         );
     }
 }
+
+// ── T-schemas: every recorded success fits its shipped schema ────────
+
+#[test]
+fn t_schemas_each_recorded_success_validates_against_its_shipped_schema() {
+    let dir = repo("tests/fixtures/maps").join(RUN);
+    for (rel, fixture) in [
+        ("maps/geocode.yaml", "geocode"),
+        ("maps/geocode.yaml", "geocode_none"),
+        ("maps/nominatim_search.yaml", "nominatim_search"),
+        ("maps/nominatim_reverse.yaml", "nominatim_reverse"),
+        ("maps/photon_search.yaml", "photon_search"),
+        ("maps/osrm_route.yaml", "osrm_route"),
+        ("knowledge/weather.yaml", "weather"),
+    ] {
+        let capability = as_shipped(rel);
+        let raw: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(format!("{fixture}.json"))).expect("fixture"),
+        )
+        .expect("JSON");
+        let published = crate::capability::apply_attribution(&capability, raw);
+        let verdict = crate::capability::validate_output(&published, &capability.schema.output);
+        assert!(
+            verdict.is_valid(),
+            "{fixture} against {rel}: {:?}",
+            verdict.violations
+        );
+    }
+}
