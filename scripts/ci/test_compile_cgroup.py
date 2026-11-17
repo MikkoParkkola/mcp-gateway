@@ -40,6 +40,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 base = Path(os.environ["CG_FIXTURE"])
@@ -57,8 +58,9 @@ def put(path, value):
         path.write_text(str(value) + "\n")
 
 if name == "sudo":
-    event("unexpected:sudo")
-    sys.exit(93)  # Never fall through to a real sudo, even for a broken gate.
+    with (base / "sudo.jsonl").open("a") as stream:
+        stream.write(json.dumps(args) + "\n")
+    os.execvp(args[0], args)  # Exercise delegation without real privileges.
 if name == "getconf" and args == ["PAGESIZE"]:
     if cfg["getconf"] is None:
         sys.exit(1)
@@ -68,6 +70,9 @@ if name == "getconf" and args == ["PAGESIZE"]:
 if name == "mkdir":
     targets = [Path(a) for a in args if not a.startswith("-")]
     groups = [p for p in targets if p.parent == root and p.name.startswith("covpart-")]
+    if groups and cfg["setup_delay"]:
+        (base / "setup-ready").touch()
+        time.sleep(0.4)
     if groups and not (root.stat().st_mode & stat.S_IWUSR):
         print("fixture: cgroup root is not writable", file=sys.stderr)
         sys.exit(1)
@@ -82,6 +87,8 @@ if name == "mkdir":
                 (group / "cgroup.procs").chmod(0o400)
             if cfg["kill_exists"]:
                 (group / "cgroup.kill").write_text("")
+            if cfg["peak_exists"]:
+                (group / "memory.peak").write_text("unsettled\n")
             put(group / "memory.stat", cfg["memstat"])
             put(group / "memory.pressure", cfg["pressure"])
             if cfg["remove_fails"]:
@@ -90,6 +97,11 @@ if name == "mkdir":
 
 group_file = base / "group"
 group = Path(group_file.read_text()) if group_file.exists() else None
+if name == "tee":
+    if str(root / "cgroup.subtree_control") in args and cfg["subtree_fails"]:
+        sys.exit(1)
+    if group is not None and str(group / "cgroup.kill") in args and cfg["kill_fails"]:
+        sys.exit(1)
 state_file = base / "state.json"
 state = json.loads(state_file.read_text()) if state_file.exists() else {"killed": False, "polls": 0}
 if group is not None:
@@ -124,13 +136,16 @@ if name in ("cat", "awk", "sed", "grep", "wc", "head", "tail", "cut"):
         if path not in paths:
             continue
         if label == "procs" and state["killed"]:
+            if cfg["procs_fails"]:
+                event("unreadable:procs")
+                sys.exit(1)
             state["polls"] += 1
             event("poll:" + str(state["polls"]))
             if cfg["empty_after"] is not None and state["polls"] >= cfg["empty_after"]:
                 (group / "cgroup.procs").write_text("")
                 if not state.get("settled"):
                     state["settled"] = True
-                    # Premature peak reads find NO file; premature final vmstat
+                    # Premature peak reads find invalid data; final vmstat
                     # reads find invalid counters. Only post-kill draining
                     # publishes the measured values, synchronously with a poll.
                     put(group / "memory.peak", cfg["peak"])
@@ -158,6 +173,7 @@ CHILD = r'''
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -178,13 +194,21 @@ def finish():
     with (base / "events").open("a") as stream:
         stream.write("cmd:return\n")
 
-if cfg["mode"] == "signal":
+if cfg["mode"] in ("signal", "descendant"):
+    grandchild = None
+    if cfg["mode"] == "descendant":
+        grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        (base / "grandchild").write_text(str(grandchild.pid))
     def receive(number, frame):
         (base / "signal").write_text(signal.Signals(number).name)
+        if grandchild is not None:
+            # Reap the grandchild so a zombie cannot masquerade as a survivor.
+            grandchild.wait()
         finish()
-        sys.exit(128 + number)
+        sys.exit(cfg["signal_status"] if cfg["signal_status"] is not None else 128 + number)
     signal.signal(signal.SIGTERM, receive)
     signal.signal(signal.SIGINT, receive)
+    signal.signal(signal.SIGHUP, receive)
     (base / "ready").write_text("ready\n")
     while True:
         time.sleep(0.01)
@@ -209,14 +233,17 @@ class Fixture:
         self.root.mkdir()
         self.cfg = dict(before=vmstat(), after=vmstat(), peak=7000 * MIB,
                         page_size="4096", getconf="4096", controllers="cpu memory io\n",
-                        kill_exists=True, move_fails=False, create_fails=False,
+                        kill_exists=True, peak_exists=True, move_fails=False, create_fails=False,
+                        setup_delay=False, subtree=None, subtree_fails=False,
+                        kill_fails=False, procs_fails=False,
                         remove_fails=False, leftovers=2, empty_after=1, status=0,
-                        mode="normal", memstat="anon 4096\nfile 8192\npswpin 17\npswpout 23\n",
+                        mode="normal", signal_status=None,
+                        memstat="anon 4096\nfile 8192\npswpin 17\npswpout 23\n",
                         meminfo="SwapTotal: 8388608 kB\nSwapFree: 4194304 kB\n",
                         pressure="some avg10=0.25 avg60=0.00 avg300=0.00 total=1\n"
                                  "full avg10=0.10 avg60=0.00 avg300=0.00 total=1\n")
         self.cfg.update(overrides)
-        names = ("mkdir", "rmdir", "cat", "awk", "sed", "grep", "wc", "head", "tail", "cut", "getconf")
+        names = ("mkdir", "rmdir", "tee", "cat", "awk", "sed", "grep", "wc", "head", "tail", "cut", "getconf")
         self.cfg["real"] = {name: shutil.which(name) for name in names}
         (self.base / "config.json").write_text(json.dumps(self.cfg))
         (self.base / "vmstat").write_text(self.cfg["before"])
@@ -226,6 +253,8 @@ class Fixture:
                 (self.base / name).write_text(self.cfg[name])
         (self.root / "cgroup.controllers").write_text("cpu memory io\n")
         (self.root / "memory.peak").write_text(str(7000 * MIB))
+        if self.cfg["subtree"] is not None:
+            (self.root / "cgroup.subtree_control").write_text(self.cfg["subtree"])
         if self.cfg["create_fails"]:
             self.root.chmod(0o500)
         bin_dir = self.base / "bin"
@@ -266,6 +295,14 @@ class Fixture:
         return self.finish()
 
     def stop(self):
+        # Job control puts CMD in a separate group from the gate. Always reap
+        # that group too, including when a deliberately broken gate times out.
+        marker = self.base / "command.json"
+        if marker.exists():
+            try:
+                os.killpg(json.loads(marker.read_text())["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if self.proc is not None:
             try:
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -418,7 +455,8 @@ class CompileCgroup(unittest.TestCase):
         self.assertEqual(command["moved"].split(), [str(command["pid"])])
         self.assertNotEqual(command["pid"], fixture.proc.pid)
         self.assertNotIn(str(fixture.proc.pid), command["moved"].split())
-        self.assertIn(f"create:covpart-{fixture.proc.pid}", fixture.events())
+        self.assertTrue(any(re.fullmatch(rf"create:covpart-{fixture.proc.pid}(?:-[0-9a-f]{{8}})?", event)
+                            for event in fixture.events()))
         self.outcome(fixture, done)
 
     def test_G9_command_status_is_preserved(self):
@@ -558,6 +596,178 @@ class CompileCgroup(unittest.TestCase):
             self.assertTrue(marker.exists(), "CMD did not receive its arguments")
             self.assertEqual(json.loads(marker.read_text())["argv"], ["argument with spaces", ""])
             self.outcome(fixture, done)
+
+    def sudo_calls(self, fixture):
+        return [json.loads(line) for line in (fixture.base / "sudo.jsonl").read_text().splitlines()]
+
+    def wait_for(self, fixture, marker):
+        deadline = time.monotonic() + 3
+        while not (fixture.base / marker).exists() and time.monotonic() < deadline:
+            if fixture.proc.poll() is not None:
+                break
+            time.sleep(0.01)
+        self.assertTrue((fixture.base / marker).exists(), f"fixture never reached {marker}")
+
+    def shell_hook(self, fixture, source):
+        hook = fixture.base / "hook.sh"
+        # Old privileged bash invocations also inherit BASH_ENV. Only the
+        # initial gate should run the scheduling hook.
+        hook.write_text('if [[ ${CG_HOOK_DONE:-} != 1 ]]; then\n'
+                        'export CG_HOOK_DONE=1\n' + source + '\nfi\n')
+        fixture.env["BASH_ENV"] = str(hook)
+
+    def test_R1_sudo_only_fixed_commands(self):
+        fixture = self.fixture()
+        fixture.env["MEM_SUDO"] = "sudo"
+        self.outcome(fixture, fixture.run())
+        calls = self.sudo_calls(fixture)
+        self.assertEqual({call[0] for call in calls}, {"mkdir", "tee", "rmdir"})
+        for call in calls:
+            self.assertEqual(len(call), 2, f"privileged argv must be a fixed command and path: {call}")
+            self.assertIn(call[0], ("mkdir", "tee", "rmdir"))
+            self.assertTrue(Path(call[1]).is_relative_to(fixture.root))
+
+    def test_R2_enable_memory_through_sudo_tee(self):
+        fixture = self.fixture(subtree="cpu io\n")
+        fixture.env["MEM_SUDO"] = "sudo"
+        self.outcome(fixture, fixture.run())
+        target = fixture.root / "cgroup.subtree_control"
+        self.assertEqual(target.read_text(), "+memory\n")
+        self.assertIn(["tee", str(target)], self.sudo_calls(fixture))
+
+    def test_R3_failed_delegation_never_runs_command(self):
+        fixture = self.fixture(subtree="cpu io\n", subtree_fails=True)
+        fixture.env["MEM_SUDO"] = "sudo"
+        done = fixture.run()
+        self.assertFalse((fixture.base / "command.json").exists(), "CMD ran after delegation write failure")
+        self.assertNotEqual(done.returncode, 0)
+        record = self.record(fixture, done)
+        self.assertEqual(record["cgroup"], "inconclusive")
+        self.assertEqual(record["cmd_status"], "na")
+        self.assertIn(["tee", str(fixture.root / "cgroup.subtree_control")], self.sudo_calls(fixture))
+
+    def test_R4_stale_pid_group_does_not_collide(self):
+        fixture = self.fixture()
+        fixture.env["CG_REAL_MKDIR"] = fixture.cfg["real"]["mkdir"]
+        self.shell_hook(fixture, '"$CG_REAL_MKDIR" "$MEM_CGROUP_ROOT/covpart-$$"')
+        self.outcome(fixture, fixture.run())
+        self.assertTrue((fixture.root / f"covpart-{fixture.proc.pid}").is_dir())
+        self.assertTrue(any(re.fullmatch(rf"create:covpart-{fixture.proc.pid}-[0-9a-f]{{8}}", event)
+                            for event in fixture.events()), "group lacks its per-run eight-hex suffix")
+
+    def test_R5_signal_during_setup_never_starts_command(self):
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(signal=sig.name):
+                fixture = self.fixture(setup_delay=True)
+                fixture.start()
+                self.wait_for(fixture, "setup-ready")
+                os.kill(fixture.proc.pid, sig)
+                done = fixture.finish()
+                self.assertFalse((fixture.base / "command.json").exists(), "CMD ran after setup was interrupted")
+                record = self.record(fixture, done)
+                self.assertEqual(record["cmd_status"], "na")
+                self.assertEqual(done.returncode, 128 + sig)
+                self.assertFalse(list(fixture.root.glob("covpart-*")), "interrupted setup leaked its cgroup")
+
+    def test_R6_signal_at_reap_keeps_status_seven(self):
+        fixture = self.fixture(mode="signal", signal_status=7)
+        self.shell_hook(fixture, r'''
+wait() {
+  if [[ ${reap_hook_done:-} != 1 ]]; then
+    reap_hook_done=1
+    while [[ ! -e $CG_FIXTURE/ready ]]; do sleep 0.01; done
+    kill -TERM "$$"
+    builtin wait "$@"
+    local status=$?
+    # Deliver a second TERM precisely at the reap/return boundary. This
+    # makes the race deterministic without substituting a fake child status.
+    kill -TERM "$$"
+    return "$status"
+  fi
+  printf 'wait:repeated\n' >> "$CG_FIXTURE/events"
+  builtin wait "$@"
+}
+''')
+        done = fixture.run()
+        self.assertEqual((fixture.base / "signal").read_text(), "SIGTERM")
+        self.assertEqual(done.returncode, 7, "a TERM at reap must preserve CMD exit 7")
+        self.assertEqual(self.record(fixture, done)["cmd_status"], "7")
+        self.assertNotIn("wait:repeated", fixture.events(), "wait retried an already-reaped child")
+
+    def test_R7_term_reaches_grandchild(self):
+        fixture = self.fixture(mode="descendant")
+        fixture.env["MEM_KILL_WAIT_S"] = "3"
+        fixture.start()
+        self.wait_for(fixture, "ready")
+        grandchild = int((fixture.base / "grandchild").read_text())
+        started = time.monotonic()
+        os.kill(fixture.proc.pid, signal.SIGTERM)
+        done = fixture.finish(timeout=3)
+        self.assertFalse(fixture.timed_out, "gate hung on the unsignalled grandchild")
+        self.assertLess(time.monotonic() - started, 3, "signal cleanup exceeded the configured kill wait")
+        with self.assertRaises(ProcessLookupError, msg="grandchild survived TERM to the gate"):
+            os.kill(grandchild, 0)
+        self.assertEqual(done.returncode, 128 + signal.SIGTERM)
+        self.assertEqual(self.record(fixture, done)["cmd_status"], str(128 + signal.SIGTERM))
+
+    def test_R8_peak_required_before_command(self):
+        fixture = self.fixture(peak_exists=False)
+        done = fixture.run()
+        self.assertFalse((fixture.base / "command.json").exists(), "CMD ran without memory.peak")
+        self.assertNotEqual(done.returncode, 0)
+        record = self.record(fixture, done)
+        self.assertEqual(record["cgroup"], "inconclusive")
+        self.assertEqual(record["cmd_status"], "na")
+
+    def assert_invalid_duration(self, name):
+        for value in ("invalid", "0", "-0.1", ""):
+            with self.subTest(value=value):
+                fixture = self.fixture()
+                fixture.env[name] = value
+                done = fixture.run()
+                self.assertEqual(done.returncode, 2, f"{name}={value!r} must be a usage error")
+                self.assertFalse((fixture.base / "command.json").exists(), "CMD ran with an invalid duration")
+                self.assertIn(name, done.stderr)
+                self.assertIn("usage:", done.stderr)
+
+    def test_R9_invalid_kill_wait_is_usage_error(self):
+        self.assert_invalid_duration("MEM_KILL_WAIT_S")
+
+    def test_R10_invalid_poll_is_usage_error(self):
+        self.assert_invalid_duration("MEM_POLL_S")
+
+    def test_R11_sleep_capped_at_remaining_deadline(self):
+        fixture = self.fixture(empty_after=None)
+        fixture.env.update(MEM_KILL_WAIT_S="0.1", MEM_POLL_S="20")
+        self.shell_hook(fixture, r'''
+sleep() {
+  printf '%s\n' "$1" >> "$CG_FIXTURE/sleeps"
+  command sleep "$@"
+}
+''')
+        fixture.start()
+        done = fixture.finish(timeout=3)
+        self.assertFalse(fixture.timed_out, "poll sleep exceeded the remaining drain deadline")
+        sleeps = [float(value) for value in (fixture.base / "sleeps").read_text().splitlines()]
+        self.assertTrue(sleeps)
+        self.assertTrue(all(0 < value <= 0.1 for value in sleeps), sleeps)
+        self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_drain")
+
+    def test_R12_failed_kill_write_is_reported(self):
+        fixture = self.fixture(kill_fails=True)
+        fixture.env["MEM_SUDO"] = "sudo"
+        done = fixture.run()
+        self.assertNotEqual(done.returncode, 0, "failed cgroup.kill write passed")
+        self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_kill")
+        self.assertIn("could not kill", done.stderr)
+
+    def test_R13_unreadable_process_list_after_command_is_reported(self):
+        fixture = self.fixture(procs_fails=True)
+        done = fixture.run()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("cmd:return", fixture.events())
+        self.assertIn("unreadable:procs", fixture.events())
+        self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_procs")
 
 
 if __name__ == "__main__":

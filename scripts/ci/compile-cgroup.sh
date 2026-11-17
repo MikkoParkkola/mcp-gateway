@@ -6,8 +6,8 @@
 #   MEM_VMSTAT defaults to /proc/vmstat; MEM_CGROUP_ROOT to /sys/fs/cgroup;
 #   MEM_PAGESIZE to `getconf PAGESIZE`; MEM_SUDO to sudo (empty disables it);
 #   MEM_KILL_WAIT_S to 10 seconds; MEM_POLL_S to 0.2 seconds.
-# Create $MEM_CGROUP_ROOT/covpart-<pid>. It is usable only when its
-# cgroup.controllers lists memory and its cgroup.kill exists. The child shell
+# Create $MEM_CGROUP_ROOT/covpart-<pid>-<8 hex>. It is usable only when its
+# cgroup.controllers lists memory and cgroup.kill and memory.peak exist. The child shell
 # writes its own pid to cgroup.procs, then execs CMD with arguments unchanged.
 # The gate stays outside. Creation, controller, kill-file, or move failure must
 # prevent CMD from running, report cgroup=inconclusive, and exit non-zero.
@@ -15,7 +15,9 @@
 # write 1 to cgroup.kill, poll cgroup.procs every MEM_POLL_S until empty or
 # MEM_KILL_WAIT_S expires, THEN read vmstat and memory.peak, THEN rmdir.
 # Failure to empty or remove the cgroup fails the verdict, with a diagnostic.
-# Forward TERM/INT to the child and still clean up and report its exit status.
+# Forward TERM/INT/HUP to the child's process group, then clean up and report.
+# A signal during setup prevents CMD from starting and returns 128+signal.
+# Kill wait and poll intervals must be positive numbers; invalid values exit 2.
 # Shell constants: SWAP_LIMIT_MIB=256 and PEAK_LIMIT_MIB=14000.
 # Swap-out OR swap-in growth >= the swap limit fails; peak bytes strictly above
 # the peak limit fails. Compare before rounding to MiB. Zero swap counts/growth
@@ -48,8 +50,8 @@ fi
 vmstat=${MEM_VMSTAT:-/proc/vmstat}
 root=${MEM_CGROUP_ROOT:-/sys/fs/cgroup}
 group=$root/covpart-$$
-kill_wait=${MEM_KILL_WAIT_S:-10}
-poll=${MEM_POLL_S:-0.2}
+kill_wait=${MEM_KILL_WAIT_S-10}
+poll=${MEM_POLL_S-0.2}
 sudo_cmd=()
 if [[ -n ${MEM_SUDO-sudo} ]]; then sudo_cmd=("${MEM_SUDO-sudo}"); fi
 
@@ -63,6 +65,7 @@ cmd_status=na
 verdict=pass
 child_pid=
 interrupted=0
+signal_number=0
 moved=
 created=0
 
@@ -73,9 +76,8 @@ fail() {
 
 # Privilege only the write, never the measured command or the gate's reads.
 root_write() {
-  # The privileged shell expands these positional arguments, not this shell.
-  # shellcheck disable=SC2016
-  "${sudo_cmd[@]}" bash -c 'printf "%s\n" "$1" > "$2"' bash "$1" "$2"
+  # Keep sudo policy limited to fixed commands; values travel on stdin.
+  printf '%s\n' "$1" | "${sudo_cmd[@]}" tee "$2" >/dev/null
 }
 
 uint() { [[ $1 =~ ^[0-9]+$ ]]; }
@@ -90,10 +92,13 @@ field() {
 
 forward() {
   interrupted=1
-  if [[ -n $child_pid ]]; then kill -s "$1" "$child_pid" 2>/dev/null || :; fi
+  signal_number=$2
+  # The child leads its own job-control group, including CMD's descendants.
+  if [[ -n $child_pid ]]; then kill -s "$1" -- "-$child_pid" 2>/dev/null || :; fi
 }
-trap 'forward TERM' TERM
-trap 'forward INT' INT
+trap 'forward TERM 15' TERM
+trap 'forward INT 2' INT
+trap 'forward HUP 1' HUP
 
 collect_report() {
   local meminfo pressure memstat
@@ -126,10 +131,40 @@ remove_group() {
   fi
 }
 
+cancel_before_command() {
+  if (( signal_number )); then
+    fail signal "setup interrupted; command was not started"
+    collect_report
+    remove_group
+    if [[ -n $moved ]]; then rm -f "$moved"; fi
+    report
+    exit "$((128 + signal_number))"
+  fi
+}
+
+# Validate before creating a cgroup or running CMD, including explicit empty
+# values. Decimal fractions are useful for polling and short drain deadlines.
+duration() {
+  [[ $1 =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] &&
+    awk -v n="$1" 'BEGIN { exit !(n > 0) }'
+}
+for setting in MEM_KILL_WAIT_S MEM_POLL_S; do
+  if [[ $setting == MEM_KILL_WAIT_S ]]; then value=$kill_wait; else value=$poll; fi
+  if ! duration "$value"; then
+    printf 'usage: %s CMD [ARG...]; %s must be a positive number\n' "$0" "$setting" >&2
+    exit 2
+  fi
+done
+
 # The new child's controller list is authoritative. Enable delegation first
 # when the parent exposes subtree_control, preserving its other controllers.
 setup() {
-  local controllers subtree
+  local controllers subtree suffix
+  # PID reuse must not collide with a cgroup left by an earlier invocation.
+  suffix=$(od -An -N4 -tx4 /dev/urandom) || return 1
+  suffix=${suffix//[[:space:]]/}
+  [[ $suffix =~ ^[0-9a-f]{8}$ ]] || return 1
+  group=$root/covpart-$$-$suffix
   if [[ -e $root/cgroup.subtree_control ]]; then
     subtree=$(cat "$root/cgroup.subtree_control" 2>/dev/null) || return 1
     if ! [[ " $subtree " =~ [[:space:]]memory[[:space:]] ]]; then
@@ -141,13 +176,17 @@ setup() {
   controllers=$(cat "$group/cgroup.controllers" 2>/dev/null) || return 1
   [[ " $controllers " =~ [[:space:]]memory[[:space:]] ]] || return 1
   [[ -e $group/cgroup.kill ]] || return 1
+  [[ -e $group/memory.peak ]] || return 1
 }
 
 before=$(cat "$vmstat" 2>/dev/null) || before=
 raw_page_size=${MEM_PAGESIZE-$(getconf PAGESIZE 2>/dev/null)}
 if positive "$raw_page_size"; then page_size=$raw_page_size; fi
 
-if ! setup; then
+setup_status=0
+setup || setup_status=$?
+cancel_before_command
+if (( setup_status )); then
   fail cgroup_setup "cgroup is unusable; command was not started"
   collect_report
   remove_group
@@ -158,6 +197,7 @@ fi
 # A separate acknowledgement distinguishes move failure from any CMD exit
 # code. It is outside cgroupfs and never contains command arguments.
 moved=$(mktemp "${TMPDIR:-/tmp}/compile-cgroup.XXXXXXXX") || {
+  cancel_before_command
   fail cgroup_setup "cannot create child acknowledgement; command was not started"
   collect_report
   remove_group
@@ -168,21 +208,23 @@ moved=$(mktemp "${TMPDIR:-/tmp}/compile-cgroup.XXXXXXXX") || {
 # Job control prevents an asynchronous shell from making SIGINT ignored across
 # exec. Only the background subshell joins the cgroup; its PID survives exec.
 set -m
+cancel_before_command
 (
-  trap - TERM INT
+  trap - TERM INT HUP
   root_write "$BASHPID" "$group/cgroup.procs" || exit 1
   printf 'moved\n' > "$moved" || exit 1
   exec "$@"
 ) &
 child_pid=$!
 set +m
-# A trapped signal interrupts wait before the child has finished. Repeat wait
-# until it returns without a trap, retaining the child's actual exit status.
+# A trap can run as wait reaps the child. Keep that status; retry an
+# interrupted wait only while the child is still running, never after reaping.
 while :; do
   interrupted=0
   wait "$child_pid"
   cmd_status=$?
   (( interrupted )) || break
+  kill -0 "$child_pid" 2>/dev/null || break
 done
 child_pid=
 if [[ $(cat "$moved" 2>/dev/null) == moved ]]; then
@@ -204,18 +246,26 @@ fi
 if ! root_write 1 "$group/cgroup.kill"; then
   fail cgroup_kill "could not kill remaining cgroup processes"
 fi
-# Bound draining with Bash elapsed seconds, rounding the configured wait up
-# to whole seconds. Always poll once, even when the wait is zero.
-wait_seconds=$(awk -v n="$kill_wait" 'BEGIN { print int(n) + (n > int(n)) }')
-deadline=$((SECONDS + wait_seconds))
+# Bash's fractional clock preserves short deadlines. Older Bash versions fall
+# back to elapsed whole seconds. Never let a long poll exceed the time left.
+drain_started=${EPOCHREALTIME:-$SECONDS}
 drained=0
 while :; do
-  if procs=$(cat "$group/cgroup.procs" 2>/dev/null) && [[ -z $procs ]]; then
+  if ! procs=$(cat "$group/cgroup.procs" 2>/dev/null); then
+    fail cgroup_procs "cannot read remaining cgroup processes while draining"
+    break
+  fi
+  if [[ -z $procs ]]; then
     drained=1
     break
   fi
-  (( SECONDS < deadline )) || break
-  sleep "$poll"
+  sleep_for=$(awk -v start="$drain_started" -v now="${EPOCHREALTIME:-$SECONDS}" \
+    -v limit="$kill_wait" -v poll="$poll" 'BEGIN {
+      remaining = limit - (now - start)
+      if (remaining <= 0) exit 1
+      printf "%.9f", (poll < remaining ? poll : remaining)
+    }') || break
+  sleep "$sleep_for"
 done
 if (( ! drained )); then fail cgroup_drain "cgroup could not be emptied within $kill_wait seconds"; fi
 
@@ -225,6 +275,8 @@ if [[ $page_size == na ]]; then fail page_size "page size is missing, non-numeri
 
 # Compare bytes before flooring the displayed MiB. Validate both endpoints:
 # absent counters and counter resets must never resemble zero swap growth.
+# Host-wide vmstat deliberately errs toward failing; cgroup memory.stat swap
+# counters remain report-only. Counters cannot decrease within a single boot.
 measure_swap() {
   local counter=$1 rule=$2 start end result amount exceeded
   start=$(field "$before" "$counter")
