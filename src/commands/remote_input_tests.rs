@@ -32,7 +32,7 @@ pub(super) async fn lookup_reading(
         panic!("not lookup-email")
     };
     let token = token.map(str::to_string);
-    super::audit_lookup::lookup_outcome(args, loaded, None, None, stdin, move |name| {
+    super::super::audit_lookup::lookup_outcome(args, loaded, None, None, stdin, move |name| {
         (name == "MCP_GATEWAY_TOKEN")
             .then(|| token.clone())
             .flatten()
@@ -196,14 +196,15 @@ async fn lookup_window_faults_and_the_equal_boundary() {
 /// no request is sent.
 #[tokio::test]
 async fn the_first_failing_check_decides() {
-    use super::dashboard_link::TokenError;
+    use super::super::dashboard_link::TokenError;
     let broken = || -> Result<mcp_gateway::config::Config, String> { Err("planted".to_string()) };
     let what = "could not load the config (planted); pass --url";
     let Command::Audit(AuditCommand::LookupEmail(args)) = parse(&["audit", "lookup-email"]) else {
         panic!()
     };
     let out =
-        super::audit_lookup::lookup_outcome(args, broken, None, None, Unreadable, |_| None).await;
+        super::super::audit_lookup::lookup_outcome(args, broken, None, None, Unreadable, |_| None)
+            .await;
     failed(
         &out,
         CliExit::Usage,
@@ -214,7 +215,7 @@ async fn the_first_failing_check_decides() {
     let Command::DashboardLink(args) = parse(&["dashboard-link"]) else {
         panic!()
     };
-    let out = super::dashboard_link::dashboard_link_outcome(
+    let out = super::super::dashboard_link::dashboard_link_outcome(
         args,
         broken,
         None,
