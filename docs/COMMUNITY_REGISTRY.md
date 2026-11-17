@@ -6,7 +6,7 @@ Share, discover, and install capability definitions from the community.
 
 ### From the Built-in Registry
 
-All 130+ built-in capabilities ship with mcp-gateway. The exact tracked inventory is currently 137 YAMLs, of which 1 is held (it loads but does not run; see `capabilities/README.md`). Browse what is available:
+All 130+ built-in capabilities ship with mcp-gateway. The exact tracked inventory is currently 143 YAMLs, of which 1 is held (it loads but does not run; see `capabilities/README.md`). Browse what is available:
 
 ```bash
 # List everything
@@ -243,6 +243,7 @@ Success:
 | `search` | `capabilities/search/` | Web, news, images, code search |
 | `finance` | `capabilities/finance/` | Stock quotes, currency, filings, company data |
 | `geo` | `capabilities/geo/` | IP geolocation, mapping |
+| `maps` | `capabilities/maps/` | Key-free geocoding, places, nearby points of interest, routing (paced per host) |
 | `entertainment` | `capabilities/entertainment/` | Movies, music, jokes, trivia |
 | `utility` | `capabilities/utility/` | QR codes, UUIDs, mock data, tracking |
 | `communication` | `capabilities/communication/` | Email, messaging |

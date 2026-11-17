@@ -494,6 +494,7 @@ impl CapabilityBackend {
 }
 
 fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {
+    let result = super::apply_attribution(capability, result);
     let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
     ToolsCallResult {
         content: vec![Content::Text {

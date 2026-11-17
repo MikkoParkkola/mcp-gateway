@@ -786,3 +786,23 @@ async fn rl17_a_paced_429_or_503_is_one_request_and_surfaces() {
     );
     call(&b, "rl17ok", "a").await.expect("a 200 is a result");
 }
+
+// ── RL7b: host case on the wire ──────────────────────────────────────
+
+#[tokio::test]
+async fn rl7b_an_upper_case_spelling_shares_the_bucket() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let b = backend(
+        Names::default(),
+        vec![
+            cap("rl7lower", &stub.url("rl7.test", "/a"), Some(30_000), false),
+            cap("rl7upper", &stub.url("RL7.test", "/b"), None, false),
+        ],
+    );
+    call(&b, "rl7lower", "a").await.expect("admitted");
+    let err = call(&b, "rl7upper", "b")
+        .await
+        .expect_err("one host, one bucket");
+    refusal_wait(&err, "rl7.test", 30_000);
+    assert_eq!(stub.count(), 1);
+}

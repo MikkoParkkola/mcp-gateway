@@ -1,6 +1,6 @@
 # MCP Gateway Built-in Capabilities
 
-mcp-gateway currently ships **136 built-in capabilities** (marketed publicly as **130+**): the tracked YAML inventory under `capabilities/` excluding `examples/` (137 files) minus the held capability below. Only capabilities that run are counted.
+mcp-gateway currently ships **142 built-in capabilities** (marketed publicly as **130+**): the tracked YAML inventory under `capabilities/` excluding `examples/` (143 files) minus the held capability below. Only capabilities that run are counted.
 
 ## Held
 
@@ -14,7 +14,7 @@ Held operation of a counted capability: `cisco_scanner` `scan_mcp_server` is not
 
 ## Categories
 
-Counted as raw inventory: all 137 files, the held entries included.
+Counted as raw inventory: all 143 files, the held entries included.
 
 | Category | Count |
 |----------|-------|
@@ -27,6 +27,7 @@ Counted as raw inventory: all 137 files, the held entries included.
 | **infrastructure/** | 11 |
 | **knowledge/** | 22 |
 | **linear/** | 13 |
+| **maps/** | 6 |
 | **observability/** | 2 |
 | **media/** | 10 |
 | **productivity/** | 26 |
@@ -138,6 +139,7 @@ metadata:
 - **observability/**: Error tracking (Sentry issues; needs SENTRY_AUTH_TOKEN)
 - **finance/**: Stock quotes, currency exchange, SEC filings, company data
 - **geo/**: IP geolocation
+- **maps/**: Key-free geocoding (Open-Meteo, Nominatim, Photon), nearby points of interest (Overpass) and driving routes (OSRM). Each provider is paced per host and per gateway process at its published limit, and every result carries its licence credit. Open-Meteo (geocode, and weather in knowledge/): free tier is non-commercial; commercial use needs an Open-Meteo plan. OSRM: the public demo server is non-commercial; commercial use needs your own OSRM server.
 - **entertainment/**: Movies, music, jokes, trivia
 - **utility/**: QR codes, UUIDs, mock data, air quality, GitHub issues
 - **communication/**: Email, messaging

@@ -59,7 +59,7 @@ use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
-use client::send_with_retry;
+use client::{MAX_SEND_ATTEMPTS, send_attempts, send_with_retry};
 
 /// The capability response cache's bound: the Meta-MCP cache's default
 /// (`cache.max_entries`), which does not govern this cache yet (MIK-8740).
@@ -480,7 +480,15 @@ impl CapabilityExecutor {
             Error::Config(format!("Invalid HTTP method '{}': {}", config.method, e))
         })?;
 
-        let mut request = self.client.request(method, &url);
+        // Per-host pacing: one lookup decides admission, the client (no
+        // redirects, no protocol retries) and the attempts together.
+        let paced = crate::capability::pacing::admit(&url)?;
+        let client = if paced {
+            &self.client.paced
+        } else {
+            &self.client.http
+        };
+        let mut request = client.request(method, &url);
 
         // Add headers; skip Authorization when auth.param is set (credential
         // goes as a query param instead of a header).
@@ -531,14 +539,29 @@ impl CapabilityExecutor {
         // Retry timeouts only for idempotent HTTP methods; a timeout on a
         // mutating method may have already been processed upstream.
         let idempotent = matches!(method_upper.as_str(), "GET" | "HEAD" | "OPTIONS" | "TRACE");
-        let response = send_with_retry(
+        let response = send_attempts(
             request.timeout(timeout),
             &self.client.redirects,
             "Request",
             idempotent,
             &self.health,
+            if paced { 1 } else { MAX_SEND_ATTEMPTS },
         )
         .await?;
+        // The paced client follows no redirect: its 3xx is the call's answer,
+        // an error naming where it pointed.
+        if paced && response.status().is_redirection() {
+            let target = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("(no Location)");
+            return Err(Error::Protocol(format!(
+                "a paced provider does not follow redirects; {} answered {} pointing to {target}",
+                crate::capability::pacing::host_key(&url).map_or_else(String::new, |k| k.host),
+                response.status().as_u16(),
+            )));
+        }
 
         let body = self.handle_response(response, config).await?;
         match &config.save_file {

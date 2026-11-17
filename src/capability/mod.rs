@@ -32,6 +32,7 @@
 //! The executor injects credentials at runtime, so they never appear in
 //! logs, error messages, or MCP responses.
 
+mod attribution;
 mod backend;
 #[cfg(test)]
 pub(crate) mod op_gate;
@@ -62,6 +63,8 @@ mod maps_attribution_tests;
 pub(crate) mod maps_harness;
 #[cfg(test)]
 mod maps_pacing_tests;
+#[cfg(test)]
+mod maps_tools_tests;
 mod openapi;
 mod pacing;
 #[cfg(test)]
@@ -78,6 +81,7 @@ mod tenant_read_tests;
 pub mod validator;
 mod watcher;
 
+pub(crate) use attribution::apply_attribution;
 pub use backend::{CapabilityBackend, CapabilityBackendStatus, DirectoryLoad, RugPullRecord};
 pub use definition::ProtocolConfig;
 pub use definition::*;

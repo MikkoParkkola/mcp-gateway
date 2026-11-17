@@ -196,3 +196,53 @@ async fn at7_a_string_is_wrapped_once_on_both_exits() {
     assert_eq!(text, want);
     assert_eq!(structured, want);
 }
+
+// ── AT10: output validation is what holds an array answer to `results` ──
+
+/// The recorded Nominatim search answer (a JSON array).
+fn nominatim_answer() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/maps/run-44178019895/nominatim_search.json"),
+    )
+    .expect("fixture")
+}
+
+#[tokio::test]
+async fn at10_control_an_array_answer_with_results_declared_is_wrapped() {
+    let stub = Stub::start(Reply::json(&nominatim_answer())).await;
+    let meta = gateway(vec![cap(
+        "at10ok",
+        &stub.url("at10-ok.test", "/s"),
+        &attributed(),
+        &array_output(),
+        "",
+    )]);
+    let (text, structured) = channels(&invoke(&meta, "at10ok", json!({ "q": "a" })).await);
+    assert!(text["results"].is_array() && structured["results"].is_array());
+    assert_eq!(structured["attribution"], OSM);
+}
+
+#[tokio::test]
+async fn at10_an_array_answer_without_results_declared_is_refused() {
+    let stub = Stub::start(Reply::json(&nominatim_answer())).await;
+    // One change from the control: `results` is not in the output schema.
+    let bare = "    type: object\n    properties:\n      attribution:\n        type: string\n";
+    let meta = gateway(vec![cap(
+        "at10bare",
+        &stub.url("at10-bare.test", "/s"),
+        &attributed(),
+        bare,
+        "",
+    )]);
+    let response = invoke(&meta, "at10bare", json!({ "q": "a" })).await;
+    let text = response.to_string();
+    assert!(
+        !text.contains("Helsingin tuomiokirkko"),
+        "no part of the refused answer is returned: {text}"
+    );
+    assert!(
+        text.contains("results"),
+        "the refusal names the undeclared key: {text}"
+    );
+}

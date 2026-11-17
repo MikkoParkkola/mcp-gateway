@@ -93,6 +93,13 @@ fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
             {
                 return crate::security::ssrf::refuse_hop(attempt, reason);
             }
+            // No unpaced entry into a paced host: a hop there would be a
+            // request its pacer never admitted.
+            if crate::capability::pacing::is_paced(attempt.url().as_str()) {
+                return attempt.error(RedirectRefused(
+                    "refusing a capability redirect into a paced host",
+                ));
+            }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
                 RedirectDecision::Reject(msg) => crate::security::ssrf::refuse_hop(attempt, msg),
@@ -276,16 +283,38 @@ pub(super) async fn send_with_retry(
     retry_timeouts: bool,
     health: &crate::failsafe::HealthTracker,
 ) -> Result<reqwest::Response> {
+    send_attempts(
+        request,
+        redirects,
+        label,
+        retry_timeouts,
+        health,
+        MAX_SEND_ATTEMPTS,
+    )
+    .await
+}
+
+/// [`send_with_retry`] with at most `max_attempts` attempts: a call to a
+/// paced host makes one, since a second attempt is a request its pacer never
+/// admitted.
+pub(super) async fn send_attempts(
+    request: reqwest::RequestBuilder,
+    redirects: &AtomicU64,
+    label: &str,
+    retry_timeouts: bool,
+    health: &crate::failsafe::HealthTracker,
+    max_attempts: u32,
+) -> Result<reqwest::Response> {
     let started = std::time::Instant::now();
     let mut backoff_ms: u64 = 100;
     let mut request = Some(request);
-    for attempt in 1..=MAX_SEND_ATTEMPTS {
+    for attempt in 1..=max_attempts {
         // A non-cloneable body gets a single attempt: the best we can do.
         let (this, last) = match request
             .as_ref()
             .and_then(reqwest::RequestBuilder::try_clone)
         {
-            Some(clone) => (clone, attempt == MAX_SEND_ATTEMPTS),
+            Some(clone) => (clone, attempt == max_attempts),
             None => match request.take() {
                 Some(only) => (only, true),
                 // Taken only for a final attempt, which always returns.

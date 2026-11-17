@@ -12,6 +12,7 @@ use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
 mod caller_state;
+pub(crate) mod maps_rules;
 mod process;
 mod protocols;
 mod providers;

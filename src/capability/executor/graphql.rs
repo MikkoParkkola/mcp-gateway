@@ -242,6 +242,9 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 .expect("static content-type is valid"),
         );
 
+        // Pacing is wired into REST only, so a paced host takes no GraphQL call
+        // (a retained definition may predate the host's pacing).
+        crate::capability::pacing::refuse_unpaced_protocol(&graphql_config.endpoint, "GraphQL")?;
         let timeout = Duration::from_secs(ctx.timeout_secs);
         let response = super::send_with_retry(
             self.executor

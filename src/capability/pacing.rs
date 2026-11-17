@@ -123,3 +123,89 @@ pub(crate) fn seed(intervals: &HashMap<HostKey, u64>) {
         );
     }
 }
+
+/// Admit one call to `url`: `Ok(true)` when its host is paced and this call
+/// took the permit, `Ok(false)` when the host is not paced, and
+/// [`crate::Error::RateLimited`] when the permit is spent. The map stays locked
+/// from the lookup through the permit, so a reload never interleaves; the
+/// check never waits, so the lock is never held across an await.
+pub(crate) fn admit(url: &str) -> crate::Result<bool> {
+    use crate::failsafe::Acquire;
+    let Some(key) = host_key(url) else {
+        return Ok(false);
+    };
+    let map = pacers().lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(pacer) = map.get(&key) else {
+        return Ok(false);
+    };
+    match pacer.limiter.acquire() {
+        Acquire::Admitted | Acquire::AdmittedAfterClockStep { .. } => {
+            pacer.used.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(true)
+        }
+        Acquire::Refused { wait, .. } => Err(crate::Error::RateLimited(format!(
+            "{}: one request per {} ms; retry after {} ms",
+            key.host,
+            pacer.interval_ms,
+            // Rounded up: retrying after the stated wait is admitted.
+            wait.as_nanos().div_ceil(1_000_000).max(1),
+        ))),
+    }
+}
+
+/// Whether `url`'s host is paced: a GraphQL or JSON-RPC call to it is
+/// refused, and no redirect may enter it.
+pub(crate) fn is_paced(url: &str) -> bool {
+    host_key(url).is_some_and(|key| {
+        pacers()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(&key)
+    })
+}
+
+/// Refuse a `protocol` (GraphQL, JSON-RPC) call to a paced host, naming it:
+/// pacing is wired into REST dispatch only.
+pub(crate) fn refuse_unpaced_protocol(endpoint: &str, protocol: &str) -> crate::Result<()> {
+    if is_paced(endpoint) {
+        let host = host_key(endpoint).map_or_else(String::new, |key| key.host);
+        return Err(crate::Error::Config(format!(
+            "{host} is paced by a rate_limit; a {protocol} provider may not call it"
+        )));
+    }
+    Ok(())
+}
+
+/// Why `capability` may not load beside `intervals`: a GraphQL or JSON-RPC
+/// provider on a paced host. Judged on the whole catalogue's intervals, so
+/// the answer does not depend on the order files are read.
+pub(crate) fn unpaced_protocol_refusal(
+    capability: &CapabilityDefinition,
+    intervals: &HashMap<HostKey, u64>,
+) -> Option<String> {
+    let providers = capability
+        .providers
+        .named
+        .values()
+        .chain(&capability.providers.fallback);
+    for provider in providers {
+        let protocol = match provider.service.as_str() {
+            "graphql" => "GraphQL",
+            "jsonrpc" => "JSON-RPC",
+            _ => continue,
+        };
+        let config = provider.protocol_config();
+        let endpoint = config
+            .as_graphql()
+            .map(|g| g.endpoint.clone())
+            .or_else(|| config.as_jsonrpc().map(|j| j.endpoint.clone()))
+            .unwrap_or_default();
+        if let Some(key) = host_key(&endpoint).filter(|key| intervals.contains_key(key)) {
+            return Some(format!(
+                "{} is paced by a rate_limit; a {protocol} provider may not call it",
+                key.host
+            ));
+        }
+    }
+    None
+}

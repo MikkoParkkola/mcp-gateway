@@ -51,6 +51,8 @@ pub(crate) use meta_mcp::{ArgsPolicy, args_policy};
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
+/// The nearest-name hint a misspelt capability key shares with a misspelt tool.
+pub(crate) use meta_mcp_helpers::did_you_mean;
 /// The gateway's one decode of a tool call's `arguments` (an object, or a
 /// JSON string holding one), shared with the sanitize step so what it checks
 /// is what dispatch uses (MIK-8154).

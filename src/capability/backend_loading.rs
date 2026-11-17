@@ -74,8 +74,27 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
+        // A GraphQL or JSON-RPC provider on a paced host fails loading, like a
+        // file the loader refuses: judged on the whole catalogue these files
+        // join, so the order they are read in decides nothing.
+        let intervals = {
+            let caps = self.capabilities.read();
+            crate::capability::pacing::declared_intervals(
+                caps.entries
+                    .iter()
+                    .chain(loaded.files.iter().map(|file| &file.definition)),
+            )
+        };
         for file in loaded.files {
             let capability = file.definition.name.clone();
+            if let Some(reason) =
+                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
+            {
+                warn!(backend = %self.name, capability = %capability, error = %reason, "Failed to load capability");
+                report.admitted -= 1;
+                report.unreadable.push(file.path.clone());
+                continue;
+            }
             // Digest outside the catalogue lock. The bytes are not stored.
             let source = self.source_of(&file.path, &file.bytes);
             if let Err(error) = self.admit_from(file.path, file.definition, Some(source)) {
@@ -147,7 +166,24 @@ impl CapabilityBackend {
         // The same admission gate the initial load applies.
         let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
+        // The new catalogue's paced hosts, before any file is admitted.
+        let intervals = crate::capability::pacing::declared_intervals(
+            loaded_files.iter().map(|file| &file.definition),
+        );
         for file in loaded_files {
+            if let Some(reason) =
+                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
+            {
+                warn!(
+                    backend = %self.name,
+                    capability = %file.definition.name,
+                    error = %reason,
+                    "Capability refused on reload"
+                );
+                total -= 1;
+                refused.insert(file.definition.name.clone());
+                continue;
+            }
             match validate_capability_account_binding(
                 &file.definition,
                 self.executor.account_strategies(),
