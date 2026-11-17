@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::*;
-use crate::test_dir_keep::{expect_unkept, kept_tempdir};
+use crate::test_dir_keep::{expect_unkept, held_then_gone, kept_tempdir};
+use crate::test_pause::Release;
 
 /// An interval no row waits out in real time: every row pauses the clock.
 const EVERY: Duration = Duration::from_secs(300);
@@ -24,54 +25,6 @@ fn this_test() -> String {
         .to_owned()
 }
 
-/// Wait for `reached` with the runtime's only thread BLOCKED, so a paused
-/// clock cannot auto-advance into another tick meanwhile. A helper thread
-/// turns the notification into a bounded std receive.
-fn reached_blocking(reached: Arc<tokio::sync::Notify>) {
-    let (sent, got) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        futures::executor::block_on(reached.notified());
-        let _ = sent.send(());
-    });
-    assert!(
-        got.recv_timeout(BOUND).is_ok(),
-        "the tick's save thread never reached its gate"
-    );
-}
-
-/// Releases a held tick when dropped, so a failing row frees its thread.
-struct Release(Arc<tokio::sync::Notify>);
-
-impl Drop for Release {
-    fn drop(&mut self) {
-        self.0.notify_one();
-    }
-}
-
-/// What is left under `dir`, for a failure message.
-fn listing(dir: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(dir).map_or_else(
-        |_| Vec::new(),
-        |entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
-    )
-}
-
-/// The dir is there while the tick's save is held, then goes once the save
-/// returns, with nothing left behind.
-async fn held_then_gone(dir: &Path, release: Release) {
-    assert!(
-        dir.exists(),
-        "the dir was removed while the tick's save was still held"
-    );
-    drop(release);
-    let gone = crate::test_wait::wait_real_time(BOUND, || !dir.exists()).await;
-    assert!(
-        gone.is_ok(),
-        "the dir stayed after the tick's save returned; left: {:?}",
-        listing(dir)
-    );
-}
-
 /// Drive one tick of the saver writing `root` up to its pre-save gate, then
 /// abort and await the saver: only the tick's own thread is left running.
 async fn hold_one_tick(
@@ -83,7 +36,9 @@ async fn hold_one_tick(
     crate::test_pause::within("the saver's loop started", seams.loop_started.notified()).await;
     tokio::time::advance(every).await;
     crate::test_pause::within("the tick's thread spawned", seams.writer_spawned.notified()).await;
-    reached_blocking(reached);
+    // Blocking: the runtime's only thread must not let the paused clock
+    // auto-advance into another tick meanwhile.
+    crate::test_pause::reached_blocking("the tick's pre-save gate", &reached);
     saver.abort();
     let ended = saver.await;
     assert!(
@@ -113,7 +68,8 @@ async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
     });
     hold_one_tick(&seams, reached, EVERY, saver).await;
     drop(dir);
-    held_then_gone(&root, Release(release)).await;
+    let release = Release(release);
+    held_then_gone(&root, || release.now()).await;
     assert_eq!(
         runs.load(Ordering::SeqCst),
         1,
@@ -206,7 +162,8 @@ async fn the_counter_saver_keeps_its_dir_through_a_tick() {
     )
     .await;
     drop((counters, dir));
-    held_then_gone(&root, Release(release)).await;
+    let release = Release(release);
+    held_then_gone(&root, || release.now()).await;
 }
 
 /// K11b. The health saver keeps health.json's dir while a tick's save runs.
@@ -231,7 +188,8 @@ async fn the_health_saver_keeps_its_dir_through_a_tick() {
     )
     .await;
     drop((health, dir));
-    held_then_gone(&root, Release(release)).await;
+    let release = Release(release);
+    held_then_gone(&root, || release.now()).await;
 }
 
 /// K11b. The cost saver keeps its data dir while a tick's save runs.
@@ -251,5 +209,6 @@ async fn the_cost_saver_keeps_its_dir_through_a_tick() {
     let saver = spawn_cost_saver(enforcer, root.clone(), EVERY, None);
     hold_one_tick(&seams, reached, EVERY, saver).await;
     drop(dir);
-    held_then_gone(&root, Release(release)).await;
+    let release = Release(release);
+    held_then_gone(&root, || release.now()).await;
 }

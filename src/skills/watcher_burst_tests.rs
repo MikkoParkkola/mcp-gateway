@@ -5,7 +5,7 @@
 use super::*;
 
 /// One capability YAML, shaped like the existing watcher test's.
-fn cap_yaml(name: &str, category: &str, description: &str) -> String {
+pub(super) fn cap_yaml(name: &str, category: &str, description: &str) -> String {
     format!(
         "name: {name}\ndescription: {description}\nproviders:\n  primary:\n    \
          service: rest\n    config:\n      base_url: https://example.com\n\

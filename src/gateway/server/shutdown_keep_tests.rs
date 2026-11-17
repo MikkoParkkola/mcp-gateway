@@ -9,10 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::test_dir_keep::{expect_unkept, kept_tempdir};
-
-/// How long a row waits for a dir to go after the save that kept it returns.
-const GONE_BOUND: Duration = Duration::from_secs(10);
+use crate::test_dir_keep::{expect_unkept, held_then_gone, kept_tempdir};
 
 fn this_test() -> String {
     std::thread::current()
@@ -55,30 +52,6 @@ fn instant_save(root: PathBuf) -> Box<dyn FnOnce() + Send> {
     Box::new(move || {
         let _ = std::fs::write(&root, b"[]");
     })
-}
-
-/// What is left under `dir`, for a failure message.
-fn listing(dir: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(dir).map_or_else(
-        |_| Vec::new(),
-        |entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
-    )
-}
-
-/// The dir is there while its save is held, then goes once the save returns,
-/// with nothing left behind.
-async fn held_then_gone(dir: &Path, release: impl FnOnce()) {
-    assert!(
-        dir.exists(),
-        "the dir was removed while its save was still held"
-    );
-    release();
-    let gone = crate::test_wait::wait_real_time(GONE_BOUND, || !dir.exists()).await;
-    assert!(
-        gone.is_ok(),
-        "the dir stayed after its save returned; left: {:?}",
-        listing(dir)
-    );
 }
 
 /// K1. A save abandoned at the deadline in a kept dir (the transitions.json leak shape: a
@@ -124,7 +97,8 @@ async fn a_shutdown_save_takes_its_keep_before_its_thread_runs() {
     run_shutdown_saves(deadline, vec![save]).await;
     crate::test_pause::within("the save's thread reached its gate", reached.notified()).await;
     drop(dir);
-    held_then_gone(&root, || release.notify_one()).await;
+    let release = crate::test_pause::Release(release);
+    held_then_gone(&root, || release.now()).await;
 }
 
 /// Run one instant save into `root` and wait for it to return.

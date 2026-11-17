@@ -61,6 +61,39 @@ impl Slot {
     }
 }
 
+/// Releases a pause point when dropped, so a row that fails before its own
+/// release never leaves a writer parked.
+pub(crate) struct Release(pub(crate) Arc<Notify>);
+
+impl Release {
+    /// Release now; dropping it later is then a no-op for the writer.
+    pub(crate) fn now(&self) {
+        self.0.notify_one();
+    }
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+/// Wait for `reached` without a runtime, or with the caller's runtime
+/// thread blocked (so a paused clock cannot auto-advance meanwhile), failing
+/// after 30 s. A helper thread turns the notification into a bounded receive.
+pub(crate) fn reached_blocking(what: &str, reached: &Arc<Notify>) {
+    let (sent, got) = std::sync::mpsc::channel();
+    let reached = Arc::clone(reached);
+    std::thread::spawn(move || {
+        futures::executor::block_on(reached.notified());
+        let _ = sent.send(());
+    });
+    assert!(
+        got.recv_timeout(std::time::Duration::from_secs(30)).is_ok(),
+        "{what} was not reached within 30 s"
+    );
+}
+
 /// Await `step`, failing the test after 30 s so a broken handshake shows as
 /// a named failure, not a CI timeout.
 pub(crate) async fn within<T>(what: &str, step: impl std::future::Future<Output = T>) -> T {
