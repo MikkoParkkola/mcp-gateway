@@ -412,40 +412,20 @@ async fn l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing() {
         .expect_err("npm's own npmrc turned TLS off or trusted another CA");
 }
 
+/// The package whose bin runs [`CANARY_BIN`].
+fn canary_package() -> Package {
+    Package {
+        name: "mcp-canary",
+        version: "1.0.0",
+        manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
+        files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
+    }
+}
+
 /// The canary package's bin: names each argument it can read content from,
 /// then shows node runs in the run phase.
 const CANARY_BIN: &[u8] =
     b"#!/bin/sh\nfor f in \"$@\"; do test -s \"$f\" && echo \"readable $f\"; done\nnode -e 'console.log(\"node-ran\")'\necho bin-ran\n";
-
-/// Host files written for a row: each restored to what it held, or removed
-/// when it was not there, on drop.
-struct Planted(Vec<(PathBuf, Option<Vec<u8>>)>);
-
-impl Planted {
-    /// `None` (skip) where this host cannot take one of them.
-    fn plant(files: Vec<(PathBuf, Vec<u8>)>) -> Option<Self> {
-        let mut planted = Self(Vec::new());
-        for (path, bytes) in files {
-            let before = std::fs::read(&path).ok();
-            if let Err(e) = std::fs::write(&path, bytes) {
-                return skip(&format!("cannot plant {} ({e})", path.display())).map(|n| match n {});
-            }
-            planted.0.push((path, before));
-        }
-        Some(planted)
-    }
-}
-
-impl Drop for Planted {
-    fn drop(&mut self) {
-        for (path, before) in &self.0 {
-            let _ = match before {
-                Some(bytes) => std::fs::write(path, bytes),
-                None => std::fs::remove_file(path),
-            };
-        }
-    }
-}
 
 /// npm's package directory when npx is a `/usr/local` install, else `None`
 /// (skip).
@@ -464,12 +444,7 @@ fn usr_local_npm() -> Option<PathBuf> {
 
 /// `npx mcp-canary <paths>`: the run's stdout lines; `None` to skip.
 async fn canary_run(paths: &[&PathBuf]) -> Option<Vec<String>> {
-    let fake = Package {
-        name: "mcp-canary",
-        version: "1.0.0",
-        manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
-        files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
-    };
+    let fake = canary_package();
     let args: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let ran = npx("mcp-canary", &args, vec![fake], Bundle::Registry).await?;
@@ -478,51 +453,71 @@ async fn canary_run(paths: &[&PathBuf]) -> Option<Vec<String>> {
 }
 
 /// L-canary, kills "the fetch binds the /usr/local trees whole": on a
-/// `/usr/local` node (the hosted runner's), files planted beside node in
-/// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` are not
-/// readable by the fetched package's run phase, while node itself runs there.
+/// `/usr/local` node (the hosted runner's), what already sits beside node in
+/// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` is not
+/// readable by the fetched package's run phase, while node itself runs
+/// there. Nothing is written under `/usr/local`: the row reads what is there.
 #[tokio::test]
 async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
     if usr_local_npm().is_none() {
         return;
     }
-    let name = format!("preview-canary-{}", std::process::id());
-    let canaries = [
-        PathBuf::from("/usr/local/bin").join(&name),
-        PathBuf::from("/usr/local/lib/node_modules").join(&name),
-    ];
-    let files = canaries
-        .iter()
-        .map(|p| (p.clone(), b"canary".to_vec()))
-        .collect();
-    let Some(planted) = Planted::plant(files) else {
-        return;
+    // The first entry with content in each directory, other than what the
+    // fetch shows (node and npm, and npm's aliases beside node).
+    let beside = |dir: &str, shown: &[&str]| {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| !shown.iter().any(|s| e.file_name() == *s))
+            .map(|e| e.path())
+            .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() > 0))
+            .collect();
+        found.sort();
+        found.into_iter().next()
     };
+    let canaries: Vec<PathBuf> = [
+        beside("/usr/local/bin", &["node", "npm", "npx"]),
+        beside("/usr/local/lib/node_modules", &["npm"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if canaries.is_empty() {
+        let _ = skip("nothing else sits beside node or npm under /usr/local");
+        return;
+    }
     let Some(seen) = canary_run(&canaries.iter().collect::<Vec<_>>()).await else {
         return;
     };
-    assert_eq!(seen, ["node-ran", "bin-ran"]);
-    drop(planted);
+    assert_eq!(seen, ["node-ran", "bin-ran"], "{canaries:?}");
 }
 
-/// L-npmrc, kills npmrc-unmasked: a registry token planted in npm's builtin
-/// `npmrc` on a `/usr/local` install cannot be read by the fetched package
-/// (an empty file covers it in the root), and the fetch still works.
+/// L-npmrc, kills npmrc-unmasked: a registry token in npm's builtin `npmrc`
+/// cannot be read by the fetched package (an empty file covers it in the
+/// root, whatever npm's layout), and the fetch still works. The token goes
+/// into a copy of the host's npm under the row's own temp dir, never into
+/// the host's npm, which other processes may read meanwhile.
 #[tokio::test]
 async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
-    let Some(package) = usr_local_npm() else {
+    let Some(gateway) = gateway_bin() else {
         return;
     };
-    let npmrc = package.join("npmrc");
-    let token = b"//registry.npmjs.org/:_authToken=preview-canary-token\n".to_vec();
-    let Some(planted) = Planted::plant(vec![(npmrc.clone(), token)]) else {
+    let Some(npx) = host_npx() else {
         return;
     };
-    let Some(seen) = canary_run(&[&npmrc]).await else {
+    if !sandbox_runs(&gateway).await {
         return;
-    };
-    assert_eq!(seen, ["node-ran", "bin-ran"]);
-    drop(planted);
+    }
+    let (_scratch, tree) = nvm_copy(&npx, "v0.0.0-npmrc");
+    let npmrc = tree.join("lib/node_modules/npm/npmrc");
+    std::fs::write(
+        &npmrc,
+        b"//registry.npmjs.org/:_authToken=preview-canary-token\n",
+    )
+    .expect("builtin npmrc");
+    let out = canary_run_in(&gateway, &tree, &[npmrc]).await;
+    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
 }
 
 /// L-nvm, kills "a runtime tree is bound whole" end to
@@ -552,13 +547,18 @@ async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
         )
         .expect("canary");
     }
-    let fake = Package {
-        name: "mcp-canary",
-        version: "1.0.0",
-        manifest: serde_json::json!({"bin": {"mcp-canary": "bin/cli.sh"}}),
-        files: vec![("bin/cli.sh", CANARY_BIN.to_vec(), 0o755)],
-    };
-    let registry = Registry::start(vec![fake], "fetch rows CA").await;
+    let out = canary_run_in(&gateway, &tree, &canaries).await;
+    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
+}
+
+/// `npx mcp-canary <canaries>` with the copied `tree`'s `bin` first on PATH:
+/// the run's stdout.
+async fn canary_run_in(
+    gateway: &std::path::Path,
+    tree: &std::path::Path,
+    canaries: &[PathBuf],
+) -> String {
+    let registry = Registry::start(vec![canary_package()], "fetch rows CA").await;
     let mut path = OsString::from(tree.join("bin"));
     path.push(":/usr/bin:/bin");
     let target = Target {
@@ -568,7 +568,7 @@ async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
             .collect(),
     };
     let ran = preview(
-        &gateway,
+        gateway,
         &target,
         &registry.ca_pem,
         registry.port,
@@ -576,8 +576,7 @@ async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
         GUARD,
     )
     .await;
-    let out = ran.expect("the copied npm fetched and node ran");
-    assert_eq!(lines(&out), ["node-ran", "bin-ran"], "{out}");
+    ran.expect("the copied npm fetched and node ran")
 }
 
 /// Every live process whose command line carries `marker` (the `unshare`, the
