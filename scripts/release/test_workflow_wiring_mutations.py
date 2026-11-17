@@ -1477,8 +1477,10 @@ CASES += [
     ("package-tests-build-step-dropped", "ci.yml",
      "      - name: Build the tests from the packaged crate\n"
      "        # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole\n"
-     "        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. A stall ends here with its log.\n"
-     "        timeout-minutes: 60\n"
+     "        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. By part it took 20.1 and\n"
+     "        # 27.6 min with nothing swapped (two samples, 2026-11-17): 45 leaves 63% over the slower. A stall ends here\n"
+     "        # with its log.\n"
+     "        timeout-minutes: 45\n"
      "        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
     ("docker-build-stops-waiting-for-package-tests", "ci.yml",
      "release-script-tests, package-tests, release-signing-checks]", "release-script-tests, release-signing-checks]", CAUGHT),

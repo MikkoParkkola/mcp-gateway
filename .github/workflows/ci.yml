@@ -1709,7 +1709,9 @@ jobs:
     name: Tests build from the packaged crate
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 80
+    # The build step's 45 min, the 10 min the census keeps free for setup and post steps (measured under 1 min here),
+    # and 5 more, so the step limit fires first and keeps its log (scripts/ci/check_swap_jobs.py).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
@@ -1719,8 +1721,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
         # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole
-        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. A stall ends here with its log.
-        timeout-minutes: 60
+        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. By part it took 20.1 and
+        # 27.6 min with nothing swapped (two samples, 2026-11-17): 45 leaves 63% over the slower. A stall ends here
+        # with its log.
+        timeout-minutes: 45
         run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build
       - name: Memory tripwire
         if: always()
