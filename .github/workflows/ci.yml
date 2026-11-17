@@ -255,6 +255,7 @@ jobs:
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
           python3 scripts/ci/test_memory_peak.py
+          python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py

@@ -38,6 +38,7 @@ python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_lib_union.py	0	closed
 python3 scripts/ci/test_lib_parts.py	1	closed
 python3 scripts/ci/test_memory_peak.py	0	closed
+python3 scripts/ci/test_lib_gates_wiring.py	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
