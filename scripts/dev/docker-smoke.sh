@@ -118,11 +118,12 @@ docker run -d \
   -p "127.0.0.1::39400" \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
+  -e MCP_GATEWAY_SERVER__HOST=0.0.0.0 \
   -e MCP_GATEWAY_TOKEN \
   -v "$work/gateway.container.yaml:/config.yaml:ro" \
   -v "$work/capabilities:/capabilities:ro" \
   "$image" \
-  --config /config.yaml --host 0.0.0.0 --port 39400 >/dev/null
+  --config /config.yaml --port 39400 >/dev/null
 
 # Docker chose the host port, so none was picked and freed for another
 # process to take first.
