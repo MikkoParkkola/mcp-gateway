@@ -111,14 +111,18 @@ impl CliOutcome {
         }
     }
 
+    /// Read-only views for the rows; production prints an outcome only through [`emit`].
+    #[cfg(test)]
     pub(crate) fn exit(&self) -> CliExit {
         self.exit
     }
 
+    #[cfg(test)]
     pub(crate) fn stdout(&self) -> &[u8] {
         &self.stdout
     }
 
+    #[cfg(test)]
     pub(crate) fn stderr(&self) -> &str {
         &self.stderr
     }
