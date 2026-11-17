@@ -85,6 +85,33 @@ EXPECTED = {
     ("release.yml", "verify"),
 }
 
+# The lib test split (SPLIT.6): every in-scope job builds the library tests through scripts/ci/lib-parts.sh, so each
+# compile is one part, never the whole binary, or it is listed here with why. Shrink-only: the jobs PR's second half
+# converts the first four rows' jobs and deletes their rows; the stage B jobs keep the whole build until then.
+HELPER = "scripts/ci/lib-parts.sh"
+WHOLE_BUILD_ALLOWED = {
+    ("ci.yml", "package-tests"): "converted by the jobs PR's second half (packaged-crate test build)",
+    ("packaged-suite.yml", "packaged-suite"): "converted by the jobs PR's second half (post-merge packaged suite)",
+    ("release.yml", "verify"): "converted by the jobs PR's second half (release verify)",
+    ("coverage-probe.yml", "linux-part"): "converted by the jobs PR's second half (llvm-cov Linux lib parts)",
+    ("ci.yml", "test-throwaway-hosted"): "stage B: the throwaway full-test job",
+    ("mutants.yml", "linux-hosted"): "stage B: mutant batches",
+    ("ci.yml", "test-shards"): "builds the integration targets only (int-a, int-b): no lib test target",
+}
+
+
+def census(jobs_in_scope: dict) -> list[str]:
+    """SPLIT.6: an in-scope job outside WHOLE_BUILD_ALLOWED builds through the helper; every allowance names a job
+    still in scope that still does not."""
+    problems = []
+    through = {key for key, job in jobs_in_scope.items()
+               if any(HELPER in str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict))}
+    for key in sorted(set(jobs_in_scope) - through - set(WHOLE_BUILD_ALLOWED)):
+        problems.append(f"{key[0]}:{key[1]} builds the library tests without {HELPER}, so the whole lib test binary")
+    for key in sorted(set(WHOLE_BUILD_ALLOWED) - (set(jobs_in_scope) - through)):
+        problems.append(f"{key[0]}:{key[1]} is allowed a whole build but no longer has one; delete its row")
+    return problems
+
 
 def builds_library(run: str) -> bool:
     """Whether a `run:` script compiles the library's test binary."""
@@ -218,7 +245,7 @@ def memlog_problems(file: str, name: str, job: dict) -> list[str]:
     return problems
 
 
-def check_workflow(file: str, doc: dict) -> tuple[set[tuple[str, str]], list[str]]:
+def check_workflow(file: str, doc: dict, seen: dict | None = None) -> tuple[set[tuple[str, str]], list[str]]:
     scope: set[tuple[str, str]] = set()
     problems: list[str] = []
     for name, job in (doc.get("jobs") or {}).items():
@@ -230,6 +257,8 @@ def check_workflow(file: str, doc: dict) -> tuple[set[tuple[str, str]], list[str
         problems += found
         if in_scope:
             scope.add((file, name))
+            if seen is not None:
+                seen[(file, name)] = job
             problems += memlog_problems(file, name, job)
     return scope, problems
 
@@ -237,10 +266,12 @@ def check_workflow(file: str, doc: dict) -> tuple[set[tuple[str, str]], list[str
 def main() -> int:
     scope: set[tuple[str, str]] = set()
     problems: list[str] = []
+    seen: dict = {}
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        s, p = check_workflow(path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        s, p = check_workflow(path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {}, seen)
         scope |= s
         problems += p
+    problems += census(seen)
     for missing in sorted(EXPECTED - scope):
         problems.append(f"{missing[0]}:{missing[1]} is listed in EXPECTED but builds no library tests")
     for extra in sorted(scope - EXPECTED):
@@ -327,7 +358,21 @@ def self_test() -> int:
         ok = bool(problems) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} memory log, {label}: problems {problems}")
-    print(f"self-test: {len(cases) + 6 + len(memlog_cases()) - wrong} ok, {wrong} wrong")
+    helper_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh export 1 out"}]}
+    whole_job = {"steps": [{"run": "cargo test --all-features --lib --no-run"}]}
+    allowed = {key: {"steps": []} for key in WHOLE_BUILD_ALLOWED}
+    census_cases = [
+        ("a new job building the whole binary", {**allowed, ("ci.yml", "new"): whole_job}, True),
+        ("a new job building through the helper", {**allowed, ("ci.yml", "new"): helper_job}, False),
+        ("an allowed job converted but still listed", {**allowed, ("ci.yml", "package-tests"): helper_job}, True),
+        ("the allowance as it stands", allowed, False),
+    ]
+    for label, jobs, want_bad in census_cases:
+        found = census(jobs)
+        ok = bool(found) == want_bad
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} census, {label}: problems {found}")
+    print(f"self-test: {len(cases) + 6 + len(memlog_cases()) + len(census_cases) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
