@@ -164,6 +164,16 @@ class Coverage(unittest.TestCase):
         self.assertTrue(log[0].startswith("gate "), "the gate must run before Python")
         self.assertEqual(done.returncode, 0, done.stderr)
 
+    def test_h9_an_already_renamed_binary_is_never_a_candidate(self):
+        # A target dir that still holds part 2's renamed binary (no `cargo llvm-cov clean` before the run): only
+        # the fresh binary may be renamed, and part 2's stays as it was.
+        done, root, _log, before = self.run_cov(candidates=("mcp_gateway-def456", "mcp_gateway-abc123-p2"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        expected = dict(before)
+        expected["mcp_gateway-def456-p3"] = expected.pop("mcp_gateway-def456")
+        self.assertEqual(self.snapshot(root / DEPS), expected,
+                         "only the fresh binary is renamed; an already-renamed -pK binary is left alone")
+
 
 if __name__ == "__main__":
     unittest.main()

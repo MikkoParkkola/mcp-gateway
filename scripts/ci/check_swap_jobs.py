@@ -581,8 +581,7 @@ def self_test() -> int:
     ok = rc == 1 and "ci.yml:package-tests builds the library tests without" in out.getvalue()
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + 1 - wrong} ok, {wrong} wrong")
-    # Coverage split C1-C3. Keep the production allowance and wrapper pattern intact in RED.
+    # Coverage split C1-C3: the census reads the helper's cov mode as a build by part.
     cov_line = 'scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh cov "$COVERAGE_PARTS" "$PART"'
     cov_job = job(swap, step(cov_line), step("scripts/ci/memory-tripwire.sh", **{"if": "always()"}))
 
@@ -607,18 +606,20 @@ def self_test() -> int:
         want = "no `if: always()` step running scripts/ci/memory-tripwire.sh"
         assert any(want in problem for problem in found), f"missing cov tripwire not diagnosed: {found}"
 
-    cov_wrong = 0
-    for label, test in (("C1 cov helper counted", c1), ("C2 direct coverage forbidden", c2),
-                        ("C3 cov tripwire required", c3)):
+    cov_cases = (("C1 cov helper counted", c1), ("C2 direct coverage forbidden", c2),
+                 ("C3 cov tripwire required", c3))
+    for label, test in cov_cases:
         try:
             test()
         except AssertionError as error:
-            cov_wrong += 1
-            print(f"FAIL {label}: {error}")
+            wrong += 1
+            print(f"WRONG {label}: {error}")
         else:
             print(f"ok   {label}")
-    print(f"coverage census self-test: {3 - cov_wrong} ok, {cov_wrong} assertion failures")
-    wrong += cov_wrong
+    # The summary comes last, so a failing row never prints after it.
+    total = (len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + 1
+             + len(cov_cases))
+    print(f"self-test: {total - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
