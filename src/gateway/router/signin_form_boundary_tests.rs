@@ -6,6 +6,7 @@
 //! `no-store` and cookie-free. Fixture and helpers are the parent's.
 
 use super::super::e5_dashboard_session_tests::redeem;
+use super::super::tests::test_router_app_state_with_auth_and_config;
 use super::*;
 #[cfg(feature = "metrics")]
 use std::collections::VecDeque;
@@ -296,6 +297,37 @@ async fn n6d_an_unparseable_public_url_admits_no_signin_origin() {
         form_post(SIGNIN, Some(&loopback), body, FORM, None, true),
     )
     .await;
+    assert_route_origin_refusal(&refused);
+    assert_eq!(polls.load(Ordering::SeqCst), 0, "the body was read");
+    assert!(
+        signin_records(&log).is_empty(),
+        "{:?}",
+        signin_records(&log)
+    );
+}
+
+/// On a network bind with no `public_url`, the guard admits a numeric Origin
+/// that names the request's own address (the page this gateway served there).
+/// The route admits only the public origin or a loopback origin, so it refuses
+/// that one with its own 401 (not the guard's 403) and never reads the body.
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn n6e_a_numeric_self_origin_on_a_network_bind_is_refused() {
+    let mut config = crate::config::Config::default();
+    // TEST-NET-1: a network address, neither loopback nor a wildcard.
+    config.server.host = "192.0.2.10".to_string();
+    let (mut state, _dir) =
+        test_router_app_state_with_auth_and_config(&auth_with(fixture_keys()), config).await;
+    let (log, _audit_dir) = with_audit(&mut state);
+    let authority = format!("192.0.2.10:{}", listener_port(&state));
+    let origin = format!("http://{authority}");
+    let (body, polls) = counted(&format!("key={ADMIN_SECRET}"));
+    let mut request = form_post(SIGNIN, Some(&origin), body, FORM, None, true);
+    request.headers_mut().insert(
+        header::HOST,
+        authority.parse().expect("a host header value"),
+    );
+    let refused = send(&state, request).await;
     assert_route_origin_refusal(&refused);
     assert_eq!(polls.load(Ordering::SeqCst), 0, "the body was read");
     assert!(
