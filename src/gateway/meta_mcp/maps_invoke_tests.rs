@@ -46,14 +46,22 @@ async fn invoke(meta: &MetaMcp, tool: &str, arguments: Value) -> Value {
     serde_json::to_value(&response).expect("serialises")
 }
 
-/// The tool result's text content parsed as JSON, and its `structuredContent`.
+/// The caller's two channels. `gateway_invoke` answers with one text item
+/// holding the backend's tool result as JSON (beside the gateway's
+/// `_context_integrity` and `_trace_id`) and no outer `structuredContent`, so
+/// the channels are that tool result's text content, parsed, and its
+/// `structuredContent`.
 fn channels(response: &Value) -> (Value, Value) {
-    let result = &response["result"];
-    let text = result["content"][0]["text"]
+    let outer = response["result"]["content"][0]["text"]
         .as_str()
-        .unwrap_or_else(|| panic!("text: {response}"));
+        .unwrap_or_else(|| panic!("outer text: {response}"));
+    let tool: Value =
+        serde_json::from_str(outer).unwrap_or_else(|_| panic!("tool result is JSON: {outer}"));
+    let text = tool["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("tool text: {tool}"));
     let parsed = serde_json::from_str(text).unwrap_or_else(|_| panic!("text is JSON: {text}"));
-    (parsed, result["structuredContent"].clone())
+    (parsed, tool["structuredContent"].clone())
 }
 
 /// A REST capability on `url` with `output` as its output schema and the

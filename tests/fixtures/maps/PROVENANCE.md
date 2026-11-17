@@ -26,6 +26,15 @@ time, HTTP status, content type and the exact URL sent.
 
 The full URLs are in `run-44178019895/MANIFEST`.
 
+### Overpass
+
+The first run's Overpass answer is the server's 502 at-capacity reply, kept as
+the fixture for that path. A second run asking Overpass only (run
+44179981855, 2026-11-17 21:27Z, after the backoff the server asked for) could
+not connect to overpass-api.de, so it recorded nothing and there was no third
+run. An Overpass success answer is recorded later, by the live run on the
+feature's own pull request.
+
 ## Licences of the recorded data
 
 - Open-Meteo answers (geocode, weather): Open-Meteo.com, CC BY 4.0.
