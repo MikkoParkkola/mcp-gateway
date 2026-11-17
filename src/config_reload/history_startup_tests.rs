@@ -409,5 +409,6 @@ fn c14_startup_without_its_worker_keeps_the_record_in_memory_and_touches_no_file
             && logged.contains(&path.join("config-history.json").display().to_string()),
         "one warning naming the file and the cause: {logged}"
     );
+    assert_eq!(warnings_in(&logged), 1, "exactly one warning: {logged}");
     drop(installed);
 }
