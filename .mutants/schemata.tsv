@@ -1,0 +1,7 @@
+head_sha	6d5aa613380ab31c78039f6afd4e1d15983651b0
+#mutant m1
+mcp_gateway	gateway::router::secret_echo_notify_tests::a_stdio_backend_progress_echo_reaches_the_client_redacted	src/gateway/router/secret_echo_notify_tests.rs:268
+#mutant m2
+mcp_gateway	gateway::router::secret_echo_notify_tests::an_http_backend_progress_echo_reaches_the_client_redacted	src/gateway/router/secret_echo_notify_tests.rs:190
+#mutant m3
+mcp_gateway	gateway::router::secret_echo_notify_tests::a_websocket_backend_progress_echo_reaches_the_client_redacted	src/gateway/router/secret_echo_notify_tests.rs:298
