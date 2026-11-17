@@ -334,7 +334,11 @@ async fn c12_a_save_in_another_process_waits_for_the_sidecar_and_never_writes() 
     tokio::time::timeout(Duration::from_secs(30), gate.completion())
         .await
         .expect("the parent's save finished");
-    let _ = reload.await;
+    tokio::time::timeout(Duration::from_secs(30), reload)
+        .await
+        .expect("the parent's reload ended")
+        .expect("joined")
+        .expect("the parent's reload applies");
     let file: serde_json::Value = serde_json::from_slice(&bytes_of(&path)).expect("parses");
     let sources: Vec<&str> = file["events"]
         .as_array()
@@ -342,7 +346,40 @@ async fn c12_a_save_in_another_process_waits_for_the_sidecar_and_never_writes() 
         .iter()
         .map(|event| event["source"].as_str().unwrap_or("?"))
         .collect();
-    assert_eq!(sources, ["start", "file"], "exactly the parent's state");
+    assert_eq!(sources, ["start", "file"], "exactly the parent's events");
+    // And exactly the parent's versions, read back by a store of its own (the
+    // parent's store went memory-only at its deadline; the late job wrote the
+    // file): the start version, then the reload's bytes under the revision
+    // the reload published.
+    let persisted = super::ConfigHistory::open(&path, super::Bounds::default(), 1).snapshots();
+    let gateway = rig.path.display().to_string();
+    let bytes_at = |index: usize| {
+        persisted
+            .get(index)
+            .and_then(|snapshot| snapshot.files.iter().find(|file| file.path == gateway))
+            .map(|file| file.bytes.clone())
+    };
+    assert_eq!(persisted.len(), 2, "two versions: {persisted:?}");
+    assert_eq!(
+        bytes_at(0),
+        Some(Some(ONE_BACKEND.as_bytes().to_vec())),
+        "the start version"
+    );
+    assert_eq!(
+        bytes_at(1),
+        Some(Some(super::record_tests::TWO_BACKENDS.as_bytes().to_vec())),
+        "the reload's version"
+    );
+    let published = rig
+        .ctx
+        .live_config
+        .applied_now()
+        .map(|applied| applied.revision.clone());
+    assert_eq!(
+        persisted.last().map(|snapshot| snapshot.revision.clone()),
+        published,
+        "under the revision the reload published"
+    );
     drop(installed);
 }
 
