@@ -29,17 +29,23 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 import yaml
 
 ACTION = "./.github/actions/add-swap"
 WORKFLOWS = Path(".github/workflows")
+CARGO_CONFIG = Path(".cargo/config.toml")
 
-# A library-test build: `cargo test` or `cargo llvm-cov` that is not a
-# single-target, doc-only or binary-only run, and the repo's wrapper scripts
-# around one.
-CARGO_RE = re.compile(r"\bcargo\s+(test|llvm-cov)\b([^\n|;&]*)")
+# A library-test build: `cargo test`, `cargo llvm-cov` or `cargo bench` (the
+# library's own bench harness compiles it with cfg(test)) that is not a
+# single-target, doc-only or binary-only run; `cargo build` with `--tests`,
+# `--all-targets` or `--benches`; and the repo's wrapper scripts around one.
+# `cargo check` and `cargo clippy` stay out: check-only, they peak under the
+# memory tripwire's limit, so they are not the build the lib test split removes.
+CARGO_RE = re.compile(r"\bcargo\s+(test|llvm-cov|bench)\b([^\n|;&]*)")
+BUILD_TESTS = re.compile(r"\bcargo\s+build\b[^\n|;&]*\s--(tests|all-targets|benches)\b")
 SINGLE_TARGET = re.compile(r"--(test|bin|doc|example|bench)\b")
 LLVM_COV_NO_COMPILE = re.compile(r"^\s*(clean|report)\b")
 WRAPPERS = (
@@ -113,8 +119,24 @@ def census(jobs_in_scope: dict) -> list[str]:
     return problems
 
 
-def builds_library(run: str) -> bool:
-    """Whether a `run:` script compiles the library's test binary."""
+def alias_text(table: dict) -> dict[str, str]:
+    """A cargo `[alias]` table as name -> expansion text (cargo takes a string or a list of words)."""
+    return {name: value if isinstance(value, str) else " ".join(value) for name, value in table.items()}
+
+
+def repo_aliases() -> dict[str, str]:
+    """The repo's own cargo aliases, from `[alias]` in .cargo/config.toml."""
+    if not CARGO_CONFIG.is_file():
+        return {}
+    return alias_text(tomllib.loads(CARGO_CONFIG.read_text(encoding="utf-8")).get("alias", {}))
+
+
+def builds_library(run: str, aliases: dict[str, str] | None = None) -> bool:
+    """Whether a `run:` script compiles the library's test binary. A repo alias is read as what it expands to."""
+    for name, expansion in (repo_aliases() if aliases is None else aliases).items():
+        run = re.sub(rf"\bcargo\s+{re.escape(name)}\b", lambda _, e=expansion: f"cargo {e}", run)
+    if BUILD_TESTS.search(run):
+        return True
     for m in CARGO_RE.finditer(run):
         sub, args = m.group(1), m.group(2)
         if sub == "llvm-cov" and LLVM_COV_NO_COMPILE.match(args):
@@ -332,8 +354,23 @@ def self_test() -> int:
         ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
+        ("cargo bench compiles the library's own bench harness", job({"run": "cargo bench --all-features --no-run"}), True, 1),
+        ("a named bench target never selects the library", job({"run": "cargo bench --bench token_savings --no-run"}), False, 0),
+        ("cargo build --tests compiles the library tests", job({"run": "cargo build --all-features --tests"}), True, 1),
+        ("cargo build --benches selects the library's bench harness", job({"run": "cargo build --benches"}), True, 1),
+        ("a check-only build is out of scope", job({"run": "cargo check --all-targets"}), False, 0),
+    ]
+    # The repo's own cargo aliases expand before the match.
+    alias_cases = [
+        ("an alias for cargo test --lib", {"wl": "test --lib"}, "cargo wl --no-run", True),
+        ("a list-form alias", {"wl": ["test", "--lib"]}, "cargo wl", True),
+        ("an alias for a release build", {"rel": "build --release"}, "cargo rel", False),
     ]
     wrong = 0
+    for label, table, run, want in alias_cases:
+        got = builds_library(run, alias_text(table))
+        wrong += got != want
+        print(f"{'ok   ' if got == want else 'WRONG'} alias, {label}: library build {got}")
     # The action must prove that OUR swap file took, whatever swap the runner image brings: runners differ (3 GB already
     # there, 11263 MB total; or none, 8191 MB total, which the old absolute 10 GB floor failed on 2026-11-12).
     for label, before, after, want_rc in (
@@ -364,6 +401,8 @@ def self_test() -> int:
     census_cases = [
         ("a new job building the whole binary", {**allowed, ("ci.yml", "new"): whole_job}, True),
         ("a new job building through the helper", {**allowed, ("ci.yml", "new"): helper_job}, False),
+        ("a new job calling export-lib itself, without the helper",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True),
         ("an allowed job converted but still listed", {**allowed, ("ci.yml", "package-tests"): helper_job}, True),
         ("the allowance as it stands", allowed, False),
     ]
@@ -372,7 +411,7 @@ def self_test() -> int:
         ok = bool(found) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} census, {label}: problems {found}")
-    print(f"self-test: {len(cases) + 6 + len(memlog_cases()) + len(census_cases) - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
