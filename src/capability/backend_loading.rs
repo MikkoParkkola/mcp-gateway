@@ -297,24 +297,35 @@ impl CapabilityBackend {
     }
 
     /// Unload every registered capability that puts a GraphQL or JSON-RPC
-    /// provider on a host the whole catalogue now paces, logging each at
-    /// WARN. It may come from an earlier directory, so no directory's count
-    /// is adjusted.
+    /// provider on a host the whole catalogue or the process now paces,
+    /// logging each at WARN. Judged and removed under one write lock, so a
+    /// definition re-registered meanwhile is judged as it stands. It may come
+    /// from an earlier directory, so no directory's count is adjusted.
     fn unload_unpaced_protocols(&self) {
-        let refused: Vec<(String, String)> = {
-            let caps = self.capabilities.read();
-            let intervals = crate::capability::pacing::declared_intervals(caps.entries.iter());
-            caps.entries
-                .iter()
-                .filter_map(|c| {
-                    crate::capability::pacing::unpaced_protocol_refusal(c, &intervals)
-                        .map(|reason| (c.name.clone(), reason))
-                })
-                .collect()
-        };
-        for (name, reason) in refused {
-            warn!(backend = %self.name, capability = %name, error = %reason, "Failed to load capability");
-            self.unload_capability(&name);
+        let mut caps = self.capabilities.write();
+        let intervals = crate::capability::pacing::declared_intervals(caps.entries.iter());
+        let refused: Vec<(String, String)> = caps
+            .entries
+            .iter()
+            .filter_map(|c| {
+                crate::capability::pacing::unpaced_protocol_refusal(c, &intervals)
+                    .map(|reason| (c.name.clone(), reason))
+            })
+            .collect();
+        let removed: Vec<(String, String)> = refused
+            .into_iter()
+            .filter(|(name, _)| self.remove_locked(&mut caps, name))
+            .collect();
+        // Logged after the lock is released, as reload logs.
+        drop(caps);
+        for (name, reason) in &removed {
+            warn!(
+                backend = %self.name,
+                capability = %name,
+                error = %reason,
+                "Capability unloaded: a GraphQL or JSON-RPC provider on a paced host"
+            );
+            self.after_unload(name);
         }
     }
 

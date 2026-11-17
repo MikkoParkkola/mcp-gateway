@@ -239,33 +239,48 @@ impl CapabilityBackend {
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
-        let removed = if let Some(&pos) = caps.index.get(name) {
-            caps.entries.remove(pos);
-            caps.tools.remove(pos);
-            caps.sources.remove(pos);
-            caps.index.remove(name);
-            caps.unloaded.insert(name.to_owned());
-            // Shift remaining indices down.
-            for idx in caps.index.values_mut() {
-                if *idx > pos {
-                    *idx -= 1;
-                }
-            }
-            // Published, and the lock still held: no reader can observe the
-            // removal under the old epoch.
-            self.executor.bump_policy_epoch();
-            self.executor.bump_mcp_generation(name);
-            self.bump_catalogue_generation(&caps);
-            true
-        } else {
-            false
-        };
+        let removed = self.remove_locked(&mut caps, name);
         drop(caps);
+        self.after_unload(name);
+        removed
+    }
+
+    /// The part of [`Self::unload_capability`] done under the catalogue's
+    /// write lock: remove `name` and publish the removal under a new epoch.
+    pub(super) fn remove_locked(
+        &self,
+        caps: &mut parking_lot::RwLockWriteGuard<'_, IndexedCapabilities>,
+        name: &str,
+    ) -> bool {
+        let Some(&pos) = caps.index.get(name) else {
+            return false;
+        };
+        caps.entries.remove(pos);
+        caps.tools.remove(pos);
+        caps.sources.remove(pos);
+        caps.index.remove(name);
+        caps.unloaded.insert(name.to_owned());
+        // Shift remaining indices down.
+        for idx in caps.index.values_mut() {
+            if *idx > pos {
+                *idx -= 1;
+            }
+        }
+        // Published, and the lock still held: no reader can observe the
+        // removal under the old epoch.
+        self.executor.bump_policy_epoch();
+        self.executor.bump_mcp_generation(name);
+        self.bump_catalogue_generation(caps);
+        true
+    }
+
+    /// The part of [`Self::unload_capability`] done after the lock is
+    /// released.
+    pub(super) fn after_unload(&self, name: &str) {
         self.catalogue_changed();
         // After the epoch bump: a call that started before it is stopped here,
         // and one that starts after it is refused at `acquire`.
         self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
-        removed
     }
 
     /// Mark a capability as quarantined by a rug-pull event.
@@ -439,6 +454,19 @@ impl CapabilityBackend {
         )?;
         let name = capability.name.clone();
         let mut caps = self.capabilities.write();
+        // A GraphQL or JSON-RPC provider on a host this catalogue, with this
+        // definition, or the process paces is refused, as the loader refuses it.
+        let intervals = crate::capability::pacing::declared_intervals(
+            caps.entries
+                .iter()
+                .filter(|c| c.name != name)
+                .chain([&capability]),
+        );
+        if let Some(reason) =
+            crate::capability::pacing::unpaced_protocol_refusal(&capability, &intervals)
+        {
+            return Err(crate::Error::Config(format!("{name}: {reason}")));
+        }
         let replaced = caps.contains(&name);
         caps.upsert(capability);
         caps.unloaded.remove(&name);
