@@ -140,13 +140,34 @@ const RELAY_BOUND: Duration = Duration::from_secs(2);
 /// The largest `package-lock.json` read.
 const LOCK_CAP: u64 = 4 * 1024 * 1024;
 
-/// The helper's npm fetch step (ADR-027 step 6). Setup that can fail comes
-/// before the credential: `lo` up, then the relay. From `fetch_start` on,
-/// every exit goes through one teardown (sweep, relay stopped, `fetch_done`
-/// and `expired`, the proxy socket removed), and the run is returned only
-/// when the fetch and all of the teardown succeeded.
+/// The helper's npm fetch step (ADR-027 step 6): npm's steps inside the
+/// shared fetch frame; the run is returned only when the fetch and all of the
+/// teardown succeeded.
 pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> Result<Run, String> {
-    lo_up(&npm.ip)?;
+    frame(control, &npm.ip, |credential, port, deadline| {
+        install(npm, credential, port, deadline, limits)
+    })?;
+    npm_run(
+        Path::new(plan::HOME),
+        &npm.spec,
+        &npm.run_args,
+        &npm.node_dir,
+    )
+    .map_err(|r| r.to_string())
+}
+
+/// The fetch frame every fetcher's steps run inside. Setup that can fail
+/// comes before the credential: `lo` up (with the host's `ip`), then the
+/// relay. From `fetch_start` on, every exit goes through one teardown (sweep,
+/// relay stopped, `fetch_done` and `expired`, the proxy socket removed).
+/// `fetch` gets the credential, the relay's port and the fetch's one
+/// deadline, and runs every step of the fetch under that deadline.
+pub(super) fn frame(
+    control: &mut UnixStream,
+    ip: &str,
+    fetch: impl FnOnce(&str, u16, Instant) -> Result<(), FetchFailure>,
+) -> Result<(), String> {
+    lo_up(ip)?;
     let relay = Relay::start(Path::new(PROXY_SOCKET), MAX_PAIRS)
         .map_err(|e| format!("starting the relay ({e})"))?;
     let issued = match control_client::start_fetch(control, HELPER_BOUNDS) {
@@ -156,21 +177,14 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
             return Err(step);
         }
     };
-    // One deadline for the whole fetch: both npm steps and the lock check.
+    // One deadline for the whole fetch: every step of it.
     let Some(deadline) = fetch_deadline(issued.deadline_ms) else {
         // A channel failure: no step to report; the gateway refuses at EOF.
         let _ = relay.stop(RELAY_BOUND);
         return Err("the gateway's fetch deadline is out of range".into());
     };
-    let fetched = install(npm, &issued.credential, relay.port(), deadline, limits);
-    teardown(control, relay, fetched)?;
-    npm_run(
-        Path::new(plan::HOME),
-        &npm.spec,
-        &npm.run_args,
-        &npm.node_dir,
-    )
-    .map_err(|r| r.to_string())
+    let fetched = fetch(&issued.credential, relay.port(), deadline);
+    teardown(control, relay, fetched)
 }
 
 /// A failed fetch step: the step the gateway is told, and the detail kept for
@@ -182,7 +196,7 @@ pub(super) struct FetchFailure {
 }
 
 impl FetchFailure {
-    fn at(step: FetchStep) -> impl FnOnce(String) -> Self {
+    pub(super) fn at(step: FetchStep) -> impl FnOnce(String) -> Self {
         move |detail| Self { step, detail }
     }
 }
@@ -288,13 +302,16 @@ fn install(
         prefix,
         npm.spec.as_str(),
     ];
-    run_npm(&npm.npm, &lock_only, &env, deadline, limits, credential)
-        .map_err(FetchFailure::at(FetchStep::NpmInstall))?;
+    run_dropped(
+        &npm.npm, "npm", &lock_only, &env, deadline, limits, credential,
+    )
+    .map_err(FetchFailure::at(FetchStep::NpmInstall))?;
     read_lock(&pkg.join("package-lock.json"))
         .and_then(|lock| check_lock(&lock).map_err(|r| r.to_string()))
         .map_err(FetchFailure::at(FetchStep::LockCheck))?;
-    run_npm(
+    run_dropped(
         &npm.npm,
+        "npm",
         &["ci", "--ignore-scripts", "--prefix", prefix],
         &env,
         deadline,
@@ -318,12 +335,14 @@ fn read_lock(path: &Path) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("reading the lock ({e})"))
 }
 
-/// One npm step through `__preview-drop`, its environment exactly `env`, its
-/// output drained; the sweep runs before the drains are joined, so a
-/// descendant holding a pipe cannot stall it. A failure refuses with npm's
-/// last line, the credential redacted.
-fn run_npm(
-    npm: &str,
+/// One fetch command (`program`, run as `name`) through `__preview-drop`,
+/// its environment exactly `env`, its output drained; the sweep runs before
+/// the drains are joined, so a descendant holding a pipe cannot stall it. A
+/// failure refuses with the command's last line, the credential redacted.
+/// Every fetcher's commands run here, the one place their output is read.
+pub(super) fn run_dropped(
+    program: &str,
+    name: &str,
     args: &[&str],
     env: &[(String, String)],
     deadline: Instant,
@@ -335,9 +354,9 @@ fn run_npm(
     let mut child = Command::new("/proc/self/exe")
         .arg(super::DROP)
         .arg(limits)
-        .arg(npm)
+        .arg(program)
         .arg("--")
-        .arg("npm")
+        .arg(name)
         .args(args)
         .env_clear()
         .envs(env.iter().map(|(k, v)| (k, v)))
@@ -346,9 +365,9 @@ fn run_npm(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("starting npm ({e})"))?;
+        .map_err(|e| format!("starting {name} ({e})"))?;
     let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
-        return Err("starting npm (no output pipes)".into());
+        return Err(format!("starting {name} (no output pipes)"));
     };
     let drains = drain(out, err);
     let status = wait_until(&mut child, deadline);
