@@ -89,6 +89,7 @@ pub(crate) use secret_file::{
 };
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
+pub(crate) use features::MIN_SECRET_LEN;
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyBinding, ApiKeyConfig,
     ApiKeyKind, AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit,
@@ -544,6 +545,10 @@ impl Config {
         }
         let (mut secret_refs, mut files, configured) = match expansion {
             Expansion::Resolve => {
+                // Before references become values: a stored token is not measured.
+                config
+                    .auth
+                    .enforce_bearer_floor(config.security.posture, &overlay)?;
                 let (mut refs, configured) = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 let auth_enabled = config.auth.enabled;
