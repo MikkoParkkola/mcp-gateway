@@ -9,11 +9,10 @@
 //! test advances it, after the job has arrived where the row parked it.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::record_tests::{ONE_BACKEND, TWO_BACKENDS, rig, rig_in};
-use super::seams::{self, Fault, ParkAt};
+use super::seams::{self, Fault};
 use super::{Outcome, StoredFile};
 use crate::gateway::test_helpers::write_owner_only;
 

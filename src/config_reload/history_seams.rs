@@ -271,7 +271,7 @@ pub(crate) fn for_file(history_file: &Path) -> Option<Arc<Seams>> {
 /// parks at; every gate it parked at is told when the job is done.
 pub(super) struct JobSeams {
     seams: Option<Arc<Seams>>,
-    fault: Option<Fault>,
+    pub(super) fault: Option<Fault>,
     parked: std::cell::RefCell<Vec<Arc<Gate>>>,
 }
 
