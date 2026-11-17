@@ -399,11 +399,8 @@ mod r9_windows_aliases {
             .output()
             .expect("cmd runs");
         assert!(out.status.success(), "cmd failed: {}", out.status);
-        let units: Vec<u16> = out
-            .stdout
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
+        let (pairs, _) = out.stdout.as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
         let short = String::from_utf16_lossy(&units).trim().to_string();
         assert!(!short.is_empty(), "cmd printed no short form");
         if short.eq_ignore_ascii_case(&raw.to_string_lossy()) {
@@ -787,10 +784,7 @@ fn g1_every_listed_test_starts_with_the_rule() {
         let text = std::fs::read_to_string(&path).expect("readable");
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            // Any path to the macro counts (`crate::require_private_home!()` too); a
-            // commented-out call does not.
-            let t = line.trim();
-            if t.starts_with("//") || !t.ends_with("require_private_home!();") {
+            if !is_rule_statement(line) {
                 continue;
             }
             // The rule is the first statement: only items (`use`, `const`,
@@ -831,6 +825,41 @@ fn g1_every_listed_test_starts_with_the_rule() {
         "the rule is not the first statement in {late:?}"
     );
     assert_eq!(found, expected, "the wrapped tests differ from the list");
+}
+
+/// The whole trimmed line is the rule call, under any path to the macro
+/// (`crate::require_private_home!();` too). Code before the call on the same
+/// line, another macro whose name ends the same way, or a comment, is not.
+fn is_rule_statement(line: &str) -> bool {
+    static RULE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^(?:[A-Za-z_][A-Za-z0-9_]*::)*require_private_home!\(\);$")
+            .expect("a valid pattern")
+    });
+    RULE.is_match(line.trim())
+}
+
+/// G1's matcher, both sides: what it takes and what it refuses.
+#[test]
+fn g1_matches_only_the_whole_rule_statement() {
+    for taken in [
+        "require_private_home!();",
+        "    require_private_home!();  ",
+        "crate::require_private_home!();",
+        "a::b_1::require_private_home!();",
+    ] {
+        assert!(is_rule_statement(taken), "should take {taken:?}");
+    }
+    for refused in [
+        "my_require_private_home!();",
+        "foo(); require_private_home!();",
+        "let _ = 1; crate::require_private_home!();",
+        "// require_private_home!();",
+        "require_private_home!()",
+        "::require_private_home!();",
+        "1a::require_private_home!();",
+    ] {
+        assert!(!is_rule_statement(refused), "should refuse {refused:?}");
+    }
 }
 
 fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
