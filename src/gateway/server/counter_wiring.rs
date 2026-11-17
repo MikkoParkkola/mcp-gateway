@@ -83,8 +83,10 @@ impl Counters {
     /// The shutdown step that writes `counters.json`.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (store, file) = (Arc::clone(&self.store), Arc::clone(&self.file));
-        (
+        ShutdownSave::new(
             "counter save (counters.json)",
+            // Staging: the counter file's path goes here in the next commit.
+            None,
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     file.save(&store, VERSION, now);
