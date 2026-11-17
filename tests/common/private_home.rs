@@ -159,8 +159,8 @@ fn judge() -> Result<(), Refusal> {
 /// counts as outside. Any error but "not found" refuses: a directory that cannot
 /// be listed may still open by a known path (an execute-only one does). Only an
 /// entry removed meanwhile (a concurrent test) is skipped. A plain file is
-/// refused only when it is the real home's file at the same relative path (a
-/// hard link to real config; unix only, see `real_file_reason`).
+/// refused only when it is the real home's file at the same relative path, or
+/// that file cannot be read (unix only, see `real_file_reason`).
 fn first_way_out(
     dir: &Path,
     canonical_home: &Path,
@@ -211,13 +211,14 @@ fn first_way_out(
     None
 }
 
-/// Unix: why a plain test-home file may be the real home's file at the same
+/// Unix: why a plain test-home file is the real home's file at the same
 /// relative path (same device and inode), so a write through it changes real
-/// config. A file with one name cannot be another path's file. For one with
-/// more names, only "not found" (or a non-directory on the way) proves the real
-/// path absent; any other error refuses, so an unreadable real home fails
-/// closed. The gateway's own hard links (journal publishes, kept backups) stay
-/// inside the test home, so they never match.
+/// config. That covers a hard link into the real home and a real-home symlink
+/// into the override (a dotfiles directory used as the test home). Only "not
+/// found" (or a non-directory on the way) proves the real path absent; any other
+/// error refuses, so an unreadable real home fails closed. The gateway's own hard
+/// links (journal publishes, kept backups) stay inside the test home, so they
+/// never match.
 #[cfg(unix)]
 fn real_file_reason(
     meta: &std::fs::Metadata,
@@ -226,21 +227,18 @@ fn real_file_reason(
 ) -> Option<String> {
     use std::io::ErrorKind;
     use std::os::unix::fs::MetadataExt;
-    if meta.nlink() < 2 {
-        return None;
-    }
     match std::fs::metadata(real_home?.join(rel)) {
         Ok(theirs) => (theirs.dev() == meta.dev() && theirs.ino() == meta.ino())
-            .then(|| format!("{rel} is a hard link to the real home's {rel}")),
+            .then(|| format!("{rel} is the real home's {rel} (the same file)")),
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => None,
         Err(e) => Some(format!(
-            "{rel} has more than one name and the real home's {rel} cannot be read ({e})"
+            "{rel} cannot be judged: the real home's {rel} cannot be read ({e})"
         )),
     }
 }
 
-/// Not unix: std has no stable file id, so a hard link to real config is not
-/// detected here. A declared limit of check 7.
+/// Not unix: std has no stable file id, so a test-home file that is the real
+/// home's file is not detected here. A declared limit of check 7.
 #[cfg(not(unix))]
 fn real_file_reason(_: &std::fs::Metadata, _: Option<&Path>, _: &str) -> Option<String> {
     None

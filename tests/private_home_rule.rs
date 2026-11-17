@@ -376,20 +376,26 @@ fn r18_a_dangling_symlink_is_refused() {
     );
 }
 
+/// Gives a directory mode 0o700 back when dropped, failing run or not, so the
+/// temp dirs holding it can be removed. Declare it after the dir it lives in,
+/// so it drops first.
+#[cfg(unix)]
+struct RestoreMode(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
 /// R19: a directory that cannot be listed is refused. An execute-only `.cursor`
 /// still opens `.cursor/mcp.json` by its known path, here a link out.
 #[cfg(unix)]
 #[test]
 fn r19_an_unlistable_directory_is_refused() {
     use std::os::unix::fs::PermissionsExt;
-    /// Gives the directory its mode back before the dirs are removed, failing
-    /// run or not; declared after `home`, so it drops first.
-    struct Listable(std::path::PathBuf);
-    impl Drop for Listable {
-        fn drop(&mut self) {
-            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
-        }
-    }
     let home = fresh_private_dir();
     let decoy = fresh_private_dir();
     let cursor = home.path().join(".cursor");
@@ -397,7 +403,7 @@ fn r19_an_unlistable_directory_is_refused() {
     std::os::unix::fs::symlink(decoy.path(), cursor.join("mcp.json")).expect("a symlink");
     std::fs::set_permissions(&cursor, std::fs::Permissions::from_mode(0o100))
         .expect("execute-only");
-    let _listable = Listable(cursor.clone());
+    let _restore = RestoreMode(cursor.clone());
     assert!(
         std::fs::read_dir(&cursor).is_err() && cursor.join("mcp.json").symlink_metadata().is_ok(),
         "premise: .cursor cannot be listed yet opens by a known path (fails as root)"
@@ -409,10 +415,10 @@ fn r19_an_unlistable_directory_is_refused() {
     );
 }
 
-/// R20: a test-home file that is the real home's file at the same path (a hard
-/// link: same device and inode) is refused. The real home is a decoy (HOME), never
-/// the developer's own. Unix only: std has no stable file id on Windows, so there
-/// a hard link to real config is a declared limit of check 7.
+/// R20: a test-home file that is the real home's file at the same path (here a
+/// hard link: same device and inode) is refused. The real home is a decoy (HOME),
+/// never the developer's own. Unix only: std has no stable file id on Windows, so
+/// there this is a declared limit of check 7.
 #[cfg(unix)]
 #[test]
 fn r20_a_hard_link_to_real_config_is_refused() {
@@ -441,7 +447,7 @@ fn r20_a_hard_link_to_real_config_is_refused() {
         &refuse(
             &[
                 "(check 7)",
-                ".cursor/mcp.json is a hard link to the real home's .cursor/mcp.json",
+                ".cursor/mcp.json is the real home's .cursor/mcp.json (the same file)",
                 FIX_ENV,
             ],
             &[],
@@ -450,22 +456,14 @@ fn r20_a_hard_link_to_real_config_is_refused() {
     );
 }
 
-/// R21: a test-home file with more than one name is refused when the real home's
-/// file at the same path cannot be read: the comparison fails closed. The decoy
-/// real home's `.cursor` cannot be searched (mode 0o600), and the test home holds
-/// a hard link to the file inside it, made before the mode change.
+/// R21: a test-home file is refused when the real home's file at the same path
+/// cannot be read: the comparison fails closed. The decoy real home's `.cursor`
+/// cannot be searched (mode 0o600), and the test home holds a hard link to the
+/// file inside it, made before the mode change.
 #[cfg(unix)]
 #[test]
 fn r21_an_unreadable_real_counterpart_is_refused() {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    /// Gives the decoy's `.cursor` its mode back before the dirs are removed,
-    /// failing run or not; declared after `decoy`, so it drops first.
-    struct Searchable(std::path::PathBuf);
-    impl Drop for Searchable {
-        fn drop(&mut self) {
-            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
-        }
-    }
+    use std::os::unix::fs::PermissionsExt;
     let home = fresh_private_dir();
     let decoy = fresh_private_dir();
     let real_dir = decoy.path().join(".cursor");
@@ -477,12 +475,12 @@ fn r21_an_unreadable_real_counterpart_is_refused() {
     std::fs::hard_link(&real, &at).expect("a hard link");
     std::fs::set_permissions(&real_dir, std::fs::Permissions::from_mode(0o600))
         .expect("unsearchable");
-    let _searchable = Searchable(real_dir.clone());
+    let _restore = RestoreMode(real_dir.clone());
     let denied =
         std::fs::metadata(&real).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     assert!(
-        denied && std::fs::metadata(&at).is_ok_and(|m| m.nlink() == 2),
-        "premise: the real file cannot be read, the test-home name is one of two (fails as root)"
+        denied && at.is_file(),
+        "premise: the real file cannot be read, the test-home file exists (fails as root)"
     );
     let mut command = with_override(home.path());
     command.env("HOME", decoy.path());
@@ -491,13 +489,47 @@ fn r21_an_unreadable_real_counterpart_is_refused() {
         &refuse(
             &[
                 "(check 7)",
-                ".cursor/mcp.json has more than one name and the real home's .cursor/mcp.json \
-                 cannot be read",
+                ".cursor/mcp.json cannot be judged: the real home's .cursor/mcp.json cannot be read",
                 FIX_ENV,
             ],
             &[],
         ),
         vec![home],
+    );
+}
+
+/// R22: a test-home file reached from the real home through a symlink is the real
+/// home's file (a dotfiles directory used as the test home). The decoy real home's
+/// `.cursor` links to the test home's `.cursor`, whose `mcp.json` has one name.
+#[cfg(unix)]
+#[test]
+fn r22_a_real_home_symlink_into_the_test_home_is_refused() {
+    use std::os::unix::fs::MetadataExt;
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    let cursor = home.path().join(".cursor");
+    std::fs::create_dir(&cursor).expect("the test home's .cursor");
+    std::fs::write(cursor.join("mcp.json"), "{}").expect("the config");
+    std::os::unix::fs::symlink(&cursor, decoy.path().join(".cursor")).expect("a symlink");
+    let ours = std::fs::metadata(cursor.join("mcp.json")).expect("ours");
+    let theirs = std::fs::metadata(decoy.path().join(".cursor").join("mcp.json")).expect("theirs");
+    assert!(
+        ours.nlink() == 1 && ours.ino() == theirs.ino() && ours.dev() == theirs.dev(),
+        "premise: one name, and the real home's path reaches the same file"
+    );
+    let mut command = with_override(home.path());
+    command.env("HOME", decoy.path());
+    probe(
+        command,
+        &refuse(
+            &[
+                "(check 7)",
+                ".cursor/mcp.json is the real home's .cursor/mcp.json (the same file)",
+                FIX_ENV,
+            ],
+            &[],
+        ),
+        vec![home, decoy],
     );
 }
 
