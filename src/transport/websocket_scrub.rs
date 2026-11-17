@@ -35,7 +35,7 @@ pub(super) fn scrub_frame(
                 method: std::mem::take(method),
                 params: params.take(),
             });
-            let outcome = ingress_scrub(needles, &mut message);
+            let outcome = mutant!("m3", Scrubbed::Clean, ingress_scrub(needles, &mut message));
             if let JsonRpcMessage::Notification(notification) = message {
                 *method = notification.method;
                 *params = notification.params;

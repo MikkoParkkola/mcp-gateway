@@ -295,7 +295,7 @@ fn withheld(
     use crate::security::needles::{Scrubbed, ingress_scrub};
     needles.is_some_and(|needles| {
         matches!(
-            ingress_scrub(needles, message),
+            mutant!("m2", Scrubbed::Clean, ingress_scrub(needles, message)),
             Scrubbed::Withhold | Scrubbed::Refuse
         )
     })

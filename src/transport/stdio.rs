@@ -300,7 +300,7 @@ impl StdioTransport {
             && !matches!(message, JsonRpcMessage::Response(_))
         {
             use crate::security::needles::{Scrubbed, ingress_scrub};
-            let outcome = ingress_scrub(needles, &mut message);
+            let outcome = mutant!("m1", Scrubbed::Clean, ingress_scrub(needles, &mut message));
             if matches!(outcome, Scrubbed::Withhold | Scrubbed::Refuse) {
                 return Ok(());
             }
