@@ -47,10 +47,43 @@ impl RuntimeShutdown {
     }
 }
 
+/// A multi-thread runtime and a count of its live threads, workers and blocking
+/// pool alike. Only the line a shutdown logs when it leaves work behind reads
+/// the count; whether work was left running is the wait's own bound.
+pub(crate) struct CountedRuntime {
+    pub(crate) tokio: tokio::runtime::Runtime,
+    live_threads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountedRuntime {
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let live_threads = std::sync::Arc::new(AtomicUsize::new(0));
+        let (started, stopped) = (
+            std::sync::Arc::clone(&live_threads),
+            std::sync::Arc::clone(&live_threads),
+        );
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                started.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_thread_stop(move || {
+                stopped.fetch_sub(1, Ordering::SeqCst);
+            })
+            .build()
+            .expect("build the tokio runtime");
+        Self {
+            tokio,
+            live_threads,
+        }
+    }
+}
+
 /// The runtime, shut down by its mode when dropped: on the normal path and on
 /// a panic out of `dispatch` alike.
 struct ShutdownGuard {
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: Option<CountedRuntime>,
     mode: RuntimeShutdown,
     /// The HTTP stop's plan, once stored: its runtime deadline bounds the wait.
     plan: crate::retire::RetireCell,
@@ -76,10 +109,14 @@ impl Drop for ShutdownGuard {
 /// out with blocking work still running, which it also logs at ERROR so an
 /// operator can tell a stalled disk or mount from a clean exit.
 pub(crate) fn shut_down(
-    runtime: tokio::runtime::Runtime,
+    runtime: CountedRuntime,
     mode: RuntimeShutdown,
     plan: Option<crate::retire::RetirePlan>,
 ) -> bool {
+    let CountedRuntime {
+        tokio: runtime,
+        live_threads: _,
+    } = runtime;
     let RuntimeShutdown::Bounded(timeout) = mode else {
         drop(runtime);
         return false;
@@ -127,12 +164,7 @@ pub(crate) fn block_on<F: std::future::Future>(
     future: F,
 ) -> (F::Output, bool) {
     let mut guard = ShutdownGuard {
-        runtime: Some(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("build the tokio runtime"),
-        ),
+        runtime: Some(CountedRuntime::new()),
         mode,
         plan: std::sync::Arc::clone(plan),
     };
@@ -140,6 +172,7 @@ pub(crate) fn block_on<F: std::future::Future>(
         .runtime
         .as_ref()
         .expect("the guard holds the runtime until it shuts down")
+        .tokio
         .block_on(future);
     let left_running = guard.shut_down();
     (output, left_running)
