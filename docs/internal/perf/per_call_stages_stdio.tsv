@@ -113,6 +113,7 @@ src/gateway/server/listener.rs	serve	-	the HTTP listener loop, started once per 
 src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup config, not per call
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup config, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup path resolution, not per call
+src/gateway/server/mod.rs	history_hook	-	startup config history hook, not per call
 src/gateway/server/mod.rs	leaky_single_user_backends	-	startup config, not per call
 src/gateway/server/persistence.rs	advance_until_saved	-	shutdown and periodic cost-save catch-up, off the request path
 src/gateway/server/persistence.rs	boot_cost_governance	-	startup cost-governance restore, once per serve
