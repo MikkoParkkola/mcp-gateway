@@ -190,6 +190,10 @@ fn named(attr: &syn::Attribute, name: &str) -> bool {
 
 /// An attribute that can switch a test off: `ignore`, `cfg` or `cfg_attr`.
 /// A part tag only picks the part that compiles the test, so it does not.
+/// That holds while every part runs: an unsplit build compiles all parts, a
+/// split run is checked to run every part's tests (their union is the
+/// unsplit list), and `scripts/dev/test_parts.py check` refuses a tag outside
+/// `1..=N`, a second tag, or one that disagrees with the partition table.
 fn disables(attr: &syn::Attribute) -> bool {
     ["ignore", "cfg", "cfg_attr"].iter().any(|n| named(attr, n))
         && !crate::test_source_text::part_tag(attr)
