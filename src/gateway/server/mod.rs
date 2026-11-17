@@ -14,6 +14,8 @@ mod support;
 pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
 mod warmstart;
 
+use std::future::IntoFuture;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1357,13 +1359,43 @@ impl Gateway {
             )
             .await?;
         } else {
-            axum::serve(
+            let drain_bound = self.config.server.shutdown_timeout;
+            let mut draining = shutdown_tx.subscribe();
+            let server = axum::serve(
                 listener,
                 app.into_make_service_with_connect_info::<SocketAddr>(),
             )
             .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-            .await
-            .map_err(|e| Error::Tls(e.to_string()))?;
+            .into_future();
+            tokio::pin!(server);
+
+            // `with_graceful_shutdown` closes the listener when the signal resolves,
+            // then waits for every accepted connection to close. A streaming
+            // response, or a call still waiting on a backend, does not close, so
+            // that wait has no end -- and every step behind it (the in-flight drain,
+            // the expiry-sweep stop, `stop_all`, the shutdown saves) is lost to
+            // whatever ends the process. Bound it the way `join_stdout_writer`
+            // bounds a stuck writer: at `drain_bound` we stop waiting and let the
+            // teardown have its turn, leaving the still-open connections to the
+            // process exit. The bound starts on the broadcast `shutdown_signal`
+            // sends before it resolves, so it can only be shorter than the real
+            // drain, never longer.
+            let outcome = tokio::select! {
+                result = &mut server => result,
+                _ = draining.recv() => {
+                    match tokio::time::timeout(drain_bound, &mut server).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(
+                                bound = ?drain_bound,
+                                "HTTP connections still open at the drain bound; continuing shutdown"
+                            );
+                            Ok(())
+                        }
+                    }
+                }
+            };
+            outcome.map_err(|e| Error::Tls(e.to_string()))?;
         }
 
         // Save search ranker usage data
