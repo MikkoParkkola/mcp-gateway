@@ -347,40 +347,6 @@ impl HistoryHook {
             .collect()
     }
 
-    /// Record one applied publish under `revision`. `previous == Some(revision)`
-    /// is an unchanged reload: an event and no new version. Test-only.
-    #[cfg(test)]
-    pub(crate) fn on_publish(
-        &self,
-        raw: &RawInputs,
-        revision: &str,
-        pending_restart: &[&str],
-        previous: Option<&str>,
-        source: Source,
-        now: u64,
-    ) {
-        let record = self.publish_record(raw, revision, pending_restart, previous, source, now);
-        self.store.save_inline(record);
-    }
-
-    /// Record a refused reload. No version is stored. `served` is the revision
-    /// still published, when there is one. Test-only.
-    #[cfg(test)]
-    pub(crate) fn on_refused(
-        &self,
-        source: Source,
-        served: Option<&str>,
-        line: Option<u32>,
-        now: u64,
-    ) {
-        let pending = PendingRecord::Refused {
-            source,
-            served: served.map(str::to_string),
-            line,
-        };
-        self.store.save_inline(self.build(pending, now));
-    }
-
     fn publish_record(
         &self,
         raw: &RawInputs,
