@@ -98,7 +98,13 @@ async fn r_order_records_land_in_swap_order_through_every_entry_point() {
     }
     // One refusal for certain, whichever bytes the concurrent reloads read.
     write_owner_only(&rig.path, REFUSED_PORT).expect("break the config");
-    assert!(rig.ctx.reload_outcome().await.is_err(), "refused");
+    assert!(
+        tokio::time::timeout(HANG, rig.ctx.reload_outcome())
+            .await
+            .expect("the refused reload ended within the bound")
+            .is_err(),
+        "refused"
+    );
     let log = installed.seams.log();
     let events = steps_of_events(&rig.store);
     let observed = steps_of_log(&log);
@@ -114,22 +120,39 @@ async fn r_order_records_land_in_swap_order_through_every_entry_point() {
         "the run stored versions to check: {}",
         snapshots.len()
     );
+    let files_of = |snapshot: &super::Snapshot| -> Vec<(String, Option<Vec<u8>>)> {
+        snapshot
+            .files
+            .iter()
+            .map(|file| (file.path.clone(), file.bytes.clone()))
+            .collect()
+    };
     for snapshot in snapshots.iter().skip(1) {
         let swapped = log.iter().find_map(|entry| match entry {
             Observed::Swap { revision, files } if *revision == snapshot.revision => Some(files),
             _ => None,
         });
-        let stored: Vec<(String, Option<Vec<u8>>)> = snapshot
-            .files
-            .iter()
-            .map(|file| (file.path.clone(), file.bytes.clone()))
-            .collect();
         assert_eq!(
-            Some(&stored),
+            Some(&files_of(snapshot)),
             swapped,
             "version {} holds its swap's files",
             snapshot.revision
         );
+    }
+    // And the other way: every swap kept its version (50 are kept, this run
+    // swaps at most 12, so none is evicted), holding exactly that swap's files.
+    for entry in &log {
+        if let Observed::Swap { revision, files } = entry {
+            let stored = snapshots
+                .iter()
+                .find(|snapshot| snapshot.revision == *revision)
+                .map(files_of);
+            assert_eq!(
+                stored.as_ref(),
+                Some(files),
+                "swap {revision} has its stored version"
+            );
+        }
     }
 }
 
