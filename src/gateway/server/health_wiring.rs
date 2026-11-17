@@ -217,8 +217,7 @@ impl Health {
         let (history, path) = (Arc::clone(&self.history), self.path.clone());
         ShutdownSave::new(
             "health save (health.json)",
-            // Staging: the optional health path goes here in the next commit.
-            None,
+            path.clone(),
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     history.stop(now);
