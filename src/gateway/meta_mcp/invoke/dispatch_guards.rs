@@ -412,6 +412,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "dispatch_guards_tests.rs"]
 mod dispatch_guards_tests;

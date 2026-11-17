@@ -374,6 +374,7 @@ pub(crate) mod witness {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod witness_tests {
     use super::witness::{self, Phase};

@@ -613,10 +613,12 @@ use run::{pick_session, runs_modern};
 #[path = "upstream_session_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_session_seam_tests.rs"]
 mod seam_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_session_iso_tests.rs"]
 mod iso_tests;

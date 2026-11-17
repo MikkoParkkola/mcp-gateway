@@ -734,14 +734,17 @@ fn sanitize_backend_url(raw: &str) -> String {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "backend_ops_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "backend_add_tests.rs"]
 mod backend_add_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "backend_ops_credential_tests.rs"]
 mod credential_tests;

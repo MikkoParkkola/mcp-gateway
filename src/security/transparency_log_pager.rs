@@ -390,6 +390,7 @@ pub(crate) mod seam {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_pager_tests.rs"]
 mod tests;

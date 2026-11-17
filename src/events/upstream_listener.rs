@@ -518,14 +518,17 @@ fn admit(shared: &Shared, need: &mut Need, interest: &Interest) -> Result<bool, 
     outcome
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_listener_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_charge_tests.rs"]
 mod charge_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_listener_keys_tests.rs"]
 mod keys_tests;

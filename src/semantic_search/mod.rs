@@ -181,6 +181,7 @@ fn matched_fields_for(tool_name: &str, query: &str) -> Vec<String> {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

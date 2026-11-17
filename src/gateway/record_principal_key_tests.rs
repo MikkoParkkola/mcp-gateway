@@ -253,15 +253,7 @@ fn g_key_no_fixed_record_key_ships_outside_test_code() {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source readable");
-            let lines: Vec<&str> = text.lines().collect();
-            for (n, line) in lines.iter().enumerate() {
-                let shaped = (line.contains("const ") && line.contains("RECORD_KEY"))
-                    || line.contains("test-record-key-");
-                let test_only = n > 0 && lines[n - 1].trim() == "#[cfg(test)]";
-                if shaped && !test_only && !line.trim_start().starts_with("//") {
-                    hits.push(format!("{rel}:{}", n + 1));
-                }
-            }
+            hits.extend(fixed_key_hits(&rel, &text));
         }
     }
     let mut hits = Vec::new();
@@ -273,4 +265,29 @@ fn g_key_no_fixed_record_key_ships_outside_test_code() {
         hits.is_empty(),
         "a fixed record key outside test code: {hits:?}"
     );
+}
+
+/// One file's G-KEY hits: a record-key-shaped line in the file's production
+/// text (the shared reader blanks every test-only item, part tag included).
+fn fixed_key_hits(rel: &str, text: &str) -> Vec<String> {
+    let product = crate::test_source_text::production_text(text);
+    let mut hits = Vec::new();
+    for (n, line) in product.lines().enumerate() {
+        let shaped = (line.contains("const ") && line.contains("RECORD_KEY"))
+            || line.contains("test-record-key-");
+        if shaped && !line.trim_start().starts_with("//") {
+            hits.push(format!("{rel}:{}", n + 1));
+        }
+    }
+    hits
+}
+
+/// A test-only key under a part-tagged test cfg is still test-only; an
+/// untagged production key is still a hit.
+#[test]
+fn g_key_reads_a_part_tag_above_the_test_cfg() {
+    let tagged = "#[cfg(tp1)]\n#[cfg(test)]\nconst A_RECORD_KEY: &str = \"k\";\n";
+    assert!(fixed_key_hits("src/x.rs", tagged).is_empty());
+    let live = "#[cfg(tp1)]\nconst A_RECORD_KEY: &str = \"k\";\n";
+    assert_eq!(fixed_key_hits("src/x.rs", live), ["src/x.rs:2"]);
 }

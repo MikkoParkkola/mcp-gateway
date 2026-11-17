@@ -370,6 +370,7 @@ fn remove_path(value: &mut Value, path: &[&str]) -> bool {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "reserved_members_tests.rs"]
 mod tests;

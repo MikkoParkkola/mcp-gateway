@@ -154,6 +154,7 @@ fn pypi_spec(spec: &str) -> Result<(), Refusal> {
     if ok { Ok(()) } else { Err(not_registry(spec)) }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "fetch_tests.rs"]
 mod tests;

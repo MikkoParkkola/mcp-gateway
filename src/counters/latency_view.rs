@@ -246,6 +246,7 @@ impl CounterStore {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "latency_view_tests.rs"]
 mod tests;

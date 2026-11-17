@@ -567,6 +567,7 @@ pub(crate) fn build_code_mode_tools() -> Vec<Tool> {
 // Tests (extracted to meta_mcp_tool_defs_tests.rs for LOC compliance)
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_mcp_tool_defs_tests.rs"]
 mod tests;

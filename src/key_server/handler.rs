@@ -608,6 +608,7 @@ pub(super) fn error_response(
     (status, Json(json!({"error": error, "message": message}))).into_response()
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -787,6 +788,7 @@ mod tests {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "store_reservation_tests.rs"]
 mod store_reservation_tests;

@@ -386,6 +386,7 @@ fn narrow_effect(
     entry.effect_listed.write().retain(|t| !cleared.contains(t));
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "read_only_revoke_tests.rs"]
 mod revoke_tests;

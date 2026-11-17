@@ -163,6 +163,7 @@ pub(super) async fn owned_capability(
 /// the capability on the direct route reaches nothing: the upstream is not
 /// hit again, nothing is served, and the direct route's records name no
 /// grant and record no declared effect.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn probe_direct_reaches_the_capability_backend() {
@@ -254,6 +255,7 @@ async fn direct_decision(
 
 /// A1: a direct call records what its slot declares for the tool, from the
 /// tool's own annotation: read-only, may-write, or listed with no hint.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_direct_call_records_its_declared_effect() {
@@ -377,6 +379,7 @@ async fn keyed(fx: &Fx, subject: &str, key: &str) -> (axum::http::StatusCode, Va
 /// A2: a propagated caller's direct call records its own bound slot's
 /// declaration, never the shared slot's: the shared slot declares `read`
 /// may-write, alice's slot read-only.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_effect_follows_the_caller_bound_slot() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -396,6 +399,7 @@ async fn direct_effect_follows_the_caller_bound_slot() {
 /// slot declares `read` read-only. The call lists alice's own slot (the
 /// fixture's listing gives `read` no hint), so the record says undeclared:
 /// alice's slot as listed for this call, never the shared slot's read-only.
+#[cfg(tp1)]
 #[tokio::test]
 async fn direct_effect_of_an_unlisted_bound_slot_is_its_own() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -445,6 +449,7 @@ async fn cache_hit(fx: &Fx, dir: &tempfile::TempDir, key: &str, between: impl Fn
 
 /// A3: a cache hit is keyed by the caller's binding, so it records what
 /// alice's own slot declares (read-only), never the shared slot's may-write.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_cache_hit_records_the_callers_slot_effect() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -463,6 +468,7 @@ async fn a_direct_cache_hit_records_the_callers_slot_effect() {
 
 /// A3, the declaration flipped between the call and the hit (may-write to
 /// read-only): the hit records alice's slot as it is now.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_cache_hit_reads_the_callers_slot_now() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -481,6 +487,7 @@ async fn a_direct_cache_hit_reads_the_callers_slot_now() {
 /// slot declaring read-only. The repeat lists alice's slot again before the
 /// cache answers (the fixture's listing gives `read` no hint), so the hit
 /// records her slot as refilled: undeclared, never the shared read-only.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_cache_hit_on_an_evicted_slot_reads_it_as_refilled() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -521,6 +528,7 @@ async fn a_direct_cache_hit_on_an_evicted_slot_reads_it_as_refilled() {
 /// the same idempotency key and is never served alice's stored answer: his
 /// call runs fresh under his own owner. Both stores: the execution store
 /// alone (cache off), and the idempotency cache in front of it (cache on).
+#[cfg(tp1)]
 #[tokio::test]
 async fn another_caller_on_the_same_key_is_never_served_a_stored_answer() {
     for cache in [Cache::Off, Cache::On] {
@@ -551,6 +559,7 @@ async fn another_caller_on_the_same_key_is_never_served_a_stored_answer() {
 /// allowed direct call; a meta call names a caller-chosen server and tool,
 /// both canaries. The configured key's secret (`k-std`) and every canary are
 /// absent from both serialised decisions.
+#[cfg(tp1)]
 #[tokio::test]
 async fn the_decision_object_carries_no_secret_or_caller_text() {
     const SUBJECT: &str = "zq-canary-subject";
@@ -602,6 +611,7 @@ async fn the_decision_object_carries_no_secret_or_caller_text() {
 /// A3, a cached failure: the backend's error answer, stored by the
 /// idempotency cache and served again (its own early-return branch), records
 /// alice's own slot (read-only), never the shared slot's may-write.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_cached_failure_records_the_callers_slot_effect() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -650,5 +660,6 @@ async fn a_direct_cached_failure_records_the_callers_slot_effect() {
 }
 
 // The completed-replay (stage 7b) rows and their generational fixture.
+#[cfg(tp1)]
 #[path = "direct_effect_replay_tests.rs"]
 mod replay;

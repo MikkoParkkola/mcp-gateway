@@ -648,6 +648,7 @@ impl CollusionDetector {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_big_tests.rs"]
 mod tests;

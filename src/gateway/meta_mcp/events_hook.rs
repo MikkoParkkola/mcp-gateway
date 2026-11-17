@@ -345,6 +345,7 @@ fn refresh_from_snapshot(
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "events_hook_tests.rs"]
 mod events_hook_tests;

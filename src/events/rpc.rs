@@ -530,6 +530,7 @@ mod held;
 mod subscribe;
 use held::Commit;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "rpc_tests.rs"]
 mod tests;

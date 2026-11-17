@@ -540,17 +540,22 @@ fn generate_client_id() -> String {
 #[cfg(test)]
 pub(crate) mod authorize_tests;
 mod browser;
+#[cfg(tp3)]
 #[cfg(test)]
 mod cache_write_pin_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
 mod identity;
+#[cfg(tp3)]
 #[cfg(test)]
 mod issue_token_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod publish_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
@@ -626,8 +631,10 @@ use url::Url;
 
 mod grants;
 pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grants_log_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
@@ -637,15 +644,19 @@ pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, is_credential_lock_busy,
     refresh_stored,
 };
+#[cfg(tp3)]
 #[cfg(test)]
 mod issuer_provenance_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod prm_discovery_tests;
 mod registration;
 mod renewal;
 pub(crate) mod sign_in;
+#[cfg(tp3)]
 #[cfg(test)]
 mod sign_in_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 mod token_access;
@@ -657,6 +668,7 @@ mod cwe532_debug_redaction {
     const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
     // TokenResponse::Debug must never surface the access/refresh tokens.
+    #[cfg(tp3)]
     #[test]
     fn token_response_debug_redacts_tokens() {
         let r = TokenResponse {
@@ -679,6 +691,7 @@ mod cwe532_debug_redaction {
     }
 
     // ClientRegistrationResponse::Debug must never surface the issued secret.
+    #[cfg(tp3)]
     #[test]
     fn client_registration_response_debug_redacts_secret() {
         let r = ClientRegistrationResponse {
@@ -698,6 +711,7 @@ mod cwe532_debug_redaction {
     }
 
     // OAuthClientConfig::Debug must never surface the fixed client secret.
+    #[cfg(tp3)]
     #[test]
     fn oauth_client_config_debug_redacts_client_secret() {
         let cfg = OAuthClientConfig {
@@ -719,6 +733,7 @@ mod cwe532_debug_redaction {
 
     // The None branch of the redaction: an absent refresh token prints as
     // the quoted string "None", not as a bare None.
+    #[cfg(tp3)]
     #[test]
     fn token_response_debug_shows_none_for_an_absent_refresh_token() {
         let r = TokenResponse {
@@ -736,6 +751,7 @@ mod cwe532_debug_redaction {
 
     // The None branch of the redaction: an absent issued secret prints as
     // the quoted string "None", not as a bare None.
+    #[cfg(tp3)]
     #[test]
     fn client_registration_response_debug_shows_none_for_an_absent_secret() {
         let r = ClientRegistrationResponse {
@@ -750,6 +766,7 @@ mod cwe532_debug_redaction {
 
     // The None branch of the redaction: an absent fixed secret prints as
     // the quoted string "None", unlike the bare None of the other options.
+    #[cfg(tp3)]
     #[test]
     fn oauth_client_config_debug_shows_none_for_an_absent_client_secret() {
         let cfg = OAuthClientConfig {

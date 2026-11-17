@@ -446,10 +446,12 @@ pub(crate) fn env_inputs(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "add_remove_tests.rs"]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "add_remove_layout_tests.rs"]
 mod layout_tests;

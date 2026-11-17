@@ -75,6 +75,7 @@ const HOSTILE: &[&str] = &[
     "naïve ✓",
 ];
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn hostile_values_arrive_as_exactly_the_built_elements() {
     let cap = capability("echo", "\"--to={to}\", \"--\", \"{file}\"", "", 30);
@@ -90,6 +91,7 @@ async fn hostile_values_arrive_as_exactly_the_built_elements() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn stdin_text_reaches_stdin_and_not_argv() {
     let cap = capability("echo", "--json", "      stdin: '{text}'\n", 30);
@@ -98,6 +100,7 @@ async fn stdin_text_reaches_stdin_and_not_argv() {
     assert_eq!(out["stdin"], "@/etc/passwd");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_child_sees_only_its_private_directory_and_allowed_names() {
     let cap = capability("echo", "x", "", 30);
@@ -157,6 +160,7 @@ async fn the_child_sees_only_its_private_directory_and_allowed_names() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_failed_child_maps_to_an_error_without_caller_values() {
     let canary = "CANARY-7782-secretish";
@@ -173,6 +177,7 @@ async fn a_failed_child_maps_to_an_error_without_caller_values() {
     assert!(!err.contains(canary), "caller value leaked: {err}");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn output_past_the_cap_fails_the_call() {
     let cap = capability("flood", "x", "      max_output_bytes: 65536\n", 30);
@@ -231,6 +236,7 @@ async fn grandchild_pid(pidfile: &Path) -> u32 {
     panic!("no grandchild pid in {}", pidfile.display());
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timeout_kills_the_child_and_its_grandchild() {
@@ -249,6 +255,7 @@ async fn a_timeout_kills_the_child_and_its_grandchild() {
 /// MIK-7815.FIX.2 and FIX.3: a call aborted while its child runs tears down
 /// the whole tree, the grandchild included: the process group on Unix, the
 /// Job on Windows.
+#[cfg(tp4)]
 #[tokio::test]
 async fn an_aborted_call_kills_the_child_and_its_grandchild() {
     let dir = tempfile::tempdir().unwrap();
@@ -271,6 +278,7 @@ async fn an_aborted_call_kills_the_child_and_its_grandchild() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_relative_command_is_refused() {
     for bad in ["./tool", "bin/tool", "..\\tool", ""] {
@@ -278,6 +286,7 @@ fn a_relative_command_is_refused() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn redaction_removes_secrets_at_any_length_and_caller_values_from_four_bytes() {
     let text = "token=abc caller=VALUE1 tiny=ab key=sk";
@@ -291,6 +300,7 @@ fn redaction_removes_secrets_at_any_length_and_caller_values_from_four_bytes() {
     assert!(out.contains("tiny=ab"), "short caller values stay: {out}");
 }
 
+#[cfg(tp4)]
 #[test]
 fn the_windows_bootstrap_names_are_reserved() {
     // MIK-7945 D6.PLATFORM.2: the gateway sets SYSTEMROOT and COMSPEC for a
@@ -319,6 +329,7 @@ fn the_windows_bootstrap_names_are_reserved() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_allowlisted_name_cannot_override_the_private_directories() {
     let workdir = Path::new("/private-workdir");
@@ -351,6 +362,7 @@ fn an_allowlisted_name_cannot_override_the_private_directories() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_refused_credential_is_the_typed_unauthorized_error() {
     let cap = capability("unauthorized", "x", "", 30);
@@ -363,6 +375,7 @@ async fn a_refused_credential_is_the_typed_unauthorized_error() {
     assert_eq!(err.to_rpc_code(), 401, "{err}");
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_typed_process_config_survives_serialization() {
     let cap = capability("echo", "x", "", 30);
@@ -376,6 +389,7 @@ fn a_typed_process_config_survives_serialization() {
 /// T6: a `.cmd` shim (how npm installs gws on Windows) is resolved and run
 /// through std's batch-argument escaping: a hostile value arrives intact or the
 /// call is refused, and is never expanded or split by cmd.exe.
+#[cfg(tp4)]
 #[cfg(windows)]
 #[tokio::test]
 async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
@@ -415,6 +429,7 @@ async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
 /// Test plan rows 21 and 25 (CLI): a run notes one send time, its end from
 /// the run: Answered when the child ran (whatever its status), `TimedOut` past
 /// the capability's timeout.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_cli_run_notes_its_send_time() {
     use crate::counters::End;
@@ -434,6 +449,7 @@ async fn a_cli_run_notes_its_send_time() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_cli_run_past_its_timeout_notes_timed_out() {
     use crate::counters::End;
@@ -453,6 +469,7 @@ async fn a_cli_run_past_its_timeout_notes_timed_out() {
 
 /// Test plan row 23b: a CLI call waiting for its capability's process slot
 /// starts no timer; the run it then makes notes one sample.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_cli_call_waiting_for_its_slot_is_not_timed() {
     use std::sync::Arc;
@@ -488,6 +505,7 @@ async fn a_cli_call_waiting_for_its_slot_is_not_timed() {
 
 /// Test plan row 23c (CLI): a program that cannot be started sent nothing,
 /// so the run notes no sample.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_cli_spawn_failure_notes_no_sample() {
     use crate::gateway::with_dispatch_scope;

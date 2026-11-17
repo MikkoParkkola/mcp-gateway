@@ -9,12 +9,19 @@
 
 use super::*;
 
+#[cfg(tp1)]
 mod audit;
+#[cfg(tp1)]
 mod control;
+#[cfg(tp1)]
 mod direct;
+#[cfg(tp1)]
 mod mcp_precedence;
+#[cfg(tp1)]
 mod principals;
+#[cfg(tp1)]
 mod probe;
+#[cfg(tp1)]
 mod task;
 
 /// A precedence case: label, request body, headers.

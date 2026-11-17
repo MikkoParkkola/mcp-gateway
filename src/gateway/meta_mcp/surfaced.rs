@@ -530,6 +530,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "surfaced_reload_tests.rs"]
 mod reload_tests;

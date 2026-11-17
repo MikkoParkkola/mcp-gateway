@@ -775,10 +775,12 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "search_role_filter_tests.rs"]
 mod role_filter_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "search_query_cap_tests.rs"]
 mod query_cap_tests;

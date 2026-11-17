@@ -518,26 +518,34 @@ pub(super) use costs::costs_handler;
 use direct_failure::DirectFailure;
 use direct_list::normalize_tools_list_response;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod passthrough_slot_cap_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod idempotency_settlement_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_route_scope_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_admission_edge_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_captured_backend_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_audit_subject_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_unpinned_tests;

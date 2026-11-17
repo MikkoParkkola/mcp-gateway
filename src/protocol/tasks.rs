@@ -525,14 +525,18 @@ impl TaskSnapshot {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod lifecycle_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod snapshot_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod scope_clamp_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tasks_clock_compile_red_tests;

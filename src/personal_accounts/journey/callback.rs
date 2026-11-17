@@ -208,6 +208,7 @@ impl PersonalAccountStore {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "callback_guard_tests.rs"]
 mod guard_tests;

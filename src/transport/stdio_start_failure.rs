@@ -198,6 +198,7 @@ fn joined(tail: &VecDeque<Vec<u8>>) -> String {
 }
 
 // Unix-only: the dying child is a `sh` script.
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "stdio_start_failure_tests.rs"]
 mod tests;

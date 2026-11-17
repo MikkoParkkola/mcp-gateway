@@ -123,6 +123,7 @@ impl HostBundle {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "ca_bundle_tests.rs"]
 mod tests;

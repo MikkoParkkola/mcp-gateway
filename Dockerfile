@@ -28,7 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy manifests first for dependency layer caching.
 # A dummy src/main.rs lets `cargo build` download and compile dependencies
 # without invalidating the cache when only source code changes.
+# Cargo.toml's `build` key names the test-part build script, so it comes with
+# the manifests (it reads only an environment variable, nothing else).
 COPY Cargo.toml Cargo.lock ./
+COPY scripts/dev/test-parts-build.rs ./scripts/dev/test-parts-build.rs
 COPY crates ./crates
 RUN mkdir src && echo 'fn main() {}' > src/main.rs
 RUN cargo build --release 2>/dev/null || true

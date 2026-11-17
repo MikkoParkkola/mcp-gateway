@@ -517,10 +517,12 @@ pub(super) fn spawn_rewatch_task(
 #[path = "watch_chain_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "watch_chain_filter_tests.rs"]
 mod filter_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod plain_file_tests {
     /// A regular file ends the chain on every platform (#1142: on Windows the

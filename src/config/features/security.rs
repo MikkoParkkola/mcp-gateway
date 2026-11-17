@@ -656,6 +656,7 @@ impl Default for SecurityConfig {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod context_integrity_config_tests {
     use super::ContextIntegrityConfig;

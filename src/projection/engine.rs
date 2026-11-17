@@ -159,6 +159,7 @@ fn build_body(r: &Value, s: &BodySpec, m: &mut Map<String, Value>) -> bool {
     any
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::project;

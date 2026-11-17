@@ -61,6 +61,7 @@ fn pair(fx: &Fixture, trace: &str, d: &Dl) {
     fx.delivery(trace, d);
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r1_effect_copied_from_the_delivery_record() {
     let fx = Fixture::new(None);
@@ -71,6 +72,7 @@ async fn r1_effect_copied_from_the_delivery_record() {
     assert_eq!(r["answer_findings"], json!([]));
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r2_cleaned_lists_rewritten_and_annotated_only() {
     let fx = Fixture::new(None);
@@ -87,6 +89,7 @@ async fn r2_cleaned_lists_rewritten_and_annotated_only() {
     assert_eq!(traces(&page), ["gw-b", "gw-c"]);
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r6_a_duplicate_record_reads_tamper() {
     let fx = Fixture::new(None);
@@ -101,6 +104,7 @@ async fn r6_a_duplicate_record_reads_tamper() {
     assert_eq!(page["join_incomplete"], 1);
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r7_a_single_record_is_complete_on_an_unfinished_window() {
     let fx = Fixture::new(None);
@@ -112,6 +116,7 @@ async fn r7_a_single_record_is_complete_on_an_unfinished_window() {
     assert_eq!(page["join_incomplete"], 0);
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r8_a_notification_record_is_ignored() {
     let fx = Fixture::new(None);
@@ -125,6 +130,7 @@ async fn r8_a_notification_record_is_ignored() {
     assert_eq!(row_of(&page, "gw-t1")["effect"], "delivered");
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r9_vouched_unscanned_reads_not_scanned() {
     let fx = Fixture::new(None);
@@ -136,6 +142,7 @@ async fn r9_vouched_unscanned_reads_not_scanned() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r10_an_omitted_effect_reads_unknown_never_delivered() {
     let fx = Fixture::new(None);
@@ -149,6 +156,7 @@ async fn r10_an_omitted_effect_reads_unknown_never_delivered() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r11_unvouched_refused_keeps_its_effect() {
     let fx = Fixture::new(None);
@@ -164,6 +172,7 @@ async fn r11_unvouched_refused_keeps_its_effect() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r12_answer_findings_never_fills_findings() {
     let fx = Fixture::new(None);
@@ -182,6 +191,7 @@ async fn r12_answer_findings_never_fills_findings() {
     }
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r16_a_refused_effect_matches_effect_not_blocked() {
     let fx = Fixture::new(None);
@@ -194,6 +204,7 @@ async fn r16_a_refused_effect_matches_effect_not_blocked() {
     }
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r21_truncated_findings_carry_their_total() {
     let fx = Fixture::new(None);

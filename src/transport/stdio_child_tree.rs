@@ -729,9 +729,11 @@ pub(super) const NESTED_TERM_NEED: std::time::Duration = std::time::Duration::ZE
 #[path = "stdio_child_tree_signal_log.rs"]
 pub(crate) mod signal_log;
 
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]
 mod tests;
+#[cfg(tp5)]
 #[cfg(all(test, windows))]
 #[path = "stdio_child_tree_windows_tests.rs"]
 mod windows_tests;
