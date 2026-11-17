@@ -801,8 +801,14 @@ def main(argv: list[str], root: Path | None = None) -> int:
         return 1 if left else 0
     if len(argv) == 4 and argv[1] == "expect":  # expect TARGET OUTDIR: the union job's per-part name lists
         # The refusals evaluate every CI configuration with `rustc --print cfg`, which only CI may run (pre-push
-        # blocks the compiler), so they run here, before any list is written, not in `check`.
-        findings = check(root, configs=_expect_module().ci_configs(root) or None)
+        # blocks the compiler), so they run here, before any list is written, not in `check`. With no configuration
+        # recorded they would silently not run, so a missing or empty table fails instead.
+        configs = _expect_module().ci_configs(root)
+        if not configs:
+            print(f"test_parts: {_expect_module().CI_TABLE} records no CI configuration; the refusals cannot run",
+                  file=sys.stderr)
+            return 1
+        findings = check(root, configs=configs)
         if findings:
             return _report(findings)
         print(f"test_parts: expected per part {_expect_module().write_expect(_walk_api(), root, argv[2], Path(argv[3]))}")

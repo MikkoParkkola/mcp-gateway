@@ -358,7 +358,8 @@ def ci_configs(root: Path) -> list[tuple[str, str, set[str]]]:
             continue
         target, flags = row[1], row[2] if len(row) > 2 else ""
         extra = {c for c in (row[3] if len(row) > 3 else "").split(",") if c.strip()}
-        texts.setdefault(target, print_cfg(target))
+        if target not in texts:  # one compiler call per target, not per row
+            texts[target] = print_cfg(target)
         out.append((texts[target], flags or "--features default", extra))
     return out
 

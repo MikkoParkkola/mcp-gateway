@@ -234,6 +234,25 @@ class Refusals(ExpectRows):
         finally:
             self.tool._expect_module = saved
 
+    def test_expect_fails_without_a_recorded_configuration(self):
+        """With no CI configuration to evaluate, the refusals cannot run: a missing table, an empty one and one with
+        only a `nowhere` row each fail `expect` before it writes a list, instead of passing unchecked."""
+        nowhere_only = "nowhere\ta::tests::t1\twritten for a platform CI does not have\n"
+        for label, table in (("missing", None), ("empty", ""), ("no config row", nowhere_only)):
+            with self.subTest(label), TemporaryDirectory() as tmp:
+                # One real test, so nothing but the missing configuration can fail the run.
+                files = tree(src__a_DOT_rs=part1_module("    #[test]\n    fn t1() {}\n"))
+                if table is not None:
+                    files["scripts/dev/test-parts-ci.tsv"] = table
+                else:
+                    files.pop("scripts/dev/test-parts-ci.tsv", None)
+                root = Path(tmp)
+                write_tree(root, files)
+                out = root / "expected"
+                rc = self.tool.main(["test_parts.py", "expect", "x86_64-unknown-linux-gnu", str(out)], root=root)
+                self.assertEqual(rc, 1, f"expect ran with a {label} CI table")
+                self.assertFalse(out.exists(), f"expect wrote lists with a {label} CI table")
+
     def test_a_nowhere_row_lets_only_its_own_test_pass(self):
         """X9's shrink-only allowance: the test a `nowhere` row of the CI table names is not refused; its neighbour,
         compiled nowhere too, still is."""

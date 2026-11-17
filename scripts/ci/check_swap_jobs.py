@@ -110,10 +110,12 @@ WHOLE_BUILD_ALLOWED = {
 # The packaged crate's build builds by part inside the unpacked crate, where the helper is not shipped: it counts as
 # through the helper while its script's build mode holds that shape (packaged_build_problems).
 PACKAGED_BUILD = "scripts/ci/packaged-tests.sh build"
+TRIPWIRE = "scripts/ci/memory-tripwire.sh"
 PACKAGED_SCRIPT = Path("scripts/ci/packaged-tests.sh")
 PART_CALL = re.compile(r"""MCP_GATEWAY_TEST_PART="\$k"\s+cargo\s+test\b.*\s--lib\b""")
 REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
 SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
+PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)')
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -131,7 +133,19 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no part")
     if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
         out.append("the build mode builds no non-lib test target")
+    # Every part: the loop runs 1..N with N read from the build script, so a shortened loop cannot pass.
+    if not PART_LOOP.search(block) or "scripts/dev/test-parts-build.rs" not in block:
+        out.append('the parts are not built by `for k in $(seq 1 "$n")` with n read from scripts/dev/test-parts-build.rs')
     return out
+
+
+def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | None = None) -> bool:
+    """Whether every command in `job` that builds the library tests goes through one of `marks`. Judged per command
+    line (continuations joined), so a helper call cannot vouch for a whole build beside it in the same job or step."""
+    lines = [line for step in job.get("steps", []) if isinstance(step, dict)
+             for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()]
+    builds = [line for line in lines if builds_library(line, aliases)]
+    return bool(builds) and all(any(m in line for m in marks) for line in builds)
 
 
 def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
@@ -139,13 +153,16 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
     `packaged_by_part`); every allowance names a job still in scope that still does not."""
     problems = []
     marks = (HELPER, PACKAGED_BUILD) if packaged_by_part else (HELPER,)
-    through = {key for key, job in jobs_in_scope.items()
-               if any(m in str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict)
-                      for m in marks)}
+    through = {key for key, job in jobs_in_scope.items() if builds_through(job, marks)}
     for key in sorted(set(jobs_in_scope) - through - set(WHOLE_BUILD_ALLOWED)):
         problems.append(f"{key[0]}:{key[1]} builds the library tests without {HELPER}, so the whole lib test binary")
     for key in sorted(set(WHOLE_BUILD_ALLOWED) - (set(jobs_in_scope) - through)):
         problems.append(f"{key[0]}:{key[1]} is allowed a whole build but no longer has one; delete its row")
+    # A job that builds by part ends with the swap-out tripwire, run even after a failed or timed-out step.
+    for key in sorted(through):
+        steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
+        if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()" for s in steps):
+            problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE}")
     return problems
 
 
@@ -425,13 +442,23 @@ def self_test() -> int:
         ok = bool(problems) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} memory log, {label}: problems {problems}")
-    helper_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh export 1 out"}]}
+    tripwire = {"if": "always()", "run": "scripts/ci/memory-tripwire.sh 2048 \"$RUNNER_TEMP/memory-trend.txt\""}
+    helper_build = {"run": "scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh export 1 out"}
+    helper_job = {"steps": [helper_build, tripwire]}
     whole_job = {"steps": [{"run": "cargo test --all-features --lib --no-run"}]}
-    packaged_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build"}]}
+    packaged_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build"}, tripwire]}
     allowed = {key: {"steps": []} for key in WHOLE_BUILD_ALLOWED}
     census_cases = [
         ("a new job building the whole binary", {**allowed, ("ci.yml", "new"): whole_job}, True, True),
         ("a new job building through the helper", {**allowed, ("ci.yml", "new"): helper_job}, False, True),
+        ("a helper job without the tripwire", {**allowed, ("ci.yml", "new"): {"steps": [helper_build]}}, True, True),
+        ("a helper job whose tripwire skips after a failure",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {**tripwire, "if": "success()"}]}}, True, True),
+        ("a helper job with a whole build in another step",
+         {**allowed, ("ci.yml", "new"): {"steps": helper_job["steps"] + whole_job["steps"]}}, True, True),
+        ("a helper job with a whole build on another line of the same step",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_job["steps"][0]["run"] + "\n"
+                                                          + whole_job["steps"][0]["run"]}]}}, True, True),
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
@@ -449,7 +476,9 @@ def self_test() -> int:
         print(f"{'ok   ' if ok else 'WRONG'} census, {label}: problems {found}")
     part = 'MCP_GATEWAY_TEST_PART="$k" cargo test --all-features --locked --lib --no-run'
     rest = "cargo test --all-features --locked --no-run --test '*' --bins --examples"
-    shape = 'elif [ "$mode" = build ]; then\n  for k in 1 2; do\n    {}\n  done\n  {}\nelse\n  cargo test --all-features\nfi\n'
+    n_line = '  n="$(sed -nE "s/x/y/p" scripts/dev/test-parts-build.rs)"\n'
+    shape = ('elif [ "$mode" = build ]; then\n' + n_line + '  for k in $(seq 1 "$n"); do\n    {}\n  done\n  {}\nelse\n'
+             '  cargo test --all-features\nfi\n')
     packaged_cases = [
         ("by part, then the other targets", shape.format(part, rest), False),
         ("today's whole build", 'elif [ "$mode" = build ]; then\n  cargo test --all-features --locked --no-run\nelse\nfi\n', True),
@@ -461,7 +490,9 @@ def self_test() -> int:
          shape.format(part, rest + "\n  cargo test --all-features --locked --no-run"), True),
         ("a second other-targets call that also selects the lib",
          shape.format(part, rest + "\n  " + rest.replace("--bins", "--lib --bins")), True),
-        ("the other targets only, no part", f'elif [ "$mode" = build ]; then\n  {rest}\nelse\nfi\n', True),
+        ("the other targets only, no part", shape.format("true", rest), True),
+        ("a fixed list of parts, not 1..N", shape.format(part, rest).replace('$(seq 1 "$n")', "1 2"), True),
+        ("N not read from the build script", shape.format(part, rest).replace(n_line, "  n=2\n"), True),
     ]
     for label, text, want_bad in packaged_cases:
         found = packaged_build_problems(text)

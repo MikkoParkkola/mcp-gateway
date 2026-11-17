@@ -58,6 +58,29 @@ def check(shards: dict[str, list[str]], docs: list[str]) -> list[str]:
     return errors
 
 
+def table_problems(shards: dict[str, list[str]], table: str) -> list[str]:
+    """The lib test split's CI table (scripts/dev/test-parts-ci.tsv, read by `test_parts.py expect` to decide which
+    tests compile nowhere) records exactly the feature sets the workflows pass: on x86_64-unknown-linux-gnu,
+    `--all-features` and every combination here without a target; on each `--target`, that target's combinations.
+    Rows with a custom cfg (coverage, kani, ...) are other jobs' builds and stay out of the comparison."""
+    linux = "x86_64-unknown-linux-gnu"
+    want: dict[str, set[str]] = {linux: {"--all-features"}}
+    for combos in shards.values():
+        for combo in combos:
+            m = re.search(r"\s--target\s+(\S+)", combo)
+            want.setdefault(m.group(1) if m else linux, set()).add(re.sub(r"\s*--target\s+\S+", "", combo).strip())
+    got: dict[str, set[str]] = {t: set() for t in want}
+    for line in table.splitlines():
+        cols = line.split("\t")
+        if line.startswith("#") or cols[0] != "config" or len(cols) < 3 or cols[1] not in got:
+            continue
+        if len(cols) > 3 and cols[3].strip():
+            continue
+        got[cols[1]].add(cols[2])
+    return [f"test-parts-ci.tsv, {t}: rows missing {sorted(want[t] - got[t])}, rows no workflow passes "
+            f"{sorted(got[t] - want[t])}" for t in sorted(want) if got[t] != want[t]]
+
+
 def self_test() -> list[str]:
     docs = ["--a", "--b", "--c"]
     cases = {
@@ -71,6 +94,21 @@ def self_test() -> list[str]:
     for name, (shards, want) in cases.items():
         if bool(check(shards, docs)) != bool(want):
             out.append(f"self-test case {name!r} misclassified")
+    shards = {"x": ["--features default", "--no-default-features"], "w": ["--all-features --target t-gnu"]}
+    rows = ("config\tx86_64-unknown-linux-gnu\t--all-features\t\n"
+            "config\tx86_64-unknown-linux-gnu\t--features default\t\n"
+            "config\tx86_64-unknown-linux-gnu\t--no-default-features\t\n"
+            "config\tt-gnu\t--all-features\t\n")
+    table_cases = {
+        "table matches": (rows, 0),
+        "a custom-cfg row is another job's": (rows + "config\tx86_64-unknown-linux-gnu\t--all-features\tcoverage\n", 0),
+        "a combination missing from the table": (rows.replace("--no-default-features\t\n", "--features x\t\n"), 1),
+        "a row no workflow passes": (rows + "config\tx86_64-unknown-linux-gnu\t--features y\t\n", 1),
+        "the target's row missing": (rows.replace("config\tt-gnu\t--all-features\t\n", ""), 1),
+    }
+    for name, (table, want) in table_cases.items():
+        if bool(table_problems(shards, table)) != bool(want):
+            out.append(f"self-test case {name!r} misclassified")
     return out
 
 
@@ -80,6 +118,7 @@ def main() -> int:
     docs = documented((ROOT / "docs/release/v4.0.0-supported-matrix.md").read_text(encoding="utf-8"))
     shards = shard_combos(workflow)
     errors += check(shards, docs)
+    errors += table_problems(shards, (ROOT / "scripts/dev/test-parts-ci.tsv").read_text(encoding="utf-8"))
     for e in errors:
         print(f"feature-shards: {e}", file=sys.stderr)
     if not errors:

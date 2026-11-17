@@ -1,6 +1,7 @@
 # The lib test split's view of CI (scripts/dev/test_parts_expect.py reads it). Tab-separated.
 # config <target triple> <cargo feature flags> <custom cfgs the job sets, comma-separated>: one CI build of the lib test
-#   code. X9 refuses a test that compiles in none of them. A row holds this list equal to what the workflows pass.
+#   code. X9 refuses a test that compiles in none of them. scripts/ci/test_feature_shards.py holds the feature sets
+#   equal to what the workflows pass (--all-features and every feature-combos entry, per target).
 # nowhere <test path> <reason>: a test written for platforms CI does not have; X9 lets it pass. Shrink-only.
 config	x86_64-unknown-linux-gnu	--all-features
 config	x86_64-unknown-linux-gnu	--features default
