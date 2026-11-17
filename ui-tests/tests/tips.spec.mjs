@@ -5,7 +5,7 @@
 // modules pass, and each planted fault fails. No browser needed.
 import { readFileSync, readdirSync } from 'node:fs';
 import { test, expect } from './base.mjs';
-import { SHELL_DIR, readCopy, readScreens, readShell, scanScreens, shapeProblems, pairingProblems } from './copy-check.mjs';
+import { SHELL_DIR, readCopy, readScreens, readShell, scanScreens, shapeProblems, pairingProblems, rowFormProblems } from './copy-check.mjs';
 
 test('C8 the real copy has the agreed shape', () => {
   expect(shapeProblems(readCopy())).toEqual([]);
@@ -148,4 +148,44 @@ test.describe('C8 planted faults', () => {
     test(`${label} fails`, () => { expect(one(entry)).toContain(problem); });
   }
   test('a rows entry passes', () => { expect(one({ title: 'T', rows: [['What', 'x'], ['Window', 'y']] })).toEqual([]); });
+});
+
+test.describe('C10 every tip in row form, or listed as still free text', () => {
+  test('C10 the real copy: every tip in rows or listed, and the list is exactly the free-text tips', () => {
+    const copy = readCopy();
+    expect(rowFormProblems(copy)).toEqual([]);
+    const free = Object.entries(copy).filter(([id, e]) => !id.startsWith('_') && 'text' in e).map(([id]) => id).sort();
+    expect([...(copy._pending_rows ?? [])].sort()).toEqual(free);
+  });
+
+  const ROWS = { title: 'Calls today', rows: [['What', 'Tool calls.'], ['Why', 'Shows the load.']] };
+  const FREE = { title: 'Paused', text: 'Stopped.' };
+  const base = () => ({ _pending_rows: ['a.status.free'], 'a.status.rows': ROWS, 'a.status.free': FREE });
+
+  test('C10 a row tip and a listed free-text tip pass', () => {
+    expect(rowFormProblems(base())).toEqual([]);
+  });
+  test('C10a a free-text tip not on the list fails', () => {
+    expect(rowFormProblems({ ...base(), 'a.status.new': FREE }))
+      .toEqual(['a.status.new: free text; rewrite it into rows or list it in _pending_rows']);
+  });
+  test('C10b a listed tip already in rows fails', () => {
+    expect(rowFormProblems({ ...base(), _pending_rows: ['a.status.free', 'a.status.rows'] }))
+      .toEqual(['a.status.rows: listed in _pending_rows but already in rows']);
+  });
+  test('C10c a listed id with no copy fails', () => {
+    expect(rowFormProblems({ ...base(), _pending_rows: ['a.status.free', 'a.status.gone'] }))
+      .toEqual(['a.status.gone: listed in _pending_rows with no copy']);
+  });
+  test('C10d the list is bookkeeping: shape and pairing do not read it as a copy entry', () => {
+    const copy = { _pending: { a: ['a.status.rows', 'a.status.free'] }, ...base() };
+    expect(shapeProblems(copy)).toEqual([]);
+    expect(pairingProblems(copy, { drawn: new Set(), nonLiteral: 0, tabs: {} })).toEqual([]);
+  });
+  test('C10e a list that is not an array of ids fails its shape', () => {
+    expect(shapeProblems({ ...base(), _pending_rows: { 'a.status.free': true } }))
+      .toContain('_pending_rows: not an array of ids');
+    expect(shapeProblems({ ...base(), _pending_rows: ['a.status.free', 3] }))
+      .toContain('_pending_rows: not an array of ids');
+  });
 });

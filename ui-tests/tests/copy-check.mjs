@@ -168,3 +168,10 @@ export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
   for (const id of pending) if (!(id in copy)) out.push(`${id}: pending with no copy`);
   return out;
 }
+
+/**
+ * C10 (red-first stub): every entry is in frame-36 row form unless `_pending_rows` lists it as still free text.
+ */
+export function rowFormProblems(_copy) {
+  return [];
+}
