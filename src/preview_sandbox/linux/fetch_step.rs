@@ -157,14 +157,12 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
         }
     };
     // One deadline for the whole fetch: both npm steps and the lock check.
-    let fetched = match fetch_deadline(issued.deadline_ms) {
-        Some(deadline) => install(npm, &issued.credential, relay.port(), deadline, limits),
-        None => {
-            // A channel failure: no step to report; the gateway refuses at EOF.
-            let _ = relay.stop(RELAY_BOUND);
-            return Err("the gateway's fetch deadline is out of range".into());
-        }
+    let Some(deadline) = fetch_deadline(issued.deadline_ms) else {
+        // A channel failure: no step to report; the gateway refuses at EOF.
+        let _ = relay.stop(RELAY_BOUND);
+        return Err("the gateway's fetch deadline is out of range".into());
     };
+    let fetched = install(npm, &issued.credential, relay.port(), deadline, limits);
     teardown(control, relay, fetched)?;
     npm_run(
         Path::new(plan::HOME),
