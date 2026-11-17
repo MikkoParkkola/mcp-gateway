@@ -51,7 +51,7 @@ pub struct ApiArgs {
     #[arg(long)]
     pub data: Option<String>,
     /// Require the gateway resource to match this `ETag`.
-    #[arg(long, value_name = "VALUE")]
+    #[arg(hide = true, long, value_name = "VALUE")]
     pub if_match: Option<String>,
     /// Gateway base URL (default as for `dashboard-link`).
     #[arg(short, long)]

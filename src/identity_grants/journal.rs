@@ -320,7 +320,7 @@ pub(crate) async fn apply_change_with(
 
     let entry = JournalEntry {
         v: JOURNAL_VERSION,
-        entry_id: uuid::Uuid::new_v4().to_string(),
+        entry_id: crate::ids::new_v4().to_string(),
         verb,
         prev_digest: before.get(&grant_id).cloned(),
         grant_id,

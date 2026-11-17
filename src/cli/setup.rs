@@ -50,14 +50,8 @@ pub enum SetupCommand {
     /// # Export to all detected clients (auto-detect mode)
     /// mcp-gateway setup export --target all
     ///
-    /// # Export only for Claude Code in stdio mode
-    /// mcp-gateway setup export --target claude-code --mode stdio
-    ///
-    /// # Export in proxy mode with custom entry name
-    /// mcp-gateway setup export --target all --mode proxy --name my-gateway
-    ///
-    /// # Watch for config changes and auto-regenerate all client configs
-    /// mcp-gateway setup export --target all --watch
+    /// # Export only for Claude Code
+    /// mcp-gateway setup export --target claude-code
     ///
     /// # Dry-run: show what would be written without writing
     /// mcp-gateway setup export --target all --dry-run
@@ -70,15 +64,15 @@ pub enum SetupCommand {
         target: ExportTarget,
 
         /// Connection mode: proxy (HTTP URL), stdio (subprocess), or auto-detect
-        #[arg(short, long, default_value = "auto", value_enum)]
+        #[arg(hide = true, short, long, default_value = "auto", value_enum)]
         mode: ConnectionMode,
 
         /// Name for the gateway entry in client configs
-        #[arg(short, long, default_value = "gateway")]
+        #[arg(hide = true, short, long, default_value = "gateway")]
         name: String,
 
         /// Watch gateway.yaml for changes and auto-regenerate all client configs
-        #[arg(short, long)]
+        #[arg(hide = true, short, long)]
         watch: bool,
 
         /// Show what would be written without actually writing anything

@@ -89,7 +89,7 @@ async fn enforce_mode_with_a_key_starts_and_enforces() {
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
-                task_uuid: uuid::Uuid::new_v4(),
+                task_uuid: crate::ids::new_v4(),
                 capabilities: vec!["t".to_string()],
             },
             chrono::Utc::now(),

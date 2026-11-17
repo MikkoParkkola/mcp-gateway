@@ -24,6 +24,7 @@ impl StdioNonce {
     fn generate() -> Self {
         use ring::rand::SecureRandom as _;
         let mut bytes = [0u8; 32];
+        #[allow(clippy::disallowed_methods, reason = "nonce: the stdio session nonce")]
         ring::rand::SystemRandom::new()
             .fill(&mut bytes)
             .expect("the OS RNG must yield 32 bytes");

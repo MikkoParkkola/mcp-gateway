@@ -55,6 +55,11 @@ mod replica_state_tests;
 pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
+// Unix only: the rows deny access through the mode bits.
+#[cfg(test)]
+mod capability_publish_tests;
+#[cfg(all(test, unix))]
+mod capability_snapshot_tests;
 mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -177,6 +182,19 @@ pub(crate) type StdioTelemetry =
 /// spawned this process, so it holds whatever the operator holds.
 const STDIO: CallerStanding = CallerStanding::Admin;
 
+/// Hand the published config to the capability catalogue. The catalogue scan
+/// starts before this handle exists: attaching delivers a part that scan
+/// parked, and a scan still loading publishes into this handle. Called once
+/// per backend, before the HTTP listener binds.
+fn attach_capability_revision(
+    meta_mcp: &super::meta_mcp::MetaMcp,
+    live_config: &Arc<crate::config_reload::LiveConfig>,
+) {
+    if let Some(capabilities) = meta_mcp.get_capabilities() {
+        capabilities.attach_revision(Arc::clone(live_config));
+    }
+}
+
 fn expand_home_path(path: &str) -> PathBuf {
     crate::home_dir::expand_or_cwd(path)
 }
@@ -212,6 +230,10 @@ pub struct Gateway {
     /// account shutdown releases the store and its two file locks while this
     /// handle stays here to refuse everything that arrives afterwards.
     custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
+    /// The boot's retirement plan cell, from `cli::run`: the HTTP stop stores
+    /// its plan here once it fixes its budget. `None` for a gateway built in
+    /// memory, whose stop then leaves the process exit to its caller.
+    retire: Option<crate::retire::RetireCell>,
     /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
     test_seams: test_seams::TestSeams,

@@ -14,8 +14,10 @@ A reason may say a function is on the per-call path but untimed (the
 harness never exercises its condition); it
 may not present that as the function costing nothing. Every row the table
 names must be a stage in the harness's `STAGES` table, which the gate then
-requires to print. A new layer on the path therefore adds a table entry or
-fails here.
+requires to print. The reverse holds too: every `STAGES` row must be named
+by some entry (a size variant through its base row, `VARIANTS`), because a
+timed row nothing names times a path the table says no function is on. A
+new layer on the path therefore adds a table entry or fails here.
 
 The checked set is derived, not a fixed file list (F1: the stdio path moved
 out of server/mod.rs into stdio_*.rs child modules and escaped a fixed
@@ -42,6 +44,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TABLE = ROOT / "docs/internal/perf/per_call_stages.tsv"
 TABLE_STDIO = ROOT / "docs/internal/perf/per_call_stages_stdio.tsv"
 HARNESS = ROOT / "src/gateway/server/tests/per_call_timing.rs"
+# STAGES rows that time their base row's functions with a larger argument:
+# no function is theirs alone, so no entry names them.
+VARIANTS = {"http_invoke_64k": "http_invoke_tiny"}
 # A `#[cfg(..)]` line above a module; the shared reader decides whether the
 # predicate compiles only under test (MIK-9387.TCFG.2).
 CFG_MOD = re.compile(
@@ -170,8 +175,12 @@ def table(path=None):
     return rows
 
 
-def check(root=ROOT, table_path=TABLE, harness_path=HARNESS):
-    """Every way the inventory disagrees with the tree, as error strings."""
+def check(root=ROOT, table_path=TABLE, harness_path=HARNESS, variants=None):
+    """Every way the inventory disagrees with the tree, as error strings.
+    `variants` maps a size-variant STAGES row to its base row; None means
+    VARIANTS for the real harness and none for a caller's own harness."""
+    if variants is None:
+        variants = VARIANTS if pathlib.Path(harness_path).resolve() == HARNESS.resolve() else {}
     known = stages(harness_path)
     rows = table(table_path)
     errors = []
@@ -180,6 +189,16 @@ def check(root=ROOT, table_path=TABLE, harness_path=HARNESS):
             errors.append(f"{file} {fn}: row '{row}' is not in STAGES {sorted(known)}")
         if row == "-" and not reason.strip():
             errors.append(f"{file} {fn}: off the per-call path needs a reason")
+    # The reverse: a timed row no entry names times a path the inventory
+    # says no function is on, so an entry marked off-path can hide there.
+    # A size variant runs its base row's functions with a larger argument,
+    # so it is accounted for when its base row is named.
+    named = {row for row, _ in rows.values()}
+    named |= {variant for variant, base in variants.items() if base in named}
+    for stage in sorted(known - named):
+        errors.append(f"STAGES row '{stage}': no inventory entry names it, so nothing it times is accounted for")
+    for variant in sorted(set(variants) - known):
+        errors.append(f"VARIANTS row '{variant}' is not in STAGES (stale variant)")
     present = {}
     for file in path_files(root):
         source = (root / file).read_text()

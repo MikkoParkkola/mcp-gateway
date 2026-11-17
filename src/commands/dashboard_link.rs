@@ -6,9 +6,9 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
-use crate::cli::stdout::println;
+use crate::cli::stdout::print;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
@@ -158,302 +158,18 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
     }
 }
 
-/// Ask the gateway at `base` for a fresh link.
-///
-/// # Errors
-///
-/// A message carrying the gateway's status or the transport failure.
-pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
-    let body = admin_call(
-        reqwest::Method::POST,
-        base,
-        "/ui/api/dashboard-link",
-        token,
-        tls,
-    )
-    .await?;
-    body["link"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "the gateway's answer carried no link".to_string())
-}
+#[path = "dashboard_link_admin.rs"]
+mod admin;
 
-/// One admin request to the gateway at `base`; the JSON answer of a success.
-///
-/// # Errors
-///
-/// A message carrying the gateway's status and reason, or the transport
-/// failure.
-pub(crate) async fn admin_call(
-    method: reqwest::Method,
-    base: &str,
-    path: &str,
-    token: &str,
-    tls: &LinkTls,
-) -> Result<serde_json::Value, String> {
-    let endpoint = format!("{}{path}", base.trim_end_matches('/'));
-    let response = send_admin_request(
-        method,
-        &endpoint,
-        token,
-        tls,
-        None,
-        None,
-        &AdminClientOptions::default(),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let response = read_admin_response(response, &endpoint, tls)
-        .await
-        .map_err(|error| match error.kind {
-            AdminFailureKind::ResponseTooLarge => "the gateway answer exceeded 16 MiB".to_string(),
-            _ => error.to_string(),
-        })?;
-    let status = response.status;
-    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-    if !status.is_success() {
-        let reason = gateway_reason(&body).unwrap_or("no reason given");
-        // A gateway that echoes the bearer in its message must not put it on
-        // the terminal: the same shared redactor as `api`.
-        let reason = mcp_gateway::cli::redact::text(reason, &[token.to_string()]);
-        return Err(format!("the gateway answered {status}: {reason}"));
-    }
-    if body.is_null() {
-        return Err(format!("the gateway answered {status} with no JSON body"));
-    }
-    Ok(body)
-}
+pub(crate) use admin::{
+    AdminCallError, AdminFailureKind, AdminResponse, admin_call, admin_call_url, fetch_link,
+    gateway_reason, redact_body,
+};
+#[cfg(test)]
+pub(crate) use admin::{AdminClientOptions, admin_call_url_with_options};
 
-/// The server's reason across its structured, JSON-RPC and flat error shapes.
-pub(crate) fn gateway_reason(body: &serde_json::Value) -> Option<&str> {
-    body["message"]
-        .as_str()
-        .or_else(|| body["error"]["message"].as_str())
-        .or_else(|| body["error"].as_str())
-        .or_else(|| body["reason"].as_str())
-}
-
-/// Classifications retained before transport errors become diagnostic strings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AdminFailureKind {
-    Target,
-    LocalIo,
-    Settings,
-    Dns,
-    Connect,
-    Tls,
-    ResponseLost,
-    ResponseTooLarge,
-}
-
-/// A transport failure and any response metadata received before it failed.
-#[derive(Debug)]
-pub(crate) struct AdminCallError {
-    pub(crate) kind: AdminFailureKind,
-    pub(crate) detail: String,
-    pub(crate) status: Option<reqwest::StatusCode>,
-    pub(crate) request_id: Option<String>,
-}
-
-impl AdminCallError {
-    fn new(kind: AdminFailureKind, detail: String) -> Self {
-        Self {
-            kind,
-            detail,
-            status: None,
-            request_id: None,
-        }
-    }
-}
-
-impl std::fmt::Display for AdminCallError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-/// The status and unmodified body, including an unsuccessful HTTP answer.
-pub(crate) struct AdminResponse {
-    pub(crate) status: reqwest::StatusCode,
-    pub(crate) headers: reqwest::header::HeaderMap,
-    pub(crate) body: Vec<u8>,
-}
-
-pub(crate) struct AdminClientOptions {
-    pub(crate) connect_timeout: std::time::Duration,
-}
-
-impl Default for AdminClientOptions {
-    fn default() -> Self {
-        Self {
-            connect_timeout: std::time::Duration::from_secs(10),
-        }
-    }
-}
-
-/// Send the exact URL the caller validated, optionally carrying a JSON body.
-///
-/// # Errors
-///
-/// A refused target, TLS setup failure, or failure to send or read the answer.
-pub(crate) async fn admin_call_url(
-    method: reqwest::Method,
-    endpoint: reqwest::Url,
-    token: &str,
-    tls: &LinkTls,
-    body: Option<&serde_json::Value>,
-    if_match: Option<&reqwest::header::HeaderValue>,
-) -> Result<AdminResponse, AdminCallError> {
-    admin_call_url_with_options(
-        method,
-        endpoint,
-        token,
-        tls,
-        body,
-        if_match,
-        &AdminClientOptions::default(),
-    )
-    .await
-}
-
-pub(crate) async fn admin_call_url_with_options(
-    method: reqwest::Method,
-    endpoint: reqwest::Url,
-    token: &str,
-    tls: &LinkTls,
-    body: Option<&serde_json::Value>,
-    if_match: Option<&reqwest::header::HeaderValue>,
-    options: &AdminClientOptions,
-) -> Result<AdminResponse, AdminCallError> {
-    let response = send_admin_request(
-        method,
-        endpoint.as_str(),
-        token,
-        tls,
-        body,
-        if_match,
-        options,
-    )
-    .await?;
-    read_admin_response(response, endpoint.as_str(), tls).await
-}
-
-async fn read_admin_response(
-    mut response: reqwest::Response,
-    endpoint: &str,
-    tls: &LinkTls,
-) -> Result<AdminResponse, AdminCallError> {
-    let status = response.status();
-    let headers = response.headers().clone();
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|error| AdminCallError {
-        kind: AdminFailureKind::ResponseLost,
-        detail: transport_error(endpoint, error, tls),
-        status: Some(status),
-        request_id: headers
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok())
-            .map(ToString::to_string),
-    })? {
-        if chunk.len() > 16 * 1024 * 1024 - body.len() {
-            return Err(AdminCallError {
-                kind: AdminFailureKind::ResponseTooLarge,
-                detail: "Gateway response exceeded 16 MiB.".to_string(),
-                status: Some(status),
-                request_id: headers
-                    .get("x-request-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(ToString::to_string),
-            });
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(AdminResponse {
-        status,
-        headers,
-        body,
-    })
-}
-
-/// Share target checks and TLS policy across admin callers.
-async fn send_admin_request(
-    method: reqwest::Method,
-    endpoint: &str,
-    token: &str,
-    tls: &LinkTls,
-    body: Option<&serde_json::Value>,
-    if_match: Option<&reqwest::header::HeaderValue>,
-    options: &AdminClientOptions,
-) -> Result<reqwest::Response, AdminCallError> {
-    check_target(endpoint)
-        .map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
-    // Direct, never through an environment proxy: an HTTP_PROXY would carry the
-    // credential off this machine even to a loopback URL. No redirects either:
-    // `check_target` vetted only this URL, and a same-host, same-port hop
-    // (https to http) would keep the bearer.
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(options.connect_timeout)
-        .no_proxy()
-        .retry(reqwest::retry::never())
-        .redirect(reqwest::redirect::Policy::none());
-    // A named CA is the only root (#1832); the test roots join only the
-    // default roots, so a named CA replaces them too.
-    builder = match &tls.ca {
-        Some(ca) => builder.tls_certs_only(read_roots(ca)?),
-        None => crate::debug_trust_roots::extra_roots(builder),
-    };
-    if let Some((cert, key)) = &tls.identity {
-        builder = builder.identity(read_identity(cert, key)?);
-    }
-    let client = builder.build().map_err(|error| {
-        AdminCallError::new(
-            AdminFailureKind::Settings,
-            format!("could not build the HTTP client: {error}"),
-        )
-    })?;
-    let mut request = client
-        .request(method, endpoint)
-        .timeout(std::time::Duration::from_secs(30))
-        .bearer_auth(token);
-    if let Some(body) = body {
-        request = request.json(body);
-    }
-    if let Some(value) = if_match {
-        request = request.header(reqwest::header::IF_MATCH, value);
-    }
-    request.send().await.map_err(|error| {
-        AdminCallError::new(
-            send_failure_kind(&error),
-            transport_error(endpoint, error, tls),
-        )
-    })
-}
-
-/// Connect errors precede HTTP dispatch; other send failures may follow it.
-fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
-    if error.is_builder() {
-        return AdminFailureKind::Settings;
-    }
-    if error.is_dns() {
-        return AdminFailureKind::Dns;
-    }
-    if !error.is_connect() {
-        return AdminFailureKind::ResponseLost;
-    }
-    let mut cause = std::error::Error::source(error);
-    while let Some(inner) = cause {
-        let tls_error = inner.is::<rustls::Error>()
-            || inner
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rustls::Error>);
-        if tls_error {
-            return AdminFailureKind::Tls;
-        }
-        cause = inner.source();
-    }
-    AdminFailureKind::Connect
-}
+/// Printed instead of an answer the redactor cannot make safe.
+const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
 ///
@@ -506,12 +222,27 @@ pub async fn run_dashboard_link_args(
     port_override: Option<u16>,
     host_override: Option<&str>,
 ) -> ExitCode {
-    match dashboard_link_base(args.url, args.tls, load, port_override, host_override) {
-        Ok((base, tls)) => run_dashboard_link_command(&base, &tls).await,
-        Err(message) => {
-            eprintln!("dashboard-link: {message}");
-            ExitCode::FAILURE
-        }
+    let token = read_token(|name| std::env::var(name).ok());
+    emit(&dashboard_link_args_output(args, load, port_override, host_override, token).await)
+}
+
+/// What `dashboard-link` prints for `token`. A resolution error comes before a
+/// token error, as before; with a token set it passes the output gate too,
+/// because a config error can quote the config, which can hold the token.
+async fn dashboard_link_args_output(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> Printed {
+    const PREFIX: &str = "dashboard-link";
+    let base = dashboard_link_base(args.url, args.tls, load, port_override, host_override);
+    match (base, token) {
+        (Ok((base, tls)), Ok(token)) => dashboard_link_output(&base, &tls, &token).await,
+        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
+        (Err(message), Err(_)) => unmasked(PREFIX, &message),
+        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
     }
 }
 
@@ -524,141 +255,134 @@ pub async fn run_events_command(
     host_override: Option<&str>,
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
-    match dashboard_link_base(
+    let token = read_token(|name| std::env::var(name).ok());
+    emit(&events_args_output(&args, load, port_override, host_override, token).await)
+}
+
+/// What `events dead-letters` prints for `token`, resolving like
+/// [`dashboard_link_args_output`].
+async fn events_args_output(
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> Printed {
+    const PREFIX: &str = "events dead-letters";
+    let base = dashboard_link_base(
         args.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
-    ) {
-        Ok((base, tls)) => run_dead_letters_command(&base, &tls, &args).await,
-        Err(message) => {
-            eprintln!("events dead-letters: {message}");
-            ExitCode::FAILURE
-        }
+    );
+    match (base, token) {
+        (Ok((base, tls)), Ok(token)) => dead_letters_output(&base, &tls, args, &token).await,
+        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
+        (Err(message), Err(_)) => unmasked(PREFIX, &message),
+        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
     }
 }
 
-/// Run `events dead-letters` against the gateway at `base`.
-async fn run_dead_letters_command(
+/// A failure printed when no token is set, so there is nothing to mask.
+fn unmasked(prefix: &str, message: &str) -> Printed {
+    Printed {
+        stdout: String::new(),
+        stderr: format!("{prefix}: {message}\n"),
+        ok: false,
+    }
+}
+
+/// What `events dead-letters` prints, through the output gate.
+async fn dead_letters_output(
     base: &str,
     tls: &LinkTls,
     args: &mcp_gateway::cli::events::DeadLettersArgs,
-) -> ExitCode {
-    let result = match (
-        read_token(|name| std::env::var(name).ok()).map_err(|error| error.to_string()),
-        dead_letters_request(args),
-    ) {
-        (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
-        (Err(message), _) | (_, Err(message)) => Err(message),
+    token: &str,
+) -> Printed {
+    let result = match dead_letters_request(args) {
+        Ok((method, path)) => admin_call(method, base, &path, token, tls).await,
+        Err(message) => Err(message),
     };
-    match result {
-        Ok(body) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
-            ExitCode::SUCCESS
+    let result = result.map(|body| {
+        let json = serde_json::to_string_pretty(&body).unwrap_or_default();
+        (format!("{json}\n"), "")
+    });
+    gate("events dead-letters", token, result)
+}
+
+/// What one `dashboard-link` or `events` run prints once the token is read,
+/// and whether it succeeded.
+#[derive(Debug)]
+struct Printed {
+    stdout: String,
+    stderr: String,
+    ok: bool,
+}
+
+/// The one output gate once the token is read. Stdout still holding the token
+/// (JSON syntax, which the JSON redactor cannot mask) is refused, and the
+/// whole stderr text passes the shared redactor as the last step, so no
+/// prefix, status, note or transport detail is printed unredacted.
+fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Printed {
+    let result = result.and_then(|(stdout, note)| {
+        if stdout.contains(token) {
+            Err(UNSAFE_ANSWER.to_string())
+        } else {
+            Ok((stdout, note))
         }
-        Err(message) => {
-            eprintln!("events dead-letters: {message}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn read_file(path: &Path) -> Result<Vec<u8>, AdminCallError> {
-    std::fs::read(path).map_err(|error| {
-        AdminCallError::new(
-            AdminFailureKind::LocalIo,
-            format!("could not read {}: {error}", path.display()),
-        )
-    })
-}
-
-/// The CA bundle at `path`, which must hold at least one certificate.
-fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, AdminCallError> {
-    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?).map_err(|error| {
-        AdminCallError::new(
-            AdminFailureKind::Settings,
-            format!("{}: not a PEM certificate bundle ({error})", path.display()),
-        )
-    })?;
-    if roots.is_empty() {
-        return Err(AdminCallError::new(
-            AdminFailureKind::Settings,
-            format!("{}: holds no PEM certificate", path.display()),
-        ));
-    }
-    Ok(roots)
-}
-
-/// The client identity from a PEM certificate file and a PEM key file.
-fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, AdminCallError> {
-    let mut pem = read_file(cert)?;
-    // Two files that each lack a final newline still concatenate to PEM.
-    pem.push(b'\n');
-    pem.extend(read_file(key)?);
-    reqwest::Identity::from_pem(&pem).map_err(|error| {
-        AdminCallError::new(
-            AdminFailureKind::Settings,
-            format!(
-                "{} with {}: not a PEM certificate and private key ({error})",
-                cert.display(),
-                key.display()
-            ),
-        )
-    })
-}
-
-/// A transport failure with its causes, and on `https` the TLS material the
-/// operator did not give.
-fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
-    use std::fmt::Write as _;
-    // Neither `--url` nor the error's own request URL may carry userinfo or a
-    // query token to the terminal.
-    let shown = mcp_gateway::security::sanitize::redact_url_for_diagnostics(base);
-    let error = error.without_url();
-    let mut message = format!("could not reach the gateway at {shown}: {error}");
-    let mut cause = std::error::Error::source(&error);
-    while let Some(inner) = cause {
-        let _ = write!(message, ": {inner}");
-        cause = inner.source();
-    }
-    if base
-        .get(..8)
-        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
-    {
-        if tls.identity.is_none() {
-            message.push_str(
-                "; if the listener requires a client certificate \
-                 (mtls.require_client_cert), pass --client-cert and --client-key",
-            );
-        }
-        if tls.ca.is_none() {
-            message.push_str("; if its certificate comes from a private CA, pass --ca-cert");
-        }
-    }
-    message
-}
-
-/// Run the command against the gateway at `base`.
-pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
-    let result = match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => fetch_link(base, &token, tls).await,
-        Err(error) => Err(error.to_string()),
+    });
+    let (stdout, line, ok) = match result {
+        Ok((stdout, note)) => (stdout, note.to_string(), true),
+        Err(message) => (String::new(), format!("{prefix}: {message}"), false),
     };
-    match result {
-        Ok(link) => {
-            println!("{link}");
-            eprintln!("Opens once, from this machine only.");
-            ExitCode::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("dashboard-link: {message}");
-            ExitCode::FAILURE
-        }
+    // Checked as printed, newline included: a token ending in a newline
+    // would otherwise form only after the check.
+    let stderr = if line.is_empty() {
+        line
+    } else {
+        token_free(&format!("{line}\n"), token)
+    };
+    Printed { stdout, stderr, ok }
+}
+
+/// `text` through the shared redactor, which keeps the first marker whose
+/// output holds no token and fails closed to empty output when none does.
+/// If the token is still there whatever the redactor did, one fixed sentence
+/// instead, or nothing if even that holds the token (the api command's rule).
+fn token_free(text: &str, token: &str) -> String {
+    let newline = if text.ends_with('\n') { "\n" } else { "" };
+    let text = mcp_gateway::cli::redact::text(text, &[token.to_string()]);
+    if !text.contains(token) {
+        return text;
     }
+    let sentence =
+        format!("A message could not be printed without exposing the credential.{newline}");
+    if sentence.contains(token) {
+        String::new()
+    } else {
+        sentence
+    }
+}
+
+/// Write a run's output: stdout through the CLI's `print!`, which ends the
+/// process cleanly when the reader has gone.
+fn emit(out: &Printed) -> ExitCode {
+    print!("{}", out.stdout);
+    eprint!("{}", out.stderr);
+    if out.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// What `dashboard-link` prints, through the output gate.
+async fn dashboard_link_output(base: &str, tls: &LinkTls, token: &str) -> Printed {
+    let result = fetch_link(base, token, tls)
+        .await
+        .map(|link| (format!("{link}\n"), "Opens once, from this machine only."));
+    gate("dashboard-link", token, result)
 }
 
 #[cfg(test)]

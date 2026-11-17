@@ -464,6 +464,12 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         1,
         "none: an exhaustive field list (no `..`) on ApiKeyConfig::default(), the value discarded",
     ),
+    (
+        "{ admin, .. }",
+        "src/config/features/api_key.rs",
+        1,
+        "none: the KeyOut mirror's exhaustive destructure copies the flag into the written config",
+    ),
 ];
 
 #[test]

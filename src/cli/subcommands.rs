@@ -221,7 +221,7 @@ pub enum ProtocolImportCommand {
         file: PathBuf,
 
         /// Source name used in generated plan metadata for OpenAPI/GraphQL.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         source_name: Option<String>,
 
         /// Output format.
@@ -249,7 +249,7 @@ pub enum ProtocolImportCommand {
         output: PathBuf,
 
         /// Source name used in generated plan metadata for OpenAPI/GraphQL.
-        #[arg(long)]
+        #[arg(hide = true, long)]
         source_name: Option<String>,
 
         /// Output format.

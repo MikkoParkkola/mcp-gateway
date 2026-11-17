@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8387 PR-B T1b, T2a and T1f (test plan v2 §3): every production allow
-//! of the registry ban, with what it covers, and the ban's own config.
+//! of the registry ban, with what it covers, and the ban's own config. The
+//! same rows count the root clippy.toml list's names (randomness, clock,
+//! home), each family under its own rule.
 
 use std::path::Path;
 
@@ -29,6 +31,63 @@ fn banned() -> &'static [String] {
     });
     &NAMES
 }
+
+/// Which root-list rule a counted name falls under.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Family {
+    /// rand, ring, rcgen and uuid: a draw from a random source.
+    Randomness,
+    /// The clock, home-directory and chrono entries: pinned counts only (their
+    /// allows are module or item scoped by design).
+    Fixed,
+}
+
+/// The root `clippy.toml` list's counting keys, read from its pinned copy
+/// (`root_ban_span.toml`, the config's paths in order, held to it by
+/// `the_root_ban_span_is_the_root_config_list`). A path call counts under its
+/// last two segments (`SystemRandom::new`, `rand::rng`); a method call counts
+/// under its bare name when the entry's owner is a type or trait (`fill`,
+/// `random`), which also counts like-named methods of other types: a stable
+/// over-count, never a miss. An aliased import is the known residual.
+fn root_keys() -> &'static std::collections::BTreeMap<String, Family> {
+    static KEYS: std::sync::LazyLock<std::collections::BTreeMap<String, Family>> =
+        std::sync::LazyLock::new(|| {
+            let mut keys = std::collections::BTreeMap::new();
+            for path in include_str!("root_ban_span.toml").lines() {
+                let family = if ["rand::", "ring::", "rcgen::", "uuid::"]
+                    .iter()
+                    .any(|crate_| path.starts_with(crate_))
+                {
+                    Family::Randomness
+                } else {
+                    Family::Fixed
+                };
+                let segs: Vec<&str> = path.split("::").collect();
+                if let [.., owner, name] = segs.as_slice() {
+                    keys.insert(format!("{owner}::{name}"), family);
+                    if owner.starts_with(char::is_uppercase) {
+                        keys.insert((*name).to_string(), family);
+                    }
+                }
+            }
+            keys
+        });
+    &KEYS
+}
+
+/// The reasons' class words a randomness allow may give; `credential` only in
+/// `src/random_secret.rs`.
+const RANDOMNESS_CLASSES: [&str; 9] = [
+    "id",
+    "jitter",
+    "record key",
+    "nonce",
+    "temp name",
+    "HMAC key",
+    "sample",
+    "key",
+    "credential",
+];
 
 /// The names `banned` must read, a row against a misparse of the span.
 #[test]
@@ -95,6 +154,57 @@ fn path_text(path: &syn::Path) -> String {
         .join("::")
 }
 
+/// The root list's pinned copy holds the root `clippy.toml`'s
+/// `disallowed-methods` paths, one per line in order: a deleted, renamed or
+/// added entry fails here until the copy follows, and with it the counted names.
+#[test]
+fn the_root_ban_span_is_the_root_config_list() {
+    let Some(config) = repo_file(PinnedFile::RootClippy) else {
+        return;
+    };
+    let start = config
+        .find("disallowed-methods = [\n")
+        .expect("the root list");
+    let end = start + config[start..].find("\n]\n").expect("its end");
+    // A commented-out entry is a removed one: comment lines never count.
+    let paths: Vec<&str> = config[start..end]
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
+        .map(|(path, _)| path)
+        .collect();
+    let pinned: Vec<&str> = include_str!("root_ban_span.toml").lines().collect();
+    assert_eq!(paths, pinned, "root span differs");
+    // The type ban too: rand's thread generator, the only type listed.
+    let start = config
+        .find("disallowed-types = [\n")
+        .expect("the root type list");
+    let end = start + config[start..].find("\n]").expect("its end");
+    let types: Vec<&str> = config[start..end]
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(types, ["rand::rngs::ThreadRng"], "root type list differs");
+}
+
+/// The keys `root_keys` must read, a row against a misparse of the span.
+#[test]
+fn the_root_keys_are_read_from_the_root_span() {
+    for (key, family) in [
+        ("SystemRandom::new", Family::Randomness),
+        ("fill", Family::Randomness),
+        ("rand::rng", Family::Randomness),
+        ("Uuid::new_v4", Family::Randomness),
+        ("KeyPair::generate", Family::Randomness),
+        ("SystemTime::now", Family::Fixed),
+        ("dirs::home_dir", Family::Fixed),
+    ] {
+        assert_eq!(root_keys().get(key), Some(&family), "{key}");
+    }
+}
+
 /// The banned names a node references, as calls or as paths, with counts:
 /// a second raw call inside one allow changes its row.
 #[derive(Default)]
@@ -105,6 +215,10 @@ impl<'ast> Visit<'ast> for Names {
         let name = call.method.to_string();
         // `get` with no argument is a `OnceLock` read; the registry's takes a name.
         if banned().contains(&name) && !(name == "get" && call.args.is_empty()) {
+            *self.0.entry(name.clone()).or_default() += 1;
+        }
+        // A root-list method by its bare name (a type's or trait's method).
+        if root_keys().contains_key(&name) && !name.contains("::") {
             *self.0.entry(name).or_default() += 1;
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -124,6 +238,14 @@ impl<'ast> Visit<'ast> for Names {
             && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str())
         {
             *self.0.entry(name.clone()).or_default() += 1;
+        }
+        // A root-list entry by its last two segments: a call, or a function
+        // item passed as a value (`LazyLock::new(rand::random)`).
+        if let [.., owner, name] = segs.as_slice() {
+            let key = format!("{owner}::{name}");
+            if root_keys().contains_key(&key) {
+                *self.0.entry(key).or_default() += 1;
+            }
         }
         syn::visit::visit_expr_path(self, path);
     }
@@ -208,18 +330,50 @@ fn t1b_every_production_allow_of_the_ban_is_pinned() {
         "Admin",
         "Lifecycle",
     ];
+    let mut credentials = Vec::new();
     for row in &actual {
         let fields: Vec<&str> = row.split('\t').collect();
-        if !fields[4].is_empty() {
-            assert!(
-                classes.contains(&fields[3]),
-                "an allow covering a banned name has no Unscoped class: {row}"
-            );
-            assert_eq!(
-                fields[2], "statement",
-                "an allow covering a banned name is not on a statement: {row}"
-            );
+        // Each name is `<key>x<count>`; the count follows the last `x`.
+        let names = fields[4]
+            .split(',')
+            .filter_map(|n| n.rsplit_once('x').map(|(key, _)| key));
+        for name in names {
+            if banned().iter().any(|b| b == name) {
+                assert!(
+                    classes.contains(&fields[3]),
+                    "an allow covering a banned name has no Unscoped class: {row}"
+                );
+                assert_eq!(
+                    fields[2], "statement",
+                    "an allow covering a banned name is not on a statement: {row}"
+                );
+            } else if root_keys().get(name) == Some(&Family::Randomness) {
+                assert!(
+                    RANDOMNESS_CLASSES.contains(&fields[3]),
+                    "an allow covering a random draw has no randomness class: {row}"
+                );
+                assert_eq!(
+                    fields[2], "statement",
+                    "an allow covering a random draw is not on a statement: {row}"
+                );
+            }
         }
+        if fields[3] == "credential" {
+            credentials.push(row.clone());
+        }
+    }
+    assert!(
+        credentials.len() == 1 && credentials[0].starts_with("src/random_secret.rs\t"),
+        "the one credential allow is src/random_secret.rs's: {credentials:?}"
+    );
+}
+
+/// A name counted as both a registry name and a root-list name would be
+/// judged by both rules and counted twice under one key.
+#[test]
+fn registry_and_root_names_do_not_overlap() {
+    for name in banned() {
+        assert!(!root_keys().contains_key(name), "{name} is in both lists");
     }
 }
 

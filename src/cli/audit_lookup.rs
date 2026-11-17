@@ -41,7 +41,7 @@ pub struct LookupEmailArgs {
     #[arg(short, long)]
     pub url: Option<String>,
     /// Rows per page (1 to 200; the gateway's default is 50).
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=200))]
+    #[arg(hide = true, long, value_parser = clap::value_parser!(u32).range(1..=200))]
     pub limit: Option<u32>,
     /// Only rows at or after this RFC 3339 time (first page only).
     #[arg(long)]

@@ -58,12 +58,22 @@ pub struct Refusal {
     pub active: bool,
     /// How many times this same refusal was recorded in a row.
     pub repeats: u32,
+    /// Parser line of a reload refused as invalid config: a syntax error, or
+    /// a serde error that carries a location. Omitted for every other
+    /// refusal. A line quotes no configured value; a check after a clean
+    /// parse has no location to give.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// When the configuration still running was applied. Served only for a
+    /// reload refused as invalid config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// What every reload context of one gateway reports into: one refusal ledger,
 /// one reload tally and one override auditor, shared by the admin API, the meta-tool and the
 /// config file watcher, so a refusal is seen wherever it happened.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ReloadReporting {
     pub(crate) refusals: std::sync::Arc<RefusalLedger>,
     pub(crate) override_audit: Option<std::sync::Arc<super::override_audit::OverrideAuditor>>,
@@ -75,18 +85,35 @@ pub struct ReloadReporting {
     pub(crate) audit_log: Option<std::sync::Arc<crate::security::TransparencyLogger>>,
 }
 
+impl Default for ReloadReporting {
+    fn default() -> Self {
+        Self::fresh(None)
+    }
+}
+
 impl ReloadReporting {
+    /// A ledger that reads this tally's applied time, so an invalid-config
+    /// reload can name the version still running.
+    fn fresh(
+        override_audit: Option<std::sync::Arc<super::override_audit::OverrideAuditor>>,
+    ) -> Self {
+        let tally = std::sync::Arc::new(super::reload_tally::ReloadTally::default());
+        Self {
+            refusals: std::sync::Arc::new(
+                RefusalLedger::new().observing(std::sync::Arc::clone(&tally)),
+            ),
+            override_audit,
+            tally,
+            audit_log: None,
+        }
+    }
+
     /// Reporting into `override_audit` as well as a fresh ledger.
     #[must_use]
     pub fn with_override_audit(
         override_audit: std::sync::Arc<super::override_audit::OverrideAuditor>,
     ) -> Self {
-        Self {
-            refusals: std::sync::Arc::default(),
-            override_audit: Some(override_audit),
-            tally: std::sync::Arc::default(),
-            audit_log: None,
-        }
+        Self::fresh(Some(override_audit))
     }
 
     /// The same reporting, auditing recoveries into `log` (`None`: auth off
@@ -117,6 +144,8 @@ struct Entry {
     cause: String,
     fix: &'static str,
     repeats: u32,
+    line: Option<u32>,
+    running_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Default)]
@@ -139,6 +168,9 @@ impl Inner {
 pub struct RefusalLedger {
     clock: fn() -> SystemTime,
     inner: parking_lot::Mutex<Inner>,
+    /// The tally an invalid-config reload reads `running_since` from.
+    /// `None` on a ledger built alone: it has no running version to name.
+    running: Option<std::sync::Arc<super::reload_tally::ReloadTally>>,
 }
 
 impl Default for RefusalLedger {
@@ -159,19 +191,55 @@ impl RefusalLedger {
         Self {
             clock,
             inner: parking_lot::Mutex::new(Inner::default()),
+            running: None,
         }
+    }
+
+    /// Read `running_since` from `tally` when an invalid-config reload is
+    /// recorded. The tally is the one this gateway's reporting shares.
+    #[must_use]
+    pub(crate) fn observing(
+        mut self,
+        tally: std::sync::Arc<super::reload_tally::ReloadTally>,
+    ) -> Self {
+        self.running = Some(tally);
+        self
     }
 
     /// Record a refused reload or admin write from its error text. A refusal
     /// caused by shutdown is not recorded: nothing about the config is wrong.
     /// `backend_hint` names the backend an add or edit was for.
-    pub fn record(&self, kind: RefusalKind, backend_hint: Option<&str>, error: &str) {
+    ///
+    /// `line` is the parser location for an invalid-config reload. It is
+    /// stored only for that refusal. The running version's time is read from
+    /// the tally, not from the clock at this call: a refusal does not move
+    /// the version still running.
+    pub fn record(
+        &self,
+        kind: RefusalKind,
+        backend_hint: Option<&str>,
+        error: &str,
+        line: Option<u32>,
+    ) {
         if super::reload_failure(error) == super::ReloadFailure::ShuttingDown {
             return;
         }
         let (code, named) = classify(error);
         let backend = named.or_else(|| backend_hint.map(str::to_owned));
         let (cause, fix) = explain(code, kind, backend.as_deref());
+        // Both fields belong to an invalid-config reload. An admin write
+        // classified the same way, and every other code, serve neither.
+        let (line, running_since) =
+            if kind == RefusalKind::Reload && code == RefusalCode::InvalidConfig {
+                (
+                    line,
+                    self.running
+                        .as_ref()
+                        .and_then(|tally| tally.last_applied_at()),
+                )
+            } else {
+                (None, None)
+            };
         let at = (self.clock)();
         let mut inner = self.inner.lock();
         let reload_applied = inner.reload_applied;
@@ -188,6 +256,10 @@ impl RefusalLedger {
         {
             newest.at = at;
             newest.repeats = newest.repeats.saturating_add(1);
+            // The cause text is the same for every invalid file, so a later
+            // one with a different line would otherwise keep the first line.
+            newest.line = line;
+            newest.running_since = running_since;
             return;
         }
         let seq = inner.bump();
@@ -200,6 +272,8 @@ impl RefusalLedger {
             cause,
             fix,
             repeats: 1,
+            line,
+            running_since,
         });
         inner.entries.truncate(REFUSAL_CAP);
         let Inner {
@@ -260,6 +334,8 @@ impl RefusalLedger {
                     fix: e.fix,
                     active: is_active(e, inner.reload_applied, written),
                     repeats: e.repeats,
+                    line: e.line,
+                    running_since: e.running_since,
                 }
             })
             .collect()
@@ -302,6 +378,8 @@ pub(crate) fn startup_refusal(
         fix,
         active: true,
         repeats: 1,
+        line: None,
+        running_since: None,
     }
 }
 
@@ -337,6 +415,16 @@ fn is_active(entry: &Entry, reload_applied: u64, write_applied: u64) -> bool {
 pub(crate) fn rfc3339(at: SystemTime) -> Option<chrono::DateTime<chrono::Utc>> {
     at.duration_since(UNIX_EPOCH).ok()?;
     Some(chrono::DateTime::<chrono::Utc>::from(at))
+}
+
+/// Whether `error` is an invalid file, the only reload refusal that serves a
+/// line and the running version's time. Posture, cleartext and shutdown do
+/// not: shutdown is not a wrong file, and the other two have their own codes.
+pub(crate) fn carries_file_line(error: &str) -> bool {
+    if super::reload_failure(error) == super::ReloadFailure::ShuttingDown {
+        return false;
+    }
+    classify(error).0 == RefusalCode::InvalidConfig
 }
 
 /// The class of `error`, and the backend it names when the class carries one.
@@ -425,6 +513,11 @@ impl super::ReloadContext {
         if let Some(log) = reporting.audit_log.clone() {
             self.audit_recoveries_into(log);
         }
+        // `new` stamped the tally it built, and this call discards that tally.
+        // This one is the gateway's. The first context to take it records the
+        // startup load; a later context sharing it, or a reload that already
+        // applied, leaves the time where it is.
+        reporting.tally.note_loaded();
         self.reporting = reporting;
         self
     }
@@ -439,3 +532,7 @@ impl super::ReloadContext {
 #[cfg(test)]
 #[path = "refusals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "refusals_file_line_tests.rs"]
+mod file_line_tests;

@@ -91,6 +91,10 @@ pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &
 impl EventsHub {
     /// Fan one occurrence out to every matching subscription.
     pub(super) async fn fan_out(self: &Arc<Self>, services: &Services, event: &SourceEvent) {
+        // Only the gateway signs an ended notice.
+        if event.name == super::outbox::ENDED_NAME {
+            return;
+        }
         let Some(source) = self.source(event.kind) else {
             return;
         };
@@ -240,6 +244,7 @@ impl EventsHub {
             dead_as: None,
             replayed: false,
             observed,
+            ended_incarnation: None,
         };
         let refusal = if scan == Scan::Block {
             Some(DeadReason::FirewallBlocked)

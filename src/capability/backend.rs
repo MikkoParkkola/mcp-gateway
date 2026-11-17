@@ -34,97 +34,20 @@ use super::{
     validate_personal_capability_identity,
 };
 use crate::Result;
+use crate::config_reload::revision::{CapabilityPart, PartDigest, part_digest};
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod definition_access;
+mod handoff;
+mod indexed;
 mod initial_scan;
 mod path_selector;
+mod revision_part;
 
+use indexed::{IndexedCapabilities, OperationUnread, ServedSource, definition_changed, part_from};
 use path_selector::path_selector_type_error;
-
-/// Ordered capability store with an O(1) name-to-index lookup layer.
-///
-/// Maintaining both a `Vec` (for stable iteration order) and a `HashMap`
-/// index (for O(1) lookup) costs one extra word per entry and one
-/// `HashMap` lookup per `get()` / `has_capability()` call — a trade-off
-/// that is strictly beneficial once the collection exceeds ~4 entries.
-///
-/// The pre-built `tools` cache amortises `to_mcp_tool()` across all
-/// `get_tools()` callers: the conversion runs exactly once per load/reload,
-/// not once per call.
-#[derive(Default)]
-struct IndexedCapabilities {
-    /// Stable insertion-order storage.
-    entries: Vec<CapabilityDefinition>,
-    /// O(1) name → `entries` index.
-    index: HashMap<String, usize>,
-    /// Pre-built MCP `Tool` representations — rebuilt whenever `entries` changes.
-    tools: Vec<Tool>,
-    /// Read yet absent: gate refusals (rebuilt by each reload) and unloads (until admitted).
-    refused: std::collections::HashSet<String>,
-    unloaded: std::collections::HashSet<String>,
-}
-
-/// True when `new` differs from `old` in any serialised field. A definition
-/// that cannot be serialised is treated as changed (revoke rather than keep).
-fn definition_changed(old: &CapabilityDefinition, new: &CapabilityDefinition) -> bool {
-    match (serde_json::to_value(old), serde_json::to_value(new)) {
-        (Ok(a), Ok(b)) => a != b,
-        _ => true,
-    }
-}
-
-impl IndexedCapabilities {
-    /// Insert or replace a capability, maintaining index and tool cache consistency.
-    fn upsert(&mut self, cap: CapabilityDefinition) {
-        let tool = cap.to_mcp_tool();
-        if let Some(&pos) = self.index.get(&cap.name) {
-            self.entries[pos] = cap;
-            self.tools[pos] = tool;
-        } else {
-            let pos = self.entries.len();
-            self.index.insert(cap.name.clone(), pos);
-            self.entries.push(cap);
-            self.tools.push(tool);
-        }
-    }
-
-    /// Replace all entries atomically, rebuilding both index and tool cache.
-    fn replace_all(&mut self, caps: Vec<CapabilityDefinition>) {
-        self.index.clear();
-        self.tools.clear();
-        self.entries = Vec::with_capacity(caps.len());
-        self.tools = Vec::with_capacity(caps.len());
-        self.index = HashMap::with_capacity(caps.len());
-        for cap in caps {
-            let tool = cap.to_mcp_tool();
-            let pos = self.entries.len();
-            self.index.insert(cap.name.clone(), pos);
-            self.entries.push(cap);
-            self.tools.push(tool);
-        }
-    }
-
-    /// O(1) capability lookup by name.
-    #[inline]
-    fn get(&self, name: &str) -> Option<&CapabilityDefinition> {
-        self.index.get(name).map(|&i| &self.entries[i])
-    }
-
-    /// O(1) existence check.
-    #[inline]
-    fn contains(&self, name: &str) -> bool {
-        self.index.contains_key(name)
-    }
-
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
+#[cfg(test)]
+use revision_part::{DeliveryObserver, take_delivery_observer};
 
 // ============================================================================
 // CapabilityBackend
@@ -141,6 +64,13 @@ pub struct DirectoryLoad {
     pub admitted: usize,
     /// `"<capability>: <error>"` for each refused capability, in load order.
     pub rejected: Vec<String>,
+    /// Files in this directory that could not be read or parsed, in walk order.
+    ///
+    /// The directory itself being unreadable is not here: that is the `Err`
+    /// the load returned. The catalogue still serves the files it read. The
+    /// caller records both with [`CapabilityBackend::note_unreadable`], which
+    /// is what makes the served part partial.
+    pub unreadable: Vec<String>,
 }
 
 /// Backend that exposes capabilities as MCP tools
@@ -172,7 +102,30 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicU8,
+    initial_scan: Arc<std::sync::atomic::AtomicU8>,
+    /// Derived revision key for capability-file digests. Absent on a backend
+    /// that is not the HTTP or stdio startup catalogue: the load still runs,
+    /// and the source map then has a path and no digest.
+    revision_key: Option<[u8; 32]>,
+    /// The catalogue operation now recording unreadable paths. Not what a
+    /// snapshot reads: that reads the set stored on the catalogue.
+    recording: parking_lot::Mutex<OperationUnread>,
+    /// Park, attach and publish share this mutex. Nothing is called while
+    /// that mutex is held.
+    handoff: handoff::Handoff,
+    /// The one lock a catalogue operation holds for its whole load, swap and
+    /// publish. Released when the operation returns, after the delivery is
+    /// recorded, so a second operation cannot publish an older catalogue
+    /// over a newer one.
+    operation: tokio::sync::Mutex<()>,
+    /// The next load sequence. Zero until the first operation takes one, so
+    /// that operation publishes seq 1. Taken under the catalogue write lock
+    /// together with the snapshot, after the catalogue it names is installed.
+    revision_seq: std::sync::atomic::AtomicU64,
+    /// Installed by a row that must try the catalogue lock from inside a
+    /// delivery.
+    #[cfg(test)]
+    delivery_observer: parking_lot::Mutex<Option<DeliveryObserver>>,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
     /// What was listed when a listing change was last announced.
@@ -188,6 +141,11 @@ pub struct CapabilityBackend {
     /// check ran before readiness without racing it.
     #[cfg(test)]
     pub(crate) records_at_scan_complete: std::sync::OnceLock<usize>,
+    /// How many times the scan was marked complete. The flag cannot tell one
+    /// completion from two. Shared with the handoff, which completes a scan
+    /// the startup function does not.
+    #[cfg(test)]
+    scan_completions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -209,15 +167,35 @@ pub struct RugPullRecord {
 impl CapabilityBackend {
     /// Create a new capability backend
     pub fn new(name: &str, executor: Arc<CapabilityExecutor>) -> Self {
+        // One set, shared, until an operation replaces it. A note before any
+        // operation has started is on the catalogue a snapshot would read.
+        let unread = OperationUnread::default();
+        let catalogue = IndexedCapabilities {
+            unread: unread.clone(),
+            ..IndexedCapabilities::default()
+        };
+        // Shared with the handoff: it marks a scan complete, and the bit the
+        // rest of the backend reads has to be this one.
+        let initial_scan = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let handoff = handoff::Handoff::new(Arc::clone(&initial_scan));
+        #[cfg(test)]
+        let scan_completions = handoff.share_completions();
         Self {
             name: name.to_string(),
             executor,
-            capabilities: RwLock::new(IndexedCapabilities::default()),
+            capabilities: RwLock::new(catalogue),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            initial_scan,
+            revision_key: None,
+            recording: parking_lot::Mutex::new(unread),
+            handoff,
+            operation: tokio::sync::Mutex::new(()),
+            revision_seq: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            delivery_observer: parking_lot::Mutex::new(take_delivery_observer()),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
@@ -225,6 +203,8 @@ impl CapabilityBackend {
             scan_panics_after_first_dir: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             records_at_scan_complete: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            scan_completions,
         }
     }
 
@@ -262,6 +242,7 @@ impl CapabilityBackend {
         let removed = if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
+            caps.sources.remove(pos);
             caps.index.remove(name);
             caps.unloaded.insert(name.to_owned());
             // Shift remaining indices down.
@@ -308,263 +289,6 @@ impl CapabilityBackend {
     /// Snapshot all active rug-pull records (e.g. for status / observability).
     pub fn rug_pull_records(&self) -> Vec<RugPullRecord> {
         self.rug_pull_state.read().values().cloned().collect()
-    }
-
-    /// Pre-register watched directories without loading any capability YAMLs.
-    ///
-    /// Used at startup so the file watcher (`CapabilityWatcher::start`) can
-    /// see the configured directory list synchronously, before the async
-    /// `load_from_directory` task has had a chance to push paths via
-    /// the loader path. Without this, the watcher races the loader and
-    /// logs "No capability directories to watch" because the spawned
-    /// loader has not yet populated `self.directories`.
-    ///
-    /// Duplicates are skipped; safe to call repeatedly.
-    pub fn register_directories(&self, paths: &[String]) {
-        let mut dirs = self.directories.write();
-        for path in paths {
-            if !dirs.contains(path) {
-                dirs.push(path.clone());
-            }
-        }
-    }
-
-    /// Load capabilities from a directory
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be loaded.
-    pub async fn load_from_directory(&self, path: &str) -> Result<usize> {
-        Ok(self.load_from_directory_reporting(path).await?.admitted)
-    }
-
-    /// Load a directory and REPORT, rather than only log, every capability the
-    /// account admission gate refused.
-    ///
-    /// `load_from_directory` keeps its log-and-drop behaviour for the hot-reload
-    /// and account-less paths. Startup uses this variant so an invalid
-    /// `auth.account` binding present in the INITIAL catalogue can be turned
-    /// into a startup failure instead of a warning behind a serving listener.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory itself cannot be loaded. A refused
-    /// capability is not an error here — it is reported in
-    /// [`DirectoryLoad::rejected`] so the caller decides.
-    pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
-        let loaded = CapabilityLoader::load_directory_with_paths(path).await?;
-        let mut report = DirectoryLoad {
-            admitted: loaded.len(),
-            rejected: Vec::new(),
-        };
-
-        // Register directory for future hot-reloads.
-        {
-            let mut dirs = self.directories.write();
-            if !dirs.contains(&path.to_string()) {
-                dirs.push(path.to_string());
-            }
-        }
-
-        // Upsert each capability into the indexed store, through the account
-        // admission gate. A refused capability is LOGGED and dropped rather
-        // than published: the operator gets a named error, and no caller gets a
-        // tool whose account reference cannot resolve.
-        for (file, cap) in loaded {
-            let capability = cap.name.clone();
-            if let Err(error) = self.admit_from(file, cap) {
-                warn!(
-                    backend = %self.name,
-                    capability = %capability,
-                    error = %error,
-                    "Capability refused: its account binding does not resolve"
-                );
-                report.admitted -= 1;
-                self.note_refused(&capability);
-                report.rejected.push(format!("{capability}: {error}"));
-            }
-            tokio::task::yield_now().await;
-        }
-
-        info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
-        Ok(report)
-    }
-
-    /// Reload all capabilities from registered directories
-    ///
-    /// This is the hot-reload entry point. It re-reads all capability
-    /// files from the registered directories and updates the registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reloading fails for all directories.
-    pub async fn reload(&self) -> Result<usize> {
-        let dirs: Vec<String> = self.directories.read().clone();
-
-        if dirs.is_empty() {
-            debug!(backend = %self.name, "No directories to reload");
-            return Ok(0);
-        }
-
-        let mut paths = Vec::new();
-        let mut total = 0;
-        // A directory that could not be read leaves the catalogue partial:
-        // its capabilities are missing from this load, not deleted (MIK-8028).
-        let mut partial = false;
-
-        for dir in &dirs {
-            match CapabilityLoader::load_directory_with_paths(dir).await {
-                Ok(loaded) => {
-                    total += loaded.len();
-                    paths.extend(loaded);
-                }
-                Err(e) => {
-                    partial = true;
-                    warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
-                }
-            }
-        }
-
-        // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) = (Vec::with_capacity(paths.len()), Vec::new());
-        let mut refused = std::collections::HashSet::new();
-        for (file, cap) in paths {
-            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
-                Ok(()) => {
-                    trusted.push((file, cap.name.clone()));
-                    admitted.push(cap);
-                }
-                Err(error) => {
-                    total -= 1;
-                    refused.insert(cap.name.clone());
-                    warn!(
-                        backend = %self.name,
-                        capability = %cap.name,
-                        error = %error,
-                        "Capability refused on reload: its account binding does not resolve"
-                    );
-                }
-            }
-        }
-
-        // Atomic swap: rebuild index and tool cache in one write lock, then
-        // bump the shared policy epoch while that lock is still held.
-        {
-            let mut caps = self.capabilities.write();
-            let incoming: HashMap<&str, &CapabilityDefinition> =
-                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
-            // Revoke the in-flight calls of a capability that is gone OR edited,
-            // and stop its children: a call holding the old definition must not
-            // start or replace a child under the new one (MIK-7870, MIK-7925).
-            let mut revoked = std::collections::HashSet::new();
-            for (name, &pos) in &caps.index {
-                if incoming
-                    .get(name.as_str())
-                    .is_none_or(|new| definition_changed(&caps.entries[pos], new))
-                {
-                    self.executor.bump_mcp_generation(name);
-                    revoked.insert(name.clone());
-                }
-            }
-            caps.replace_all(admitted);
-            caps.settle_absent(refused);
-            // With the swap, under the same lock: `catalogue_snapshot` never
-            // sees one without the other.
-            self.set_catalogue_partial(partial);
-            self.bump_catalogue_generation(&caps);
-            self.executor.bump_policy_epoch();
-            self.executor.stop_unloaded_mcp(&|name| {
-                !revoked.contains(name) && caps.index.contains_key(name)
-            });
-        }
-        self.catalogue_changed();
-        self.note_admitted(trusted, !partial);
-
-        info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
-        Ok(total)
-    }
-
-    /// Get the tools clients are shown (pre-built MCP tool representations).
-    ///
-    /// A capability whose required login is missing is left out until it is
-    /// supplied (MIK-7787 D4): the catalogue is a library, and a tool that
-    /// can only fail is noise in every listing.
-    pub fn get_tools(&self) -> Vec<Tool> {
-        let caps = self.capabilities.read();
-        let mut oauth_seen = HashMap::new();
-        caps.entries
-            .iter()
-            .zip(caps.tools.iter())
-            .filter(|(entry, _tool)| {
-                self.executor
-                    .missing_credential(&entry.auth, &mut oauth_seen)
-                    .is_none()
-            })
-            .map(|(_entry, tool)| tool.clone())
-            .collect()
-    }
-
-    /// Get tools visible in `current_state`.
-    ///
-    /// A capability is included when its `visible_in_states` list is **empty**
-    /// (always visible — backward compat) or when it contains `current_state`.
-    ///
-    /// Also leaves out a capability whose required login is missing, as
-    /// [`Self::get_tools`] does.
-    pub fn get_tools_for_state(&self, current_state: &str) -> Vec<Tool> {
-        let caps = self.capabilities.read();
-        let mut oauth_seen = HashMap::new();
-        caps.entries
-            .iter()
-            .zip(caps.tools.iter())
-            .filter(|(entry, _tool)| {
-                (entry.visible_in_states.is_empty()
-                    || entry.visible_in_states.iter().any(|s| s == current_state))
-                    && self
-                        .executor
-                        .missing_credential(&entry.auth, &mut oauth_seen)
-                        .is_none()
-            })
-            .map(|(_entry, tool)| tool.clone())
-            .collect()
-    }
-
-    /// Whether clients are shown the capability `name`: it exists and its
-    /// required login (if any) is in place. A name this backend does not hold
-    /// is not its to hide, so it counts as listed.
-    pub fn is_listed(&self, name: &str) -> bool {
-        self.is_listed_in(name, &mut HashMap::new())
-    }
-
-    /// [`Self::is_listed`] for a pass over many names: `seen` memoises the
-    /// per-provider OAuth lookups, so one listing or search reads each
-    /// provider's token once however many capabilities use it.
-    pub fn is_listed_in(&self, name: &str, seen: &mut HashMap<String, bool>) -> bool {
-        self.capabilities.read().get(name).is_none_or(|entry| {
-            self.executor
-                .missing_credential(&entry.auth, seen)
-                .is_none()
-        })
-    }
-
-    /// Get a specific capability by name — O(1) via the name index.
-    pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
-        self.capabilities.read().get(name).cloned()
-    }
-
-    /// List all capability names in insertion order.
-    pub fn list(&self) -> Vec<String> {
-        self.capabilities
-            .read()
-            .entries
-            .iter()
-            .map(|c| c.name.clone())
-            .collect()
-    }
-
-    /// List all capability definitions (cloned, insertion order).
-    pub fn list_capabilities(&self) -> Vec<CapabilityDefinition> {
-        self.capabilities.read().entries.clone()
     }
 
     /// Execute a capability (call a tool).
@@ -782,6 +506,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
 mod listing;
 #[cfg(test)]
 pub(crate) use listing::listing_watches_started;
+#[path = "backend_loading.rs"]
+mod loading;
 #[path = "backend_rug_pull.rs"]
 mod rug_pull;
 
@@ -800,3 +526,7 @@ mod pin_tests;
 #[cfg(test)]
 #[path = "backend_output_root_tests.rs"]
 mod output_root_tests;
+
+#[cfg(test)]
+#[path = "backend_snapshot_tests.rs"]
+mod snapshot_tests;

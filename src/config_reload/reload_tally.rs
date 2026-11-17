@@ -46,11 +46,22 @@ pub struct ReloadCounts {
     pub last: Option<LastReload>,
 }
 
+/// Counts plus the time the configuration still running was applied, behind
+/// one lock so a reader never sees `attempts` ahead of `last`, nor a refusal
+/// ahead of the apply that moved `last_applied_at`.
+#[derive(Debug, Default)]
+struct TallyInner {
+    counts: ReloadCounts,
+    /// Startup load, then each applied reload. A refusal does not move it:
+    /// the version still running is the one this names.
+    last_applied_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// The counts, behind one lock so a reader never sees `attempts` ahead of
 /// `last`.
 #[derive(Debug, Default)]
 pub struct ReloadTally {
-    counts: parking_lot::Mutex<ReloadCounts>,
+    inner: parking_lot::Mutex<TallyInner>,
 }
 
 impl ReloadTally {
@@ -72,18 +83,41 @@ impl ReloadTally {
     /// A copy of the counts, taken under the lock.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn snapshot(&self) -> ReloadCounts {
-        *self.counts.lock()
+        self.inner.lock().counts
+    }
+
+    /// The configuration now running was loaded. The first call records it;
+    /// an applied reload replaces it, and a later call leaves that time.
+    /// A clock that cannot be read records nothing, so the next call tries
+    /// again.
+    pub(crate) fn note_loaded(&self) {
+        let mut inner = self.inner.lock();
+        if inner.last_applied_at.is_some() {
+            return;
+        }
+        // Under the lock, as an attempt's stamp is, so an apply on another
+        // thread cannot leave this older than that apply.
+        inner.last_applied_at =
+            super::refusals::rfc3339(crate::clock::system_time_or_before_epoch());
+    }
+
+    /// When the configuration still running was applied. `None` before the
+    /// startup load is recorded, and when that clock could not be read.
+    pub(crate) fn last_applied_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inner.lock().last_applied_at
     }
 
     fn record(&self, outcome: ReloadResult) {
-        let mut counts = self.counts.lock();
+        let mut inner = self.inner.lock();
         // Read under the lock, so `last.at` is never older than an attempt
         // another thread recorded before this one.
         let at = super::refusals::rfc3339(crate::clock::system_time_or_before_epoch());
-        counts.attempts = counts.attempts.saturating_add(1);
+        inner.counts.attempts = inner.counts.attempts.saturating_add(1);
         if outcome == ReloadResult::Applied {
-            counts.applied = counts.applied.saturating_add(1);
+            inner.counts.applied = inner.counts.applied.saturating_add(1);
+            // A refusal does not reach this arm, so it cannot move the time.
+            inner.last_applied_at = at;
         }
-        counts.last = Some(LastReload { at, outcome });
+        inner.counts.last = Some(LastReload { at, outcome });
     }
 }

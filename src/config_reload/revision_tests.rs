@@ -6,7 +6,9 @@
 
 use sha2::{Digest, Sha256};
 
-use super::{AppliedInputs, ConsumedInput, ConsumedSource, RawInputs, config_revision};
+use super::{
+    AppliedInputs, CapabilityPart, ConsumedInput, ConsumedSource, RawInputs, config_revision,
+};
 use crate::gateway::record_principal::RecordPrincipalKey;
 
 const KEY_TEXT: &str = "test-record-key-0123456789abcdef";
@@ -55,7 +57,10 @@ fn api2a_1_golden_values_match_the_shared_encoding() {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
         grants: Some(b"[]\n".to_vec()),
         env_files: vec![("/e/.env".to_owned(), Some(b"A=1\n".to_vec()))],
-        capabilities: vec![("caps/a.yaml".to_owned(), b"name: a\n".to_vec())],
+        capabilities: CapabilityPart::Loaded(vec![(
+            "caps/a.yaml".to_owned(),
+            b"name: a\n".to_vec(),
+        )]),
         consumed: vec![consumed("A", b"1")],
     };
     assert_eq!(
@@ -80,10 +85,12 @@ fn api2a_1_any_input_byte_changes_the_id_and_order_of_unsorted_lists_does_not() 
     };
     assert_ne!(id(base()), id(comment_only));
     let caps = |order: [&str; 2]| RawInputs {
-        capabilities: order
-            .iter()
-            .map(|p| ((*p).to_owned(), p.as_bytes().to_vec()))
-            .collect(),
+        capabilities: CapabilityPart::Loaded(
+            order
+                .iter()
+                .map(|p| ((*p).to_owned(), p.as_bytes().to_vec()))
+                .collect(),
+        ),
         ..base()
     };
     assert_eq!(
@@ -136,7 +143,10 @@ fn debug_never_prints_input_bytes_for_any_input_type() {
         gateway_yaml: b"token: hunter2-yaml".to_vec(),
         grants: Some(b"hunter2-grants".to_vec()),
         env_files: vec![("/e/.env".to_owned(), Some(b"K=hunter2-env".to_vec()))],
-        capabilities: vec![("c/a.yaml".to_owned(), b"hunter2-cap".to_vec())],
+        capabilities: CapabilityPart::Loaded(vec![(
+            "c/a.yaml".to_owned(),
+            b"hunter2-cap".to_vec(),
+        )]),
         consumed: vec![consumed("S", b"hunter2-secret")],
     };
     let applied = AppliedInputs::digest(&key(), raw.clone());

@@ -454,7 +454,7 @@ fn declared_level_admits(raised: LoggingLevel) -> bool {
 pub(crate) fn mint_progress_token(client: &Value) -> Option<String> {
     TRANSLATIONS
         .try_with(|cell| {
-            let minted = format!("gw-{}", uuid::Uuid::new_v4());
+            let minted = format!("gw-{}", crate::ids::new_v4());
             cell.borrow_mut().push((minted.clone(), client.clone()));
             minted
         })

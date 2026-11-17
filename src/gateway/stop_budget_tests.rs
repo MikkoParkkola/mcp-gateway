@@ -366,3 +366,41 @@ fn the_minimum_is_at_least_the_sum_of_its_parts() {
         "the minimum {HTTP_MIN_TOTAL:?} is under the sum of its parts {parts:?}"
     );
 }
+
+/// U4 (exec share): a committed restart's plan takes its exec share E from the
+/// logger: the logger ends exactly at D - E, and every stage ends at or
+/// before D - E; a plain stop keeps the logger's end at D. E is 250 ms.
+#[test]
+fn a_restart_takes_its_exec_share_from_the_logger_only() {
+    use crate::retire::{EXEC_SHARE, Exit, RetirePlan};
+    assert_eq!(EXEC_SHARE, ms(250), "the exec share moved");
+    for total in [HTTP_MIN_TOTAL, Duration::from_secs(30)] {
+        let (_, budget) = at(total);
+        let d = budget.end();
+        let plan = |exit| RetirePlan::new(d, budget.runtime_end(), exit);
+        let cut = d.checked_sub(EXEC_SHARE).expect("D is past the exec share");
+        let restart = plan(Exit::Restart);
+        assert_eq!(
+            restart.logger_end(),
+            cut,
+            "{total:?}: the logger does not end at D - E"
+        );
+        for (stage, end) in [
+            ("backend", budget.backend_end()),
+            ("post-listener", budget.post_listener_end()),
+            ("runtime", restart.runtime_end()),
+        ] {
+            assert!(end <= cut, "{total:?}: the {stage} stage ends past D - E");
+        }
+        assert_eq!(
+            restart.runtime_end(),
+            budget.runtime_end(),
+            "{total:?}: E moved the runtime share"
+        );
+        assert_eq!(
+            plan(Exit::Plain).logger_end(),
+            d,
+            "{total:?}: a plain stop lost logger time"
+        );
+    }
+}

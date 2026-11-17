@@ -36,6 +36,7 @@ src/gateway/server/construct.rs	new_evaluated_with_account_http	-	Gateway constr
 src/gateway/server/construct.rs	new_with_env	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_with_path	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	reload_path	-	startup and config-watcher accessor, not per call
+src/gateway/server/construct.rs	set_retire_cell	-	stores the boot's retirement plan cell at startup, once per boot
 src/gateway/server/construct.rs	shutdown_account_custody	-	account-custody shutdown
 src/gateway/server/construct.rs	shutdown_account_custody_by	-	account-custody shutdown, bounded by the stop deadline, once per stop
 src/gateway/server/construct.rs	start_account_custody	-	startup account custody, once per serve
@@ -109,6 +110,7 @@ src/gateway/server/identity_grants.rs	snapshot_time	-	startup identity-grant aud
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	stdio_identity_grants	-	startup identity-grant audit for stdio, before serving
 src/gateway/server/listener.rs	serve	-	the HTTP listener loop, started once per serve; the timed rows call the router in-process and over stdio pipes, with no socket
+src/gateway/server/mod.rs	attach_capability_revision	-	startup: hands the published config to the capability catalogue before the listener binds, not per call
 src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup config, not per call
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup config, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup path resolution, not per call
@@ -153,8 +155,12 @@ src/gateway/server/run_wiring.rs	build_agent_auth	-	startup step of Gateway::run
 src/gateway/server/run_wiring.rs	declare_multi_user	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	drain_inflight	-	shutdown drain of in-flight requests, after the listener stops
 src/gateway/server/run_wiring.rs	install_identity_propagation	-	startup step of Gateway::run, once per serve
+src/gateway/server/run_wiring.rs	load_playbooks	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	log_feature_states	-	startup logging, once per serve
+src/gateway/server/run_wiring.rs	open_tasks	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	-	startup pre-bind checks, before any listener opens
+src/gateway/server/run_wiring.rs	stop_custody_and_backends	-	shutdown step of Gateway::run, after the listener stops
+src/gateway/server/run_wiring.rs	warn_cold_surfaced_tools	-	startup step of Gateway::run, once per serve
 src/gateway/server/start_checks.rs	clock	-	startup clock check, before serving
 src/gateway/server/start_checks.rs	http	-	startup HTTP config check, before serving
 src/gateway/server/start_checks.rs	new_evaluated	-	Gateway construction, once at startup
@@ -239,6 +245,7 @@ src/gateway/server/stdio_single.rs	stdio_routing_keys_only	stdio_invoke_tiny	on 
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, untimed: only when params._meta must be merged into the arguments; the timed rows carry no _meta
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	-	startup step of the stdio loop, once per serve
 src/gateway/server/stdio_startup.rs	key_error	-	startup error of the stdio loop, once per serve
+src/gateway/server/stdio_startup.rs	log_capability_dirs	-	startup log of the stdio loop's capability directories, once per serve
 src/gateway/server/stdio_tasks.rs	advertised	-	initialize and server/discover answers only
 src/gateway/server/stdio_tasks.rs	default_auth	-	builds stdio's auth once at session start
 src/gateway/server/stdio_tasks.rs	degraded	-	task store open failure at session start

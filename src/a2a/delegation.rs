@@ -179,6 +179,10 @@ fn fresh_token() -> Option<String> {
     use base64::Engine as _;
     use ring::rand::SecureRandom as _;
     let mut bytes = [0_u8; 16];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "nonce: a 128-bit delegation cancel token; an RNG failure is recoverable"
+    )]
     ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
     Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }

@@ -11,18 +11,21 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
-use super::outbox::{DeadLetter, OutboxRecord};
+use super::outbox::{DeadLetter, EndedRow, OutboxRecord};
 use super::records::{
     Placed, Subscription, Verified, create_private_dir, load_records, remove_record, verified_file,
     write_record,
 };
 
+#[path = "store_ended.rs"]
+mod ended;
 #[path = "store_hold.rs"]
 mod hold;
 #[path = "store_key_binding.rs"]
 mod key_binding;
 #[path = "store_pending.rs"]
 mod pending;
+pub(crate) use ended::Cancel;
 pub(crate) use hold::{Held, Judged};
 pub(crate) use pending::{Claim, Claimed, Revived, Settle};
 
@@ -107,6 +110,9 @@ type Pair = (String, String);
 #[derive(Default)]
 struct State {
     subs: HashMap<String, Subscription>,
+    /// Ended rows whose notice is pending, keyed (id, incarnation): no
+    /// live-row reader sees them.
+    ended: HashMap<(String, u64), EndedRow>,
     /// Rows removed so far, by any path (design r3 L5: the worker tick
     /// releases their keys).
     removals: u64,
@@ -249,6 +255,7 @@ pub(crate) struct Store {
     verified_dir: PathBuf,
     outbox_dir: PathBuf,
     dead_dir: PathBuf,
+    ended_dir: PathBuf,
     state: Mutex<State>,
     /// The last row generation handed out (design r3 G3); starts above every
     /// generation loaded, so a re-made row never repeats an old one.
@@ -322,8 +329,9 @@ impl Store {
         let verified_dir = root.join("verified");
         let outbox_dir = root.join("outbox");
         let dead_dir = root.join("dead");
+        let ended_dir = root.join("ended");
         create_private_dir(root)?;
-        for dir in [&subs_dir, &verified_dir, &outbox_dir, &dead_dir] {
+        for dir in [&subs_dir, &verified_dir, &outbox_dir, &dead_dir, &ended_dir] {
             create_private_dir(dir)?;
         }
         let mut state = State::default();
@@ -347,12 +355,14 @@ impl Store {
             }
         }
         pending::load(&mut state, &outbox_dir, &dead_dir, now)?;
+        ended::load(&mut state, &ended_dir);
         let loaded = state.subs.values().map(|s| s.generation).max().unwrap_or(0);
         let store = Self {
             subs_dir,
             verified_dir,
             outbox_dir,
             dead_dir,
+            ended_dir,
             state: Mutex::new(state),
             generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
@@ -390,14 +400,18 @@ impl Store {
             let untried: Vec<String> = state
                 .outbox
                 .values()
-                .filter(|r| r.subscription_id == id && !r.needs_burial_at_expiry())
+                .filter(|r| r.is_event() && r.subscription_id == id && !r.needs_burial_at_expiry())
                 .map(|r| r.event_id.clone())
                 .collect();
             for event_id in untried {
                 remove_record(&self.outbox_dir, &OutboxRecord::file(&event_id))?;
                 state.outbox.remove(&event_id);
             }
-            if state.outbox.values().any(|r| r.subscription_id == id) {
+            if state
+                .outbox
+                .values()
+                .any(|r| r.is_event() && r.subscription_id == id)
+            {
                 continue;
             }
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
@@ -684,7 +698,10 @@ impl Store {
         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         tail: TailPolicy,
     ) -> std::io::Result<bool> {
-        self.remove_where(id, now, tail, |_| true)
+        let removed = self.remove_where(id, now, tail, |_| true)?;
+        // The owner said stop: that supersedes the id's earlier endings too,
+        // whether or not a live row was left.
+        Ok(self.forget_ended(id)? || removed)
     }
 
     /// Delete subscription `id` when `still` holds for the stored row under
@@ -715,25 +732,12 @@ impl Store {
             return Ok(false);
         };
         // Cancelled in the same hold of the lock: no attempt can start for
-        // this subscription once the removal returns (design §6.4).
-        self.cancel_pending(&mut state, id)?;
+        // this subscription once the removal returns (design §6.4). The
+        // notices of its earlier endings stay.
+        self.cancel_pending(&mut state, id, Cancel::Events)?;
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
         state.drop_row(id);
-        // An expired row kept for its burials keeps the expiry stamp the
-        // sweep gave its pair: removing it never restarts the tail (MIK-8061).
-        let Some(now) = now else {
-            return Ok(true);
-        };
-        if sub.live(now) && !state.pair_live(&sub.principal, &sub.url, now) {
-            let key = verified_file(&sub.principal, &sub.url);
-            if let Some(mut record) = state.verified.get(&key).cloned() {
-                record.last_subscription_ended_at = Some(now);
-                let placed = write_record(&self.verified_dir, &key, &record)?;
-                state.verified.insert(key, record);
-                placed.durable()?;
-            }
-        }
-        self.trim_tails(&mut state, now, tail)?;
+        self.stamp_removed(&mut state, &sub, now, tail)?;
         Ok(true)
     }
 
