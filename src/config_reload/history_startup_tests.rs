@@ -120,10 +120,10 @@ fn c13a_an_open_parked_before_its_read_does_not_hold_startup() {
 fn c13b_a_late_quarantine_only_copies_the_unparseable_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_path_buf();
-    write_owner_only(&path.join("gateway.yaml"), ONE_BACKEND).expect("config");
+    write_owner_only(path.join("gateway.yaml"), ONE_BACKEND).expect("config");
     let unparseable = b"{not json at all".to_vec();
     // Owner-only, so the file is refused for not parsing, not for its mode (A5).
-    write_owner_only(&path.join("config-history.json"), "{not json at all").expect("plant");
+    write_owner_only(path.join("config-history.json"), "{not json at all").expect("plant");
     let installed = seams::install(&path);
     let gate = installed.seams.park(ParkAt::BeforeQuarantineLink);
     let Some((rig, _, took)) = start_bounded(dir) else {

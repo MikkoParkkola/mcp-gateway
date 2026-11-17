@@ -4,7 +4,7 @@
 //!
 //! "Byte-identical" compares the history file's raw bytes before and after,
 //! read by its literal name. Rows that need the deadline run on a
-//! current-thread runtime with a paused clock: a running spawn_blocking task
+//! current-thread runtime with a paused clock: a running `spawn_blocking` task
 //! holds the clock's auto-advance there, so the deadline fires only when the
 //! test advances it, after the job has arrived where the row parked it.
 
