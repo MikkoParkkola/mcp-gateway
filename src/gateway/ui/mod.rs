@@ -26,6 +26,9 @@ pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+/// Every UI API answer type is classified for the api command.
+#[cfg(test)]
+mod content_types_tests;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
@@ -110,10 +113,20 @@ async fn write_audited(
     context: Arc<ReloadContext>,
     replace: Replace,
     kind: IntentKind,
+    who: &crate::security::audit::AuditWho,
 ) -> Result<ReplaceOutcome, ReplaceError> {
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(kind)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
@@ -642,7 +655,13 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         .into_response();
     };
 
-    match reload_context.manual_reload_outcome().await {
+    let who = admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    match reload_context
+        .manual_reload_outcome(crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        })
+        .await
+    {
         Ok(outcome) => (
             StatusCode::OK,
             Json(json!({

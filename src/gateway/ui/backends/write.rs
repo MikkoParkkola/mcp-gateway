@@ -62,6 +62,7 @@ pub(super) async fn write_backend<T, F>(
     operation: BackendOp,
     name: &str,
     slotted: Option<Slotted>,
+    guard: &super::super::guard::Guard,
     edit: F,
 ) -> Result<Written<T>, Box<axum::response::Response>>
 where
@@ -149,7 +150,12 @@ where
         operation,
         backend: name.to_owned(),
     };
-    let written = super::super::write_audited(state, context, replace, kind).await;
+    let who = super::super::admin_audit::caller_who(
+        state,
+        guard.client.as_ref(),
+        guard.identity.as_ref(),
+    );
+    let written = super::super::write_audited(state, context, replace, kind, &who).await;
     let answered = decided.lock().take();
     match (written, answered) {
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {

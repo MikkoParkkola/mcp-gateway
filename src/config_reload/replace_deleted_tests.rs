@@ -113,6 +113,7 @@ async fn audited(
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await

@@ -1,0 +1,1 @@
+src/gateway/server/mod.rs	history_hook	1	Builds the config history hook from the config file path at startup; decides nothing

@@ -312,9 +312,15 @@ async fn loud_refusals(dir: &Path, audit: impl Fn() -> Audit) -> Vec<String> {
     let failing = Arc::new(Failing::default());
     let mut broken = save(dir, Counting::new(dir), &LOUD_KEYS, &standing(), LOUD);
     broken.secrets.as_mut().expect("a secret step").store = Arc::clone(&failing) as _;
-    let store_refusal = replace_audited(context(&path), broken, audit(), WAIT)
-        .await
-        .expect_err("the store refuses");
+    let store_refusal = replace_audited(
+        context(&path),
+        broken,
+        audit(),
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        WAIT,
+    )
+    .await
+    .expect_err("the store refuses");
     assert!(
         matches!(store_refusal, ReplaceError::Secrets(_)),
         "premise: the store's own refusal: {store_refusal:?}"
@@ -329,6 +335,7 @@ async fn loud_refusals(dir: &Path, audit: impl Fn() -> Audit) -> Vec<String> {
         refusing_context(&path),
         save(dir, Arc::clone(&store), &LOUD_KEYS, &standing(), LOUD),
         audit(),
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
