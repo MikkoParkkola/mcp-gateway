@@ -70,6 +70,30 @@ fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
 }
 
 #[test]
+fn prepare_tool_metadata_drops_a_nested_duplicate_annotation() {
+    // GIVEN a tool whose nested property repeats a top-level header name
+    let mut tools = vec![tool_with_schema(
+        "dup",
+        json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"},
+            "filter": {"type": "object", "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "tenant"}
+            }}
+        }}),
+    )];
+
+    // WHEN the tool-metadata path filters the list
+    prepare_tool_metadata("beeper", &mut tools);
+
+    // THEN a duplicate across schema levels excludes the tool, as a top-level
+    // duplicate already does
+    assert!(
+        tools.is_empty(),
+        "a duplicate header name across schema levels must exclude the tool"
+    );
+}
+
+#[test]
 fn prepare_tool_metadata_leaves_unannotated_tools_untouched() {
     let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
 
