@@ -260,7 +260,7 @@ impl CapabilityExecutor {
         skip(self, params),
         fields(
             capability = %capability.name,
-            request_id = %uuid::Uuid::new_v4()
+            request_id = %crate::ids::new_v4()
         )
     )]
     pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
@@ -278,7 +278,7 @@ impl CapabilityExecutor {
         skip(self, params, context),
         fields(
             capability = %capability.name,
-            request_id = %uuid::Uuid::new_v4()
+            request_id = %crate::ids::new_v4()
         )
     )]
     pub async fn execute_with_context(

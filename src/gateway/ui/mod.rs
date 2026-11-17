@@ -21,6 +21,10 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+/// Every web UI change has a CLI form; CLI commands and config writes are
+/// classified for remote use.
+#[cfg(test)]
+pub(crate) mod cli_parity_tests;
 mod config_file;
 pub mod control_plane;
 mod dashboard;
@@ -60,6 +64,8 @@ mod restart;
 pub(crate) mod restart_confirm;
 #[cfg(test)]
 mod restart_confirm_tests;
+#[cfg(test)]
+mod restart_get_tests;
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;

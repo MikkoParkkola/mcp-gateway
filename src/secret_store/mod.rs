@@ -27,7 +27,8 @@ pub(crate) use save::{
     LOCK_WAIT, NewSecret, SaveError, UnusedEntry, Vault, save_secrets, unused_entries,
     unused_entries_until,
 };
-// The unused-entry delete and listing are reached only through the admin UI routes.
+// The unused-entry delete and listing are reached through the admin UI routes;
+// doctor's count calls `unused::listing_within` from `report`.
 #[cfg(feature = "webui")]
 pub(crate) use unused::{
     DeleteRefused, Deleted, Listing, NamingSources, delete_unused, is_generated_name, listing,
@@ -256,6 +257,10 @@ pub(crate) fn fresh_name(field: &str, unix_ms: u64, random: u64) -> String {
 pub(crate) fn random_suffix() -> Result<u64, StoreError> {
     use ring::rand::SecureRandom as _;
     let mut bytes = [0u8; 8];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: a store file's random suffix"
+    )]
     ring::rand::SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| StoreError::Failed("the OS random source failed".to_owned()))?;

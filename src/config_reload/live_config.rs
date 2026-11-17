@@ -78,6 +78,10 @@ impl LiveConfig {
     #[must_use]
     pub fn new(config: Config) -> Self {
         use rand::RngExt;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "record key: a throwaway record key for tests and tools that judge no production request"
+        )]
         let key: [u8; 32] = rand::rng().random();
         let key = hex::encode(key);
         let auth = crate::gateway::auth::ResolvedAuthConfig::from_config(&config.auth, &key);

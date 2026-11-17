@@ -36,9 +36,19 @@ pub(super) fn stand_ins(
 fn stand_in(id: &SlotId) -> String {
     let digest = matches!(id.0.last(), Some(Segment::Key(key)) if key.ends_with("key_sha256"));
     if digest {
-        format!("sha256:{}", hex::encode(rand::random::<[u8; 32]>()))
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "nonce: a per-save stand-in only the validation load sees, never applied or stored"
+        )]
+        let bytes = rand::random::<[u8; 32]>();
+        format!("sha256:{}", hex::encode(bytes))
     } else {
-        format!("mcpgw-pending-{}", hex::encode(rand::random::<[u8; 16]>()))
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "nonce: a per-save stand-in only the validation load sees, never applied or stored"
+        )]
+        let bytes = rand::random::<[u8; 16]>();
+        format!("mcpgw-pending-{}", hex::encode(bytes))
     }
 }
 

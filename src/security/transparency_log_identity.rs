@@ -59,7 +59,7 @@ impl LogId {
 impl LogId {
     /// A fresh random id.
     pub(super) fn mint() -> Self {
-        Self(uuid::Uuid::new_v4().simple().to_string())
+        Self(crate::ids::new_v4().simple().to_string())
     }
 
     /// The id as written to a record.

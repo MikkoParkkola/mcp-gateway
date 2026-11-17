@@ -12,6 +12,10 @@
 //! notification to one subject's streams only. The peer records which subject every request
 //! carried, so a test can assert that no request for one user ever went out
 //! as anyone else.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

@@ -28,7 +28,7 @@ permissions:
 jobs:
   feature-combos:
     name: Feature combinations (${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 45, not 20: on a slow mirror day the windows target shard's mingw
     # install once took the whole 20 minutes, twice, before any clippy ran
     # (MIK-8761). The install normally comes from a cache now (MIK-8766), but
@@ -237,9 +237,17 @@ jobs:
   # Not reproduced, on purpose: panic = "abort", overflow checks and
   # opt-level differ from --release, but no code here is gated on them at
   # compile time. Add a row for one before restoring --release.
+  # `cargo check`, not `cargo test --no-run`: the job only ever compiled (it never ran a test), and a full
+  # codegen and link of every test target sat at the runner's memory edge (19.9-20.3 GB with swap; 8 of 8
+  # stalls cancelled). check type-checks every target with the same cfg at 12.96 GB peak in 4.3 min
+  # (canary run 43817798268). Not caught here any more: post-monomorphization and link errors in debug-off
+  # code. For shipped code that stays covered: docker.yml's release-compile builds the binary in release on
+  # every source PR (docker.yml:172), and the image build does again after merge (Dockerfile:42). Test code
+  # loses it, but nothing runs or ships a debug-off test binary (the packaged suites build debug; ci.yml's
+  # release builds need a manual dispatch), so such an error cannot reach a test run or an artefact.
   release-test-compile:
     name: Test compile without debug assertions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The compile step's 30 min plus 10 for setup and post steps, kept strictly under (scripts/ci/check_swap_jobs.py).
     timeout-minutes: 45
     steps:
@@ -255,10 +263,10 @@ jobs:
         with:
           shared-key: feature-combos-no-debug-assertions
       - name: Compile every test target with debug assertions off
-        # Healthy compiles take up to 17 min; a stall ends here with its log, and the memory log samples it every
+        # A healthy check takes about 5 min; a stall ends here with its log, and the memory log samples it every
         # 30 s (scripts/ci/check_swap_jobs.py).
         timeout-minutes: 30
         run: >-
-          scripts/ci/with-memory-log.sh cargo test --all-targets --no-run
+          scripts/ci/with-memory-log.sh cargo check --all-targets
           --config profile.dev.debug-assertions=false
           --config profile.test.debug-assertions=false

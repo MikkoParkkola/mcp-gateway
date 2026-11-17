@@ -46,6 +46,7 @@ pub(crate) mod secret_ref;
 pub(crate) mod secret_values;
 mod server_config;
 mod strict_keys;
+pub(crate) use strict_keys::is_retired_key;
 mod validation;
 pub(crate) use validation::CLEARTEXT_REFUSAL;
 mod ws_backend;

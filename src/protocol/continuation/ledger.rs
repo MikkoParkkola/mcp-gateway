@@ -249,7 +249,7 @@ impl InFlight {
         }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
-        let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
+        let key = format!("{backend_id}:{}", crate::ids::new_v4());
         held.insert(
             key.clone(),
             (self.replica.clone(), expires_at, quota.clone()),
@@ -444,15 +444,23 @@ impl ContinuationState {
     /// sees it, rather than on the first elicitation a user reaches.
     #[must_use]
     pub fn new() -> Self {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: the generator for the continuation sealing key below"
+        )]
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "key: the process's continuation sealing key"
+        )]
         rng.fill(&mut key)
             .expect("platform RNG must produce a continuation key");
         // Named by the process, for the process: `origin_replica` is sealed
         // inside the envelope and read only by the replica that minted it, so
         // any per-process value works and a generated one cannot collide with
         // a restarted predecessor's.
-        let replica = uuid::Uuid::new_v4().to_string();
+        let replica = crate::ids::new_v4().to_string();
         Self {
             keyring: Keyring::new(&[(1, key)]).expect("a single 32-byte key is a valid keyring"),
             ledger: ConsumedLedger::new(CONSUMED_LEDGER_CAPACITY),
@@ -477,6 +485,10 @@ impl ContinuationState {
     #[cfg(test)]
     pub(crate) fn mint_refusing_for_test() -> Self {
         let mut key = [0u8; 32];
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test code: a test store's continuation key"
+        )]
         SystemRandom::new()
             .fill(&mut key)
             .expect("platform RNG must produce a continuation key");

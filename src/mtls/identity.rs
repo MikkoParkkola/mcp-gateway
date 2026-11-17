@@ -123,6 +123,10 @@ mod tests {
         params.distinguished_name = dn;
         params.subject_alt_names = sans.to_vec();
 
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test code: a throwaway certificate key"
+        )]
         let key_pair = KeyPair::generate().expect("key generation failed");
         let cert = params
             .self_signed(&key_pair)

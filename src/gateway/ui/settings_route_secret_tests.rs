@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Secret, stale, no-op and removal route rows.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 use super::{SettingsStoreForTest, test_support::*};
 use crate::secret_store::{FilesStore, SecretStore, StoreError, StoreKind};
 use axum::http::StatusCode;

@@ -228,7 +228,6 @@ mod tests {
     )]
     use super::*;
     use crate::attestation::signer::{BnautAttestationSigner, TokenRequest};
-    use uuid::Uuid;
 
     const KEY: &[u8] = b"launcher-test-key";
 
@@ -253,7 +252,7 @@ mod tests {
             .issue(
                 &TokenRequest {
                     agent_identity: "agent".to_string(),
-                    task_uuid: Uuid::new_v4(),
+                    task_uuid: crate::ids::new_v4(),
                     capabilities: vec!["cap".to_string()],
                 },
                 now,

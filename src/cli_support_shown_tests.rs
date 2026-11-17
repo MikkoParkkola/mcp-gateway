@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! [`shown`] against the per-backslash version it replaced, kept here as the
 //! reference: the same output for every input, in linear time.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 
 use std::sync::mpsc;
 

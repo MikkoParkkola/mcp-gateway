@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A client certificate identity built the way production builds one.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code: random fixtures and throwaway keys, never shipped"
+)]
 /// A real certificate's identity, through the checked parser.
 pub fn cert_identity(
     common_name: Option<&str>,
