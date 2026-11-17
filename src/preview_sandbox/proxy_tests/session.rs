@@ -525,10 +525,12 @@ async fn rf1_a_refused_fetch_ends_the_session_with_its_step() {
 /// RF2 (NPM.8), kills "the refusal echoes what the sandbox sent": a
 /// `refused` value outside the step set (the credential itself, a URL that
 /// carries it, a path) or `null` ends the session with fixed words that hold
-/// none of it, and the credential stops working.
+/// none of it, no log line holds it either, and the credential stops working.
 #[tokio::test(flavor = "current_thread")]
 async fn rf2_an_unlisted_step_is_refused_without_echo() {
     for kind in ["credential", "url", "path", "null"] {
+        // Current-thread runtime: the session's and the proxy's tasks log here.
+        let (logs, _logging) = crate::gateway::session_id::log_capture::capture_debug();
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
         let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
@@ -566,6 +568,18 @@ async fn rf2_an_unlisted_step_is_refused_without_echo() {
             assert!(!text.contains(leaked), "{kind}: {text}");
         }
         assert_eq!(status_under(&rig, &secret).await, 407, "{kind}");
+        let logged = logs.text();
+        // Positive control: the capture saw the proxy refuse the revoked credential.
+        assert!(
+            logged.contains("preview proxy refused a request"),
+            "{kind}: {logged}"
+        );
+        for leaked in [secret.as_str(), "registry.npmjs.org/p", ".npmrc"] {
+            assert!(
+                !logged.contains(leaked),
+                "{kind}: a log line holds {leaked}"
+            );
+        }
     }
 }
 
