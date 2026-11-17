@@ -115,7 +115,12 @@ PACKAGED_SCRIPT = Path("scripts/ci/packaged-tests.sh")
 PART_CALL = re.compile(r"""MCP_GATEWAY_TEST_PART="\$k"\s+cargo\s+test\b.*\s--lib\b""")
 REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
 SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
-PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)')
+PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
+# The packaged build's one assignment of n: read from the build script, nothing else.
+N_FROM_BUILD = re.compile(r'^\s*n="\$\(sed\b[^\n]*\sscripts/dev/test-parts-build\.rs\)"\s*$', re.M)
+N_ASSIGNED = re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+)?n=", re.M)
+SHELL_SEPARATOR = re.compile(r"\s*(?:;|&&|\|\||\|)\s*")
+SHELL_COMMENT = re.compile(r"(?:^|\s)#.*$")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -133,19 +138,27 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no part")
     if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
         out.append("the build mode builds no non-lib test target")
-    # Every part: the loop runs 1..N with N read from the build script, so a shortened loop cannot pass.
-    if not PART_LOOP.search(block) or "scripts/dev/test-parts-build.rs" not in block:
-        out.append('the parts are not built by `for k in $(seq 1 "$n")` with n read from scripts/dev/test-parts-build.rs')
+    # Every part: the part builds sit inside a loop over 1..N, with n assigned once, from the build script, so a
+    # shortened loop or a part built outside it cannot pass.
+    joined = block.replace("\\\n", " ")
+    loop = PART_LOOP.search(block)
+    outside = block[:loop.start()] + block[loop.end():] if loop else block
+    if (not loop or len(N_ASSIGNED.findall(joined)) != 1 or not N_FROM_BUILD.search(joined)
+            or any(PART_CALL.search(line) for line in outside.splitlines())):
+        out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n assigned once, from '
+                   "scripts/dev/test-parts-build.rs")
     return out
 
 
 def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | None = None) -> bool:
-    """Whether every command in `job` that builds the library tests goes through one of `marks`. Judged per command
-    line (continuations joined), so a helper call cannot vouch for a whole build beside it in the same job or step."""
-    lines = [line for step in job.get("steps", []) if isinstance(step, dict)
-             for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()]
-    builds = [line for line in lines if builds_library(line, aliases)]
-    return bool(builds) and all(any(m in line for m in marks) for line in builds)
+    """Whether every command in `job` that builds the library tests goes through one of `marks`. Judged per shell
+    command (continuations joined, lines split at `;`, `&&`, `||` and `|`), so a helper call cannot vouch for a whole
+    build beside it in the same job, step or line."""
+    commands = [cmd for step in job.get("steps", []) if isinstance(step, dict)
+                for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()
+                for cmd in SHELL_SEPARATOR.split(SHELL_COMMENT.sub("", line))]
+    builds = [cmd for cmd in commands if builds_library(cmd, aliases)]
+    return bool(builds) and all(any(m in cmd for m in marks) for cmd in builds)
 
 
 def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
@@ -158,11 +171,15 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
         problems.append(f"{key[0]}:{key[1]} builds the library tests without {HELPER}, so the whole lib test binary")
     for key in sorted(set(WHOLE_BUILD_ALLOWED) - (set(jobs_in_scope) - through)):
         problems.append(f"{key[0]}:{key[1]} is allowed a whole build but no longer has one; delete its row")
-    # A job that builds by part ends with the swap-out tripwire, run even after a failed or timed-out step.
+    # A job that builds by part ends with the swap-out tripwire, after its last build step and run even after a failed
+    # or timed-out step; one placed before the build would measure nothing.
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
-        if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()" for s in steps):
-            problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE}")
+        last_build = max(i for i, s in enumerate(steps) if builds_library(str(s.get("run", ""))))
+        if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()"
+                   for s in steps[last_build + 1:]):
+            problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
+                            "after its last build step")
     return problems
 
 
@@ -457,8 +474,16 @@ def self_test() -> int:
         ("a helper job with a whole build in another step",
          {**allowed, ("ci.yml", "new"): {"steps": helper_job["steps"] + whole_job["steps"]}}, True, True),
         ("a helper job with a whole build on another line of the same step",
-         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_job["steps"][0]["run"] + "\n"
-                                                          + whole_job["steps"][0]["run"]}]}}, True, True),
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "\n" + whole_job["steps"][0]["run"]},
+                                                   tripwire]}}, True, True),
+        ("a helper job with a whole build after a separator on the same line",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "; " + whole_job["steps"][0]["run"]},
+                                                   tripwire]}}, True, True),
+        ("a whole build whose trailing comment names the helper",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": whole_job["steps"][0]["run"] + "  # scripts/ci/lib-parts.sh"},
+                                                   tripwire]}}, True, True),
+        ("a helper job whose tripwire runs before the build",
+         {**allowed, ("ci.yml", "new"): {"steps": [tripwire, helper_build]}}, True, True),
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
@@ -493,6 +518,8 @@ def self_test() -> int:
         ("the other targets only, no part", shape.format("true", rest), True),
         ("a fixed list of parts, not 1..N", shape.format(part, rest).replace('$(seq 1 "$n")', "1 2"), True),
         ("N not read from the build script", shape.format(part, rest).replace(n_line, "  n=2\n"), True),
+        ("n overridden after it is read", shape.format(part, rest).replace(n_line, n_line + "  n=2\n"), True),
+        ("a part built outside the loop", shape.format(part, rest + "\n  " + part.replace('"$k"', "3")), True),
     ]
     for label, text, want_bad in packaged_cases:
         found = packaged_build_problems(text)
