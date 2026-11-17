@@ -314,7 +314,7 @@ After importing, review and customize the generated files:
    ```
 
 3. **Customize** as needed:
-   - Adjust `cache.ttl` for frequently changing data
+   - Shorten the capability's response-cache TTL for frequently changing data
    - Add `response_path` to extract nested JSON fields
    - Tune `timeout` for slow endpoints
    - Set `cost_per_call` for metered APIs

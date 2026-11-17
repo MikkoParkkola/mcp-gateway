@@ -88,6 +88,7 @@ fn queued_observed(hub: &EventsHub, services: &Services, port: u16, event: &str)
         attribution_keys: Vec::new(),
         firewall: None,
         observed,
+        ended_incarnation: None,
     };
     let caps = OutboxCaps {
         global: 10,

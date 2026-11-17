@@ -28,7 +28,7 @@ permissions:
 jobs:
   feature-combos:
     name: Feature combinations (${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 45, not 20: on a slow mirror day the windows target shard's mingw
     # install once took the whole 20 minutes, twice, before any clippy ran
     # (MIK-8761). The install normally comes from a cache now (MIK-8766), but
@@ -247,7 +247,7 @@ jobs:
   # release builds need a manual dispatch), so such an error cannot reach a test run or an artefact.
   release-test-compile:
     name: Test compile without debug assertions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The compile step's 30 min plus 10 for setup and post steps, kept strictly under (scripts/ci/check_swap_jobs.py).
     timeout-minutes: 45
     steps:
