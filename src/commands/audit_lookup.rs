@@ -11,7 +11,7 @@
 //! The answer is decoded strictly and printed as the typed answer; any HTTP,
 //! authentication, read or decode failure is a nonzero exit.
 
-use crate::cli::stdout::println;
+use crate::cli::stdout::print;
 
 use std::process::ExitCode;
 
@@ -271,9 +271,28 @@ pub(crate) async fn run_with(
     input: impl std::io::Read,
     token: impl Fn(&str) -> Option<String>,
 ) -> ExitCode {
-    let fail = |message: String| {
-        eprintln!("audit lookup-email: {message}");
-        ExitCode::FAILURE
+    let outcome = lookup_outcome(args, load, port_override, host_override, input, token).await;
+    print!("{}", String::from_utf8_lossy(&outcome.stdout));
+    eprint!("{}", outcome.stderr);
+    ExitCode::from(outcome.exit.code())
+}
+
+/// What `audit lookup-email` prints and exits with: the entry the exit-table rows drive.
+///
+/// Red scaffold: today's text, exit 1 on every failure, until the shared error shape lands.
+pub(crate) async fn lookup_outcome(
+    args: LookupEmailArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    input: impl std::io::Read,
+    token: impl Fn(&str) -> Option<String>,
+) -> super::cli_exit::CliOutcome {
+    use super::cli_exit::{CliExit, CliOutcome};
+    let fail = |message: String| CliOutcome {
+        stdout: Vec::new(),
+        stderr: format!("audit lookup-email: {message}\n"),
+        exit: CliExit::LocalFailure,
     };
     let token = match super::dashboard_link::read_token(token) {
         Ok(token) => token,
@@ -300,10 +319,11 @@ pub(crate) async fn run_with(
     };
     match lookup(&base, &tls, &token, &asked, &args).await {
         Ok(answer) => match render(&answer) {
-            Ok(text) => {
-                println!("{text}");
-                ExitCode::SUCCESS
-            }
+            Ok(text) => CliOutcome {
+                stdout: format!("{text}\n").into_bytes(),
+                stderr: String::new(),
+                exit: CliExit::Ok,
+            },
             Err(message) => fail(message),
         },
         Err(message) => fail(message),

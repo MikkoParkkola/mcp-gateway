@@ -12,7 +12,8 @@ use mcp_gateway::cli::{Cli, Command};
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 
-use super::api::{ApiExit, ApiRequest, run_api_with};
+use super::api::{ApiRequest, run_api_with};
+use super::cli_exit::CliExit;
 use super::dashboard_link::{AdminCallError, AdminResponse, LinkTls, TOKEN_ENV};
 use crate::gateway::ui::cli_parity_tests::{CliForm, UI_CHANGES, filled};
 
@@ -55,7 +56,7 @@ async fn each_ui_change_cli_form_sends_that_method_and_path() {
         );
         assert_eq!(
             outcome.exit,
-            ApiExit::Ok,
+            CliExit::Ok,
             "{form}: a 204 answer must exit 0"
         );
         checked += 1;

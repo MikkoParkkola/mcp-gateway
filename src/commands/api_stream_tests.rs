@@ -98,7 +98,7 @@ fn answer(status: u16, content_type: &str, chunks: Vec<Vec<u8>>, open: bool) -> 
 
 /// The streamed path with a scripted answer (`None`: it must not be sent):
 /// what it printed, its outcome, and how many requests it sent.
-async fn run(request: &ApiArgs, reply: Option<AdminStream>) -> (Vec<u8>, ApiOutcome, usize) {
+async fn run(request: &ApiArgs, reply: Option<AdminStream>) -> (Vec<u8>, CliOutcome, usize) {
     run_as(request, reply, TOKEN).await
 }
 
@@ -107,7 +107,7 @@ async fn run_as(
     request: &ApiArgs,
     reply: Option<AdminStream>,
     token: &str,
-) -> (Vec<u8>, ApiOutcome, usize) {
+) -> (Vec<u8>, CliOutcome, usize) {
     let sends = AtomicUsize::new(0);
     let out = Shared::default();
     let outcome = run_streamed_with(
@@ -156,7 +156,7 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
         let (out, outcome, sends) = run(&request, None).await;
         assert_eq!(
             (outcome.exit, sends, out.len()),
-            (ApiExit::Usage, 0, 0),
+            (CliExit::Usage, 0, 0),
             "{}",
             request.path
         );
@@ -176,7 +176,7 @@ async fn stream_flags_and_credentials_are_checked_before_sending() {
         let (out, outcome, sends) = run(&request, None).await;
         assert_eq!(
             (outcome.exit, sends, out.len()),
-            (ApiExit::Usage, 0, 0),
+            (CliExit::Usage, 0, 0),
             "{}",
             request.path
         );
@@ -239,7 +239,7 @@ async fn a_download_masks_the_credential_at_every_cut() {
     for at in 1..body.len() {
         let reply = answer(200, "application/x-ndjson", split(&body, at), false);
         let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
-        assert_eq!(outcome.exit, ApiExit::Ok, "cut at {at}");
+        assert_eq!(outcome.exit, CliExit::Ok, "cut at {at}");
         assert_eq!(text(&out), expected, "cut at {at}");
     }
 }
@@ -252,7 +252,7 @@ async fn an_event_masks_the_credential_in_every_field() {
         for at in [3, 12, body.len() / 2, body.len() - 3] {
             let reply = answer(200, "text/event-stream", split(&body, at), true);
             let (out, outcome, _) = run(&args(STREAM, Some(1), json), Some(reply)).await;
-            assert_eq!(outcome.exit, ApiExit::Ok, "json {json}, cut {at}");
+            assert_eq!(outcome.exit, CliExit::Ok, "json {json}, cut {at}");
             assert!(
                 !text(&out).contains(TOKEN),
                 "json {json}, cut {at}: {}",
@@ -275,7 +275,7 @@ async fn a_non_utf8_line_passes_only_without_the_credential() {
         Some(answer(200, "text/csv", clean, false)),
     )
     .await;
-    assert_eq!((outcome.exit, out), (ApiExit::Ok, b"ok\n\xffa\n".to_vec()));
+    assert_eq!((outcome.exit, out), (CliExit::Ok, b"ok\n\xffa\n".to_vec()));
     let mut dirty = vec![0xff];
     dirty.extend_from_slice(TOKEN.as_bytes());
     dirty.push(b'\n');
@@ -289,7 +289,7 @@ async fn a_non_utf8_line_passes_only_without_the_credential() {
         )),
     )
     .await;
-    assert_eq!(outcome.exit, ApiExit::LocalFailure);
+    assert_eq!(outcome.exit, CliExit::LocalFailure);
     assert_eq!(
         out,
         b"ok\n".to_vec(),
@@ -311,7 +311,7 @@ async fn non_stream_answers_take_the_buffered_path() {
         )),
     )
     .await;
-    assert_eq!(outcome.exit, ApiExit::Ok);
+    assert_eq!(outcome.exit, CliExit::Ok);
     assert!(
         out.is_empty() && text(&outcome.stdout).contains("\"ok\": true"),
         "rendered by the buffered path"
@@ -328,7 +328,7 @@ async fn non_stream_answers_take_the_buffered_path() {
         )
         .await;
         assert!(
-            out.is_empty() && outcome.exit != ApiExit::Ok,
+            out.is_empty() && outcome.exit != CliExit::Ok,
             "{status} {kind}: not streamed, not success"
         );
     }
@@ -340,7 +340,7 @@ async fn non_stream_answers_take_the_buffered_path() {
         .await;
         assert_eq!(
             (outcome.exit, out),
-            (ApiExit::Ok, b"a,b\n".to_vec()),
+            (CliExit::Ok, b"a,b\n".to_vec()),
             "{kind} streams"
         );
     }
@@ -356,7 +356,7 @@ async fn the_limit_prints_whole_events_only() {
         Some(answer(200, "text/event-stream", vec![chunk], true)),
     )
     .await;
-    assert_eq!(outcome.exit, ApiExit::Ok);
+    assert_eq!(outcome.exit, CliExit::Ok);
     assert_eq!(text(&out), "event: message\ndata: first\n\n");
 }
 
@@ -373,7 +373,7 @@ async fn an_over_long_line_is_refused_unprinted() {
         false,
     );
     let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
-    assert_eq!(outcome.exit, ApiExit::LocalFailure);
+    assert_eq!(outcome.exit, CliExit::LocalFailure);
     assert_eq!(
         out,
         b"first\n".to_vec(),
@@ -386,7 +386,7 @@ async fn an_over_long_line_is_refused_unprinted() {
         Some(answer(200, "text/event-stream", vec![event], true)),
     )
     .await;
-    assert_eq!((outcome.exit, out.len()), (ApiExit::LocalFailure, 0));
+    assert_eq!((outcome.exit, out.len()), (CliExit::LocalFailure, 0));
 }
 
 /// R9: a transport loss after output is the network exit with the output so
@@ -411,7 +411,7 @@ async fn a_failure_after_output_keeps_what_was_printed() {
     let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
     assert_eq!(
         (outcome.exit, text(&out)),
-        (ApiExit::Network, "one\n".to_owned())
+        (CliExit::Network, "one\n".to_owned())
     );
     assert!(!outcome.stderr.contains(TOKEN));
     let ended = answer(
@@ -421,7 +421,7 @@ async fn a_failure_after_output_keeps_what_was_printed() {
         false,
     );
     let (out, outcome, _) = run(&args(STREAM, Some(2), false), Some(ended)).await;
-    assert_eq!(outcome.exit, ApiExit::Network);
+    assert_eq!(outcome.exit, CliExit::Network);
     assert!(outcome.stderr.contains("1 of 2"), "{}", outcome.stderr);
     assert_eq!(text(&out), "event: message\ndata: a\n\n");
 }
@@ -439,8 +439,8 @@ async fn write_failures_follow_the_buffered_rules() {
         }
     }
     for (kind, exit) in [
-        (std::io::ErrorKind::BrokenPipe, ApiExit::Ok),
-        (std::io::ErrorKind::Other, ApiExit::LocalFailure),
+        (std::io::ErrorKind::BrokenPipe, CliExit::Ok),
+        (std::io::ErrorKind::Other, CliExit::LocalFailure),
     ] {
         let reply = answer(200, "text/csv", vec![b"a\n".to_vec()], false);
         let request = args(EXPORT, None, false);
@@ -485,7 +485,7 @@ async fn tokens_the_redactor_cannot_mask_stop_the_run() {
         let (out, outcome, _) = run_as(&request, Some(reply), token).await;
         assert_eq!(
             (outcome.exit, out.len()),
-            (ApiExit::LocalFailure, 0),
+            (CliExit::LocalFailure, 0),
             "{} {token:?}: {}",
             request.path,
             outcome.stderr
@@ -496,7 +496,7 @@ async fn tokens_the_redactor_cannot_mask_stop_the_run() {
         (args(STREAM, Some(1), false), event("Xd]zz")),
     ] {
         let (out, outcome, _) = run_as(&request, Some(reply), "d]z").await;
-        assert_eq!(outcome.exit, ApiExit::Ok, "{}", outcome.stderr);
+        assert_eq!(outcome.exit, CliExit::Ok, "{}", outcome.stderr);
         let printed = text(&out);
         assert!(
             !printed.contains("d]z") && printed.contains("X<removed>z"),
@@ -515,7 +515,7 @@ async fn an_over_long_line_in_one_chunk_is_refused() {
     chunk.push(b'\n');
     let reply = answer(200, "application/x-ndjson", vec![chunk], false);
     let (out, outcome, _) = run(&args(EXPORT, None, false), Some(reply)).await;
-    assert_eq!((outcome.exit, out.len()), (ApiExit::LocalFailure, 0));
+    assert_eq!((outcome.exit, out.len()), (CliExit::LocalFailure, 0));
 }
 
 /// The shared refusal on the stream's JSON events (its third caller, beside
@@ -537,7 +537,7 @@ async fn a_json_event_that_loses_an_entry_to_redaction_is_refused() {
     let (out, outcome, _) = run_as(&args(STREAM, Some(1), true), Some(reply), "#").await;
     assert_eq!(
         (outcome.exit, out.len()),
-        (ApiExit::LocalFailure, 0),
+        (CliExit::LocalFailure, 0),
         "{}",
         outcome.stderr
     );

@@ -284,6 +284,47 @@ async fn events_args_output(
     }
 }
 
+/// What `dashboard-link` prints and exits with for `token`: the entry the exit-table rows drive.
+///
+/// Red scaffold: today's output, exit 1 on every failure, until the shared error shape lands.
+pub(crate) async fn dashboard_link_outcome(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> super::cli_exit::CliOutcome {
+    scaffold_outcome(
+        dashboard_link_args_output(args, load, port_override, host_override, token).await,
+    )
+}
+
+/// What `events dead-letters` prints and exits with for `token`: the entry the exit-table rows drive.
+///
+/// Red scaffold: today's output, exit 1 on every failure, until the shared error shape lands.
+pub(crate) async fn events_outcome(
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> super::cli_exit::CliOutcome {
+    scaffold_outcome(events_args_output(args, load, port_override, host_override, token).await)
+}
+
+fn scaffold_outcome(printed: Printed) -> super::cli_exit::CliOutcome {
+    use super::cli_exit::{CliExit, CliOutcome};
+    CliOutcome {
+        stdout: printed.stdout.into_bytes(),
+        stderr: printed.stderr,
+        exit: if printed.ok {
+            CliExit::Ok
+        } else {
+            CliExit::LocalFailure
+        },
+    }
+}
+
 /// A failure printed when no token is set, so there is nothing to mask.
 fn unmasked(prefix: &str, message: &str) -> Printed {
     Printed {

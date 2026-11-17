@@ -12,6 +12,7 @@ use mcp_gateway::cli::api::{ApiArgs, ApiMethod};
 use mcp_gateway::cli::redact;
 use serde_json::Value;
 
+use super::cli_exit::{CliError, CliExit, CliOutcome};
 use super::dashboard_link::{
     AdminCallError, AdminFailureKind, AdminResponse, LinkTls, TOKEN_ENV, TokenError,
     admin_call_url, check_target, dashboard_link_base, gateway_reason, read_token,
@@ -21,7 +22,6 @@ const BODY_LIMIT: u64 = 16 * 1024 * 1024;
 
 #[path = "api_stream.rs"]
 mod stream;
-pub(crate) use stream::write_outcome;
 
 const UNCERTAIN_MESSAGE: &str = "The gateway may have applied this change.";
 const UNCERTAIN_REMEDY: &str =
@@ -31,44 +31,6 @@ const UNSAFE_BODY_REMEDY: &str = "The response was received but could not be pri
 const PROTOCOL_MESSAGE: &str = "The gateway returned an invalid response.";
 const PROTOCOL_REMEDY: &str = "Check the gateway response against UI API 1.";
 
-/// Exit table E. Each kind has one process code, independent of HTTP status.
-/// What an error becomes when its rendering would still contain the token.
-const UNPRINTABLE_ERROR: &str =
-    "error: The error report could not be printed without exposing the credential.\n";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-pub(crate) enum ApiExit {
-    Ok,
-    LocalFailure,
-    Usage,
-    AuthRefused,
-    NotFound,
-    Network,
-    Gateway,
-    #[allow(dead_code, reason = "reserved by the shared exit table")]
-    Declined,
-    UncertainOutcome,
-    #[allow(dead_code, reason = "reserved by the shared exit table")]
-    Interrupted,
-}
-
-impl ApiExit {
-    pub(crate) const fn code(self) -> u8 {
-        match self {
-            Self::Ok => 0,
-            Self::LocalFailure => 1,
-            Self::Usage => 2,
-            Self::AuthRefused => 3,
-            Self::NotFound => 4,
-            Self::Network => 5,
-            Self::Gateway => 6,
-            Self::Declined => 7,
-            Self::UncertainOutcome => 8,
-            Self::Interrupted => 130,
-        }
-    }
-}
-
 /// A validated request. Deliberately not Debug: it owns the bearer.
 pub(crate) struct ApiRequest {
     pub(crate) method: reqwest::Method,
@@ -77,76 +39,6 @@ pub(crate) struct ApiRequest {
     pub(crate) tls: LinkTls,
     pub(crate) body: Option<Value>,
     pub(crate) if_match: Option<reqwest::header::HeaderValue>,
-}
-
-/// Output is captured before printing, so tests need no process globals.
-pub(crate) struct ApiOutcome {
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: String,
-    pub(crate) exit: ApiExit,
-}
-
-struct ApiError {
-    kind: ApiExit,
-    message: String,
-    remedy: String,
-    http_status: Option<u16>,
-    request_id: Option<String>,
-}
-
-impl ApiError {
-    fn new(kind: ApiExit, message: impl Into<String>, remedy: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-            remedy: remedy.into(),
-            http_status: None,
-            request_id: None,
-        }
-    }
-
-    fn outcome(self, json: bool, token: &str) -> ApiOutcome {
-        // Redact values before serialization: a token resembling JSON
-        // punctuation must never replace JSON syntax.
-        let message = redact::text(&self.message, &[token.to_string()]);
-        let remedy = redact::text(&self.remedy, &[token.to_string()]);
-        let request_id = self
-            .request_id
-            .map(|id| redact::text(&id, &[token.to_string()]));
-        let stderr = if json {
-            let error = serde_json::json!({
-                "schema_version": 1,
-                "error": {
-                    "kind": self.kind,
-                    "message": message,
-                    "remedy": remedy,
-                    "http_status": self.http_status,
-                    "request_id": request_id,
-                },
-            });
-            format!("{error}\n")
-        } else {
-            format!("error: {message}\n{remedy}\n")
-        };
-        // Fixed fields (kind, schema_version, http_status) are never
-        // redacted, so a token equal to one of them would still show. Then
-        // print one fixed token-free sentence instead of the report, or
-        // nothing if even that sentence contains the token.
-        let stderr = if !token.is_empty() && stderr.contains(token) {
-            if UNPRINTABLE_ERROR.contains(token) {
-                String::new()
-            } else {
-                UNPRINTABLE_ERROR.to_string()
-            }
-        } else {
-            stderr
-        };
-        ApiOutcome {
-            stdout: Vec::new(),
-            stderr,
-            exit: self.kind,
-        }
-    }
 }
 
 /// Resolve the gateway like dashboard-link, then send one request through
@@ -160,7 +52,7 @@ pub async fn run_api_command(
     let token = std::env::var(TOKEN_ENV).ok();
     let redaction = token.as_deref().unwrap_or_default();
     let outcome = if let Err(error) = method(&args.method, redaction) {
-        error.outcome(args.json, redaction)
+        error.outcome(args.json, &[redaction])
     } else {
         match dashboard_link_base(
             args.url.clone(),
@@ -206,46 +98,35 @@ pub async fn run_api_command(
                 )
                 .await
             }
-            Err(message) => ApiError::new(
-                ApiExit::Usage,
+            Err(message) => CliError::new(
+                CliExit::Usage,
                 message,
                 "Check the gateway settings, then retry.",
             )
-            .outcome(args.json, redaction),
+            .outcome(args.json, &[redaction]),
         }
     };
-    ExitCode::from(
-        write_outcome(
-            &outcome,
-            args.json,
-            redaction,
-            // Not locked up front: a streamed run's printing thread may hold
-            // stdout past its deadline, and an empty answer must not wait.
-            &mut std::io::stdout(),
-            &mut std::io::stderr().lock(),
-        )
-        .code(),
-    )
+    super::cli_exit::emit(&outcome, args.json, &[redaction])
 }
 
 /// The credential to send, or the refusal that ends the command before any
 /// request: none, empty, or holding a control character (a credential travels
 /// in a header line, so it can never hold CR or LF).
-fn resolve_token(credential: Result<String, TokenError>, origin: &str) -> Result<String, ApiError> {
+fn resolve_token(credential: Result<String, TokenError>, origin: &str) -> Result<String, CliError> {
     match credential {
-        Ok(token) if token.chars().any(char::is_control) => Err(ApiError::new(
-            ApiExit::Usage,
+        Ok(token) if token.chars().any(char::is_control) => Err(CliError::new(
+            CliExit::Usage,
             "MCP_GATEWAY_TOKEN holds a control character.",
             "Unset or replace MCP_GATEWAY_TOKEN, then retry.",
         )),
         Ok(token) => Ok(token),
-        Err(TokenError::Missing) => Err(ApiError::new(
-            ApiExit::AuthRefused,
+        Err(TokenError::Missing) => Err(CliError::new(
+            CliExit::AuthRefused,
             "No gateway credential is available.",
             login_remedy(origin),
         )),
-        Err(TokenError::Blank) => Err(ApiError::new(
-            ApiExit::Usage,
+        Err(TokenError::Blank) => Err(CliError::new(
+            CliExit::Usage,
             "MCP_GATEWAY_TOKEN is empty.",
             "Unset or replace MCP_GATEWAY_TOKEN, then retry.",
         )),
@@ -260,7 +141,7 @@ pub(crate) async fn run_api_with<F, Fut>(
     lookup: impl Fn(&str) -> Option<String>,
     stdin: impl FnOnce() -> Result<Vec<u8>, String>,
     send: F,
-) -> ApiOutcome
+) -> CliOutcome
 where
     F: FnOnce(ApiRequest) -> Fut,
     Fut: Future<Output = Result<AdminResponse, AdminCallError>>,
@@ -269,19 +150,19 @@ where
     let redaction = credential.as_deref().unwrap_or_default();
     let method = match method(&args.method, redaction) {
         Ok(method) => method,
-        Err(error) => return error.outcome(args.json, redaction),
+        Err(error) => return error.outcome(args.json, &[redaction]),
     };
     let url = match api_url(base, &args.path) {
         Ok(url) => url,
-        Err(error) => return error.outcome(args.json, redaction),
+        Err(error) => return error.outcome(args.json, &[redaction]),
     };
     if let Err(error) = stream::check_args(args, &url) {
-        return error.outcome(args.json, redaction);
+        return error.outcome(args.json, &[redaction]);
     }
     let origin = url.origin().ascii_serialization();
     let token = match resolve_token(credential, &origin) {
         Ok(token) => token,
-        Err(error) => return error.outcome(args.json, ""),
+        Err(error) => return error.outcome(args.json, &[""]),
     };
     let if_match = match args.if_match.as_deref().map(|value| {
         if value.chars().any(char::is_control) {
@@ -290,19 +171,19 @@ where
         reqwest::header::HeaderValue::from_str(value).ok()
     }) {
         Some(None) => {
-            return ApiError::new(
-                ApiExit::Usage,
+            return CliError::new(
+                CliExit::Usage,
                 "If-Match value is not a valid header value.",
                 "Pass the ETag exactly as the gateway returned it.",
             )
-            .outcome(args.json, &token);
+            .outcome(args.json, &[token.as_str()]);
         }
         Some(Some(value)) => Some(value),
         None => None,
     };
     let body = match read_data(args.data.as_deref(), stdin) {
         Ok(body) => body,
-        Err(error) => return error.outcome(args.json, &token),
+        Err(error) => return error.outcome(args.json, &[token.as_str()]),
     };
     let mutation = method != reqwest::Method::GET;
     match send(ApiRequest {
@@ -318,11 +199,13 @@ where
         Ok(response) => {
             render_response(&response, &token, args.json, &origin, &args.path, mutation)
         }
-        Err(error) => transport_failure(error, mutation, &token).outcome(args.json, &token),
+        Err(error) => {
+            transport_failure(error, mutation, &token).outcome(args.json, &[token.as_str()])
+        }
     }
 }
 
-fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, ApiError> {
+fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, CliError> {
     Ok(match method {
         ApiMethod::Get => reqwest::Method::GET,
         ApiMethod::Post => reqwest::Method::POST,
@@ -331,8 +214,8 @@ fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, ApiError> 
         ApiMethod::Delete => reqwest::Method::DELETE,
         ApiMethod::Unsupported(value) => {
             let value = redact::text(value, &[token.to_string()]);
-            return Err(ApiError::new(
-                ApiExit::Usage,
+            return Err(CliError::new(
+                CliExit::Usage,
                 format!("Unsupported API method {value:?}."),
                 "Use GET, POST, PUT, PATCH or DELETE.",
             ));
@@ -340,29 +223,29 @@ fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, ApiError> 
     })
 }
 
-fn unsafe_target() -> ApiError {
-    ApiError::new(
-        ApiExit::Usage,
+fn unsafe_target() -> CliError {
+    CliError::new(
+        CliExit::Usage,
         "Gateway URL must use HTTPS or loopback HTTP.",
         "Use an HTTPS gateway URL or a loopback HTTP URL.",
     )
 }
 
-fn unsafe_path() -> ApiError {
-    ApiError::new(
-        ApiExit::Usage,
+fn unsafe_path() -> CliError {
+    CliError::new(
+        CliExit::Usage,
         "API path is outside the unchanged /ui/api/ boundary.",
         "Use an unchanged relative path beginning /ui/api/.",
     )
 }
 
 /// Judge the same WHATWG-normalised URL the transport will send.
-fn api_url(base: &str, path: &str) -> Result<reqwest::Url, ApiError> {
+fn api_url(base: &str, path: &str) -> Result<reqwest::Url, CliError> {
     check_target(base).map_err(|_| unsafe_target())?;
     let base = reqwest::Url::parse(base).map_err(|_| unsafe_target())?;
     if !matches!(base.path(), "" | "/") || base.query().is_some() || base.fragment().is_some() {
-        return Err(ApiError::new(
-            ApiExit::Usage,
+        return Err(CliError::new(
+            CliExit::Usage,
             "Gateway URL must have no path, query or fragment.",
             "Use the gateway's origin only, for example https://gateway.example:8443.",
         ));
@@ -386,12 +269,12 @@ fn api_url(base: &str, path: &str) -> Result<reqwest::Url, ApiError> {
 fn read_data(
     data: Option<&str>,
     stdin: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<Option<Value>, ApiError> {
+) -> Result<Option<Value>, CliError> {
     let Some(data) = data else { return Ok(None) };
     let data = if data == "-" {
         stdin().map_err(|_| {
-            ApiError::new(
-                ApiExit::LocalFailure,
+            CliError::new(
+                CliExit::LocalFailure,
                 "Could not read request body from stdin.",
                 "Supply readable request bytes on stdin, then retry.",
             )
@@ -404,8 +287,8 @@ fn read_data(
                 Ok(input)
             })
             .map_err(|_| {
-                ApiError::new(
-                    ApiExit::LocalFailure,
+                CliError::new(
+                    CliExit::LocalFailure,
                     format!("Could not read request body from {path}."),
                     format!("Make {path} readable, then retry."),
                 )
@@ -414,15 +297,15 @@ fn read_data(
         data.as_bytes().to_vec()
     };
     if data.len() as u64 > BODY_LIMIT {
-        return Err(ApiError::new(
-            ApiExit::Usage,
+        return Err(CliError::new(
+            CliExit::Usage,
             "Request body exceeds 16 MiB.",
             "Send a smaller body.",
         ));
     }
     serde_json::from_slice(&data).map(Some).map_err(|_| {
-        ApiError::new(
-            ApiExit::Usage,
+        CliError::new(
+            CliExit::Usage,
             "Request body is not valid JSON.",
             "Correct the JSON or select the body's actual Content-Type.",
         )
@@ -433,49 +316,49 @@ fn login_remedy(origin: &str) -> String {
     format!("Run mcp-gateway login --gateway {origin}, then retry.")
 }
 
-fn transport_failure(error: AdminCallError, mutation: bool, token: &str) -> ApiError {
+fn transport_failure(error: AdminCallError, mutation: bool, token: &str) -> CliError {
     let mut failure = match error.kind {
         AdminFailureKind::Target => unsafe_target(),
-        AdminFailureKind::LocalIo | AdminFailureKind::Settings => ApiError::new(
+        AdminFailureKind::LocalIo | AdminFailureKind::Settings => CliError::new(
             if error.kind == AdminFailureKind::LocalIo {
-                ApiExit::LocalFailure
+                CliExit::LocalFailure
             } else {
-                ApiExit::Usage
+                CliExit::Usage
             },
             error.detail,
             "Check the gateway hostname, CA and client identity files, then retry.",
         ),
-        AdminFailureKind::Dns => ApiError::new(
-            ApiExit::Network,
+        AdminFailureKind::Dns => CliError::new(
+            CliExit::Network,
             "Gateway host could not be resolved.",
             "Check the gateway hostname and DNS settings, then retry.",
         ),
-        AdminFailureKind::Connect => ApiError::new(
-            ApiExit::Network,
+        AdminFailureKind::Connect => CliError::new(
+            CliExit::Network,
             "Could not connect to the gateway.",
             "Check the gateway address and listener, then retry.",
         ),
-        AdminFailureKind::Tls => ApiError::new(
-            ApiExit::Network,
+        AdminFailureKind::Tls => CliError::new(
+            CliExit::Network,
             "Gateway TLS verification failed.",
             "Check the gateway hostname, CA and client identity files, then retry.",
         ),
-        AdminFailureKind::ResponseTooLarge => ApiError::new(
+        AdminFailureKind::ResponseTooLarge => CliError::new(
             if mutation {
-                ApiExit::UncertainOutcome
+                CliExit::UncertainOutcome
             } else {
-                ApiExit::Network
+                CliExit::Network
             },
             "Gateway response exceeded 16 MiB.",
             "Narrow the request or read the data in smaller pages.",
         ),
-        AdminFailureKind::ResponseLost if mutation => ApiError::new(
-            ApiExit::UncertainOutcome,
+        AdminFailureKind::ResponseLost if mutation => CliError::new(
+            CliExit::UncertainOutcome,
             UNCERTAIN_MESSAGE,
             UNCERTAIN_REMEDY,
         ),
-        AdminFailureKind::ResponseLost => ApiError::new(
-            ApiExit::Network,
+        AdminFailureKind::ResponseLost => CliError::new(
+            CliExit::Network,
             "Gateway response was interrupted.",
             "Repeat the read request.",
         ),
@@ -556,7 +439,7 @@ fn gateway_failure(
     origin: &str,
     path: &str,
     mutation: bool,
-) -> Option<ApiError> {
+) -> Option<CliError> {
     let status = response.status;
     let reason = gateway_reason(body).and_then(|reason| safe_text(reason, token));
     let code = gateway_code(body);
@@ -566,8 +449,8 @@ fn gateway_failure(
     let not_run = known_not_run(status, body) && !explicit_uncertainty;
     let ambiguous = mutation && status.is_server_error() && !not_run && !explicit_uncertainty;
     let mut failure = if explicit_uncertainty || ambiguous {
-        ApiError::new(
-            ApiExit::UncertainOutcome,
+        CliError::new(
+            CliExit::UncertainOutcome,
             if explicit_uncertainty {
                 reason
                     .as_deref()
@@ -582,14 +465,14 @@ fn gateway_failure(
             UNCERTAIN_REMEDY,
         )
     } else if code.as_deref() == Some("unsupported_version") {
-        ApiError::new(
-            ApiExit::Gateway,
+        CliError::new(
+            CliExit::Gateway,
             "The gateway API version is unsupported.",
             "Use a CLI and gateway that support the same UI API version.",
         )
     } else if status.is_success() && not_run {
-        ApiError::new(
-            ApiExit::Gateway,
+        CliError::new(
+            CliExit::Gateway,
             reason
                 .as_deref()
                 .unwrap_or("The gateway failed before running the operation."),
@@ -600,7 +483,7 @@ fn gateway_failure(
     } else {
         let (kind, fallback, remedy) =
             http_refusal(response, code.as_deref(), origin, path, token, not_run);
-        ApiError::new(kind, reason.as_deref().unwrap_or(fallback), remedy)
+        CliError::new(kind, reason.as_deref().unwrap_or(fallback), remedy)
     };
     if !ambiguous
         && let Some(code) = code.and_then(|code| safe_text(&code, token))
@@ -608,7 +491,7 @@ fn gateway_failure(
     {
         let _ = write!(failure.remedy, " Gateway reason: {code}.");
     }
-    if failure.kind == ApiExit::UncertainOutcome
+    if failure.kind == CliExit::UncertainOutcome
         && let Some(recovery) = body["recovery"]
             .as_str()
             .and_then(|text| safe_text(text, token))
@@ -616,7 +499,7 @@ fn gateway_failure(
         let _ = write!(failure.remedy, " {recovery}");
     }
     if status == reqwest::StatusCode::NOT_FOUND
-        && failure.kind == ApiExit::NotFound
+        && failure.kind == CliExit::NotFound
         && reason
             .as_deref()
             .is_some_and(|text| text.starts_with("Backend '") || text.starts_with("Backend \""))
@@ -642,27 +525,27 @@ fn http_refusal(
     path: &str,
     token: &str,
     not_run: bool,
-) -> (ApiExit, &'static str, String) {
+) -> (CliExit, &'static str, String) {
     match response.status {
         reqwest::StatusCode::UNAUTHORIZED => (
-            ApiExit::AuthRefused,
+            CliExit::AuthRefused,
             "The gateway rejected this credential.",
             login_remedy(origin),
         ),
         reqwest::StatusCode::FORBIDDEN => (
-            ApiExit::AuthRefused,
+            CliExit::AuthRefused,
             "This credential is not permitted to perform this operation.",
             format!(
                 "Use an entitled credential; run mcp-gateway login --gateway {origin} with an account permitted to perform this operation, then retry."
             ),
         ),
         reqwest::StatusCode::NOT_FOUND => (
-            ApiExit::NotFound,
+            CliExit::NotFound,
             "API path was not found.",
             "Check the path against docs/api/stable-ui-routes.md.".to_string(),
         ),
         reqwest::StatusCode::CONFLICT if code == Some("name_taken") => (
-            ApiExit::Gateway,
+            CliExit::Gateway,
             PROTOCOL_MESSAGE,
             "Choose an unused key name, then retry.".to_string(),
         ),
@@ -673,7 +556,7 @@ fn http_refusal(
                 .unwrap_or("x");
             let name = redact::text(name, &[token.to_string()]);
             (
-                ApiExit::Gateway,
+                CliExit::Gateway,
                 PROTOCOL_MESSAGE,
                 format!(
                     "Read capability {name:?} again and reapply the edit using its current revision."
@@ -681,12 +564,12 @@ fn http_refusal(
             )
         }
         reqwest::StatusCode::PRECONDITION_REQUIRED => (
-            ApiExit::Gateway,
+            CliExit::Gateway,
             PROTOCOL_MESSAGE,
             "Send the request with If-Match set to the current revision.".to_string(),
         ),
         reqwest::StatusCode::UNPROCESSABLE_ENTITY => (
-            ApiExit::Gateway,
+            CliExit::Gateway,
             PROTOCOL_MESSAGE,
             "Correct the request body using the gateway's validation details.".to_string(),
         ),
@@ -698,18 +581,18 @@ fn http_refusal(
                 .and_then(|v| v.parse::<u64>().ok());
             let interval = seconds.map_or_else(String::new, |s| format!(" ({s} s)"));
             (
-                ApiExit::Gateway,
+                CliExit::Gateway,
                 PROTOCOL_MESSAGE,
                 format!("Wait for the gateway's Retry-After interval{interval} before retrying."),
             )
         }
         _ if response.status.is_server_error() && not_run => (
-            ApiExit::Gateway,
+            CliExit::Gateway,
             "The gateway failed before running the operation.",
             "Resolve the gateway error, then retry.".to_string(),
         ),
         _ => (
-            ApiExit::Gateway,
+            CliExit::Gateway,
             PROTOCOL_MESSAGE,
             PROTOCOL_REMEDY.to_string(),
         ),
@@ -723,7 +606,7 @@ fn render_response(
     origin: &str,
     path: &str,
     mutation: bool,
-) -> ApiOutcome {
+) -> CliOutcome {
     let mut json = serde_json::from_slice::<Value>(&response.body).ok();
     if let Some(error) = gateway_failure(
         response,
@@ -733,16 +616,16 @@ fn render_response(
         path,
         mutation,
     ) {
-        return error.outcome(json_output, token);
+        return error.outcome(json_output, &[token]);
     }
     let (stdout, stderr) = if let Some(body) = &mut json {
         if !super::dashboard_link::redact_body(body, token) {
-            return ApiError::new(
-                ApiExit::LocalFailure,
+            return CliError::new(
+                CliExit::LocalFailure,
                 UNSAFE_BODY_MESSAGE,
                 UNSAFE_BODY_REMEDY,
             )
-            .outcome(json_output, token);
+            .outcome(json_output, &[token]);
         }
         let mut stdout = serde_json::to_vec_pretty(body).unwrap_or_default();
         stdout.push(b'\n');
@@ -753,12 +636,12 @@ fn render_response(
             Ok(text) => redact::text(text, &[token.to_string()]).into_bytes(),
             Err(_) if token.is_empty() || !checked.contains(token) => response.body.clone(),
             Err(_) => {
-                return ApiError::new(
-                    ApiExit::LocalFailure,
+                return CliError::new(
+                    CliExit::LocalFailure,
                     UNSAFE_BODY_MESSAGE,
                     UNSAFE_BODY_REMEDY,
                 )
-                .outcome(json_output, token);
+                .outcome(json_output, &[token]);
             }
         };
         (
@@ -772,9 +655,9 @@ fn render_response(
             ),
         )
     };
-    ApiOutcome {
+    CliOutcome {
         stdout,
         stderr,
-        exit: ApiExit::Ok,
+        exit: CliExit::Ok,
     }
 }

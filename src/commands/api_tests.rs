@@ -21,7 +21,9 @@ use mcp_gateway::cli::events::{DeadLetterAction, DeadLettersArgs};
 
 use serde_json::json;
 
-use super::api::{ApiExit, ApiOutcome, ApiRequest, run_api_with, write_outcome};
+use super::api::{ApiRequest, run_api_with};
+use super::cli_exit::emit_to;
+use super::cli_exit::{CliExit, CliOutcome};
 
 use super::dashboard_link::{
     AdminCallError, AdminFailureKind, AdminResponse, LinkTls, TOKEN_ENV, admin_call,
@@ -138,7 +140,7 @@ async fn stand_in_with_headers(
     reason = "fixtures pin every error field independently"
 )]
 fn assert_error(
-    out: &ApiOutcome,
+    out: &CliOutcome,
     json_output: bool,
     code: u8,
     kind: &str,
@@ -522,7 +524,7 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
                 },
             )
             .await;
-            assert_eq!(out.exit, ApiExit::AuthRefused);
+            assert_eq!(out.exit, CliExit::AuthRefused);
             assert!(out.stdout.is_empty());
             assert!(!out.stderr.contains(TOKEN));
             if json_output {
@@ -663,7 +665,7 @@ async fn truncated_response_stand() -> TruncatedStand {
     }
 }
 
-async fn echoed_body(token: &str, body: Vec<u8>) -> ApiOutcome {
+async fn echoed_body(token: &str, body: Vec<u8>) -> CliOutcome {
     run_api_with(
         &args("/ui/api/status"),
         "http://127.0.0.1:1",
@@ -682,7 +684,7 @@ async fn echoed_body(token: &str, body: Vec<u8>) -> ApiOutcome {
 }
 
 /// A gateway answer with `status` and `body` to a GET, in human or JSON mode.
-async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool) -> ApiOutcome {
+async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool) -> CliOutcome {
     let mut a = args("/ui/api/status");
     a.json = json_output;
     let body = body.as_bytes().to_vec();
@@ -711,3 +713,6 @@ mod transport;
 
 #[path = "api_redaction_tests.rs"]
 mod redaction;
+
+#[path = "api_matrix_tests.rs"]
+mod matrix;

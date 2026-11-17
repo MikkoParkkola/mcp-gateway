@@ -24,7 +24,7 @@ use super::super::dashboard_link::{
     AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, LinkTls,
     admin_stream_url, read_token, redact_body,
 };
-use super::{ApiError, ApiExit, ApiOutcome, api_url, method, render_response, resolve_token};
+use super::{CliError, CliExit, CliOutcome, api_url, method, render_response, resolve_token};
 use crate::gateway::routes;
 
 /// A pending line or event may hold as much as a whole buffered answer, so
@@ -88,9 +88,9 @@ pub(super) fn streamed(base: &str, path: &str) -> bool {
 }
 
 /// `--limit` belongs to the stream route, which needs it.
-pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiError> {
+pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), CliError> {
     let stream = mode_of(url) == Mode::Stream;
-    let usage = |message: &str, remedy: &str| Err(ApiError::new(ApiExit::Usage, message, remedy));
+    let usage = |message: &str, remedy: &str| Err(CliError::new(CliExit::Usage, message, remedy));
     if stream && args.limit.is_none() {
         return usage(
             "The event stream needs --limit.",
@@ -114,48 +114,14 @@ pub(super) fn check_args(args: &ApiArgs, url: &reqwest::Url) -> Result<(), ApiEr
             None
         };
         if let Some(flag) = flag {
-            return Err(ApiError::new(
-                ApiExit::Usage,
+            return Err(CliError::new(
+                CliExit::Usage,
                 format!("{flag} does not apply to {}.", url.path()),
                 format!("Remove {flag}, then retry."),
             ));
         }
     }
     Ok(())
-}
-
-/// Keep output failures in the same error sink as all other API failures.
-pub(crate) fn write_outcome(
-    outcome: &ApiOutcome,
-    json: bool,
-    token: &str,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-) -> ApiExit {
-    // Nothing to print touches no stdout: after a streamed deadline, the
-    // printing thread may still be parked in a write holding stdout's lock.
-    let written = if outcome.stdout.is_empty() {
-        Ok(())
-    } else {
-        stdout.write_all(&outcome.stdout)
-    };
-    if let Err(error) = written {
-        if error.kind() == std::io::ErrorKind::BrokenPipe {
-            return ApiExit::Ok;
-        }
-        let failure = ApiError::new(
-            ApiExit::LocalFailure,
-            "Could not write command output.",
-            "Check the output destination before repeating the command.",
-        )
-        .outcome(json, token);
-        let _ = stderr.write_all(failure.stderr.as_bytes());
-        return failure.exit;
-    }
-    if stderr.write_all(outcome.stderr.as_bytes()).is_err() {
-        return ApiExit::LocalFailure;
-    }
-    outcome.exit
 }
 
 /// One streamed request, validated before the credential reaches the sender.
@@ -198,7 +164,7 @@ pub(super) async fn run_production(
     base: &str,
     tls: &LinkTls,
     token: Option<String>,
-) -> ApiOutcome {
+) -> CliOutcome {
     let lookup = |name: &str| {
         (name == super::super::dashboard_link::TOKEN_ENV)
             .then(|| token.clone())
@@ -416,13 +382,13 @@ fn streamable(mode: Mode, answer: &AdminStream) -> bool {
         }
 }
 
-fn failure(kind: ApiExit, message: &str, remedy: &str, json: bool, token: &str) -> ApiOutcome {
-    ApiError::new(kind, message, remedy).outcome(json, token)
+fn failure(kind: CliExit, message: &str, remedy: &str, json: bool, token: &str) -> CliOutcome {
+    CliError::new(kind, message, remedy).outcome(json, &[token])
 }
 
-fn network(message: &str, json: bool, token: &str) -> ApiOutcome {
+fn network(message: &str, json: bool, token: &str) -> CliOutcome {
     failure(
-        ApiExit::Network,
+        CliExit::Network,
         message,
         "Check the gateway, then retry.",
         json,
@@ -430,9 +396,9 @@ fn network(message: &str, json: bool, token: &str) -> ApiOutcome {
     )
 }
 
-fn unsafe_body(json: bool, token: &str) -> ApiOutcome {
+fn unsafe_body(json: bool, token: &str) -> CliOutcome {
     failure(
-        ApiExit::LocalFailure,
+        CliExit::LocalFailure,
         super::UNSAFE_BODY_MESSAGE,
         super::UNSAFE_BODY_REMEDY,
         json,
@@ -440,9 +406,9 @@ fn unsafe_body(json: bool, token: &str) -> ApiOutcome {
     )
 }
 
-fn too_long(json: bool, token: &str) -> ApiOutcome {
+fn too_long(json: bool, token: &str) -> CliOutcome {
     failure(
-        ApiExit::LocalFailure,
+        CliExit::LocalFailure,
         "A line of the answer is longer than 16 MiB.",
         "Nothing of that line was printed; narrow the request and retry.",
         json,
@@ -459,7 +425,7 @@ async fn buffered(
     json: bool,
     origin: &str,
     path: &str,
-) -> ApiOutcome {
+) -> CliOutcome {
     let AdminStream {
         status,
         headers,
@@ -491,7 +457,7 @@ async fn buffered(
             }
             Ok(None) => break,
             Ok(Some(Err(error))) => {
-                return super::transport_failure(error, false, token).outcome(json, token);
+                return super::transport_failure(error, false, token).outcome(json, &[token]);
             }
             Ok(Some(Ok(chunk))) if bytes.len() + chunk.len() > PENDING_LIMIT => {
                 let error = AdminCallError {
@@ -500,7 +466,7 @@ async fn buffered(
                     status: Some(status),
                     request_id: None,
                 };
-                return super::transport_failure(error, false, token).outcome(json, token);
+                return super::transport_failure(error, false, token).outcome(json, &[token]);
             }
             Ok(Some(Ok(chunk))) => bytes.extend_from_slice(&chunk),
         }
@@ -574,9 +540,9 @@ impl Printer {
     }
 }
 
-fn write_failed(json: bool, token: &str) -> ApiOutcome {
+fn write_failed(json: bool, token: &str) -> CliOutcome {
     failure(
-        ApiExit::LocalFailure,
+        CliExit::LocalFailure,
         "Could not write command output.",
         "Check the output destination before repeating the command.",
         json,
@@ -595,7 +561,7 @@ pub(super) async fn run_streamed_with<F, Fut>(
     sink: impl Write + Send + 'static,
     deadlines: &Deadlines,
     send: F,
-) -> ApiOutcome
+) -> CliOutcome
 where
     F: FnOnce(StreamRequest) -> Fut,
     Fut: Future<Output = Result<AdminStream, AdminCallError>>,
@@ -604,19 +570,19 @@ where
     let redaction = credential.as_deref().unwrap_or_default().to_owned();
     let method = match method(&args.method, &redaction) {
         Ok(method) => method,
-        Err(error) => return error.outcome(args.json, &redaction),
+        Err(error) => return error.outcome(args.json, &[redaction.as_str()]),
     };
     let url = match api_url(base, &args.path) {
         Ok(url) => url,
-        Err(error) => return error.outcome(args.json, &redaction),
+        Err(error) => return error.outcome(args.json, &[redaction.as_str()]),
     };
     if let Err(error) = check_args(args, &url) {
-        return error.outcome(args.json, &redaction);
+        return error.outcome(args.json, &[redaction.as_str()]);
     }
     let (mode, origin) = (mode_of(&url), url.origin().ascii_serialization());
     let token = match resolve_token(credential, &origin) {
         Ok(token) => token,
-        Err(error) => return error.outcome(args.json, ""),
+        Err(error) => return error.outcome(args.json, &[""]),
     };
     let started = Instant::now();
     let request = StreamRequest {
@@ -628,7 +594,8 @@ where
     let answer = match tokio::time::timeout(deadlines.headers, send(request)).await {
         Ok(Ok(answer)) => answer,
         Ok(Err(error)) => {
-            return super::transport_failure(error, false, &token).outcome(args.json, &token);
+            return super::transport_failure(error, false, &token)
+                .outcome(args.json, &[token.as_str()]);
         }
         Err(_) => {
             return network(
@@ -676,7 +643,7 @@ impl Printing<'_> {
         answer: AdminStream,
         printer: &mut Printer,
         deadlines: &Deadlines,
-    ) -> ApiOutcome {
+    ) -> CliOutcome {
         let (json, token) = (self.json, self.token);
         let mut body = answer.body;
         let (mut lines, mut events) = (Lines::default(), Events::default());
@@ -700,7 +667,7 @@ impl Printing<'_> {
                 Err(_) => return network(self.late(event_due), json, token),
                 Ok(None) => break,
                 Ok(Some(Err(error))) => {
-                    return super::transport_failure(error, false, token).outcome(json, token);
+                    return super::transport_failure(error, false, token).outcome(json, &[token]);
                 }
                 Ok(Some(Ok(chunk))) => chunk,
             };
@@ -773,7 +740,7 @@ impl Printing<'_> {
         }
     }
 
-    fn done(&self) -> ApiOutcome {
+    fn done(&self) -> CliOutcome {
         let stderr = if self.mode == Mode::Download {
             let note = format!(
                 "api: the gateway answered {} with a non-JSON body\n",
@@ -783,10 +750,10 @@ impl Printing<'_> {
         } else {
             String::new()
         };
-        ApiOutcome {
+        CliOutcome {
             stdout: Vec::new(),
             stderr,
-            exit: ApiExit::Ok,
+            exit: CliExit::Ok,
         }
     }
 }

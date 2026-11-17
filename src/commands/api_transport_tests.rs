@@ -113,24 +113,24 @@ async fn login_remedy_uses_the_normalised_resolved_origin() {
 
 #[test]
 fn output_failure_with_a_token_inside_json_null_prints_the_fixed_sentence() {
-    let out = ApiOutcome {
+    let out = CliOutcome {
         stdout: b"data\n".to_vec(),
         stderr: String::new(),
-        exit: ApiExit::Ok,
+        exit: CliExit::Ok,
     };
     let mut stdout = FailedOutput::new(io::ErrorKind::PermissionDenied);
     let mut stderr = Vec::new();
-    let exit = write_outcome(&out, true, "null", &mut stdout, &mut stderr);
+    let exit = emit_to(&out, true, &["null"], &mut stdout, &mut stderr);
     assert!(
         stdout.written.is_empty(),
         "output errors never reach stdout"
     );
-    let captured = ApiOutcome {
+    let captured = CliOutcome {
         stdout: Vec::new(),
         stderr: String::from_utf8(stderr).expect("stderr"),
         exit,
     };
-    assert_eq!(captured.exit, ApiExit::LocalFailure);
+    assert_eq!(captured.exit, CliExit::LocalFailure);
     // The token is "null", which JSON's own null fields contain: the report
     // becomes the fixed sentence instead.
     assert_eq!(
@@ -159,7 +159,7 @@ async fn unsupported_methods_redact_credentials_before_quoting() {
                 },
             )
             .await;
-            assert_eq!(out.exit, ApiExit::Usage);
+            assert_eq!(out.exit, CliExit::Usage);
             assert!(out.stdout.is_empty());
             assert!(!out.stderr.contains(token));
             if json_output {
@@ -204,7 +204,7 @@ async fn stderr_output_failure_is_local_io_without_stdout_fallback() {
         let attempted = out.stderr.as_bytes().to_vec();
         let mut stdout = Vec::new();
         let mut stderr = FailedOutput::new(io::ErrorKind::PermissionDenied);
-        let exit = write_outcome(&out, json_output, TOKEN, &mut stdout, &mut stderr);
+        let exit = emit_to(&out, json_output, &[TOKEN], &mut stdout, &mut stderr);
         assert_eq!(exit.code(), 1);
         assert!(stdout.is_empty());
         assert!(stderr.written.is_empty());
@@ -573,7 +573,7 @@ async fn lost_response_request_ids_use_safe_text() {
                 },
             )
             .await;
-            assert_eq!(out.exit, ApiExit::UncertainOutcome);
+            assert_eq!(out.exit, CliExit::UncertainOutcome);
             assert!(out.stdout.is_empty());
             assert!(!out.stderr.contains(TOKEN));
             if json_output {
@@ -624,7 +624,7 @@ async fn request_sources_accept_exactly_sixteen_mib() {
 async fn a_token_echoed_as_a_json_number_is_redacted() {
     let token = "1234567890123456";
     let out = echoed_body(token, br#"{"echo":1234567890123456}"#.to_vec()).await;
-    assert_eq!(out.exit, ApiExit::Ok);
+    assert_eq!(out.exit, CliExit::Ok);
     assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
     serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("valid JSON");
 }
@@ -634,7 +634,7 @@ async fn a_key_collision_keeps_every_field() {
     let marker = mcp_gateway::cli::redact::text(TOKEN, &[TOKEN.to_string()]);
     let body = json!({(TOKEN): "renamed", (marker.clone()): "original", "other": 42});
     let out = echoed_body(TOKEN, serde_json::to_vec(&body).expect("body")).await;
-    assert_eq!(out.exit, ApiExit::Ok);
+    assert_eq!(out.exit, CliExit::Ok);
     assert!(!String::from_utf8_lossy(&out.stdout).contains(TOKEN));
     let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     let fields = printed.as_object().expect("object");
@@ -648,7 +648,7 @@ async fn a_key_collision_keeps_every_field() {
 async fn a_token_inside_the_marker_is_not_copied_back() {
     let token = "redacted";
     let out = echoed_body(token, br#"{"echo":"redacted"}"#.to_vec()).await;
-    assert_eq!(out.exit, ApiExit::Ok);
+    assert_eq!(out.exit, CliExit::Ok);
     assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
     let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     // The facade's marker-rotation row checks this value with contains_marker.
@@ -662,7 +662,7 @@ async fn a_token_inside_the_marker_is_not_copied_back() {
 async fn invalid_utf8_is_preserved_only_without_token_bytes() {
     let clean = vec![0xff, 0xfe];
     let out = echoed_body(TOKEN, clean.clone()).await;
-    assert_eq!(out.exit, ApiExit::Ok);
+    assert_eq!(out.exit, CliExit::Ok);
     assert_eq!(out.stdout, clean);
 
     let mut unsafe_body = vec![0xff];

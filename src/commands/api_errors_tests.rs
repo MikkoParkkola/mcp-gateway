@@ -58,16 +58,16 @@ async fn invalid_data_is_a_usage_error_before_sending() {
 #[test]
 fn exit_table_e_uses_the_approved_numeric_values() {
     for (exit, code) in [
-        (ApiExit::Ok, 0),
-        (ApiExit::LocalFailure, 1),
-        (ApiExit::Usage, 2),
-        (ApiExit::AuthRefused, 3),
-        (ApiExit::NotFound, 4),
-        (ApiExit::Network, 5),
-        (ApiExit::Gateway, 6),
-        (ApiExit::Declined, 7),
-        (ApiExit::UncertainOutcome, 8),
-        (ApiExit::Interrupted, 130),
+        (CliExit::Ok, 0),
+        (CliExit::LocalFailure, 1),
+        (CliExit::Usage, 2),
+        (CliExit::AuthRefused, 3),
+        (CliExit::NotFound, 4),
+        (CliExit::Network, 5),
+        (CliExit::Gateway, 6),
+        (CliExit::Declined, 7),
+        (CliExit::UncertainOutcome, 8),
+        (CliExit::Interrupted, 130),
     ] {
         assert_eq!(exit.code(), code);
     }
@@ -709,14 +709,14 @@ fn output_io_is_local_failure_and_an_ordinary_broken_pipe_succeeds() {
             (io::ErrorKind::BrokenPipe, 0),
             (io::ErrorKind::PermissionDenied, 1),
         ] {
-            let out = ApiOutcome {
+            let out = CliOutcome {
                 stdout: b"data\n".to_vec(),
                 stderr: String::new(),
-                exit: ApiExit::Ok,
+                exit: CliExit::Ok,
             };
             let mut stdout = FailedOutput::new(failure);
             let mut stderr = Vec::new();
-            let exit = write_outcome(&out, json_output, TOKEN, &mut stdout, &mut stderr);
+            let exit = emit_to(&out, json_output, &[TOKEN], &mut stdout, &mut stderr);
             assert!(
                 stdout.written.is_empty(),
                 "output errors never reach stdout"
@@ -725,7 +725,7 @@ fn output_io_is_local_failure_and_an_ordinary_broken_pipe_succeeds() {
             if code == 0 {
                 assert!(stderr.is_empty());
             } else {
-                let captured = ApiOutcome {
+                let captured = CliOutcome {
                     stdout: Vec::new(),
                     stderr: String::from_utf8(stderr).expect("stderr"),
                     exit,

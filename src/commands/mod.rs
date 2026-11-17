@@ -19,6 +19,9 @@ mod audit_lookup;
 mod backend_url_keys;
 mod cap;
 mod capability_dirs;
+/// The shared exit table and error shape; used by the webui-only remote commands until `MIK-9765.LERR.2`.
+#[cfg(feature = "webui")]
+mod cli_exit;
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -553,6 +556,9 @@ mod api_parity_tests;
 mod api_tests;
 #[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
+#[cfg(all(test, feature = "webui"))]
+#[path = "remote_exit_tests.rs"]
+mod remote_exit_tests;
 #[cfg(test)]
 mod tls_ca_key_tests;
 // Windows owner-only fixtures for the binary's `Inherit` callers.
