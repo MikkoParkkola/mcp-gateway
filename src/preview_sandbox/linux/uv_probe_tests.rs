@@ -6,9 +6,9 @@
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use super::super::elf_fixture::placement_elfs;
+use super::super::elf_fixture::{placement_elfs, sh_elf};
 use super::super::{ProgramBind, READ_ONLY, program_bind};
-use super::{PythonPlace, place_python, python_real, uv_beside};
+use super::{PythonPlace, check_uv, place_python, python_real, python_xy, uv_beside};
 use crate::preview_sandbox::Refusal;
 
 /// A file that is not a script: the probe reads only its first two bytes.
@@ -186,4 +186,131 @@ fn u_uv_place_a_lone_uv_binds_as_a_file() {
         program_bind(&real, &system()),
         ProgramBind::File(real.clone())
     );
+}
+
+/// A uv stand-in in `dir` answering `--version` with `answer` (a shell
+/// command), after writing its environment to `dir/version.env`.
+fn uv_answering(dir: &Path, answer: &str) -> PathBuf {
+    let env = dir.join("version.env");
+    sh_elf(
+        dir,
+        "uv",
+        &format!(
+            "/usr/bin/tr '\\0' '\\n' < /proc/$$/environ > '{}'; {answer}",
+            env.display()
+        ),
+    )
+}
+
+/// U-floor, kills m-floor and m-version-env: 0.13.0 refuses naming both
+/// versions, 0.13.1 and 0.14.0 pass, a malformed answer refuses naming it,
+/// and the call sees an empty environment.
+#[test]
+fn u_floor_uv_below_0_13_1_refuses_and_the_call_has_no_environment() {
+    for (answer, want) in [
+        (
+            "echo 'uv 0.13.0 (aarch64-unknown-linux-gnu)'",
+            Err(Refusal::Step("uv 0.13.0 is older than 0.13.1".into())),
+        ),
+        ("echo 'uv 0.13.1 (aarch64-unknown-linux-gnu)'", Ok(())),
+        ("echo 'uv 0.14.0 (x86_64-unknown-linux-gnu)'", Ok(())),
+        (
+            "echo 'uv x.y'",
+            Err(Refusal::Step("reading uv's version (\"uv x.y\")".into())),
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("dir");
+        let uv = uv_answering(dir.path(), answer);
+        assert_eq!(check_uv(&uv), want, "{answer}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("version.env")).ok(),
+            Some(String::new()),
+            "{answer}: the call saw an environment"
+        );
+    }
+}
+
+/// U-floor, the 10 s bound on both sides: an answer after 2 s passes; a uv
+/// that never answers refuses no earlier than 10 s and no later than 30 s.
+#[test]
+fn u_floor_the_version_call_waits_10_s_and_no_longer() {
+    let dir = tempfile::tempdir().expect("dir");
+    let slow = uv_answering(
+        dir.path(),
+        "sleep 2; echo 'uv 0.13.1 (x86_64-unknown-linux-gnu)'",
+    );
+    assert_eq!(check_uv(&slow), Ok(()), "a 2 s answer");
+    let dir = tempfile::tempdir().expect("dir");
+    let silent = uv_answering(dir.path(), "exec sleep 60");
+    let begun = std::time::Instant::now();
+    let refused = check_uv(&silent);
+    let took = begun.elapsed();
+    assert_eq!(
+        refused,
+        Err(Refusal::Step(
+            "uv --version did not answer within 10 s".into()
+        ))
+    );
+    assert!(
+        took >= std::time::Duration::from_secs(10),
+        "refused after {took:?}"
+    );
+    assert!(
+        took <= std::time::Duration::from_secs(30),
+        "refused after {took:?}"
+    );
+}
+
+/// An interpreter stand-in in `dir` that records its argv and environment
+/// size to `dir/host.spawns`, then prints `answer`.
+fn python_answering(dir: &Path, answer: &str) -> PathBuf {
+    let log = dir.join("host.spawns");
+    sh_elf(
+        dir,
+        "python3.12",
+        &format!(
+            "n=$(/usr/bin/tr -cd '\\0' < /proc/$$/environ | /usr/bin/wc -c); \
+             p=${{HTTPS_PROXY+set}}; \
+             {{ printf 'proxy=%s env=%s' \"${{p:-unset}}\" \"$n\"; \
+             for a in \"$0\" \"$@\"; do printf '\\t%s' \"$a\"; done; printf '\\n'; }} >> '{}'; \
+             printf '%s\\n' '{answer}'",
+            log.display()
+        ),
+    )
+}
+
+/// U-probe, kills m-probe-site, m-probe-env and m-fixed-xy: the probe runs
+/// the interpreter as `-S -I -c <the version script>` with no environment,
+/// takes X.Y from its answer, and refuses an answer it cannot read.
+#[test]
+fn u_probe_runs_the_interpreter_without_site_and_reads_its_version() {
+    for (answer, want) in [
+        ("3.12", Ok((3, 12))),
+        ("3.13", Ok((3, 13))),
+        (
+            "nonsense",
+            Err(Refusal::Step(
+                "reading python3's version (\"nonsense\")".into(),
+            )),
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("dir");
+        let python = python_answering(dir.path(), answer);
+        assert_eq!(python_xy(&python), want, "{answer}");
+        // Absent when the interpreter never ran: an empty record fails below.
+        let log = std::fs::read_to_string(dir.path().join("host.spawns")).unwrap_or_default();
+        let fields: Vec<&str> = log.trim_end_matches('\n').split('\t').collect();
+        assert_eq!(
+            fields,
+            [
+                "proxy=unset env=0",
+                python.to_str().expect("UTF-8"),
+                "-S",
+                "-I",
+                "-c",
+                "import sys; print('%d.%d' % sys.version_info[:2])",
+            ],
+            "{answer}"
+        );
+    }
 }

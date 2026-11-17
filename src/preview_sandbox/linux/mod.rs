@@ -8,6 +8,7 @@ mod ca_bundle;
 mod control_client;
 mod drop;
 mod fetch_step;
+mod fetch_uv;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
@@ -226,6 +227,7 @@ async fn start_fetching_with(
         control: utf8(&control)?,
         ca: utf8(&ca)?,
         npm,
+        uv: None,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {

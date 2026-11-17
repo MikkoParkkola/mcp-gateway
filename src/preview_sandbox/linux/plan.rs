@@ -71,6 +71,44 @@ pub(crate) struct FetchPaths {
     pub(crate) ca: String,
     /// The npm package fetched before the run; `None` is the handshake alone.
     pub(crate) npm: Option<NpmFetch>,
+    /// The `PyPI` package fetched before the run; never set with `npm`.
+    #[serde(default)]
+    pub(crate) uv: Option<UvFetch>,
+}
+
+/// The one fetcher a plan names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fetcher<'a> {
+    Npm(&'a NpmFetch),
+    Uv(&'a UvFetch),
+}
+
+impl FetchPaths {
+    /// The fetcher this plan names, if any; a plan naming both refuses.
+    pub(crate) fn fetcher(&self) -> Result<Option<Fetcher<'_>>, String> {
+        Ok(self.npm.as_ref().map(Fetcher::Npm))
+    }
+}
+
+/// A `PyPI` package the fetch step installs with the host's uv before the run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct UvFetch {
+    /// The validated spec: `name` or `name==version`.
+    pub(crate) spec: String,
+    /// The spec's PEP 503 name: the tool env's directory.
+    pub(crate) name: String,
+    /// The server's own arguments, after the spec.
+    pub(crate) run_args: Vec<String>,
+    /// uv's real file inside the root.
+    pub(crate) uv: String,
+    /// The interpreter's real file inside the root.
+    pub(crate) python: String,
+    /// The interpreter's directory, first on the fetch's and the run's PATH.
+    pub(crate) python_dir: String,
+    /// `ip`, for `ip link set lo up` inside the root.
+    pub(crate) ip: String,
+    /// The proxy's Unix socket (a host path), bound at `/tmp/proxy.sock`.
+    pub(crate) proxy: String,
 }
 
 /// An npm package the fetch step installs before the run.

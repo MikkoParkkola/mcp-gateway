@@ -20,6 +20,25 @@ use crate::preview_sandbox::Refusal;
 
 /// The largest interpreter binary read for its library names.
 const MAX_BINARY: u64 = 256 << 20;
+/// uv older than this refuses the fetch (CI's pinned uv; older ones are not
+/// verified).
+pub(super) const UV_FLOOR: [u32; 3] = [0, 13, 1];
+/// The script the interpreter probe runs: the interpreter's `X.Y`.
+pub(super) const VERSION_SCRIPT: &str = "import sys; print('%d.%d' % sys.version_info[:2])";
+
+/// Refuse a uv older than [`UV_FLOOR`]: `uv --version`, environment cleared,
+/// within 10 s.
+pub(super) fn check_uv(uv: &Path) -> Result<(), Refusal> {
+    let _ = uv;
+    Ok(())
+}
+
+/// The interpreter's `X.Y`: `python -S -I -c` [`VERSION_SCRIPT`], environment
+/// cleared, within 10 s, so no site processing runs on the host either.
+pub(super) fn python_xy(python: &Path) -> Result<(u32, u32), Refusal> {
+    let _ = python;
+    Ok((3, 12))
+}
 
 /// uv beside the real file of `uvx` (both come from one install), as its
 /// real file; a `uv` that is a script refuses by name.

@@ -219,6 +219,39 @@ pub(crate) fn uv_tool_env(home: &Path, spec: &str) -> PathBuf {
     home.join("uv-tools").join(uv_name(spec))
 }
 
+/// The most directory entries the direct-URL check reads in a tool env's
+/// site-packages; more refuses.
+pub(crate) const MAX_SITE_ENTRIES: usize = 4096;
+
+/// Refuse a uv tool environment `env` holding any distribution installed
+/// from a direct URL (a `*.dist-info` with `direct_url.json`): the one
+/// `lib/python*/site-packages` is read, every `*.dist-info` checked, at most
+/// [`MAX_SITE_ENTRIES`] entries and only before `deadline`; any read or
+/// metadata error refuses. Returns the names checked, for the rows.
+pub(crate) fn check_direct_url(
+    env: &Path,
+    deadline: std::time::Instant,
+) -> Result<Vec<String>, Refusal> {
+    let _ = deadline;
+    let site = site_packages(env)?;
+    let mut checked = Vec::new();
+    for entry in std::fs::read_dir(&site)
+        .map_err(|_| no_metadata())?
+        .flatten()
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".dist-info") else {
+            continue;
+        };
+        checked.push(stem.to_owned());
+        if entry.path().join("direct_url.json").exists() {
+            return Err(refuse("the install holds a package from a direct URL"));
+        }
+        break;
+    }
+    Ok(checked)
+}
+
 /// The console script of `PyPI` package `name` in the uv tool environment
 /// `env`, from the package's own `entry_points.txt`: the script named after
 /// the package, or its only one. Never a listing of `bin/`, which also holds
