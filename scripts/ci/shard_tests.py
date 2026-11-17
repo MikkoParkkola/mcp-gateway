@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import glob
 import json
 import os
 import re
@@ -551,6 +552,7 @@ def self_test() -> int:
         assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    parts_rows()
     print("shard_tests self-test: ok")
     return 0
 
@@ -699,6 +701,95 @@ def prebuilt_rows() -> None:
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
+def parts_rows() -> None:
+    """S1 and S2: the shard and single-test consumers on five part binaries (fake ones that record each run)."""
+    n = 5
+    with tempfile.TemporaryDirectory() as d:
+        log = os.path.join(d, "runs")
+
+        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            body = " ".join(names)
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; f="$1"\n'
+                        f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
+                        f'echo "p{k} $*" >> {log}\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write("".join(f"{t}: test\n" for t in (names if listed is None else listed)))
+
+        def fresh(names_by_part=None):
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                part(k, (names_by_part or {}).get(k, [f"m{k}::upgrade_x{k}", f"m{k}::t{k}"]))
+
+        fresh()
+        assert part_binaries(d)[1] == [], part_binaries(d)[1]
+        shutil.rmtree(os.path.join(d, "linux-lib-tests-p3"))
+        assert part_binaries(d)[1], "a missing part passed"
+        fresh()
+        part(2, ["m2::t2"], listed=["m2::t2", "m2::other"])
+        assert part_binaries(d)[1], "a binary differing from its list.txt passed"
+        fresh({1: ["m1::t1", "shared::x"], 2: ["shared::x"]})
+        assert part_binaries(d)[1], "two parts sharing a test passed"
+        # run-one, exact: exactly one test over all parts, run once on its binary.
+        fresh()
+        assert run_one("--exact", "m3::t3", d, []) == 0
+        runs = open(log).read().splitlines()
+        assert runs == ["p3 m3::t3 --exact"], runs
+        fresh()
+        assert run_one("--exact", "m9::none", d, []) == 1, "zero selected passed"
+        fresh({1: ["a::dup", "b::dup"]})
+        assert run_one("--exact", "dup", d, []) == 1, "an exact name matching nothing exactly passed"
+        # run-one, module: at least one, all on one part, by exact names.
+        fresh({4: ["upgrade_notice_tests::a", "upgrade_notice_tests::b", "m4::t4"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 0
+        assert open(log).read().split() == ["p4", "upgrade_notice_tests::a", "upgrade_notice_tests::b", "--exact"]
+        fresh({1: ["upgrade_notice_tests::a"], 2: ["upgrade_notice_tests::b"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 1, "a module split over parts passed"
+        fresh()
+        assert run_one("--module", "nothing_tests::", d, []) == 1, "an empty module selection passed"
+        # S1, run-prebuilt-parts: each binary runs its half under today's guards; the floor is on the sum.
+        def shard_part(k: int, count: int, residue: bool = False) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            names = f"gateway::g{k} other::o{k}"
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; [ "$1" = --format ] && shift 2\n'
+                        '  case "$1 $2" in\n'
+                        f'    "gateway:: "*) for t in {names}; do case $t in gateway::*) echo "$t: test";; esac; done;;\n'
+                        f'    "--skip gateway::") for t in {names}; do case $t in gateway::*) ;; *) echo "$t: test";; esac; done;;\n'
+                        f'    *) for t in {names}; do echo "$t: test"; done;;\n'
+                        '  esac; exit 0; fi\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {count} tests"; echo "test result: ok. {count} passed; 0 failed; 0 ignored"\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write(f"gateway::g{k}: test\nother::o{k}: test\n")
+
+        def shards(count: int, residue_part: int | None = None) -> None:
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                shard_part(k, count, residue=k == residue_part)
+
+        big = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
+        shards(big // n + 1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 0
+        shards(1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 1, "a sum under the floor passed"
+        shards(big // n + 1, residue_part=3)
+        assert run_prebuilt_parts("linux", "lib-b", d) == 1, "a leftover from the middle part passed"
+
+
 def per_binary_rows() -> None:
     """Each test binary gets its own TMPDIR under BY_BINARY, so a leftover names the binary that left it."""
     # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to
@@ -825,11 +916,12 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
     return out
 
 
-def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
-    """Run a PREBUILT or SHARED_BUILD shard from an exported lib test binary, as `cargo test` would run it:
-    from the package root with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run`
-    applies (the binary's own BY_BINARY folder as TMPDIR, a leftover fails the shard). Same floor and report."""
-    ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
+def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
+    """Run SHARD's selection on one exported lib test binary, as `cargo test` would run it: from the package root
+    with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run` applies (the binary's own
+    BY_BINARY folder as TMPDIR, a leftover fails the shard). (Tests selected, problems), the halves' partition of
+    this binary's list included; the floor is the caller's."""
+    ((step, _args, test_args, _floor),) = SHARDS[os_kind][shard]
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
@@ -850,15 +942,102 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     rc = p.wait()
     # The binary prints no cargo `Running` header: arm the count as cargo's would.
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
-    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")
-    failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
-    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
+    failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
+    return n, failed
+
+
+def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
+    """Run a PREBUILT or SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    n, failed = _run_binary(os_kind, shard, binary)
+    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
+    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
+
+
+def part_binaries(directory: str) -> tuple[dict[int, str], list[str]]:
+    """The lib test part binaries under DIRECTORY (`*/pK/lib-tests-pK`, one artifact folder each) and the problems
+    that stop a run before any test: parts other than exactly 1..N, a binary whose `--list` differs from the
+    `list.txt` the union job checked, or two parts listing the same test."""
+    n = int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
+                      open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    found: dict[int, str] = {}
+    out: list[str] = []
+    for path in sorted(glob.glob(os.path.join(directory, "*", "p*", "lib-tests-p*"))):
+        m = re.fullmatch(r"lib-tests-p(\d+)", os.path.basename(path))
+        if m is None or os.path.basename(os.path.dirname(path)) != f"p{m.group(1)}":
+            continue
+        k = int(m.group(1))
+        if k in found:
+            out.append(f"part {k} appears twice")
+        found[k] = path
+    if sorted(found) != list(range(1, n + 1)):
+        out.append(f"part binaries {sorted(found)}, not exactly 1..{n}")
+    owner: dict[str, int] = {}
+    for k, path in sorted(found.items()):
+        os.chmod(path, 0o755)
+        listed_now = subprocess.run([path, "--list"], capture_output=True, text=True, cwd=ROOT).stdout
+        names = {x[: -len(": test")] for x in listed_now.splitlines() if x.endswith(": test")}
+        recorded = os.path.join(os.path.dirname(path), "list.txt")
+        if not os.path.isfile(recorded) or names != {x[: -len(": test")] for x in open(recorded).read().splitlines()
+                                                     if x.endswith(": test")}:
+            out.append(f"part {k}'s binary does not list what its list.txt recorded")
+        for name in names:
+            if name in owner:
+                out.append(f"{name} is listed by parts {owner[name]} and {k}")
+            owner.setdefault(name, k)
+    return found, out
+
+
+def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
+    """Run a SHARED_BUILD shard across the lib test part binaries: the parts are checked first, then each binary
+    runs the shard's half under today's guards, and the floor applies to the sum."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    binaries, failed = part_binaries(directory)
+    total = 0
+    if not failed:
+        for k, path in sorted(binaries.items()):
+            n, problems = _run_binary(os_kind, shard, path)
+            total += n
+            failed += [f"part {k}: {x}" for x in problems]
+    print(f"::notice::{os_kind} {shard} {step} (parts): selected {total} (floor {floor})")
+    failed += [f"{step}: selected {total} tests over the parts, below the floor of {floor}"] * (total < floor)
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
+    """List PATTERN on every part binary first, then run it once. `--exact`: exactly one test in total (libtest
+    `--exact`). `--module`: names under the anchored path prefix PATTERN, at least one, all on one binary, run there
+    by exact name. EXTRA passes through (for example `--ignored`)."""
+    binaries, failed = part_binaries(directory)
+    hits: dict[int, list[str]] = {}
+    for k, path in sorted(binaries.items()):
+        args = [pattern, "--exact"] if mode == "--exact" else [pattern]
+        out = subprocess.run([path, "--list", *args, *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        names = [x[: -len(": test")] for x in out.splitlines() if x.endswith(": test")]
+        if mode == "--module":
+            names = [x for x in names if x.startswith(pattern)]
+        if names:
+            hits[k] = names
+    count = sum(len(v) for v in hits.values())
+    if mode == "--exact" and count != 1:
+        failed.append(f"{pattern}: {count} tests selected over the parts, not exactly one")
+    if mode == "--module" and (not count or len(hits) != 1):
+        failed.append(f"{pattern}: {count} tests on {len(hits)} parts; a module filter needs one part")
+    for f in failed:
+        print(f"::error::run-one {f}")
+    if failed:
+        return 1
+    ((k, names),) = hits.items()
+    env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    return subprocess.run([binaries[k], *names, "--exact", *extra], env=env, cwd=ROOT).returncode
 
 
 # Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
@@ -948,6 +1127,11 @@ def main(argv: list[str]) -> int:
         return export_lib(argv[2])
     if len(argv) == 4 and argv[1] == "wait-lib":
         return wait_lib(argv[2], argv[3])
+    if len(argv) == 5 and argv[1] == "run-prebuilt-parts" and argv[3] in SHARED_BUILD.get(argv[2], ()):
+        return run_prebuilt_parts(argv[2], argv[3], argv[4])
+    if len(argv) >= 5 and argv[1] == "run-one" and argv[2] in ("--exact", "--module"):
+        extra = argv[6:] if len(argv) > 5 and argv[5] == "--" else []
+        return run_one(argv[2], argv[3], argv[4], extra)
     if (len(argv) == 5 and argv[1] == "run-prebuilt"
             and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
         return run_prebuilt(argv[2], argv[3], argv[4])
