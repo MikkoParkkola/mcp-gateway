@@ -632,3 +632,26 @@ impl<'ast> syn::visit::Visit<'ast> for ProductionIdents {
         }
     }
 }
+
+/// The lib test split's part tag: the shared `test_only` reads a tagged test
+/// module as test-only and a tag alone as not, and `part_tag` matches `tpK`
+/// only.
+#[test]
+fn a_part_tag_neither_makes_nor_unmakes_test_only_code() {
+    use crate::test_source_text::part_tag;
+    let attrs = |text: &str| {
+        syn::parse_str::<syn::ItemMod>(&format!("{text}\nmod m;"))
+            .expect("a module declaration")
+            .attrs
+    };
+    assert!(crate::test_source_text::test_only(&attrs(
+        "#[cfg(tp2)]\n#[cfg(test)]"
+    )));
+    assert!(!crate::test_source_text::test_only(&attrs("#[cfg(tp2)]")));
+    let cases = ["tp2", "tp12", "test", "tp", "tpx", "not(tp2)"];
+    let tags: Vec<bool> = cases
+        .iter()
+        .map(|c| part_tag(&attrs(&format!("#[cfg({c})]"))[0]))
+        .collect();
+    assert_eq!(tags, [true, true, false, false, false, false]);
+}
