@@ -50,8 +50,9 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     resolve_home(override_home, None, test_home)
 }
 
+/// The test-home override, the one place a test build reads it.
 #[cfg(test)]
-fn test_override() -> Option<PathBuf> {
+pub(crate) fn test_override() -> Option<PathBuf> {
     std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").map(PathBuf::from)
 }
 
@@ -199,16 +200,22 @@ mod probe_tests;
 mod tests {
     use super::*;
 
-    fn p(path: &str) -> Option<PathBuf> {
-        Some(PathBuf::from(path))
+    fn p(path: &str) -> PathBuf {
+        PathBuf::from(path)
     }
 
     /// R1.1-R1.3, R1.8: the override wins, then the test home, then the platform.
     #[test]
     fn resolve_home_prefers_override_then_test_home_then_platform() {
-        assert_eq!(resolve_home(p("/o"), p("/p"), p("/t")), p("/o"));
-        assert_eq!(resolve_home(None, p("/p"), p("/t")), p("/t"));
-        assert_eq!(resolve_home(None, p("/p"), None), p("/p"));
+        assert_eq!(
+            resolve_home(Some(p("/o")), Some(p("/p")), Some(p("/t"))),
+            Some(p("/o"))
+        );
+        assert_eq!(
+            resolve_home(None, Some(p("/p")), Some(p("/t"))),
+            Some(p("/t"))
+        );
+        assert_eq!(resolve_home(None, Some(p("/p")), None), Some(p("/p")));
         assert_eq!(resolve_home(None, None, None), None);
     }
 
@@ -216,16 +223,22 @@ mod tests {
     /// home decides, and the platform value is used only outside a test home.
     #[test]
     fn resolve_config_honours_xdg_only_under_the_override() {
-        assert_eq!(resolve_config(p("/o"), p("/x"), p("/pc"), p("/t")), p("/x"));
         assert_eq!(
-            resolve_config(p("/o"), None, p("/pc"), p("/t")),
-            p("/o/.config")
+            resolve_config(Some(p("/o")), Some(p("/x")), Some(p("/pc")), Some(p("/t"))),
+            Some(p("/x"))
         );
         assert_eq!(
-            resolve_config(None, p("/x"), p("/pc"), p("/t")),
-            p("/t/.config")
+            resolve_config(Some(p("/o")), None, Some(p("/pc")), Some(p("/t"))),
+            Some(p("/o/.config"))
         );
-        assert_eq!(resolve_config(None, p("/x"), p("/pc"), None), p("/pc"));
+        assert_eq!(
+            resolve_config(None, Some(p("/x")), Some(p("/pc")), Some(p("/t"))),
+            Some(p("/t/.config"))
+        );
+        assert_eq!(
+            resolve_config(None, Some(p("/x")), Some(p("/pc")), None),
+            Some(p("/pc"))
+        );
         assert_eq!(resolve_config(None, None, None, None), None);
     }
 

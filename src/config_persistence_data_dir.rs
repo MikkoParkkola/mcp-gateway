@@ -30,7 +30,7 @@ fn configured_data_dir() -> Option<std::ffi::OsString> {
 /// at their real data dir. A harness, or a test passing `child_env`, sets both.
 #[cfg(test)]
 fn configured_data_dir() -> Option<std::ffi::OsString> {
-    std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR")?;
+    crate::home_dir::test_override()?;
     std::env::var_os("MCP_GATEWAY_CONFIG_DIR")
 }
 
