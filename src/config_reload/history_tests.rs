@@ -519,9 +519,15 @@ fn t14_a_history_in_a_kept_tempdir_keeps_it_until_its_last_handle() {
     let root = dir.path().to_path_buf();
     let history = ConfigHistory::open(&root, Bounds::default(), 0);
     drop(dir);
-    assert!(root.is_dir(), "the dir went with the test's share while the history lived in it");
+    assert!(
+        root.is_dir(),
+        "the dir went with the test's share while the history lived in it"
+    );
     record_version(&history, "r1", 1, b"a: 1\n", "r1");
-    assert!(root.join(ConfigHistory::FILE).is_file(), "the late save landed");
+    assert!(
+        root.join(ConfigHistory::FILE).is_file(),
+        "the late save landed"
+    );
     drop(history);
     assert!(!root.exists(), "the dir outlived the history's last handle");
 }
