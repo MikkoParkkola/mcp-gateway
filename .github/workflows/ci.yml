@@ -1103,7 +1103,9 @@ jobs:
     name: Linux lib test binary
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # Step limits (25 min for the lib test binary, 15 for the gateway binary) plus the 10 min reserve
+    # check_swap_jobs.py keeps must stay under the job's limit: 50 would equal it and fail, so 55.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1127,6 +1129,25 @@ jobs:
           # One name per run: a rerun of a consumer alone finds this attempt's binary.
           name: linux-lib-tests
           path: ${{ runner.temp }}/lib-bin/lib-tests
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
+      # The preview sandbox's fetch rows run in the lib's own tests (their fake resolver and dialer are cfg(test), so
+      # no shipped build carries a seam) and launch the real gateway binary as the helper. The lib shards run only the
+      # prebuilt test binary, so this job hands them the gateway binary too, from the same dependency build. A separate
+      # artifact, so the other consumers of linux-lib-tests do not download it.
+      - name: Build the gateway binary for the lib shards' sandbox rows
+        timeout-minutes: 15
+        run: |
+          echo "phase compile: the gateway binary at $(date -u +%T)"
+          scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+          mkdir -p "$RUNNER_TEMP/gateway-bin"
+          cp target/debug/mcp-gateway "$RUNNER_TEMP/gateway-bin/mcp-gateway"
+      - name: Hand the gateway binary to the lib shards
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-gateway-bin
+          path: ${{ runner.temp }}/gateway-bin/mcp-gateway
           retention-days: 1
           overwrite: true
           if-no-files-found: error
@@ -1225,12 +1246,22 @@ jobs:
         with:
           name: linux-lib-tests
           path: ${{ runner.temp }}/lib-bin
+      - name: Fetch the gateway binary for the sandbox rows
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-gateway-bin
+          path: ${{ runner.temp }}/gateway-bin
       # ADR-027, as in test-shards: the preview sandbox tests need unprivileged user namespaces.
       - name: Allow unprivileged user namespaces (preview sandbox tests)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The artifact round trip drops the exec bit.
+      - name: The gateway binary is executable
+        run: chmod +x "$RUNNER_TEMP/gateway-bin/mcp-gateway"
       - name: Shard suite from the shared binary
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
+          # The fetch rows launch it as the sandbox helper; with the sandbox required they fail when it is missing.
+          PREVIEW_SANDBOX_GATEWAY_BIN: ${{ runner.temp }}/gateway-bin/mcp-gateway
         run: python3 scripts/ci/shard_tests.py run-prebuilt linux ${{ matrix.shard }} "$RUNNER_TEMP/lib-bin/lib-tests"
       # The upgrade-notice lib target (upgrade_notice_tests) on the assembled guide, from the shared binary; int-b runs the
       # guide's integration target. A run that selects no test fails.

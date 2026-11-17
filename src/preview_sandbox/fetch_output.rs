@@ -4,8 +4,8 @@
 //! its last 64 KiB kept, and the last line, which a failing fetch refuses
 //! with, stripped of the fetch credential and of any URL userinfo.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Linux fetch step, a later part, calls these")
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step drives it so far")
 )]
 
 use std::io::{self, Read};

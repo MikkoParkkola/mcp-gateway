@@ -14,6 +14,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, ExitCode};
 
+use rustix::fs::FileType;
 use rustix::process::{DumpableBehavior, WaitOptions, set_dumpable_behavior};
 
 use super::control_client::{self, HELPER_BOUNDS};
@@ -27,17 +28,30 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
             return ExitCode::from(super::REFUSED);
         }
     };
+    let mut run = None;
     if let Some(mut control) = control {
-        let fetched = fetch(&mut control);
+        let npm = plan.fetch.as_ref().and_then(|paths| paths.npm.as_ref());
+        let fetched = match npm {
+            Some(npm) => super::fetch_step::npm(&mut control, npm, plan.limits).map(Some),
+            None => fetch(&mut control).map(|()| None),
+        };
         // Dropped before any child exists, so no preview process can inherit
         // or reach the control connection.
         drop(control);
-        if let Err(step) = fetched {
-            eprintln!("preview-sandbox: refused at {step}");
-            return ExitCode::from(super::REFUSED);
+        match fetched {
+            Ok(after) => run = after,
+            Err(step) => {
+                eprintln!("preview-sandbox: refused at {step}");
+                return ExitCode::from(super::REFUSED);
+            }
         }
     }
-    supervise(plan)
+    // Nothing the fetch step opened may reach the target.
+    if let Err(step) = check_descriptors() {
+        eprintln!("preview-sandbox: refused at {step}");
+        return ExitCode::from(super::REFUSED);
+    }
+    supervise(plan, run.as_ref())
 }
 
 fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
@@ -57,16 +71,61 @@ fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
     // process's environ, fd table or memory through /proc/1.
     set_dumpable_behavior(DumpableBehavior::NotDumpable)
         .map_err(|e| format!("making the helper non-dumpable ({e})"))?;
-    super::mounts::build_root(plan)?;
+    // The CA snapshot, opened before staging covers host /tmp; it is bound
+    // from this descriptor, which is closed once bound, before any child.
+    let ca = plan
+        .fetch
+        .as_ref()
+        .map(|paths| open_path(&paths.ca, FileType::RegularFile, "the CA snapshot"))
+        .transpose()?;
+    // The proxy socket likewise: it sits beside the snapshot.
+    let proxy = plan
+        .fetch
+        .as_ref()
+        .and_then(|paths| paths.npm.as_ref())
+        .map(|npm| open_path(&npm.proxy, FileType::Socket, "the proxy socket"))
+        .transpose()?;
+    super::mounts::build_root(
+        plan,
+        ca.as_ref().map(|(fd, _)| fd),
+        proxy.as_ref().map(|(fd, _)| fd),
+    )?;
+    if let Some((fd, identity)) = ca {
+        drop(fd);
+        super::mounts::check_preview_config(identity)?;
+    }
+    if let Some((fd, identity)) = proxy {
+        drop(fd);
+        super::mounts::check_proxy_socket(identity)?;
+    }
     super::mounts::enter_root()?;
     Ok(control)
+}
+
+/// `what` at `path`, opened `O_PATH` (no symlink followed) and checked to be
+/// of `kind`; its device and inode for the check that the bind shows this
+/// file once made.
+fn open_path(
+    path: &str,
+    kind: FileType,
+    what: &str,
+) -> Result<(rustix::fd::OwnedFd, (u64, u64)), String> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let fd = rustix::fs::open(path, flags, Mode::empty())
+        .map_err(|e| format!("opening {what} ({e})"))?;
+    let stat = rustix::fs::fstat(&fd).map_err(|e| format!("checking {what} ({e})"))?;
+    if FileType::from_raw_mode(stat.st_mode) != kind {
+        return Err(format!("checking {what} (not a {kind:?})"));
+    }
+    Ok((fd, (stat.st_dev, stat.st_ino)))
 }
 
 /// The fetch step's handshake: the credential, then `fetch_done` and the wait
 /// for `expired`. The fetch command itself runs between them (the next part).
 fn fetch(control: &mut UnixStream) -> Result<(), String> {
     let _issued = control_client::start_fetch(control, HELPER_BOUNDS)?;
-    control_client::finish_fetch(control, HELPER_BOUNDS)
+    control_client::finish_fetch(control, HELPER_BOUNDS, None)
 }
 
 /// Refuse unless every namespace differs from the gateway's.
@@ -132,7 +191,7 @@ fn check_descriptors() -> Result<(), String> {
 
 /// Start the target through `__preview-drop` and stay as PID 1 until it
 /// exits, reaping every orphan the namespace hands this process.
-fn supervise(plan: &Plan) -> ExitCode {
+fn supervise(plan: &Plan, run: Option<&super::fetch_step::Run>) -> ExitCode {
     let limits = match serde_json::to_string(&plan.limits) {
         Ok(limits) => limits,
         Err(e) => {
@@ -140,14 +199,24 @@ fn supervise(plan: &Plan) -> ExitCode {
             return ExitCode::from(super::REFUSED);
         }
     };
+    // After an npm fetch the run is the package's own bin, with PATH holding
+    // node and the install's bin directory; the plan's program is unused.
+    let (program, target) = match run {
+        Some(run) => (run.program.as_str(), run.argv.as_slice()),
+        None => (plan.program.as_str(), plan.target.as_slice()),
+    };
+    let env = plan.env.iter().map(|(k, v)| match run {
+        Some(run) if k == "PATH" => (k.as_str(), run.path.as_str()),
+        _ => (k.as_str(), v.as_str()),
+    });
     let child = Command::new("/proc/self/exe")
         .arg(super::DROP)
         .arg(limits)
-        .arg(&plan.program)
+        .arg(program)
         .arg("--")
-        .args(&plan.target)
+        .args(target)
         .env_clear()
-        .envs(plan.env.iter().map(|(k, v)| (k, v)))
+        .envs(env)
         .current_dir(plan::HOME)
         .spawn();
     let child = match child {

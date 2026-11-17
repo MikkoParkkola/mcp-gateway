@@ -333,6 +333,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
     ),
     (
+        "src/preview_sandbox/linux/ca_bundle.rs",
+        "the preview fetch's CA bundle: public CA certificates read from one descriptor, and their snapshot written 0444; no secret",
+    ),
+    (
         "src/preview_sandbox/control.rs",
         "the control peer's /proc/<pid>/stat and status (start time, parent pid, uids) through one directory fd; the kernel's process table, no secret",
     ),
@@ -343,6 +347,22 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/preview_sandbox/linux/mounts.rs",
         "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_step.rs",
+        "the npm fetch inside the sandbox: the package-lock.json npm wrote (capped at 4 MiB) and /proc's pid list for the sweep; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_rows.rs",
+        "test-only (cfg(test)): writes the fetch rows' CA bundle and a copy of the host's npm with hostile npmrc files into scratch dirs, and canary files under /usr/local (two new files, and a planted token line in npm's builtin npmrc) that it removes or restores; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_shim_rows.rs",
+        "test-only (cfg(test)): writes the fake npm tree into a scratch dir and reads the lock it wrote; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/probe.rs",
+        "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
     ),
     (
         "src/preview_sandbox/mod.rs",

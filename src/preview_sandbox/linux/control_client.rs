@@ -9,7 +9,9 @@ use std::io::{ErrorKind, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-use crate::preview_sandbox::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE};
+use crate::preview_sandbox::control_msg::{
+    Expired, FetchDone, FetchStart, FetchStep, Issued, MAX_LINE, Run,
+};
 
 /// The helper's bounds: the first byte of each answer, the rest of a frame
 /// once its first byte came, and each write.
@@ -133,19 +135,31 @@ pub(super) fn start_fetch(stream: &mut UnixStream, bounds: HelperBounds) -> Resu
     Ok(issued)
 }
 
-/// Report the fetch done and wait for `expired`: returns only once the
-/// gateway says every tunnel of the credential is shut.
-pub(super) fn finish_fetch(stream: &mut UnixStream, bounds: HelperBounds) -> Result<(), String> {
+/// Report the fetch done, naming the step that failed if one did. A failed
+/// fetch ends here: the gateway refuses and never sends `expired`. Otherwise
+/// wait for `expired` (every tunnel of the credential is shut), then
+/// acknowledge it; the run may start only once the acknowledgement is out.
+pub(super) fn finish_fetch(
+    stream: &mut UnixStream,
+    bounds: HelperBounds,
+    refused: Option<FetchStep>,
+) -> Result<(), String> {
     write_line(
         stream,
-        &encode(&FetchDone { fetch_done: true })?,
+        &encode(&FetchDone {
+            fetch_done: true,
+            refused,
+        })?,
         bounds.write,
     )?;
+    if refused.is_some() {
+        return Ok(());
+    }
     let expired: Expired = parse(&read_line(stream, bounds.first, bounds.frame)?, "expired")?;
     if !expired.expired {
         return Err("the gateway sent expired false".into());
     }
-    Ok(())
+    write_line(stream, &encode(&Run { run: true })?, bounds.write)
 }
 
 #[cfg(test)]

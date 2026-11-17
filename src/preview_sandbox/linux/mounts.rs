@@ -46,8 +46,21 @@ fn staged(path: &str) -> PathBuf {
     Path::new(STAGE).join(path.trim_start_matches('/'))
 }
 
-/// Build the whole root under [`STAGE`], then read every mount back.
-pub(super) fn build_root(plan: &Plan) -> Step {
+/// Where the fetch's CA trust files sit in the root.
+pub(super) const PREVIEW_CONFIG: &str = "/etc/mcp-gateway-preview";
+
+/// Where the gateway proxy's Unix socket is bound for an npm fetch (D5): a
+/// file on the root's own `/tmp`, so the helper alone can unmount and remove
+/// it before the run.
+pub(super) const PROXY_SOCKET: &str = "/tmp/proxy.sock";
+
+/// Build the whole root under [`STAGE`], then read every mount back. `ca` is
+/// the fetch's CA snapshot, opened before staging covered host `/tmp`.
+pub(super) fn build_root(
+    plan: &Plan,
+    ca: Option<&rustix::fd::OwnedFd>,
+    proxy: Option<&rustix::fd::OwnedFd>,
+) -> Step {
     let root = Path::new(STAGE);
     mount(
         "tmpfs",
@@ -106,8 +119,158 @@ pub(super) fn build_root(plan: &Plan) -> Step {
     mount_remount(&proc, proc_flags, proc_options)
         .map_err(io::Error::from)
         .map_err(at("remounting proc on", &proc))?;
+    // After the masks and hidden binds, so nothing covers it.
+    if let Some(ca) = ca {
+        preview_config(ca)?;
+    }
+    if let Some(proxy) = proxy {
+        proxy_socket(proxy)?;
+    }
 
     verify(plan)
+}
+
+/// The preview config's files, checked directly once mounted: exactly
+/// `ca.pem`, `empty-certs`, `empty-global.npmrc` and `empty-user.npmrc`; the
+/// empty ones empty and of their type (npm refuses one file as both configs); `ca.pem` the snapshot itself, by the device and inode the
+/// helper read from the descriptor it bound.
+pub(super) fn check_preview_config(snapshot: (u64, u64)) -> Step {
+    check_config_dir(&staged(PREVIEW_CONFIG), snapshot)
+}
+
+/// [`check_preview_config`] over any directory, so rows can build one.
+fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
+    use std::os::unix::fs::MetadataExt as _;
+    let fail = |why: &str| Err(format!("checking {} ({why})", dir.display()));
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir).map_err(at("listing", dir))? {
+        let entry = entry.map_err(at("listing", dir))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    if names
+        != [
+            "ca.pem",
+            "empty-certs",
+            "empty-global.npmrc",
+            "empty-user.npmrc",
+        ]
+    {
+        return fail("unexpected entries");
+    }
+    let certs = dir.join("empty-certs");
+    let certs_meta = fs::symlink_metadata(&certs).map_err(at("reading", &certs))?;
+    if !certs_meta.is_dir()
+        || fs::read_dir(&certs)
+            .map_err(at("listing", &certs))?
+            .next()
+            .is_some()
+    {
+        return fail("empty-certs is not an empty directory");
+    }
+    for name in ["empty-global.npmrc", "empty-user.npmrc"] {
+        let npmrc = dir.join(name);
+        let npmrc_meta = fs::symlink_metadata(&npmrc).map_err(at("reading", &npmrc))?;
+        if !npmrc_meta.is_file() || npmrc_meta.len() != 0 {
+            return fail(&format!("{name} is not an empty file"));
+        }
+    }
+    let ca = dir.join("ca.pem");
+    let ca_meta = fs::symlink_metadata(&ca).map_err(at("reading", &ca))?;
+    if !ca_meta.is_file() || (ca_meta.dev(), ca_meta.ino()) != snapshot {
+        return fail("ca.pem is not the snapshot");
+    }
+    Ok(())
+}
+
+/// The proxy socket at [`PROXY_SOCKET`]: bound from its descriptor (it may sit
+/// under host `/tmp`, which staging covers), then read-only, nosuid, nodev; a
+/// socket still accepts a connect on a read-only mount.
+fn proxy_socket(proxy: &rustix::fd::OwnedFd) -> Step {
+    use std::os::fd::AsRawFd as _;
+    let target = staged(PROXY_SOCKET);
+    fs::write(&target, b"").map_err(at("creating", &target))?;
+    let source = PathBuf::from(format!("/proc/self/fd/{}", proxy.as_raw_fd()));
+    mount_bind(&source, &target)
+        .map_err(io::Error::from)
+        .map_err(at("binding the proxy socket on", &target))?;
+    remount(
+        &target,
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+    )
+}
+
+/// The bound proxy socket is the gateway's, by the device and inode the
+/// helper read from the descriptor it bound.
+pub(super) fn check_proxy_socket(socket: (u64, u64)) -> Step {
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+    let target = staged(PROXY_SOCKET);
+    let meta = fs::symlink_metadata(&target).map_err(at("reading", &target))?;
+    if !meta.file_type().is_socket() || (meta.dev(), meta.ino()) != socket {
+        return Err(format!(
+            "checking {} (not the proxy socket)",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
+/// After the fetch, in the new root: unmount the proxy socket and remove its
+/// file, so nothing of it reaches the run.
+pub(super) fn remove_proxy_socket() -> Step {
+    let path = Path::new(PROXY_SOCKET);
+    unmount(path, UnmountFlags::DETACH)
+        .map_err(io::Error::from)
+        .map_err(at("unmounting the proxy socket at", path))?;
+    fs::remove_file(path).map_err(at("removing", path))?;
+    if path.exists() {
+        return Err(format!("removing {} (still there)", path.display()));
+    }
+    Ok(())
+}
+
+/// The fetch's CA trust files at [`PREVIEW_CONFIG`]: a tmpfs holding
+/// `ca.pem` (the snapshot, bound from its descriptor), an empty `empty-certs`
+/// and two empty npmrc files (user and global: npm refuses one file as both);
+/// the bind and the tmpfs then read-only.
+fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
+    use std::os::fd::AsRawFd as _;
+    let dir = staged(PREVIEW_CONFIG);
+    fs::create_dir_all(&dir).map_err(at("creating", &dir))?;
+    mount(
+        "tmpfs",
+        &dir,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        plan::MASK_SIZE,
+    )
+    .map_err(io::Error::from)
+    .map_err(at("mounting a tmpfs on", &dir))?;
+    let ca_pem = dir.join("ca.pem");
+    fs::write(&ca_pem, b"").map_err(at("creating", &ca_pem))?;
+    let certs = dir.join("empty-certs");
+    fs::create_dir(&certs).map_err(at("creating", &certs))?;
+    for name in ["empty-global.npmrc", "empty-user.npmrc"] {
+        let npmrc = dir.join(name);
+        fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
+    }
+    let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
+    mount_bind(&source, &ca_pem)
+        .map_err(io::Error::from)
+        .map_err(at("binding the CA snapshot on", &ca_pem))?;
+    remount(
+        &ca_pem,
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+    )?;
+    // A tmpfs remount (no bind flag) makes its superblock read-only, as for
+    // the masks.
+    mount_remount(
+        &dir,
+        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+        plan::MASK_SIZE,
+    )
+    .map_err(io::Error::from)
+    .map_err(at("making the preview config read-only at", &dir))
 }
 
 /// Bind `path` at the same place in the new root, read-only with every
@@ -246,8 +409,14 @@ fn remount(target: &Path, wanted: MountFlags) -> Step {
 /// host's own `/tmp` and anything mounted under it are covered by the root
 /// tmpfs but still listed at the same paths.
 fn verify(plan: &Plan) -> Step {
+    verify_rows(plan, &mountinfo()?)
+}
+
+/// [`verify`] over mountinfo `rows`. With a fetch planned, the preview config
+/// must be exactly its read-only tmpfs and the read-only `ca.pem` bind (no
+/// mount nested under it, neither missing); with none planned, neither exists.
+fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
     let root = Path::new(STAGE);
-    let rows = mountinfo()?;
     let root_id = rows
         .iter()
         .rev()
@@ -267,10 +436,45 @@ fn verify(plan: &Plan) -> Step {
         .chain(&plan.bound_back)
         .map(|p| staged(p))
         .collect();
-    for m in rows.iter().filter(|m| descends_from(&rows, m, root_id)) {
+    let config = staged(PREVIEW_CONFIG);
+    let ca_pem = config.join("ca.pem");
+    let (mut saw_config, mut saw_ca) = (false, false);
+    let proxy_socket = staged(PROXY_SOCKET);
+    let npm_planned = plan.fetch.as_ref().is_some_and(|f| f.npm.is_some());
+    let mut saw_proxy = false;
+    for m in rows.iter().filter(|m| descends_from(rows, m, root_id)) {
         let fail = |why: &str| Err(format!("verifying {} ({why})", m.point.display()));
         if !m.flags.contains(MountFlags::NOSUID) {
             return fail("not nosuid");
+        }
+        if m.point == proxy_socket {
+            if !npm_planned {
+                return fail("a proxy socket with no npm fetch planned");
+            }
+            saw_proxy = true;
+            if !m.flags.contains(MountFlags::RDONLY) || !m.flags.contains(MountFlags::NODEV) {
+                return fail("not read-only and nodev");
+            }
+            continue;
+        }
+        if m.point.starts_with(&config) {
+            if plan.fetch.is_none() {
+                return fail("a fetch mount with no fetch planned");
+            }
+            if m.point == config {
+                saw_config = true;
+            } else if m.point == ca_pem {
+                saw_ca = true;
+            } else {
+                return fail("nested under the preview config");
+            }
+            if !m.flags.contains(MountFlags::RDONLY) {
+                return fail("writable");
+            }
+            if !m.flags.contains(MountFlags::NODEV) {
+                return fail("not nodev");
+            }
+            continue;
         }
         if m.point == root || writable.contains(&m.point) {
             continue;
@@ -290,6 +494,15 @@ fn verify(plan: &Plan) -> Step {
         if !m.flags.contains(MountFlags::NODEV) {
             return fail("not nodev");
         }
+    }
+    if npm_planned && !saw_proxy {
+        return Err(format!("verifying {} (missing)", proxy_socket.display()));
+    }
+    if plan.fetch.is_some() && !(saw_config && saw_ca) {
+        return Err(format!(
+            "verifying {} (the preview config or its ca.pem is missing)",
+            config.display()
+        ));
     }
     Ok(())
 }
@@ -418,55 +631,5 @@ fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mountinfo_rows_parse_with_escapes_and_locked_flags() {
-        let text = "36 35 98:0 / /usr rw,nosuid,nodev,relatime master:1 - ext4 /dev/root rw\n\
-                    37 36 0:5 / /tmp/a\\040b ro,noexec shared:2 - tmpfs none rw\n";
-        let rows = parse_mountinfo(text);
-        assert_eq!(
-            rows,
-            vec![
-                Mount {
-                    id: 36,
-                    parent: 35,
-                    point: PathBuf::from("/usr"),
-                    flags: MountFlags::NOSUID | MountFlags::NODEV | MountFlags::RELATIME,
-                },
-                Mount {
-                    id: 37,
-                    parent: 36,
-                    point: PathBuf::from("/tmp/a b"),
-                    flags: MountFlags::RDONLY | MountFlags::NOEXEC,
-                },
-            ]
-        );
-    }
-
-    /// The host's own mount at the staging path is not checked; the root
-    /// tmpfs stacked on it and that tmpfs's children are.
-    #[test]
-    fn only_mounts_below_the_root_tmpfs_descend_from_it() {
-        let rows = parse_mountinfo(
-            "1 1 0:1 / / rw - x x rw\n\
-             20 1 0:2 / /tmp rw - tmpfs t rw\n\
-             21 20 0:3 / /tmp/.X11-unix rw - tmpfs t rw\n\
-             30 20 0:4 / /tmp rw,nosuid,nodev - tmpfs t rw\n\
-             31 30 0:5 / /tmp/usr ro,nosuid,nodev - ext4 r rw\n",
-        );
-        let below: Vec<u64> = rows
-            .iter()
-            .filter(|m| descends_from(&rows, m, 30))
-            .map(|m| m.id)
-            .collect();
-        assert_eq!(below, vec![30, 31]);
-    }
-
-    #[test]
-    fn a_backslash_not_followed_by_three_octal_digits_stays() {
-        assert_eq!(unescape("a\\9b"), PathBuf::from("a\\9b"));
-        assert_eq!(unescape("a\\134b"), PathBuf::from("a\\b"));
-    }
-}
+#[path = "mounts_tests.rs"]
+mod tests;
