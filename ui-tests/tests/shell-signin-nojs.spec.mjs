@@ -30,14 +30,6 @@ async function productCookies(page) {
   return page.context().cookies();
 }
 
-/**
- * The script's ready class: the shell script adds `ready` to the document
- * element once it has loaded; the CSS keys the no-JavaScript card on its absence.
- */
-function ready(page) {
-  return page.evaluate(() => document.documentElement.classList.contains('ready'));
-}
-
 test.describe('script off', () => {
   test.use({ javaScriptEnabled: false });
 
@@ -55,6 +47,11 @@ test.describe('script off', () => {
 
     await page.goto('/ui/overview/status');
     await expect(page.locator('#signin')).toBeVisible();
+    // Exposed to assistive technology, not only drawn, although the markup
+    // carries `hidden`: role and label queries read the accessibility tree.
+    await expect(page.getByRole('heading', { name: 'mcp-gateway' })).toBeVisible();
+    await expect(page.getByLabel('API key')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
     await expect(page.locator('#signin-form')).toHaveAttribute('method', 'post');
     await expect(page.locator('#signin-form')).toHaveAttribute('action', '/ui/signin');
     await expect(page.locator('#signin-key')).toHaveAttribute('name', 'key');
@@ -116,7 +113,7 @@ test.describe('script off', () => {
   });
 });
 
-test('N10 once the shell is ready, submitting sends no POST and no cookie, and checks the key once', async ({ page, request }, testInfo) => {
+test('N10 once the script shows the card, submitting sends no POST and no cookie, and checks the key once', async ({ page, request }, testInfo) => {
   const read = await openSigninLog(page, request, testInfo);
   const checks = [];
   await page.route('**/ui/api/status', (route) => {
@@ -126,7 +123,8 @@ test('N10 once the shell is ready, submitting sends no POST and no cookie, and c
     return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
   });
   await page.goto('/ui/overview/status');
-  await expect.poll(() => ready(page)).toBe(true);
+  // The markup hides the card and nothing unhides it with script on, so a
+  // visible card is the script's: the precondition this row submits under.
   await expect(page.locator('#signin')).toBeVisible();
   await page.locator('#signin-key').fill(KEY);
   await page.locator('#signin-key').press('Enter');
@@ -157,29 +155,37 @@ test('N11b a same-origin read carries the shell URL as Referer, and an outbound 
   expect(Object.hasOwn((await outbound).headers(), 'referer')).toBe(false);
 });
 
-test('N13 before the shell script loads, the no-JavaScript note shows and a submit opens the dashboard; releasing it posts nothing more', async ({ page, request, baseURL }, testInfo) => {
+test('N13 with script on, the card stays hidden until the shell script shows it, and nothing is posted', async ({ page, request }, testInfo) => {
   const read = await openSigninLog(page, request, testInfo);
-  const origin = new URL(baseURL).origin;
+  await page.route('**/ui/api/status', (route) => route.fulfill({
+    json: { version: '4.0.0', auth: { enabled: true, signed_in: false, admin: false } },
+  }));
+  const assets = [];
+  page.on('request', (r) => {
+    const path = new URL(r.url()).pathname;
+    if (path.startsWith('/ui/assets/')) assets.push(path);
+  });
   let release = () => {};
   const held = new Promise((resolve) => { release = resolve; });
   let sawScript = false;
   await page.route('**/ui/assets/shell.*.js', async (route) => {
     sawScript = true;
     await held;
-    try { await route.continue(); } catch { /* the document navigated while the script was held */ }
+    await route.continue();
   });
   try {
     await page.goto('/ui/overview/status', { waitUntil: 'commit' });
     await page.locator('#signin').waitFor({ state: 'attached' });
     await expect.poll(() => sawScript).toBe(true);
-    expect(await ready(page)).toBe(false);
-    await expect(page.getByText('Without JavaScript, signing in sets a session cookie in this browser and opens the dashboard page.', { exact: true })).toBeVisible();
-    await page.locator('#signin-key').fill(KEY);
-    await page.locator('#signin-key').press('Enter');
-    await expect(page).toHaveURL(`${origin}/dashboard`);
-    expect(await read()).toHaveLength(1);
+    // In the window: the shell script was requested and is held.
+    await expect(page.locator('#signin')).toBeHidden();
+    expect(assets.filter((p) => p.startsWith('/ui/assets/shell.') && p.endsWith('.js'))).toHaveLength(1);
+    expect(assets.filter((p) => p.startsWith('/ui/assets/shell.nojs.'))).toEqual([]);
+    expect(await read()).toEqual([]);
     release();
-    expect((await read()).filter((entry) => entry.method === 'POST')).toHaveLength(1);
+    // Released, signed out: the script shows the card, and still nothing was posted.
+    await expect(page.locator('#signin')).toBeVisible();
+    expect(await read()).toEqual([]);
   } finally {
     release();
   }
