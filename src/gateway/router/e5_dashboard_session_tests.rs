@@ -107,6 +107,14 @@ pub(super) struct Reply {
 }
 
 impl Reply {
+    /// One header value, when it is a single UTF-8 line.
+    pub(super) fn header(&self, name: header::HeaderName) -> Option<String> {
+        self.headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    }
+
     /// Every `Set-Cookie` value, joined.
     pub(super) fn set_cookie(&self) -> String {
         self.headers

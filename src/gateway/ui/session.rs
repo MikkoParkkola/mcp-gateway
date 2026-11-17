@@ -47,7 +47,19 @@ pub fn logout_router() -> Router<Arc<AppState>> {
         .layer(axum::middleware::map_response(handoff_private));
     Router::new()
         .route(routes::DASHBOARD_LOGOUT, post(logout))
+        .route(routes::UI_SIGNIN, post(signin_unimplemented))
         .merge(handoff)
+}
+
+/// `POST /ui/signin` is registered so the sign-in rows reach their own
+/// assertions. The behaviour is not built yet: 501, not cached,
+/// and the body is not read.
+async fn signin_unimplemented() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        [(header::CACHE_CONTROL, "no-store")],
+    )
+        .into_response()
 }
 
 async fn handoff_private(response: Response) -> Response {
