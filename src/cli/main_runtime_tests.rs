@@ -8,21 +8,18 @@ use std::time::Duration;
 
 use crate::cli::Command;
 
-use super::{RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, block_on, shut_down};
+use super::{CountedRuntime, RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, block_on, shut_down};
 
-fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("build a runtime")
+fn runtime() -> CountedRuntime {
+    CountedRuntime::new()
 }
 
 /// A blocking-pool task that has started and stays stuck, as a read on a
 /// stalled mount does, until the returned sender is dropped.
-fn stuck_task(runtime: &tokio::runtime::Runtime) -> mpsc::Sender<()> {
+fn stuck_task(runtime: &CountedRuntime) -> mpsc::Sender<()> {
     let (release, stuck) = mpsc::channel::<()>();
     let (started, running) = mpsc::channel();
-    runtime.spawn_blocking(move || {
+    runtime.tokio.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
         let _ = stuck.recv();
     });
@@ -154,7 +151,7 @@ fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     let done = Arc::clone(&flushed);
     let (started, running) = mpsc::channel();
     let (release, held) = mpsc::channel::<()>();
-    runtime.spawn_blocking(move || {
+    runtime.tokio.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
         held.recv().expect("the test releases the flush");
         done.store(true, Ordering::SeqCst);
@@ -200,11 +197,11 @@ fn plan_with_runtime_end(runtime_end: tokio::time::Instant) -> crate::retire::Re
     )
 }
 
-/// U1 (RETIRE.4): under a plan the runtime waits at most 250 ms when its
-/// runtime deadline is further off, and only what is left to it when nearer;
-/// without a plan, the mode's timeout as before.
+/// U1 (RETIRE.4): under a plan the runtime waits for blocking work
+/// until the plan's runtime deadline, however far off, not a fixed cap; without
+/// a plan, the mode's timeout as before.
 #[test]
-fn a_plan_bounds_the_runtime_wait_by_the_cap_and_its_deadline() {
+fn a_plan_bounds_the_runtime_wait_by_its_runtime_deadline() {
     use super::wait_bound;
     let now = tokio::time::Instant::now();
     let ten = SERVE_RUNTIME_SHUTDOWN_TIMEOUT;
@@ -216,8 +213,8 @@ fn a_plan_bounds_the_runtime_wait_by_the_cap_and_its_deadline() {
     let far = plan_with_runtime_end(now + Duration::from_secs(60));
     assert_eq!(
         wait_bound(ten, Some(far), now),
-        crate::retire::RUNTIME_WAIT_CAP,
-        "a far runtime deadline did not cap the wait at 250 ms"
+        Duration::from_secs(60),
+        "a far runtime deadline was cut short by a fixed cap"
     );
     let near = plan_with_runtime_end(now + Duration::from_millis(100));
     assert_eq!(
@@ -244,14 +241,58 @@ fn a_spent_runtime_deadline_gives_a_zero_wait() {
     );
 }
 
-/// U1 (RETIRE.4): a blocking task that never ends no longer holds an HTTP
-/// stop's runtime for the 10 s bound: the shutdown returns within the plan's
-/// 250 ms cap (well under 2 s here) and reports the work left running.
+/// Blocking work that ends before the plan's runtime deadline is
+/// waited for, not reported as left running. Under load such work outlived the
+/// old 250 ms cap and the stop exited 75 with seconds of its budget left.
 #[test]
-fn a_planned_shutdown_leaves_a_stuck_task_behind_within_the_cap() {
+fn blocking_work_that_ends_before_the_runtime_deadline_is_not_left_running() {
+    let runtime = runtime();
+    let (started, running) = mpsc::channel();
+    let (go, hold) = mpsc::channel::<()>();
+    runtime.tokio.spawn_blocking(move || {
+        started.send(()).expect("the test waits for the start");
+        // The hold starts when the shutdown is about to begin, not at spawn, so
+        // setup delays under load cannot use it up before the old cap is tested.
+        hold.recv().expect("the test starts the hold");
+        // The work lasts at least 400 ms, past the old 250 ms cap; with the
+        // deadline 30 s away, a late wake under load still ends long before it.
+        // timing: lower-bound
+        std::thread::sleep(Duration::from_millis(400));
+    });
+    running
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the blocking task starts");
+    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_secs(30));
+    let (left_running, logged) = within_watchdog(move || {
+        let mut left_running = true;
+        let logged = errors_logged(|| {
+            go.send(()).expect("the blocking task waits for its hold");
+            left_running = shut_down(
+                runtime,
+                RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+                Some(plan),
+            );
+        });
+        (left_running, logged)
+    });
+    assert!(
+        !left_running,
+        "work that ended well before the runtime deadline was reported as left running"
+    );
+    assert!(
+        logged.is_empty(),
+        "a clean planned shutdown logged: {logged:?}"
+    );
+}
+
+/// U1 (RETIRE.4): a blocking task that never ends no longer holds an
+/// HTTP stop's runtime for the 10 s bound: the shutdown returns at the plan's
+/// runtime deadline (500 ms away here) and reports the work left running.
+#[test]
+fn a_task_stuck_past_the_runtime_deadline_is_left_running() {
     let runtime = runtime();
     let release = stuck_task(&runtime);
-    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_secs(60));
+    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_millis(500));
     let (sent, got) = mpsc::channel();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
@@ -275,8 +316,8 @@ fn a_planned_shutdown_leaves_a_stuck_task_behind_within_the_cap() {
 
 /// U1d (RETIRE.4): `block_on` reads the plan its future stored in the cell, as
 /// the HTTP stop stores it during the run, when it shuts the runtime down: a
-/// stuck blocking task then holds the exit no longer than the cap, and the
-/// shutdown reports it left running.
+/// stuck blocking task then holds the exit no longer than the plan's runtime
+/// deadline, and the shutdown reports it left running.
 #[test]
 fn block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run() {
     let plan = crate::retire::RetireCell::default();
@@ -289,8 +330,8 @@ fn block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run() {
             RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
             &plan,
             async move {
-                let far = tokio::time::Instant::now() + Duration::from_secs(60);
-                let _ = cell.set(plan_with_runtime_end(far));
+                let near = tokio::time::Instant::now() + Duration::from_millis(500);
+                let _ = cell.set(plan_with_runtime_end(near));
                 let (started, running) = tokio::sync::oneshot::channel();
                 tokio::task::spawn_blocking(move || {
                     let _ = started.send(());
@@ -309,5 +350,47 @@ fn block_on_bounds_its_shutdown_by_the_plan_stored_during_the_run() {
     assert!(
         took < Duration::from_secs(2),
         "block_on ignored the plan stored during the run and waited {took:?}"
+    );
+}
+
+/// RETIRE.4 log line: a task stuck past the plan's runtime deadline produces
+/// exactly one ERROR line from the shutdown, naming how long it waited, the
+/// runtime threads still alive (at least the stuck one) and the known
+/// candidates for the stuck work.
+#[test]
+fn a_stuck_stop_logs_one_line_naming_what_was_still_running() {
+    let runtime = runtime();
+    let release = stuck_task(&runtime);
+    let plan = plan_with_runtime_end(tokio::time::Instant::now() + Duration::from_millis(300));
+    let logged = within_watchdog(move || {
+        errors_logged(|| {
+            shut_down(
+                runtime,
+                RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+                Some(plan),
+            );
+        })
+    });
+    drop(release);
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|line| line.contains("ERROR"))
+        .collect();
+    assert_eq!(lines.len(), 1, "not exactly one ERROR line: {logged:?}");
+    let line = lines[0];
+    let threads: usize = line
+        .split("live_runtime_threads=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_else(|| panic!("the line names no live_runtime_threads count: {line:?}"));
+    assert!(threads >= 1, "the stuck thread was not counted: {line:?}");
+    assert!(
+        line.contains("waited=") && line.contains("live_tasks="),
+        "the line does not name the wait and the live tasks: {line:?}"
+    );
+    assert!(
+        line.contains("disk or mount write") && line.contains("npm lookup"),
+        "the line does not name the known candidates: {line:?}"
     );
 }
