@@ -357,7 +357,9 @@ async fn an_unloadable_config_is_a_usage_error() {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
     let out = super::dashboard_link::events_outcome(&args, broken, None, None, ok_token()).await;
     failed(&out, CliExit::Usage, what, SETTINGS_REMEDY, "events");
-    let Command::Audit(AuditCommand::LookupEmail(args)) = parse(&["audit", "lookup-email"]) else {
+    let Command::Audit(AuditCommand::LookupEmail(args)) =
+        parse(&["audit", "lookup-email", "--email-stdin"])
+    else {
         panic!()
     };
     let out =
