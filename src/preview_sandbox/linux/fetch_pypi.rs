@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A fake PyPI for the uv fetch rows: TLS on 127.0.0.1 under one leaf naming
+//! A fake `PyPI` for the uv fetch rows: TLS on 127.0.0.1 under one leaf naming
 //! `pypi.org` and `files.pythonhosted.org`, signed by a fresh test CA,
 //! serving the PEP 691 JSON simple API and the files, wheels and sdists
 //! built here. Every request is logged as `host path`, so a row can name
 //! what uv asked for.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
@@ -97,7 +98,7 @@ pub(super) fn wheel(
     let info = format!("{dist}-1.0.dist-info");
     let mut metadata = format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n");
     for r in requires {
-        metadata.push_str(&format!("Requires-Dist: {r}\n"));
+        writeln!(metadata, "Requires-Dist: {r}").expect("a String takes the line");
     }
     let mut entries: Vec<(String, Vec<u8>, u32)> = files
         .iter()
@@ -120,7 +121,7 @@ pub(super) fn wheel(
     if !scripts.is_empty() {
         let mut text = String::from("[console_scripts]\n");
         for (script, target) in scripts {
-            text.push_str(&format!("{script} = {target}\n"));
+            writeln!(text, "{script} = {target}").expect("a String takes the line");
         }
         entries.push((format!("{info}/entry_points.txt"), text.into_bytes(), 0o644));
     }
@@ -128,9 +129,9 @@ pub(super) fn wheel(
     for (path, data, _) in &entries {
         let digest =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(data));
-        record.push_str(&format!("{path},sha256={digest},{}\n", data.len()));
+        writeln!(record, "{path},sha256={digest},{}", data.len()).expect("a String takes the line");
     }
-    record.push_str(&format!("{info}/RECORD,,\n"));
+    writeln!(record, "{info}/RECORD,,").expect("a String takes the line");
     entries.push((format!("{info}/RECORD"), record.into_bytes(), 0o644));
     let filename = format!("{dist}-1.0-py3-none-any.whl");
     IndexFile {
@@ -168,7 +169,7 @@ pub(super) fn sdist(project: &'static str, dist: &str, files: &[(&str, &str)]) -
     }
 }
 
-/// A running fake PyPI: its loopback port, the CA its leaf chains to, and
+/// A running fake `PyPI`: its loopback port, the CA its leaf chains to, and
 /// every request it read, as `host path`.
 pub(super) struct Index {
     pub(super) port: u16,
@@ -201,7 +202,7 @@ fn simple_page(project: &str, files: &[IndexFile]) -> Vec<u8> {
 }
 
 impl Index {
-    /// Serve `files` under a leaf for both PyPI names, signed by a fresh test
+    /// Serve `files` under a leaf for both `PyPI` names, signed by a fresh test
     /// CA named `ca_name`.
     pub(super) async fn start(files: Vec<IndexFile>, ca_name: &str) -> Self {
         let pki = crate::test_fixture_host::test_pki_names(

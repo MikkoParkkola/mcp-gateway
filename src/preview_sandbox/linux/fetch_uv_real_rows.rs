@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The uv fetch with the real uv 0.13.1 against the fake PyPI (its test plan,
+//! The uv fetch with the real uv 0.13.1 against the fake `PyPI` (its test plan,
 //! the real-uv rows). Each row looks for `uvx` on the test's PATH: absent,
 //! it skips with a named line; present, it requires uv 0.13.1 and prints a
 //! named `ran` line before its first assertion. The enabling PR deletes the
@@ -129,12 +129,12 @@ async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
     };
     for under in ["plain", "a b", "it's"] {
         let layout = Layout::pyenv(under);
-        let reads: Vec<String> = layout
+        let read_args: Vec<String> = layout
             .canaries
             .iter()
             .map(|c| format!("--read={}", c.display()))
             .collect();
-        let args: Vec<&str> = reads.iter().map(String::as_str).collect();
+        let args: Vec<&str> = read_args.iter().map(String::as_str).collect();
         let (out, _) = real_uvx(
             &ready,
             Some(&layout),
@@ -145,7 +145,7 @@ async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
         .await;
         let out = out.expect("the fetch and the run succeeded");
         let mut want = vec!["cli-ran".to_owned()];
-        want.extend(reads.iter().cloned());
+        want.extend(read_args.iter().cloned());
         want.push("proxy unset".to_owned());
         want.extend(
             layout

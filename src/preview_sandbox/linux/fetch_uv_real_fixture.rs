@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The real-uv rows' fixtures: the packages the fake PyPI serves, the
+//! The real-uv rows' fixtures: the packages the fake `PyPI` serves, the
 //! copied interpreter trees and the spawn recorder, and the runner that
 //! finds the real uv (or prints the row's skip line) and previews a target.
 
@@ -437,7 +437,7 @@ pub(super) async fn ready(row: &str) -> Option<Ready> {
     Some(Ready { gateway, uv_dir })
 }
 
-/// `uvx spec <args(port)>` with the real uv against the fake PyPI on
+/// `uvx spec <args(port)>` with the real uv against the fake `PyPI` on
 /// `port`, the fetch's bundle holding the index's CA (`Bundle::Registry`) or
 /// an unrelated one; the interpreter is `layout`'s, else the system's. The
 /// start's refusal or the run's stdout, and the index, still serving, with

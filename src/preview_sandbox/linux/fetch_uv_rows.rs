@@ -56,6 +56,7 @@ for a in "$@"; do printf '%s\n' "$a"; done
 /// records its argv and exact environment (numbered per call), lays out the
 /// tool env of the package the spec names, then runs the scenario's hook.
 fn uv_script(scenario: &Scenario, tools: &Path) -> String {
+    let run_bin = format!("{RUN_BIN}{}\n", scenario.run_tail);
     let decoy = if scenario.decoy {
         format!(
             "printf '#!/bin/sh\\necho decoy\\n' > \"$env/bin/{dist}\"; chmod 755 \"$env/bin/{dist}\"\n",
@@ -94,7 +95,7 @@ exit 0
 "#,
         dist = scenario.dist,
         script = scenario.script,
-        run_bin = format!("{RUN_BIN}{}\n", scenario.run_tail),
+        run_bin = run_bin,
         hook = scenario.hook,
         version = scenario.version,
         called = path_of(&tools.join("version-called")),
