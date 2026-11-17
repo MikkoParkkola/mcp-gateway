@@ -49,12 +49,18 @@ std::thread_local! {
     static ZONE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// A client's `timezone` argument as a zone. Refused like an unknown zone.
+/// A client's `timezone` argument as a zone. Refused like an unknown zone, and
+/// before the parser sees it, when it is empty, longer than [`MAX_ZONE`] or has
+/// a character no IANA name uses: the parser only ever reads a short ASCII name.
 fn zone(name: &str) -> Result<Tz, RpcError> {
+    let refused = || RpcError::invalid("arguments.timezone");
+    let name_byte = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'/' | b'-');
+    if name.is_empty() || name.len() > MAX_ZONE || !name.bytes().all(name_byte) {
+        return Err(refused());
+    }
     #[cfg(test)]
     ZONE_PARSES.with(|parses| parses.set(parses.get() + 1));
-    name.parse::<Tz>()
-        .map_err(|_| RpcError::invalid("arguments.timezone"))
+    name.parse::<Tz>().map_err(|_| refused())
 }
 
 /// A subscription's arguments, canonical but unvalidated: the timer key and
