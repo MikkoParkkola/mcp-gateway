@@ -11,13 +11,6 @@ use crate::config_reload::revision::RawInputs;
 
 /// The whole-save deadline: a record's save, its sidecar wait and the
 /// startup worker's open all end within it (design D-1, D-2).
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "the stub: D-2 bounds the save with it; the rows read it now"
-    )
-)]
 pub(crate) const SAVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Where a reload event came from.
@@ -253,16 +246,17 @@ impl ConfigHistory {
         })
     }
 
-    /// Memory-only reads the held state; otherwise the file. Test-only: a
-    /// failed read reads as empty here, which no write path relies on (the
-    /// save reads the store itself and never takes a failure as empty).
+    /// Memory-only reads the held state; otherwise the file. Test-only. A
+    /// failed read is never taken as an empty store: it fails the reader
+    /// with the read error (design D-2).
     #[cfg(test)]
     fn with_state<T>(&self, read: impl FnOnce(&State) -> T) -> T {
         let mode = self.mode.lock();
         match &*mode {
             StoreMode::MemoryOnly { state } => read(state),
             StoreMode::Disk | StoreMode::Unopened { .. } => {
-                let state = load_state(&self.file()).unwrap_or_default();
+                let state = load_state(&self.file())
+                    .unwrap_or_else(|error| panic!("the history file does not read: {error}"));
                 read(&state)
             }
         }

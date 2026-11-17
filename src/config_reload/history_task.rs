@@ -68,8 +68,14 @@ impl RecordSlot {
         };
         let guard = self.guard.take();
         let live = Arc::clone(live);
+        // One record per reload; were there a second, it waits for the first,
+        // so records stay in order without the guard (code review r2).
+        let previous = self.task.take();
         self.task = Some(tokio::spawn(async move {
             let _guard = guard;
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
             #[cfg(test)]
             let reached = live
                 .history_hook()
@@ -97,8 +103,10 @@ impl RecordSlot {
 
     /// Wait for the record task, when one was spawned.
     pub(crate) async fn finish(self) {
-        if let Some(task) = self.task {
-            let _ = task.await;
+        if let Some(task) = self.task
+            && let Err(error) = task.await
+        {
+            tracing::warn!(%error, "the config history record task stopped before its record was kept");
         }
     }
 }

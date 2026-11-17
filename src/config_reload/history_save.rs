@@ -249,15 +249,34 @@ impl super::ConfigHistory {
     /// blocking pool under the save deadline. Past it, the generation moves
     /// (a late job then renames nothing) and the store goes memory-only.
     pub(crate) async fn save_bounded(self: &std::sync::Arc<Self>, record: Record) {
-        let Some((record, file)) = self.memory_or_file(record) else {
-            return;
+        // Memory-only appends here; an unopened store is opened inside the job,
+        // so the save deadline covers the open as well (code review r2).
+        let unopened = {
+            let mut mode = self.mode.lock();
+            match &mut *mode {
+                super::StoreMode::MemoryOnly { state } => {
+                    apply(state, record, self.bounds);
+                    return;
+                }
+                super::StoreMode::Unopened { .. } => true,
+                super::StoreMode::Disk => false,
+            }
         };
+        let file = self.file();
         let (tx, rx) = std::sync::mpsc::channel();
         let ticket = self.generation.load(Ordering::SeqCst);
         let deadline = Instant::now() + super::SAVE_DEADLINE;
         let store = std::sync::Arc::clone(self);
         let job_record = record.clone();
         let job = tokio::task::spawn_blocking(move || {
+            if unopened {
+                if let Err(cause) = store.open_now(ticket, deadline) {
+                    return SaveOutcome::ReadFailed(cause);
+                }
+                if matches!(*store.mode.lock(), super::StoreMode::MemoryOnly { .. }) {
+                    return SaveOutcome::ReadFailed("the store is kept in memory".to_string());
+                }
+            }
             save_record(
                 &file,
                 store.bounds,
@@ -375,6 +394,9 @@ impl super::ConfigHistory {
         let (tx, rx) = std::sync::mpsc::channel();
         let store = std::sync::Arc::clone(self);
         let job_record = record.clone();
+        // Which step the worker is in, for the warning if it does not finish.
+        let step = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let saving = std::sync::Arc::clone(&step);
         #[cfg(test)]
         let injected = super::seams::for_file(&self.file()).is_some_and(|s| s.take_spawn_failure());
         #[cfg(not(test))]
@@ -389,6 +411,7 @@ impl super::ConfigHistory {
                         let _ = done.send(Some(SaveOutcome::ReadFailed(cause)));
                         return;
                     }
+                    saving.store(true, Ordering::SeqCst);
                     let file = {
                         let mut mode = store.mode.lock();
                         match &mut *mode {
@@ -425,8 +448,13 @@ impl super::ConfigHistory {
             Ok(Some(outcome)) => self.settle(outcome, record, rx.try_recv().ok()),
             Err(_) => {
                 self.generation.fetch_add(1, Ordering::SeqCst);
+                let unfinished = if step.load(Ordering::SeqCst) {
+                    "the startup record's save"
+                } else {
+                    "the open of the history file"
+                };
                 let cause = format!(
-                    "startup's open and record did not finish within {:?}; its sidecar is {}",
+                    "{unfinished} did not finish within {:?}; its sidecar is {}",
                     super::SAVE_DEADLINE,
                     sidecar_path(&self.file()).display()
                 );
