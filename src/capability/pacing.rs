@@ -98,13 +98,19 @@ pub(crate) fn declared_intervals<'a>(
             .values()
             .chain(&capability.providers.fallback);
         for provider in providers {
-            // An interval outside the loader's bounds never reaches a bucket.
-            let Some(rate) = provider
-                .rate_limit
-                .filter(|rate| (1..=600_000).contains(&rate.interval_ms))
-            else {
+            let Some(rate) = provider.rate_limit else {
                 continue;
             };
+            // Every path into a catalogue applies the loader's bounds; one
+            // that did not would be logged, and never reach a bucket.
+            if !crate::capability::definition::maps_rules::INTERVAL_MS.contains(&rate.interval_ms) {
+                tracing::warn!(
+                    capability = %capability.name,
+                    interval_ms = rate.interval_ms,
+                    "rate_limit outside 1..=600000 ms; this provider is not paced"
+                );
+                continue;
+            }
             // The loader refuses a paced provider with no host key, so none
             // is skipped here.
             let Some(key) = host_key(&configured_url(&provider.config)) else {
@@ -240,7 +246,17 @@ pub(crate) fn unpaced_protocol_refusal(
             .map(|g| g.endpoint.clone())
             .or_else(|| config.as_jsonrpc().map(|j| j.endpoint.clone()))
             .unwrap_or_default();
-        if let Some(key) = host_key(&endpoint).filter(|key| intervals.contains_key(key)) {
+        // Paced by this catalogue, or by the process: another backend, or a
+        // host a reload dropped that keeps its bucket.
+        let paced_now = |key: &HostKey| {
+            pacers()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(key)
+        };
+        if let Some(key) =
+            host_key(&endpoint).filter(|key| intervals.contains_key(key) || paced_now(key))
+        {
             return Some(format!(
                 "{} is paced by a rate_limit; a {protocol} provider may not call it",
                 key.host

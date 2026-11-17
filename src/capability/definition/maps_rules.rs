@@ -49,7 +49,7 @@ const PROVIDER_KEYS: &[&str] = &[
 const RATE_LIMIT_KEYS: &[&str] = &["interval_ms"];
 
 /// The bounds of `rate_limit.interval_ms`.
-const INTERVAL_MS: std::ops::RangeInclusive<u64> = 1..=600_000;
+pub(crate) const INTERVAL_MS: std::ops::RangeInclusive<u64> = 1..=600_000;
 
 fn refuse(file: &Path, message: impl std::fmt::Display) -> Error {
     Error::Config(format!("{}: {message}", file.display()))
