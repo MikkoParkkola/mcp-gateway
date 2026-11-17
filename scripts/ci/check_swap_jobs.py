@@ -96,7 +96,6 @@ EXPECTED = {
 # converts the first four rows' jobs and deletes their rows; the stage B jobs keep the whole build until then.
 HELPER = "scripts/ci/lib-parts.sh"
 WHOLE_BUILD_ALLOWED = {
-    ("ci.yml", "package-tests"): "converted by the jobs PR's second half (packaged-crate test build)",
     ("packaged-suite.yml", "packaged-suite"): "converted by the jobs PR's second half (post-merge packaged suite)",
     ("release.yml", "verify"): "converted by the jobs PR's second half (release verify)",
     ("coverage-probe.yml", "linux-part"): "converted by the jobs PR's second half (llvm-cov Linux lib parts)",
@@ -106,12 +105,41 @@ WHOLE_BUILD_ALLOWED = {
 }
 
 
-def census(jobs_in_scope: dict) -> list[str]:
-    """SPLIT.6: an in-scope job outside WHOLE_BUILD_ALLOWED builds through the helper; every allowance names a job
-    still in scope that still does not."""
+# The packaged crate's build builds by part inside the unpacked crate, where the helper is not shipped: it counts as
+# through the helper while its script's build mode holds that shape (packaged_build_problems).
+PACKAGED_BUILD = "scripts/ci/packaged-tests.sh build"
+PACKAGED_SCRIPT = Path("scripts/ci/packaged-tests.sh")
+PART_CALL = re.compile(r"""MCP_GATEWAY_TEST_PART="\$k"\s+cargo\s+test\b.*\s--lib\b""")
+REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
+SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
+
+
+def packaged_build_problems(text: str) -> list[str]:
+    """Why the packaged crate's `build` mode does not build the lib tests one part at a time, or nothing: every
+    `cargo test` there is either one part (`--lib` with MCP_GATEWAY_TEST_PART set) or the other targets only
+    (`--test '*'`, no `--lib`/`--tests`/`--all-targets`/`--benches`), and there is one of each."""
+    start = text.find('elif [ "$mode" = build ]')
+    if start < 0:
+        return ["packaged-tests.sh has no build mode"]
+    block = text[start:].split("\nelse", 1)[0]
+    calls = [line.strip() for line in block.splitlines() if re.search(r"\bcargo\s+test\b", line)]
+    out = [f"`{c}` is neither one part nor the other targets" for c in calls
+           if not PART_CALL.search(c) and not (REST_CALL.search(c) and not SELECTS_LIB.search(c))]
+    if not any(PART_CALL.search(c) for c in calls):
+        out.append("the build mode builds no part")
+    if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
+        out.append("the build mode builds no non-lib test target")
+    return out
+
+
+def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
+    """SPLIT.6: an in-scope job outside WHOLE_BUILD_ALLOWED builds through the helper (or is the packaged build while
+    `packaged_by_part`); every allowance names a job still in scope that still does not."""
     problems = []
+    marks = (HELPER, PACKAGED_BUILD) if packaged_by_part else (HELPER,)
     through = {key for key, job in jobs_in_scope.items()
-               if any(HELPER in str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict))}
+               if any(m in str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict)
+                      for m in marks)}
     for key in sorted(set(jobs_in_scope) - through - set(WHOLE_BUILD_ALLOWED)):
         problems.append(f"{key[0]}:{key[1]} builds the library tests without {HELPER}, so the whole lib test binary")
     for key in sorted(set(WHOLE_BUILD_ALLOWED) - (set(jobs_in_scope) - through)):
@@ -293,7 +321,7 @@ def main() -> int:
         s, p = check_workflow(path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {}, seen)
         scope |= s
         problems += p
-    problems += census(seen)
+    problems += census(seen, packaged_by_part=not packaged_build_problems(PACKAGED_SCRIPT.read_text(encoding="utf-8")))
     for missing in sorted(EXPECTED - scope):
         problems.append(f"{missing[0]}:{missing[1]} is listed in EXPECTED but builds no library tests")
     for extra in sorted(scope - EXPECTED):
@@ -397,21 +425,42 @@ def self_test() -> int:
         print(f"{'ok   ' if ok else 'WRONG'} memory log, {label}: problems {problems}")
     helper_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh export 1 out"}]}
     whole_job = {"steps": [{"run": "cargo test --all-features --lib --no-run"}]}
+    packaged_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build"}]}
     allowed = {key: {"steps": []} for key in WHOLE_BUILD_ALLOWED}
     census_cases = [
-        ("a new job building the whole binary", {**allowed, ("ci.yml", "new"): whole_job}, True),
-        ("a new job building through the helper", {**allowed, ("ci.yml", "new"): helper_job}, False),
+        ("a new job building the whole binary", {**allowed, ("ci.yml", "new"): whole_job}, True, True),
+        ("a new job building through the helper", {**allowed, ("ci.yml", "new"): helper_job}, False, True),
         ("a new job calling export-lib itself, without the helper",
-         {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True),
-        ("an allowed job converted but still listed", {**allowed, ("ci.yml", "package-tests"): helper_job}, True),
-        ("the allowance as it stands", allowed, False),
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
+        ("an allowed job converted but still listed",
+         {**allowed, ("packaged-suite.yml", "packaged-suite"): helper_job}, True, True),
+        ("the allowance as it stands", allowed, False, True),
+        ("the packaged-crate build, its script building by part",
+         {**allowed, ("ci.yml", "package-tests"): packaged_job}, False, True),
+        ("the packaged-crate build, its script building the whole binary",
+         {**allowed, ("ci.yml", "package-tests"): packaged_job}, True, False),
     ]
-    for label, jobs, want_bad in census_cases:
-        found = census(jobs)
+    for label, jobs, want_bad, by_part in census_cases:
+        found = census(jobs, packaged_by_part=by_part)
         ok = bool(found) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} census, {label}: problems {found}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) - wrong} ok, {wrong} wrong")
+    part = 'MCP_GATEWAY_TEST_PART="$k" cargo test --all-features --locked --lib --no-run'
+    rest = "cargo test --all-features --locked --no-run --test '*' --bins --examples"
+    shape = 'elif [ "$mode" = build ]; then\n  for k in 1 2; do\n    {}\n  done\n  {}\nelse\n  cargo test --all-features\nfi\n'
+    packaged_cases = [
+        ("by part, then the other targets", shape.format(part, rest), False),
+        ("today's whole build", 'elif [ "$mode" = build ]; then\n  cargo test --all-features --locked --no-run\nelse\nfi\n', True),
+        ("--tests selects the lib again", shape.format(part, rest.replace("--test '*'", "--tests")), True),
+        ("a part without its variable", shape.format(part.replace('MCP_GATEWAY_TEST_PART="$k" ', ""), rest), True),
+        ("parts only, the other targets never built", shape.format(part, "true"), True),
+    ]
+    for label, text, want_bad in packaged_cases:
+        found = packaged_build_problems(text)
+        ok = bool(found) == want_bad
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} packaged build, {label}: problems {found}")
+    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
