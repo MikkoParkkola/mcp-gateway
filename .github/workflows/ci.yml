@@ -254,7 +254,7 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
-          python3 scripts/ci/test_memory_peak.py
+          python3 scripts/ci/test_memory_tripwire.py
           python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/job_time_watch.py --self-test
@@ -1146,8 +1146,9 @@ jobs:
           retention-days: 1
           overwrite: true
           if-no-files-found: error
-      # A whole lib test build peaks near 15 GB here and a part near 11 GB: above 13 GB a whole build came back,
-      # however it was launched. `always()`, so a step timeout still reports the peak.
+      # A part writes nothing to swap here and a whole lib test build about 7 GiB (E1, 2026-11-17): past 2 GiB a whole
+      # build came back, however it was launched. The kernel keeps the count, so `always()` still reports after a step
+      # timeout. memory.peak is printed for the trend only.
       - name: Memory tripwire
         if: always()
         run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
@@ -1877,7 +1878,7 @@ jobs:
     name: Tests build from the packaged crate
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
@@ -1886,9 +1887,13 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
-        # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).
-        timeout-minutes: 35
+        # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole
+        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. A stall ends here with its log.
+        timeout-minutes: 60
         run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
   # The post-merge packaged run, on demand: a workflow file that is not on the
   # default branch yet cannot be dispatched itself.

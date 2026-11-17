@@ -30,7 +30,7 @@ BUILD_JOB = "linux-lib-build"
 ARTIFACT = "linux-lib-tests-p*"  # the consumers' download pattern
 UPLOAD_NAME = "linux-lib-tests-p${{ matrix.part }}"
 UNION = "linux-lib-union"
-TRIPWIRE = "scripts/ci/memory-peak.sh"
+TRIPWIRE = "scripts/ci/memory-tripwire.sh"
 CONSUMERS = ("test-shards-lib", "gws-dry-run", "linux-keychain")
 ROLLUP = "test"
 

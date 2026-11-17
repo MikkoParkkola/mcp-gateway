@@ -1476,8 +1476,9 @@ CASES += [
      "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
     ("package-tests-build-step-dropped", "ci.yml",
      "      - name: Build the tests from the packaged crate\n"
-     "        # Healthy builds take up to 17 min; a stall ends here with its log (check_swap_jobs.py).\n"
-     "        timeout-minutes: 35\n"
+     "        # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole\n"
+     "        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. A stall ends here with its log.\n"
+     "        timeout-minutes: 60\n"
      "        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
     ("docker-build-stops-waiting-for-package-tests", "ci.yml",
      "release-script-tests, package-tests, release-signing-checks]", "release-script-tests, release-signing-checks]", CAUGHT),
