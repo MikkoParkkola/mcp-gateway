@@ -319,31 +319,47 @@ fn every_shutdown_save_construction_has_a_root_row() {
         "health save (health.json)",
         "protocol-revision window seal",
     ];
-    fn walk(dir: &Path, found: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).expect("a source dir").flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if path.is_dir() {
-                walk(&path, found);
-            } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
-                let text = std::fs::read_to_string(&path).expect("a source file");
-                let code = crate::test_source_text::sanitize(
-                    &crate::test_source_text::production_text(&text),
-                );
-                for _ in code.matches("ShutdownSave::new(") {
-                    found.push(path.display().to_string());
-                }
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut found,
-    );
+    let found = production_matches(&source_files(), "ShutdownSave::new(");
     assert_eq!(
         found.len(),
         READ_BY_A_ROW.len(),
         "constructions found: {found:?}"
     );
+}
+
+/// Every non-test `.rs` file under `src/`, as (path, text). Files named
+/// `*tests.rs` are test modules; test items inside other files are blanked
+/// by the shared reader.
+pub(super) fn source_files() -> Vec<(String, String)> {
+    fn walk(dir: &Path, files: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).expect("a source dir").flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir() {
+                walk(&path, files);
+            } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
+                let text = std::fs::read_to_string(&path).expect("a source file");
+                files.push((path.display().to_string(), text));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    files
+}
+
+/// One entry per occurrence of `needle` in the production code of `files`
+/// (comments, strings and test-only items removed), naming its file.
+pub(super) fn production_matches(files: &[(String, String)], needle: &str) -> Vec<String> {
+    files
+        .iter()
+        .flat_map(|(path, text)| {
+            let code =
+                crate::test_source_text::sanitize(&crate::test_source_text::production_text(text));
+            vec![path.clone(); code.matches(needle).count()]
+        })
+        .collect()
 }

@@ -96,6 +96,7 @@ pub(super) fn start_history(
         "health save",
         COUNTER_SAVE_INTERVAL,
         Some(shutdown),
+        path.clone(),
         saver_closure(
             Arc::clone(&gate),
             Arc::clone(&history),
@@ -184,6 +185,8 @@ impl Health {
             "health sample",
             SAMPLE_INTERVAL,
             Some(shutdown),
+            // Samples into memory only: no file, nothing to keep.
+            None,
             sampler_closure(
                 Arc::clone(&self.gate),
                 Arc::clone(&self.history),

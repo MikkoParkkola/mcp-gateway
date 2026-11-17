@@ -1,0 +1,255 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A periodic saver keeps the temp dir a test registered while each tick's
+//! save runs, and reports a plain one once, at start (family
+//! test-temp-sidecar-leak, rows K8, K8p, K11 and K11b).
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use super::*;
+use crate::test_dir_keep::{expect_unkept, kept_tempdir};
+
+/// An interval no row waits out in real time: every row pauses the clock.
+const EVERY: Duration = Duration::from_secs(300);
+
+/// How long a row waits for a signal from a save thread, or for a dir to go.
+const BOUND: Duration = Duration::from_secs(30);
+
+fn this_test() -> String {
+    std::thread::current()
+        .name()
+        .expect("a test thread")
+        .to_owned()
+}
+
+/// Wait for `reached` with the runtime's only thread BLOCKED, so a paused
+/// clock cannot auto-advance into another tick meanwhile. A helper thread
+/// turns the notification into a bounded std receive.
+fn reached_blocking(reached: Arc<tokio::sync::Notify>) {
+    let (sent, got) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        futures::executor::block_on(reached.notified());
+        let _ = sent.send(());
+    });
+    assert!(
+        got.recv_timeout(BOUND).is_ok(),
+        "the tick's save thread never reached its gate"
+    );
+}
+
+/// Releases a held tick when dropped, so a failing row frees its thread.
+struct Release(Arc<tokio::sync::Notify>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+/// What is left under `dir`, for a failure message.
+fn listing(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+    )
+}
+
+/// The dir is there while the tick's save is held, then goes once the save
+/// returns, with nothing left behind.
+async fn held_then_gone(dir: &Path, release: Release) {
+    assert!(
+        dir.exists(),
+        "the dir was removed while the tick's save was still held"
+    );
+    drop(release);
+    let gone = crate::test_wait::wait_real_time(BOUND, || !dir.exists()).await;
+    assert!(
+        gone.is_ok(),
+        "the dir stayed after the tick's save returned; left: {:?}",
+        listing(dir)
+    );
+}
+
+/// Drive one tick of the saver writing `root` up to its pre-save gate, then
+/// abort and await the saver: only the tick's own thread is left running.
+async fn hold_one_tick(
+    seams: &PeriodicSeams,
+    reached: Arc<tokio::sync::Notify>,
+    every: Duration,
+    saver: tokio::task::JoinHandle<()>,
+) {
+    crate::test_pause::within("the saver's loop started", seams.loop_started.notified()).await;
+    tokio::time::advance(every).await;
+    crate::test_pause::within("the tick's thread spawned", seams.writer_spawned.notified()).await;
+    reached_blocking(reached);
+    saver.abort();
+    let ended = saver.await;
+    assert!(
+        ended.as_ref().is_err_and(|error| error.is_cancelled()),
+        "the saver was not cancelled: {ended:?}"
+    );
+}
+
+/// K8. One tick's save in a kept dir, held before it runs while the saver is
+/// aborted and the test drops its share: the dir stays until that save
+/// returns, then goes, and the save ran exactly once.
+/// Mutant: spawn_periodic_save left without the per-tick keep.
+#[tokio::test(start_paused = true)]
+async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let file = root.join("saved.json");
+    let seams = periodic_seams(&file);
+    let (reached, release) = seams.pre_save.arm();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let saver = spawn_periodic_save("k8 save", EVERY, None, Some(file.clone()), {
+        let (runs, file) = (Arc::clone(&runs), file.clone());
+        move || {
+            runs.fetch_add(1, Ordering::SeqCst);
+            let _ = std::fs::write(&file, b"{}");
+        }
+    });
+    hold_one_tick(&seams, reached, EVERY, saver).await;
+    drop(dir);
+    held_then_gone(&root, Release(release)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "the tick's save ran other than once"
+    );
+}
+
+/// K8p. A periodic saver on a plain temp dir is recorded once, when
+/// spawn_periodic_save returns, before any tick; three ticks later the count
+/// is still one. The save writes nothing, so no tick can leave a file behind.
+/// Mutant: the report taken per tick, or on a tick's thread.
+#[tokio::test(start_paused = true)]
+async fn a_plain_dir_periodic_saver_is_recorded_once_at_start() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let file = dir.path().join("saved.json");
+    let runs = Arc::new(AtomicUsize::new(0));
+    let unkept = expect_unkept();
+    let saver = spawn_periodic_save("k8p save", EVERY, None, Some(file.clone()), {
+        let runs = Arc::clone(&runs);
+        move || {
+            runs.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let want = vec![("periodic save", file.clone(), this_test())];
+    assert_eq!(unkept.recorded(), want, "not recorded once at start");
+    for tick in 1..=3 {
+        tokio::time::advance(EVERY).await;
+        let ran =
+            crate::test_wait::wait_real_time(BOUND, || runs.load(Ordering::SeqCst) >= tick).await;
+        assert!(ran.is_ok(), "tick {tick} did not run its save");
+    }
+    assert_eq!(unkept.recorded(), want, "a tick recorded another line");
+    saver.abort();
+    let _ = saver.await;
+}
+
+/// The periodic saver call sites in `files`, excluding the definition.
+fn periodic_callers(files: &[(String, String)]) -> Vec<String> {
+    let calls = super::shutdown_keep_tests::production_matches(files, "spawn_periodic_save(");
+    let defined = super::shutdown_keep_tests::production_matches(files, "fn spawn_periodic_save(");
+    let mut callers = calls;
+    for definition in defined {
+        let at = callers
+            .iter()
+            .position(|c| *c == definition)
+            .expect("the definition is also a match");
+        callers.remove(at);
+    }
+    callers
+}
+
+/// K11. Exactly the five callers the design's table lists start a periodic
+/// saver (counters, health save, health sample, stdio telemetry, costs), so
+/// a new one fails here until its root is decided; a planted sixth caller
+/// fails by name.
+#[test]
+fn exactly_five_callers_start_a_periodic_saver() {
+    let files = super::shutdown_keep_tests::source_files();
+    let callers = periodic_callers(&files);
+    assert_eq!(callers.len(), 5, "periodic saver callers: {callers:?}");
+    let mut planted = files;
+    planted.push((
+        "planted/sixth.rs".to_owned(),
+        "fn sixth() { spawn_periodic_save(\"x\", EVERY, None, None, || ()); }".to_owned(),
+    ));
+    let callers = periodic_callers(&planted);
+    assert_eq!(callers.len(), 6);
+    assert!(
+        callers.iter().any(|c| c == "planted/sixth.rs"),
+        "the planted caller is not named: {callers:?}"
+    );
+}
+
+/// K11b. The counter saver keeps counters.json's dir while a tick's save runs.
+#[tokio::test(start_paused = true)]
+async fn the_counter_saver_keeps_its_dir_through_a_tick() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let seams = periodic_seams(&root.join("counters.json"));
+    let (reached, release) = seams.pre_save.arm();
+    let meta =
+        crate::gateway::meta_mcp::MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let (stop, _) = tokio::sync::broadcast::channel(1);
+    let (counters, saver) = super::super::counter_wiring::start(&root, &meta, stop.subscribe());
+    hold_one_tick(
+        &seams,
+        reached,
+        super::super::counter_wiring::COUNTER_SAVE_INTERVAL,
+        saver,
+    )
+    .await;
+    drop((counters, dir));
+    held_then_gone(&root, Release(release)).await;
+}
+
+/// K11b. The health saver keeps health.json's dir while a tick's save runs.
+#[tokio::test(start_paused = true)]
+async fn the_health_saver_keeps_its_dir_through_a_tick() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let seams = periodic_seams(&root.join("health.json"));
+    let (reached, release) = seams.pre_save.arm();
+    let (stop, _) = tokio::sync::broadcast::channel(1);
+    let (health, saver) = super::super::health_wiring::start_history(
+        &root,
+        crate::clock::unix_secs().expect("a clock"),
+        crate::health_history::Restores::Counted(0),
+        stop.subscribe(),
+    );
+    hold_one_tick(
+        &seams,
+        reached,
+        super::super::counter_wiring::COUNTER_SAVE_INTERVAL,
+        saver,
+    )
+    .await;
+    drop((health, dir));
+    held_then_gone(&root, Release(release)).await;
+}
+
+/// K11b. The cost saver keeps its data dir while a tick's save runs.
+#[cfg(feature = "cost-governance")]
+#[tokio::test(start_paused = true)]
+async fn the_cost_saver_keeps_its_dir_through_a_tick() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let seams = periodic_seams(&root);
+    let (reached, release) = seams.pre_save.arm();
+    let cfg = CostGovernanceConfig {
+        enabled: true,
+        ..CostGovernanceConfig::default()
+    };
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg, registry));
+    let saver = spawn_cost_saver(enforcer, root.clone(), EVERY, None);
+    hold_one_tick(&seams, reached, EVERY, saver).await;
+    drop(dir);
+    held_then_gone(&root, Release(release)).await;
+}

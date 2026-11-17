@@ -110,6 +110,7 @@ impl Gateway {
                 "protocol telemetry save",
                 telemetry_save_every,
                 None,
+                Some(data_dir.clone()),
                 move || Self::save_stdio_protocol_telemetry_unless_busy(&sink),
             ))
         };

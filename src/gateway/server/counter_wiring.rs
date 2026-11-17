@@ -53,14 +53,20 @@ pub(super) fn start(
     } = CounterFile::restore(path.clone(), now, VERSION, &crate::local_day::host_zone());
     let (store, file) = (Arc::new(store), Arc::new(file));
     meta_mcp.set_counters(Arc::clone(&store));
-    let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
-        let (store, file) = (Arc::clone(&store), Arc::clone(&file));
-        move || {
-            if let Ok(now) = crate::clock::unix_secs() {
-                file.save_unless_busy(&store, VERSION, now);
+    let saver = spawn_periodic_save(
+        "counter save",
+        COUNTER_SAVE_INTERVAL,
+        Some(shutdown),
+        Some(path.clone()),
+        {
+            let (store, file) = (Arc::clone(&store), Arc::clone(&file));
+            move || {
+                if let Ok(now) = crate::clock::unix_secs() {
+                    file.save_unless_busy(&store, VERSION, now);
+                }
             }
-        }
-    });
+        },
+    );
     (
         Counters {
             store,
