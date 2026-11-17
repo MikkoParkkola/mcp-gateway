@@ -309,19 +309,19 @@ pub fn run_row_child(
 /// temp dir and not the real home or anything containing it.
 pub fn fresh_private_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let canonical = canonical(dir.path());
+    let ours = canonical(dir.path());
     let temp = canonical(&std::env::temp_dir());
     assert!(
-        canonical != temp && canonical.starts_with(&temp),
+        ours != temp && ours.starts_with(&temp),
         "{} is not inside the temp dir {}",
-        canonical.display(),
+        ours.display(),
         temp.display()
     );
     if let Some(home) = real_home() {
         assert!(
-            !home.starts_with(&canonical),
+            !home.starts_with(&ours),
             "{} contains the real home {}",
-            canonical.display(),
+            ours.display(),
             home.display()
         );
     }
