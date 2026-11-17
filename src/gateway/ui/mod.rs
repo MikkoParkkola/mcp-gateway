@@ -26,6 +26,9 @@ pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+/// Every UI API answer type is classified for the api command.
+#[cfg(test)]
+mod content_types_tests;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
