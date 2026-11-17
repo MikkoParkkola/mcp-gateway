@@ -430,6 +430,9 @@ def self_test() -> int:
     def job(*steps: dict, runs_on: str = "ubuntu-latest") -> dict:
         return {"runs-on": runs_on, "steps": list(steps)}
 
+    def step(run: str, **fields) -> dict:
+        return {"run": run, **fields}
+
     swap = {"uses": ACTION}
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
@@ -580,6 +583,43 @@ def self_test() -> int:
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
     print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + 1 - wrong} ok, {wrong} wrong")
+    # Coverage split C1-C3. Keep the production allowance and wrapper pattern intact in RED.
+    cov_line = 'scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh cov "$COVERAGE_PARTS" "$PART"'
+    cov_job = job(swap, step(cov_line), step("scripts/ci/memory-tripwire.sh", **{"if": "always()"}))
+
+    def c1() -> None:
+        in_scope, problems = check_job("fixture:cov", cov_job)
+        found = census({**allowed, ("fixture.yml", "cov"): cov_job}, packaged_by_part=True)
+        assert in_scope, "cov helper command is not counted as a library build"
+        assert builds_through(cov_job, (HELPER,)), "cov build is not recognized as through the helper"
+        assert not problems and not found, (problems, found)
+
+    def c2() -> None:
+        direct = job(swap, step('scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run '
+                                '"$COVERAGE_PARTS" "$PART"'),
+                     step("scripts/ci/memory-tripwire.sh", **{"if": "always()"}))
+        found = census({**allowed, ("coverage-probe.yml", "linux-part"): direct}, packaged_by_part=True)
+        want = "coverage-probe.yml:linux-part builds the library tests without scripts/ci/lib-parts.sh"
+        assert any(want in problem for problem in found), f"direct coverage build not rejected: {found}"
+
+    def c3() -> None:
+        no_tripwire = job(swap, step(cov_line))
+        found = census({**allowed, ("fixture.yml", "cov"): no_tripwire}, packaged_by_part=True)
+        want = "no `if: always()` step running scripts/ci/memory-tripwire.sh"
+        assert any(want in problem for problem in found), f"missing cov tripwire not diagnosed: {found}"
+
+    cov_wrong = 0
+    for label, test in (("C1 cov helper counted", c1), ("C2 direct coverage forbidden", c2),
+                        ("C3 cov tripwire required", c3)):
+        try:
+            test()
+        except AssertionError as error:
+            cov_wrong += 1
+            print(f"FAIL {label}: {error}")
+        else:
+            print(f"ok   {label}")
+    print(f"coverage census self-test: {3 - cov_wrong} ok, {cov_wrong} assertion failures")
+    wrong += cov_wrong
     return 1 if wrong else 0
 
 

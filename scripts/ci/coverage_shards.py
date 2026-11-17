@@ -23,6 +23,7 @@ TMPDIR guard, as in the single job.
   coverage_shards.py plan <n>              print the plan's shards as JSON
   coverage_shards.py check <n> <metadata>  check the partition (file or -)
   coverage_shards.py run <n> <shard>       run one shard, or `sdk` (exit 1 on failure)
+  coverage_shards.py lists <out> <shards>  write the downloaded lib parts' test lists
   coverage_shards.py objects <report-log> <manifest>...
                                            every manifest executable with coverage
                                            sections is read by each llvm-cov command
@@ -66,6 +67,11 @@ PLANS: dict[int, dict[str, tuple[list[str], list[str]]]] = {
         "int-b": (["--test", GLOB_B], []),
     },
 }
+
+
+def plan(n: int) -> dict[str, tuple[list[str], list[str]]]:
+    """RED stub: keep this builder name; P2 patches lib_union.part_count before calling plan(4)."""
+    return PLANS[n]
 
 
 def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -> list[str]:
@@ -490,13 +496,144 @@ def self_test() -> int:
         with open(os.path.join(d, "debug/deps/a-1"), "wb") as f:
             f.write(elf([("__llvm_covfun", b"other"), *cov[1:]]))
         assert on_disk(d, [listed])[0] == "debug/deps/a-1: digest differs from its manifest"
-    print("coverage_shards self-test: ok")
-    return 0
+    print("coverage_shards existing self-test rows: ok")
+    return coverage_parts_self_test()
+
+
+def coverage_parts_self_test() -> int:
+    """P1-P5: run every assertion row even when earlier RED rows fail."""
+    import contextlib
+    import copy
+    import io
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import lib_union
+
+    def p1() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = root / "scripts/dev/test-parts-build.rs"
+            build.parent.mkdir(parents=True)
+            build.write_text("const N: u32 = 5;\n", encoding="utf-8")
+            with contextlib.chdir(root), patch.object(lib_union, "BUILD_SCRIPT", build):
+                got = set(plan(4))
+            want = {"lib-1", "lib-2", "lib-3", "lib-4", "lib-5", "int-a", "int-b"}
+            assert got == want, f"plan(4) names {sorted(got)}, expected {sorted(want)}"
+
+    def p2() -> None:
+        # The implementation must retain plan(n) and call this module's one reader.
+        with patch.object(lib_union, "part_count", return_value=2) as reader:
+            got = set(plan(4))
+        want = {"lib-1", "lib-2", "int-a", "int-b"}
+        assert got == want, f"patched N=2: plan(4) names {sorted(got)}, expected {sorted(want)}"
+        assert reader.called, "plan(4) did not call lib_union.part_count"
+
+    def p3() -> None:
+        selected = plan(4)
+        assert "lib-2" in selected, "plan(4) has no lib-2 for run's argv check"
+        header = "     Running unittests src/lib.rs (target/debug/deps/mcp_gateway-fixture)"
+        responses = [(0, [header, "sample: test"]), (0, [header]),
+                     (0, [header, "test result: ok. 1 passed; 0 failed; 0 ignored"])]
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            with patch(__name__ + ".cargo", side_effect=responses) as fake:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = run(4, "lib-2")
+        expected = ["llvm-cov", "--no-report", "--all-features", "--lib", "--", "--skip", SDK]
+        got = [call.args[0] for call in fake.call_args_list]
+        assert got == [expected + ["--list"], expected + ["--list", "--ignored"], expected], got
+        assert rc == 0, f"run returned {rc}"
+
+    metadata = {"workspace_root": "/w", "packages": [
+        {"id": "gw", "manifest_path": "/w/Cargo.toml", "targets": [
+            {"kind": ["lib"], "name": "mcp_gateway", "test": True}]}]}
+    complete = {f"lib-{k}": (["--lib"], []) for k in range(1, 6)}
+    complete.update({"int-a": (["--bins", "--test", "[a-l]*"], []),
+                     "int-b": (["--test", "[!a-l]*"], [])})
+
+    def p4(change: str) -> None:
+        candidate = copy.deepcopy(complete)
+        if change == "missing lib-3":
+            del candidate["lib-3"]
+        elif change == "extra lib-6":
+            candidate["lib-6"] = (["--lib"], [])
+        elif change == "duplicate lib-2":
+            # Ordinary dict literals discard repeated keys. Preserve a repeated
+            # item so owners() really returns lib-2 twice, not a different name.
+            class RepeatedPart(dict):
+                def items(self):
+                    return [*super().items(), ("lib-2", self["lib-2"])]
+
+            candidate = RepeatedPart(candidate)
+        elif change == "filtered lib-2":
+            candidate["lib-2"] = (["--lib"], ["gateway::"])
+        with patch.object(lib_union, "part_count", return_value=5):
+            with patch.dict(PLANS, {4: complete}), patch(__name__ + ".plan", return_value=complete):
+                control = check(4, metadata)
+            with patch.dict(PLANS, {4: candidate}), patch(__name__ + ".plan", return_value=candidate):
+                broken = check(4, metadata)
+        # Each negative row requires a passing control: rejecting everything is not validation.
+        assert control == [], f"valid five-part ownership rejected: {control}"
+        if change != "complete":
+            assert broken, f"{change} was accepted"
+
+    def p5(case: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards, out = root / "shards", root / "lists"
+            lib = shards / "cov-shard-lib-2"
+            lib.mkdir(parents=True)
+            if case == "mixed binaries":
+                (lib / "tests.tsv").write_text(
+                    "unittests src/lib.rs\ta::one\tok\n"
+                    "tests/x.rs\tintegration::excluded\tok\n"
+                    "unittests src/lib.rs\tb::two\tignored\n", encoding="utf-8")
+                other = shards / "cov-shard-lib-5"
+                other.mkdir()
+                (other / "tests.tsv").write_text("unittests src/lib.rs\tc::three\tok\n", encoding="utf-8")
+                for name in ("int-a", "int-b", "sdk"):
+                    other = shards / f"cov-shard-{name}"
+                    other.mkdir()
+                    (other / "tests.tsv").write_text("unittests src/lib.rs\tnot_a_lib_part\tok\n", encoding="utf-8")
+            elif case == "empty tsv":
+                (lib / "tests.tsv").write_text("", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["coverage_shards.py", "lists", str(out), str(shards)])
+            if case != "mixed binaries":
+                assert rc != 0, f"lists accepted {case}: exit {rc}"
+                return
+            assert rc == 0, f"lists returned {rc}"
+            got = {p.relative_to(out).as_posix(): p.read_text(encoding="utf-8")
+                   for p in out.rglob("*") if p.is_file()}
+            want = {"lib-2/p2/list.txt": "a::one: test\nb::two: test\n",
+                    "lib-5/p5/list.txt": "c::three: test\n"}
+            assert got == want, f"lists wrote {got!r}, expected {want!r} (no integration or SDK lists)"
+
+    rows = [("P1 fixture N=5", p1), ("P2 shared reader N=2", p2), ("P3 literal cargo argv", p3)]
+    rows += [(f"P4 {case}", lambda case=case: p4(case)) for case in
+             ("complete", "missing lib-3", "extra lib-6", "duplicate lib-2", "filtered lib-2")]
+    rows += [(f"P5 {case}", lambda case=case: p5(case)) for case in
+             ("mixed binaries", "empty tsv", "missing tsv")]
+    wrong = 0
+    for label, test in rows:
+        try:
+            test()
+        except AssertionError as error:
+            wrong += 1
+            print(f"FAIL {label}: {error}")
+        else:
+            print(f"ok   {label}")
+    print(f"coverage parts self-test: {len(rows) - wrong} ok, {wrong} assertion failures")
+    return 1 if wrong else 0
 
 
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
+    if len(argv) == 4 and argv[1] == "lists":
+        # RED stub: implementation writes OUT/lib-K/pK/list.txt from SHARDS.
+        return 0
     if len(argv) == 3 and argv[1] == "canary":
         problems = canary(open(argv[2], encoding="utf-8", errors="replace").read())
         for p in problems:
