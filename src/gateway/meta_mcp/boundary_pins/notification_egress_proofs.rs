@@ -5,6 +5,9 @@
 
 use super::*;
 
+/// What a broken legacy SSE map proof reports.
+const MAPBY: &str = "stored map unapplied, unscrubbed or built elsewhere: HttpTransport listen";
+
 /// The pin's own proof: a new transport, a new sink anywhere it counts, and
 /// a new channel send fail; an outbound HTTP `send()` does not.
 #[test]
@@ -152,10 +155,10 @@ fn a_late_scrub_or_a_second_caller_fails() {
     }
 }
 
-/// The pin's own proof: a helper that stops scrubbing, a literal `None`
-/// needle set, and a stored map built outside its scrubber each fail.
+/// The pin's own proof: a helper that stops scrubbing and a literal `None`
+/// needle set each fail.
 #[test]
-fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
+fn a_hollow_helper_or_a_none_needle_set_fails() {
     let hollow = replaced(
         scanned(),
         "src/transport/upstream_tap.rs",
@@ -186,7 +189,13 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
             "a None needle set passed"
         );
     }
-    const MAPBY: &str = "stored map unapplied, unscrubbed or built elsewhere: HttpTransport listen";
+}
+
+/// The pin's own proof: a legacy SSE route that bypasses its stored map,
+/// sends past its result, or whose map is built elsewhere or scrubs
+/// outside the closure, fails.
+#[test]
+fn a_stored_map_unapplied_unscrubbed_or_built_elsewhere_fails() {
     let stray = with(
         scanned(),
         "src/transport/http/fake.rs",
