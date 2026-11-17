@@ -184,6 +184,10 @@ struct Body {
     unscrubbed_maps: usize,
     /// `notification_sink::collect(..)` calls.
     collects: usize,
+    /// Names bound from a stored map's result (`let`/`if let` over `(map)`).
+    map_bound: BTreeSet<String>,
+    /// The single plain-name argument of the last channel send, if it had one.
+    last_send_arg: Option<String>,
     /// Names bound to `collect`'s notifications.
     discarded: Vec<String>,
     /// How often each identifier appears outside macros.
@@ -216,6 +220,41 @@ fn is_none(arg: &syn::Expr) -> bool {
         if p.qself.is_none() && p.path.segments.last().is_some_and(|s| s.ident == "None"))
 }
 
+/// `(x.map)(..)`: a call through a stored `map` closure.
+fn is_map_call(expr: &syn::Expr) -> bool {
+    matches!(expr, syn::Expr::Call(call) if matches!(call.func.as_ref(), syn::Expr::Paren(inner)
+        if matches!(inner.expr.as_ref(), syn::Expr::Field(syn::ExprField {
+            member: syn::Member::Named(name), ..
+        }) if name == "map")))
+}
+
+/// Every plain name a pattern binds (`note`, `Some(note)`, `(a, b)`).
+fn bound_names(pat: &syn::Pat, into: &mut BTreeSet<String>) {
+    match pat {
+        syn::Pat::Ident(ident) => {
+            into.insert(ident.ident.to_string());
+        }
+        syn::Pat::TupleStruct(tuple) => tuple.elems.iter().for_each(|p| bound_names(p, into)),
+        syn::Pat::Tuple(tuple) => tuple.elems.iter().for_each(|p| bound_names(p, into)),
+        _ => {}
+    }
+}
+
+/// The first closure written inside `expr` (`Box::new(move |data| ..)`).
+fn first_closure(expr: &syn::Expr) -> Option<&syn::ExprClosure> {
+    struct Find<'a>(Option<&'a syn::ExprClosure>);
+    impl<'a> Visit<'a> for Find<'a> {
+        fn visit_expr_closure(&mut self, closure: &'a syn::ExprClosure) {
+            if self.0.is_none() {
+                self.0 = Some(closure);
+            }
+        }
+    }
+    let mut find = Find(None);
+    find.visit_expr(expr);
+    find.0
+}
+
 impl Body {
     fn of(block: &syn::Block) -> Self {
         let mut body = Self::default();
@@ -237,6 +276,7 @@ impl Body {
         self.calls.push(name.to_owned());
         if let Some(kind) = sink {
             self.sinks.push((kind, self.calls.len() - 1));
+            self.last_send_arg = None;
         }
     }
 
@@ -321,18 +361,35 @@ impl<'ast> Visit<'ast> for Body {
             _ => None,
         };
         self.called(&name, call.args.iter(), sink);
+        if sink.is_some() {
+            self.last_send_arg = match call.args.first() {
+                Some(syn::Expr::Path(p)) if call.args.len() == 1 => {
+                    p.path.get_ident().map(ToString::to_string)
+                }
+                _ => None,
+            };
+        }
+    }
+
+    fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
+        syn::visit::visit_expr_let(self, expr);
+        if is_map_call(&expr.expr) {
+            bound_names(&expr.pat, &mut self.map_bound);
+        }
     }
 
     fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
         syn::visit::visit_expr_struct(self, expr);
         if expr.path.segments.last().is_some_and(|s| s.ident == "Sink") {
-            // The scrub must sit inside the stored map itself, not merely nearby.
+            // The scrub must sit inside the stored closure's own body: not
+            // beside the literal, and not in the field's initializer around it.
             let scrubs = expr.fields.iter().any(|field| {
-                matches!(&field.member, syn::Member::Named(name) if name == "map") && {
-                    let mut map = Self::default();
-                    map.visit_expr(&field.expr);
-                    map.first_scrub().is_some()
-                }
+                matches!(&field.member, syn::Member::Named(name) if name == "map")
+                    && first_closure(&field.expr).is_some_and(|closure| {
+                        let mut map = Self::default();
+                        map.visit_expr(&closure.body);
+                        map.first_scrub().is_some()
+                    })
             });
             if scrubs {
                 self.maps += 1;
@@ -344,6 +401,11 @@ impl<'ast> Visit<'ast> for Body {
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
         syn::visit::visit_local(self, local);
+        if let Some(init) = &local.init
+            && is_map_call(&init.expr)
+        {
+            bound_names(&local.pat, &mut self.map_bound);
+        }
         let (syn::Pat::Tuple(pair), Some(init)) = (&local.pat, &local.init) else {
             return;
         };
@@ -364,90 +426,6 @@ impl<'ast> Visit<'ast> for Body {
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         self.macros.push(mac.tokens.to_string());
         self.macro_calls(mac.tokens.clone());
-    }
-}
-
-/// A parenthesised group's top-level arguments, split on commas.
-fn arguments(group: &proc_macro2::Group) -> Vec<Vec<proc_macro2::TokenTree>> {
-    let mut args = vec![Vec::new()];
-    for tree in group.stream() {
-        match &tree {
-            proc_macro2::TokenTree::Punct(p) if p.as_char() == ',' => args.push(Vec::new()),
-            _ => args.last_mut().expect("one open argument").push(tree),
-        }
-    }
-    args.retain(|arg| !arg.is_empty());
-    args
-}
-
-fn punct(tree: Option<&proc_macro2::TokenTree>, c: char) -> bool {
-    matches!(tree, Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == c)
-}
-
-impl Body {
-    /// Calls written inside a macro body (`select!`, `matches!`), read from
-    /// its tokens: a name followed by a parenthesised group is a call, one
-    /// after `.` a method call, each recorded after its arguments.
-    fn macro_calls(&mut self, stream: proc_macro2::TokenStream) {
-        let trees: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
-        let mut i = 0;
-        while i < trees.len() {
-            let call = match (&trees[i], trees.get(i + 1)) {
-                (
-                    proc_macro2::TokenTree::Ident(ident),
-                    Some(proc_macro2::TokenTree::Group(group)),
-                ) if group.delimiter() == proc_macro2::Delimiter::Parenthesis => {
-                    Some((ident.to_string(), group))
-                }
-                _ => None,
-            };
-            let Some((name, group)) = call else {
-                if let proc_macro2::TokenTree::Group(group) = &trees[i] {
-                    self.macro_calls(group.stream());
-                }
-                i += 1;
-                continue;
-            };
-            self.macro_calls(group.stream());
-            let args = arguments(group);
-            let method = i > 0 && punct(trees.get(i - 1), '.');
-            let pathed = i > 0 && punct(trees.get(i - 1), ':');
-            let sink_path = i >= 3
-                && pathed
-                && matches!(&trees[i - 3], proc_macro2::TokenTree::Ident(m) if m == "notification_sink");
-            let sink = match name.as_str() {
-                "send" | "try_send" if method && args.len() == 1 => Some("send"),
-                "send" | "try_send" if pathed && args.len() == 2 => Some("send"),
-                "deliver" if method || pathed => Some("deliver"),
-                "publish" if sink_path => Some("publish"),
-                "publish" if !method && !pathed => Some("bare publish"),
-                _ => None,
-            };
-            if name == "collect"
-                && i >= 3
-                && pathed
-                && matches!(&trees[i - 3], proc_macro2::TokenTree::Ident(m) if m == "notification_sink")
-            {
-                self.collects += 1;
-            }
-            // `None` or `Option::None`: the argument's last token, alone or after `::`.
-            let none_arg = args.iter().any(|arg| match arg.as_slice() {
-                [.., proc_macro2::TokenTree::Ident(n)] if n == "None" => {
-                    arg.len() == 1 || punct(arg.get(arg.len() - 2), ':')
-                }
-                _ => false,
-            });
-            if none_arg
-                && (SCRUB_CALLS.contains(&name.as_str()) || NEEDLE_TAKERS.contains(&name.as_str()))
-            {
-                self.none_needles.push(name.clone());
-            }
-            self.calls.push(name);
-            if let Some(kind) = sink {
-                self.sinks.push((kind, self.calls.len() - 1));
-            }
-            i += 2;
-        }
     }
 }
 
@@ -551,11 +529,17 @@ fn holds(scan: &Egress, file: &str, func: &str, proof: Proof) -> bool {
         }
         Proof::MapBy(by_file, by_func) => {
             // The row's function sends what its stored map returned: it calls
-            // `(map)`, and its last send comes after that call. (It also answers
+            // `(map)`, its last send comes after that call, and that send's
+            // argument is a name bound from the map's result. (It also answers
             // waiting calls, so an earlier send is allowed.)
             let applies_map = bodies.iter().all(|body| {
                 matches!((body.first_call("(map)"), body.sinks.last()),
                     (Some(map), Some((_, sink))) if map < *sink)
+                    // The last send hands on a name bound from the map's result.
+                    && body
+                        .last_send_arg
+                        .as_ref()
+                        .is_some_and(|arg| body.map_bound.contains(arg))
             });
             let builders = scan.bodies_of(by_file, by_func);
             let builds_scrubbing_maps = !builders.is_empty()
@@ -726,5 +710,7 @@ fn every_notification_egress_is_scrubbed_or_unread() {
     );
 }
 
+#[path = "notification_egress_macros.rs"]
+mod macros;
 #[path = "notification_egress_proofs.rs"]
 mod proofs;

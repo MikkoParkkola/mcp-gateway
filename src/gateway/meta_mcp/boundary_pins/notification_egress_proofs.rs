@@ -15,7 +15,7 @@ fn a_new_transport_sink_or_send_fails() {
         fails_with(&scan, "unlisted transport: FakeTransport"),
         "a new transport passed"
     );
-    let cases: [(&str, syn::Block, &str); 6] = [
+    let cases: [(&str, syn::Block, &str); 8] = [
         (
             "src/gateway/fake.rs",
             syn::parse_quote!({
@@ -55,6 +55,20 @@ fn a_new_transport_sink_or_send_fails() {
             "src/transport/fake.rs",
             syn::parse_quote!({
                 tokio::sync::mpsc::Sender::try_send(&tx, note);
+            }),
+            "send",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                tokio::select! { _ = a => { DeliveryHandle::deliver(&destination, note); } }
+            }),
+            "deliver",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                tokio::select! { _ = a => { Sender::try_send(&tx, note); } }
             }),
             "send",
         ),
@@ -162,6 +176,9 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
         syn::parse_quote!({
             let _ = scrub_note(Option::None, note);
         }),
+        syn::parse_quote!({
+            tokio::select! { _ = a => { let _ = scrub_note(Option::None, note); } }
+        }),
     ] {
         let scan = with(scanned(), "src/transport/fake.rs", "fake", &block);
         assert!(
@@ -212,6 +229,39 @@ fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
     assert!(
         fails_with(&bypassed, MAPBY),
         "a route bypassing its map passed"
+    );
+    let discarded_result = replaced(
+        scanned(),
+        "src/transport/http/sse_channel.rs",
+        "route",
+        &syn::parse_quote!({
+            let _ = (open.map)(&event.data);
+            if let Some(note) = unsolicited_frame(&event.data) {
+                let _ = open.tx.try_send(note);
+            }
+        }),
+    );
+    assert!(
+        fails_with(&discarded_result, MAPBY),
+        "a route sending past its map's result passed"
+    );
+    let scrub_outside_closure = replaced(
+        scanned(),
+        "src/transport/http/sse_listen.rs",
+        "handshake",
+        &syn::parse_quote!({
+            let sink = Sink {
+                tx,
+                map: {
+                    let _ = scrubbed(needles.as_deref(), probe);
+                    Box::new(move |data| unsolicited_frame(data))
+                },
+            };
+        }),
+    );
+    assert!(
+        fails_with(&scrub_outside_closure, MAPBY),
+        "a scrub in the initializer, outside the closure, passed"
     );
 }
 
