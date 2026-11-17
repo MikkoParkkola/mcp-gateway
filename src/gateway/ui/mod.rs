@@ -24,7 +24,6 @@ pub mod backends;
 pub mod capabilities;
 /// Every web UI change has a CLI form; CLI commands and config writes are
 /// classified for remote use.
-#[cfg(tp3)]
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
