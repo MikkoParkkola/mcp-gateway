@@ -166,24 +166,11 @@ impl CapabilityBackend {
         // The same admission gate the initial load applies.
         let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        // The new catalogue's paced hosts, before any file is admitted.
-        let intervals = crate::capability::pacing::declared_intervals(
-            loaded_files.iter().map(|file| &file.definition),
-        );
+        for name in self.drop_unpaced_protocols(&mut loaded_files) {
+            total -= 1;
+            refused.insert(name);
+        }
         for file in loaded_files {
-            if let Some(reason) =
-                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
-            {
-                warn!(
-                    backend = %self.name,
-                    capability = %file.definition.name,
-                    error = %reason,
-                    "Capability refused on reload"
-                );
-                total -= 1;
-                refused.insert(file.definition.name.clone());
-                continue;
-            }
             match validate_capability_account_binding(
                 &file.definition,
                 self.executor.account_strategies(),
@@ -276,5 +263,37 @@ impl CapabilityBackend {
         }
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
+    }
+}
+
+impl CapabilityBackend {
+    /// Take out of `files` every capability that puts a GraphQL or JSON-RPC
+    /// provider on a host the new catalogue paces, logging each at WARN, and
+    /// return their names. Judged on the whole catalogue, so file order
+    /// decides nothing.
+    fn drop_unpaced_protocols(
+        &self,
+        files: &mut Vec<crate::capability::loader::LoadedCapability>,
+    ) -> Vec<String> {
+        let intervals = crate::capability::pacing::declared_intervals(
+            files.iter().map(|file| &file.definition),
+        );
+        let mut dropped = Vec::new();
+        files.retain(|file| {
+            let Some(reason) =
+                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
+            else {
+                return true;
+            };
+            warn!(
+                backend = %self.name,
+                capability = %file.definition.name,
+                error = %reason,
+                "Capability refused on reload"
+            );
+            dropped.push(file.definition.name.clone());
+            false
+        });
+        dropped
     }
 }

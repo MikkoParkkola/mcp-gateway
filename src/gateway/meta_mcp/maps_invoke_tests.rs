@@ -77,11 +77,12 @@ fn cap(name: &str, url: &str, top: &str, output: &str, extra: &str) -> Capabilit
 
 /// An object output schema with `fields` (each a string) and `attribution`.
 fn object_output(fields: &[&str]) -> String {
-    let mut out = String::from("    type: object\n    properties:\n");
-    for f in fields.iter().chain(["attribution"].iter()) {
-        out.push_str(&format!("      {f}:\n        type: string\n"));
-    }
-    out
+    let props: String = fields
+        .iter()
+        .chain(["attribution"].iter())
+        .map(|f| format!("      {f}:\n        type: string\n"))
+        .collect();
+    format!("    type: object\n    properties:\n{props}")
 }
 
 // ── RL16: a paced refusal through gateway_invoke ─────────────────────
@@ -223,7 +224,7 @@ async fn at10_control_an_array_answer_with_results_declared_is_wrapped() {
     assert_eq!(structured["attribution"], OSM);
 }
 
-/// Output validation is advisory (output_shape.rs, `enforce_output_schema`):
+/// Output validation is advisory (`output_shape.rs`, `enforce_output_schema`):
 /// an array answer under a schema without `results` passes through, and the
 /// gateway logs the mismatch at WARN. The log names the tool and reports an
 /// "undeclared key", never the key itself, which could be backend text.
@@ -269,7 +270,7 @@ fn at10_an_array_answer_without_results_declared_is_logged_at_warn() {
 // ── AT4: no declared attribution, no change ──────────────────────────
 
 /// A capability that declares no attribution answers through
-/// gateway_invoke exactly as its provider sent it, in both channels, with
+/// `gateway_invoke` exactly as its provider sent it, in both channels, with
 /// and without `_full`. The expected value is the stub's own literal body.
 #[tokio::test]
 async fn at4_without_attribution_the_answer_is_untouched() {

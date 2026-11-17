@@ -28,10 +28,10 @@ fn cap_full(
     cached: bool,
     extra: &str,
 ) -> CapabilityDefinition {
-    let mut rate = extra.to_owned();
-    if let Some(ms) = interval_ms {
-        rate.push_str(&format!("    rate_limit:\n      interval_ms: {ms}\n"));
-    }
+    let rate = match interval_ms {
+        Some(ms) => format!("{extra}    rate_limit:\n      interval_ms: {ms}\n"),
+        None => extra.to_owned(),
+    };
     let cache = if cached {
         // `is_cacheable` needs both (definition/mod.rs:636).
         "metadata:\n  read_only: true\ncache:\n  strategy: exact\n  ttl: 600\n"
@@ -656,7 +656,7 @@ async fn rl14e_a_host_dropped_by_a_reload_still_refuses_within_its_interval() {
 
 // ── RL15: GraphQL and JSON-RPC on a paced host ───────────────────────
 
-/// A `service` (graphql or jsonrpc) capability on `url`, no rate_limit.
+/// A `service` (graphql or jsonrpc) capability on `url`, no `rate_limit`.
 fn rpc_yaml(name: &str, service: &str, url: &str) -> String {
     format!(
         "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input:\n    type: object\n\

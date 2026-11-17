@@ -4,23 +4,26 @@
 
 use super::pacing::{HostKey, host_key};
 
-fn key(host: &str, port: u16) -> Option<HostKey> {
-    Some(HostKey {
+fn key(host: &str, port: u16) -> HostKey {
+    HostKey {
         host: host.to_owned(),
         port,
-    })
+    }
 }
 
 #[test]
 fn rl7_host_case_is_folded() {
-    assert_eq!(host_key("HTTPS://Example.ORG/x"), key("example.org", 443));
+    assert_eq!(
+        host_key("HTTPS://Example.ORG/x"),
+        Some(key("example.org", 443))
+    );
 }
 
 #[test]
 fn rl7_an_explicit_default_port_is_the_same_key() {
     assert_eq!(
         host_key("https://example.org:443/x"),
-        key("example.org", 443)
+        Some(key("example.org", 443))
     );
 }
 
@@ -28,13 +31,16 @@ fn rl7_an_explicit_default_port_is_the_same_key() {
 fn rl7_another_port_is_another_key() {
     assert_eq!(
         host_key("https://example.org:8443/x"),
-        key("example.org", 8443)
+        Some(key("example.org", 8443))
     );
 }
 
 #[test]
 fn rl7_plain_http_counts_port_80() {
-    assert_eq!(host_key("http://example.org/x"), key("example.org", 80));
+    assert_eq!(
+        host_key("http://example.org/x"),
+        Some(key("example.org", 80))
+    );
 }
 
 #[test]

@@ -13,7 +13,6 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
@@ -28,7 +27,6 @@ pub(crate) struct Seen {
     pub(crate) path: String,
     pub(crate) query: Vec<(String, String)>,
     pub(crate) headers: HeaderMap,
-    pub(crate) at: Instant,
 }
 
 /// What the stub answers.
@@ -91,7 +89,6 @@ impl Stub {
                     path: request.uri().path().to_owned(),
                     query,
                     headers: request.headers().clone(),
-                    at: Instant::now(),
                 });
                 match reply {
                     Reply::Body {
@@ -175,5 +172,5 @@ impl crate::security::ssrf::HostResolver for Names {
 
 /// An executor in normal mode whose clients resolve through `names`.
 pub(crate) fn executor(names: Names) -> CapabilityExecutor {
-    CapabilityExecutor::with_test_resolver(names)
+    CapabilityExecutor::with_test_resolver(&names)
 }
