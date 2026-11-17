@@ -692,7 +692,7 @@ wait() {
         self.assertEqual((fixture.base / "signal").read_text(), "SIGTERM")
         self.assertEqual(done.returncode, 7, "a TERM at reap must preserve CMD exit 7")
         self.assertEqual(self.record(fixture, done)["cmd_status"], "7")
-        self.assertNotIn("wait:repeated", fixture.events(), "wait retried an already-reaped child")
+        self.assertIn("wait:repeated", fixture.events(), "a trapped signal must retry the cached child status")
 
     def test_R7_term_reaches_grandchild(self):
         fixture = self.fixture(mode="descendant")
@@ -768,6 +768,64 @@ sleep() {
         self.assertIn("cmd:return", fixture.events())
         self.assertIn("unreadable:procs", fixture.events())
         self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_procs")
+
+    def test_R14_signal_before_child_pid_assignment_is_forwarded(self):
+        fixture = self.fixture(mode="signal", signal_status=7)
+        # DEBUG stops the gate after launch but before assignment. Waiting for
+        # the child's handler isolates lost forwarding from early exec signals.
+        self.shell_hook(fixture, r'''
+trap 'if [[ $BASH_COMMAND == '\''child_pid=$!'\'' ]]; then
+  while [[ ! -e $CG_FIXTURE/ready ]]; do sleep 0.01; done
+  printf "pending:child_pid=%s\n" "$child_pid" >> "$CG_FIXTURE/events"
+  kill -TERM "$$"
+  trap - DEBUG
+fi' DEBUG
+''')
+        done = fixture.run()
+        self.assertIn("pending:child_pid=", fixture.events())
+        marker = fixture.base / "signal"
+        self.assertTrue(marker.exists(), "child did not receive TERM pending at child_pid assignment")
+        self.assertEqual(marker.read_text(), "SIGTERM")
+        self.assertEqual(done.returncode, 7, "pending TERM must preserve the child's exit 7")
+        self.assertEqual(self.record(fixture, done)["cmd_status"], "7")
+        self.assert_cleanup_order(fixture)
+
+    def test_R15_interrupted_wait_keeps_immediate_child_exit(self):
+        for repetition in range(20):
+            with self.subTest(repetition=repetition):
+                fixture = self.fixture(mode="signal", signal_status=7)
+                # Hold the forwarding trap until the child has exited. The
+                # interrupted builtin wait still returns 143, but a subsequent
+                # liveness probe must now fail, on every repetition.
+                self.shell_hook(fixture, r'''
+kill() {
+  builtin kill "$@"
+  local status=$?
+  if [[ $1 == -s && $2 == TERM ]]; then
+    while builtin kill -0 "$child_pid" 2>/dev/null; do sleep 0.01; done
+    printf 'child:exited\n' >> "$CG_FIXTURE/events"
+  fi
+  return "$status"
+}
+wait() {
+  printf 'waiting\n' > "$CG_FIXTURE/waiting"
+  builtin wait "$@"
+  local status=$?
+  printf 'wait:status=%s\n' "$status" >> "$CG_FIXTURE/events"
+  return "$status"
+}
+''')
+                fixture.start()
+                self.wait_for(fixture, "ready")
+                self.wait_for(fixture, "waiting")
+                os.kill(fixture.proc.pid, signal.SIGTERM)
+                done = fixture.finish()
+                self.assertEqual((fixture.base / "signal").read_text(), "SIGTERM")
+                self.assertIn("child:exited", fixture.events())
+                self.assertIn("wait:status=143", fixture.events(), "fixture did not interrupt wait")
+                self.assertEqual(done.returncode, 7, "interrupted wait lost the child's exit 7")
+                self.assertEqual(self.record(fixture, done)["cmd_status"], "7")
+                self.assert_cleanup_order(fixture)
 
 
 if __name__ == "__main__":

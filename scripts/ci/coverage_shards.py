@@ -82,6 +82,7 @@ def plan(n: int) -> dict[str, tuple[list[str], list[str]]]:
     Bundle readers can import this module without a build script. Resolve the
     reader's path against this checkout so callers can change working directory.
     """
+    # Callers may edit either argument list without changing later plans.
     selected = {shard: (list(args), list(test)) for shard, (args, test) in PLANS[n].items()}
     if n == 4:
         count = lib_union.part_count(Path(__file__).resolve().parents[2] / lib_union.BUILD_SCRIPT)
@@ -679,6 +680,25 @@ def coverage_parts_self_test() -> int:
             assert selected is not again and selected is not PLANS[4], "plan(4) reused a plan dict"
 
     def p7() -> None:
+        # Exercise both argument lists, including the generated library parts.
+        before = copy.deepcopy(PLANS)
+        try:
+            for n in PLANS:
+                selected, second = plan(n), plan(n)
+                expected = copy.deepcopy(second)
+                for args, test in selected.values():
+                    args.append("changed cargo argument")
+                    test.append("changed libtest argument")
+                assert PLANS == before, f"mutating plan({n}) argument lists changed PLANS"
+                assert second == expected, f"mutating plan({n}) argument lists changed another call"
+                assert plan(n) == expected, f"mutating plan({n}) argument lists changed a later call"
+        finally:
+            # A failing isolation row must not contaminate subsequent rows.
+            if PLANS != before:
+                PLANS.clear()
+                PLANS.update(before)
+
+    def p9() -> None:
         # A plan number alone says nothing about how its library is partitioned.
         whole = {"lib": (["--lib"], [])}
         with patch(__name__ + ".plan", return_value=whole):
@@ -707,8 +727,8 @@ def coverage_parts_self_test() -> int:
              ("complete", "missing lib-3", "extra lib-6", "duplicate lib-2", "filtered lib-2")]
     rows += [(f"P5 {case}", lambda case=case: p5(case)) for case in
              ("mixed binaries", "empty tsv", "missing tsv")]
-    rows += [("P6 plan registry unchanged", p6), ("P7 whole-lib plan 2", p7),
-             ("P8 nonempty lists output refused", p8)]
+    rows += [("P6 plan registry unchanged", p6), ("P7 plan argument lists isolated", p7),
+             ("P8 nonempty lists output refused", p8), ("P9 whole-lib plan 2", p9)]
     wrong = 0
     for label, test in rows:
         try:

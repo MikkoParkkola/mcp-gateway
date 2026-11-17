@@ -64,6 +64,7 @@ leftovers=na
 cmd_status=na
 verdict=pass
 child_pid=
+pending_signal=
 interrupted=0
 signal_number=0
 moved=
@@ -94,7 +95,12 @@ forward() {
   interrupted=1
   signal_number=$2
   # The child leads its own job-control group, including CMD's descendants.
-  if [[ -n $child_pid ]]; then kill -s "$1" -- "-$child_pid" 2>/dev/null || :; fi
+  if [[ -n $child_pid ]]; then
+    kill -s "$1" -- "-$child_pid" 2>/dev/null || :
+  else
+    # A signal can arrive after the final cancellation check, before $! is saved.
+    pending_signal=$1
+  fi
 }
 trap 'forward TERM 15' TERM
 trap 'forward INT 2' INT
@@ -216,15 +222,19 @@ cancel_before_command
   exec "$@"
 ) &
 child_pid=$!
+# Close the launch window before doing any more work in the gate.
+if [[ -n $pending_signal ]]; then
+  kill -s "$pending_signal" -- "-$child_pid" 2>/dev/null || :
+  pending_signal=
+fi
 set +m
-# A trap can run as wait reaps the child. Keep that status; retry an
-# interrupted wait only while the child is still running, never after reaping.
+# An interrupted wait reports the signal, not necessarily the child's status.
+# Always retry: Bash retains the real status even when the child has exited.
 while :; do
   interrupted=0
   wait "$child_pid"
   cmd_status=$?
   (( interrupted )) || break
-  kill -0 "$child_pid" 2>/dev/null || break
 done
 child_pid=
 if [[ $(cat "$moved" 2>/dev/null) == moved ]]; then
