@@ -248,8 +248,15 @@ fi"#;
 }
 
 /// L-deadline2: both npm steps take just under the fetch's deadline, so
-/// together they pass it; the fetch refuses at the one deadline, not at
-/// twice it.
+/// together they pass it; the fetch refuses at the one deadline, not after
+/// both steps ran.
+///
+/// What the caller can see: the gateway's deadline ends the session at the
+/// preview's deadline whatever the helper does, and after the credential the
+/// helper's own words never reach the caller, so this row cannot tell the
+/// helper's one shared deadline from a deadline per step. That sharing is
+/// structural (`install` passes one `deadline` to both npm steps); this row
+/// pins that nothing of the fetch outlives the preview's one deadline.
 #[tokio::test]
 async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
     // Each step takes most of the deadline, leaving room for a slow sandbox
@@ -257,9 +264,14 @@ async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
     // inside a deadline of its own.
     let limit = Duration::from_secs(30);
     let shim = Shim::new("sleep 18");
+    let begun = std::time::Instant::now();
     let Some(ran) = shim.npx(&[], limit).await else {
         return;
     };
+    // Both steps take 36 s; the refusal comes at the 30 s deadline plus the
+    // bounded kill and reap.
+    let took = begun.elapsed();
+    assert!(took < limit + Duration::from_secs(5), "{took:?}");
     let refusal = ran.expect_err("two steps ran past the one deadline");
     // The gateway's own deadline ends the session first: its wait for
     // fetch_done times out at the deadline, either way a refusal.
