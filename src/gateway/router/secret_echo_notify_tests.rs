@@ -199,20 +199,35 @@ async fn an_http_backend_progress_echo_reaches_the_client_redacted() {
 #[tokio::test]
 async fn the_per_backend_route_delivers_no_backend_notification() {
     let (router, calls, _store) = http_fixture().await;
-    let body = post_stream(
-        &router,
+    let body = direct_call(&router).await;
+    injected_once(&calls, &body);
+    assert_dropped(&body, "done");
+}
+
+/// One `echo` call on the per-backend route, carrying the client's progress
+/// token `p1`; the whole body, whatever its encoding.
+async fn direct_call(router: &axum::Router) -> String {
+    post_stream(
+        router,
         "/mcp/echoes",
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
             "name": "echo", "arguments": {"q": "hi"}, "_meta": {"progressToken": "p1"}
         }}),
     )
-    .await;
-    injected_once(&calls, &body);
+    .await
+}
+
+/// The answer arrived (it holds `answered`), and no notification of any
+/// method, in any encoding, nor the secret, came with it.
+fn assert_dropped(body: &str, answered: &str) {
     assert!(
-        body.contains("done"),
+        body.contains(answered),
         "premise: the call was answered: {body}"
     );
-    assert_eq!(progress_frames(&body), Vec::<Value>::new(), "{body}");
+    assert!(
+        !body.contains("notifications/"),
+        "a backend notification reached the per-backend client: {body}"
+    );
     assert!(
         !body.contains(SECRET),
         "the injected secret reached the client: {body}"
@@ -303,4 +318,40 @@ async fn a_websocket_backend_progress_echo_reaches_the_client_redacted() {
         !body.contains(SECRET),
         "the WebSocket echo reached the client: {body}"
     );
+}
+
+/// The per-backend route drops a stdio backend's progress too: it reaches the
+/// call's collected sink, which nothing reads.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_per_backend_route_drops_a_stdio_backends_notification() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let script = dir.path().join("echo.py");
+    std::fs::write(&script, STDIO_PROGRESS_ECHO).expect("write the child script");
+    let (router, _store) = router_on(TransportConfig::Stdio {
+        command: format!("python3 {}", script.display()),
+        cwd: None,
+        protocol_version: None,
+    })
+    .await;
+    assert_dropped(&direct_call(&router).await, "done");
+}
+
+/// The per-backend route drops a WebSocket backend's progress too.
+#[tokio::test]
+async fn the_per_backend_route_drops_a_websocket_backends_notification() {
+    use crate::transport::websocket_test_server::{Behaviour, WsPeer};
+    let peer = WsPeer::start(Behaviour::EchoInProgress).await;
+    let (router, _store) = router_on(TransportConfig::WebSocket {
+        ws_url: peer.url.clone(),
+        protocol_version: None,
+    })
+    .await;
+    let body = direct_call(&router).await;
+    assert_eq!(
+        peer.seen.calls.lock().len(),
+        1,
+        "premise: the peer was called: {body}"
+    );
+    assert_dropped(&body, "wire_id");
 }

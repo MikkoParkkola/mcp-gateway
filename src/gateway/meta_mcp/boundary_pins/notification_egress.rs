@@ -1,130 +1,181 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every path that hands a backend's notification toward a client passes its
-//! transport's scrub first, or ends unread. A new transport, a new sink call,
-//! a scrub moved after its sink, or a per-backend route that keeps its
-//! notifications fails here.
+//! transport's scrub first, or ends unread. A new transport, a new sink or
+//! channel send, a scrub moved after its sink, a scrub helper that stops
+//! scrubbing, a needle set replaced by `None`, a second caller of a scrubbed
+//! hop, or a per-backend route that keeps its notifications fails here.
 //!
 //! Rules:
-//! - Every production `impl Transport for ..` is in [`TRANSPORTS`] with the
-//!   routes its notifications take, and each route has an [`EGRESS`] row.
-//! - Every call under src/transport, src/a2a or src/backend to a sink entry
-//!   (`notification_sink::publish`, or a `deliver` method: the progress
-//!   handle's) sits in an [`EGRESS`] row's function.
-//! - An `Own` row's function calls one of [`SCRUB_CALLS`] before its first
-//!   [`SINK_CALLS`] call. A `By` row's scrubber calls a scrub before its
-//!   first call of the row's function, and does call it. A `ParseRow` row is
-//!   a `scrubbed` or `scrubbed-by` row of `inbound_parse_sites.tsv`, whose
-//!   own pin proves the scrub. A `Discard` row binds `collect`'s
-//!   notifications to `_` or a `_`-prefixed name it never reads again.
+//! - Every production `impl Transport for ..` is in [`TRANSPORTS`]; each one
+//!   that raises notifications has its own [`EGRESS`] rows.
+//! - A sink entry anywhere in the crate (`notification_sink::publish`), and
+//!   in the transport trees (src/transport, src/a2a, src/backend) a bare
+//!   `publish(..)`, a `deliver(..)` or a one-argument `send`/`try_send` (a
+//!   channel send: a zero-argument `send()` is an outbound HTTP request, a
+//!   two-argument one the transport's own request helper), sits in an
+//!   [`EGRESS`] row's function or in a `notification_egress.tsv` row saying
+//!   why that send carries no backend notification.
+//! - `Own`: the function calls a scrub ([`SCRUB_CALLS`]) before its first
+//!   sink. `By`: the named scrubber calls a scrub before its first call of
+//!   the row's function, and no other function calls it. `MapBy`: the
+//!   function sends what a stored map returns; every such map (an
+//!   `sse_channel` `Sink { .. }` literal) is built in the named function,
+//!   whose body calls a scrub.
+//! - Every scrub helper in [`HELPERS`] reaches a needle-set primitive
+//!   ([`PRIMITIVES`]) over helper calls, and no scrub call in the transport
+//!   trees passes a literal `None` needle set.
+//! - The per-backend route ([`DIRECT`]) binds `collect`'s notifications to
+//!   `_` or a `_`-prefixed name it never reads again.
 //!
-//! Syntax scan with `syn`, per function body. Its limits, as the parse-site
-//! pin's: names, not types; order is source order (a call counts after its
-//! arguments), not flow analysis; a `By` hop is one direct call by name; a
-//! tap's scrub depends on the needle set its caller passes. The behaviour
-//! rows (`secret_echo_notify_tests.rs` and each transport's scrub rows) stay
-//! the primary proof.
+//! Syntax scan with `syn`, per function body. Its limits: names, not types;
+//! order is source order (a call counts after its arguments), so a second
+//! sink handing on other, unscrubbed data after a scrub passes; a `By` hop is
+//! a direct call by name; `Withhold` and `Refuse` outcomes are honoured only
+//! as the behaviour rows check. The behaviour rows (the route rows in
+//! `secret_echo_notify_tests.rs`, each transport's scrub rows) stay the
+//! primary proof; the per-transport mutants show those rows depend on it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::visit::Visit;
 
+use super::inbound_parse_sites::{SCRUB_CALLS, SINK_CALLS};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
 const ROOTS: [&str; 1] = ["src/lib.rs"];
 const SCOPES: [&str; 3] = ["src/transport/", "src/a2a/", "src/backend/"];
 
-/// The calls that remove a backend's injected values (as the parse-site pin).
-const SCRUB_CALLS: [&str; 6] = [
+/// The production transports. A2A raises no MCP notification: its replies
+/// are task answers, scrubbed as answers (the a2a rows of
+/// `inbound_parse_sites.tsv`), so it has no [`EGRESS`] row.
+const TRANSPORTS: [&str; 4] = [
+    "A2aTransport",
+    "HttpTransport",
+    "StdioTransport",
+    "WebSocketTransport",
+];
+const NO_NOTIFICATIONS: [&str; 1] = ["A2aTransport"];
+
+/// The helpers a scrub call may be, and the needle-set primitives each must
+/// reach.
+const HELPERS: [&str; 4] = ["withheld", "scrub_frame", "scrub_note", "scrubbed"];
+const PRIMITIVES: [&str; 4] = [
     "ingress_scrub",
-    "scrub_frame",
-    "withheld",
-    "scrub_note",
-    "scrubbed",
+    "scrub_text",
+    "scrub_response_with",
     "scrub_answer",
 ];
 
-/// The calls that hand a notification on (as the parse-site pin).
-const SINK_CALLS: [&str; 4] = ["publish", "send", "try_send", "deliver"];
+/// Calls that take a needle set as an argument besides the scrubs: a
+/// literal `None` there skips the scrub.
+const NEEDLE_TAKERS: [&str; 1] = ["notification_keyed"];
 
-/// The production transports and the routes their notifications take. A2A
-/// raises no MCP notification: its replies are task answers, scrubbed as
-/// answers (the a2a rows of `inbound_parse_sites.tsv`).
-const TRANSPORTS: [(&str, &[&str]); 4] = [
-    ("A2aTransport", &[]),
-    ("HttpTransport", &["http-stream", "listen"]),
-    ("StdioTransport", &["stdio", "listen"]),
-    ("WebSocketTransport", &["websocket", "listen"]),
-];
-
-/// How a row's notification is shown scrubbed, or unread.
+/// How a row's notification is shown scrubbed.
 #[derive(Clone, Copy, Debug)]
 enum Proof {
-    /// The function itself scrubs before its first sink call.
+    /// The function itself scrubs before its first sink.
     Own,
-    /// This function (file, name) scrubs, then calls the row's function.
+    /// This function (file, name) scrubs, then calls the row's function; no
+    /// other function calls it.
     By(&'static str, &'static str),
-    /// Its row in `inbound_parse_sites.tsv` proves the scrub.
-    ParseRow,
-    /// `collect`'s notifications are bound and never read.
-    Discard,
+    /// The function sends what a stored map returns; every map is built in
+    /// this function (file, name), which scrubs.
+    MapBy(&'static str, &'static str),
 }
 
-/// (route, file, function, proof): every function that hands a backend's
-/// notification toward a client, or holds the route that drops them.
-const EGRESS: [(&str, &str, &str, Proof); 7] = [
+/// (transport, route, file, function, proof): every function that hands a
+/// backend's notification toward a client.
+const EGRESS: [(&str, &str, &str, &str, Proof); 9] = [
     (
+        "StdioTransport",
         "stdio",
         "src/transport/stdio.rs",
         "capture_notification",
         Proof::By("src/transport/stdio.rs", "handle_response"),
     ),
     (
-        "http-stream",
-        "src/transport/http/sse_decoder.rs",
-        "drain_events",
-        Proof::Own,
-    ),
-    (
-        "websocket",
-        "src/transport/websocket_progress.rs",
-        "route_progress",
-        Proof::By("src/transport/websocket.rs", "dispatch_inbound"),
-    ),
-    (
+        "StdioTransport",
         "listen",
         "src/transport/upstream_tap.rs",
         "notification_keyed",
         Proof::Own,
     ),
     (
-        "listen",
-        "src/transport/http/listen.rs",
-        "frame",
-        Proof::ParseRow,
+        "HttpTransport",
+        "http-stream",
+        "src/transport/http/sse_decoder.rs",
+        "drain_events",
+        Proof::Own,
     ),
     (
+        "HttpTransport",
         "listen",
         "src/transport/http/listen.rs",
-        "unsolicited_frame",
-        Proof::ParseRow,
+        "open_session_stream_as",
+        Proof::Own,
     ),
     (
-        "direct",
-        "src/gateway/router/backend_handlers/direct_send.rs",
-        "send_in_scope",
-        Proof::Discard,
+        "HttpTransport",
+        "listen",
+        "src/transport/http/listen.rs",
+        "read_stream",
+        Proof::Own,
+    ),
+    (
+        "HttpTransport",
+        "listen",
+        "src/transport/http/listen.rs",
+        "read_single",
+        Proof::Own,
+    ),
+    (
+        "HttpTransport",
+        "listen",
+        "src/transport/http/sse_channel.rs",
+        "route",
+        Proof::MapBy("src/transport/http/sse_listen.rs", "handshake"),
+    ),
+    (
+        "WebSocketTransport",
+        "websocket",
+        "src/transport/websocket_progress.rs",
+        "route_progress",
+        Proof::By("src/transport/websocket.rs", "dispatch_inbound"),
+    ),
+    (
+        "WebSocketTransport",
+        "listen",
+        "src/transport/upstream_tap.rs",
+        "notification_keyed",
+        Proof::Own,
     ),
 ];
+
+/// The per-backend route: it collects a call's notifications and drops them.
+const DIRECT: (&str, &str) = (
+    "src/gateway/router/backend_handlers/direct_send.rs",
+    "send_in_scope",
+);
+
+/// Where an `sse_channel` map may be built.
+const MAP_FILES: &str = "src/transport/http/";
+
+/// The reviewed sends that carry no backend notification.
+const SENDS: &str = include_str!("notification_egress.tsv");
 
 /// What one function body does, in source order.
 #[derive(Clone, Default)]
 struct Body {
     /// Callee names, each after its arguments.
     calls: Vec<String>,
-    /// Its sink-entry calls: `publish` (the sink's) or `deliver`.
-    entries: Vec<&'static str>,
+    /// Its sink entries: the kind and the index of the call in `calls`.
+    sinks: Vec<(&'static str, usize)>,
+    /// Scrub or needle-taking calls given a literal `None`.
+    none_needles: Vec<String>,
+    /// `Sink { .. }` literals built here.
+    maps: usize,
     /// Names bound to `collect`'s notifications.
     discarded: Vec<String>,
     /// How often each identifier appears outside macros.
@@ -137,6 +188,10 @@ fn segments(path: &syn::Path) -> Vec<String> {
     path.segments.iter().map(|s| s.ident.to_string()).collect()
 }
 
+fn ends_with(path: &[String], tail: [&str; 2]) -> bool {
+    path.len() >= 2 && path[path.len() - 2] == tail[0] && path[path.len() - 1] == tail[1]
+}
+
 /// `notification_sink::collect(..)`, awaited or not.
 fn collects(expr: &syn::Expr) -> bool {
     let expr = match expr {
@@ -144,27 +199,99 @@ fn collects(expr: &syn::Expr) -> bool {
         other => other,
     };
     matches!(expr, syn::Expr::Call(call) if matches!(call.func.as_ref(), syn::Expr::Path(p)
-        if segments(&p.path).ends_with(&["notification_sink".to_owned(), "collect".to_owned()])))
+        if ends_with(&segments(&p.path), ["notification_sink", "collect"])))
+}
+
+fn is_none(arg: &syn::Expr) -> bool {
+    matches!(arg, syn::Expr::Path(p) if p.path.is_ident("None"))
+}
+
+impl Body {
+    fn of(block: &syn::Block) -> Self {
+        let mut body = Self::default();
+        body.visit_block(block);
+        body
+    }
+
+    fn called<'a>(
+        &mut self,
+        name: &str,
+        args: impl Iterator<Item = &'a syn::Expr>,
+        sink: Option<&'static str>,
+    ) {
+        if (SCRUB_CALLS.contains(&name) || NEEDLE_TAKERS.contains(&name))
+            && args.into_iter().any(is_none)
+        {
+            self.none_needles.push(name.to_owned());
+        }
+        self.calls.push(name.to_owned());
+        if let Some(kind) = sink {
+            self.sinks.push((kind, self.calls.len() - 1));
+        }
+    }
+
+    fn first_scrub(&self) -> Option<usize> {
+        self.calls
+            .iter()
+            .position(|c| SCRUB_CALLS.contains(&c.as_str()))
+    }
+
+    fn first_call(&self, name: &str) -> Option<usize> {
+        self.calls.iter().position(|c| c == name)
+    }
+
+    /// `name` is bound and never read: `_`, or `_`-prefixed, met once and in
+    /// no macro.
+    fn unread(&self, name: &str) -> bool {
+        name == "_"
+            || (name.starts_with('_')
+                && self.idents.get(name) == Some(&1)
+                && !self.macros.iter().any(|tokens| {
+                    tokens
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .any(|word| word == name)
+                }))
+    }
 }
 
 impl<'ast> Visit<'ast> for Body {
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         syn::visit::visit_expr_call(self, call);
         if let syn::Expr::Path(p) = call.func.as_ref() {
-            let names = segments(&p.path);
-            if names.ends_with(&["notification_sink".to_owned(), "publish".to_owned()]) {
-                self.entries.push("publish");
+            let path = segments(&p.path);
+            let sink = if ends_with(&path, ["notification_sink", "publish"]) {
+                Some("publish")
+            } else if path.len() == 1 && path[0] == "publish" {
+                Some("bare publish")
+            } else {
+                None
+            };
+            if let Some(name) = path.last() {
+                self.called(name, call.args.iter(), sink);
             }
-            self.calls.extend(names.last().cloned());
         }
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         syn::visit::visit_expr_method_call(self, call);
-        if call.method == "deliver" {
-            self.entries.push("deliver");
+        let name = call.method.to_string();
+        let sink = match name.as_str() {
+            sink if !SINK_CALLS.contains(&sink) => None,
+            // One argument: a channel send. None is an outbound HTTP request,
+            // two the transport's own request helper.
+            "send" | "try_send" => (call.args.len() == 1).then_some("send"),
+            "deliver" => Some("deliver"),
+            // A method named `publish` is not the sink's free function.
+            _ => None,
+        };
+        self.called(&name, call.args.iter(), sink);
+    }
+
+    fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
+        syn::visit::visit_expr_struct(self, expr);
+        if expr.path.segments.last().is_some_and(|s| s.ident == "Sink") {
+            self.maps += 1;
         }
-        self.calls.push(call.method.to_string());
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
@@ -188,31 +315,6 @@ impl<'ast> Visit<'ast> for Body {
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         self.macros.push(mac.tokens.to_string());
-    }
-}
-
-impl Body {
-    fn of(block: &syn::Block) -> Self {
-        let mut body = Self::default();
-        body.visit_block(block);
-        body
-    }
-
-    fn first(&self, names: &[&str]) -> Option<usize> {
-        self.calls.iter().position(|c| names.contains(&c.as_str()))
-    }
-
-    /// `name` is bound and never read: `_`, or `_`-prefixed, met once and in
-    /// no macro.
-    fn unread(&self, name: &str) -> bool {
-        name == "_"
-            || (name.starts_with('_')
-                && self.idents.get(name) == Some(&1)
-                && !self.macros.iter().any(|tokens| {
-                    tokens
-                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                        .any(|word| word == name)
-                }))
     }
 }
 
@@ -267,93 +369,174 @@ impl Sink for Egress {
     }
 }
 
-/// Whether `parse_rows` lists `file::func` as `scrubbed` or `scrubbed-by`.
-fn parse_row_scrubs(parse_rows: &str, file: &str, func: &str) -> bool {
-    parse_rows
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .map(|line| line.split('\t').collect::<Vec<_>>())
-        .any(|cells| {
-            cells.len() >= 5
-                && cells[0] == file
-                && cells[1] == func
-                && matches!(cells[4], "scrubbed" | "scrubbed-by")
+fn in_scopes(file: &str) -> bool {
+    SCOPES.iter().any(|scope| file.starts_with(scope))
+}
+
+fn is_egress(file: &str, func: &str) -> bool {
+    EGRESS
+        .iter()
+        .any(|(_, _, f, n, _)| *f == file && *n == func)
+}
+
+/// The reviewed sends: (file, function) to its class.
+fn send_rows(text: &str) -> BTreeMap<(String, String), String> {
+    text.lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .filter_map(|line| {
+            let cells: Vec<&str> = line.split('\t').collect();
+            (cells.len() == 4).then(|| {
+                (
+                    (cells[0].to_owned(), cells[1].to_owned()),
+                    cells[2].to_owned(),
+                )
+            })
         })
+        .collect()
 }
 
 /// Whether `proof` holds for the row `file::func`.
-fn holds(scan: &Egress, parse_rows: &str, file: &str, func: &str, proof: Proof) -> bool {
+fn holds(scan: &Egress, file: &str, func: &str, proof: Proof) -> bool {
     let bodies = scan.bodies_of(file, func);
     match proof {
         Proof::Own => bodies.iter().all(|body| {
-            matches!((body.first(&SCRUB_CALLS), body.first(&SINK_CALLS)),
-                (Some(scrub), Some(sink)) if scrub < sink)
+            matches!((body.first_scrub(), body.sinks.first()),
+                (Some(scrub), Some((_, sink))) if scrub < *sink)
         }),
         Proof::By(by_file, by_func) => {
             let scrubbers = scan.bodies_of(by_file, by_func);
-            !scrubbers.is_empty()
+            let scrubs_first = !scrubbers.is_empty()
                 && scrubbers.iter().all(|body| {
-                    matches!((body.first(&SCRUB_CALLS), body.first(&[func])),
+                    matches!((body.first_scrub(), body.first_call(func)),
                         (Some(scrub), Some(call)) if scrub < call)
-                })
+                });
+            let sole_caller = scan.bodies.iter().all(|((f, n), found)| {
+                (f == by_file && n == by_func)
+                    || found.iter().all(|body| body.first_call(func).is_none())
+            });
+            scrubs_first && sole_caller
         }
-        Proof::ParseRow => parse_row_scrubs(parse_rows, file, func),
-        Proof::Discard => bodies.iter().all(|body| {
-            !body.discarded.is_empty() && body.discarded.iter().all(|name| body.unread(name))
-        }),
+        Proof::MapBy(by_file, by_func) => {
+            let builders = scan.bodies_of(by_file, by_func);
+            let builds_and_scrubs = !builders.is_empty()
+                && builders
+                    .iter()
+                    .all(|body| body.maps > 0 && body.first_scrub().is_some());
+            let sole_builder = scan.bodies.iter().all(|((f, n), found)| {
+                !f.starts_with(MAP_FILES)
+                    || (f == by_file && n == by_func)
+                    || found.iter().all(|body| body.maps == 0)
+            });
+            builds_and_scrubs && sole_builder
+        }
     }
 }
 
 fn failure(proof: Proof) -> &'static str {
     match proof {
         Proof::Own => "scrub not before sink",
-        Proof::By(..) => "scrubber does not scrub first",
-        Proof::ParseRow => "no scrubbing parse row",
-        Proof::Discard => "keeps its notifications",
+        Proof::By(..) => "scrubber does not scrub first, or another function calls it",
+        Proof::MapBy(..) => "map not built by its scrubber",
     }
 }
 
+/// Each helper whose every body under src/transport reaches a primitive,
+/// directly or over other helpers that do.
+fn helper_failures(scan: &Egress) -> Vec<String> {
+    let mut reaching: BTreeSet<&str> = BTreeSet::new();
+    loop {
+        let before = reaching.len();
+        for helper in HELPERS {
+            let bodies: Vec<&Body> = scan
+                .bodies
+                .iter()
+                .filter(|((f, n), _)| n == helper && f.starts_with("src/transport/"))
+                .flat_map(|(_, found)| found)
+                .collect();
+            if !bodies.is_empty()
+                && bodies.iter().all(|body| {
+                    body.calls
+                        .iter()
+                        .any(|c| PRIMITIVES.contains(&c.as_str()) || reaching.contains(c.as_str()))
+                })
+            {
+                reaching.insert(helper);
+            }
+        }
+        if reaching.len() == before {
+            break;
+        }
+    }
+    HELPERS
+        .iter()
+        .filter(|helper| !reaching.contains(*helper))
+        .map(|helper| format!("helper reaches no needle scrub: {helper}"))
+        .collect()
+}
+
 /// Every way `scan` departs from the reviewed tables.
-fn differences(scan: &Egress, parse_rows: &str) -> Vec<String> {
+fn differences(scan: &Egress, sends: &str) -> Vec<String> {
     let mut wrong = Vec::new();
-    let listed: BTreeSet<String> = TRANSPORTS.iter().map(|(t, _)| (*t).to_owned()).collect();
+    let listed: BTreeSet<String> = TRANSPORTS.iter().map(|t| (*t).to_owned()).collect();
     for name in scan.transports.difference(&listed) {
         wrong.push(format!("unlisted transport: {name}"));
     }
     for name in listed.difference(&scan.transports) {
         wrong.push(format!("stale transport: {name}"));
     }
-    for (name, routes) in TRANSPORTS {
-        for route in routes {
-            if !EGRESS.iter().any(|(r, ..)| r == route) {
-                wrong.push(format!("route without a row: {name} {route}"));
-            }
+    for name in TRANSPORTS {
+        if !NO_NOTIFICATIONS.contains(&name) && !EGRESS.iter().any(|(t, ..)| *t == name) {
+            wrong.push(format!("transport without a row: {name}"));
         }
     }
+    let rows = send_rows(sends);
     for ((file, func), bodies) in &scan.bodies {
-        if !SCOPES.iter().any(|scope| file.starts_with(scope)) {
-            continue;
+        for (kind, _) in bodies.iter().flat_map(|body| &body.sinks) {
+            let counted = *kind == "publish" || in_scopes(file);
+            let reviewed = *kind == "send" && rows.contains_key(&(file.clone(), func.clone()));
+            if counted && !reviewed && !is_egress(file, func) {
+                wrong.push(format!("unlisted sink: {file}::{func} ({kind})"));
+            }
         }
-        for entry in bodies.iter().flat_map(|body| &body.entries) {
-            if !EGRESS
-                .iter()
-                .any(|(_, f, n, _)| *f == file.as_str() && *n == func.as_str())
-            {
-                wrong.push(format!("unlisted sink call: {file}::{func} ({entry})"));
+        if in_scopes(file) {
+            for name in bodies.iter().flat_map(|body| &body.none_needles) {
+                wrong.push(format!("a None needle set: {file}::{func} ({name})"));
             }
         }
     }
-    for (route, file, func, proof) in EGRESS {
-        if scan.bodies_of(file, func).is_empty() {
-            wrong.push(format!("stale row: {route} {file}::{func}"));
-        } else if !holds(scan, parse_rows, file, func, proof) {
-            wrong.push(format!("{}: {route} {file}::{func}", failure(proof)));
+    for (file, func) in rows.keys() {
+        let sends_here = scan
+            .bodies_of(file, func)
+            .iter()
+            .any(|body| body.sinks.iter().any(|(kind, _)| *kind == "send"));
+        if !sends_here || is_egress(file, func) {
+            wrong.push(format!("stale send row: {file}::{func}"));
         }
+    }
+    for (transport, route, file, func, proof) in EGRESS {
+        if scan.bodies_of(file, func).is_empty() {
+            wrong.push(format!("stale row: {transport} {route} {file}::{func}"));
+        } else if !holds(scan, file, func, proof) {
+            wrong.push(format!(
+                "{}: {transport} {route} {file}::{func}",
+                failure(proof)
+            ));
+        }
+    }
+    wrong.extend(helper_failures(scan));
+    let direct = scan.bodies_of(DIRECT.0, DIRECT.1);
+    let dropped = !direct.is_empty()
+        && direct.iter().all(|body| {
+            !body.discarded.is_empty() && body.discarded.iter().all(|name| body.unread(name))
+        });
+    if !dropped {
+        wrong.push(format!(
+            "keeps its notifications: {}::{}",
+            DIRECT.0, DIRECT.1
+        ));
     }
     wrong
 }
-
-const PARSE_ROWS: &str = include_str!("inbound_parse_sites.tsv");
 
 /// The crate, walked once for every row here.
 fn scanned() -> Egress {
@@ -365,15 +548,21 @@ fn scanned() -> Egress {
     SCAN.clone()
 }
 
-/// `file::func`'s bodies replaced by `block` alone.
+/// The scan with one more body under `file::func`.
+fn with(mut scan: Egress, file: &str, func: &str, block: &syn::Block) -> Egress {
+    scan.function(file, func, block);
+    scan
+}
+
+/// The scan with `file::func`'s bodies replaced by `block` alone.
 fn replaced(mut scan: Egress, file: &str, func: &str, block: &syn::Block) -> Egress {
     scan.bodies
         .insert((file.to_owned(), func.to_owned()), vec![Body::of(block)]);
     scan
 }
 
-fn fails_with(scan: &Egress, parse_rows: &str, prefix: &str) -> bool {
-    differences(scan, parse_rows)
+fn fails_with(scan: &Egress, prefix: &str) -> bool {
+    differences(scan, SENDS)
         .iter()
         .any(|line| line.starts_with(prefix))
 }
@@ -382,7 +571,7 @@ fn fails_with(scan: &Egress, parse_rows: &str, prefix: &str) -> bool {
 /// transport's scrub, and the per-backend route reads none.
 #[test]
 fn every_notification_egress_is_scrubbed_or_unread() {
-    let wrong = differences(&scanned(), PARSE_ROWS);
+    let wrong = differences(&scanned(), SENDS);
     assert!(
         wrong.is_empty(),
         "notification egress differs from the reviewed rows ({}):\n{}",
@@ -391,37 +580,71 @@ fn every_notification_egress_is_scrubbed_or_unread() {
     );
 }
 
-/// The pin's own proof: a new transport and a new sink call fail.
+/// The pin's own proof: a new transport, a new sink anywhere it counts, and
+/// a new channel send fail; an outbound HTTP `send()` does not.
 #[test]
-fn a_new_transport_or_sink_call_fails() {
+fn a_new_transport_sink_or_send_fails() {
     let mut scan = scanned();
     scan.transports.insert("FakeTransport".to_owned());
     assert!(
-        fails_with(&scan, PARSE_ROWS, "unlisted transport: FakeTransport"),
+        fails_with(&scan, "unlisted transport: FakeTransport"),
         "a new transport passed"
     );
-    let mut scan = scanned();
-    scan.function(
+    let cases: [(&str, syn::Block, &str); 4] = [
+        (
+            "src/gateway/fake.rs",
+            syn::parse_quote!({
+                crate::transport::notification_sink::publish(vec![note]);
+            }),
+            "publish",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                publish(vec![note]);
+            }),
+            "bare publish",
+        ),
+        (
+            "src/transport/fake.rs",
+            syn::parse_quote!({
+                destination.deliver(note);
+            }),
+            "deliver",
+        ),
+        (
+            "src/backend/fake.rs",
+            syn::parse_quote!({
+                tx.try_send(note);
+            }),
+            "send",
+        ),
+    ];
+    for (file, block, kind) in &cases {
+        let scan = with(scanned(), file, "fake", block);
+        assert!(
+            fails_with(&scan, &format!("unlisted sink: {file}::fake ({kind})")),
+            "a new {kind} in {file} passed"
+        );
+    }
+    let outbound = with(
+        scanned(),
         "src/transport/fake.rs",
-        "fake_publish",
+        "fake",
         &syn::parse_quote!({
-            crate::transport::notification_sink::publish(vec![note]);
+            client.get(url).send().await;
         }),
     );
     assert!(
-        fails_with(
-            &scan,
-            PARSE_ROWS,
-            "unlisted sink call: src/transport/fake.rs::fake_publish"
-        ),
-        "a new sink call passed"
+        !fails_with(&outbound, "unlisted sink: src/transport/fake.rs::fake"),
+        "an outbound request was read as a channel send"
     );
 }
 
 /// The pin's own proof: a scrub moved after its sink, a scrubber that no
-/// longer scrubs, and a lost parse row each fail.
+/// longer scrubs, and a second caller of a scrubbed hop each fail.
 #[test]
-fn a_late_or_lost_scrub_fails() {
+fn a_late_scrub_or_a_second_caller_fails() {
     let late = replaced(
         scanned(),
         "src/transport/http/sse_decoder.rs",
@@ -432,7 +655,7 @@ fn a_late_or_lost_scrub_fails() {
         }),
     );
     assert!(
-        fails_with(&late, PARSE_ROWS, "scrub not before sink: http-stream"),
+        fails_with(&late, "scrub not before sink: HttpTransport http-stream"),
         "a scrub after its sink passed"
     );
     let unscrubbed = replaced(
@@ -443,26 +666,70 @@ fn a_late_or_lost_scrub_fails() {
             self.capture_notification(notification, None);
         }),
     );
-    assert!(
-        fails_with(
-            &unscrubbed,
-            PARSE_ROWS,
-            "scrubber does not scrub first: stdio"
-        ),
-        "a scrubber without its scrub passed"
+    let second = with(
+        scanned(),
+        "src/transport/stdio_fake.rs",
+        "relay",
+        &syn::parse_quote!({
+            transport.capture_notification(notification, None);
+        }),
     );
-    let rows: String = PARSE_ROWS
-        .lines()
-        .filter(|line| !line.starts_with("src/transport/http/listen.rs\tframe\t"))
-        .map(|line| format!("{line}\n"))
-        .collect();
+    for (scan, case) in [(unscrubbed, "a lost scrub"), (second, "a second caller")] {
+        assert!(
+            fails_with(
+                &scan,
+                "scrubber does not scrub first, or another function calls it: StdioTransport stdio"
+            ),
+            "{case} passed"
+        );
+    }
+}
+
+/// The pin's own proof: a helper that stops scrubbing, a literal `None`
+/// needle set, and a stored map built outside its scrubber each fail.
+#[test]
+fn a_hollow_helper_a_none_needle_set_or_a_stray_map_fails() {
+    let hollow = replaced(
+        scanned(),
+        "src/transport/upstream_tap.rs",
+        "scrub_note",
+        &syn::parse_quote!({ Some(note) }),
+    );
+    assert!(
+        fails_with(&hollow, "helper reaches no needle scrub: scrub_note"),
+        "a hollow helper passed"
+    );
+    for block in [
+        syn::parse_quote!({
+            taps.notification_keyed(method, keys, None);
+        }),
+        syn::parse_quote!({
+            let _ = scrub_note(None, note);
+        }),
+    ] {
+        let scan = with(scanned(), "src/transport/fake.rs", "fake", &block);
+        assert!(
+            fails_with(&scan, "a None needle set: src/transport/fake.rs::fake"),
+            "a None needle set passed"
+        );
+    }
+    let stray = with(
+        scanned(),
+        "src/transport/http/fake.rs",
+        "fake",
+        &syn::parse_quote!({
+            let sink = Sink {
+                tx,
+                map: Box::new(move |data| unsolicited_frame(data)),
+            };
+        }),
+    );
     assert!(
         fails_with(
-            &scanned(),
-            &rows,
-            "no scrubbing parse row: listen src/transport/http/listen.rs::frame"
+            &stray,
+            "map not built by its scrubber: HttpTransport listen"
         ),
-        "a lost parse row passed"
+        "a map built elsewhere passed"
     );
 }
 
@@ -470,10 +737,6 @@ fn a_late_or_lost_scrub_fails() {
 /// notifications fails, while one that drops them to `_` passes.
 #[test]
 fn a_direct_route_that_keeps_its_notifications_fails() {
-    const DIRECT: (&str, &str) = (
-        "src/gateway/router/backend_handlers/direct_send.rs",
-        "send_in_scope",
-    );
     let kept: [syn::Block; 2] = [
         syn::parse_quote!({
             let (response, notifications) =
@@ -489,7 +752,7 @@ fn a_direct_route_that_keeps_its_notifications_fails() {
     for block in &kept {
         let scan = replaced(scanned(), DIRECT.0, DIRECT.1, block);
         assert!(
-            fails_with(&scan, PARSE_ROWS, "keeps its notifications: direct"),
+            fails_with(&scan, "keeps its notifications"),
             "a kept notification passed"
         );
     }
@@ -502,7 +765,19 @@ fn a_direct_route_that_keeps_its_notifications_fails() {
         }),
     );
     assert!(
-        !fails_with(&dropped, PARSE_ROWS, "keeps its notifications"),
+        !fails_with(&dropped, "keeps its notifications"),
         "a dropped notification failed"
+    );
+}
+
+/// The pin's own proof: a reviewed send row whose send is gone fails.
+#[test]
+fn a_stale_send_row_fails() {
+    let rows = format!("{SENDS}src/transport/fake.rs\tgone\tinternal\tremoved since\n");
+    assert!(
+        differences(&scanned(), &rows)
+            .iter()
+            .any(|line| line == "stale send row: src/transport/fake.rs::gone"),
+        "a stale send row passed"
     );
 }
