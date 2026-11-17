@@ -540,10 +540,13 @@ async fn off_runtime_in<T: Send + 'static>(
     let held = root.map(Path::to_path_buf);
     // Taken before the thread exists, while the caller (a test) still holds
     // its share of the dir; the thread holds it to its end, past a caller
-    // that left.
+    // that left. Silent here: an awaited caller outlives its thread, so only a
+    // caller that leaves first is reported, by its guard (`Left`).
     let kept = root
-        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::CONFIG_LOCK, root))
+        .map(crate::spawn_keep::kept_dirs_at_spawn)
         .unwrap_or_default();
+    #[cfg(test)]
+    let unkept_root = root.filter(|_| kept.is_empty()).map(Path::to_path_buf);
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
@@ -567,10 +570,19 @@ async fn off_runtime_in<T: Send + 'static>(
         state,
         abandoned,
         armed: true,
+        #[cfg(test)]
+        unkept_root,
     };
     let out = result.await;
     // Received: the thread's send succeeded and it is returning.
     caller.armed = out.is_err();
+    // The caller stayed to the end, so it is not the cancel the report is for,
+    // even when the thread died without sending (its unwind may not have
+    // marked it returned yet).
+    #[cfg(test)]
+    {
+        caller.unkept_root = None;
+    }
     out.map_err(|_| NoResult::Lost)
 }
 
@@ -597,6 +609,11 @@ struct Left {
     abandoned: &'static Abandoned,
     /// Cleared once the result is received.
     armed: bool,
+    /// The config path whose temp dir no test kept at spawn: reported if this
+    /// caller leaves while the thread still runs, the one case whose writes
+    /// can outlive the test (`crate::spawn_keep`).
+    #[cfg(test)]
+    unkept_root: Option<std::path::PathBuf>,
 }
 
 impl Drop for Left {
@@ -611,6 +628,11 @@ impl Drop for Left {
             .is_err()
         {
             self.abandoned.0.fetch_sub(1, SeqCst);
+            return;
+        }
+        #[cfg(test)]
+        if let Some(root) = &self.unkept_root {
+            crate::test_dir_keep::report_unkept(crate::spawn_keep::CONFIG_LOCK, root);
         }
     }
 }

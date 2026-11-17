@@ -20,9 +20,10 @@ fn this_test() -> String {
 
 /// K15. A `lock_config` call whose thread is held before its work starts, and
 /// whose caller then leaves, keeps the test's dir after the test drops its
-/// share; the dir goes once the thread's work returns.
-/// Mutant: `off_runtime_in` without the keep.
-#[tokio::test]
+/// share; the dir goes once the thread's work returns. A kept dir is never
+/// reported, at the cancel or after.
+/// Mutants: `off_runtime_in` without the keep; the report ignoring the keep.
+#[tokio::test(flavor = "current_thread")]
 async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
     let dir = kept_tempdir();
     let root = dir.path().to_path_buf();
@@ -31,6 +32,7 @@ async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
     let hold = crate::spawn_keep::hold_for(&config);
     let (reached, release) = hold.arm();
     let release = Release(release);
+    let unkept = expect_unkept();
     let caller = tokio::spawn({
         let config = config.clone();
         async move {
@@ -45,15 +47,25 @@ async fn the_config_lock_thread_keeps_its_dir_after_its_caller_leaves() {
             .is_err_and(tokio::task::JoinError::is_cancelled),
         "the caller did not leave: {left:?}"
     );
+    assert_eq!(
+        unkept.recorded(),
+        vec![],
+        "a kept dir's cancel was reported"
+    );
     drop(dir);
     held_then_gone(&root, || release.now()).await;
+    assert_eq!(
+        unkept.recorded(),
+        vec![],
+        "a kept dir was reported on return"
+    );
 }
 
 /// K15p. A `lock_config` call awaited in a plain temp dir records nothing: its
 /// thread cannot outlive the caller, so no write can land after the test. The
 /// lock is still taken.
 /// Mutant: the report taken at spawn again.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn an_awaited_config_lock_in_a_plain_dir_records_nothing() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let config = dir.path().join("gateway.yaml");
@@ -71,7 +83,7 @@ async fn an_awaited_config_lock_in_a_plain_dir_records_nothing() {
 /// again afterwards, awaited, proves the cancelled thread let it go before the
 /// dir is removed.
 /// Mutant: no report on cancel.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn a_config_lock_caller_cancelled_mid_thread_is_recorded_at_the_cancel() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let config = dir.path().join("gateway.yaml");
@@ -109,4 +121,47 @@ async fn a_config_lock_caller_cancelled_mid_thread_is_recorded_at_the_cancel() {
         "the awaited relock was reported"
     );
     drop(again);
+}
+
+/// K15r. The report needs the caller to leave while the thread still runs: a
+/// guard dropped after its thread returned reports nothing, even armed with an
+/// unkept root; the same guard dropped while the thread runs reports once (the
+/// control, so the row can fail).
+/// Mutant: the report on any armed drop.
+#[test]
+fn a_caller_left_after_its_thread_returned_records_nothing() {
+    static MINE: Abandoned = Abandoned(AtomicUsize::new(0));
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let config = dir.path().join("gateway.yaml");
+    let guards = || {
+        let state = Arc::new(AtomicU8::new(RUNNING));
+        let ended = Returned {
+            state: Arc::clone(&state),
+            abandoned: &MINE,
+        };
+        let caller = Left {
+            state,
+            abandoned: &MINE,
+            armed: true,
+            unkept_root: Some(config.clone()),
+        };
+        (ended, caller)
+    };
+    let unkept = expect_unkept();
+    let (ended, caller) = guards();
+    drop(ended);
+    drop(caller);
+    assert_eq!(
+        unkept.recorded(),
+        vec![],
+        "a caller left after its thread returned was reported"
+    );
+    let (ended, caller) = guards();
+    drop(caller);
+    assert_eq!(
+        unkept.recorded(),
+        vec![("config lock", config.clone(), this_test())],
+        "control: a caller left mid-thread was not reported"
+    );
+    drop(ended);
 }
