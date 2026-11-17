@@ -10,6 +10,9 @@
 
 use std::path::Path;
 
+/// The kind a shutdown save (run_shutdown_saves) reports as.
+pub(crate) const SHUTDOWN_SAVE: &str = "shutdown save";
+
 /// The temp dirs a detached writer keeps: test builds only.
 #[cfg(test)]
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
@@ -32,5 +35,23 @@ pub(crate) fn kept_dirs_at_spawn(path: &Path) -> Kept {
 /// Nothing to keep in a release build.
 #[cfg(not(test))]
 pub(crate) fn kept_dirs_at_spawn(_path: &Path) -> Kept {
+    Kept
+}
+
+/// [`kept_dirs_at_spawn`], reporting `kind` at `path` when no test kept the
+/// dir: the line CI fails a shard on. It is reported at spawn, so it fires on
+/// every run, whether or not a late write races the dir's removal.
+#[cfg(test)]
+pub(crate) fn kept_at_spawn(kind: &'static str, path: &Path) -> Kept {
+    let kept = kept_dirs_at_spawn(path);
+    if kept.is_empty() {
+        crate::test_dir_keep::report_unkept(kind, path);
+    }
+    kept
+}
+
+/// Nothing to keep or report in a release build.
+#[cfg(not(test))]
+pub(crate) fn kept_at_spawn(_kind: &'static str, _path: &Path) -> Kept {
     Kept
 }

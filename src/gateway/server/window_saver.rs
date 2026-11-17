@@ -332,8 +332,7 @@ pub(super) async fn start_window_saver(
         let counted = stall_seam::live(&seam_path);
         let close = super::persistence::ShutdownSave::new(
             "protocol-revision window seal",
-            // Staging: data_dir goes here in the next commit.
-            None,
+            Some(data_dir.clone()),
             Box::new(move || {
                 #[cfg(test)]
                 let _live = counted;

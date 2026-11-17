@@ -317,8 +317,11 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
     {
         #[cfg(test)]
         STARTED_ROOTS.lock().push((step, root.clone()));
-        // Staging: the keep is taken here in the next commit.
-        let _ = root;
+        // Taken here, before the thread exists, while the caller (a test)
+        // still holds its share of the dir; the save thread holds it to its end.
+        let kept = root
+            .as_deref()
+            .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SHUTDOWN_SAVE, root));
         let (done, finished) = tokio::sync::oneshot::channel();
         let spawned = std::thread::Builder::new()
             .name(format!("shutdown: {step}"))
@@ -327,6 +330,8 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
                 if let Some(gate) = gate {
                     gate.pause_on_thread();
                 }
+                // Bound, not `_`: the thread owns the keep until it ends.
+                let _kept = kept;
                 save();
                 let _ = done.send(());
             });
@@ -364,7 +369,7 @@ pub(super) async fn save_state_on_shutdown(
     let mut saves: Vec<ShutdownSave> = vec![
         ShutdownSave::new(
             "search ranking save",
-            None,
+            Some(ranker_path.clone()),
             Box::new(move || {
                 save_with_logging(
                     &ranker_path,
@@ -376,7 +381,7 @@ pub(super) async fn save_state_on_shutdown(
         ),
         ShutdownSave::new(
             "transition tracking save",
-            None,
+            Some(transition_path.clone()),
             Box::new(move || {
                 save_with_logging(
                     &transition_path,
@@ -391,7 +396,7 @@ pub(super) async fn save_state_on_shutdown(
     if let Some((enforcer, data_dir)) = cost {
         saves.push(ShutdownSave::new(
             COST_SAVE_STEP,
-            None,
+            Some(data_dir.clone()),
             Box::new(move || save_costs(&enforcer, &data_dir)),
         ));
     }
