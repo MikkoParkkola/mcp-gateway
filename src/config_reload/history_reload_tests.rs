@@ -422,7 +422,18 @@ async fn h10_the_version_holds_the_published_bytes_not_the_disk() {
         write_owner_only(&overwrite, THREE_BACKENDS).expect("the pause overwrites gateway.yaml");
     });
     let started = start(dir.path(), ONE_BACKEND, None, None, Some(pause), None);
-    write_owner_only(&started.path, TWO_BACKENDS).expect("the edit");
+    // A commented version: a whole-line comment and an end-of-line one. The
+    // history keeps each version's exact bytes, comments included.
+    let commented = format!(
+        "# a comment the history keeps\n{}",
+        TWO_BACKENDS.replacen("backends:", "backends: # and one at a line's end", 1)
+    );
+    assert_eq!(
+        commented.matches('#').count(),
+        2,
+        "the premise: two comments"
+    );
+    write_owner_only(&started.path, &commented).expect("the edit");
     started
         .ctx
         .reload_outcome()
@@ -436,7 +447,8 @@ async fn h10_the_version_holds_the_published_bytes_not_the_disk() {
         newest
             .and_then(|snapshot| stored(snapshot, &gateway))
             .map(|file| file.bytes.clone()),
-        Some(Some(TWO_BACKENDS.as_bytes().to_vec()))
+        Some(Some(commented.into_bytes())),
+        "the version holds the edit's exact bytes, comments included"
     );
     let published = started
         .ctx
