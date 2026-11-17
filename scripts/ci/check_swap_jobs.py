@@ -46,6 +46,8 @@ WRAPPERS = (
     re.compile(r"scripts/ci/shard_tests\.py\s+run\s+linux\b"),
     # The shared lib test binary: `export-lib` compiles it once for the run.
     re.compile(r"scripts/ci/shard_tests\.py\s+export-lib\b"),
+    # The Linux lib test binary in parts: the helper compiles each part through export-lib.
+    re.compile(r"scripts/ci/lib-parts\.sh\s+export\b"),
     re.compile(r"scripts/ci/coverage_shards\.py\s+run\b"),
     re.compile(r"scripts/ci/packaged-tests\.sh\s+(build|run)\b"),
     # The mutant harness, run from the repo or from the copy mutants.yml takes

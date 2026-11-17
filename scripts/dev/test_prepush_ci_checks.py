@@ -43,7 +43,11 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
-    ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the lib test binary (macOS, and Linux's shared build)",
+    ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the macOS lib test binary",
+    ("scripts/ci/lib-parts.sh", ("export", "$PART", "<TMP>/lib-bin")): "cargo: builds one part of the Linux lib test binary",
+    ("scripts/ci/memory-peak.sh", ("13312", "<TMP>/memory-peak.txt")): "ci-env: reads this job's cgroup memory.peak",
+    ("scripts/ci/lib_union.py", ("<TMP>/lib-bin", "<TMP>/expected")): "artifact: compares the lists of the part binaries linux-lib-build built",
+    ("scripts/dev/test_parts.py", ("expect", "x86_64-unknown-linux-gnu", "<TMP>/expected")): "artifact: writes the expected lists the union check compares with the part binaries'",
     ("scripts/ci/shard_tests.py", ("run", "macos", "lib-a")): "cargo: builds and runs a macOS lib half",
     ("scripts/ci/shard_tests.py", ("run", "macos", "int")): "cargo: runs the macOS integration shard (the os-int label's lane job)",
     ("scripts/ci/os_sensitive_diff.py", ("--base", "HEAD^1", "--head", "HEAD", "--pr", "$PR_NUMBER", "--labels", "$LABELS",
@@ -51,8 +55,22 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "ci-env: reads the pull request number, labels and head sha from the event payload",
     ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-a", "<TMP>/lib-bin/lib-tests")):
         "artifact: runs the lib test binary another job built",
-    ("scripts/ci/shard_tests.py", ("run-prebuilt", "linux", "${{matrix.shard}}", "<TMP>/lib-bin/lib-tests")):
-        "artifact: runs the shared lib test binary job linux-lib-build built",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "linux", "${{matrix.shard}}", "<TMP>/lib-bin")):
+        "artifact: runs the lib test part binaries linux-lib-build built",
+    ("scripts/ci/shard_tests.py", ("run-one", "--module", "commands::upgrade::upgrade_notice_tests::", "<TMP>/lib-bin"),
+     ('python3 scripts/ci/shard_tests.py run-one --module commands::upgrade::upgrade_notice_tests:: "$RUNNER_TEMP/lib-bin" 2>&1',
+      'tee "$RUNNER_TEMP/assembled-lib.log"')):
+        "artifact: runs one module from the lib test part binaries",
+    ("scripts/ci/shard_tests.py", ("run-one", "--exact", "capability::executor::gws_real_tests::every_gws_capability_is_accepted_by_the_real_binary_in_dry_run", "<TMP>/lib-bin", "--", "--ignored"),
+     ('python3 scripts/ci/shard_tests.py run-one --exact capability::executor::gws_real_tests::every_gws_capability_is_accepted_by_the_real_binary_in_dry_run "$RUNNER_TEMP/lib-bin" -- --ignored 2>&1',
+      'tee "$RUNNER_TEMP/gws.log"')):
+        "artifact: runs one test from the lib test part binaries",
+    ("scripts/ci/shard_tests.py", ("which", "config::keychain_linux_tests::a15_the_real_secret_service_reads_back_byte_exact_and_refuses_when_locked",
+                                   "<TMP>/lib-bin", "--", "--ignored")):
+        "artifact: finds a test's part binary among the ones linux-lib-build built",
+    ("scripts/ci/shard_tests.py", ("which", "config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked",
+                                   "<TMP>/lib-bin", "--", "--ignored")):
+        "artifact: finds a test's part binary among the ones linux-lib-build built",
     ("scripts/ci/shard_tests.py", ("wait-lib", "macos-lib-tests", "macOS shard lib-b")):
         "ci-env: polls this run's artifacts and jobs through the Actions API",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",

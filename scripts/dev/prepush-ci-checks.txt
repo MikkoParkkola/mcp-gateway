@@ -35,6 +35,9 @@ python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
+python3 scripts/ci/test_lib_union.py	0	closed
+python3 scripts/ci/test_lib_parts.py	1	closed
+python3 scripts/ci/test_memory_peak.py	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
@@ -129,6 +132,7 @@ python3 scripts/release/upgrading_fragments.py check	1	closed
 python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
 "$GATE_PY" scripts/dev/test_cfg_items.py	1	closed
 "$GATE_PY" scripts/dev/test_test_parts.py	1	closed
+"$GATE_PY" scripts/dev/test_test_parts_expect.py	1	closed
 "$GATE_PY" scripts/dev/test_parts.py check	30	closed
 "$GATE_PY" scripts/dev/check-outbound-clients.py	20	closed
 "$GATE_PY" scripts/dev/test_check_outbound_clients.py	1	closed

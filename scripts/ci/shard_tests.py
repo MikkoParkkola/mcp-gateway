@@ -744,6 +744,14 @@ def parts_rows() -> None:
         runs = open(log).read().splitlines()
         assert runs == ["p3 m3::t3 --exact"], runs
         fresh()
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert which_one("m4::t4", d, []) == 0
+        assert buf.getvalue().strip().endswith("lib-tests-p4"), buf.getvalue()
+        assert which_one("m9::none", d, []) == 1, "which found a test that is not there"
+        fresh()
         assert run_one("--exact", "m9::none", d, []) == 1, "zero selected passed"
         fresh({1: ["a::dup", "b::dup"]})
         assert run_one("--exact", "dup", d, []) == 1, "an exact name matching nothing exactly passed"
@@ -1012,6 +1020,24 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
     return 1 if failed else 0
 
 
+def which_one(name: str, directory: str, extra: list[str]) -> int:
+    """Print the one part binary that holds exactly-named test NAME (a step that must run the binary itself, as the
+    keychain steps inside their D-Bus session do). Fails unless exactly one test over the parts matches."""
+    binaries, failed = part_binaries(directory)
+    hits = []
+    for k, path in sorted(binaries.items()):
+        out = subprocess.run([path, "--list", name, "--exact", *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        hits += [path for x in out.splitlines() if x.endswith(": test")]
+    if len(hits) != 1:
+        failed.append(f"{name}: {len(hits)} tests selected over the parts, not exactly one")
+    for f in failed:
+        print(f"::error::which {f}", file=sys.stderr)
+    if failed:
+        return 1
+    print(hits[0])
+    return 0
+
+
 def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
     """List PATTERN on every part binary first, then run it once. `--exact`: exactly one test in total (libtest
     `--exact`). `--module`: names under the anchored path prefix PATTERN, at least one, all on one binary, run there
@@ -1129,6 +1155,8 @@ def main(argv: list[str]) -> int:
         return wait_lib(argv[2], argv[3])
     if len(argv) == 5 and argv[1] == "run-prebuilt-parts" and argv[3] in SHARED_BUILD.get(argv[2], ()):
         return run_prebuilt_parts(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == "which":
+        return which_one(argv[2], argv[3], argv[5:] if len(argv) > 4 and argv[4] == "--" else [])
     if len(argv) >= 5 and argv[1] == "run-one" and argv[2] in ("--exact", "--module"):
         extra = argv[6:] if len(argv) > 5 and argv[5] == "--" else []
         return run_one(argv[2], argv[3], argv[4], extra)
