@@ -6,9 +6,11 @@
 // user does (hover after 300 ms, keyboard focus, Enter, a tap on touch), shows
 // the copy the asset holds for its id, and closes on Esc or a tap outside. The
 // expected words come from the copy asset, not from the module under test.
+// The expected words are the tip's free text or its row values, so these rows
+// keep passing when the copy moves into rows.
 import { test, expect } from './base.mjs';
 import { readCopy } from './copy-check.mjs';
-import { shellReady } from './shell.mjs';
+import { pauseClock, shellReady } from './shell.mjs';
 
 const COPY = readCopy();
 const LOAD = 'tools.status.load-11-tools-and-reach';
@@ -18,7 +20,16 @@ const NOT_SET = 'gateway.status.environment-not-set';
 const holder = (page, id) => page.locator(`.has-tip[data-tip="${id}"]`);
 const tipOf = (page, id) => holder(page, id).locator('.tip');
 const triggerOf = (page, id) => holder(page, id).locator('button');
-const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
+/** Press Tab from the page start until `target` holds focus; fails if Tab never reaches it. */
+async function tabTo(page, target, what) {
+  for (let i = 0; i < 80; i += 1) {
+    await page.keyboard.press('Tab');
+    if (await target.evaluate((el) => el === document.activeElement)) return;
+  }
+  throw new Error(`${what} is not reachable by Tab`);
+}
+/** The words a tip shows: its free text, or each row's value once the copy is in rows. */
+const words = (entry) => ('text' in entry ? [entry.text] : entry.rows.map(([, value]) => value));
 const gateway = (page, environment) => page.route('**/ui/api/gateway', (r) => r.fulfill({ json: { environment } }));
 /** Tools › Status as a signed-in admin with one tool, so the screen draws its load note. */
 async function toolsScreen(page) {
@@ -36,12 +47,13 @@ test('J1 Tools › Status: the load note opens on hover after 300 ms, shows its 
   await pauseClock(page);
   const tip = tipOf(page, LOAD);
   await triggerOf(page, LOAD).hover();
-  await page.clock.runFor(200);
+  await page.clock.runFor(299);
   await expect(tip).not.toHaveClass(/open/);
-  await page.clock.runFor(150);
+  await page.clock.runFor(17);
   await expect(tip).toHaveClass(/open/);
+  await expect(tip).toBeVisible();
   await expect(tip).toContainText(COPY[LOAD].title);
-  await expect(tip).toContainText(COPY[LOAD].text);
+  for (const w of words(COPY[LOAD])) await expect(tip).toContainText(w);
   await page.keyboard.press('Escape');
   await expect(tip).not.toHaveClass(/open/);
 });
@@ -53,8 +65,9 @@ test('J1b Tools › Status: by keyboard the load note opens at once, Enter keeps
   await expect(triggerOf(page, LOAD), 'Tools › Status draws its load note').toBeVisible();
   const tip = tipOf(page, LOAD);
   const trigger = triggerOf(page, LOAD);
-  await trigger.focus();
+  await tabTo(page, trigger, 'the load note');
   await expect(tip).toHaveClass(/open/);
+  await expect(tip).toBeVisible();
   await page.keyboard.press('Enter');
   await expect(tip).toHaveClass(/open/);
   await page.keyboard.press('Escape');
@@ -68,9 +81,10 @@ test('J2 the environment chip with no name set: keyboard opens the not-set note,
   await shellReady(page);
   await expect(holder(page, FROM_HOST)).toHaveCount(0);
   const tip = tipOf(page, NOT_SET);
-  await triggerOf(page, NOT_SET).focus();
+  await tabTo(page, triggerOf(page, NOT_SET), 'the not-set note');
   await expect(tip).toHaveClass(/open/);
-  await expect(tip).toContainText(COPY[NOT_SET].text);
+  await expect(tip).toBeVisible();
+  for (const w of words(COPY[NOT_SET])) await expect(tip).toContainText(w);
   await page.keyboard.press('Escape');
   await expect(tip).not.toHaveClass(/open/);
 });
@@ -86,7 +100,8 @@ test.describe('touch', () => {
     const tip = tipOf(page, LOAD);
     await triggerOf(page, LOAD).tap();
     await expect(tip).toHaveClass(/open/);
-    await expect(tip).toContainText(COPY[LOAD].text);
+    await expect(tip).toBeVisible();
+    for (const w of words(COPY[LOAD])) await expect(tip).toContainText(w);
     await page.locator('h1').tap();
     await expect(tip).not.toHaveClass(/open/);
   });
@@ -99,7 +114,8 @@ test.describe('touch', () => {
     const tip = tipOf(page, FROM_HOST);
     await triggerOf(page, FROM_HOST).tap();
     await expect(tip).toHaveClass(/open/);
-    await expect(tip).toContainText(COPY[FROM_HOST].text);
+    await expect(tip).toBeVisible();
+    for (const w of words(COPY[FROM_HOST])) await expect(tip).toContainText(w);
     await page.locator('h1').tap();
     await expect(tip).not.toHaveClass(/open/);
   });

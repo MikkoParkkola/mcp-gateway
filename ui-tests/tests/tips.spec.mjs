@@ -177,10 +177,12 @@ test.describe('C10 every tip in row form, or listed as still free text', () => {
     expect(rowFormProblems({ ...base(), _pending_rows: ['a.status.free', 'a.status.gone'] }))
       .toEqual(['a.status.gone: listed in _pending_rows with no copy']);
   });
-  test('C10d the list is bookkeeping: shape and pairing do not read it as a copy entry', () => {
+  test('C10d the list is bookkeeping: shape and pairing do not read it as a copy entry, and a screen drawing it fails', () => {
     const copy = { _pending: { a: ['a.status.rows', 'a.status.free'] }, ...base() };
     expect(shapeProblems(copy)).toEqual([]);
     expect(pairingProblems(copy, { drawn: new Set(), nonLiteral: 0, tabs: {} })).toEqual([]);
+    expect(pairingProblems(copy, { drawn: new Set(['_pending_rows']), nonLiteral: 0, tabs: {} }))
+      .toEqual(['_pending_rows: not <page>.<tab>.<subject>']);
   });
   test('C10e a list that is not an array of ids fails its shape', () => {
     expect(shapeProblems({ ...base(), _pending_rows: { 'a.status.free': true } }))
