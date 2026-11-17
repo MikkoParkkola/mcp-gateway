@@ -18,6 +18,7 @@ fn full() -> Decision {
     Decision {
         v: 2,
         config_revision: Some("rev-a".into()),
+        config_revision_capabilities: None,
         running_revision: None,
         pending_restart: vec![],
         kind: DecisionKind::Grant,
