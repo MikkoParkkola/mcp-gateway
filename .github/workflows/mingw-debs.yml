@@ -26,7 +26,7 @@ permissions:
 jobs:
   fill:
     name: Fetch the mingw packages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The download is its only work, so a slow mirror day has room here.
     timeout-minutes: 90
     steps:
