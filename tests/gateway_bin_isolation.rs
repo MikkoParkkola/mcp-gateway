@@ -87,7 +87,12 @@ fn the_operator_data_dir_wins_over_the_test_home_in_the_binary() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(started.is_dir(), "the gateway never started");
+    if !started.is_dir() {
+        // Reap it first: a panic here would leave it running over its fixture.
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the gateway never started");
+    }
 
     // End of stdin is an orderly stdio shutdown, which saves the window.
     drop(child.stdin.take());
@@ -120,14 +125,21 @@ fn the_operator_data_dir_wins_over_the_test_home_in_the_binary() {
     );
 }
 
-/// Every path under `root`, depth first.
+/// Paths under `root`, depth first, for a failure message: symlinked dirs are
+/// not entered, and the listing stops at 200 entries.
 fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let path = entry.path();
-        found.push(path.clone());
-        if path.is_dir() {
-            found.extend(walk(&path));
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if found.len() >= 200 {
+                return found;
+            }
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(path.clone());
+            }
+            found.push(path);
         }
     }
     found
