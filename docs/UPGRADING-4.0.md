@@ -148,7 +148,7 @@ backend" and "fails a capability file" first.**
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
-| 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
+| 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 19 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed, but an `asana` backend must be replaced (see the item) |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, Chrome DevTools, fetch, git without a pinned repository). `init` (local profile) enables memory, sequential-thinking, context7 and time. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
@@ -3640,7 +3640,8 @@ github, gitlab, linear, sentry, aws, cloudflare-workers, slack, fetch, semgrep, 
 notion, airtable, stripe, pinecone, qdrant. Pinned: exa, perplexity, filesystem, mysql, memory,
 sequential-thinking. `jira` is now `atlassian` (Atlassian's hosted Jira and Confluence server).
 
-Removed, because no maintained server exists at a resolvable package:
+Removed, because no maintained server exists at a resolvable package, or `add` cannot write a backend
+that works with it:
 
 | Name | Reason |
 |---|---|
@@ -3655,7 +3656,8 @@ Removed, because no maintained server exists at a resolvable package:
 | pagerduty | the vendor's server repository is archived |
 | asana | Asana shut down the `https://mcp.asana.com/sse` endpoint on 5 August 2026 (it answers HTTP 410). Its V2 server, `https://mcp.asana.com/v2/mcp`, has no dynamic client registration, so it needs an OAuth client you register with Asana, and `add` writes no client ID. To use it: `mcp-gateway add --url https://mcp.asana.com/v2/mcp asana`, then set `oauth.client_id`, `oauth.client_secret` and an `oauth.callback_port` matching the app's Redirect URL on the backend ([OAUTH_CONFIG.md](OAUTH_CONFIG.md), [Asana's guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server)). A backend already pointing at `/sse` is not migrated, and `add` refuses a name that already exists: run `mcp-gateway remove asana` first, then add it as above |
 
-**Action:** none for existing configs. To keep using a removed server, add it with an explicit
+**Action:** none for existing configs, except an `asana` backend, whose `/sse` URL no longer answers:
+replace it as its row says. To keep using a removed server, add it with an explicit
 command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
 
 ## 125. A listen stream opens with the acknowledgement notification
