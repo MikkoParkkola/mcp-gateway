@@ -84,7 +84,8 @@ impl FetchStep {
             Self::Sweep => "the fetch's sweep",
             Self::Relay => "stopping the fetch's relay",
             Self::ProxySocket => "removing the fetch's proxy socket",
-            Self::UvInstall | Self::DirectUrlCheck => "preparing the fetch",
+            Self::UvInstall => "the fetch's uv install",
+            Self::DirectUrlCheck => "the fetch's direct-URL check",
         }
     }
 }

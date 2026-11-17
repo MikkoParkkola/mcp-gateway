@@ -15,19 +15,54 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::utf8;
+use super::{ProgramBind, program_bind, utf8};
 use crate::preview_sandbox::Refusal;
 
-/// uv beside the real file of `uvx` (both come from one install).
+/// The largest interpreter binary read for its library names.
+const MAX_BINARY: u64 = 256 << 20;
+
+/// uv beside the real file of `uvx` (both come from one install), as its
+/// real file; a `uv` that is a script refuses by name.
 pub(super) fn uv_beside(uvx: &Path) -> Result<PathBuf, Refusal> {
-    Ok(uvx.parent().unwrap_or_else(|| Path::new("/")).join("uv"))
+    let real = fs::canonicalize(uvx)
+        .map_err(|e| Refusal::Step(format!("finding uv beside {} ({e})", uvx.display())))?;
+    let uv = real
+        .parent()
+        .map(|dir| dir.join("uv"))
+        .filter(|uv| uv.is_file())
+        .ok_or_else(|| {
+            Refusal::Step(format!("finding uv beside {} (not there)", real.display()))
+        })?;
+    let uv = fs::canonicalize(&uv)
+        .map_err(|e| Refusal::Step(format!("finding uv beside {} ({e})", real.display())))?;
+    refuse_script("uv", &uv)?;
+    Ok(uv)
 }
 
-/// The real file of the `python3` found on the gateway's PATH.
+/// The real file of the `python3` found on the gateway's PATH; a script (a
+/// version manager's shim) refuses by name.
 pub(super) fn python_real(python: &Path) -> Result<PathBuf, Refusal> {
-    Ok(fs::canonicalize(python).unwrap_or_else(|_| python.to_owned()))
+    let real = fs::canonicalize(python)
+        .map_err(|e| Refusal::Step(format!("finding python3 at {} ({e})", python.display())))?;
+    refuse_script("python3", &real)?;
+    Ok(real)
 }
 
+/// Refuse `file` by name when it starts with `#!`.
+fn refuse_script(what: &str, file: &Path) -> Result<(), Refusal> {
+    use std::io::Read as _;
+    let mut head = Vec::with_capacity(2);
+    fs::File::open(file)
+        .and_then(|f| f.take(2).read_to_end(&mut head))
+        .map_err(|e| Refusal::Step(format!("placing {what} (reading {}: {e})", file.display())))?;
+    if head == b"#!" {
+        return Err(Refusal::Step(format!(
+            "placing {what} ({} is a script)",
+            file.display()
+        )));
+    }
+    Ok(())
+}
 /// What the root must show of the interpreter in both phases, and what it
 /// covers with an empty directory after every bind and bind-back.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -44,18 +79,95 @@ pub(super) struct PythonPlace {
 /// whose version is `xy`; `system` lists the roots the sandbox shows anyway.
 pub(super) fn place_python(
     real: &Path,
-    xy: (u32, u32),
+    (x, y): (u32, u32),
     system: &[String],
 ) -> Result<PythonPlace, Refusal> {
-    let _ = (xy, system);
-    let prefix = real
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new("/"));
-    Ok(PythonPlace {
-        read_only: vec![utf8(prefix)?],
+    let prefix = real.parent().and_then(Path::parent).ok_or_else(|| {
+        Refusal::Step(format!(
+            "placing python3 ({} has no prefix)",
+            real.display()
+        ))
+    })?;
+    let lib = prefix.join("lib");
+    let stdlib = lib.join(format!("python{x}.{y}"));
+    if !stdlib.is_dir() {
+        return Err(Refusal::Step(format!(
+            "placing python3 (no standard library at {})",
+            stdlib.display()
+        )));
+    }
+    let mut masks = Vec::new();
+    for dir in [
+        stdlib.join("site-packages"),
+        stdlib.join("dist-packages"),
+        lib.join("python3/dist-packages"),
+    ] {
+        if dir.is_dir() {
+            masks.push(utf8(&dir)?);
+        }
+    }
+    let mut binds = vec![utf8(real)?, utf8(&stdlib)?];
+    if links_libpython(real, (x, y))? {
+        let stem = format!("libpython{x}.{y}.so");
+        let mut libs = Vec::new();
+        for entry in fs::read_dir(&lib).map_err(|e| {
+            Refusal::Step(format!("placing python3 (listing {}: {e})", lib.display()))
+        })? {
+            let entry = entry.map_err(|e| {
+                Refusal::Step(format!("placing python3 (listing {}: {e})", lib.display()))
+            })?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&stem))
+            {
+                libs.push(utf8(&entry.path())?);
+            }
+        }
+        libs.sort();
+        binds.extend(libs);
+    }
+    let mut place = PythonPlace {
+        masks,
         ..PythonPlace::default()
-    })
+    };
+    // Never the tree the program rule would bind for a runtime: the
+    // interpreter's own pieces only.
+    match program_bind(real, system) {
+        ProgramBind::Refused => {
+            return Err(Refusal::Step(format!(
+                "placing python3 ({} lies under a masked secret path)",
+                real.display()
+            )));
+        }
+        ProgramBind::System => {}
+        ProgramBind::UsrLocal(_) => place.bound_back = binds,
+        ProgramBind::Runtime(_) | ProgramBind::File(_) => place.read_only = binds,
+    }
+    Ok(place)
+}
+
+/// Whether the interpreter's binary names `libpythonX.Y.so` (the dynamic
+/// section's `DT_NEEDED` string of a linked build).
+// ponytail: a byte search, not an ELF parse; a stray mention only adds a
+// read-only bind of a library file that exists; parse the dynamic section
+// if that ever matters.
+fn links_libpython(real: &Path, (x, y): (u32, u32)) -> Result<bool, Refusal> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    fs::File::open(real)
+        .and_then(|f| f.take(MAX_BINARY + 1).read_to_end(&mut bytes))
+        .map_err(|e| Refusal::Step(format!("placing python3 (reading {}: {e})", real.display())))?;
+    if bytes.len() as u64 > MAX_BINARY {
+        return Err(Refusal::Step(format!(
+            "placing python3 ({} is over 256 MiB)",
+            real.display()
+        )));
+    }
+    let needle = format!("libpython{x}.{y}.so");
+    Ok(bytes
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes()))
 }
 
 #[cfg(test)]

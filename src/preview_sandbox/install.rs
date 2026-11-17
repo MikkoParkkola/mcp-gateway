@@ -211,7 +211,7 @@ pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
 /// `name==version`): the name of the package's uv tool environment and the
 /// name its metadata is looked up by.
 pub(crate) fn uv_name(spec: &str) -> String {
-    spec.to_owned()
+    normalize(spec.split_once("==").map_or(spec, |(name, _)| name))
 }
 
 /// The uv tool environment `spec` installs into under the preview home `home`.
