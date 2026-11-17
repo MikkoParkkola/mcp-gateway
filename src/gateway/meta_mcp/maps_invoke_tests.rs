@@ -412,9 +412,16 @@ async fn at11b_an_error_result_through_the_gateway_carries_no_credit() {
     let response = invoke(&meta, "at11b", json!({})).await;
     let text = response.to_string();
     assert_eq!(stub.count(), 0, "premise: refused before any request");
+    // The tool result inside gateway_invoke's one text item.
+    let outer = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("outer text: {response}"));
+    let tool: Value = serde_json::from_str(outer).expect("tool result JSON");
+    assert_eq!(tool["isError"], true, "premise: an error result: {tool}");
+    let diagnostic = tool["content"][0]["text"].as_str().unwrap_or_default();
     assert!(
-        text.contains("isError") || text.contains("\"error\""),
-        "premise: an error: {text}"
+        diagnostic.contains('q') && diagnostic.contains("required"),
+        "premise: the input refusal names `q`: {diagnostic}"
     );
     assert!(!text.contains(OSM), "no credit on an error result: {text}");
 }

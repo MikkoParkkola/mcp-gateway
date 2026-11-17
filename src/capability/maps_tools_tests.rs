@@ -852,15 +852,29 @@ fn ld7_a_catalogue_load_logs_the_refused_file_at_warn() {
 #[test]
 fn t_schemas_each_recorded_success_validates_against_its_shipped_schema() {
     let dir = repo("tests/fixtures/maps").join(RUN);
-    for (rel, fixture) in [
-        ("maps/geocode.yaml", "geocode"),
-        ("maps/geocode.yaml", "geocode_none"),
-        ("maps/nominatim_search.yaml", "nominatim_search"),
-        ("maps/nominatim_reverse.yaml", "nominatim_reverse"),
-        ("maps/photon_search.yaml", "photon_search"),
-        ("maps/osrm_route.yaml", "osrm_route"),
-        ("knowledge/weather.yaml", "weather"),
-    ] {
+    // Every recorded 200 is checked: a new recording must be mapped here.
+    let tool_of = |fixture: &str| match fixture {
+        "geocode" | "geocode_none" => "maps/geocode.yaml",
+        "nominatim_search" => "maps/nominatim_search.yaml",
+        "nominatim_reverse" => "maps/nominatim_reverse.yaml",
+        "photon_search" => "maps/photon_search.yaml",
+        "overpass_nearby" => "maps/overpass_nearby.yaml",
+        "osrm_route" => "maps/osrm_route.yaml",
+        "weather" => "knowledge/weather.yaml",
+        other => panic!("recorded fixture {other} maps to no shipped tool"),
+    };
+    let manifest = std::fs::read_to_string(dir.join("MANIFEST")).expect("MANIFEST");
+    let successes: Vec<(&str, &str)> = manifest
+        .lines()
+        .skip(1)
+        .filter(|l| l.split(' ').nth(2) == Some("200"))
+        .map(|l| {
+            let fixture = l.split(' ').next().expect("name");
+            (tool_of(fixture), fixture)
+        })
+        .collect();
+    assert_eq!(successes.len(), 7, "premise: the seven recorded successes");
+    for (rel, fixture) in successes {
         let capability = as_shipped(rel);
         let raw: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join(format!("{fixture}.json"))).expect("fixture"),

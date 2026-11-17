@@ -959,3 +959,88 @@ fn ld8_registering_a_zero_interval_directly_is_refused_and_changes_nothing() {
         "no bucket was made for it"
     );
 }
+
+#[test]
+fn ld8b_registering_a_graphql_provider_on_a_host_it_paces_is_refused() {
+    let url = "http://ld8b.test:9/g";
+    let backend = CapabilityBackend::new("ld8b", Arc::new(executor(Names::default())));
+    backend
+        .register_capability(cap("ld8brest", url, Some(30_000), false))
+        .expect("premise: the paced REST provider registers");
+    let gql =
+        crate::capability::parse_capability(&rpc_yaml("ld8bgql", "graphql", url)).expect("cap");
+    let err = backend.register_capability(gql).expect_err("refused");
+    assert!(
+        err.to_string()
+            .contains("ld8b.test is paced by a rate_limit"),
+        "names the host: {err}"
+    );
+    assert!(!backend.has_capability("ld8bgql"));
+}
+
+#[test]
+fn ld8c_a_host_another_backend_paces_refuses_a_graphql_registration() {
+    let url = "http://ld8c.test:9/g";
+    let pacing = CapabilityBackend::new("ld8c-rest", Arc::new(executor(Names::default())));
+    pacing
+        .register_capability(cap("ld8crest", url, Some(30_000), false))
+        .expect("premise: another backend paces the host");
+    // This backend's own catalogue declares nothing on the host.
+    let other = CapabilityBackend::new("ld8c-gql", Arc::new(executor(Names::default())));
+    let gql =
+        crate::capability::parse_capability(&rpc_yaml("ld8cgql", "graphql", url)).expect("cap");
+    let err = other.register_capability(gql).expect_err("refused");
+    assert!(
+        err.to_string()
+            .contains("ld8c.test is paced by a rate_limit"),
+        "names the host: {err}"
+    );
+    assert!(!other.has_capability("ld8cgql"));
+}
+
+#[tokio::test]
+async fn rl12c_a_relative_location_names_the_request_host() {
+    let from = redirect_to("/elsewhere?token=s3cr3t-sig").await;
+    let b = backend(
+        Names::default(),
+        vec![cap(
+            "rl12c",
+            &from.url("rl12c.test", "/s"),
+            Some(30_000),
+            false,
+        )],
+    );
+    let err = call(&b, "rl12c", "a").await.expect_err("not followed");
+    assert!(
+        err.to_string().contains("pointing to rl12c.test"),
+        "a relative Location resolves against the request: {err}"
+    );
+    assert!(
+        !err.to_string().contains("s3cr3t-sig"),
+        "never the query: {err}"
+    );
+}
+
+// ── RL19b: a withdrawn declaration ───────────────────────────────────
+
+#[tokio::test]
+async fn rl19b_a_withdrawn_strict_declaration_hands_the_host_to_the_weaker() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl19b.test", "/s");
+    let dir = tempfile::TempDir::new().expect("dir");
+    let strict_file = dir.path().join("rl19bs.yaml");
+    std::fs::write(&strict_file, cap_yaml("rl19bs", &url, 30_000)).expect("write");
+    let (strict, _) = loaded(dir.path()).await;
+    let weak = CapabilityBackend::new("rl19b-weak", Arc::new(executor(Names::default())));
+    weak.register_capability(cap("rl19bw", &url, Some(300), false))
+        .expect("registered");
+    call(&strict, "rl19bs", "a").await.expect("admitted");
+    // The strict backend's reload drops its declaration: 300 ms now rules.
+    std::fs::remove_file(&strict_file).expect("remove");
+    strict.reload().await.expect("reloaded");
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    call(&weak, "rl19bw", "b")
+        .await
+        .expect("the weaker interval now governs");
+    assert_eq!(stub.count(), 2);
+}
