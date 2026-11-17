@@ -636,3 +636,72 @@ fn a_fired_file_is_named_by_the_hex_sha256_of_the_key() {
         "6ab9f1eb8f7d3388f4f9d586f66e99fd54080df2c446f0e58668b09c08a16dd0.json"
     );
 }
+
+/// The parses `zone` made on this thread while `run` ran.
+fn parses_during(run: impl FnOnce()) -> usize {
+    let before = super::ZONE_PARSES.with(std::cell::Cell::get);
+    run();
+    super::ZONE_PARSES.with(std::cell::Cell::get) - before
+}
+
+/// A client's timezone longer than the bound is refused with the zone error,
+/// without reaching the parser; a name of exactly the bound still reaches it
+/// (and, being no zone, is refused there).
+/// Mutant: the length bound dropped or moved past the parse.
+#[test]
+fn an_over_long_timezone_is_refused_before_the_parser() {
+    let over = format!(
+        "Europe/{}",
+        "A".repeat(super::MAX_ZONE + 1 - "Europe/".len())
+    );
+    assert_eq!(over.len(), super::MAX_ZONE + 1, "premise: one byte over");
+    let mut field = Value::Null;
+    let parses = parses_during(|| field = refused_field(super::zone(&over).map(drop)));
+    assert_eq!(field, "arguments.timezone");
+    assert_eq!(parses, 0, "an over-long name reached the parser");
+    let at = format!("Europe/{}", "A".repeat(super::MAX_ZONE - "Europe/".len()));
+    assert_eq!(at.len(), super::MAX_ZONE, "premise: exactly the bound");
+    let parses = parses_during(|| field = refused_field(super::zone(&at).map(drop)));
+    assert_eq!(field, "arguments.timezone");
+    assert_eq!(parses, 1, "a name at the bound did not reach the parser");
+}
+
+/// A client's timezone with a character outside the IANA name set
+/// (letters, digits, `_`, `+`, `/`, `-`) is refused before the parser.
+/// Mutant: the character check dropped, or one of these let through.
+#[test]
+fn a_timezone_outside_the_name_characters_is_refused_before_the_parser() {
+    for name in [
+        "Europe/Hel sinki",
+        "Europe/Helsinki\0",
+        "../etc/localtime",
+        "Europe\\Helsinki",
+        "Europe/Helsinkı",
+        "",
+    ] {
+        let mut field = Value::Null;
+        let parses = parses_during(|| field = refused_field(super::zone(name).map(drop)));
+        assert_eq!(field, "arguments.timezone", "{name:?}");
+        assert_eq!(parses, 0, "{name:?} reached the parser");
+    }
+}
+
+/// Valid IANA names, the punctuation they use included, still parse.
+#[test]
+fn a_valid_timezone_still_parses() {
+    for (name, want) in [
+        ("Europe/Helsinki", chrono_tz::Europe::Helsinki),
+        ("America/Port-au-Prince", chrono_tz::America::PortauPrince),
+        ("Etc/GMT+5", chrono_tz::Etc::GMTPlus5),
+        (
+            "America/Argentina/Buenos_Aires",
+            chrono_tz::America::Argentina::Buenos_Aires,
+        ),
+        ("UTC", chrono_tz::UTC),
+    ] {
+        let mut got = None;
+        let parses = parses_during(|| got = Some(super::zone(name)));
+        assert_eq!(got.expect("ran").ok(), Some(want), "{name}");
+        assert_eq!(parses, 1, "{name} did not reach the parser once");
+    }
+}
