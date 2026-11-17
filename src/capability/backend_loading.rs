@@ -130,7 +130,6 @@ impl CapabilityBackend {
         let operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
         let mut failed_dirs: Vec<(String, String)> = Vec::new();
-        let mut refused_logs: Vec<(String, String)> = Vec::new();
 
         // Before any note, so this reload's set is not the one still stored
         // on the catalogue. Install below is what stores it. An empty
@@ -164,26 +163,12 @@ impl CapabilityBackend {
         }
 
         // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
-        let mut refused = std::collections::HashSet::new();
-        total -= self.drop_unpaced_protocols(&mut loaded_files, &mut refused);
-        for file in loaded_files {
-            match validate_capability_account_binding(
-                &file.definition,
-                self.executor.account_strategies(),
-            ) {
-                Ok(()) => {
-                    let source = self.source_of(&file.path, &file.bytes);
-                    trusted.push((file.path, file.definition.name.clone()));
-                    admitted.push((file.definition, Some(source)));
-                }
-                Err(error) => {
-                    total -= 1;
-                    refused.insert(file.definition.name.clone());
-                    refused_logs.push((file.definition.name.clone(), error.to_string()));
-                }
-            }
-        }
+        let Admission {
+            admitted,
+            trusted,
+            refused,
+            refused_logs,
+        } = self.admit_reloaded(loaded_files, &mut total);
 
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
@@ -260,7 +245,54 @@ impl CapabilityBackend {
     }
 }
 
+/// What a reload's admission gate let through, and what it refused.
+struct Admission {
+    admitted: Vec<(CapabilityDefinition, Option<super::indexed::ServedSource>)>,
+    /// Each admitted file's path and capability name.
+    trusted: Vec<(String, String)>,
+    refused: std::collections::HashSet<String>,
+    /// Each account-binding refusal's capability and error, logged after the
+    /// catalogue lock is released.
+    refused_logs: Vec<(String, String)>,
+}
+
 impl CapabilityBackend {
+    /// The admission gate the initial load applies, on a reload's files:
+    /// GraphQL and JSON-RPC providers on a paced host, then account bindings.
+    /// `total` drops by one for each file refused.
+    fn admit_reloaded(
+        &self,
+        mut files: Vec<crate::capability::loader::LoadedCapability>,
+        total: &mut usize,
+    ) -> Admission {
+        let mut gate = Admission {
+            admitted: Vec::with_capacity(files.len()),
+            trusted: Vec::new(),
+            refused: std::collections::HashSet::new(),
+            refused_logs: Vec::new(),
+        };
+        *total -= self.drop_unpaced_protocols(&mut files, &mut gate.refused);
+        for file in files {
+            match validate_capability_account_binding(
+                &file.definition,
+                self.executor.account_strategies(),
+            ) {
+                Ok(()) => {
+                    let source = self.source_of(&file.path, &file.bytes);
+                    gate.trusted.push((file.path, file.definition.name.clone()));
+                    gate.admitted.push((file.definition, Some(source)));
+                }
+                Err(error) => {
+                    *total -= 1;
+                    gate.refused.insert(file.definition.name.clone());
+                    gate.refused_logs
+                        .push((file.definition.name.clone(), error.to_string()));
+                }
+            }
+        }
+        gate
+    }
+
     /// Take out of `files` every capability that puts a GraphQL or JSON-RPC
     /// provider on a host the new catalogue paces, logging each at WARN and
     /// adding its name to `refused`; return how many. Judged on the whole
