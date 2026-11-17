@@ -1,0 +1,67 @@
+name: Repeat
+
+# Hosted repeat evidence. A lane pushes `throwaway/repeat-<name>`: the commit
+# under test plus one commit that adds only `.repeat/spec.json` (sha, filter,
+# runs, parallel, exact). The job downloads that sha's CI lib test binary,
+# kept for 1 day, and re-runs the filter. It compiles nothing. The job summary
+# shows the verdict as PASSED/TOTAL. scripts/ci/repeat/run_repeat.py documents
+# the spec and the pass / fail / void rules.
+#
+# A push trigger, not workflow_dispatch: a dispatch needs this file on the
+# default branch. The CI, Docker and CodeQL push filters never match these
+# branches, so a repeat uses a hosted runner only for this job.
+on:
+  push:
+    branches: ["throwaway/repeat-*"]
+
+jobs:
+  linux-hosted:
+    name: Repeat (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    # One hosted repeat at a time across every lane, the rest queued in
+    # arrival order (`queue: max` keeps up to 100 waiting instead of replacing
+    # the one pending), so repeats never take more than one hosted runner.
+    concurrency:
+      group: repeat-linux-hosted
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      # The runner script and the shard module it reads its skip list from come
+      # from the release line, never from the tree under test: a source head
+      # that edited either could fake its own checks. Nothing from the checkout
+      # runs after this step except the test binary itself.
+      - name: Fetch the reviewed runner script
+        shell: bash
+        run: |
+          git fetch --quiet --depth=1 origin docs/ranking-1-release-line
+          git show FETCH_HEAD:scripts/ci/repeat/run_repeat.py > "$RUNNER_TEMP/run_repeat.py"
+          git show FETCH_HEAD:scripts/ci/shard_tests.py > "$RUNNER_TEMP/shard_tests.py"
+      - name: Plan
+        run: python3 "$RUNNER_TEMP/run_repeat.py" plan
+      - name: Fetch the CI lib test binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/run_repeat.py" fetch --out "$RUNNER_TEMP/lib-bin"
+      # ADR-027: ubuntu-latest restricts unprivileged user namespaces through
+      # AppArmor, which refuses the command preview's sandbox. The same lift
+      # the lib shard applies, so a filter that selects a sandbox test can run.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Repeat the filtered tests
+        # No memory-log wrapper: it would be a script from the tree under test.
+        run: python3 "$RUNNER_TEMP/run_repeat.py" run --binary "$RUNNER_TEMP/lib-bin/lib-tests" --out repeat-out
+      - name: Upload the repeat results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: repeat-${{ github.run_id }}
+          path: repeat-out/results.json
+          if-no-files-found: warn

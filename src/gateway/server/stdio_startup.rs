@@ -17,6 +17,21 @@ use crate::gateway::oauth::GatewayKeyPair;
 
 const PARENT_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
 
+/// Each capability directory's load outcome. Called only after the
+/// operation lock is released: a blocked log write must not hold up a reload.
+fn log_capability_dirs(logs: &[(String, std::result::Result<usize, String>)]) {
+    for (dir, outcome) in logs {
+        match outcome {
+            Ok(count) => {
+                debug!(target: PARENT_TARGET, directory = %dir, count, "Loaded capabilities (stdio)");
+            }
+            Err(error) => {
+                debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+            }
+        }
+    }
+}
+
 impl Gateway {
     pub(super) async fn install_stdio_startup_catalogue(
         &self,
@@ -48,27 +63,44 @@ impl Gateway {
                     .with_account_strategies(account_strategies)
                     .with_stop_deadline(self.backends.stop_deadline()),
             );
-            let cap_backend = Arc::new(CapabilityBackend::new(
-                &self.config.capabilities.name,
-                executor,
-            ));
+            let cap_backend = Arc::new(
+                CapabilityBackend::new(&self.config.capabilities.name, executor)
+                    .with_revision_key(meta_mcp.record_key().config_revision_key()),
+            );
+            // Live config already exists. Attach before the first load so the
+            // scan's publish delivers into it instead of parking.
+            cap_backend.attach_revision(Arc::clone(live_config));
             // Registered before the load, as on HTTP: a directory whose load
             // fails is still checked for pin mismatches below.
             cap_backend.register_directories(&self.config.capabilities.directories);
             let mut refused = Vec::new();
+            // The load, the snapshot and the publish are one operation.
+            let operation = cap_backend.lock_operation().await;
+            // Before any directory is read: this startup's unreadable set
+            // starts empty and is the one its catalogue carries.
+            cap_backend.begin_incremental_coverage();
+            // Each directory's outcome, logged once the operation lock is
+            // released: a blocked log write must not hold up a reload.
+            let mut dir_logs: Vec<(String, std::result::Result<usize, String>)> = Vec::new();
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {
                         let admitted = report.admitted;
-                        debug!(target: PARENT_TARGET, directory = %dir, count = admitted, "Loaded capabilities (stdio)");
+                        for path in &report.unreadable {
+                            cap_backend.note_unreadable(path);
+                        }
+                        dir_logs.push((dir.clone(), Ok(admitted)));
                         refused.extend(report.rejected);
                     }
                     Err(error) => {
-                        debug!(target: PARENT_TARGET, directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+                        cap_backend.note_unreadable(dir);
+                        dir_logs.push((dir.clone(), Err(error.to_string())));
                     }
                 }
             }
             if !refused.is_empty() {
+                drop(operation);
+                log_capability_dirs(&dir_logs);
                 return Err(crate::Error::Config(format!(
                     "capabilities rejected by the account admission gate: {}",
                     refused.join("; ")
@@ -78,7 +110,18 @@ impl Gateway {
             // skipped by the load without a record: record it now, as the
             // file watcher records one that changes while it runs.
             cap_backend.detect_rug_pulls().await;
-            cap_backend.mark_initial_scan_complete();
+            // Under the catalogue write lock, after rug-pull removal. The
+            // publish runs after that lock drops, while the operation lock
+            // is still held.
+            let (seq, part) = cap_backend.take_served_revision();
+            let transitioned = cap_backend.publish_initial_scan(seq, part);
+            // A backend is born complete, so the attached publish does not
+            // count as the transition. Mark once, as this startup always has.
+            if !transitioned {
+                cap_backend.mark_initial_scan_complete();
+            }
+            drop(operation);
+            log_capability_dirs(&dir_logs);
             meta_mcp.set_capabilities(cap_backend);
         }
 

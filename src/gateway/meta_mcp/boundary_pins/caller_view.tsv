@@ -21,6 +21,7 @@ src/gateway/router/handlers/health.rs	1	not-a-call-path	health: the provider's s
 src/gateway/router/mod.rs	1	not-a-call-path	readiness: the provider's initial scan
 src/gateway/router/view_judge.rs	1	not-a-call-path	the served-list digest names
 src/gateway/router/watch_poll.rs	1	not-a-call-path	watch catalogue generation
+src/gateway/server/mod.rs	1	not-a-call-path	attaching the live config to the catalogue at startup (attach_capability_revision)
 src/gateway/server/run.rs	2	not-a-call-path	startup and reload wiring
 src/gateway/server/stdio_loop.rs	1	not-a-call-path	stdio listing watch startup
 src/gateway/server/stdio_startup.rs	1	not-a-call-path	stdio reload wiring
