@@ -392,10 +392,23 @@ fn u_floor_a_descendant_holding_the_pipe_neither_holds_the_call_nor_outlives_it(
     });
     let answered = rx.recv_timeout(std::time::Duration::from_secs(30));
     let pid = std::fs::read_to_string(&pid_file).expect("the descendant started");
-    let alive = std::path::Path::new("/proc").join(pid.trim()).exists();
+    let pid = pid.trim().to_owned();
+    // SIGKILL lands asynchronously and init then reaps the orphan: ended is
+    // gone from /proc or a zombie ('Z' after the command name's ')').
+    let ended = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+    };
+    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ended() && std::time::Instant::now() < wait_until {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let alive = !ended();
     if alive {
         // Only so a red run leaves nothing behind; the assert below fails it.
-        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        let _ = std::process::Command::new("kill").arg(&pid).status();
     }
     assert_eq!(answered, Ok(Ok(())), "the call answered with its line");
     assert!(!alive, "the descendant outlived the call");
