@@ -64,9 +64,10 @@ pub(crate) struct Pacer {
     /// being registered file by file has admitted nothing to carry over.
     pub(crate) used: AtomicBool,
     /// Each catalogue's declared interval for this host, by the backend that
-    /// holds it. The bucket runs at the strictest of them, so one backend
-    /// cannot weaken a host another paces more strictly.
-    declared: HashMap<String, u64>,
+    /// holds it (its process-unique pacing owner, never its name). The bucket
+    /// runs at the strictest of them, so one backend cannot weaken a host
+    /// another paces more strictly.
+    declared: HashMap<u64, u64>,
 }
 
 /// Every paced host in the process. Entries live until restart (design v5,
@@ -124,7 +125,7 @@ pub(crate) fn declared_intervals<'a>(
 }
 
 /// Seed the map from `owner`'s whole catalogue.
-pub(crate) fn seed_from(owner: &str, capabilities: &[CapabilityDefinition]) {
+pub(crate) fn seed_from(owner: u64, capabilities: &[CapabilityDefinition]) {
     seed(owner, &declared_intervals(capabilities));
 }
 
@@ -134,12 +135,12 @@ pub(crate) fn seed_from(owner: &str, capabilities: &[CapabilityDefinition]) {
 /// bucket, whose first permit is taken before it is inserted when the old
 /// bucket was used, so no request is admitted inside the new interval across
 /// the switch. A host nobody declares any more keeps its entry and interval.
-pub(crate) fn seed(owner: &str, intervals: &HashMap<HostKey, u64>) {
+pub(crate) fn seed(owner: u64, intervals: &HashMap<HostKey, u64>) {
     use std::sync::atomic::Ordering;
     let mut map = pacers().lock().unwrap_or_else(PoisonError::into_inner);
     // Withdraw this owner's old declarations, then add its new ones.
     for pacer in map.values_mut() {
-        pacer.declared.remove(owner);
+        pacer.declared.remove(&owner);
     }
     for (key, &interval_ms) in intervals {
         map.entry(key.clone())
@@ -150,7 +151,7 @@ pub(crate) fn seed(owner: &str, intervals: &HashMap<HostKey, u64>) {
                 declared: HashMap::new(),
             })
             .declared
-            .insert(owner.to_owned(), interval_ms);
+            .insert(owner, interval_ms);
     }
     for pacer in map.values_mut() {
         let Some(&strictest) = pacer.declared.values().max() else {

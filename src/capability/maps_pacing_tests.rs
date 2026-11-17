@@ -865,6 +865,30 @@ async fn rl19_a_weaker_backend_does_not_loosen_a_stricter_one() {
     assert_eq!(stub.count(), 1);
 }
 
+/// Two backends sharing a name keep separate declarations: the weaker one's
+/// registration does not withdraw the stricter one's.
+#[tokio::test]
+async fn rl19c_a_same_named_weaker_backend_does_not_loosen_a_stricter_one() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl19c.test", "/s");
+    let strict = CapabilityBackend::new("rl19c", Arc::new(executor(Names::default())));
+    strict
+        .register_capability(cap("rl19cs", &url, Some(30_000), false))
+        .expect("registered");
+    let weak = CapabilityBackend::new("rl19c", Arc::new(executor(Names::default())));
+    assert_eq!(strict.name, weak.name, "premise: one name");
+    weak.register_capability(cap("rl19cw", &url, Some(300), false))
+        .expect("registered");
+    call(&strict, "rl19cs", "a").await.expect("admitted");
+    // Past the weak interval, inside the strict one: only the strict rules.
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let err = call(&weak, "rl19cw", "b")
+        .await
+        .expect_err("the strictest interval holds");
+    refusal_wait(&err, "rl19c.test", 30_000);
+    assert_eq!(stub.count(), 1);
+}
+
 // ── RL20: no permit is spent on a call that never reaches the wire ───
 
 /// A call that fails while its credential is prepared takes no permit: it

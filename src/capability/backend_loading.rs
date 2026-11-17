@@ -202,7 +202,7 @@ impl CapabilityBackend {
             super::super::op_gate::reach(super::super::op_gate::Step::Swap);
             caps.install(admitted);
             caps.settle_absent(refused);
-            crate::capability::pacing::seed_from(&self.name, &caps.entries);
+            crate::capability::pacing::seed_from(self.pacing_owner, &caps.entries);
             // With the entries, under the same lock: the part names this
             // catalogue and the coverage of the operation that wrote it.
             caps.unread = self.recording.lock().clone();

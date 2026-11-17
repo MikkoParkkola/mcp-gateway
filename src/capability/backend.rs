@@ -128,6 +128,10 @@ pub struct CapabilityBackend {
     delivery_observer: parking_lot::Mutex<Option<DeliveryObserver>>,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
+    /// This backend's key for its declarations in the process-wide pacing
+    /// map. Unique per instance, unlike `name`: two backends sharing a name
+    /// never withdraw each other's declarations.
+    pacing_owner: u64,
     /// What was listed when a listing change was last announced.
     listing: parking_lot::Mutex<Option<Vec<String>>>,
     /// Wakes the listing watch when the catalogue changes.
@@ -167,6 +171,9 @@ pub struct RugPullRecord {
 impl CapabilityBackend {
     /// Create a new capability backend
     pub fn new(name: &str, executor: Arc<CapabilityExecutor>) -> Self {
+        // Each backend's pacing owner: process-unique, unlike its name.
+        static NEXT_PACING_OWNER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         // One set, shared, until an operation replaces it. A note before any
         // operation has started is on the catalogue a snapshot would read.
         let unread = OperationUnread::default();
@@ -197,6 +204,7 @@ impl CapabilityBackend {
             #[cfg(test)]
             delivery_observer: parking_lot::Mutex::new(take_delivery_observer()),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
+            pacing_owner: NEXT_PACING_OWNER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -473,7 +481,7 @@ impl CapabilityBackend {
         caps.upsert(capability);
         caps.unloaded.remove(&name);
         // The host policy is the whole catalogue's.
-        crate::capability::pacing::seed_from(&self.name, &caps.entries);
+        crate::capability::pacing::seed_from(self.pacing_owner, &caps.entries);
         self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children
