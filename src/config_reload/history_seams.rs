@@ -151,6 +151,9 @@ pub(crate) struct Seams {
     record_reached: Mutex<Option<Arc<Gate>>>,
     log: Mutex<Vec<Observed>>,
     guard_waits: Notify,
+    /// Every gate handed out, taken by the code under test or not, so a
+    /// dropped [`Installed`] can release them all.
+    handed_out: Mutex<Vec<Arc<Gate>>>,
 }
 
 impl Seams {
@@ -158,6 +161,10 @@ impl Seams {
     pub(crate) fn park(&self, at: ParkAt) -> Arc<Gate> {
         let gate = Arc::new(Gate::default());
         *self.park.lock().expect("park") = Some((at, Arc::clone(&gate)));
+        self.handed_out
+            .lock()
+            .expect("gates")
+            .push(Arc::clone(&gate));
         gate
     }
 
@@ -165,6 +172,10 @@ impl Seams {
     pub(crate) fn park_record(&self) -> Arc<Gate> {
         let gate = Arc::new(Gate::default());
         *self.record_reached.lock().expect("record") = Some(Arc::clone(&gate));
+        self.handed_out
+            .lock()
+            .expect("gates")
+            .push(Arc::clone(&gate));
         gate
     }
 
@@ -222,12 +233,14 @@ impl Seams {
     }
 
     fn release_all(&self) {
-        if let Some((_, gate)) = self.park.lock().expect("park").take() {
+        // A failed row must not leave a job parked: the runtime's drop waits
+        // for its blocking jobs, and a parked one would turn the row's own
+        // failure into a hang.
+        for gate in self.handed_out.lock().expect("gates").drain(..) {
             gate.release();
         }
-        if let Some(gate) = self.record_reached.lock().expect("record").take() {
-            gate.release();
-        }
+        self.park.lock().expect("park").take();
+        self.record_reached.lock().expect("record").take();
     }
 }
 
