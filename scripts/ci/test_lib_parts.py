@@ -27,7 +27,7 @@ printf '{"reason":"compiler-artifact","target":{"kind":["lib"]},"profile":{"test
 
 
 class Export(unittest.TestCase):
-    def run_export(self, parts: str, empty: bool = False):
+    def run_export(self, parts: str, empty: bool = False, helper: Path = HELPER):
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         t = Path(tmp.name)
@@ -38,7 +38,7 @@ class Export(unittest.TestCase):
         env = {**os.environ, "PATH": f"{t / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(t / "log"),
                "FAKE_DIR": str(t), "FAKE_EMPTY": "1" if empty else "0"}
         env.pop("MCP_GATEWAY_TEST_PART", None)
-        done = subprocess.run(["bash", str(HELPER), "export", parts, str(t / "out")], cwd=ROOT, env=env,
+        done = subprocess.run(["bash", str(helper), "export", parts, str(t / "out")], cwd=ROOT, env=env,
                               capture_output=True, text=True)
         log = (t / "log").read_text() if (t / "log").exists() else ""
         return done, t / "out", log
@@ -65,6 +65,21 @@ class Export(unittest.TestCase):
                 done, _out, log = self.run_export(parts)
                 self.assertNotEqual(done.returncode, 0)
                 self.assertEqual(log, "", "nothing may build before the parts are checked")
+
+    def test_a_build_script_without_n_is_refused(self):
+        """N is read from the build script; without it no part can be checked against 1..N, so nothing builds."""
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "scripts" / "ci").mkdir(parents=True)
+        (root / "scripts" / "dev").mkdir(parents=True)
+        copy = root / "scripts" / "ci" / "lib-parts.sh"
+        copy.write_text(HELPER.read_text())
+        (root / "scripts" / "dev" / "test-parts-build.rs").write_text("fn main() {}\n")
+        done, _out, log = self.run_export("1", helper=copy)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("no const N", done.stderr)
+        self.assertEqual(log, "", "nothing may build without N")
 
     def test_a_part_that_lists_no_test_fails(self):
         done, _out, _log = self.run_export("4", empty=True)

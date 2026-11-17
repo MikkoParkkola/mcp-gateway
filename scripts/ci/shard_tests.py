@@ -755,8 +755,9 @@ def parts_rows() -> None:
         assert run_one("--exact", "m9::none", d, []) == 1, "zero selected passed"
         fresh({1: ["a::dup", "b::dup"]})
         assert run_one("--exact", "dup", d, []) == 1, "an exact name matching nothing exactly passed"
-        # run-one, module: at least one, all on one part, by exact names.
-        fresh({4: ["upgrade_notice_tests::a", "upgrade_notice_tests::b", "m4::t4"]})
+        # run-one, module: at least one, all on one part, by exact names. The prefix is anchored: libtest's filter
+        # also lists part 2's name, which holds the prefix only in the middle.
+        fresh({4: ["upgrade_notice_tests::a", "upgrade_notice_tests::b", "m4::t4"], 2: ["m2::upgrade_notice_tests::c"]})
         assert run_one("--module", "upgrade_notice_tests::", d, []) == 0
         assert open(log).read().split() == ["p4", "upgrade_notice_tests::a", "upgrade_notice_tests::b", "--exact"]
         fresh({1: ["upgrade_notice_tests::a"], 2: ["upgrade_notice_tests::b"]})

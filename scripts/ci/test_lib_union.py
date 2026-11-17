@@ -19,19 +19,23 @@ BUILD = "fn main() {\n    const N: u32 = 3;\n}\n"
 EXPECT = {1: ["a::t1", "a::t2"], 2: ["b::t3"], 3: ["c::t4"]}
 
 
+def fixture(root: Path, lists: dict[int, list[str]], expected=EXPECT, build=BUILD) -> list[str]:
+    """Write `lists` (part -> names, as each part leg's list.txt holds them, `name: test` lines) under `root`, and
+    return the check's arguments: the lists folder, the expected folder and the build script."""
+    (root / "build.rs").write_text(build)
+    for part, names in lists.items():
+        d = root / "lists" / f"linux-lib-tests-p{part}" / f"p{part}"
+        d.mkdir(parents=True)
+        (d / "list.txt").write_text("".join(f"{n}: test\n" for n in names) + "\n3 tests, 0 benchmarks\n")
+    for part, names in expected.items():
+        (root / "expected").mkdir(exist_ok=True)
+        (root / "expected" / f"p{part}.txt").write_text("".join(f"{n}\n" for n in names))
+    return [str(root / "lists"), str(root / "expected"), str(root / "build.rs")]
+
+
 def problems(lists: dict[int, list[str]], expected=EXPECT, build=BUILD) -> list[str]:
-    """Run the check on `lists` (part -> names, as each part leg's list.txt holds them, `name: test` lines)."""
     with TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / "build.rs").write_text(build)
-        for part, names in lists.items():
-            d = root / "lists" / f"linux-lib-tests-p{part}" / f"p{part}"
-            d.mkdir(parents=True)
-            (d / "list.txt").write_text("".join(f"{n}: test\n" for n in names) + "\n3 tests, 0 benchmarks\n")
-        for part, names in expected.items():
-            (root / "expected").mkdir(exist_ok=True)
-            (root / "expected" / f"p{part}.txt").write_text("".join(f"{n}\n" for n in names))
-        return U.problems(root / "lists", root / "expected", root / "build.rs")
+        return U.problems(*map(Path, fixture(Path(tmp), lists, expected, build)))
 
 
 class Union(unittest.TestCase):
@@ -62,6 +66,12 @@ class Union(unittest.TestCase):
 
     def test_an_empty_part(self):
         self.assertTrue(problems({**EXPECT, 3: []}, {**EXPECT, 3: []}))
+
+    def test_the_exit_status_is_what_ci_reads(self):
+        """CI reads the script's exit status, not the problem list: 1 on any problem, 0 on exact lists."""
+        for lists, want in ((EXPECT, 0), ({1: EXPECT[1], 2: EXPECT[2]}, 1)):
+            with TemporaryDirectory() as tmp:
+                self.assertEqual(U.main(["lib_union.py", *fixture(Path(tmp), lists)]), want, lists)
 
 
 if __name__ == "__main__":

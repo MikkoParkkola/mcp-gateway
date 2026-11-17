@@ -147,6 +147,10 @@ class Undecidable(ExpectRows):
         body = "    #[cfg(made_up)]\n    #[test]\n    fn t2() {}\n"
         self.assert_refused(tree(src__a_DOT_rs=part1_module(body)), "cfg-undecidable")
 
+    def test_a_key_value_cfg_outside_every_known_source_is_refused(self):
+        body = '    #[cfg(made_up = "x")]\n    #[test]\n    fn t2() {}\n'
+        self.assert_refused(tree(src__a_DOT_rs=part1_module(body)), "cfg-undecidable")
+
     def test_a_listed_custom_cfg_is_decided(self):
         body = "    #[cfg(reads_token_probe)]\n    #[test]\n    fn t2() {}\n"
         self.assertNotIn("cfg-undecidable", self.codes(tree(src__a_DOT_rs=part1_module(body))))
@@ -205,6 +209,18 @@ class Refusals(ExpectRows):
         self.assert_refused(tree(src__a_DOT_rs=part1_module(body)), "test-nowhere")
         both = '    #[cfg(all(windows, target_os = "macos"))]\n    #[test]\n    fn t3() {}\n'
         self.assert_refused(tree(src__a_DOT_rs=part1_module(both)), "test-nowhere")
+
+    def test_a_nowhere_row_lets_only_its_own_test_pass(self):
+        """X9's shrink-only allowance: the test a `nowhere` row of the CI table names is not refused; its neighbour,
+        compiled nowhere too, still is."""
+        body = "    #[cfg(any())]\n    mod gone {\n        #[test]\n        fn t2() {}\n        #[test]\n        fn t3() {}\n    }\n"
+        table = "nowhere\ta::tests::gone::t2\twritten for a platform CI does not have\n"
+        files = tree(**{"src__a_DOT_rs": part1_module(body), "scripts__dev__test-parts-ci_DOT_tsv": table})
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_tree(root, files)
+            nowhere = [f.message for f in self.tool.check(root, configs=CONFIGS) if f.code == "test-nowhere"]
+        self.assertEqual([m.split()[0] for m in nowhere], ["a::tests::gone::t3"], nowhere)
 
     def test_feature_and_single_os_gates_stay_legal(self):
         """X9 treats feature atoms as free: default-feature builds compile `not(feature = ..)` tests."""
