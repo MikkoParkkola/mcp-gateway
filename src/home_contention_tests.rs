@@ -421,8 +421,8 @@ fn r3b_judge_refuses_aborted_runs_and_unrelated_failures() {
         .failed
         .insert("gateway::ui::settings::unused_route_tests::other".to_owned());
     assert_eq!(
-        judge(Variant::Fallback, &stray_failure).len(),
-        1,
+        judge(Variant::Fallback, &stray_failure),
+        vec![r#"failed: {"gateway::ui::settings::unused_route_tests::other"}"#.to_owned()],
         "a failure the summaries did not show still fails a green variant"
     );
     let mut aborted = green_suite();
