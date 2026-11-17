@@ -68,6 +68,63 @@ pub struct OriginPolicy {
     hosted: Option<hosted::HostedOrigin>,
 }
 
+/// Every spelling a browser could legitimately use to reach this listener on
+/// loopback, including the configured address itself when it is a loopback
+/// one: a bind on 127.0.0.2 is served at 127.0.0.2, and its own page is
+/// same-origin only there. One scheme: the one this listener actually speaks.
+/// Listing both would admit an origin nothing can serve.
+fn loopback_origins(tls: bool, port: u16, host: &str) -> Vec<String> {
+    let scheme = if tls { "https" } else { "http" };
+    let mut origins = vec![
+        format!("{scheme}://127.0.0.1:{port}"),
+        format!("{scheme}://localhost:{port}"),
+        format!("{scheme}://[::1]:{port}"),
+    ];
+    if is_loopback_host(host) {
+        let bracketed = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+        let configured = format!("{scheme}://{bracketed}:{port}").to_ascii_lowercase();
+        if !origins.contains(&configured) {
+            origins.push(configured);
+        }
+    }
+    origins
+}
+
+/// The sign-in form's own origin.
+///
+/// When `public_url` is set, only that origin: a loopback address the guard
+/// still admits is not the page a browser signed in from. An unparseable
+/// `public_url` admits nothing. `public_url` is read live, as the guard reads
+/// it. Otherwise a loopback origin of the running listener, on a loopback bind
+/// or on a wildcard one (which serves loopback too); on any other bind, none.
+/// Host, port and TLS come from the running config, not a reloaded file's:
+/// they are restart-only, and the listener still serves the old values until
+/// a restart. Compared by [`same_origin`], so a default port written out and
+/// one a browser omits are the same origin.
+#[cfg(feature = "webui")]
+pub(crate) fn admits_signin(live_config: &crate::config_reload::LiveConfig, origin: &str) -> bool {
+    let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
+    if let Some(url) = live_config.get().server.public_url.as_deref() {
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        let public_origin = parsed.origin().ascii_serialization().to_ascii_lowercase();
+        return same_origin(&public_origin, &candidate);
+    }
+    let running = live_config.running();
+    let host = running.server.host.as_str();
+    if !is_loopback_host(host) && !super::is_wildcard_bind(host) {
+        return false;
+    }
+    loopback_origins(running.mtls.enabled, running.server.port, host)
+        .iter()
+        .any(|allowed| same_origin(allowed, &candidate))
+}
+
 impl OriginPolicy {
     /// Build the policy from the live config.
     ///
@@ -83,28 +140,7 @@ impl OriginPolicy {
         let port = config.port;
         // Every spelling of the loopback bind a browser could legitimately use.
         let allowed_origins: Vec<String> = if is_loopback_host(&config.host) {
-            // Every spelling a browser could legitimately use to reach a
-            // loopback bind, including the configured address itself: a bind on
-            // 127.0.0.2 is served at 127.0.0.2, and its own page is same-origin
-            // only there.
-            // One scheme: the one this listener actually speaks. Listing both
-            // would admit an origin nothing can serve.
-            let scheme = if tls { "https" } else { "http" };
-            let mut origins = vec![
-                format!("{scheme}://127.0.0.1:{port}"),
-                format!("{scheme}://localhost:{port}"),
-                format!("{scheme}://[::1]:{port}"),
-            ];
-            let bracketed = if config.host.contains(':') && !config.host.starts_with('[') {
-                format!("[{}]", config.host)
-            } else {
-                config.host.clone()
-            };
-            let configured = format!("{scheme}://{bracketed}:{port}").to_ascii_lowercase();
-            if !origins.contains(&configured) {
-                origins.push(configured);
-            }
-            origins
+            loopback_origins(tls, port, &config.host)
         } else {
             Vec::new()
         };
@@ -199,29 +235,6 @@ impl OriginPolicy {
             default_port,
         );
         canonical_authority(authority, default_port) == origin
-    }
-
-    /// The sign-in form's own origin.
-    ///
-    /// When `public_url` is set, only that origin: a loopback address the
-    /// guard still admits is not the page a browser signed in from. Otherwise
-    /// only a loopback origin this listener admits. An unparseable `public_url`
-    /// admits nothing. Compared by [`same_origin`], so a default port written
-    /// out and one a browser omits are the same origin.
-    #[cfg(feature = "webui")]
-    pub(crate) fn admits_signin(&self, origin: &str) -> bool {
-        let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
-        let config = self.live_config.get();
-        if let Some(url) = config.server.public_url.as_deref() {
-            let Ok(parsed) = url::Url::parse(url) else {
-                return false;
-            };
-            let public_origin = parsed.origin().ascii_serialization().to_ascii_lowercase();
-            return same_origin(&public_origin, &candidate);
-        }
-        self.allowed_origins
-            .iter()
-            .any(|allowed| same_origin(allowed, &candidate))
     }
 
     /// `true` when a `Host` value names this gateway.

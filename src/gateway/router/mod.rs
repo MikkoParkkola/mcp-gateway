@@ -63,7 +63,7 @@ pub(crate) mod helpers;
 mod lookup_budget;
 mod origin_guard;
 #[cfg(feature = "webui")]
-pub(crate) use origin_guard::OriginPolicy;
+pub(crate) use origin_guard::admits_signin;
 mod process_facts;
 #[cfg(feature = "webui")]
 pub(crate) use lookup_budget::{Charge, LookupBudget};
@@ -79,6 +79,16 @@ pub(crate) use watch_poll::GatewayWatchHost;
 #[must_use]
 pub fn is_loopback_bind(host: &str) -> bool {
     well_known::is_loopback_host(host)
+}
+
+/// `true` when `host` is a wildcard bind (empty, `0.0.0.0` or `::`), which
+/// serves every interface, loopback included.
+#[cfg(feature = "webui")]
+pub(crate) fn is_wildcard_bind(host: &str) -> bool {
+    host.is_empty()
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified())
 }
 mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).

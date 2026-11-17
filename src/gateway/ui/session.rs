@@ -197,12 +197,10 @@ async fn signin(
     )
 }
 
-/// The gateway's own origin: the public origin when `public_url` is set,
-/// otherwise a loopback origin [`crate::gateway::router::OriginPolicy`] admits.
+/// The gateway's own origin, as [`crate::gateway::router::admits_signin`]
+/// decides it. An absent Origin is not one.
 fn signin_origin_ok(state: &AppState, origin: Option<&str>) -> bool {
-    origin.is_some_and(|origin| {
-        crate::gateway::router::OriginPolicy::from_live(&state.live_config).admits_signin(origin)
-    })
+    origin.is_some_and(|origin| crate::gateway::router::admits_signin(&state.live_config, origin))
 }
 
 fn header_str(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
@@ -371,7 +369,9 @@ pub(super) async fn dashboard_link(
     // a reloaded file's, say where a browser can reach this process.
     let running = state.live_config.running();
     let host = running.server.host.as_str();
-    if !is_wildcard(host) && !crate::gateway::router::is_loopback_bind(host) {
+    if !crate::gateway::router::is_wildcard_bind(host)
+        && !crate::gateway::router::is_loopback_bind(host)
+    {
         // Redemption accepts only a loopback peer, and a browser reaching a
         // concrete network address is not one: the link could never open.
         return flat_error(
@@ -402,7 +402,7 @@ pub(super) async fn dashboard_link(
 fn loopback_authority(host: &str, port: u16) -> String {
     let host = match host.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V6(ip)) if ip.is_unspecified() => "::1",
-        _ if is_wildcard(host) => "127.0.0.1",
+        _ if crate::gateway::router::is_wildcard_bind(host) => "127.0.0.1",
         _ => host,
     };
     if host.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -410,15 +410,6 @@ fn loopback_authority(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
-}
-
-/// A bind on every interface, in any spelling (`0.0.0.0`, `::`,
-/// `0:0:0:0:0:0:0:0`), or none given.
-fn is_wildcard(host: &str) -> bool {
-    host.is_empty()
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_unspecified())
 }
 
 #[cfg(test)]
