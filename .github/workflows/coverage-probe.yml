@@ -102,6 +102,7 @@ jobs:
 
   linux-sdk:
     name: llvm-cov Linux, SDK journey
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -144,10 +145,14 @@ jobs:
     needs: linux-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    # Probe only: each minute's sample is a commit status, kept server-side when the runner is lost.
+    permissions:
+      contents: read
+      statuses: write
     strategy:
       fail-fast: false
       matrix:
-        part: ${{ fromJSON(needs.linux-plan.outputs.parts) }}
+        part: [lib-a, lib-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The library parts only: the integration parts peak at 6.5 GB.
@@ -163,13 +168,35 @@ jobs:
       - name: Run the part
         env:
           PART: ${{ matrix.part }}
+          GH_TOKEN: ${{ github.token }}
         # Healthy parts take up to 41 min; a stall ends here with its log, and the memory log samples it every 30 s
         # (scripts/ci/check_swap_jobs.py). Its lines go to stderr, so they are in run.log too, as "memory ..." lines.
         timeout-minutes: 70
         run: |
           set -o pipefail
+          # Probe: one aggregate sample a minute as a commit status (numbers only, no process list).
+          (
+            start=$(date +%s)
+            while :; do
+              m=$(free -m | awk '/^Mem:/ { printf "u%s a%s", $3, $7 }')
+              s=$(free -m | awk '/^Swap:/ { printf "sw%s", $3 }')
+              d=$(df -BM --output=avail / | tail -1 | tr -dc 0-9)
+              pc=$(find "$GITHUB_WORKSPACE/target" -name '*.profraw' 2>/dev/null | wc -l)
+              pm=$(find "$GITHUB_WORKSPACE/target" -name '*.profraw' -printf '%s\n' 2>/dev/null | awk '{ t += $1 } END { printf "%d", t / 1048576 }')
+              tm=$(du -sm "$GITHUB_WORKSPACE/target" 2>/dev/null | cut -f1)
+              ld=$(cut -d' ' -f1 /proc/loadavg)
+              ps=$(awk '$1 == "some" { print $2 }' /proc/pressure/memory 2>/dev/null)
+              gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=pending -f "context=probe/$PART" \
+                -f "description=t$(( $(date +%s) - start ))s $m $s disk$d tgt$tm prof$pc/${pm}M ld$ld $ps" >/dev/null 2>&1 || true
+              sleep 60
+            done
+          ) &
+          sampler=$!
           cargo llvm-cov clean --workspace
-          scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
+          rc=0
+          scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log || rc=$?
+          kill "$sampler" 2>/dev/null || true
+          exit "$rc"
       - name: Bundle
         env:
           PART: ${{ matrix.part }}
@@ -193,7 +220,7 @@ jobs:
     needs: [linux-plan, linux-sdk, linux-part]
     # Runs whatever the parts did, and fails unless every one succeeded: a skipped or
     # cancelled part would otherwise leave this check unreported, not red.
-    if: ${{ !cancelled() }}
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -259,7 +286,7 @@ jobs:
     runs-on: windows-2025
     # Pull requests grade Linux only (runner budget); every release-line push grades
     # Windows too, so a Windows-only shortfall is caught at most one merge later.
-    if: github.event_name != 'pull_request'
+    if: false
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -296,7 +323,7 @@ jobs:
     needs: [linux-grade, windows-grade]
     # Runs whatever the platform jobs did, so it is never skipped: a skipped job would
     # read as passing if this check were ever made required.
-    if: ${{ !cancelled() }}
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
