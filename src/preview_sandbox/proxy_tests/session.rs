@@ -585,17 +585,20 @@ async fn rf2_an_unlisted_step_is_refused_without_echo() {
 
 /// RF7 (G1), kills "the start is reported before the helper acknowledges
 /// `expired`": a helper that reads `expired` and then sends nothing, `run`
-/// false, `run` of the wrong type, an extra key, the credential as the value,
-/// half a line, or the right line after the deadline, gets no start; the
-/// session refuses at its deadline or on the line, without echoing it.
+/// false, `run` of the wrong type, an extra key, the credential as the value
+/// or beside `run` true, half a line, or the right line after the deadline,
+/// gets no start; the session refuses at its deadline or on the line, and the
+/// refusal holds neither the credential nor the line's canary.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn rf7_no_start_without_the_runs_acknowledgement() {
+    const CANARY: &str = "rf7-canary-3d9e";
     let kinds = [
         "none",
         "false",
         "string",
         "extra",
         "credential",
+        "credential-extra",
         "truncated",
         "late",
     ];
@@ -623,10 +626,11 @@ async fn rf7_no_start_without_the_runs_acknowledgement() {
             let ack = match kind {
                 "none" => String::new(),
                 "false" => "{\"run\":false}\n".to_owned(),
-                "string" => "{\"run\":\"true\"}\n".to_owned(),
-                "extra" => "{\"run\":true,\"step\":\"npm-ci\"}\n".to_owned(),
+                "string" => format!("{{\"run\":\"{CANARY}\"}}\n"),
+                "extra" => format!("{{\"run\":true,\"step\":\"{CANARY}\"}}\n"),
                 "credential" => format!("{{\"run\":\"{secret}\"}}\n"),
-                "truncated" => "{\"run\":tr".to_owned(),
+                "credential-extra" => format!("{{\"run\":true,\"x\":\"{secret}\"}}\n"),
+                "truncated" => format!("{{\"run\":\"{CANARY}"),
                 _ => {
                     // Past the session's 5 s deadline.
                     tokio::time::sleep(6 * SEC).await;
@@ -647,9 +651,11 @@ async fn rf7_no_start_without_the_runs_acknowledgement() {
         assert_eq!(expired, "{\"expired\":true}\n", "{kind}");
         let refusal = served.expect_err(kind);
         let text = format!("{refusal:?} {refusal}");
-        assert!(
-            !text.contains(&secret),
-            "{kind}: the refusal echoes the line"
-        );
+        for echoed in [secret.as_str(), CANARY] {
+            assert!(
+                !text.contains(echoed),
+                "{kind}: the refusal echoes the line"
+            );
+        }
     }
 }
