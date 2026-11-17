@@ -1151,6 +1151,12 @@ jobs:
       - name: Memory tripwire
         if: always()
         run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+      # THROWAWAY (E1 run 2): the swap-out the tripwire will read, kernel-kept, so a step timeout still reports it.
+      - name: Swap-out (E1 measurement)
+        if: always()
+        run: |
+          pages=$(awk '$1 == "pswpout" {print $2}' /proc/vmstat)
+          echo "swap-out: ${pages} pages, $(( pages * $(getconf PAGESIZE) / 1048576 )) MiB written to swap since boot; swap used now: $(free -m | awk '/^Swap:/{print $3}') MB"
 
   # Every run: each part's binary lists exactly the tests the source puts in that part (scripts/dev/test_parts.py
   # expect, every cfg evaluated with CI's compiler), parts exactly 1..N, none empty, no test in two parts
@@ -1187,44 +1193,13 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
           python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
 
-  # THROWAWAY (E1, never merged). e1-unsplit builds the whole lib test binary once and e1-compare checks that the
-  # union of the five part lists equals its list. The two tripwire jobs each run a whole lib test build that no
-  # helper launches (a cargo alias from .cargo/config.toml; a script calling a script calling cargo) and must end
-  # red at the memory tripwire. Every whole build records its cgroup peak.
-  e1-unsplit:
-    name: "E1: unsplit lib test binary"
-    if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/add-swap
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-        with:
-          toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Build the whole lib test binary once
-        timeout-minutes: 35
-        run: |
-          python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/whole"
-          "$RUNNER_TEMP/whole/lib-tests" --list > "$RUNNER_TEMP/whole/list.txt"
-          echo "unsplit: $(grep -c ': test$' "$RUNNER_TEMP/whole/list.txt") tests"
-      - name: Hand the unsplit list on
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: e1-unsplit-list
-          path: ${{ runner.temp }}/whole/list.txt
-          retention-days: 3
-          if-no-files-found: error
-      - name: Memory peak of the whole build (recorded; E1 is the named exception)
-        if: always()
-        run: scripts/ci/memory-peak.sh 65536 "$RUNNER_TEMP/memory-peak.txt"
-
+  # THROWAWAY (E1, never merged). e1-compare checks that the union of the five part lists equals the list of the
+  # whole binary e1-tripwire-alias built (run 1's separate unsplit job hung past its 45-min limit). The two tripwire
+  # jobs each run a whole lib test build that no helper launches (a cargo alias from .cargo/config.toml; a script
+  # calling a script calling cargo) and must end red at the memory tripwire. Every build records its swap-out.
   e1-compare:
     name: "E1: union of the parts equals the unsplit list"
-    needs: [linux-lib-build, e1-unsplit]
+    needs: [linux-lib-build, e1-tripwire-alias]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1274,9 +1249,28 @@ jobs:
       - name: A whole lib test build through the repo's cargo alias
         timeout-minutes: 35
         run: cargo wholelib
+      # The same build, already done: export-lib only finds and copies its binary, for E1's unsplit list.
+      - name: List the whole binary for E1
+        timeout-minutes: 10
+        run: |
+          python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/whole"
+          "$RUNNER_TEMP/whole/lib-tests" --list > "$RUNNER_TEMP/whole/list.txt"
+          echo "unsplit: $(grep -c ': test$' "$RUNNER_TEMP/whole/list.txt") tests"
+      - name: Hand the unsplit list on
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e1-unsplit-list
+          path: ${{ runner.temp }}/whole/list.txt
+          retention-days: 3
+          if-no-files-found: error
       - name: Memory tripwire
         if: always()
         run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+      - name: Swap-out (E1 measurement)
+        if: always()
+        run: |
+          pages=$(awk '$1 == "pswpout" {print $2}' /proc/vmstat)
+          echo "swap-out: ${pages} pages, $(( pages * $(getconf PAGESIZE) / 1048576 )) MiB written to swap since boot; swap used now: $(free -m | awk '/^Swap:/{print $3}') MB"
 
   e1-tripwire-nested:
     name: "E1: a whole build through a nested launcher trips the tripwire"
@@ -1298,6 +1292,67 @@ jobs:
       - name: Memory tripwire
         if: always()
         run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+      - name: Swap-out (E1 measurement)
+        if: always()
+        run: |
+          pages=$(awk '$1 == "pswpout" {print $2}' /proc/vmstat)
+          echo "swap-out: ${pages} pages, $(( pages * $(getconf PAGESIZE) / 1048576 )) MiB written to swap since boot; swap used now: $(free -m | awk '/^Swap:/{print $3}') MB"
+
+  # THROWAWAY (E1 run 2): a part leg whose build step times out (2 min), and a union job wired as linux-lib-union
+  # is (`needs` the leg, `!cancelled()`): the leg must end red with its swap-out still read at job end, and the union
+  # job must run and end red, never skipped.
+  e1-timeout-leg:
+    name: "E1: a part leg whose build times out"
+    if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/add-swap
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: Build part 3, cut off by its step timeout
+        timeout-minutes: 2
+        run: scripts/ci/lib-parts.sh export 3 "$RUNNER_TEMP/lib-bin"
+      - name: Hand the part binary on
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e1-timeout-p3
+          path: ${{ runner.temp }}/lib-bin
+          retention-days: 1
+          if-no-files-found: error
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-peak.sh 13312 "$RUNNER_TEMP/memory-peak.txt"
+      - name: Swap-out (E1 measurement)
+        if: always()
+        run: |
+          pages=$(awk '$1 == "pswpout" {print $2}' /proc/vmstat)
+          echo "swap-out: ${pages} pages, $(( pages * $(getconf PAGESIZE) / 1048576 )) MiB written to swap since boot; swap used now: $(free -m | awk '/^Swap:/{print $3}') MB"
+
+  e1-timeout-union:
+    name: "E1: the union job after a timed-out part leg"
+    needs: [e1-timeout-leg]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the leg's list
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: e1-timeout-p*
+          path: ${{ runner.temp }}/lib-bin
+          merge-multiple: false
+      - name: The union check over what the legs handed on
+        run: |
+          mkdir -p "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
+          python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
 
   test-shards:
     name: Linux shard ${{ matrix.shard }}
