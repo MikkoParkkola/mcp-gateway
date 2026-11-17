@@ -34,6 +34,8 @@ DOC = """# x
 | `mcp-gateway kubernetes` | INTERNAL | r | - | a |
 | `mcp-gateway kubernetes plan` | INTERNAL | r | - | a |
 | `mcp-gateway kubernetes plan --namespace` | INTERNAL | r | - | a |
+| `mcp-gateway kubernetes controller` | INTERNAL | r | - | a |
+| `mcp-gateway kubernetes controller --cycles` | INTERNAL | r | - | a |
 | `mcp-gateway trust` | INTERNAL | r | - | a |
 | `mcp-gateway trust lab` | INTERNAL | r | - | a |
 | `mcp-gateway trust lab evaluate` | INTERNAL | r | - | a |
@@ -580,6 +582,34 @@ def test_shape_flow_list_keep_port() -> None:
 
 
 # ── Resolution ───────────────────────────────────────────────────────────────
+
+
+def test_k15_a_flag_after_a_positional_still_counts() -> None:
+    # The alpha README's shape: a file path, then the hidden command's flags.
+    text = "```sh\nmcp-gateway kubernetes plan \\\n  base/example.yaml \\\n  --namespace ns\n```\n"
+    assert scan("docs/k15.md", text) == expect("docs/k15.md", [
+        (2, "mcp-gateway kubernetes"),
+        (2, "mcp-gateway kubernetes plan"),
+        (4, "mcp-gateway kubernetes plan --namespace"),
+    ]), scan("docs/k15.md", text)
+
+
+def test_k15_keep_positional_then_keep_flag() -> None:
+    assert scan("docs/k15.md", sh("mcp-gateway add weather --name w")) == []
+
+
+def test_g8_a_binary_after_a_positional_starts_its_own_command() -> None:
+    # `mcp-gateway` as kubectl's namespace starts a walk; the real binary after
+    # `--` must start its own, or its flags would read as values after `--`.
+    text = sh("kubectl -n mcp-gateway exec gw -- mcp-gateway --host 0.0.0.0")
+    assert scan("docs/g8.md", text) == expect("docs/g8.md", [(2, "mcp-gateway --host")]), scan("docs/g8.md", text)
+
+
+def test_g9_a_flag_value_spelled_like_the_binary_starts_nothing() -> None:
+    # `--namespace mcp-gateway` is a value: the flags after it stay on the command.
+    text = sh("mcp-gateway kubernetes controller x.yaml --namespace mcp-gateway --cycles 2")
+    hits = scan("docs/g9.md", text)
+    assert ("docs/g9.md", 2, "INTERNAL", "mcp-gateway kubernetes controller --cycles") in hits, hits
 
 
 def test_g1_serve_host_resolves_through_parent() -> None:
