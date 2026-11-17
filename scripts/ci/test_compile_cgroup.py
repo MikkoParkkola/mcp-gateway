@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -72,7 +73,7 @@ if name == "mkdir":
     groups = [p for p in targets if p.parent == root and p.name.startswith("covpart-")]
     if groups and cfg["setup_delay"]:
         (base / "setup-ready").touch()
-        time.sleep(0.4)
+        time.sleep(cfg["setup_sleep"])
     if groups and not (root.stat().st_mode & stat.S_IWUSR):
         print("fixture: cgroup root is not writable", file=sys.stderr)
         sys.exit(1)
@@ -197,7 +198,8 @@ def finish():
 if cfg["mode"] in ("signal", "descendant"):
     grandchild = None
     if cfg["mode"] == "descendant":
-        grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        grandchild = subprocess.Popen([sys.executable, "-c",
+                                      f"import time; time.sleep({cfg['grandchild_sleep']})"])
         (base / "grandchild").write_text(str(grandchild.pid))
     def receive(number, frame):
         (base / "signal").write_text(signal.Signals(number).name)
@@ -211,7 +213,7 @@ if cfg["mode"] in ("signal", "descendant"):
     signal.signal(signal.SIGHUP, receive)
     (base / "ready").write_text("ready\n")
     while True:
-        time.sleep(0.01)
+        time.sleep(cfg["child_poll"])
 finish()
 if cfg["mode"] == "kill":
     os.kill(os.getpid(), signal.SIGKILL)
@@ -227,7 +229,9 @@ def vmstat(pswpin=101, pswpout=211):
 
 
 class Fixture:
-    def __init__(self, directory, **overrides):
+    def __init__(self, directory, row, note_wait, **overrides):
+        self.row = row
+        self.note_wait = note_wait
         self.base = Path(directory)
         self.root = self.base / "cgroups"
         self.root.mkdir()
@@ -243,6 +247,12 @@ class Fixture:
                         pressure="some avg10=0.25 avg60=0.00 avg300=0.00 total=1\n"
                                  "full avg10=0.10 avg60=0.00 avg300=0.00 total=1\n")
         self.cfg.update(overrides)
+        if self.cfg["setup_delay"]:
+            self.cfg["setup_sleep"] = note_wait("setup sleep", 0.4)
+        if self.cfg["mode"] in ("signal", "descendant"):
+            self.cfg["child_poll"] = note_wait("child poll sleep", 0.01)
+        if self.cfg["mode"] == "descendant":
+            self.cfg["grandchild_sleep"] = note_wait("grandchild sleep", 30)
         names = ("mkdir", "rmdir", "tee", "cat", "awk", "sed", "grep", "wc", "head", "tail", "cut", "getconf")
         self.cfg["real"] = {name: shutil.which(name) for name in names}
         (self.base / "config.json").write_text(json.dumps(self.cfg))
@@ -267,11 +277,16 @@ class Fixture:
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("MEM_")}
         self.env.update(PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], CG_FIXTURE=str(self.base),
                         MEM_VMSTAT=str(self.base / "vmstat"), MEM_CGROUP_ROOT=str(self.root),
-                        MEM_SUDO="", MEM_KILL_WAIT_S="1", MEM_POLL_S="0.02")
+                        MEM_SUDO="")
+        self.set_wait("MEM_KILL_WAIT_S", "1")
+        self.set_wait("MEM_POLL_S", "0.02")
         if self.cfg["page_size"] is not None:
             self.env["MEM_PAGESIZE"] = str(self.cfg["page_size"])
         self.proc = None
         self.timed_out = False
+
+    def set_wait(self, name, value):
+        self.env[name] = self.note_wait(name, value)
 
     def start(self, script=SCRIPT, args=(), no_command=False):
         command = [] if no_command else [sys.executable, str(self.base / "child.py"), *args]
@@ -281,10 +296,13 @@ class Fixture:
                                      text=True, start_new_session=True)
 
     def finish(self, timeout=6):
+        timeout = self.note_wait("subprocess timeout", timeout)
         try:
             stdout, stderr = self.proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.timed_out = True
+            print(f"compile-cgroup timeout {self.row}: command {shlex.join(self.proc.args)}; "
+                  f"bound {timeout:.2f}s", file=sys.stderr, flush=True)
             self.stop()
             stdout, stderr = self.proc.communicate()
         self.elapsed = time.monotonic() - self.started
@@ -316,10 +334,28 @@ class Fixture:
 
 
 class CompileCgroup(unittest.TestCase):
+    def setUp(self):
+        self.row_started = time.monotonic()
+        self.waits = []
+        # Cleanups run in reverse order, so report after fixture cleanup, even
+        # when the test or a later cleanup fails.
+        self.addCleanup(self.report_timing)
+
+    def note_wait(self, name, value):
+        entry = f"{name}={value!r}s"
+        if entry not in self.waits:
+            self.waits.append(entry)
+        return value
+
+    def report_timing(self):
+        elapsed = time.monotonic() - self.row_started
+        print(f"compile-cgroup row {self._testMethodName}: {elapsed:.2f}s; "
+              f"waits: {', '.join(self.waits) or 'none'}", file=sys.stderr, flush=True)
+
     def fixture(self, **kwargs):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        fixture = Fixture(temporary.name, **kwargs)
+        fixture = Fixture(temporary.name, self._testMethodName, self.note_wait, **kwargs)
         self.addCleanup(fixture.stop)
         return fixture
 
@@ -482,7 +518,8 @@ class CompileCgroup(unittest.TestCase):
         fixture.start()
         done = fixture.finish(timeout=3)
         self.assertFalse(fixture.timed_out, "gate did not give up within MEM_KILL_WAIT_S + 2 seconds")
-        self.assertLessEqual(fixture.elapsed, 3, "gate exceeded the kill-wait bound plus slack")
+        self.assertLessEqual(fixture.elapsed, 3,
+                             f"gate exceeded the kill-wait bound plus slack: took {fixture.elapsed:.2f}s, bound {3:.2f}s")
         self.assertNotEqual(done.returncode, 0, "a cgroup that never empties must fail")
         self.assertIn("could not be emptied", done.stdout + done.stderr)
         record = self.record(fixture, done)
@@ -544,10 +581,11 @@ class CompileCgroup(unittest.TestCase):
             with self.subTest(signal=sig.name):
                 fixture = self.fixture(mode="signal")
                 fixture.start()
-                deadline = time.monotonic() + 2
+                deadline = time.monotonic() + self.note_wait("signal readiness wait", 2)
+                poll = self.note_wait("signal readiness poll sleep", 0.01)
                 while (not (fixture.base / "ready").exists() and fixture.proc.poll() is None
                        and time.monotonic() < deadline):
-                    time.sleep(0.01)
+                    time.sleep(poll)
                 self.assertTrue((fixture.base / "ready").exists(), "CMD never became ready to receive a signal")
                 os.kill(fixture.proc.pid, sig)  # Only the gate; never broadcast to the child.
                 done = fixture.finish()
@@ -601,14 +639,17 @@ class CompileCgroup(unittest.TestCase):
         return [json.loads(line) for line in (fixture.base / "sudo.jsonl").read_text().splitlines()]
 
     def wait_for(self, fixture, marker):
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + self.note_wait(f"{marker} wait", 3)
+        poll = self.note_wait(f"{marker} poll sleep", 0.01)
         while not (fixture.base / marker).exists() and time.monotonic() < deadline:
             if fixture.proc.poll() is not None:
                 break
-            time.sleep(0.01)
+            time.sleep(poll)
         self.assertTrue((fixture.base / marker).exists(), f"fixture never reached {marker}")
 
-    def shell_hook(self, fixture, source):
+    def shell_hook(self, fixture, source, poll=None):
+        if poll is not None:
+            fixture.env["CG_HOOK_POLL_S"] = self.note_wait("shell hook poll sleep", poll)
         hook = fixture.base / "hook.sh"
         # Old privileged bash invocations also inherit BASH_ENV. Only the
         # initial gate should run the scheduling hook.
@@ -675,7 +716,7 @@ class CompileCgroup(unittest.TestCase):
 wait() {
   if [[ ${reap_hook_done:-} != 1 ]]; then
     reap_hook_done=1
-    while [[ ! -e $CG_FIXTURE/ready ]]; do sleep 0.01; done
+    while [[ ! -e $CG_FIXTURE/ready ]]; do sleep "$CG_HOOK_POLL_S"; done
     kill -TERM "$$"
     builtin wait "$@"
     local status=$?
@@ -687,7 +728,7 @@ wait() {
   printf 'wait:repeated\n' >> "$CG_FIXTURE/events"
   builtin wait "$@"
 }
-''')
+''', poll="0.01")
         done = fixture.run()
         self.assertEqual((fixture.base / "signal").read_text(), "SIGTERM")
         self.assertEqual(done.returncode, 7, "a TERM at reap must preserve CMD exit 7")
@@ -696,7 +737,7 @@ wait() {
 
     def test_R7_term_reaches_grandchild(self):
         fixture = self.fixture(mode="descendant")
-        fixture.env["MEM_KILL_WAIT_S"] = "3"
+        fixture.set_wait("MEM_KILL_WAIT_S", "3")
         fixture.start()
         self.wait_for(fixture, "ready")
         grandchild = int((fixture.base / "grandchild").read_text())
@@ -704,7 +745,9 @@ wait() {
         os.kill(fixture.proc.pid, signal.SIGTERM)
         done = fixture.finish(timeout=3)
         self.assertFalse(fixture.timed_out, "gate hung on the unsignalled grandchild")
-        self.assertLess(time.monotonic() - started, 3, "signal cleanup exceeded the configured kill wait")
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 3,
+                        f"signal cleanup exceeded the configured kill wait: took {elapsed:.2f}s, bound {3:.2f}s")
         with self.assertRaises(ProcessLookupError, msg="grandchild survived TERM to the gate"):
             os.kill(grandchild, 0)
         self.assertEqual(done.returncode, 128 + signal.SIGTERM)
@@ -723,7 +766,7 @@ wait() {
         for value in ("invalid", "0", "-0.1", ""):
             with self.subTest(value=value):
                 fixture = self.fixture()
-                fixture.env[name] = value
+                fixture.set_wait(name, value)
                 done = fixture.run()
                 self.assertEqual(done.returncode, 2, f"{name}={value!r} must be a usage error")
                 self.assertFalse((fixture.base / "command.json").exists(), "CMD ran with an invalid duration")
@@ -738,7 +781,8 @@ wait() {
 
     def test_R11_sleep_capped_at_remaining_deadline(self):
         fixture = self.fixture(empty_after=None)
-        fixture.env.update(MEM_KILL_WAIT_S="0.1", MEM_POLL_S="20")
+        fixture.set_wait("MEM_KILL_WAIT_S", "0.1")
+        fixture.set_wait("MEM_POLL_S", "20")
         self.shell_hook(fixture, r'''
 sleep() {
   printf '%s\n' "$1" >> "$CG_FIXTURE/sleeps"
@@ -750,7 +794,9 @@ sleep() {
         self.assertFalse(fixture.timed_out, "poll sleep exceeded the remaining drain deadline")
         sleeps = [float(value) for value in (fixture.base / "sleeps").read_text().splitlines()]
         self.assertTrue(sleeps)
-        self.assertTrue(all(0 < value <= 0.1 for value in sleeps), sleeps)
+        self.assertTrue(all(0 < value <= 0.1 for value in sleeps),
+                        "; ".join(f"sleep took {value:.2f}s, lower bound {0:.2f}s (exclusive), "
+                                  f"bound {0.1:.2f}s (inclusive)" for value in sleeps))
         self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_drain")
 
     def test_R12_failed_kill_write_is_reported(self):
@@ -775,12 +821,12 @@ sleep() {
         # the child's handler isolates lost forwarding from early exec signals.
         self.shell_hook(fixture, r'''
 trap 'if [[ $BASH_COMMAND == '\''child_pid=$!'\'' ]]; then
-  while [[ ! -e $CG_FIXTURE/ready ]]; do sleep 0.01; done
+  while [[ ! -e $CG_FIXTURE/ready ]]; do sleep "$CG_HOOK_POLL_S"; done
   printf "pending:child_pid=%s\n" "$child_pid" >> "$CG_FIXTURE/events"
   kill -TERM "$$"
   trap - DEBUG
 fi' DEBUG
-''')
+''', poll="0.01")
         done = fixture.run()
         self.assertIn("pending:child_pid=", fixture.events())
         marker = fixture.base / "signal"
@@ -802,7 +848,7 @@ kill() {
   builtin kill "$@"
   local status=$?
   if [[ $1 == -s && $2 == TERM ]]; then
-    while builtin kill -0 "$child_pid" 2>/dev/null; do sleep 0.01; done
+    while builtin kill -0 "$child_pid" 2>/dev/null; do sleep "$CG_HOOK_POLL_S"; done
     printf 'child:exited\n' >> "$CG_FIXTURE/events"
   fi
   return "$status"
@@ -814,7 +860,7 @@ wait() {
   printf 'wait:status=%s\n' "$status" >> "$CG_FIXTURE/events"
   return "$status"
 }
-''')
+''', poll="0.01")
                 fixture.start()
                 self.wait_for(fixture, "ready")
                 self.wait_for(fixture, "waiting")
