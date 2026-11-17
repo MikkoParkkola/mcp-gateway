@@ -54,7 +54,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
         )),
         Err(NotLocked::Failed(message) | NotLocked::Refused(message)) => {
             let probed = config.to_path_buf();
-            let probe = off_runtime(move || {
+            let probe = off_runtime(Some(config), move || {
                 let target = resolved(&probed);
                 let journal = crate::config_persistence::journal::journal_path(&target);
                 (

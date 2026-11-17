@@ -28,6 +28,39 @@ pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Kept;
 
+/// Test-only holds by path, for writers handed a path and nothing else (the
+/// package cache's deletes, the config lock's thread): a row arms the hold for
+/// the exact path its writer will get, and the writer's closure pauses there
+/// before it touches the file system. Parallel rows use distinct paths.
+#[cfg(test)]
+static HOLDS: parking_lot::Mutex<
+    Vec<(std::path::PathBuf, std::sync::Arc<crate::test_pause::Slot>)>,
+> = parking_lot::Mutex::new(Vec::new());
+
+/// Arm a one-shot hold for the writer handed `path`.
+#[cfg(test)]
+pub(crate) fn hold_for(path: &Path) -> std::sync::Arc<crate::test_pause::Slot> {
+    let slot = std::sync::Arc::new(crate::test_pause::Slot::default());
+    HOLDS
+        .lock()
+        .push((path.to_path_buf(), std::sync::Arc::clone(&slot)));
+    slot
+}
+
+/// Pause here if a row armed a hold for `path` (bounded: see
+/// `Slot::pause_on_thread`). The first statement of a held writer's closure.
+#[cfg(test)]
+pub(crate) fn pause_if_held(path: &Path) {
+    let slot = HOLDS
+        .lock()
+        .iter()
+        .find(|(held, _)| held == path)
+        .map(|(_, slot)| std::sync::Arc::clone(slot));
+    if let Some(slot) = slot {
+        slot.pause_on_thread();
+    }
+}
+
 // A keep carries no data in a release build, so taking one costs nothing there.
 #[cfg(not(test))]
 const _: () = assert!(std::mem::size_of::<Kept>() == 0);

@@ -381,10 +381,11 @@ async fn lock_with(
     preflight: Preflight,
     recovery: Recovery,
 ) -> crate::Result<Result<Locked, NotLocked>> {
+    let root = config;
     let config = config.to_path_buf();
     let waiting = Arc::new(AtomicBool::new(true));
     let _cancel = StopWaiting(Arc::clone(&waiting));
-    off_runtime(move || {
+    off_runtime(Some(root), move || {
         if matches!(preflight, Preflight::Loads) && !super::journal::exists(&config) {
             super::load_existing_or_default(&config)?;
         }
@@ -503,15 +504,19 @@ const LEFT: u8 = 2;
 /// detached thread, not `spawn_blocking`, so filesystem work stalled on an
 /// NFS or FUSE mount never holds the runtime's shutdown (as the reload's own
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
-/// it finishes, even if the awaiting caller is dropped.
+/// it finishes, even if the awaiting caller is dropped. `root` is the config
+/// path the work touches: a test's temp dir holding it is kept while the
+/// thread runs (crate::spawn_keep); none for work that writes nothing.
 async fn off_runtime<T: Send + 'static>(
+    root: Option<&Path>,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, NoResult> {
-    off_runtime_in(&ABANDONED, work).await
+    off_runtime_in(&ABANDONED, root, work).await
 }
 
 async fn off_runtime_in<T: Send + 'static>(
     abandoned: &'static Abandoned,
+    root: Option<&Path>,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, NoResult> {
     if abandoned.0.load(SeqCst) >= MAX_ABANDONED {
@@ -530,9 +535,17 @@ async fn off_runtime_in<T: Send + 'static>(
         state: Arc::clone(&state),
         abandoned,
     };
+    #[cfg(test)]
+    let held = root.map(Path::to_path_buf);
+    // Staging: the keep for `root` is taken here in the next commit.
+    let _ = root;
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
+            #[cfg(test)]
+            if let Some(held) = &held {
+                crate::spawn_keep::pause_if_held(held);
+            }
             let out = work();
             // A result nobody received (a held lock) is dropped before the
             // thread counts as returned: closing it can stall on the same
@@ -681,6 +694,10 @@ pub(crate) fn lock_file_blocking(
 #[cfg(test)]
 #[path = "config_persistence_lock_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_persistence_lock_keep_tests.rs"]
+mod keep_tests;
 
 /// Dispatch an already held lock without recursively acquiring it.
 pub(crate) fn dispatch_journal(

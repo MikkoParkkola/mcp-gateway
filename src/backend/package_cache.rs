@@ -473,7 +473,10 @@ fn retire_now(dir: &Path) -> Retired {
 /// Deletes a tombstone in the background, holding no lock: how long a large or
 /// slow tree takes no longer blocks any start.
 fn discard_tombstone(tombstone: PathBuf) {
+    // Staging: the keep for the tombstone's dir is taken here in the next commit.
     drop(tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        crate::spawn_keep::pause_if_held(&tombstone);
         if !remove_now(&tombstone) {
             warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
         }
@@ -492,7 +495,12 @@ fn sweep_tombstones_once(root: &Path) {
         return;
     }
     let root = root.to_path_buf();
-    drop(tokio::task::spawn_blocking(move || sweep_now(&root)));
+    // Staging: the keep for the cache root is taken here in the next commit.
+    drop(tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        crate::spawn_keep::pause_if_held(&root);
+        sweep_now(&root);
+    }));
 }
 
 /// One pass of the sweep over `root`, on the caller's thread: deletes the
@@ -562,3 +570,7 @@ mod tests;
 #[cfg(test)]
 #[path = "package_cache_retry_tests.rs"]
 mod retry_tests;
+
+#[cfg(test)]
+#[path = "package_cache_keep_tests.rs"]
+mod keep_tests;
