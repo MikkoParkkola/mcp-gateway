@@ -1,0 +1,3 @@
+head_sha	88d3a8a766da2092aa4832613d8d47770894904e
+#mutant m8
+gateway_bin_isolation	the_operator_data_dir_wins_over_the_test_home_in_the_binary	tests/gateway_bin_isolation.rs:115
