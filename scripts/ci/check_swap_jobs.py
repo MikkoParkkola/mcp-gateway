@@ -514,8 +514,11 @@ def self_test() -> int:
         ("a quoted # before a whole build on the helper's next line",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + '\necho " #"; '
                                                            + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
-        ("an unbalanced quote on a line that builds the library",
-         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + '; echo "x; '
+        ("an unbalanced quote on a line that builds the library, beside a clean helper step",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {"run": 'echo "x; ' + whole_job["steps"][0]["run"]},
+                                                   tripwire]}}, True, True),
+        ("an in-word # before a whole build on the helper's next line",
+         {**allowed, ("ci.yml", "new"): {"steps": [{"run": helper_build["run"] + "\necho a#b; "
                                                            + whole_job["steps"][0]["run"]}, tripwire]}}, True, True),
         ("a whole build whose trailing comment names the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": whole_job["steps"][0]["run"] + "  # scripts/ci/lib-parts.sh"},
