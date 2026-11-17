@@ -248,8 +248,12 @@ fn a_spent_runtime_deadline_gives_a_zero_wait() {
 fn blocking_work_that_ends_before_the_runtime_deadline_is_not_left_running() {
     let runtime = runtime();
     let (started, running) = mpsc::channel();
+    let (go, hold) = mpsc::channel::<()>();
     runtime.tokio.spawn_blocking(move || {
         started.send(()).expect("the test waits for the start");
+        // The hold starts when the shutdown is about to begin, not at spawn, so
+        // setup delays under load cannot use it up before the old cap is tested.
+        hold.recv().expect("the test starts the hold");
         // The work lasts at least 400 ms, past the old 250 ms cap; with the
         // deadline 30 s away, a late wake under load still ends long before it.
         // timing: lower-bound
@@ -262,6 +266,7 @@ fn blocking_work_that_ends_before_the_runtime_deadline_is_not_left_running() {
     let (left_running, logged) = within_watchdog(move || {
         let mut left_running = true;
         let logged = errors_logged(|| {
+            go.send(()).expect("the blocking task waits for its hold");
             left_running = shut_down(
                 runtime,
                 RuntimeShutdown::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
