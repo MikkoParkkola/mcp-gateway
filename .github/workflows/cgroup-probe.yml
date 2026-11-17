@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Throwaway probe (never merged): checks on a hosted runner that the coverage memory gate gets its own cgroup (R1)
+# and that the kernel kills what a command leaves behind (R8), before any coverage run is judged.
+name: Cgroup probe
+
+on:
+  push:
+    branches: ["throwaway/cgroup-probe-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: cgroup probe (R1, R8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: R1 the command runs in its own cgroup, as the runner user, and its peak is measured
+        run: |
+          echo "gate shell cgroup: $(cat /proc/self/cgroup); uid $(id -u); HOME=$HOME"
+          scripts/ci/compile-cgroup.sh python3 scripts/ci/cgroup_probe_child.py
+      - name: R8 a process the command leaves behind is killed and the cgroup removed
+        run: |
+          scripts/ci/compile-cgroup.sh bash scripts/ci/cgroup_probe_sleeper.sh "$RUNNER_TEMP/sleeper.pid"
+          pid=$(cat "$RUNNER_TEMP/sleeper.pid")
+          if kill -0 "$pid" 2>/dev/null; then echo "::error::sleeper $pid is still alive"; exit 1; fi
+          echo "sleeper $pid is gone"
+          if ls -d /sys/fs/cgroup/covpart-* 2>/dev/null; then echo "::error::a covpart cgroup was left behind"; exit 1; fi
+          echo "no covpart cgroup left"
