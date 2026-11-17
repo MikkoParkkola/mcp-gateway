@@ -10,8 +10,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mcp_gateway::mtls::{CaParams, CertGenerator, GeneratedCert, LeafCertParams, MtlsConfig};
 
-use super::dashboard_link::{LinkTls, dashboard_link_base, fetch_link};
+use super::dashboard_link::{LinkTls, dashboard_link_base};
 use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
+
+/// `fetch_link`, its error as it prints for a run holding `token`.
+async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    super::dashboard_link::fetch_link(base, token, tls)
+        .await
+        .map_err(|error| error.outcome(false, &[token]).stderr().to_string())
+}
 
 const LINK: &str = "https://127.0.0.1:1/dashboard?bootstrap=abc";
 

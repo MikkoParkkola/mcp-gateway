@@ -225,3 +225,23 @@ async fn api_matches_its_capture_from_before_the_move() {
         misses.join("\n")
     );
 }
+
+/// T12: api's three changed remedy lines (missing token, 401, 403) are D4's `MCP_GATEWAY_TOKEN` sentences, written
+/// out whole (no login command exists yet).
+#[tokio::test]
+async fn api_credential_remedies_name_the_token_variable() {
+    let get = |case: &'static str, answer| line(case, ApiMethod::Get, false, TOKEN, answer);
+    let got = [
+        get("no-token", Answer::NoToken).await,
+        get("401", Answer::Status(401, b"{}".to_vec())).await,
+        get("403", Answer::Status(403, b"{}".to_vec())).await,
+    ];
+    assert_eq!(
+        got,
+        [
+            "no-token\t3\t\terror: No gateway credential is available.\\nSet MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.\\n",
+            "401\t3\t\terror: The gateway rejected this credential.\\nSet MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.\\n",
+            "403\t3\t\terror: This credential is not permitted to perform this operation.\\nUse a token permitted to perform this operation for http://127.0.0.1:1, then retry.\\n",
+        ]
+    );
+}

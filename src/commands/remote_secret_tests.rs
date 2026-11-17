@@ -123,7 +123,7 @@ async fn shared_sites_redact_the_token() {
     let gw = gateway(json(401, r#"{"message":"denied"}"#)).await;
     for (command, out) in three(&gw.base, "error").await {
         check_eq!(
-            (out.exit, out.stderr.as_str(), out.stdout.as_slice()),
+            (out.exit(), out.stderr(), out.stdout()),
             (CliExit::AuthRefused, "", &b""[..]),
             "{command} prefix word"
         );

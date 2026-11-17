@@ -185,7 +185,7 @@ async fn lookup_window_faults_and_the_equal_boundary() {
     )
     .await;
     check_eq!(
-        (out.exit, out.stdout.as_slice()),
+        (out.exit(), out.stdout()),
         (CliExit::Ok, LOOKUP_PRINTED.as_bytes()),
         "from == to"
     );

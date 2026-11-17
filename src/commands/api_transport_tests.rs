@@ -79,7 +79,7 @@ async fn known_not_run_protocol_and_version_failures_use_gateway_exit() {
 }
 
 #[tokio::test]
-async fn login_remedy_uses_the_normalised_resolved_origin() {
+async fn token_remedy_uses_the_normalised_resolved_origin() {
     for json_output in [false, true] {
         let mut args = args("/ui/api/keys");
         args.json = json_output;
@@ -104,7 +104,7 @@ async fn login_remedy_uses_the_normalised_resolved_origin() {
             3,
             "AuthRefused",
             "The gateway rejected this credential.",
-            "Run mcp-gateway login --gateway https://gateway.example, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for https://gateway.example, then retry.",
             Some(401),
             None,
         );
@@ -113,11 +113,7 @@ async fn login_remedy_uses_the_normalised_resolved_origin() {
 
 #[test]
 fn output_failure_with_a_token_inside_json_null_prints_the_fixed_sentence() {
-    let out = CliOutcome {
-        stdout: b"data\n".to_vec(),
-        stderr: String::new(),
-        exit: CliExit::Ok,
-    };
+    let out = CliOutcome::raw(b"data\n".to_vec(), String::new(), CliExit::Ok);
     let mut stdout = FailedOutput::new(io::ErrorKind::PermissionDenied);
     let mut stderr = Vec::new();
     let exit = emit_to(&out, true, &["null"], &mut stdout, &mut stderr);
@@ -125,11 +121,7 @@ fn output_failure_with_a_token_inside_json_null_prints_the_fixed_sentence() {
         stdout.written.is_empty(),
         "output errors never reach stdout"
     );
-    let captured = CliOutcome {
-        stdout: Vec::new(),
-        stderr: String::from_utf8(stderr).expect("stderr"),
-        exit,
-    };
+    let captured = CliOutcome::raw(Vec::new(), String::from_utf8(stderr).expect("stderr"), exit);
     assert_eq!(captured.exit, CliExit::LocalFailure);
     // The token is "null", which JSON's own null fields contain: the report
     // becomes the fixed sentence instead.
@@ -197,7 +189,7 @@ async fn stderr_output_failure_is_local_io_without_stdout_fallback() {
             3,
             "AuthRefused",
             "No gateway credential is available.",
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
             None,
             None,
         );

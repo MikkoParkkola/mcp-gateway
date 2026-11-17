@@ -457,7 +457,8 @@ async fn buffered(
             }
             Ok(None) => break,
             Ok(Some(Err(error))) => {
-                return super::transport_failure(error, false, token).outcome(json, &[token]);
+                return super::transport_failure(error, super::Request::Read, token)
+                    .outcome(json, &[token]);
             }
             Ok(Some(Ok(chunk))) if bytes.len() + chunk.len() > PENDING_LIMIT => {
                 let error = AdminCallError {
@@ -466,7 +467,8 @@ async fn buffered(
                     status: Some(status),
                     request_id: None,
                 };
-                return super::transport_failure(error, false, token).outcome(json, &[token]);
+                return super::transport_failure(error, super::Request::Read, token)
+                    .outcome(json, &[token]);
             }
             Ok(Some(Ok(chunk))) => bytes.extend_from_slice(&chunk),
         }
@@ -476,7 +478,7 @@ async fn buffered(
         headers,
         body: bytes,
     };
-    render_response(&response, token, json, origin, path, false)
+    render_response(&response, token, json, origin, path, super::Request::Read)
 }
 
 /// Writes and flushes one printed piece: `Ok(true)` to go on, `Ok(false)`
@@ -594,7 +596,7 @@ where
     let answer = match tokio::time::timeout(deadlines.headers, send(request)).await {
         Ok(Ok(answer)) => answer,
         Ok(Err(error)) => {
-            return super::transport_failure(error, false, &token)
+            return super::transport_failure(error, super::Request::Read, &token)
                 .outcome(args.json, &[token.as_str()]);
         }
         Err(_) => {
@@ -667,7 +669,8 @@ impl Printing<'_> {
                 Err(_) => return network(self.late(event_due), json, token),
                 Ok(None) => break,
                 Ok(Some(Err(error))) => {
-                    return super::transport_failure(error, false, token).outcome(json, &[token]);
+                    return super::transport_failure(error, super::Request::Read, token)
+                        .outcome(json, &[token]);
                 }
                 Ok(Some(Ok(chunk))) => chunk,
             };
@@ -741,20 +744,22 @@ impl Printing<'_> {
     }
 
     fn done(&self) -> CliOutcome {
-        let stderr = if self.mode == Mode::Download {
-            let note = format!(
+        let note = if self.mode == Mode::Download {
+            format!(
                 "api: the gateway answered {} with a non-JSON body\n",
                 self.status
-            );
-            redact::text(&note, &[self.token.to_owned()])
+            )
         } else {
             String::new()
         };
-        CliOutcome {
-            stdout: Vec::new(),
-            stderr,
-            exit: CliExit::Ok,
-        }
+        // The pieces were printed as they arrived; only the note is left, redacted and gated by `success`.
+        CliOutcome::success(
+            Vec::new(),
+            note,
+            self.json,
+            &[self.token],
+            super::StdoutRule::RedactedJsonBody,
+        )
     }
 }
 

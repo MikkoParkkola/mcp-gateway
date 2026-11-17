@@ -84,7 +84,10 @@ async fn legacy_admin_calls_refuse_oversized_bodies() {
         )
         .await
         .expect_err("body cap");
-        assert_eq!(error, "the gateway answer exceeded 16 MiB");
+        assert_eq!(
+            error,
+            "error: Gateway response exceeded 16 MiB.\nNarrow the request or read the data in smaller pages.\n"
+        );
     }
     server.abort();
 }

@@ -26,8 +26,8 @@ use super::cli_exit::emit_to;
 use super::cli_exit::{CliExit, CliOutcome};
 
 use super::dashboard_link::{
-    AdminCallError, AdminFailureKind, AdminResponse, LinkTls, TOKEN_ENV, admin_call,
-    admin_call_url, dead_letters_request, fetch_link,
+    AdminCallError, AdminFailureKind, AdminResponse, LinkTls, Remedies, TOKEN_ENV, admin_call_url,
+    dead_letters_request,
 };
 
 const TOKEN: &str = "api-unit-credential";
@@ -43,6 +43,34 @@ fn args(path: &str) -> ApiArgs {
         url: None,
         tls: DashboardLinkTls::default(),
     }
+}
+
+/// The commands' `admin_call` as a read, its error as it prints for a run holding `token`.
+async fn admin_call(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    tls: &LinkTls,
+) -> Result<serde_json::Value, String> {
+    super::dashboard_link::admin_call(
+        method,
+        base,
+        path,
+        token,
+        tls,
+        super::cli_exit::Request::Read,
+        &Remedies::read(base),
+    )
+    .await
+    .map_err(|error| error.outcome(false, &[token]).stderr().to_string())
+}
+
+/// `fetch_link`, its error as it prints for a run holding `token`.
+async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    super::dashboard_link::fetch_link(base, token, tls)
+        .await
+        .map_err(|error| error.outcome(false, &[token]).stderr().to_string())
 }
 
 fn credential(name: &str) -> Option<String> {
@@ -350,37 +378,37 @@ async fn a12_existing_admin_call_callers_unchanged() {
 }
 
 #[tokio::test]
-async fn a12_existing_admin_call_errors_keep_their_wording() {
+async fn a12_admin_call_errors_use_the_shared_shape() {
     for (status, body, expected) in [
         (
             StatusCode::FORBIDDEN,
             r#"{"reason":"no standing","error":"ignored"}"#,
-            "the gateway answered 403 Forbidden: ignored",
+            "The gateway answered HTTP 403: ignored\nUse a token permitted to perform this operation for {base}, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
             r#"{"reason":"no standing"}"#,
-            "the gateway answered 403 Forbidden: no standing",
+            "The gateway answered HTTP 403: no standing\nUse a token permitted to perform this operation for {base}, then retry.",
         ),
         (
             StatusCode::NOT_FOUND,
             r#"{"error":"missing"}"#,
-            "the gateway answered 404 Not Found: missing",
+            "The gateway answered HTTP 404: missing\nCheck that the gateway supports this command (update the gateway or the CLI), then retry.",
         ),
         (
             StatusCode::BAD_GATEWAY,
             "plain",
-            "the gateway answered 502 Bad Gateway: no reason given",
+            "The gateway answered HTTP 502: its error body is not JSON\nResolve the gateway error, then retry.",
         ),
         (
             StatusCode::OK,
             "plain",
-            "the gateway answered 200 OK with no JSON body",
+            "The gateway returned an invalid response.\nCheck the gateway response against UI API 1.",
         ),
         (
             StatusCode::OK,
             "null",
-            "the gateway answered 200 OK with no JSON body",
+            "The gateway returned an invalid response.\nCheck the gateway response against UI API 1.",
         ),
     ] {
         let listener = stand_in(status, "application/json", body).await;
@@ -392,7 +420,8 @@ async fn a12_existing_admin_call_errors_keep_their_wording() {
             &LinkTls::default(),
         )
         .await
-        .expect_err("legacy error");
+        .expect_err("an error");
+        let expected = format!("error: {}\n", expected.replace("{base}", &listener.base));
         assert_eq!(error, expected);
     }
 }
@@ -454,7 +483,7 @@ async fn missing_or_blank_credential_never_sends() {
             3,
             "AuthRefused",
             "No gateway credential is available.",
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
         ),
         (
             Some(""),
@@ -498,11 +527,11 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
     for (status, remedy) in [
         (
             StatusCode::UNAUTHORIZED,
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
-            "Use an entitled credential; run mcp-gateway login --gateway http://127.0.0.1:1 with an account permitted to perform this operation, then retry.",
+            "Use a token permitted to perform this operation for http://127.0.0.1:1, then retry.",
         ),
     ] {
         for json_output in [false, true] {

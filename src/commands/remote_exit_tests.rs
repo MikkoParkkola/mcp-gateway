@@ -242,7 +242,7 @@ fn ok_token() -> Result<String, super::dashboard_link::TokenError> {
 /// Asserts a whole failure: the exit, stderr exactly `error: <what>` then `<remedy>`, and empty stdout.
 fn failed(out: &CliOutcome, exit: CliExit, what: &str, remedy: &str, case: &str) {
     check_eq!(
-        (out.exit, out.stderr.as_str(), out.stdout.as_slice()),
+        (out.exit(), out.stderr(), out.stdout()),
         (
             exit,
             format!("error: {what}\n{remedy}\n").as_str(),
@@ -631,7 +631,7 @@ async fn successes_print_as_today() {
     let gw = gateway(json(200, r#"{"link":"https://gw.test/once"}"#)).await;
     let out = link(&["--url", &gw.base], ok_token()).await;
     check_eq!(
-        (out.exit, out.stdout.as_slice(), out.stderr.as_str()),
+        (out.exit(), out.stdout(), out.stderr()),
         (
             CliExit::Ok,
             &b"https://gw.test/once\n"[..],
@@ -642,7 +642,7 @@ async fn successes_print_as_today() {
     let gw = gateway(json(200, r#"{"items":[]}"#)).await;
     let out = events(&["list", "--url", &gw.base], ok_token()).await;
     check_eq!(
-        (out.exit, out.stdout.as_slice(), out.stderr.as_str()),
+        (out.exit(), out.stdout(), out.stderr()),
         (CliExit::Ok, &b"{\n  \"items\": []\n}\n"[..], ""),
         "events list"
     );
@@ -663,7 +663,7 @@ async fn successes_print_as_today() {
     ] {
         let out = lookup(&argv, stdin.as_bytes(), Some(TOKEN)).await;
         check_eq!(
-            (out.exit, out.stdout.as_slice(), out.stderr.as_str()),
+            (out.exit(), out.stdout(), out.stderr()),
             (CliExit::Ok, LOOKUP_PRINTED.as_bytes(), ""),
             "lookup {mode}"
         );
@@ -737,14 +737,14 @@ async fn stdout_safety_has_three_separate_outcomes() {
     let gw = gateway(json(200, &format!(r#"{{"items":["{TOKEN}"]}}"#))).await;
     let out = events(&["list", "--url", &gw.base], ok_token()).await;
     check_eq!(
-        out.exit,
+        out.exit(),
         CliExit::Ok,
         "(a) events: a redacted value still prints"
     );
     check!(
-        !String::from_utf8_lossy(&out.stdout).contains(TOKEN),
+        !String::from_utf8_lossy(out.stdout()).contains(TOKEN),
         "(a) events: {:?}",
-        out.stdout
+        out.stdout()
     );
     // `[redacted]` is the shared redactor's first marker: renaming the key `#` to it collides (the fixture of
     // dashboard_link_tests' entry-loss row).
