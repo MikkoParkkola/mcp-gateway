@@ -122,7 +122,7 @@ fn package(name: &'static str, bins: &[(&str, &'static str)], extra: serde_json:
 
 /// Which CA the fetch's bundle holds.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Bundle {
+pub(super) enum Bundle {
     /// The registry's own CA: the fetch trusts it.
     Registry,
     /// An unrelated test CA: the registry's certificate is untrusted.

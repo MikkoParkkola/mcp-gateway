@@ -828,11 +828,15 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
 #[cfg(test)]
 mod elf_fixture;
 #[cfg(test)]
+mod fetch_pypi;
+#[cfg(test)]
 mod fetch_registry;
 #[cfg(test)]
 mod fetch_rows;
 #[cfg(test)]
 mod fetch_shim_rows;
+#[cfg(test)]
+mod fetch_uv_real_rows;
 #[cfg(test)]
 mod fetch_uv_rows;
 #[cfg(test)]
