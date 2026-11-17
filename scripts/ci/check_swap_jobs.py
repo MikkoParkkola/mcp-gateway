@@ -24,6 +24,8 @@ as the other workflow checks.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import re
 import subprocess
@@ -313,7 +315,7 @@ def check_workflow(file: str, doc: dict, seen: dict | None = None) -> tuple[set[
     return scope, problems
 
 
-def main() -> int:
+def main(packaged_script: Path = PACKAGED_SCRIPT) -> int:
     scope: set[tuple[str, str]] = set()
     problems: list[str] = []
     seen: dict = {}
@@ -321,7 +323,7 @@ def main() -> int:
         s, p = check_workflow(path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {}, seen)
         scope |= s
         problems += p
-    problems += census(seen, packaged_by_part=not packaged_build_problems(PACKAGED_SCRIPT.read_text(encoding="utf-8")))
+    problems += census(seen, packaged_by_part=not packaged_build_problems(packaged_script.read_text(encoding="utf-8")))
     for missing in sorted(EXPECTED - scope):
         problems.append(f"{missing[0]}:{missing[1]} is listed in EXPECTED but builds no library tests")
     for extra in sorted(scope - EXPECTED):
@@ -454,13 +456,30 @@ def self_test() -> int:
         ("--tests selects the lib again", shape.format(part, rest.replace("--test '*'", "--tests")), True),
         ("a part without its variable", shape.format(part.replace('MCP_GATEWAY_TEST_PART="$k" ', ""), rest), True),
         ("parts only, the other targets never built", shape.format(part, "true"), True),
+        # One rule each: every other case also trips a second rule, so these keep each rule's own failure seen.
+        ("a whole build beside the parts and the other targets",
+         shape.format(part, rest + "\n  cargo test --all-features --locked --no-run"), True),
+        ("a second other-targets call that also selects the lib",
+         shape.format(part, rest + "\n  " + rest.replace("--bins", "--lib --bins")), True),
+        ("the other targets only, no part", f'elif [ "$mode" = build ]; then\n  {rest}\nelse\nfi\n', True),
     ]
     for label, text, want_bad in packaged_cases:
         found = packaged_build_problems(text)
         ok = bool(found) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} packaged build, {label}: problems {found}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) - wrong} ok, {wrong} wrong")
+    # main() judges the packaged job by the script it reads: a whole build there makes that job a census problem.
+    # Its ::error:: lines are captured, so this expected failure raises no annotation.
+    with tempfile.TemporaryDirectory() as tmp:
+        whole = Path(tmp) / "packaged-tests.sh"
+        whole.write_text('elif [ "$mode" = build ]; then\n  cargo test --all-features --locked --no-run\nelse\nfi\n')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = main(whole)
+    ok = rc == 1 and "ci.yml:package-tests builds the library tests without" in out.getvalue()
+    wrong += not ok
+    print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
+    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + 1 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
