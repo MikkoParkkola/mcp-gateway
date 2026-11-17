@@ -29,7 +29,7 @@ pub(crate) fn child_env() -> Vec<(&'static str, OsString)> {
 /// `tokio::process::Command::from(test_binary())`.
 pub(crate) fn test_binary() -> Command {
     let mut command = Command::new(std::env::current_exe().expect("the running test binary"));
-    command.envs(child_env());
+    command.envs(mutant!("m6", Vec::new(), child_env()));
     command
 }
 
