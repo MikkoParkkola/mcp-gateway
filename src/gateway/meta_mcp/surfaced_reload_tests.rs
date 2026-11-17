@@ -273,7 +273,7 @@ async fn l2_the_reload_meta_tool_applies_surfaced_tools() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _context) = started(&dir, &[("alpha", "read")]);
     write_file(&dir, &[("beta", "read")]);
-    meta.reload_config()
+    meta.reload_config(&crate::security::audit::AuditWho::gateway())
         .await
         .expect("premise: the meta tool reloads");
     assert_eq!(
