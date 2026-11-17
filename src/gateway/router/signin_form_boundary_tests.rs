@@ -289,6 +289,11 @@ async fn n6e_a_numeric_self_origin_on_a_network_bind_is_refused() {
     config.server.host = "192.0.2.10".to_string();
     let (mut state, _dir) =
         test_router_app_state_with_auth_and_config(&auth_with(fixture_keys()), config).await;
+    assert_eq!(
+        state.live_config.running().server.host,
+        "192.0.2.10",
+        "premise: the running bind"
+    );
     let (log, _audit_dir) = with_audit(&mut state);
     let authority = format!("192.0.2.10:{}", listener_port(&state));
     let origin = format!("http://{authority}");
@@ -310,15 +315,20 @@ async fn n6e_a_numeric_self_origin_on_a_network_bind_is_refused() {
 
 /// A wildcard bind serves loopback too. With no `public_url`, the gateway's
 /// own loopback page posts with its numeric loopback Origin, which the guard
-/// admits on a non-loopback bind; the route admits it and mints, on `0.0.0.0`
-/// and on `::`.
+/// admits on a non-loopback bind; the route admits it and mints, on `0.0.0.0`,
+/// on `::` and on an empty host (every interface).
 #[tokio::test]
 async fn n6f_a_wildcard_bind_admits_its_own_loopback_page() {
-    for bind in ["0.0.0.0", "::"] {
+    for bind in ["0.0.0.0", "::", ""] {
         let mut config = crate::config::Config::default();
         config.server.host = bind.to_string();
         let (mut state, _dir) =
             test_router_app_state_with_auth_and_config(&auth_with(fixture_keys()), config).await;
+        assert_eq!(
+            state.live_config.running().server.host,
+            bind,
+            "premise: the running bind"
+        );
         let (log, _audit_dir) = with_audit(&mut state);
         let authority = format!("127.0.0.1:{}", listener_port(&state));
         let mut request = form_post(
@@ -350,35 +360,93 @@ async fn n6f_a_wildcard_bind_admits_its_own_loopback_page() {
     }
 }
 
-/// Host, port and TLS are restart-only. A reload that changes the port leaves
-/// the listener on the old one, and the page it serves posts from that origin.
-/// Through a router built before the reload, as in production, the running
-/// listener's origin still mints.
+/// Host, port and TLS are restart-only. A reload that changes one leaves the
+/// listener as it was, and the page it serves posts from the running origin.
+/// Through a router built before the reload, as in production, that origin
+/// still mints, for each of the three changed alone: the port, the host (to a
+/// network address, which would admit no loopback origin) and TLS (which would
+/// expect `https`).
 #[tokio::test]
-async fn n6g_a_reloaded_port_does_not_refuse_the_running_listeners_origin() {
+async fn n6g_a_reloaded_listener_setting_does_not_refuse_the_running_origin() {
+    type Edit = fn(&mut crate::config::Config);
+    let cases: [(&str, Edit); 3] = [
+        ("port", |config| config.server.port += 1),
+        ("host", |config| {
+            config.server.host = "192.0.2.10".to_string()
+        }),
+        ("tls", |config| config.mtls.enabled = true),
+    ];
+    for (name, edit) in cases {
+        let (mut state, _dir) = fixture().await;
+        let (log, _audit_dir) = with_audit(&mut state);
+        let running = format!("http://127.0.0.1:{}", listener_port(&state));
+        let router = super::super::create_router(Arc::clone(&state));
+        let before = state.live_config.running().clone();
+        reload(&state, edit);
+        let after = state.live_config.running();
+        assert_eq!(
+            (&after.server.host, after.server.port, after.mtls.enabled),
+            (&before.server.host, before.server.port, before.mtls.enabled),
+            "{name}: premise: the listener keeps its settings until a restart"
+        );
+        let minted = send_to(
+            router,
+            form_post(
+                SIGNIN,
+                Some(&running),
+                Body::from(format!("key={ADMIN_SECRET}")),
+                FORM,
+                None,
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(
+            minted.status,
+            StatusCode::SEE_OTHER,
+            "{name}: {}",
+            minted.body
+        );
+        assert_mint(&minted);
+        assert_eq!(
+            signin_records(&log).len(),
+            1,
+            "{name}: {:?}",
+            signin_records(&log)
+        );
+    }
+}
+
+/// `public_url` is read live. Through a router built before a reload that
+/// sets it, the loopback origin the route admitted is now the route's refusal
+/// (401) and the public origin mints.
+#[tokio::test]
+async fn n6h_a_reloaded_public_url_applies_at_once() {
     let (mut state, _dir) = fixture().await;
     let (log, _audit_dir) = with_audit(&mut state);
-    let port = listener_port(&state);
-    let running = format!("http://127.0.0.1:{port}");
+    let loopback = http_origin(&state, "127.0.0.1");
     let router = super::super::create_router(Arc::clone(&state));
-    reload(&state, |config| config.server.port = port + 1);
-    assert_eq!(
-        state.live_config.running().server.port,
-        port,
-        "premise: the listener keeps its port until a restart"
-    );
-    let minted = send_to(
-        router,
+    reload(&state, |config| {
+        config.server.public_url = Some("https://gw.example".to_string());
+    });
+    let post = |origin: &str| {
         form_post(
             SIGNIN,
-            Some(&running),
+            Some(origin),
             Body::from(format!("key={ADMIN_SECRET}")),
             FORM,
             None,
             true,
-        ),
-    )
-    .await;
+        )
+    };
+    let refused = send_to(router.clone(), post(&loopback)).await;
+    assert_route_origin_refusal(&refused);
+    assert!(
+        signin_records(&log).is_empty(),
+        "{:?}",
+        signin_records(&log)
+    );
+    let minted = send_to(router, post("https://gw.example")).await;
     assert_mint(&minted);
     assert_eq!(signin_records(&log).len(), 1, "{:?}", signin_records(&log));
 }
