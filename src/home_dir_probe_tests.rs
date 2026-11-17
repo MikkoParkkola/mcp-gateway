@@ -110,8 +110,12 @@ fn r1a_without_the_override_each_process_gets_its_own_private_home() {
     let s2 = tempfile::tempdir().expect("data sentinel");
     let one = run(spawn_r1a_child(tmp.path(), s1.path(), s2.path()), "r1a");
     let two = run(spawn_r1a_child(tmp.path(), s1.path(), s2.path()), "r1a");
+    // An empty override counts as absent: a fallback, never paths against "".
+    let mut empty_override = spawn_r1a_child(tmp.path(), s1.path(), s2.path());
+    empty_override.env(OVERRIDE, "");
+    let empty = run(empty_override, "r1a");
     let account_home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    for seen in [&one, &two] {
+    for seen in [&one, &two, &empty] {
         let home = PathBuf::from(&seen["HOME"]);
         assert_eq!(seen["HOME"], seen["HOME2"], "one home for every call");
         assert_eq!(
@@ -150,9 +154,17 @@ fn r1a_without_the_override_each_process_gets_its_own_private_home() {
         }
     }
     assert_ne!(one["HOME"], two["HOME"], "one fallback per process");
-    let mut both = vec![PathBuf::from(&one["HOME"]), PathBuf::from(&two["HOME"])];
-    both.sort();
-    assert_eq!(fallbacks(tmp.path()), both);
+    assert_ne!(
+        one["HOME"], empty["HOME"],
+        "the empty override got a fallback of its own"
+    );
+    let mut all = vec![
+        PathBuf::from(&one["HOME"]),
+        PathBuf::from(&two["HOME"]),
+        PathBuf::from(&empty["HOME"]),
+    ];
+    all.sort();
+    assert_eq!(fallbacks(tmp.path()), all);
 }
 
 #[test]

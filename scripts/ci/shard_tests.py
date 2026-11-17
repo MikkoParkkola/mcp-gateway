@@ -292,7 +292,11 @@ def private_home(base: dict[str, str] | None, tmp: str | None):
     try:
         yield env
     finally:
-        shutil.rmtree(home, ignore_errors=True)
+        try:
+            shutil.rmtree(home)
+        except OSError as error:
+            # Not a shard failure, but never silent: a kept home is state the next run must not see.
+            print(f"::warning::could not remove the shard's gateway home {home}: {error}")
 
 
 def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:

@@ -35,6 +35,10 @@ pub(crate) fn test_binary() -> Command {
 
 /// The call the scan looks for, built so this file's own text never matches it.
 const CALL: &str = concat!("current_", "exe()");
+/// The calls the clear check looks for, built the same way.
+const CLEAR: &str = concat!(".env_", "clear()");
+const BINARY: &str = concat!("test_home::test_", "binary()");
+const RESTORE: &str = concat!("child_", "env()");
 
 /// Every `(file, enclosing fn)` that calls [`CALL`] in `text`, skipping comment
 /// lines. The enclosing fn is the nearest `fn name` at or above the call.
@@ -81,6 +85,32 @@ fn fn_body<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
         .position(|line| fn_name(line).is_some() && indent(line) <= indent(lines[start]))
         .map_or(lines.len(), |offset| start + 1 + offset);
     lines[start..end].to_vec()
+}
+
+/// Every `(file, enclosing fn)` that starts the test binary and then clears
+/// its environment without giving the parent's home back after the clear.
+fn cleared_without_home(rel: &str, text: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut found = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        if !line.contains(CLEAR) || line.trim_start().starts_with("//") {
+            continue;
+        }
+        let Some(name) = lines[..=at].iter().rev().find_map(|above| fn_name(above)) else {
+            continue;
+        };
+        let body = fn_body(text, &name);
+        if !body.iter().any(|line| line.contains(BINARY)) {
+            continue;
+        }
+        let clear = body.iter().position(|line| line.contains(CLEAR));
+        let restored =
+            clear.is_some_and(|at| body[at + 1..].iter().any(|line| line.contains(RESTORE)));
+        if !restored {
+            found.push((rel.to_owned(), name));
+        }
+    }
+    found
 }
 
 fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
@@ -142,28 +172,42 @@ fn every_test_binary_spawn_goes_through_test_binary() {
     ] {
         assert!(texts.contains_key(named), "the scan read {named}");
     }
-    let found: std::collections::BTreeSet<(String, String)> = texts
-        .iter()
-        .flat_map(|(rel, text)| spawn_sites(rel, text))
-        .collect();
-    let expected: std::collections::BTreeSet<(String, String)> = std::iter::once(OWN)
+    // Counted per site, so a second call inside a listed fn is not hidden.
+    let mut found = std::collections::BTreeMap::<(String, String), usize>::new();
+    for site in texts.iter().flat_map(|(rel, text)| spawn_sites(rel, text)) {
+        *found.entry(site).or_default() += 1;
+    }
+    let expected: std::collections::BTreeMap<(String, String), usize> = std::iter::once(OWN)
         .chain(SHELL_WRAPPED)
         .chain(PRODUCTION)
-        .map(|(file, name)| (file.to_owned(), name.to_owned()))
+        .map(|(file, name)| ((file.to_owned(), name.to_owned()), 1))
+        .collect();
+    let unrouted: Vec<_> = found
+        .iter()
+        .filter(|(site, count)| expected.get(*site) != Some(*count))
         .collect();
     assert_eq!(
-        found.difference(&expected).collect::<Vec<_>>(),
-        Vec::<&(String, String)>::new(),
+        unrouted,
+        Vec::<(&(String, String), &usize)>::new(),
         "start the test binary through test_home::test_binary()"
     );
     assert_eq!(
         found, expected,
         "a listed site no longer calls it: update the list"
     );
+    let cleared: Vec<_> = texts
+        .iter()
+        .flat_map(|(rel, text)| cleared_without_home(rel, text))
+        .collect();
+    assert_eq!(
+        cleared,
+        Vec::<(String, String)>::new(),
+        "an env_clear() after test_binary() drops the parent's home: apply child_env() after it"
+    );
     for (file, name) in SHELL_WRAPPED {
         let body = fn_body(&texts[file], name);
         assert!(
-            body.iter().any(|line| line.contains("child_env()")),
+            body.iter().any(|line| line.contains(RESTORE)),
             "{file}::{name} wraps the test binary and must apply child_env()"
         );
     }
@@ -184,6 +228,25 @@ fn the_spawn_scan_finds_a_planted_call() {
     assert_eq!(
         spawn_sites("src/x_tests.rs", &planted),
         vec![("src/x_tests.rs".to_owned(), "planted".to_owned())]
+    );
+    let twice = format!("fn twice() {{\n    a(std::env::{CALL});\n    b(std::env::{CALL});\n}}\n");
+    assert_eq!(
+        spawn_sites("src/x_tests.rs", &twice).len(),
+        2,
+        "each call counts"
+    );
+    let cleared =
+        format!("fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR};\n}}\n");
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &cleared),
+        vec![("src/x_tests.rs".to_owned(), "hermetic".to_owned())]
+    );
+    let restored = format!(
+        "fn hermetic() {{\n    let mut c = crate::{BINARY};\n    c{CLEAR};\n    c.envs(crate::test_home::{RESTORE});\n}}\n"
+    );
+    assert_eq!(
+        cleared_without_home("src/x_tests.rs", &restored),
+        Vec::new()
     );
     let commented = format!("// std::env::{CALL}\n");
     assert_eq!(spawn_sites("src/x_tests.rs", &commented), Vec::new());

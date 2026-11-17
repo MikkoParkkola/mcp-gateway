@@ -79,6 +79,8 @@ fn probe_record_lookup(
             "--test-threads=1",
         ])
         .env_clear()
+        // The clear drops the parent's home too: give it back, before the row's own values.
+        .envs(crate::test_home::child_env())
         .env(RECORD_CHILD_ROOT, root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

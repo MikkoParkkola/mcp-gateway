@@ -112,6 +112,8 @@ pub(super) fn run(
             "--test-threads=1",
         ])
         .env_clear()
+        // The clear drops the parent's home too: give it back, before the row's own values.
+        .envs(crate::test_home::child_env())
         .env(ROOT, root)
         .env(ACTION, action)
         .stdin(Stdio::null())

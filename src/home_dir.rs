@@ -53,7 +53,10 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 /// The test-home override, the one place a test build reads it.
 #[cfg(test)]
 pub(crate) fn test_override() -> Option<PathBuf> {
-    std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").map(PathBuf::from)
+    // Empty counts as absent: "" would resolve every path against the working dir.
+    std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// This test process's private home: randomized, owner-only, kept for the
