@@ -101,7 +101,7 @@ def self_test() -> list[str]:
             "config\tt-gnu\t--all-features\t\n")
     table_cases = {
         "table matches": (rows, 0),
-        "a custom-cfg row is another job's": (rows + "config\tx86_64-unknown-linux-gnu\t--all-features\tcoverage\n", 0),
+        "a custom-cfg row is another job's": (rows + "config\tx86_64-unknown-linux-gnu\t--features z\tcoverage\n", 0),
         "a combination missing from the table": (rows.replace("--no-default-features\t\n", "--features x\t\n"), 1),
         "a row no workflow passes": (rows + "config\tx86_64-unknown-linux-gnu\t--features y\t\n", 1),
         "the target's row missing": (rows.replace("config\tt-gnu\t--all-features\t\n", ""), 1),
