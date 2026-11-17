@@ -223,28 +223,47 @@ async fn at10_control_an_array_answer_with_results_declared_is_wrapped() {
     assert_eq!(structured["attribution"], OSM);
 }
 
-#[tokio::test]
-async fn at10_an_array_answer_without_results_declared_is_refused() {
-    let stub = Stub::start(Reply::json(&nominatim_answer())).await;
-    // One change from the control: `results` is not in the output schema.
-    let bare = "    type: object\n    properties:\n      attribution:\n        type: string\n";
-    let meta = gateway(vec![cap(
+/// Output validation is advisory (output_shape.rs, `enforce_output_schema`):
+/// an array answer under a schema without `results` passes through, and the
+/// gateway logs the mismatch at WARN. The log names the tool and reports an
+/// "undeclared key", never the key itself, which could be backend text.
+#[test]
+fn at10_an_array_answer_without_results_declared_is_logged_at_warn() {
+    let (response, warnings) = crate::test_log_capture::capture_warnings(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let stub = Stub::start(Reply::json(&nominatim_answer())).await;
+                // One change from the control: `results` is not declared.
+                let bare =
+                    "    type: object\n    properties:\n      attribution:\n        type: string\n";
+                let meta = gateway(vec![cap(
+                    "at10bare",
+                    &stub.url("at10-bare.test", "/s"),
+                    &attributed(),
+                    bare,
+                    "",
+                )]);
+                invoke(&meta, "at10bare", json!({ "q": "a" })).await
+            })
+    });
+    let (_, structured) = channels(&response);
+    assert!(
+        structured["results"].is_array(),
+        "advisory: the answer passes through"
+    );
+    for part in [
+        "tool output did not match its declared output schema",
         "at10bare",
-        &stub.url("at10-bare.test", "/s"),
-        &attributed(),
-        bare,
-        "",
-    )]);
-    let response = invoke(&meta, "at10bare", json!({ "q": "a" })).await;
-    let text = response.to_string();
-    assert!(
-        !text.contains("Helsingin tuomiokirkko"),
-        "no part of the refused answer is returned: {text}"
-    );
-    assert!(
-        text.contains("results"),
-        "the refusal names the undeclared key: {text}"
-    );
+        "undeclared key",
+    ] {
+        assert!(
+            warnings.contains(part),
+            "the WARN carries {part}: {warnings}"
+        );
+    }
 }
 
 // ── AT4: no declared attribution, no change ──────────────────────────
