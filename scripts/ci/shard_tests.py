@@ -137,6 +137,11 @@ RUNNING = re.compile(r"^running (\d+) tests?$")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
 
 
+def unkept(lines: list[str]) -> list[str]:
+    """One failure per distinct unkept-dir report in a step's output, whatever its kind."""
+    return []
+
+
 def selected(lines: list[str]) -> int:
     """Tests libtest selected, one `running N` per test binary.
 
@@ -553,8 +558,31 @@ def self_test() -> int:
         assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    unkept_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def unkept_rows() -> None:
+    """K6: every unkept-dir report fails the shard naming its test, whatever its kind, wherever it
+    starts on the line (raw stderr lands mid-line after a `test x ... ` prefix); a clean log passes."""
+    audit = ("test gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and"
+             "_the_stop_is_clean ... audit log at /tmp/.tmpmFJ46f/audit.jsonl is in a temp dir no test kept;"
+             " created by gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_ser"
+             "ving_and_the_stop_is_clean")
+    assert unkept([audit]) == [
+        "unkept temp dir: audit log at /tmp/.tmpmFJ46f/audit.jsonl; created by gateway::server::test_seams::"
+        "health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean"], unkept([audit])
+    # A kind no writer uses today fails the same way: the check reads the report, not a list of kinds.
+    novel = "frobnicator spool at /tmp/.tmpQx12Ab/spool.bin is in a temp dir no test kept; created by a::b::row"
+    assert unkept(["", novel, "test a::b::row ... ok"]) == [
+        "unkept temp dir: frobnicator spool at /tmp/.tmpQx12Ab/spool.bin; created by a::b::row"], unkept([novel])
+    # The same report printed twice by one test is one failure; two tests are two.
+    other = novel.replace("a::b::row", "a::b::other")
+    assert len(unkept([novel, novel, other])) == 2, unkept([novel, novel, other])
+    clean = ["running 2 tests", "test a::b::row ... ok", "test a::b::other ... ok",
+             "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
+    assert unkept(clean) == [], unkept(clean)
 
 
 def prebuilt_rows() -> None:
