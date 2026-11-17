@@ -50,9 +50,14 @@ type Random = fn(&mut [u8]) -> io::Result<()>;
 
 fn os_random(bytes: &mut [u8]) -> io::Result<()> {
     use ring::rand::SecureRandom as _;
-    ring::rand::SystemRandom::new()
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "temp name: the proxy's private directory name"
+    )]
+    let filled: io::Result<()> = ring::rand::SystemRandom::new()
         .fill(bytes)
-        .map_err(|_| io::Error::other("the OS random source failed"))
+        .map_err(|_| io::Error::other("the OS random source failed"));
+    filled
 }
 
 /// One fetch's proxy credential. No `Debug`: it carries the secret.

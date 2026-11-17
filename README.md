@@ -101,7 +101,7 @@ MCP Registry name: `mcp-name: io.github.MikkoParkkola/mcp-gateway`
 | **Cargo** | `cargo install --locked mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
-| **Docker** | `docker run --stop-timeout 31 -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_TOKEN -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --host 0.0.0.0 --port 39400` |
+| **Docker** | `docker run --stop-timeout 31 -p 127.0.0.1:39400:39400 -e MCP_GATEWAY_TOKEN -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish -e MCP_GATEWAY_SERVER__HOST=0.0.0.0 -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml --port 39400` |
 | **Docker, `npx`/`uvx` backends** | Same, with `:latest-full` — the default image carries no Node or `uv`, so a stdio backend that shells out to either cannot spawn. See [Docker Deployment](docs/DEPLOYMENT.md#docker-deployment). |
 
 `--locked` builds with the exact dependency versions this release was tested with. Without it Cargo picks the newest compatible versions on the day you install, which can differ from the ones the release was tested with. The release binaries and the container images are already built from the release's own lock file.
@@ -203,7 +203,7 @@ the command refuses (naming any comment lines a rewrite would drop), and `--forc
 
 #### Option C: hand-write `gateway.yaml`
 
-For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `cache`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
+For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
 
 ```yaml
 server:
@@ -259,7 +259,6 @@ through `/ui` with the token instead. See
 mcp-gateway setup export --target all --dry-run       # preview without writing
 mcp-gateway setup export --target all                 # write, back up, verify
 mcp-gateway setup export --target claude-code         # one client
-mcp-gateway setup export --target all --watch         # regenerate on gateway.yaml changes
 mcp-gateway setup export --rollback <backup-file>     # restore one client config
 ```
 
@@ -267,7 +266,7 @@ Existing client files are backed up before mutation. The command prints the exac
 
 Targets: `claude-code`, `claude-desktop`, `cursor`, `vs-code-copilot`, `windsurf`, `cline`, `zed`, `generic`, `all`. The file each one writes, and which clients have been verified against 4.0, are in [Supported clients](docs/CLIENTS.md).
 
-Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe the health endpoint, then fall back).
+Each client entry connects over HTTP when the gateway's health endpoint answers, and starts the gateway as a stdio subprocess otherwise.
 
 <details>
 <summary>Manual JSON snippet (if you prefer to edit by hand)</summary>
@@ -449,7 +448,7 @@ The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHu
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |
 | **Surfaced tools** | Pin high-value tools directly in `tools/list` for one-hop invocation. |
-| **Client config export** | `mcp-gateway setup export` writes the gateway's entry into each AI client's own MCP config file (Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, Zed), in proxy or stdio mode, with `--dry-run` and `--watch`. |
+| **Client config export** | `mcp-gateway setup export` writes the gateway's entry into each AI client's own MCP config file (Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, Zed), in proxy or stdio mode, with `--dry-run`. |
 
 ### Protocol and transport
 

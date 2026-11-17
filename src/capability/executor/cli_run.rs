@@ -34,7 +34,7 @@ pub(crate) struct Workdir(PathBuf);
 impl Workdir {
     pub(crate) fn create() -> std::io::Result<Self> {
         let root =
-            std::env::temp_dir().join(format!("mcp-gateway-cap-{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("mcp-gateway-cap-{}", crate::ids::new_v4().simple()));
         // A fresh random name, created (not opened): an entry planted at that
         // path makes this fail instead of being used.
         #[cfg(unix)]

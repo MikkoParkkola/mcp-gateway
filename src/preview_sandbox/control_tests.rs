@@ -191,11 +191,20 @@ fn t8_a_duplicated_status_field_is_refused() {
     assert!(peer_is_helper(&forged, 4241, 1000).is_err());
 }
 
-/// T8, kills "the listener outlives the accept": once the helper's one
-/// connection is taken, whatever the peer check said, no second connection
-/// is served.
+/// T8, kills "the listener outlives the accept" and "a second connection is
+/// taken": once the helper's one connection is taken, whatever the peer check
+/// said, no second connection is served. A connect that goes through must be
+/// reset (when read, or already while connecting): it was queued on a copy of
+/// the listener's fd that a child another test forks holds until its exec, and
+/// closing the last copy resets it. An accepted connection reads an end or a byte instead, or hangs. The
+/// row then waits for a refused connect: a live listener never refuses (once
+/// its backlog is full it answers "try again"), so the guard fails the row.
+/// Linux only: the sandbox runs nowhere else, and on macOS a full backlog
+/// refuses.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn t8_no_second_connection_is_served() {
+    use tokio::io::AsyncReadExt as _;
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("control.sock");
     let listener = tokio::net::UnixListener::bind(&path).expect("bind");
@@ -205,7 +214,37 @@ async fn t8_no_second_connection_is_served() {
         .expect("the accept did not end within the guard");
     drop(accepted);
     let _first = first.await.expect("join");
-    assert!(tokio::net::UnixStream::connect(&path).await.is_err());
+    let mut last = String::from("none");
+    let refused = tokio::time::timeout(GUARD, async {
+        loop {
+            match tokio::net::UnixStream::connect(&path).await {
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => break,
+                Ok(mut taken) => {
+                    let read = taken.read(&mut [0_u8; 1]).await;
+                    assert!(
+                        matches!(&read, Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset),
+                        "a second connection was served: its read gave {read:?}"
+                    );
+                    last = "a queued connect, reset".into();
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    last = "a full backlog's try again".into();
+                }
+                // Queued, then reset before the connect finished: the same
+                // closed copy as a taken connect reset on its read.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                    last = "a queued connect, reset while connecting".into();
+                }
+                Err(e) => panic!("a connect after the accept failed otherwise: {e}"),
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(
+        refused.is_ok(),
+        "a listener still took connections after the accept; last answer: {last}"
+    );
 }
 
 /// A `/proc/<pid>/stat` line: field 22, the start time, is `start`.

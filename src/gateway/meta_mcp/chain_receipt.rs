@@ -40,6 +40,10 @@ pub(crate) type ChainSlot = parking_lot::Mutex<ChainReceipt>;
 pub(crate) fn mint_nonce() -> crate::Result<String> {
     use ring::rand::SecureRandom as _;
     let mut bytes = [0_u8; 16];
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "nonce: a per-dispatch chain challenge, never stored or shared"
+    )]
     ring::rand::SystemRandom::new()
         .fill(&mut bytes)
         .map_err(|_| {

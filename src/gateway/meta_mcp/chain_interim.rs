@@ -438,7 +438,7 @@ pub fn mint_step_resume(
         expires_at: plan.expires_at,
         issued_at: now,
         origin_replica: state.replica().to_string(),
-        jti: uuid::Uuid::new_v4().to_string(),
+        jti: crate::ids::new_v4().to_string(),
     };
     state
         .keyring()
@@ -479,7 +479,7 @@ pub fn seal_chain_stop(
         // A fresh handle. The `jti` that reached this re-ask was consumed by
         // the redemption that ran the step, so carrying it forward would seal
         // an envelope the ledger has already retired.
-        jti: uuid::Uuid::new_v4().to_string(),
+        jti: crate::ids::new_v4().to_string(),
         rounds_used: previous.rounds_used.saturating_add(1),
         // A chain envelope never carries a lookup page's keyed hash.
         lookup_scope: None,

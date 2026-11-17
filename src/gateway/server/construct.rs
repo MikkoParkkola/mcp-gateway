@@ -182,7 +182,13 @@ impl Gateway {
             // Attached by `start_account_custody`, so this constructor stays
             // exactly what it was for a caller building a Config in memory.
             custody: None,
+            retire: None,
         })
+    }
+
+    /// Hand the HTTP stop the boot's retirement plan cell (see `crate::retire`).
+    pub(crate) fn set_retire_cell(&mut self, cell: crate::retire::RetireCell) {
+        self.retire = Some(cell);
     }
 
     /// Resolve env-file-supplied values through `env`.

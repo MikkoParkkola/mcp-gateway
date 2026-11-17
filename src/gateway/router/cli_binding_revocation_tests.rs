@@ -55,8 +55,20 @@ pub(super) async fn fixture() -> (
     (state, store, dir, keys)
 }
 
+/// Keys as the config file holds them: `ApiKeyConfig` is not `Serialize`, and
+/// the config writes its keys through `AuthConfig`.
+fn keys_json(keys: &[ApiKeyConfig]) -> serde_json::Value {
+    let auth = crate::config::AuthConfig {
+        api_keys: keys.to_vec(),
+        ..crate::config::AuthConfig::default()
+    };
+    let mut value = serde_json::to_value(&auth).expect("auth serialises");
+    value["api_keys"].take()
+}
+
 async fn reload(state: &Arc<super::AppState>, dir: &std::path::Path, keys: &[ApiKeyConfig]) {
-    let text = serde_json::json!({"auth": {"enabled": true, "api_keys": keys}}).to_string();
+    let text =
+        serde_json::json!({"auth": {"enabled": true, "api_keys": keys_json(keys)}}).to_string();
     reload_text(state, dir, text).await; // Reuses the K5 owner-only file/reload harness; JSON is YAML.
 }
 
@@ -191,7 +203,7 @@ async fn enable_key_creation(state: &mut Arc<super::AppState>, dir: &std::path::
     let path = dir.join("gateway.yaml");
     let config = serde_json::json!({
         "secrets": {"store": "files"},
-        "auth": {"enabled": true, "api_keys": state.live_config.get().auth.api_keys},
+        "auth": {"enabled": true, "api_keys": keys_json(&state.live_config.get().auth.api_keys)},
     });
     let text = crate::yaml::to_string(&config).expect("block YAML");
     reload_text(state, dir, text).await;

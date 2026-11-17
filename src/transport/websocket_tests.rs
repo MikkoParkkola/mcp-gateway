@@ -246,7 +246,7 @@ fn session_ids_are_unique() {
 fn session_id_is_valid_uuid() {
     let s = WebSocketSession::new();
     assert!(
-        Uuid::parse_str(s.id()).is_ok(),
+        uuid::Uuid::parse_str(s.id()).is_ok(),
         "session_id must be a valid UUID"
     );
 }

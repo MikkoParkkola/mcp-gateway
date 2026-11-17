@@ -170,9 +170,11 @@ impl StreamHub {
     /// A hub with a random boot id.
     pub(crate) fn new() -> Self {
         use rand::RngExt;
+        #[allow(clippy::disallowed_methods, reason = "id: the stream hub's boot id")]
+        let boot = rand::rng().random();
         Self {
             shared: Arc::new(Shared {
-                boot: rand::rng().random(),
+                boot,
                 inner: Mutex::new(Inner::default()),
                 feeds: [
                     Arc::new(super::feed::LogFeed::new(super::id::LogName::Invocation)),

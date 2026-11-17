@@ -43,6 +43,16 @@ fn unused_entries_warn_with_their_count() {
     let row = row(&report(Some("keychain"), false, Some(2)));
     assert_eq!(row.status, CheckStatus::Warn);
     assert!(row.detail.contains("unused=2"), "{}", row.detail);
+    // Offline, doctor reads the config file's capability directories only; a
+    // running gateway's Settings listing also reads its live ones.
+    assert_eq!(
+        row.hint.as_deref(),
+        Some(
+            "unused entries stay until an admin removes them; doctor reads the config's \
+             capability directories, and the running gateway's Settings list, which also reads \
+             its live ones, can show fewer"
+        )
+    );
 }
 
 #[test]

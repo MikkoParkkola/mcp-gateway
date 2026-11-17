@@ -17,7 +17,14 @@ use super::reader::Cursor;
 
 /// This process's token key. A restart makes every earlier token unreadable,
 /// which reads as a reset, never as an error.
-static KEY: LazyLock<[u8; 32]> = LazyLock::new(rand::random);
+static KEY: LazyLock<[u8; 32]> = LazyLock::new(|| {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "HMAC key: this process's activity cursor key"
+    )]
+    let key: [u8; 32] = rand::random();
+    key
+});
 
 #[derive(Serialize, Deserialize)]
 struct Wire {

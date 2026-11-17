@@ -75,6 +75,8 @@ mod backend_preview;
 mod capabilities;
 #[path = "webui_management_tests/capability_editor.rs"]
 mod capability_editor;
+#[path = "webui_management_tests/classic_routes.rs"]
+mod classic_routes;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
 #[path = "webui_management_tests/openapi_import.rs"]

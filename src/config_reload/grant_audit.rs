@@ -433,7 +433,7 @@ impl GrantAuditor {
         if inner.commit_owed || inner.state.as_ref().is_some_and(|s| s.pending.is_some()) {
             return Err("a grant audit plan is still pending".to_string());
         }
-        let run = uuid::Uuid::new_v4().to_string();
+        let run = crate::ids::new_v4().to_string();
         let active = crate::identity_grants::journal::active_rows(rows, now);
         for row in &active {
             let mut change = GrantChangeRecord::new(GrantChangeVerb::Loaded);

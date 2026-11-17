@@ -82,7 +82,7 @@ jobs:
   # executables into one report and keeps the name the grade and coverage_grade.sh read.
   linux-plan:
     name: llvm-cov Linux, plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       parts: ${{ steps.plan.outputs.parts }}
@@ -102,7 +102,7 @@ jobs:
 
   linux-sdk:
     name: llvm-cov Linux, SDK journey
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,7 +142,7 @@ jobs:
   linux-part:
     name: llvm-cov Linux, part ${{ matrix.part }}
     needs: linux-plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -194,7 +194,7 @@ jobs:
     # Runs whatever the parts did, and fails unless every one succeeded: a skipped or
     # cancelled part would otherwise leave this check unreported, not red.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Every part succeeded
@@ -297,7 +297,7 @@ jobs:
     # Runs whatever the platform jobs did, so it is never skipped: a skipped job would
     # read as passing if this check were ever made required.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       # Both platform runs must have passed every test; on a pull request the Windows run

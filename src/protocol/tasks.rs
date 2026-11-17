@@ -185,7 +185,7 @@ impl Task {
         Self {
             tool: tool.to_owned(),
             wire: TaskWire {
-                task_id: format!("task-{}", uuid::Uuid::new_v4()),
+                task_id: format!("task-{}", crate::ids::new_v4()),
                 created_at: at,
                 last_updated_at: at,
                 ttl_ms: options.ttl_ms,
