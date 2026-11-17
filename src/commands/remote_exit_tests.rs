@@ -792,3 +792,6 @@ mod input;
 
 #[path = "remote_secret_tests.rs"]
 mod secrets;
+
+#[path = "remote_answer_tests.rs"]
+mod answers;
