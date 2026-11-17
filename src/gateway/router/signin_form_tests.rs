@@ -93,18 +93,33 @@ fn named_key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
     }
 }
 
-async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
-    let auth = AuthConfig {
+/// The fixture's keys: one admin key and one standard key.
+fn fixture_keys() -> Vec<ApiKeyConfig> {
+    vec![
+        named_key(ADMIN_NAME, ADMIN_SECRET, true),
+        named_key(STANDARD_NAME, STANDARD_SECRET, false),
+    ]
+}
+
+fn auth_with(keys: Vec<ApiKeyConfig>) -> AuthConfig {
+    AuthConfig {
         enabled: true,
         bearer_token: Some("signin-static-bearer".to_string()),
-        api_keys: vec![
-            named_key(ADMIN_NAME, ADMIN_SECRET, true),
-            named_key(STANDARD_NAME, STANDARD_SECRET, false),
-        ],
+        api_keys: keys,
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
-    };
-    test_router_app_state_with_auth_and_key_server(&auth, None).await
+    }
+}
+
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    test_router_app_state_with_auth_and_key_server(&auth_with(fixture_keys()), None).await
+}
+
+/// A key reload. The published config does not carry the fixture's key table
+/// (the fixture installs it directly), so a key edit replaces the whole auth
+/// section, as live_keys_dashboard_tests.rs does.
+fn reload_keys(state: &AppState, keys: Vec<ApiKeyConfig>) {
+    reload(state, |config| config.auth = auth_with(keys));
 }
 
 fn reload(state: &AppState, edit: impl FnOnce(&mut crate::config::Config)) {
@@ -305,17 +320,15 @@ fn record_principal(state: &AppState, secret: &str) -> String {
 }
 
 fn rotate(state: &AppState, name: &str, new_secret: &str) {
-    reload(state, |config| {
-        let key = config
-            .auth
-            .api_keys
-            .iter_mut()
-            .find(|key| key.name == name)
-            .expect("the key is in the fixture");
-        key.key_sha256 = Some(crate::config::api_key_digest_spec(new_secret.as_bytes()));
-        key.previous_key_sha256 = None;
-        key.previous_expires_at = None;
-    });
+    let mut keys = fixture_keys();
+    let key = keys
+        .iter_mut()
+        .find(|key| key.name == name)
+        .expect("the key is in the fixture");
+    key.key_sha256 = Some(crate::config::api_key_digest_spec(new_secret.as_bytes()));
+    key.previous_key_sha256 = None;
+    key.previous_expires_at = None;
+    reload_keys(state, keys);
 }
 
 fn url_has_no_secret_query(url: &str) {
@@ -925,15 +938,12 @@ async fn n7c_an_expiring_key_caps_the_session_at_the_key_expiry() {
     assert!(limits(&state).idle > Duration::from_secs(121));
     let now = Now::read();
     let expires = chrono::DateTime::<chrono::Utc>::from(now.wall + Duration::from_secs(120));
-    reload(&state, |config| {
-        config
-            .auth
-            .api_keys
-            .iter_mut()
-            .find(|key| key.name == ADMIN_NAME)
-            .expect("the admin key")
-            .expires_at = Some(expires);
-    });
+    let mut keys = fixture_keys();
+    keys.iter_mut()
+        .find(|key| key.name == ADMIN_NAME)
+        .expect("the admin key")
+        .expires_at = Some(expires);
+    reload_keys(&state, keys);
     let origin = http_origin(&state, "127.0.0.1");
     let reply = send(
         &state,
@@ -980,12 +990,13 @@ async fn n8_mint_and_refusal_are_audited_and_the_key_stays_out_of_the_log() {
     assert!(!N8_SECRET.contains(N8_NAME) && !N8_WRONG.contains(N8_NAME));
     let (mut state, _dir) = fixture().await;
     let (log, _audit_dir) = with_audit(&mut state);
-    reload(&state, |config| {
-        config.auth.api_keys = vec![
+    reload_keys(
+        &state,
+        vec![
             named_key(N8_NAME, N8_SECRET, true),
             named_key(STANDARD_NAME, STANDARD_SECRET, false),
-        ];
-    });
+        ],
+    );
     let origin = http_origin(&state, "127.0.0.1");
     let principal = record_principal(&state, N8_SECRET);
     let ((), captured) = traced(|| async {
