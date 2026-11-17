@@ -369,10 +369,21 @@ async fn s1_gateway_search_finds_each_map_tool_by_name() {
             context(&who),
         ))
         .await;
-        let text = serde_json::to_string(&response).expect("json");
+        // The matches, by name: the echoed query must not count as a hit.
+        let response = serde_json::to_value(&response).expect("json");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("search text: {response}"));
+        let found: Value = serde_json::from_str(text).expect("search JSON");
+        let tools: Vec<&str> = found["matches"]
+            .as_array()
+            .expect("matches")
+            .iter()
+            .filter_map(|m| m["tool"].as_str())
+            .collect();
         assert!(
-            text.contains(&format!("\\\"{tool}\\\"")) || text.contains(&format!("\"{tool}\"")),
-            "{query}: finds {tool}: {text}"
+            tools.contains(&format!("{CAPS}:{tool}").as_str()),
+            "{query}: finds {tool} among {tools:?}"
         );
     }
 }
