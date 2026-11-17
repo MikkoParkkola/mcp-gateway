@@ -128,8 +128,11 @@ pub(super) fn creation_blocked(error: &io::Error) -> Option<&'static str> {
 
 /// A journal beside `config`, or one whose absence cannot be established.
 pub(crate) fn journal_pending(config: &Path) -> bool {
-    !matches!(
-        std::fs::symlink_metadata(super::super::journal::journal_path(config)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound
-    )
+    !absent(&super::super::journal::journal_path(config))
+}
+
+/// Whether `path` is proven absent: only a `NotFound` from `symlink_metadata` proves it. A
+/// dangling symlink, a permission error or any other failure counts as present.
+pub(crate) fn absent(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == io::ErrorKind::NotFound)
 }
