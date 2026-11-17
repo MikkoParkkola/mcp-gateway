@@ -1,7 +1,7 @@
 file	sites	purpose
 src/capability/executor/client.rs	Client::builder=1	calls a capability file makes, to the URL written in that file
 src/commands/config_export/mod.rs	TcpStream::connect=1	`config export`: a TCP connect to the local gateway's health address
-src/commands/dashboard_link.rs	Client::builder=1	`dashboard`: reads the local gateway
+src/commands/dashboard_link_admin.rs	Client::builder=1	`dashboard`: reads the local gateway
 src/commands/doctor.rs	Client::builder=1	`doctor`: probes configured HTTP backends
 src/commands/doctor/health.rs	Client::builder=1	`doctor`: probes the local gateway runtime
 src/commands/doctor/npm_pin.rs	Client::builder=1	`doctor`: asks registry.npmjs.org about npx packages enabled stdio backends pin; off with --no-registry-check, MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK or security.posture: hardened

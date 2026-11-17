@@ -305,6 +305,68 @@ impl AuthConfig {
         Ok(())
     }
 
+    /// The sha256 of the bearer token, when it is a literal or an `env:` value
+    /// shorter than [`super::MIN_SECRET_LEN`] characters. A digest,
+    /// not the token, so no caller holds a copy it could log.
+    ///
+    /// Reads only the configured text and, for `env:`, the overlay: `auto`,
+    /// `file:` and `keychain:` are never read or measured, so the caller must
+    /// run this before the load replaces references with their values. An
+    /// empty literal, or an unset or empty variable, is `None`: the existing
+    /// reference checks refuse those with their own message.
+    pub(crate) fn short_bearer(&self, overlay: &crate::config::EnvOverlay) -> Option<String> {
+        use crate::config::secret_ref::SecretRef;
+        // Before `SecretRef::parse`, which would read `auto` as a literal.
+        let spec = self
+            .bearer_token
+            .as_deref()
+            .filter(|spec| *spec != "auto")?;
+        let token = match SecretRef::parse(spec) {
+            SecretRef::Literal(text) => text.to_owned(),
+            SecretRef::Env(name) => overlay.resolve(name)?,
+            SecretRef::File(_) | SecretRef::Keychain(_) => return None,
+        };
+        let length = token.chars().count();
+        (length > 0 && length < super::MIN_SECRET_LEN)
+            .then(|| crate::hashing::sha256_hex(token.as_bytes()))
+    }
+
+    /// A short literal or `env:` bearer token refuses the load under
+    /// `security.posture: hardened` and otherwise warns once per token. Called
+    /// by the load before references are replaced with their values (see
+    /// [`Self::short_bearer`]). Neither the error nor the warning holds the token.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConfigValidation`] naming the field, the floor and the fix,
+    /// under `hardened` only.
+    pub(crate) fn enforce_bearer_floor(
+        &self,
+        posture: crate::security::SecurityPosture,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<()> {
+        let Some(digest) = self.short_bearer(overlay) else {
+            return Ok(());
+        };
+        let floor = super::MIN_SECRET_LEN;
+        if posture == crate::security::SecurityPosture::Hardened {
+            return Err(Error::ConfigValidation(format!(
+                "auth.bearer_token is shorter than {floor} characters, which \
+                 security.posture=hardened refuses; set a token of {floor} or more \
+                 characters, or \"auto\""
+            )));
+        }
+        // Keyed on the token's digest, held only in the once-set: a retried
+        // reload of the same config stays quiet, a new short token warns again.
+        if crate::config::log_once::first_time(&format!("short auth.bearer_token {digest}")) {
+            tracing::warn!(
+                "auth.bearer_token is shorter than {floor} characters and can be guessed; \
+                 set a token of {floor} or more characters, or \"auto\""
+            );
+        }
+        Ok(())
+    }
+
     /// Resolve the bearer token (expand env vars, generate if `auto`).
     ///
     /// # Errors
@@ -436,6 +498,11 @@ impl AgentDefinitionConfig {
 #[cfg(test)]
 #[path = "auth_multi_user_tests.rs"]
 mod multi_user_tests;
+
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "auth_short_bearer_tests.rs"]
+mod short_bearer_tests;
 
 // #2241: the bearer token is a credential too.
 #[cfg(tp5)]

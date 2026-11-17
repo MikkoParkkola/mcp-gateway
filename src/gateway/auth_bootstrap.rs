@@ -51,10 +51,7 @@ pub(super) fn try_dashboard_bootstrap(
         // it (`server::mod`, `support::serve_tls`); a request without it came
         // from somewhere unaccounted for, and the safe reading of "unaccounted
         // for" is "not at this machine".
-        let peer_is_local = request
-            .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .is_some_and(|info| info.0.ip().is_loopback());
+        let peer_is_local = super::peer_ip(request).is_some_and(|ip| ip.is_loopback());
 
         // A loopback peer is not conclusive on its own: a reverse proxy running
         // on THIS machine also connects from loopback. Such a proxy announces
