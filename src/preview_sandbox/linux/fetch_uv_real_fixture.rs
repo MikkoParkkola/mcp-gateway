@@ -509,3 +509,54 @@ pub(super) fn site_off(line: &str) -> bool {
     }
     false
 }
+
+/// Put `bytes` at `path` inside a copied tree as a new regular file. The
+/// copy may hold a link there into the host (Debian's stdlib links
+/// `sitecustomize.py` into `/etc`): the entry is removed first, without
+/// following it, and the file is created new, so nothing is ever written
+/// through a link. No row writes a host path.
+pub(super) fn plant_new(path: &Path, bytes: &[u8]) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("removing the copied {}: {e}", path.display()),
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap_or_else(|e| panic!("creating {} new: {e}", path.display()));
+    std::io::Write::write_all(&mut file, bytes).expect("the planted bytes");
+}
+
+/// Kills "a planted file is written through a copied link": with a link at
+/// the path pointing at a decoy outside the copy, planting leaves the decoy
+/// byte for byte unchanged and puts a regular file there. Control: a plain
+/// create-new open of a path holding a link refuses, so the link is gone
+/// before the write, never followed by it. Holds whatever the decoy's owner.
+#[test]
+fn plant_new_never_writes_through_a_link() {
+    let root = tempfile::tempdir().expect("root");
+    let decoy = root.path().join("host-etc/sitecustomize.py");
+    std::fs::create_dir_all(decoy.parent().expect("dir")).expect("decoy dir");
+    std::fs::write(&decoy, "decoy").expect("decoy");
+    let copy = root.path().join("copy/lib/python3.13");
+    std::fs::create_dir_all(&copy).expect("copy");
+    let planted = copy.join("sitecustomize.py");
+    std::os::unix::fs::symlink(&decoy, &planted).expect("link");
+    let refused = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&planted)
+        .map(|_| ());
+    assert_eq!(
+        refused.map_err(|e| e.kind()),
+        Err(std::io::ErrorKind::AlreadyExists),
+        "create-new refuses a path holding a link"
+    );
+    plant_new(&planted, b"hook");
+    assert_eq!(std::fs::read(&decoy).expect("decoy"), b"decoy");
+    let meta = std::fs::symlink_metadata(&planted).expect("planted");
+    assert!(meta.file_type().is_file(), "a regular file, not a link");
+    assert_eq!(std::fs::read(&planted).expect("planted"), b"hook");
+}

@@ -6,7 +6,9 @@
 //! named `ran` line before its first assertion. The enabling PR deletes the
 //! skip, so a missing uv then fails the row.
 
-use super::fetch_uv_real_fixture::{Layout, Real, fixed, lines, ready, real_uvx, site_off, spawns};
+use super::fetch_uv_real_fixture::{
+    Layout, Real, fixed, lines, plant_new, ready, real_uvx, site_off, spawns,
+};
 
 /// U-spawn-S (design 3), kills m-no-wrapper and m-unquoted-wrapper: with
 /// the recorder as the interpreter's real file, the fetch's one interpreter
@@ -77,24 +79,7 @@ async fn u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch() {
         return;
     };
     let layout = Layout::unlinked("plain", Real::Recorder);
-    // The host's stdlib may hold sitecustomize.py as a link to a host file
-    // (Debian's points into /etc): the copy keeps the link, so it goes first
-    // and the hook is created new, never written through it.
-    let hook = layout.stdlib().join("sitecustomize.py");
-    match std::fs::remove_file(&hook) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => panic!("removing the copied sitecustomize.py: {e}"),
-    }
-    std::io::Write::write_all(
-        &mut std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&hook)
-            .expect("the hook is created new"),
-        HOOK.as_bytes(),
-    )
-    .expect("hook");
+    plant_new(&layout.stdlib().join("sitecustomize.py"), HOOK.as_bytes());
     let (out, _) = real_uvx(
         &ready,
         Some(&layout),
