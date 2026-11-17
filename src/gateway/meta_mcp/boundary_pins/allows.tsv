@@ -11,7 +11,6 @@ src/config_reload/apply.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	removex1
 src/config_reload/refusals.rs	startup_refusals	statement	Admin	allx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
-src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_context_lock.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
 src/config_reload/reload_context_lock.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1

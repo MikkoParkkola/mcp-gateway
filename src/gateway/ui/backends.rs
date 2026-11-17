@@ -231,7 +231,7 @@ async fn add_backend(
     let selected = allowed_tools.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Add, &req.name, slotted, move |config| {
+    let edit = move |config: &mut crate::config::Config| {
         add_backend_config(config, &name, resolved)
             .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
             .map(|notes| {
@@ -244,8 +244,8 @@ async fn add_backend(
                 (notes, enabled)
             })
             .map_err(|message| add_refusal(&name, message))
-    })
-    .await;
+    };
+    let mutation = write_backend(&state, BackendOp::Add, &req.name, slotted, &guard, edit).await;
 
     let write::Written {
         value: (notes, enabled),
@@ -304,7 +304,7 @@ async fn remove_backend(
     let removed = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Remove, &name, None, move |config| {
+    let edit = move |config: &mut crate::config::Config| {
         remove_backend_config(config, &removed).map_err(|_| {
             (
                 StatusCode::NOT_FOUND,
@@ -317,8 +317,8 @@ async fn remove_backend(
         Ok::<Vec<String>, (StatusCode, String)>(crate::config_persistence::comments_a_write_drops(
             &path, config,
         ))
-    })
-    .await;
+    };
+    let mutation = write_backend(&state, BackendOp::Remove, &name, None, &guard, edit).await;
 
     let gone = match mutation {
         Ok(written) => {
@@ -453,6 +453,7 @@ async fn update_backend(
         BackendOp::Update,
         &updated,
         slotted,
+        &guard,
         move |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));

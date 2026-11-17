@@ -161,12 +161,12 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 #[path = "dashboard_link_admin.rs"]
 mod admin;
 
-pub(crate) use admin::{
-    AdminCallError, AdminFailureKind, AdminResponse, admin_call, admin_call_url, fetch_link,
-    gateway_reason, redact_body,
-};
 #[cfg(test)]
-pub(crate) use admin::{AdminClientOptions, admin_call_url_with_options};
+pub(crate) use admin::admin_call_url_with_options;
+pub(crate) use admin::{
+    AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, admin_call,
+    admin_call_url, admin_stream_url, fetch_link, gateway_reason, redact_body,
+};
 
 /// Printed instead of an answer the redactor cannot make safe.
 const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";

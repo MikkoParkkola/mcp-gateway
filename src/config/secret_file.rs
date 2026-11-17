@@ -52,6 +52,10 @@ pub(crate) enum SecretFile {
     RecoveryFile,
     /// A v2 recovery journal, with the recovery rule and a 1 MiB read limit.
     RecoveryJournalV2,
+    /// The config history: past versions of the operator's files, env files
+    /// included. Like a recovery file, a refusal never suggests fixing its
+    /// owner or mode: a planted history is one a restore would apply.
+    ConfigHistory,
 }
 
 /// The Windows DACL refusal: the guard's `head`, then `detail` (the found
@@ -100,6 +104,12 @@ const RECOVERY_FILE_FIX: &str = "Both the replace journal and its staged origina
      owner and mode alone, because fixing them would make the next recovery restore them. Check \
      gateway.yaml against a known-good copy, move both files aside, then retry.";
 
+/// What a refused config history gets instead of an owner or mode fix.
+const CONFIG_HISTORY_FIX: &str = "The config history is untrusted: another account could have \
+     planted it. Leave its owner and mode alone, because fixing them would let a restore apply it. \
+     Move it aside; the gateway keeps this run's history in memory and starts a new file next \
+     start.";
+
 /// What a file's mode must protect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Protects {
@@ -134,15 +144,18 @@ impl SecretFile {
             Self::IdentityGrants => "identity grants file",
             Self::ControlPlaneCollection => "control-plane file",
             Self::RecoveryFile | Self::RecoveryJournalV2 => "replace journal or staged original",
+            Self::ConfigHistory => "config history file",
         }
     }
 
     /// The one place a class's refusal guidance is decided: a recovery file
-    /// gets [`RECOVERY_FILE_FIX`] in place of any owner, mode or ACL fix,
+    /// gets [`RECOVERY_FILE_FIX`] and the config history
+    /// [`CONFIG_HISTORY_FIX`] in place of any owner, mode or ACL fix,
     /// whatever the refusal.
     const fn recovery_guidance(self) -> Option<&'static str> {
         match self {
             Self::RecoveryFile | Self::RecoveryJournalV2 => Some(RECOVERY_FILE_FIX),
+            Self::ConfigHistory => Some(CONFIG_HISTORY_FIX),
             _ => None,
         }
     }
@@ -509,6 +522,8 @@ pub(crate) enum CheckedFile {
     ControlPlaneCollection,
     /// `gateway.yaml`, reread by a read-only report.
     Config,
+    /// The config history file under the data directory.
+    ConfigHistory,
 }
 
 /// The one mode-checked read for files outside `config` (F18): open once,
@@ -541,6 +556,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
         CheckedFile::Config => SecretFile::Config,
+        CheckedFile::ConfigHistory => SecretFile::ConfigHistory,
     }
 }
 

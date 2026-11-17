@@ -304,7 +304,9 @@ pub(super) async fn settings_save(
         state.transparency_log.clone(),
         GatewayAuth::of(state.live_config.running().auth.enabled),
     );
-    match ui_save(ctx, posture, base, edit, secrets, RELOAD_LOCK_WAIT).await {
+    let who =
+        super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
         Ok(saved) => Json(json!({
             "revision": saved.revision.as_str(), "changed": saved.changed,
             "restart_required": restart_fields(&fields, &saved.reload),

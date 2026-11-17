@@ -3,6 +3,7 @@
 //! `MetaMcp` `tools/call` routing and the dispatch below the gate.
 
 use crate::error::rpc_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
+use crate::security::audit::AuditWho;
 use std::borrow::Cow;
 use std::ops::ControlFlow;
 
@@ -537,7 +538,7 @@ impl MetaMcp {
             Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.admin.is_gateway()),
             Some(MetaArm::ListProfiles) => self.list_profiles(),
             Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
-            Some(MetaArm::ReloadConfig) => self.reload_config().await,
+            Some(MetaArm::ReloadConfig) => self.reload_config(&AuditWho::from_caller(caller)).await,
             Some(MetaArm::ReloadCapabilities) => self.reload_capabilities().await,
             // A name that matches no tool is refused before any backend, so it
             // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A

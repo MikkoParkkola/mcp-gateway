@@ -152,7 +152,11 @@ security:
         let mut config = (*self.live.get()).clone();
         config.meta_mcp.surfaced_tools[0].server = "beta".into();
         write_config(&self.dir, &config);
-        let result = self.meta.reload_config().await.unwrap();
+        let result = self
+            .meta
+            .reload_config(&crate::security::audit::AuditWho::gateway())
+            .await
+            .unwrap();
         assert_eq!(result["status"], "ok", "{result}");
         assert_eq!(result["restart_required"], false, "{result}");
     }

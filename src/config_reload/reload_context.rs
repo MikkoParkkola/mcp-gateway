@@ -15,6 +15,7 @@ use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{IdentityGrantSink, LiveConfig, ReloadOutcome, SHUTDOWN_ABORTED_ERROR, apply_patch};
+use crate::config_reload::history::Source;
 
 #[path = "reload_context_write.rs"]
 mod write_api;
@@ -252,6 +253,8 @@ impl ReloadContext {
     /// Publish `overlay` and, when it changes what the capability backend
     /// lists, send the same tools-changed notice a registry change sends.
     fn publish_overlay(&self, overlay: Arc<crate::config::EnvOverlay>) {
+        #[cfg(test)]
+        self.live_config.observe_overlay();
         match &self.capabilities {
             // Under the backend's listing lock, which an expired login's
             // announcement takes too, so one change is announced once.
@@ -365,7 +368,10 @@ impl ReloadContext {
     /// # Errors
     ///
     /// The gate's refusal text, or `reload_outcome`'s error.
-    pub async fn manual_reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+    pub(crate) async fn manual_reload_outcome(
+        &self,
+        source: Source,
+    ) -> std::result::Result<ReloadOutcome, String> {
         use crate::gateway::restart_config_floor::{AdmitKind, Refusal};
         let gate = self.registry.config_gate();
         let _admitted = gate.admit(AdmitKind::ManualReload).map_err(|refusal| {
@@ -380,7 +386,7 @@ impl ReloadContext {
         gate.call_admitted(
             crate::gateway::restart_config_floor::seams::AdmittedPoint::ManualAfterAdmission,
         );
-        let outcome = self.reload_outcome().await?;
+        let outcome = self.reload_outcome_from(source).await?;
         #[cfg(test)]
         gate.record_reload(
             crate::gateway::restart_config_floor::seams::ReloadSource::Manual,
@@ -395,6 +401,14 @@ impl ReloadContext {
     ///
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        self.reload_outcome_from(Source::File).await
+    }
+
+    /// [`Self::reload_outcome`] recording `source` on the history event.
+    pub(crate) async fn reload_outcome_from(
+        &self,
+        source: crate::config_reload::history::Source,
+    ) -> std::result::Result<ReloadOutcome, String> {
         // Grants FIRST, and on their own lock. Two reasons, both settled in
         // review: a config refusal must not hold a revocation hostage, and a
         // revocation must not queue behind `backend.stop()` for an unrelated
@@ -464,7 +478,7 @@ impl ReloadContext {
                 return Err(skipped);
             }
         };
-        let mut outcome = match self.reload_outcome_locked_at(&target).await {
+        let mut outcome = match self.reload_outcome_locked_at(&target, source).await {
             Ok(outcome) => {
                 // An applied reload marks the charts; a refused one
                 // returns below and marks nothing.
@@ -498,6 +512,8 @@ impl ReloadContext {
     async fn reload_transaction(
         &self,
         path: &std::path::Path,
+        source: Source,
+        slot: &mut crate::config_reload::history::RecordSlot,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
@@ -543,9 +559,13 @@ impl ReloadContext {
             // The env files can rotate under an unchanged config file, so the
             // overlay is published even here — a resolver reading the old one
             // would serve a value the operator has already replaced.
+            // The same rotation changes what the config was built from: the
+            // inputs swap first, then the overlay, then the record (design D-1).
+            let pending = self
+                .live_config
+                .set_inputs_from(inputs, &env_restart_keys, source);
             self.publish_overlay(overlay);
-            // The same rotation changes what the config was built from.
-            self.live_config.set_inputs(inputs, &env_restart_keys);
+            slot.spawn(&self.live_config, pending);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -598,9 +618,15 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config
-            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys);
+        let pending = self.live_config.set_applied(
+            Arc::clone(&generation),
+            inputs,
+            &env_restart_keys,
+            source,
+        );
         self.publish_overlay(overlay);
+        // No await between the swap and this spawn (design D-1).
+        slot.spawn(&self.live_config, pending);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
         // `surfaced_tools` applies here too, under the same lock.

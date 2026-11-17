@@ -204,6 +204,7 @@ impl super::Gateway {
                 ),
             )
             .with_policy_epoch(std::sync::Arc::clone(&built.meta_mcp.policy_epoch))
+            .with_history(self.history_hook(&built.data_dir))
             .with_startup_revision(built.meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
         built.meta_mcp.set_live_config(live_config);

@@ -92,6 +92,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -127,6 +128,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -168,6 +170,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -198,6 +201,7 @@ async fn an_intent_failure_writes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -442,19 +446,18 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         // A manual reload goes through the config gate's wrapper, which must itself
         // run the same transaction (asserted below).
         assert!(
-            text.contains(".reload_outcome().await")
-                || text.contains(".manual_reload_outcome().await"),
-            "{entry} no longer reloads through ReloadContext::reload_outcome"
+            text.contains(".reload_outcome().await") || text.contains(".manual_reload_outcome("),
+            "{entry} no longer reloads through reload_outcome or manual_reload_outcome"
         );
     }
     let wrapper = source_span(
         "config_reload/reload_context.rs",
-        "pub async fn manual_reload_outcome",
+        "pub(crate) async fn manual_reload_outcome",
         "\n    }\n",
     );
     assert!(
-        wrapper.contains("self.reload_outcome().await"),
-        "manual_reload_outcome no longer runs ReloadContext::reload_outcome"
+        wrapper.contains("self.reload_outcome_from("),
+        "manual_reload_outcome no longer runs the full reload path"
     );
 }
 
@@ -583,6 +586,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -619,6 +623,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -646,6 +651,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -683,6 +689,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -719,6 +726,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;

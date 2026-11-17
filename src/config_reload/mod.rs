@@ -242,6 +242,7 @@ pub(crate) fn flags_off(mut config: Config) -> Config {
     config.security.ssrf_protection = false;
     config
 }
+pub(crate) mod history;
 pub(crate) mod override_audit;
 #[cfg_attr(
     not(feature = "webui"),

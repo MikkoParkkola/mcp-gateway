@@ -129,7 +129,7 @@ mod window_seal_http_backend;
 #[cfg(test)]
 mod window_seal_http_tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::router::CallerStanding;
@@ -300,6 +300,21 @@ fn configured_minting_strategy_kind(
 #[cfg(test)]
 fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
     configured_minting_strategy_kind(config).is_some()
+}
+
+impl Gateway {
+    /// The config history this gateway records its versions into, kept under
+    /// `data_dir`. A discovered config file is reloaded like a named one, so
+    /// it is recorded too; with neither there is no file to record.
+    fn history_hook(&self, data_dir: &Path) -> Option<crate::config_reload::history::HistoryHook> {
+        let path = self
+            .config_path
+            .as_deref()
+            .or(self.watched_config.as_deref())?;
+        // A config version holds gateway.yaml and the env files; grants
+        // versions are recorded separately.
+        Some(crate::config_reload::history::hook_for(data_dir, path))
+    }
 }
 
 /// Backends whose gateway-held OAuth token is not blessed for shared use

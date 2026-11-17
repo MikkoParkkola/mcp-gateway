@@ -4,6 +4,7 @@
 //! the gateway itself makes no namespace syscall, and the gateway's own binary
 //! runs inside them as `__preview-sandbox` and `__preview-drop`.
 
+mod ca_bundle;
 mod control_client;
 mod drop;
 mod helper;
@@ -145,6 +146,8 @@ pub(super) async fn start_fetching(
     target: &Target,
     protected: &[PathBuf],
     deadline: tokio::time::Instant,
+    ca_bundle: Option<OsString>,
+    runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
     use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
     use super::proxy::{AllowlistProxy, System};
@@ -153,15 +156,32 @@ pub(super) async fn start_fetching(
     let begun = tokio::time::Instant::now();
     let unshare = find_unshare()?;
     let mut plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let proxy = AllowlistProxy::bind(Arc::new(System), Arc::new(System), Arc::new(System))
-        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
+    let proxy = AllowlistProxy::bind(
+        runtime_dir,
+        Arc::new(System),
+        Arc::new(System),
+        Arc::new(System),
+    )
+    .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
     // Beside the proxy socket, in the proxy's owner-only directory, removed
     // with it when the proxy drops.
     let control = proxy.unix_path().with_file_name("control.sock");
     let listener = tokio::net::UnixListener::bind(&control)
         .map_err(|e| Refusal::Step(format!("binding the control socket ({e})")))?;
+    // The one CA bundle the fetch trusts, chosen here and snapshotted by its
+    // bytes beside the sockets, so it goes with the proxy's directory.
+    let bundle = ca_bundle::HostBundle::choose(ca_bundle.as_deref(), Path::new("/"))?;
+    let ca = bundle
+        .snapshot(proxy.unix_path().parent().unwrap_or(Path::new("/")))
+        .map_err(|e| {
+            Refusal::Step(format!(
+                "writing the CA snapshot of {} ({e})",
+                bundle.source.display()
+            ))
+        })?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
+        ca: utf8(&ca)?,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {
