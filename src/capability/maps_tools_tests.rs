@@ -494,7 +494,12 @@ async fn attempt(rel: &str, host: &str, fixture: &str, args: Value) -> (bool, us
     let stub = Stub::start(recorded(fixture)).await;
     let capability = shipped(rel, host, &stub);
     let name = capability.name.clone();
-    let refused = backend(capability).call_tool(&name, args).await.is_err();
+    // Input validation answers with an error result, not an `Err`
+    // (backend.rs: "Validate arguments against the YAML schema").
+    let refused = match backend(capability).call_tool(&name, args).await {
+        Err(_) => true,
+        Ok(result) => result.is_error,
+    };
     (refused, stub.count())
 }
 
