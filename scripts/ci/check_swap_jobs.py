@@ -519,7 +519,7 @@ def self_test() -> int:
         ("a fixed list of parts, not 1..N", shape.format(part, rest).replace('$(seq 1 "$n")', "1 2"), True),
         ("N not read from the build script", shape.format(part, rest).replace(n_line, "  n=2\n"), True),
         ("n overridden after it is read", shape.format(part, rest).replace(n_line, n_line + "  n=2\n"), True),
-        ("a part built outside the loop", shape.format(part, rest + "\n  " + part.replace('"$k"', "3")), True),
+        ("a part built outside the loop", shape.format(part, rest + "\n  " + part), True),
     ]
     for label, text, want_bad in packaged_cases:
         found = packaged_build_problems(text)
