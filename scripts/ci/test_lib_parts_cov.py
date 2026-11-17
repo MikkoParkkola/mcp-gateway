@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Coverage helper rows H1-H8, with a fake Python runner and compile gate."""
+"""Coverage helper rows H1-H10, with a fake Python runner and compile gate."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ DEPS = Path("target/llvm-cov-target/debug/deps")
 
 FAKE_PYTHON = """#!/bin/sh
 echo "part=${MCP_GATEWAY_TEST_PART:-unset} argv=$*" >> "$FAKE_LOG"
+# Model a build refreshing its executables after the coverage command starts.
+while IFS= read -r executable; do
+  touch "$executable"
+done < "$FAKE_FRESH"
 exit "${FAKE_RC:-0}"
 """
 
@@ -43,7 +47,7 @@ class Coverage(unittest.TestCase):
     longMessage = False
 
     def run_cov(self, part="lib-3", *, n=5, inherited=None,
-                candidates=("mcp_gateway-abc123",), runner_rc=0, gate_rc=0):
+                candidates=("mcp_gateway-abc123",), stale=(), runner_rc=0, gate_rc=0):
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -61,15 +65,19 @@ class Coverage(unittest.TestCase):
         deps = root / DEPS
         deps.mkdir(parents=True)
         files = {**DECOYS, **{name: (f"#!/bin/sh\n# {name}\nexit 0\n", True)
-                             for name in candidates}}
+                             for name in (*candidates, *stale)}}
         for name, (content, executable) in files.items():
             path = deps / name
             path.write_text(content)
             path.chmod(0o755 if executable else 0o644)
+            os.utime(path, (1, 1))
+        fresh = root / "fresh"
+        # Fresh decoys still exercise the name and executable-bit rules, not just the age rule.
+        fresh.write_text("".join(f"{deps / name}\n" for name in (*DECOYS, *candidates)))
         before = self.snapshot(deps)
         env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
                "FAKE_LOG": str(root / "log"), "FAKE_RC": str(runner_rc),
-               "FAKE_GATE_RC": str(gate_rc)}
+               "FAKE_GATE_RC": str(gate_rc), "FAKE_FRESH": str(fresh)}
         env.pop("MCP_GATEWAY_TEST_PART", None)
         if inherited is not None:
             env["MCP_GATEWAY_TEST_PART"] = inherited
@@ -173,6 +181,16 @@ class Coverage(unittest.TestCase):
         expected["mcp_gateway-def456-p3"] = expected.pop("mcp_gateway-def456")
         self.assertEqual(self.snapshot(root / DEPS), expected,
                          "only the fresh binary is renamed; an already-renamed -pK binary is left alone")
+
+    def test_h10_an_older_unrenamed_binary_is_never_a_candidate(self):
+        done, root, _log, before = self.run_cov(stale=("mcp_gateway-deadbeef",))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        expected = dict(before)
+        expected["mcp_gateway-abc123-p3"] = expected.pop("mcp_gateway-abc123")
+        self.assertEqual(self.snapshot(root / DEPS), expected,
+                         "only this run's fresh executable may be renamed")
+        self.assertEqual((root / DEPS / "mcp_gateway-deadbeef").stat().st_mtime, 1,
+                         "the older unrenamed executable must stay untouched")
 
 
 if __name__ == "__main__":

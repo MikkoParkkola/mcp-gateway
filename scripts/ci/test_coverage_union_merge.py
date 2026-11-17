@@ -148,7 +148,10 @@ class MergeRow(unittest.TestCase):
                                "scripts/ci/lib_union.py"])
             write(leg, "scripts/dev/test-parts-build.rs", "const N: u32 = 5;\n")
             write(leg, "scripts/ci/compile-cgroup.sh", '#!/bin/sh\nexec "$@"\n', True)
-            write(leg, "fake-runner/python3", "#!/bin/sh\nexit 0\n", True)
+            # The fake run "builds" the lib test executable, as a real run writes it: the helper renames only a binary
+            # newer than the run's start.
+            write(leg, "fake-runner/python3",
+                  "#!/bin/sh\ntouch target/llvm-cov-target/debug/deps/mcp_gateway-abc123\nexit 0\n", True)
             content = f"#!/bin/sh\n# distinct coverage executable for part {k}\nexit 0\n"
             write(leg, DEPS / "mcp_gateway-abc123", content, True)
             contents[f"mcp_gateway-abc123-p{k}"] = content

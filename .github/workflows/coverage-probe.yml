@@ -173,7 +173,7 @@ jobs:
       # The part's output went to run.log (bundled for the grade, uploaded on failure); show it here too.
       - name: Show the part's log
         if: always()
-        run: cat run.log
+        run: if [ -f run.log ]; then cat run.log; else echo "run.log was not written (the step failed before the part ran)"; fi
       - name: Bundle
         env:
           PART: ${{ matrix.part }}

@@ -50,14 +50,19 @@ if [ "$mode" = cov ]; then
     k="${part#lib-}"
     n="$(part_count)"
     check_part "$k" "$n"
+    deps=target/llvm-cov-target/debug/deps
+    mkdir -p "$deps"
+    marker="$(mktemp "$deps/.coverage-start.XXXXXX")"
+    trap 'rm -f "$marker"' EXIT
+    touch "$marker"
     MCP_GATEWAY_TEST_PART="$k" "$root/scripts/ci/compile-cgroup.sh" \
       python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
     # The one lib test executable this run built: an executable mcp_gateway-HASH with no extension. A binary already
-    # renamed for a part (-pK) is never a candidate, so the rename does not depend on the target dir being clean.
+    # renamed for a part (-pK), or older than this run's marker, is never a candidate even in a reused target dir.
     executables=()
     while IFS= read -r -d '' executable; do
       executables+=("$executable")
-    done < <(find target/llvm-cov-target/debug/deps -maxdepth 1 -type f -perm -u+x \
+    done < <(find "$deps" -maxdepth 1 -type f -perm -u+x -newer "$marker" \
       -name 'mcp_gateway-*' ! -name '*.*' ! -name '*-p[0-9]*' -print0)
     if [ "${#executables[@]}" -ne 1 ]; then
       echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}" >&2

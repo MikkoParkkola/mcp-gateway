@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -25,9 +26,9 @@ import lib_union  # noqa: E402
 # Exact (file, line text) pairs, with multiplicity: the two plan 3 definitions
 # occur once each. Identical definitions in another plan must still fail W1.
 # Escaped hyphens keep this allowlist's source from matching its own search.
-# Scope is the coverage pipeline only (its workflow and every file with "coverage" in its name under scripts/ci,
-# scripts/release and docs/release): the plain test shards keep their own lib-a/lib-b names, which are not coverage
-# parts, and a whole-word match keeps names such as linux-lib-build out.
+# Scope is the coverage pipeline: its workflow, its shell entry points and every file with "coverage" in its name
+# under scripts/ci, scripts/release and docs/release. The plain test shards keep their own lib-a/lib-b names, which
+# are not coverage parts, and a whole-word match keeps names such as linux-lib-build out.
 STALE_NAME_ALLOWLIST = Counter([
     ("scripts/ci/coverage_shards.py", '        "lib\x2da": _LIB_A,'),
     ("scripts/ci/coverage_shards.py", '        "lib\x2db": _LIB_B,'),
@@ -88,7 +89,8 @@ class CoveragePartsWiring(unittest.TestCase):
                             f"output: {result.stdout}{result.stderr}")
 
     def test_W1_only_explicit_stale_name_allowlist(self) -> None:
-        paths = [ROOT / ".github/workflows/coverage-probe.yml"]
+        paths = [ROOT / relative for relative in (".github/workflows/coverage-probe.yml",
+                                                  "scripts/ci/lib-parts.sh", "scripts/ci/compile-cgroup.sh")]
         for directory in ("scripts/ci", "scripts/release", "docs/release"):
             paths.extend(path for path in (ROOT / directory).rglob("*")
                          if path.is_file() and "__pycache__" not in path.parts and "coverage" in path.name
@@ -110,6 +112,19 @@ class CoveragePartsWiring(unittest.TestCase):
                    f"({count} occurrence(s) beyond allowlist)"
                    for (file, line), count in sorted(unexpected.items())]
         self.assertEqual(sum(unexpected.values()), 0, "unallowlisted old part names:\n" + "\n".join(details))
+
+    def test_W1_checks_coverage_entry_points_without_coverage_in_name(self) -> None:
+        # Inject a stale name into reads, leaving the live scripts (and concurrent edits) untouched.
+        read_text = Path.read_text
+        for relative in ("scripts/ci/lib-parts.sh", "scripts/ci/compile-cgroup.sh"):
+            with self.subTest(path=relative):
+                def with_stale_name(path, *args, **kwargs):
+                    source = read_text(path, *args, **kwargs)
+                    return source + "\n# lib\x2da\n" if path == ROOT / relative else source
+
+                with patch.object(Path, "read_text", with_stale_name):
+                    with self.assertRaisesRegex(AssertionError, re.escape(relative)):
+                        self.test_W1_only_explicit_stale_name_allowlist()
 
     def test_W2_swap_matches_numbered_lib_parts_only(self) -> None:
         doc = yaml.safe_load((ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8"))
