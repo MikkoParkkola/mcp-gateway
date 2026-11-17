@@ -640,6 +640,24 @@ def _check_package(root: Path, add) -> None:
         add("package", "Cargo.toml", 1, f'[package] needs build = "{want}"')
     if want not in package.get("include", []):
         add("package", "Cargo.toml", 1, f'[package] include needs "{want}"')
+    _check_dockerfile(root, want, add)
+
+
+def _check_dockerfile(root: Path, want: str, add) -> None:
+    """The image builds from a Dockerfile that copies chosen paths: Cargo.toml's build key needs the script there
+    before the first `cargo build`, or the release image does not build. A COPY of the script or of a folder above
+    it counts."""
+    path = root / "Dockerfile"
+    if not path.is_file():
+        return
+    above = {want, *(p.as_posix() for p in Path(want).parents)} - {"."} | {"."}
+    for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        words = line.split()
+        if words[:1] == ["COPY"] and above & {w.rstrip("/") for w in words[1:-1] if not w.startswith("--")}:
+            return
+        if words[:1] == ["RUN"] and re.search(r"\bcargo\s+build\b", line):
+            add("package", "Dockerfile", no, f"cargo build runs before the image copies {want}, which Cargo.toml's build key needs")
+            return
 
 
 def _check_table(root: Path, rows, crate: Crate, desired: dict[int, int], add) -> None:
