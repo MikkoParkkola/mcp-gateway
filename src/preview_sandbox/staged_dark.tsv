@@ -6,3 +6,4 @@ src/preview_sandbox/fetch.rs	the macOS fetch step (live on Linux since the npm f
 src/preview_sandbox/fetch_output.rs	the macOS fetch step (live on Linux since the npm fetch)
 src/preview_sandbox/install.rs	the uv fetch step (the sandbox fetch part)
 src/preview_sandbox/proxy.rs	the fetch session (the sandbox fetch part)
+src/preview_sandbox/linux/uv_probe.rs	the uv fetch's plan (the uv fetch part)

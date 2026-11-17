@@ -14,6 +14,7 @@ pub(crate) mod plan;
 mod probe;
 mod relay;
 pub(crate) mod seccomp;
+mod uv_probe;
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -807,6 +808,8 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
 
+#[cfg(test)]
+mod elf_fixture;
 #[cfg(test)]
 mod fetch_registry;
 #[cfg(test)]

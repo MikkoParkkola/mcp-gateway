@@ -597,3 +597,35 @@ fn a_peer_declaration_must_be_a_registry_range() {
         check_lock(&l).expect(range);
     }
 }
+
+/// U-name (the uv fetch, design 4), kills "the raw spec names the tool env": a
+/// spec with a version pin, dots, underscores, capitals or a run of
+/// separators gives the PEP 503 name `foo-bar`, and the tool env, the
+/// metadata lookup and the console script all sit under that one name.
+#[test]
+fn u_name_every_spelling_gives_one_tool_env() {
+    let home = tempfile::tempdir().expect("home");
+    let env = home.path().join("uv-tools/foo-bar");
+    let site = env.join("lib/python3.12/site-packages/foo_bar-1.0.dist-info");
+    std::fs::create_dir_all(&site).expect("site");
+    std::fs::write(
+        site.join("entry_points.txt"),
+        "[console_scripts]\nfb = foo_bar:main\n",
+    )
+    .expect("entry points");
+    std::fs::create_dir_all(env.join("bin")).expect("bin");
+    std::fs::write(env.join("bin/fb"), "").expect("script");
+    for spec in ["Foo_Bar==1.0", "foo.bar", "FOO--bar"] {
+        assert_eq!(uv_name(spec), "foo-bar", "{spec}");
+        assert_eq!(
+            uv_tool_env(home.path(), spec),
+            home.path().join("uv-tools/foo-bar"),
+            "{spec}"
+        );
+        assert_eq!(
+            uv_entry_point(&uv_tool_env(home.path(), spec), &uv_name(spec)).expect("entry point"),
+            home.path().join("uv-tools/foo-bar/bin/fb"),
+            "{spec}"
+        );
+    }
+}

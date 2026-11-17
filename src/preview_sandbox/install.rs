@@ -207,6 +207,18 @@ pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
     Ok(target)
 }
 
+/// The PEP 503-normalized name of a validated `PyPI` spec (`name` or
+/// `name==version`): the name of the package's uv tool environment and the
+/// name its metadata is looked up by.
+pub(crate) fn uv_name(spec: &str) -> String {
+    spec.to_owned()
+}
+
+/// The uv tool environment `spec` installs into under the preview home `home`.
+pub(crate) fn uv_tool_env(home: &Path, spec: &str) -> PathBuf {
+    home.join("uv-tools").join(uv_name(spec))
+}
+
 /// The console script of `PyPI` package `name` in the uv tool environment
 /// `env`, from the package's own `entry_points.txt`: the script named after
 /// the package, or its only one. Never a listing of `bin/`, which also holds
