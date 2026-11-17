@@ -25,11 +25,22 @@ const FILTERS: [&str; 2] = [
 ];
 
 /// The tests that failed in the red run against the held lock (the expected
-/// set E, recorded by name in the red record). Each must pass in every green
+/// set E, recorded by name in the red record: 12, all in the unused-route
+/// module; no journal row touches the vault lock). Each must pass in every green
 /// variant and fail in the control.
 const E: &[&str] = &[
+    "gateway::ui::settings::unused_route_tests::delete_is_audited",
     "gateway::ui::settings::unused_route_tests::delete_refuses_capability_named",
+    "gateway::ui::settings::unused_route_tests::delete_refuses_env_named",
+    "gateway::ui::settings::unused_route_tests::delete_refuses_hard_linked_entry_behind_symlinked_config",
+    "gateway::ui::settings::unused_route_tests::delete_refuses_named_after_listing",
+    "gateway::ui::settings::unused_route_tests::delete_route_refuses_pending_write",
     "gateway::ui::settings::unused_route_tests::delete_route_removes_entry",
+    "gateway::ui::settings::unused_route_tests::delete_route_unlisted",
+    "gateway::ui::settings::unused_route_tests::failed_commit_entry_listed",
+    "gateway::ui::settings::unused_route_tests::locks_released_after_refusals",
+    "gateway::ui::settings::unused_route_tests::routes_need_admin",
+    "gateway::ui::settings::unused_route_tests::unused_listed_with_write_time",
 ];
 
 /// Which home a variant's children resolve.
