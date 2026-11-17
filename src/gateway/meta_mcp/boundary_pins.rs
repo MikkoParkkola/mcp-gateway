@@ -33,6 +33,7 @@ mod keyed_request;
 mod live_config;
 mod live_generation;
 mod needle_attach_sites;
+mod notification_egress;
 mod packaged;
 mod pinned_generation;
 mod pinned_role_mapping;
