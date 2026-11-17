@@ -261,6 +261,9 @@ fn judge(variant: Variant, seen: &Suite) -> Vec<String> {
     }
     for (name, markers) in E {
         if control {
+            if !seen.failed.contains(*name) {
+                problems.push(format!("{name} is not among the failed tests"));
+            }
             let Some(section) = seen.sections.get(*name) else {
                 problems.push(format!("{name} did not fail against the held lock"));
                 continue;
@@ -458,6 +461,13 @@ fn r3b_judge_refuses_aborted_runs_and_unrelated_failures() {
         judge(Variant::Control, &wrong_count),
         vec![format!("{name} failed without the held lock's \"left: 0\"")],
         "the label alone is not the lock's failure"
+    );
+    let mut section_only = control_suite();
+    section_only.failed.remove(E[0].0);
+    assert_eq!(
+        judge(Variant::Control, &section_only),
+        vec![format!("{} is not among the failed tests", E[0].0)],
+        "a section alone is not a failure"
     );
     let mut missing = control_suite();
     missing.sections.remove(E[0].0);
