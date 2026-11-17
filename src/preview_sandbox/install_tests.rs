@@ -704,8 +704,9 @@ fn u_direct_what_cannot_be_read_refuses() {
 
     let root = tempfile::tempdir().expect("root");
     let env = tool_env(root.path(), &["a-1.0".to_owned()]);
-    let past = std::time::Instant::now();
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    let past = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .expect("an instant a minute back");
     assert!(check_direct_url(&env, past).is_err(), "a passed deadline");
     assert!(
         check_direct_url(&env, far()).is_ok(),

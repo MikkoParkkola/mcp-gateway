@@ -9,10 +9,40 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::plan::{Plan, UvFetch};
+use super::plan::{NpmFetch, Plan, UvFetch};
 use super::{ProgramBind, program_bind, utf8};
+use crate::preview_sandbox::fetch::Fetch;
 use crate::preview_sandbox::install::uv_name;
 use crate::preview_sandbox::{Refusal, Target};
+
+/// The production entry's refusal of every uv target: the uv fetch is
+/// staged dark until its real-uv rows are required in CI. The rows reach
+/// the fetch below this entry, through `start_fetching_with`.
+pub(super) fn staged_dark(target: &Target) -> Result<(), Refusal> {
+    match crate::preview_sandbox::fetch::plan(target) {
+        Ok(phases) if matches!(phases.fetch, Some(Fetch::Uv(_))) => {
+            Err(Refusal::Step("the uv fetch is not built yet".into()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The package fetch a target needs: npm's (`npm_fetch`), uv's
+/// ([`uv_fetch`]), or neither (the handshake alone).
+pub(super) fn package_fetch(
+    target: &Target,
+    plan: &mut Plan,
+    path: Option<&OsStr>,
+    proxy: &Path,
+) -> Result<(Option<NpmFetch>, Option<UvFetch>), Refusal> {
+    let phases = crate::preview_sandbox::fetch::plan(target)?;
+    match phases.fetch {
+        Some(Fetch::Uv(spec)) => {
+            uv_fetch(target, plan, path, proxy, spec, &phases.run_args).map(|uv| (None, Some(uv)))
+        }
+        _ => super::npm_fetch(target, plan, path, proxy).map(|npm| (npm, None)),
+    }
+}
 
 /// The uv fetch a `uvx` target needs (design 1, 2 and 4): uv beside the
 /// real `uvx`, its floor checked; `python3` on `path`, probed with `-S`, and
