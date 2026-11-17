@@ -384,9 +384,9 @@ const OLD_UV: Scenario = Scenario {
 /// fetch would read as a failed step instead). Needs no sandbox.
 #[tokio::test]
 async fn u_setup_a_probe_refusal_is_the_starts_own() {
-    let Some(gateway) = gateway_bin() else {
-        return;
-    };
+    // The refusal comes before the helper is started, so no gateway binary
+    // is needed: a late refusal would launch /bin/false and fail the row.
+    let gateway = PathBuf::from("/bin/false");
     let shim = UvShim::new(&OLD_UV);
     let target = Target {
         program: PathBuf::from("uvx"),
@@ -407,9 +407,8 @@ async fn u_setup_a_probe_refusal_is_the_starts_own() {
 /// the staged code below that entry only.
 #[tokio::test]
 async fn u_dark_the_production_entry_refuses_uv() {
-    let Some(gateway) = gateway_bin() else {
-        return;
-    };
+    // Refused at the entry, before any helper: no gateway binary needed.
+    let gateway = PathBuf::from("/bin/false");
     let shim = UvShim::new(&PROBE_CLI);
     let marker = shim.tools.join("version-called");
     let target = Target {
