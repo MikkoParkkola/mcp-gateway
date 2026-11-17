@@ -68,6 +68,11 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("worker.rs", "settle_answer", 1),
     ("worker_dispatch.rs", "dispatch", 2),
     ("worker_dispatch.rs", "sweep_dead_letters", 1),
+    // An ended row's notice: its bounds at the claim, the signature's date,
+    // the answer's judgement (an event's attempt's three decisions).
+    ("worker_ended.rs", "attempt_ended", 1),
+    ("worker_ended.rs", "send_ended", 1),
+    ("worker_ended.rs", "settle_ended", 1),
     ("worker_settle.rs", "settle_with", 1),
     ("worker_settle.rs", "settled_unsendable", 1),
 ];

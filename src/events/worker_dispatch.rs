@@ -106,28 +106,24 @@ impl EventsHub {
             })
             .min(IDLE);
         for record in due.ready {
+            // An ended notice has its own slot, apart from a live row under
+            // the same id.
+            let key = record.busy_key();
             let Ok(permit) = Arc::clone(slots).try_acquire_owned() else {
                 // Every slot is busy: a finishing attempt wakes the worker.
                 break;
             };
-            if let Err(later) = self
-                .runtime
-                .rates
-                .take(&record.subscription_id, std::time::Instant::now())
-            {
+            if let Err(later) = self.runtime.rates.take(&key, std::time::Instant::now()) {
                 // Delayed, never dropped: the record stays due.
                 wait = wait.min(later);
                 drop(permit);
                 continue;
             }
-            self.runtime
-                .busy
-                .lock()
-                .insert(record.subscription_id.clone());
+            self.runtime.busy.lock().insert(key.clone());
             let (hub, services) = (Arc::clone(self), Arc::clone(services));
             tokio::spawn(async move {
                 hub.attempt(&services, &record.event_id).await;
-                hub.runtime.busy.lock().remove(&record.subscription_id);
+                hub.runtime.busy.lock().remove(&key);
                 drop(permit);
                 hub.runtime.wake.notify_one();
             });

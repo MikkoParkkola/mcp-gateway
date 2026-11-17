@@ -221,11 +221,10 @@ mcp-gateway identity grants grant \
   --file ~/.mcp-gateway/identity-grants.yaml \
   --grant-id alice-calendar-read \
   --subject api_key:alice \
-  --subject-label Alice \
   --any-agent \
   --capability calendar_read_day \
   --scope read \
-  --ttl-seconds 3600 \
+  --expires-at 2027-12-31T00:00:00Z \
   --reason "Alice approved read-only access to her calendar"
 ```
 
