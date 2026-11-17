@@ -376,6 +376,18 @@ impl EventsHub {
     /// Register `source`, replacing any earlier source of the same kind. Its
     /// descriptors join the catalogue; lifecycle hooks follow (I4).
     pub(crate) fn register_source(self: &Arc<Self>, source: Arc<dyn EventSource>) {
+        // Only the gateway signs an ended notice.
+        if source
+            .descriptors()
+            .iter()
+            .any(|d| d.name == outbox::ENDED_NAME)
+        {
+            tracing::warn!(
+                name = outbox::ENDED_NAME,
+                "events: a source offering a reserved event name was refused"
+            );
+            return;
+        }
         let mut sources = self.sources.write();
         let position = sources.iter().position(|s| s.kind() == source.kind());
         let replaced = position.map(|at| sources.remove(at));
@@ -423,6 +435,8 @@ impl EventsHub {
             .read()
             .iter()
             .flat_map(|source| source.descriptors())
+            // A source's offer can change after it registered.
+            .filter(|d| d.name != outbox::ENDED_NAME)
             .collect();
         all.sort_by(|a, b| a.name.cmp(&b.name));
         all

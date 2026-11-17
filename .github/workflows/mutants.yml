@@ -28,7 +28,7 @@ jobs:
   # Reads git only, so a hosted runner is enough wherever the rows run.
   plan:
     name: Plan mutant batch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       has_linux: ${{ steps.plan.outputs.has_linux }}
@@ -56,7 +56,7 @@ jobs:
     name: Mutants (linux)
     needs: plan
     if: needs.plan.outputs.has_linux == 'true' && vars.MCPGW_TRUSTED_RUNNER != 'ready'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     # One hosted mutant run at a time across every lane, the rest queued in
     # arrival order (`queue: max` keeps up to 100 waiting instead of replacing

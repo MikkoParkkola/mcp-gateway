@@ -285,7 +285,13 @@ the next `pull_request` event that carries it: push after labelling (an empty co
 `git commit --allow-empty -m "ci: run the OS shards" && git push`) or close and reopen the pull
 request. A label added at creation (`gh pr create --label`) or a re-run of an earlier run does not
 start them. The macOS lib shard takes about 75 minutes, and the macOS runners also serve every
-train, so the label is for changes that need it.
+train, so the label is for changes that need it. One part of this is enforced: the check
+`OS-sensitive diff carries the os-int label` also demands `os-sensitive` when the diff adds or
+removes a Rust line that sends a signal, manages a process group or session, reaps a child or reads
+a process errno (`SIGTERM`, `Signal::`, `kill_process(`, `start_kill`, `.kill()`, `process_group`,
+`setsid`, `waitid`, `try_wait`, `child.wait(`, `Errno::CHILD` and the other words in
+`OS_PROC_WORDS` in `scripts/ci/os_sensitive_diff.py`); its message gives the `gh pr edit` command.
+A change with no such word beside unchanged process code is not caught; the merge train still is.
 **The `os-int` label.** A pull request whose diff adds or removes a Rust or TOML line that names
 the secret store, the keychain or a file lock (`secret_store`, `SecretStore`, `keychain`,
 `security_framework`, `fs_lock`, `flock`, `fcntl`, `keyring`, `fd-lock`, `lock_shared`; the

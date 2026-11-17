@@ -40,6 +40,17 @@ const CP_WRITES: &[Citation] = &[(
 type Citation = (&'static str, &'static str);
 
 const SERVED_BY: &[(&str, Method, &[Citation])] = &[
+    // Logout's served answer is its 303 to /ui with the session revoked on the
+    // server; this fixture holds no session, so its table row pins only the
+    // sessionless 303 (src/gateway/ui/session.rs:81-120).
+    (
+        "/dashboard/logout",
+        Method::POST,
+        &[(
+            "src/gateway/router/e5_dashboard_session_tests.rs",
+            "logout_revokes_server_side",
+        )],
+    ),
     // PR1: 422 is the handler's fixed JSON; a valid body is a served refusal.
     (
         "/ui/api/gateway/restart",

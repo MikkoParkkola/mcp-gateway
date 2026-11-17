@@ -172,7 +172,7 @@ impl Store {
         let mine = state
             .outbox
             .values()
-            .filter(|r| r.subscription_id == record.subscription_id)
+            .filter(|r| r.is_event() && r.subscription_id == record.subscription_id)
             .count();
         if mine >= caps.per_subscription {
             return Ok(Enqueued::DroppedPerSubscription);
@@ -200,11 +200,12 @@ impl Store {
     ) -> std::io::Result<Due> {
         let mut state = self.state.lock();
         // A record whose row is gone was left by an unsubscribe: dropped, as
-        // the unsubscribe meant (design 9).
+        // the unsubscribe meant (design 9). A notice maps to its ended row,
+        // so a pending one is never an orphan.
         let orphans: Vec<String> = state
             .outbox
             .values()
-            .filter(|r| !state.subs.contains_key(&r.subscription_id))
+            .filter(|r| state.row_of(r).is_none())
             .map(|r| r.event_id.clone())
             .collect();
         for id in orphans {
@@ -212,25 +213,29 @@ impl Store {
             state.outbox.remove(&id);
         }
         let (buried, evicted, more) = self.settle_expired(&mut state, now, policy);
-        let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
+        let mut first: HashMap<String, &OutboxRecord> = HashMap::new();
         // Expired records left past this batch are due at once.
         let mut next: Option<DateTime<Utc>> = more.then_some(now);
         for record in state.outbox.values() {
-            let open = state
-                .subs
-                .get(&record.subscription_id)
-                .is_some_and(|s| sendable(s, now));
-            if !open
-                || record.state != OutboxState::Pending
-                || busy.contains(&record.subscription_id)
-            {
+            // An ended row's notice goes out whatever the row's own standing:
+            // the ending is what it reports.
+            let open = if record.is_event() {
+                state
+                    .subs
+                    .get(&record.subscription_id)
+                    .is_some_and(|s| sendable(s, now))
+            } else {
+                state.row_of(record).is_some()
+            };
+            let key = record.busy_key();
+            if !open || record.state != OutboxState::Pending || busy.contains(&key) {
                 continue;
             }
             if record.next_attempt_at > now {
                 next = Some(next.map_or(record.next_attempt_at, |n| n.min(record.next_attempt_at)));
                 continue;
             }
-            let slot = first.entry(&record.subscription_id).or_insert(record);
+            let slot = first.entry(key).or_insert(record);
             if (record.created_at, &record.event_id) < (slot.created_at, &slot.event_id) {
                 *slot = record;
             }
@@ -251,7 +256,10 @@ impl Store {
     /// the wire notwithstanding.
     pub(crate) fn has_due(&self, id: &str, now: DateTime<Utc>) -> bool {
         self.state.lock().outbox.values().any(|r| {
-            r.subscription_id == id && r.state == OutboxState::Pending && r.next_attempt_at <= now
+            r.is_event()
+                && r.subscription_id == id
+                && r.state == OutboxState::Pending
+                && r.next_attempt_at <= now
         })
     }
 
@@ -264,9 +272,8 @@ impl Store {
             return Ok(Claim::Skip);
         };
         let Some(subscription) = state
-            .subs
-            .get(&record.subscription_id)
-            .filter(|s| sendable(s, now))
+            .row_of(record)
+            .filter(|s| !record.is_event() || sendable(s, now))
             .cloned()
         else {
             return Ok(Claim::Skip);
@@ -320,6 +327,7 @@ impl Store {
             return Ok(Settled::default());
         };
         let sub_id = record.subscription_id.clone();
+        let ended_key = record.ended_key();
         let mut settled = self.settle_record(&mut state, record, outcome, now, policy);
         // Logged once `state` is released.
         let mut burial_cleanup = None;
@@ -354,6 +362,12 @@ impl Store {
                 }
             }
         }
+        // A notice settled for good (delivered, or dead and buried) takes its
+        // ended row with it; one that retries keeps it.
+        let ended_cleanup = ended_key
+            .as_ref()
+            .filter(|_| !state.outbox.contains_key(event_id))
+            .map(|key| self.drop_ended(&mut state, key));
         let status_line = match outcome {
             Settle::Delivered => Some((true, None)),
             Settle::Retry { status, .. }
@@ -363,7 +377,10 @@ impl Store {
                 ..
             } => Some((false, Some(status))),
             Settle::Dead { status: None, .. } => None,
-        };
+        }
+        // A notice never writes a row's status: the live row under its id is
+        // another grant (design Y'' 5).
+        .filter(|_| ended_key.is_none());
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
         #[cfg(test)]
@@ -381,6 +398,9 @@ impl Store {
         drop(state);
         if let Some(error) = burial_cleanup {
             tracing::warn!(%error, "events store: cleanup after a burial failed");
+        }
+        if let Some(Err(error)) = ended_cleanup {
+            tracing::warn!(%error, "events store: a settled notice's ended row was not removed");
         }
         if let Some(Err(error)) = touched {
             tracing::warn!(%error, "events store: subscription status not written");
@@ -463,7 +483,8 @@ impl Store {
 
     /// The subscription row to sign claimed `record` with, read now: `None`
     /// once the claim was cancelled (unsubscribe, revocation, expiry), even
-    /// if a resubscribe has since re-created the same subscription id.
+    /// if a resubscribe has since re-created the same subscription id. A
+    /// notice signs with its ended row's keys.
     pub(crate) fn signing_row(&self, record: &OutboxRecord) -> Option<Subscription> {
         let state = self.state.lock();
         let claimed = state
@@ -471,7 +492,7 @@ impl Store {
             .get(&record.event_id)
             .is_some_and(|r| r.state == OutboxState::InFlight && r.created_at == record.created_at);
         if claimed {
-            state.subs.get(&record.subscription_id).cloned()
+            state.row_of(record).cloned()
         } else {
             None
         }
@@ -493,18 +514,28 @@ impl Store {
         self.state.lock().subs.values().cloned().collect()
     }
 
-    /// Cancel every pending record of subscription `id` (unsubscribe,
-    /// revocation), under the caller's hold of the lock.
-    pub(super) fn cancel_pending(&self, state: &mut State, id: &str) -> std::io::Result<()> {
+    /// Cancel the pending records of subscription `id` that `which` names,
+    /// under the caller's hold of the lock. [`Cancel::All`] also deletes the
+    /// id's ended rows, whose notices it cancelled.
+    pub(super) fn cancel_pending(
+        &self,
+        state: &mut State,
+        id: &str,
+        which: super::Cancel,
+    ) -> std::io::Result<()> {
         let cancelled: Vec<String> = state
             .outbox
             .values()
             .filter(|r| r.subscription_id == id)
+            .filter(|r| which == super::Cancel::All || r.is_event())
             .map(|r| r.event_id.clone())
             .collect();
         for event_id in cancelled {
             remove_record(&self.outbox_dir, &OutboxRecord::file(&event_id))?;
             state.outbox.remove(&event_id);
+        }
+        if which == super::Cancel::All {
+            self.drop_ended_of(state, id)?;
         }
         Ok(())
     }

@@ -51,11 +51,11 @@ pub enum SkillsCommand {
 
         /// Only generate skills for capabilities whose name starts with this prefix
         /// (useful when multiple backends share the same capabilities directory)
-        #[arg(long)]
+        #[arg(hide = true, long)]
         server: Option<String>,
 
         /// Only generate skills for capabilities in this category
-        #[arg(long)]
+        #[arg(hide = true, long)]
         category: Option<String>,
 
         /// Output directory for generated skill bundles
