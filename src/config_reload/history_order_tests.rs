@@ -109,8 +109,7 @@ async fn r_order_records_land_in_swap_order_through_every_entry_point() {
     let events = steps_of_events(&rig.store);
     let observed = steps_of_log(&log);
     assert!(
-        events.contains(&Step::Refused)
-            && events.iter().any(|s| matches!(s, Step::Applied(_))),
+        events.contains(&Step::Refused) && events.iter().any(|s| matches!(s, Step::Applied(_))),
         "the run had both outcomes: {events:?}"
     );
     assert_eq!(events, observed, "events in exactly the observer's order");
