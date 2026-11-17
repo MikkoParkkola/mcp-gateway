@@ -806,3 +806,56 @@ async fn rl7b_an_upper_case_spelling_shares_the_bucket() {
     refusal_wait(&err, "rl7.test", 30_000);
     assert_eq!(stub.count(), 1);
 }
+
+// ── RL18, RL19: base_url providers; the strictest backend wins ───────
+
+/// A paced provider configured as `base_url` plus `path` (as MusicBrainz
+/// is), not `endpoint`.
+fn base_url_cap(name: &str, base: &str, interval_ms: u64) -> CapabilityDefinition {
+    let yaml = format!(
+        "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input:\n    type: object\n    \
+         properties:\n      q:\n        type: string\nproviders:\n  primary:\n    service: rest\n    \
+         rate_limit:\n      interval_ms: {interval_ms}\n    config:\n      base_url: {base}\n      \
+         path: /ws/2/artist\n      method: GET\n      params:\n        q: \"{{q}}\"\n"
+    );
+    crate::capability::parse_capability(&yaml).expect("capability")
+}
+
+#[tokio::test]
+async fn rl18_a_base_url_provider_is_paced() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let base = format!("http://rl18.test:{}", stub.port);
+    let b = backend(Names::default(), vec![base_url_cap("rl18", &base, 30_000)]);
+    call(&b, "rl18", "a").await.expect("admitted");
+    let err = call(&b, "rl18", "b")
+        .await
+        .expect_err("paced by its base_url host");
+    refusal_wait(&err, "rl18.test", 30_000);
+    assert_eq!(stub.count(), 1);
+    assert_eq!(
+        stub.seen()[0].path,
+        "/ws/2/artist",
+        "premise: base_url plus path"
+    );
+}
+
+#[tokio::test]
+async fn rl19_a_weaker_backend_does_not_loosen_a_stricter_one() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl19.test", "/s");
+    let strict = CapabilityBackend::new("rl19-strict", Arc::new(executor(Names::default())));
+    strict
+        .register_capability(cap("rl19s", &url, Some(30_000), false))
+        .expect("registered");
+    let weak = CapabilityBackend::new("rl19-weak", Arc::new(executor(Names::default())));
+    weak.register_capability(cap("rl19w", &url, Some(300), false))
+        .expect("registered");
+    call(&strict, "rl19s", "a").await.expect("admitted");
+    // Past the weak interval, inside the strict one: only the strict rules.
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let err = call(&weak, "rl19w", "b")
+        .await
+        .expect_err("the strictest interval holds");
+    refusal_wait(&err, "rl19.test", 30_000);
+    assert_eq!(stub.count(), 1);
+}

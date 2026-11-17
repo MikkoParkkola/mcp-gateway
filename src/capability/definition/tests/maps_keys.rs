@@ -279,3 +279,15 @@ fn ld4c_an_attribution_property_of_another_type_is_refused() {
         ),
     );
 }
+
+#[test]
+fn ld3b_a_paced_provider_with_no_host_is_refused() {
+    let text = with("endpoint: https://", "endpoint: not-a-url-");
+    assert_eq!(
+        refusal(&text),
+        format!(
+            "Configuration error: {FILE}: providers.primary.rate_limit needs a fixed host; \
+             its URL has none"
+        ),
+    );
+}

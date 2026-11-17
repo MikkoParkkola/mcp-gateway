@@ -20,9 +20,9 @@ use governor::clock::MonotonicClock;
 use crate::capability::CapabilityDefinition;
 use crate::failsafe::RateLimiter;
 
-/// The host a request goes to, as pacing counts it: the lowercased host and
-/// the effective port, so `HTTPS://Example.ORG/` and `https://example.org:443/`
-/// share one bucket.
+/// The host a request goes to, as pacing counts it: the lowercased host
+/// without a trailing dot, and the effective port, so `HTTPS://Maps.Test./`
+/// and `https://maps.test:443/` share one bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct HostKey {
     pub(crate) host: String,
@@ -32,11 +32,27 @@ pub(crate) struct HostKey {
 /// The [`HostKey`] of `url`, or `None` when it has no host or no known port.
 pub(crate) fn host_key(url: &str) -> Option<HostKey> {
     let url = url::Url::parse(url).ok()?;
+    // `Url` already lowercases a domain; an IP literal has no case. One
+    // trailing dot names the same host (a fully qualified name).
+    let host = url.host_str()?;
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.is_empty() {
+        return None;
+    }
     Some(HostKey {
-        // `Url` already lowercases a domain; an IP literal has no case.
-        host: url.host_str()?.to_owned(),
+        host: host.to_owned(),
         port: url.port_or_known_default()?,
     })
+}
+
+/// The URL a REST provider is configured to call, as dispatch builds it:
+/// `endpoint`, or else `base_url` followed by `path`.
+pub(crate) fn configured_url(config: &crate::capability::RestConfig) -> String {
+    if config.endpoint.is_empty() {
+        format!("{}{}", config.base_url, config.path)
+    } else {
+        config.endpoint.clone()
+    }
 }
 
 /// One host's bucket and the interval it was built for.
@@ -47,6 +63,10 @@ pub(crate) struct Pacer {
     /// replacement starts spent: one replaced while a catalogue is still
     /// being registered file by file has admitted nothing to carry over.
     pub(crate) used: AtomicBool,
+    /// Each catalogue's declared interval for this host, by the backend that
+    /// holds it. The bucket runs at the strictest of them, so one backend
+    /// cannot weaken a host another paces more strictly.
+    declared: HashMap<String, u64>,
 }
 
 /// Every paced host in the process. Entries live until restart (design v5,
@@ -81,7 +101,9 @@ pub(crate) fn declared_intervals<'a>(
             let Some(rate) = provider.rate_limit else {
                 continue;
             };
-            let Some(key) = host_key(&provider.config.endpoint) else {
+            // The loader refuses a paced provider with no host key, so none
+            // is skipped here.
+            let Some(key) = host_key(&configured_url(&provider.config)) else {
                 continue;
             };
             let slot = intervals.entry(key).or_insert(rate.interval_ms);
@@ -91,41 +113,50 @@ pub(crate) fn declared_intervals<'a>(
     intervals
 }
 
-/// Seed the map from a whole catalogue: its strictest interval per host.
-pub(crate) fn seed_from(capabilities: &[CapabilityDefinition]) {
-    seed(&declared_intervals(capabilities));
+/// Seed the map from `owner`'s whole catalogue.
+pub(crate) fn seed_from(owner: &str, capabilities: &[CapabilityDefinition]) {
+    seed(owner, &declared_intervals(capabilities));
 }
 
-/// Seed the map with `intervals`. A host whose interval is unchanged keeps
-/// its bucket; a changed one gets a new bucket, whose first permit is taken
-/// before it is inserted when the old bucket was used, so no request is
-/// admitted inside the new interval across the switch. Hosts absent from
-/// `intervals` keep their entries.
-pub(crate) fn seed(intervals: &HashMap<HostKey, u64>) {
+/// Record `owner`'s declared `intervals`, replacing what it declared before,
+/// and run each host at the strictest interval any backend declares. A host
+/// whose interval is unchanged keeps its bucket; a changed one gets a new
+/// bucket, whose first permit is taken before it is inserted when the old
+/// bucket was used, so no request is admitted inside the new interval across
+/// the switch. A host nobody declares any more keeps its entry and interval.
+pub(crate) fn seed(owner: &str, intervals: &HashMap<HostKey, u64>) {
+    use std::sync::atomic::Ordering;
     let mut map = pacers().lock().unwrap_or_else(PoisonError::into_inner);
+    // Withdraw this owner's old declarations, then add its new ones.
+    for pacer in map.values_mut() {
+        pacer.declared.remove(owner);
+    }
     for (key, &interval_ms) in intervals {
-        if map
-            .get(key)
-            .is_some_and(|pacer| pacer.interval_ms == interval_ms)
-        {
+        map.entry(key.clone())
+            .or_insert_with(|| Pacer {
+                interval_ms,
+                limiter: limiter(interval_ms),
+                used: AtomicBool::new(false),
+                declared: HashMap::new(),
+            })
+            .declared
+            .insert(owner.to_owned(), interval_ms);
+    }
+    for pacer in map.values_mut() {
+        let Some(&strictest) = pacer.declared.values().max() else {
+            continue;
+        };
+        if strictest == pacer.interval_ms {
             continue;
         }
-        let limiter = limiter(interval_ms);
-        let was_used = map
-            .get(key)
-            .is_some_and(|old| old.used.load(std::sync::atomic::Ordering::SeqCst));
+        let fresh = limiter(strictest);
+        let was_used = pacer.used.load(Ordering::SeqCst);
         if was_used {
             // Pre-consumed: the switch never opens a free permit.
-            let _ = limiter.try_acquire();
+            let _ = fresh.try_acquire();
         }
-        map.insert(
-            key.clone(),
-            Pacer {
-                interval_ms,
-                limiter,
-                used: AtomicBool::new(was_used),
-            },
-        );
+        pacer.interval_ms = strictest;
+        pacer.limiter = fresh;
     }
 }
 

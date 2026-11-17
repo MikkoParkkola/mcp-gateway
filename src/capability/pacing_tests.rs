@@ -47,3 +47,12 @@ fn rl7_plain_http_counts_port_80() {
 fn rl7_a_url_without_a_host_has_no_key() {
     assert_eq!(host_key("data:text/plain,hi"), None);
 }
+
+#[test]
+fn rl7c_a_trailing_dot_is_the_same_host() {
+    assert_eq!(
+        host_key("https://maps.test./x"),
+        Some(key("maps.test", 443))
+    );
+    assert_eq!(host_key("https://./x"), None, "a lone dot is no host");
+}

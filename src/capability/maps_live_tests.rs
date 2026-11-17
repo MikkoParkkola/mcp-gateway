@@ -113,6 +113,10 @@ async fn maps_live_photon() {
     )
     .await;
     assert_eq!(out["type"], "FeatureCollection", "{out}");
+    assert!(
+        out["features"].as_array().is_some_and(|f| !f.is_empty()),
+        "{out}"
+    );
     assert_eq!(out["attribution"], OSM);
 }
 
@@ -124,7 +128,10 @@ async fn maps_live_overpass() {
         json!({ "latitude": 60.1699, "longitude": 24.9384, "category": "cafe", "radius": 500, "limit": 5 }),
     )
     .await;
-    assert!(out["elements"].is_array(), "{out}");
+    assert!(
+        out["elements"].as_array().is_some_and(|e| !e.is_empty()),
+        "cafes near Helsinki centre: {out}"
+    );
     assert_eq!(out["attribution"], OSM);
 }
 

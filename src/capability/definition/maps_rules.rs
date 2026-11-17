@@ -167,6 +167,15 @@ pub(crate) fn check_parsed(file: &Path, capability: &CapabilityDefinition) -> Re
                 format!("{at}.rate_limit needs a fixed host; the endpoint's host is templated"),
             ));
         }
+        // A URL with no host key would load paced on paper and unpaced in
+        // fact: pacing counts by host.
+        let url = crate::capability::pacing::configured_url(&provider.config);
+        if crate::capability::pacing::host_key(&url).is_none() {
+            return Err(refuse(
+                file,
+                format!("{at}.rate_limit needs a fixed host; its URL has none"),
+            ));
+        }
     }
     if let Some(text) = &capability.attribution {
         check_attribution(file, text, &capability.schema.output)?;
