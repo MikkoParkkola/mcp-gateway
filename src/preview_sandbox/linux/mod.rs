@@ -292,7 +292,6 @@ fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
     }
 }
 
-/// A step refusal with the time it came after the fetch step began.
 /// The npm fetch a target needs, or `None` when it names no package (the
 /// handshake alone). npm and node are the ones beside the target's `npx`, its
 /// version floor checked; `ip` and both must lie in the plan's bound trees,
@@ -334,6 +333,7 @@ fn npm_fetch(
     }))
 }
 
+/// A step refusal with the time it came after the fetch step began.
 fn with_elapsed(refusal: Refusal, begun: tokio::time::Instant) -> Refusal {
     match refusal {
         Refusal::Step(why) => Refusal::Step(format!(

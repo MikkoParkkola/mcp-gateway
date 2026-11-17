@@ -525,10 +525,12 @@ async fn rf1_a_refused_fetch_ends_the_session_with_its_step() {
 /// RF2 (NPM.8), kills "the refusal echoes what the sandbox sent": a
 /// `refused` value outside the step set (the credential itself, a URL that
 /// carries it, a path) or `null` ends the session with fixed words that hold
-/// none of it, and the credential stops working.
+/// none of it, no log line holds it either, and the credential stops working.
 #[tokio::test(flavor = "current_thread")]
 async fn rf2_an_unlisted_step_is_refused_without_echo() {
     for kind in ["credential", "url", "path", "null"] {
+        // Current-thread runtime: the session's and the proxy's tasks log here.
+        let (logs, _logging) = crate::gateway::session_id::log_capture::capture_debug();
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
         let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
@@ -566,16 +568,41 @@ async fn rf2_an_unlisted_step_is_refused_without_echo() {
             assert!(!text.contains(leaked), "{kind}: {text}");
         }
         assert_eq!(status_under(&rig, &secret).await, 407, "{kind}");
+        let logged = logs.text();
+        // Positive control: the capture saw the proxy refuse the revoked credential.
+        assert!(
+            logged.contains("preview proxy refused a request"),
+            "{kind}: {logged}"
+        );
+        for leaked in [secret.as_str(), "registry.npmjs.org/p", ".npmrc"] {
+            assert!(
+                !logged.contains(leaked),
+                "{kind}: a log line holds {leaked}"
+            );
+        }
     }
 }
 
 /// RF7 (G1), kills "the start is reported before the helper acknowledges
-/// `expired`": a helper that reads `expired` and then sends nothing, or sends
-/// `run` false, gets no start; the session refuses at its deadline or on the
-/// false line.
+/// `expired`": a helper that reads `expired` and then sends nothing, `run`
+/// false, `run` of the wrong type, an extra key, the credential as the value
+/// or beside `run` true, half a line, or the right line after the deadline,
+/// gets no start; the session refuses at its deadline or on the line, and the
+/// refusal holds neither the credential nor the line's canary.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn rf7_no_start_without_the_runs_acknowledgement() {
-    for ack in [None, Some("{\"run\":false}\n")] {
+    const CANARY: &str = "rf7-canary-3d9e";
+    let kinds = [
+        "none",
+        "false",
+        "string",
+        "extra",
+        "credential",
+        "credential-extra",
+        "truncated",
+        "late",
+    ];
+    for kind in kinds {
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
         let soon = tokio::time::Instant::now() + 5 * SEC;
@@ -589,25 +616,46 @@ async fn rf7_no_start_without_the_runs_acknowledgement() {
                 .expect("write");
             let mut line = String::new();
             read.read_line(&mut line).await.expect("credential");
+            let secret = secret_of(&line);
             write
                 .write_all(b"{\"fetch_done\":true}\n")
                 .await
                 .expect("write");
             line.clear();
             read.read_line(&mut line).await.expect("expired");
-            if let Some(ack) = ack {
-                write.write_all(ack.as_bytes()).await.expect("write");
-            }
-            // The write half stays open: only the missing or false line ends it.
+            let ack = match kind {
+                "none" => String::new(),
+                "false" => "{\"run\":false}\n".to_owned(),
+                "string" => format!("{{\"run\":\"{CANARY}\"}}\n"),
+                "extra" => format!("{{\"run\":true,\"step\":\"{CANARY}\"}}\n"),
+                "credential" => format!("{{\"run\":\"{secret}\"}}\n"),
+                "credential-extra" => format!("{{\"run\":true,\"x\":\"{secret}\"}}\n"),
+                "truncated" => format!("{{\"run\":\"{CANARY}"),
+                _ => {
+                    // Past the session's 5 s deadline.
+                    tokio::time::sleep(6 * SEC).await;
+                    "{\"run\":true}\n".to_owned()
+                }
+            };
+            // The session may have refused already; a failed write is fine.
+            let _ = write.write_all(ack.as_bytes()).await;
+            // The write half stays open: only the line, or its absence, ends it.
             let mut rest = String::new();
             let _ = read.read_line(&mut rest).await;
-            line
+            (line, secret)
         };
-        let (served, expired) =
+        let (served, (expired, secret)) =
             tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
                 .await
                 .expect("the session did not end within the guard");
-        assert_eq!(expired, "{\"expired\":true}\n", "{ack:?}");
-        assert!(served.is_err(), "{ack:?}: {served:?}");
+        assert_eq!(expired, "{\"expired\":true}\n", "{kind}");
+        let refusal = served.expect_err(kind);
+        let text = format!("{refusal:?} {refusal}");
+        for echoed in [secret.as_str(), CANARY] {
+            assert!(
+                !text.contains(echoed),
+                "{kind}: the refusal echoes the line"
+            );
+        }
     }
 }

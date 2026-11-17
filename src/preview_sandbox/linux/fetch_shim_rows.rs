@@ -247,11 +247,17 @@ fi"#;
     assert!(tail[2..].iter().all(|l| *l == "other 1"), "{out}");
 }
 
-/// L-deadline2: both npm steps take just under the fetch's deadline, so
-/// together they pass it; the fetch refuses at the one deadline, not at
-/// twice it.
+/// L-deadline2: both npm steps take just under the preview's deadline, so
+/// together they pass it; the preview refuses instead of running.
+///
+/// What the caller can see: the gateway's deadline ends the session at the
+/// preview's deadline whatever the helper does, and after the credential the
+/// helper's own words never reach the caller, so this row cannot tell the
+/// helper's one shared deadline from a deadline per step. That sharing is
+/// structural (`install` passes one `deadline` to both npm steps); this row
+/// pins that a fetch running past the preview's deadline never runs.
 #[tokio::test]
-async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
+async fn l_deadline2_a_fetch_past_the_preview_deadline_never_runs() {
     // Each step takes most of the deadline, leaving room for a slow sandbox
     // start before fetch_start: two steps pass one deadline, but each fits
     // inside a deadline of its own.
@@ -260,7 +266,7 @@ async fn l_deadline2_the_two_npm_steps_share_one_deadline() {
     let Some(ran) = shim.npx(&[], limit).await else {
         return;
     };
-    let refusal = ran.expect_err("two steps ran past the one deadline");
+    let refusal = ran.expect_err("a fetch past the preview's deadline ran");
     // The gateway's own deadline ends the session first: its wait for
     // fetch_done times out at the deadline, either way a refusal.
     let text = refusal.to_string();

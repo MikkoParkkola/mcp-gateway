@@ -160,7 +160,8 @@ async fn npx(
 
 /// `target` through the fetch step with `ca` as the bundle, the dialer sending
 /// the registry to `port` and `path` as the gateway's PATH, its deadline
-/// `limit` away: the refusal, or the run's stdout.
+/// `limit` away: the start's refusal, or the run's stdout. A helper refusing
+/// after the start panics instead (NPM.8).
 pub(super) async fn preview(
     gateway: &std::path::Path,
     target: &Target,
@@ -206,11 +207,15 @@ pub(super) async fn preview(
         .expect("the run's stderr ended within the guard")
         .expect("stderr");
     let status = started.child.wait().await.expect("the run's status");
-    // A fetch that fails inside the sandbox still ends its session cleanly, so
-    // the start succeeds; the helper then refuses and names its step.
-    if status.code() == Some(i32::from(super::REFUSED)) {
-        return Err(super::classify(&err));
-    }
+    // A failed fetch is never a start (NPM.8): every row here expects either
+    // the start's own refusal or a run, so a helper that refuses after the
+    // start fails the row, naming the step it refused at.
+    assert_ne!(
+        status.code(),
+        Some(i32::from(super::REFUSED)),
+        "the preview started, then the helper refused: {}",
+        super::classify(&err)
+    );
     Ok(out)
 }
 
