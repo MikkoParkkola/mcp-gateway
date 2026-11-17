@@ -20,6 +20,13 @@ pub(crate) const PERIODIC_SAVE: &str = "periodic save";
 /// agent root.
 pub(crate) const SKILL_BUNDLE: &str = "skill bundle";
 
+/// The kind the package cache's detached deletes (a tombstone, the startup
+/// sweep) report as.
+pub(crate) const PACKAGE_CACHE: &str = "package cache";
+
+/// The kind the config lock's detached thread reports as, for the config path.
+pub(crate) const CONFIG_LOCK: &str = "config lock";
+
 /// The temp dirs a detached writer keeps: test builds only.
 #[cfg(test)]
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;

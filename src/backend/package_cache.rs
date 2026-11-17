@@ -473,10 +473,13 @@ fn retire_now(dir: &Path) -> Retired {
 /// Deletes a tombstone in the background, holding no lock: how long a large or
 /// slow tree takes no longer blocks any start.
 fn discard_tombstone(tombstone: PathBuf) {
-    // Staging: the keep for the tombstone's dir is taken here in the next commit.
+    // Taken before the task exists, while the caller (a test) still holds its
+    // share of the dir; the task holds it until the delete returns.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, &tombstone);
     drop(tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         crate::spawn_keep::pause_if_held(&tombstone);
+        let _kept = kept;
         if !remove_now(&tombstone) {
             warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
         }
@@ -495,10 +498,12 @@ fn sweep_tombstones_once(root: &Path) {
         return;
     }
     let root = root.to_path_buf();
-    // Staging: the keep for the cache root is taken here in the next commit.
+    // Taken before the task exists; the task holds it until the sweep returns.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, &root);
     drop(tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         crate::spawn_keep::pause_if_held(&root);
+        let _kept = kept;
         sweep_now(&root);
     }));
 }

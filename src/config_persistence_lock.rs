@@ -537,8 +537,11 @@ async fn off_runtime_in<T: Send + 'static>(
     };
     #[cfg(test)]
     let held = root.map(Path::to_path_buf);
-    // Staging: the keep for `root` is taken here in the next commit.
-    let _ = root;
+    // Taken before the thread exists, while the caller (a test) still holds
+    // its share of the dir; the thread holds it to its end, past a caller
+    // that left.
+    let kept =
+        root.map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::CONFIG_LOCK, root));
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
@@ -546,6 +549,7 @@ async fn off_runtime_in<T: Send + 'static>(
             if let Some(held) = &held {
                 crate::spawn_keep::pause_if_held(held);
             }
+            let _kept = kept;
             let out = work();
             // A result nobody received (a held lock) is dropped before the
             // thread counts as returned: closing it can stall on the same
