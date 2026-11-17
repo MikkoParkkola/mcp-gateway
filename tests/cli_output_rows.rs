@@ -234,11 +234,7 @@ fn remote_commands_exit_with_the_table_through_the_binary() {
             Some(TOKEN),
             b""
         ),
-        (
-            Some(3),
-            String::new(),
-            format!("error: The gateway rejected this credential.\n{remedy}\n")
-        ),
+        (Some(3), String::new(), format!("error: denied\n{remedy}\n")),
         "api 401"
     );
     assert!(

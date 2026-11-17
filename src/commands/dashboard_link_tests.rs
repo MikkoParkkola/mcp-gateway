@@ -457,17 +457,23 @@ async fn usage_and_marker_edge_tokens_are_never_printed() {
         "{}",
         usage.stderr()
     );
-    // "r" is in the first two markers, so the redactor rotates to the third;
-    // "d]z" would re-form at the first marker's edge, so it takes the second.
-    for token in ["r", "d]z"] {
-        for (command, out) in both(&base, token).await {
-            printed_nowhere(command, token, &out);
-            assert!(
-                failed(&out) && !out.stderr().is_empty(),
-                "{command} {token:?}: {}",
-                out.stderr()
-            );
-        }
+    // "d]z" would re-form at the first marker's edge, so the redactor takes the second; the report still prints.
+    for (command, out) in both(&base, "d]z").await {
+        printed_nowhere(command, "d]z", &out);
+        assert!(
+            failed(&out) && !out.stderr().is_empty(),
+            "{command}: {}",
+            out.stderr()
+        );
+    }
+    // "r" is in the "error:" prefix and in the fixed sentence, which are never redacted: nothing prints, the
+    // exit stands (the gate's rule, shared with api).
+    for (command, out) in both(&base, "r").await {
+        assert_eq!(
+            (out.exit(), out.stderr(), out.stdout()),
+            (CliExit::Gateway, "", &b""[..]),
+            "{command}"
+        );
     }
     // "d" is in every marker, so the redactor fails closed: nothing holding
     // it is printed, possibly nothing at all.

@@ -337,7 +337,10 @@ async fn a_redirect_is_not_followed() {
 #[tokio::test]
 async fn a_cleartext_non_loopback_target_is_refused() {
     let message = ask("http://10.255.255.1:9").await.expect_err("refused");
-    assert!(message.contains("cleartext"), "{message}");
+    assert_eq!(
+        message,
+        "error: Gateway URL must use HTTPS or loopback HTTP.\nUse an HTTPS gateway URL or a loopback HTTP URL.\n"
+    );
 }
 
 /// MIK-9456.CLI.3: the command writes no file (no request history, no

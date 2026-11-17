@@ -491,13 +491,19 @@ async fn refusals_map_through_the_shared_order() {
         ),
         (
             "409 state_uncertain",
-            json(409, r#"{"message":"unsure","code":"state_uncertain"}"#),
+            json(
+                409,
+                r#"{"message":"unsure","error":{"code":"state_uncertain"}}"#,
+            ),
             CliExit::UncertainOutcome,
             "409: unsure",
         ),
         (
             "401 unsupported_version",
-            json(401, r#"{"message":"old","code":"unsupported_version"}"#),
+            json(
+                401,
+                r#"{"message":"old","error":{"code":"unsupported_version"}}"#,
+            ),
             CliExit::Gateway,
             "401: old",
         ),
@@ -731,7 +737,8 @@ async fn lost_oversized_and_unparsable_answers() {
 
 /// T6-T7, stdout safety, three fixtures each decided by its own rule: (a) a value equal to the token prints
 /// redacted; (b) a redaction that makes two keys collide is refused; (c) a token left in stdout after redaction is
-/// refused (dashboard-link's (c) is a unit row: its link is redacted before stdout is built).
+/// refused (dashboard-link's (c) is a unit row: its link is redacted before stdout is built). (c) uses "{": JSON syntax
+/// the redactor cannot mask, held by neither refusal sentence (":" is in the "error:" prefix, so it prints nothing).
 #[tokio::test]
 async fn stdout_safety_has_three_separate_outcomes() {
     let unsafe_what = "The response could not be printed safely.";
@@ -760,7 +767,7 @@ async fn stdout_safety_has_three_separate_outcomes() {
         "(b) events entry loss",
     );
     let gw = gateway(json(200, r#"{"items":[]}"#)).await;
-    let out = events(&["list", "--url", &gw.base], Ok(":".to_string())).await;
+    let out = events(&["list", "--url", &gw.base], Ok("{".to_string())).await;
     failed(
         &out,
         CliExit::LocalFailure,
@@ -769,7 +776,7 @@ async fn stdout_safety_has_three_separate_outcomes() {
         "(c) events residual token",
     );
     let gw = gateway(json(200, LOOKUP_ANSWER)).await;
-    let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some(":")).await;
+    let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some("{")).await;
     failed(
         &out,
         CliExit::LocalFailure,
