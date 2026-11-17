@@ -359,7 +359,7 @@ fn r15w_a_data_leaf_junction_out_is_refused() {
 /// R9 (Windows): the real profile spelt three other ways is still the real home.
 #[cfg(windows)]
 mod r9_windows_aliases {
-    use super::{FIX, probe, refuse, with_override};
+    use super::{FIX, FIX_ENV, probe, refuse, with_override};
     use std::path::PathBuf;
 
     fn refused(alias: &std::path::Path) {
