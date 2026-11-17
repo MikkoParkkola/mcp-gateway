@@ -6,7 +6,7 @@
 //! named `ran` line before its first assertion. The enabling PR deletes the
 //! skip, so a missing uv then fails the row.
 
-use super::fetch_uv_real_fixture::{Layout, Real, fixed, lines, real_uvx, site_off, spawns};
+use super::fetch_uv_real_fixture::{Layout, Real, fixed, lines, ready, real_uvx, site_off, spawns};
 
 /// U-spawn-S (design 3), kills m-no-wrapper and m-unquoted-wrapper: with
 /// the recorder as the interpreter's real file, the fetch's one interpreter
@@ -15,19 +15,19 @@ use super::fetch_uv_real_fixture::{Layout, Real, fixed, lines, real_uvx, site_of
 #[tokio::test]
 async fn u_spawn_s_every_fetch_spawn_of_the_interpreter_has_site_off() {
     use super::fetch_rows::Bundle;
+    let Some(ready) = ready("u_spawn_s").await else {
+        return;
+    };
     for under in ["plain", "it's"] {
         let layout = Layout::unlinked(under, Real::Recorder);
-        let Some((out, _)) = real_uvx(
-            "u_spawn_s",
+        let (out, _) = real_uvx(
+            &ready,
             Some(&layout),
             "probe-hook",
             fixed(&[]),
             Bundle::Registry,
         )
-        .await
-        else {
-            return;
-        };
+        .await;
         let out = out.expect("the fetch and the run succeeded");
         let recorder = layout.bin.join(&layout.version);
         assert_eq!(
@@ -73,19 +73,36 @@ const HOOK: &str = "import os\nif os.environ.get('HTTPS_PROXY'):\n    open(os.pa
 #[tokio::test]
 async fn u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch() {
     use super::fetch_rows::Bundle;
+    let Some(ready) = ready("u_hostpth").await else {
+        return;
+    };
     let layout = Layout::unlinked("plain", Real::Recorder);
-    std::fs::write(layout.stdlib().join("sitecustomize.py"), HOOK).expect("hook");
-    let Some((out, _)) = real_uvx(
-        "u_hostpth",
+    // The host's stdlib may hold sitecustomize.py as a link to a host file
+    // (Debian's points into /etc): the copy keeps the link, so it goes first
+    // and the hook is created new, never written through it.
+    let hook = layout.stdlib().join("sitecustomize.py");
+    match std::fs::remove_file(&hook) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("removing the copied sitecustomize.py: {e}"),
+    }
+    std::io::Write::write_all(
+        &mut std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&hook)
+            .expect("the hook is created new"),
+        HOOK.as_bytes(),
+    )
+    .expect("hook");
+    let (out, _) = real_uvx(
+        &ready,
         Some(&layout),
         "probe-hook",
         fixed(&[]),
         Bundle::Registry,
     )
-    .await
-    else {
-        return;
-    };
+    .await;
     let out = out.expect("the fetch and the run succeeded");
     let recorder = layout.bin.join(&layout.version);
     let all = lines(&out);
@@ -122,6 +139,9 @@ async fn u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch() {
 #[tokio::test]
 async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
     use super::fetch_rows::Bundle;
+    let Some(ready) = ready("u_run_layout").await else {
+        return;
+    };
     for under in ["plain", "a b", "it's"] {
         let layout = Layout::pyenv(under);
         let reads: Vec<String> = layout
@@ -130,17 +150,14 @@ async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
             .map(|c| format!("--read={}", c.display()))
             .collect();
         let args: Vec<&str> = reads.iter().map(String::as_str).collect();
-        let Some((out, _)) = real_uvx(
-            "u_run_layout",
+        let (out, _) = real_uvx(
+            &ready,
             Some(&layout),
             "probe-cli",
             fixed(&args),
             Bundle::Registry,
         )
-        .await
-        else {
-            return;
-        };
+        .await;
         let out = out.expect("the fetch and the run succeeded");
         let mut want = vec!["cli-ran".to_owned()];
         want.extend(reads.iter().cloned());
@@ -161,16 +178,16 @@ async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
 #[tokio::test]
 async fn l7b_a_cold_wheel_fetch_runs_its_console_script_offline() {
     use super::fetch_rows::Bundle;
+    let Some(ready) = ready("l7b").await else {
+        return;
+    };
     let sentinels = ["alpha", "b c", "--flag=d'e"];
     let args = |port: u16| {
         let mut args: Vec<String> = sentinels.iter().map(|a| (*a).to_owned()).collect();
         args.push(format!("--connect=127.0.0.1:{port}"));
         args
     };
-    let Some((out, index)) = real_uvx("l7b", None, "probe-cli", args, Bundle::Registry).await
-    else {
-        return;
-    };
+    let (out, index) = real_uvx(&ready, None, "probe-cli", args, Bundle::Registry).await;
     let out = out.expect("the fetch and the run succeeded");
     // Positive control: the index still answers on the host.
     assert!(
@@ -206,17 +223,10 @@ async fn l7b_a_cold_wheel_fetch_runs_its_console_script_offline() {
 #[tokio::test]
 async fn l7c_sdist_an_sdist_only_project_is_never_built() {
     use super::fetch_rows::{Bundle, at_step};
-    let Some((out, index)) = real_uvx(
-        "l7c_sdist",
-        None,
-        "probe-sdist",
-        fixed(&[]),
-        Bundle::Registry,
-    )
-    .await
-    else {
+    let Some(ready) = ready("l7c_sdist").await else {
         return;
     };
+    let (out, index) = real_uvx(&ready, None, "probe-sdist", fixed(&[]), Bundle::Registry).await;
     let refused = out.expect_err("an sdist-only project refuses");
     assert!(at_step(&refused, "the fetch's uv install"), "{refused:?}");
     let requests = index.requests();
@@ -236,11 +246,10 @@ async fn l7c_sdist_an_sdist_only_project_is_never_built() {
 #[tokio::test]
 async fn l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check() {
     use super::fetch_rows::{Bundle, at_step};
-    let Some((out, index)) =
-        real_uvx("l7c_url", None, "probe-url", fixed(&[]), Bundle::Registry).await
-    else {
+    let Some(ready) = ready("l7c_url").await else {
         return;
     };
+    let (out, index) = real_uvx(&ready, None, "probe-url", fixed(&[]), Bundle::Registry).await;
     let requests = index.requests();
     assert!(
         requests
@@ -261,18 +270,18 @@ async fn l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check() {
 #[tokio::test]
 async fn l7c_pth_an_installed_pth_never_runs_during_the_fetch() {
     use super::fetch_rows::Bundle;
+    let Some(ready) = ready("l7c_pth").await else {
+        return;
+    };
     let layout = Layout::unlinked("plain", Real::Recorder);
-    let Some((out, _)) = real_uvx(
-        "l7c_pth",
+    let (out, _) = real_uvx(
+        &ready,
         Some(&layout),
         "probe-pth",
         fixed(&[]),
         Bundle::Registry,
     )
-    .await
-    else {
-        return;
-    };
+    .await;
     let out = out.expect("the fetch and the run succeeded");
     let all = lines(&out);
     assert_eq!(
@@ -300,11 +309,10 @@ async fn l7c_pth_an_installed_pth_never_runs_during_the_fetch() {
 #[tokio::test]
 async fn l_name_a_dotted_mixed_case_name_runs_from_its_normalized_env() {
     use super::fetch_rows::Bundle;
-    let Some((out, _)) =
-        real_uvx("l_name", None, "Foo.Bar_Baz", fixed(&[]), Bundle::Registry).await
-    else {
+    let Some(ready) = ready("l_name").await else {
         return;
     };
+    let (out, _) = real_uvx(&ready, None, "Foo.Bar_Baz", fixed(&[]), Bundle::Registry).await;
     let out = out.expect("the fetch and the run succeeded");
     assert_eq!(
         lines(&out),
@@ -322,11 +330,10 @@ async fn l_name_a_dotted_mixed_case_name_runs_from_its_normalized_env() {
 #[tokio::test]
 async fn u_tls_only_the_bundles_ca_is_trusted() {
     use super::fetch_rows::{Bundle, at_step};
-    let Some((out, index)) =
-        real_uvx("u_tls", None, "probe-cli", fixed(&[]), Bundle::Registry).await
-    else {
+    let Some(ready) = ready("u_tls").await else {
         return;
     };
+    let (out, index) = real_uvx(&ready, None, "probe-cli", fixed(&[]), Bundle::Registry).await;
     let out = out.expect("the trusted fetch and the run succeeded");
     assert_eq!(lines(&out).first().copied(), Some("cli-ran"), "{out}");
     // uv may ask for one file more than once (range reads): the set counts.
@@ -341,10 +348,7 @@ async fn u_tls_only_the_bundles_ca_is_trusted() {
         ],
         "{out}"
     );
-    let Some((out, index)) = real_uvx("u_tls", None, "probe-cli", fixed(&[]), Bundle::Other).await
-    else {
-        return;
-    };
+    let (out, index) = real_uvx(&ready, None, "probe-cli", fixed(&[]), Bundle::Other).await;
     let refused = out.expect_err("an untrusted index refuses");
     assert!(at_step(&refused, "the fetch's uv install"), "{refused:?}");
     assert_eq!(index.requests(), Vec::<String>::new());

@@ -238,8 +238,6 @@ pub(super) struct Layout {
     pub(super) version: String,
     /// The canaries the run must not read, each checked readable here first.
     pub(super) canaries: Vec<PathBuf>,
-    /// Where the recorder logs a spawn with no HOME (the gateway's probe).
-    pub(super) host_log: PathBuf,
 }
 
 /// How the interpreter's real file is made.
@@ -410,7 +408,6 @@ impl Layout {
             prefix,
             version: version.to_owned(),
             canaries,
-            host_log,
         }
     }
 
@@ -420,25 +417,39 @@ impl Layout {
     }
 }
 
-/// `uvx spec <args(port)>` with the real uv against the fake PyPI on
-/// `port`, the fetch's bundle holding the index's CA (`Bundle::Registry`) or
-/// an unrelated one; the interpreter is `layout`'s, else the system's.
-/// `None` where the host has no sandbox or no uv (the skip line printed);
-/// else the start's refusal or the run's stdout, and the index, still
-/// serving, with its request log.
-pub(super) async fn real_uvx(
-    row: &str,
-    layout: Option<&Layout>,
-    spec: &str,
-    args: impl FnOnce(u16) -> Vec<String>,
-    bundle: super::fetch_rows::Bundle,
-) -> Option<(Result<String, crate::preview_sandbox::Refusal>, Index)> {
-    use super::fetch_rows::{Bundle, GUARD, gateway_bin, preview, sandbox_runs};
+/// What a real-uv row needs before it builds anything: the gateway binary
+/// and the real uv's directory.
+pub(super) struct Ready {
+    gateway: PathBuf,
+    uv_dir: PathBuf,
+}
+
+/// `Some` where this host can run the real-uv rows (a gateway binary, user
+/// namespaces, and uv 0.13.1); `None` after the row's skip line otherwise.
+/// Every real-uv row calls this before it builds a fixture.
+pub(super) async fn ready(row: &str) -> Option<Ready> {
+    use super::fetch_rows::{gateway_bin, sandbox_runs};
     let gateway = gateway_bin()?;
     if !sandbox_runs(&gateway).await {
         return None;
     }
     let uv_dir = real_uv(row)?;
+    Some(Ready { gateway, uv_dir })
+}
+
+/// `uvx spec <args(port)>` with the real uv against the fake PyPI on
+/// `port`, the fetch's bundle holding the index's CA (`Bundle::Registry`) or
+/// an unrelated one; the interpreter is `layout`'s, else the system's. The
+/// start's refusal or the run's stdout, and the index, still serving, with
+/// its request log.
+pub(super) async fn real_uvx(
+    ready: &Ready,
+    layout: Option<&Layout>,
+    spec: &str,
+    args: impl FnOnce(u16) -> Vec<String>,
+    bundle: super::fetch_rows::Bundle,
+) -> (Result<String, crate::preview_sandbox::Refusal>, Index) {
+    use super::fetch_rows::{Bundle, GUARD, preview};
     let index = Index::start(index_files(), "fake PyPI CA").await;
     let ca = match bundle {
         Bundle::Registry => index.ca_pem.clone(),
@@ -451,7 +462,7 @@ pub(super) async fn real_uvx(
         path.push(&layout.bin);
         path.push(":");
     }
-    path.push(&uv_dir);
+    path.push(&ready.uv_dir);
     path.push(":/usr/bin:/bin");
     let target = crate::preview_sandbox::Target {
         program: PathBuf::from("uvx"),
@@ -460,8 +471,8 @@ pub(super) async fn real_uvx(
             .map(OsString::from)
             .collect(),
     };
-    let out = preview(&gateway, &target, &ca, index.port, Some(path), GUARD).await;
-    Some((out, index))
+    let out = preview(&ready.gateway, &target, &ca, index.port, Some(path), GUARD).await;
+    (out, index)
 }
 
 /// Arguments that do not depend on the index's port.
