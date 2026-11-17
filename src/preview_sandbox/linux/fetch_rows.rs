@@ -312,7 +312,7 @@ async fn l_tls1_a_registry_outside_the_bundle_is_refused() {
 
 /// A writable copy of the host's npm and node in an NVM-shaped tree: the
 /// scratch dir and the tree (`bin/node`, `bin/npm`, `bin/npx`, npm's package
-/// under `lib/node_modules/npm`, an empty `etc`).
+/// under `lib/node_modules/npm` without its builtin `npmrc`, an empty `etc`).
 fn nvm_copy(npx: &std::path::Path, version: &str) -> (tempfile::TempDir, PathBuf) {
     let npx_real = std::fs::canonicalize(npx).expect("npx's real file");
     let npm_root = npx_real.ancestors().nth(2).expect("npm's package dir");
@@ -323,13 +323,24 @@ fn nvm_copy(npx: &std::path::Path, version: &str) -> (tempfile::TempDir, PathBuf
     for dir in [tree.join("bin"), tree.join("etc"), modules.clone()] {
         std::fs::create_dir_all(dir).expect("tree");
     }
-    let copied = std::process::Command::new("cp")
-        .arg("-R")
-        .arg(npm_root)
-        .arg(modules.join("npm"))
-        .status()
-        .expect("cp");
-    assert!(copied.success(), "copying npm");
+    // npm's builtin `npmrc` stays behind: L-npmrc plants a token in the host's
+    // and removes it again, so it can vanish mid-copy, and no row here wants
+    // the host's (L-tls2 writes its own).
+    let npm_dir = modules.join("npm");
+    std::fs::create_dir_all(&npm_dir).expect("npm's package dir");
+    for entry in std::fs::read_dir(npm_root).expect("npm's package dir") {
+        let entry = entry.expect("npm's entry");
+        if entry.file_name() == "npmrc" {
+            continue;
+        }
+        let copied = std::process::Command::new("cp")
+            .arg("-R")
+            .arg(entry.path())
+            .arg(&npm_dir)
+            .status()
+            .expect("cp");
+        assert!(copied.success(), "copying npm's {:?}", entry.file_name());
+    }
     std::fs::copy(&node, tree.join("bin/node")).expect("copying node");
     for tool in ["npm", "npx"] {
         let cli = format!("../lib/node_modules/npm/bin/{tool}-cli.js");
