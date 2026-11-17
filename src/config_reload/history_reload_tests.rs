@@ -320,10 +320,9 @@ async fn h5_a_version_holds_every_operator_file_with_presence() {
 
 #[tokio::test]
 async fn h6_no_consumed_value_reaches_the_history() {
-    use rand::RngExt;
-    let p1 = format!("p1-{}", rand::rng().random::<u128>());
-    let p2 = format!("p2-{}", rand::rng().random::<u128>());
-    let p3 = format!("p3-{}", rand::rng().random::<u128>());
+    let p1 = crate::random_secret::random_secret("p1-");
+    let p2 = crate::random_secret::random_secret("p2-");
+    let p3 = crate::random_secret::random_secret("p3-");
     let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
     nested
         .args(["--exact", H6_SCENARIO, "--nocapture"])
