@@ -720,6 +720,67 @@ async fn n8_mint_and_refusal_are_audited_and_the_key_stays_out_of_the_log() {
     }
 }
 
+/// A fail-closed audit log that cannot write withholds the answer. With one
+/// append fault, a valid admin key presenting a live handle gets 503: no
+/// cookie, the presented handle still live, no record. A wrong key with one
+/// fault gets 503 too, not its refusal. Once the fault is spent the same admin
+/// key mints, so the fault is what refused.
+#[tokio::test]
+async fn n8b_an_audit_write_failure_withholds_the_sign_in() {
+    let (mut state, _dir) = fixture().await;
+    let (log, _audit_dir) = with_audit(&mut state);
+    let origin = http_origin(&state, "127.0.0.1");
+    let h1 = issue(&state);
+    assert_eq!(check(&state, &h1), SessionCheck::Valid);
+
+    log.fail_next_append_for_test();
+    let withheld = send(
+        &state,
+        post_signin(
+            Some(&origin),
+            &format!("key={ADMIN_SECRET}"),
+            Some(&h1),
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(
+        withheld.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        withheld.body
+    );
+    assert_no_cookie(&withheld);
+    assert_eq!(check(&state, &h1), SessionCheck::Valid, "the held session");
+    assert!(
+        signin_records(&log).is_empty(),
+        "{:?}",
+        signin_records(&log)
+    );
+
+    log.fail_next_append_for_test();
+    let refused = send(
+        &state,
+        post_signin(Some(&origin), &format!("key={WRONG_SECRET}"), None, true),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        refused.body
+    );
+    assert_no_cookie(&refused);
+
+    let minted = send(
+        &state,
+        post_signin(Some(&origin), &format!("key={ADMIN_SECRET}"), None, true),
+    )
+    .await;
+    assert_mint(&minted);
+    assert_eq!(signin_records(&log).len(), 1, "{:?}", signin_records(&log));
+}
+
 /// The origin rules, the URL and header rows and the router's own answers.
 /// Declared after `recorded!`, which those rows use.
 #[path = "signin_form_boundary_tests.rs"]
