@@ -405,8 +405,11 @@ impl super::ConfigHistory {
                 );
                 let _ = done.send(Some(outcome));
             });
-        if spawned.is_err() {
-            self.save_inline(record);
+        if let Err(error) = spawned {
+            // No unbounded fallback on this thread: without its worker, startup
+            // touches no file and keeps this record in memory (code review r2).
+            let cause = format!("the startup worker could not start: {error}");
+            self.to_memory(record, None, &cause);
             return;
         }
         match finished.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
