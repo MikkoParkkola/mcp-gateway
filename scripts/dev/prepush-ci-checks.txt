@@ -121,6 +121,7 @@ python3 scripts/release/test_scope_acceptance.py	14	closed
 python3 scripts/release/test_scope_contract_interface.py	10	closed
 python3 scripts/release/test_sign_release_assets.py	4	closed
 python3 scripts/release/test_surface_docs.py	0	closed
+python3 scripts/release/test_surface_shipped.py	0	closed
 python3 scripts/release/test_surface_upgrading.py	0	closed
 python3 scripts/release/test_upgrading_fragments.py	4	closed
 python3 scripts/release/test_windows_job_scope.py	0	closed
