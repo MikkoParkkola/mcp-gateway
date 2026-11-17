@@ -250,7 +250,6 @@ fn t7_a_rotated_key_gives_a_new_id_and_keeps_the_old() {
         .with_history(super::HistoryHook {
             store: Arc::clone(&second),
             config_path: "gateway.yaml".to_string(),
-            grants_path: None,
         })
         .with_startup_revision(&rotated, Some(raw));
     let k2 = live.applied_now().map(|applied| applied.revision.clone());

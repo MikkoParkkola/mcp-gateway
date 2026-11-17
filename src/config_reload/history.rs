@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::revision::RawInputs;
 
 /// The whole-save deadline: a record's save, its sidecar wait and the
@@ -39,10 +38,21 @@ pub(crate) enum Outcome {
 }
 
 /// One file as it stood in a stored version. `bytes` is `None` when that version had no such file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StoredFile {
     pub path: String,
     pub bytes: Option<Vec<u8>>,
+}
+
+/// The path and the byte count, never the bytes: a version holds env-file
+/// secrets (I2).
+impl std::fmt::Debug for StoredFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredFile")
+            .field("path", &self.path)
+            .field("bytes", &self.bytes.as_ref().map(Vec::len))
+            .finish()
+    }
 }
 
 impl Drop for StoredFile {
@@ -127,7 +137,7 @@ pub(crate) enum Lookup {
     Unknown,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct State {
     snapshots: Vec<Snapshot>,
     events: Vec<Event>,
@@ -137,8 +147,16 @@ struct State {
 /// record reads the file, evicts, writes it back and drops the bytes (wiped).
 /// Memory-only is the refused-file mode of the 2026-11-16 ruling.
 enum StoreMode {
-    Disk { path: PathBuf },
-    MemoryOnly { state: State },
+    /// Not read yet: `open_now` reads it; until then reads go to the file.
+    Unopened {
+        now: u64,
+    },
+    Disk {
+        path: PathBuf,
+    },
+    MemoryOnly {
+        state: State,
+    },
 }
 
 /// Config versions and reload events, persisted as `data_dir/config-history.json`
@@ -153,6 +171,9 @@ pub(crate) struct ConfigHistory {
     /// holds it until the record is done (design D-1). Never taken with a
     /// swap lock held, never by anything else.
     record_guard: Arc<tokio::sync::Mutex<()>>,
+    /// Raised when a save is abandoned at its deadline; a save renames only
+    /// while this still equals the ticket it took (design D-2).
+    generation: std::sync::atomic::AtomicU64,
 }
 
 impl ConfigHistory {
@@ -164,48 +185,14 @@ impl ConfigHistory {
     /// be read or moved aside is left as it is, said once, and this store
     /// keeps its history in memory only.
     pub(crate) fn open(data_dir: &Path, bounds: Bounds, now: u64) -> Self {
-        let path = data_dir.join(Self::FILE);
-        #[cfg(test)]
-        if let Some(gate) =
-            seams::for_file(&path).and_then(|s| s.take_park(seams::ParkAt::OpenBeforeRead))
-        {
-            gate.park_blocking();
-        }
-        // A parsed file is not kept: disk mode re-reads it on each call, and
-        // the parse is wiped when it drops.
-        let mode = match read_stored(&path) {
-            Ok(None) => StoreMode::Disk { path },
-            Err(reason) => {
-                tracing::warn!(%reason, "config history kept in memory only; its file is left as it is");
-                StoreMode::MemoryOnly {
-                    state: State::default(),
-                }
-            }
-            Ok(Some(text)) => match serde_json::from_slice::<State>(text.as_bytes()) {
-                Ok(parsed) => {
-                    drop(parsed);
-                    StoreMode::Disk { path }
-                }
-                Err(error) => match crate::counters::persist::quarantine(&path, now) {
-                    Ok(_) => StoreMode::Disk { path },
-                    Err(quarantine_error) => {
-                        tracing::warn!(
-                            parse = %error,
-                            error = %quarantine_error,
-                            "config history could not be moved aside; not saving over it"
-                        );
-                        StoreMode::MemoryOnly {
-                            state: State::default(),
-                        }
-                    }
-                },
-            },
-        };
+        // No I/O here: the file is read by `open_now`, which startup runs on
+        // its worker under the startup deadline (gpt G1).
         Self {
             bounds,
-            mode: parking_lot::Mutex::new(mode),
+            mode: parking_lot::Mutex::new(StoreMode::Unopened { now }),
             data_dir: data_dir.to_path_buf(),
             record_guard: Arc::new(tokio::sync::Mutex::new(())),
+            generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -219,49 +206,16 @@ impl ConfigHistory {
         self.data_dir.join(Self::FILE)
     }
 
-    /// Remember `event` and, when present, `snapshot`. Evict, then save.
-    /// `running` is the revision a snapshot eviction must not drop. A disk
-    /// read that is refused or fails switches this store to memory-only,
-    /// starting from the event being recorded, and does not write.
+    /// Remember `event` and, when present, `snapshot`, saved on this thread
+    /// (design D-2); `running` is the revision an eviction must not drop.
     pub(crate) fn record(&self, event: Event, snapshot: Option<Snapshot>, running: &str, now: u64) {
-        let noted = {
-            let mut mode = self.mode.lock();
-            record_in(&mut mode, self.bounds, event, snapshot, running, now)
-        };
-        match noted {
-            None => {}
-            Some(Noted::Write(error)) => {
-                tracing::warn!(%error, "config history could not be saved");
-            }
-            Some(Noted::Read(reason)) => {
-                tracing::warn!(%reason, "config history kept in memory only; its file is left as it is");
-            }
-        }
-    }
-
-    /// The bytes `path` had in the newest kept version, when it has that file.
-    fn newest_file_bytes(&self, path: &str) -> Option<Vec<u8>> {
-        self.with_state(|state| {
-            let file = state
-                .snapshots
-                .last()?
-                .files
-                .iter()
-                .find(|file| file.path == path)?;
-            file.bytes.clone()
-        })
-    }
-
-    /// When the newest kept version named `revision` was stored.
-    fn stored_at(&self, revision: &str) -> Option<u64> {
-        self.with_state(|state| {
-            state
-                .snapshots
-                .iter()
-                .rev()
-                .find(|snapshot| snapshot.revision == revision)
-                .map(|snapshot| snapshot.at)
-        })
+        self.save_inline(Record {
+            event,
+            snapshot,
+            running: running.to_string(),
+            served: None,
+            now,
+        });
     }
 
     /// Held events, oldest first. Test-only until the history page reads it.
@@ -270,7 +224,8 @@ impl ConfigHistory {
         self.with_state(|state| state.events.clone())
     }
 
-    /// Kept versions, oldest first.
+    /// Kept versions, oldest first. Test-only until the history page reads it.
+    #[cfg(test)]
     pub(crate) fn snapshots(&self) -> Vec<Snapshot> {
         self.with_state(|state| state.snapshots.clone())
     }
@@ -299,23 +254,16 @@ impl ConfigHistory {
         })
     }
 
-    /// Disk reads and parses the file. Memory-only reads the held state.
-    /// A disk read that fails answers as an empty store and does not change mode.
+    /// Memory-only reads the held state; otherwise the file. Test-only: a
+    /// failed read reads as empty here, which no write path relies on (the
+    /// save reads the store itself and never takes a failure as empty).
+    #[cfg(test)]
     fn with_state<T>(&self, read: impl FnOnce(&State) -> T) -> T {
         let mode = self.mode.lock();
         match &*mode {
             StoreMode::MemoryOnly { state } => read(state),
-            StoreMode::Disk { path } => {
-                // A read fault is met by whichever read comes first (C4).
-                #[cfg(test)]
-                let faulted = seams::for_file(path).is_some_and(|s| s.take_read_fault().is_some());
-                #[cfg(not(test))]
-                let faulted = false;
-                let state = if faulted {
-                    State::default()
-                } else {
-                    load_state(path).unwrap_or_default()
-                };
+            StoreMode::Disk { .. } | StoreMode::Unopened { .. } => {
+                let state = load_state(&self.file()).unwrap_or_default();
                 read(&state)
             }
         }
@@ -327,15 +275,10 @@ impl ConfigHistory {
 pub(crate) struct HistoryHook {
     pub store: Arc<ConfigHistory>,
     pub config_path: String,
-    pub grants_path: Option<String>,
 }
 
 /// The hook a serving gateway attaches when it has a config file.
-pub(crate) fn hook_for(
-    data_dir: &Path,
-    config_path: &Path,
-    grants_path: Option<String>,
-) -> HistoryHook {
+pub(crate) fn hook_for(data_dir: &Path, config_path: &Path) -> HistoryHook {
     HistoryHook {
         store: Arc::new(ConfigHistory::open(
             data_dir,
@@ -343,13 +286,14 @@ pub(crate) fn hook_for(
             crate::clock::unix_secs().unwrap_or(0),
         )),
         config_path: config_path.display().to_string(),
-        grants_path,
     }
 }
 
 impl HistoryHook {
-    /// Run one pending record.
-    pub(crate) fn run(&self, pending: PendingRecord, now: u64) {
+    /// The record `pending` stands for, built from the publish's own inputs
+    /// only (gateway.yaml and the env files): no version depends on another
+    /// record or on state read back from the store (design D-1).
+    pub(crate) fn build(&self, pending: PendingRecord, now: u64) -> Record {
         match pending {
             PendingRecord::Publish {
                 raw,
@@ -357,7 +301,7 @@ impl HistoryHook {
                 pending_restart,
                 previous,
                 source,
-            } => self.on_publish(
+            } => self.publish_record(
                 &raw,
                 &revision,
                 &pending_restart,
@@ -369,8 +313,30 @@ impl HistoryHook {
                 source,
                 served,
                 line,
-            } => self.on_refused(source, served.as_deref(), line, now),
+            } => Record {
+                event: Event {
+                    at: now,
+                    source,
+                    outcome: Outcome::Refused,
+                    revision: None,
+                    unchanged: false,
+                    still_running: None,
+                    location: line.map(u64::from),
+                    attempted_diff: None,
+                },
+                snapshot: None,
+                running: served.clone().unwrap_or_default(),
+                served,
+                now,
+            },
         }
+    }
+
+    /// Build and save one pending record on this thread. Test-only: a reload
+    /// saves through the record task, startup through `ConfigHistory::start`.
+    #[cfg(test)]
+    pub(crate) fn run(&self, pending: PendingRecord, now: u64) {
+        self.store.save_inline(self.build(pending, now));
     }
 
     /// The files a version of `raw` holds, as the swap observer logs them.
@@ -393,32 +359,8 @@ impl HistoryHook {
         source: Source,
         now: u64,
     ) {
-        if previous == Some(revision) {
-            self.store.record(
-                applied_event(now, source, revision, true),
-                None,
-                revision,
-                now,
-            );
-            return;
-        }
-        let snapshot = Snapshot {
-            revision: revision.to_string(),
-            at: now,
-            source: source.clone(),
-            pending_restart: pending_restart
-                .iter()
-                .copied()
-                .map(str::to_string)
-                .collect(),
-            files: self.version_files(raw),
-        };
-        self.store.record(
-            applied_event(now, source, revision, false),
-            Some(snapshot),
-            revision,
-            now,
-        );
+        let record = self.publish_record(raw, revision, pending_restart, previous, source, now);
+        self.store.save_inline(record);
     }
 
     /// Record a refused reload. No version is stored. `served` is the revision
@@ -430,94 +372,48 @@ impl HistoryHook {
         line: Option<u32>,
         now: u64,
     ) {
-        let still_running = served.map(|revision| StillRunning {
-            revision: revision.to_string(),
-            since: self.store.stored_at(revision).unwrap_or(now),
-        });
-        self.store.record(
-            Event {
-                at: now,
-                source,
-                outcome: Outcome::Refused,
-                revision: None,
-                unchanged: false,
-                still_running,
-                location: line.map(u64::from),
-                attempted_diff: None,
-            },
-            None,
-            served.unwrap_or(""),
-            now,
-        );
+        let pending = PendingRecord::Refused {
+            source,
+            served: served.map(str::to_string),
+            line,
+        };
+        self.store.save_inline(self.build(pending, now));
     }
 
-    /// A grants publish is its own version. The grants come from their file,
-    /// so the source is `File`. Nothing is recorded when this hook has no
-    /// grants path. `previous == Some(revision)` is an unchanged event.
-    /// Otherwise the version is the newest held version's files with the
-    /// grants entry set to `grants` (`None` when there are none), appended
-    /// when that version has no grants entry; with no held version, only
-    /// the grants entry.
-    pub(crate) fn on_grants(
+    fn publish_record(
         &self,
-        grants: Option<&[u8]>,
+        raw: &RawInputs,
         revision: &str,
         pending_restart: &[&str],
         previous: Option<&str>,
+        source: Source,
         now: u64,
-    ) {
-        let Some(grants_path) = self.grants_path.clone() else {
-            return;
-        };
-        if previous == Some(revision) {
-            self.store.record(
-                applied_event(now, Source::File, revision, true),
-                None,
-                revision,
-                now,
-            );
-            return;
-        }
-        let bytes = grants.map(<[u8]>::to_vec);
-        let mut files = self
-            .store
-            .snapshots()
-            .pop()
-            .map(|newest| newest.files.clone())
-            .unwrap_or_default();
-        if let Some(file) = files.iter_mut().find(|file| file.path == grants_path) {
-            if let Some(old) = file.bytes.as_mut() {
-                zeroize::Zeroize::zeroize(old);
-            }
-            file.bytes = bytes;
-        } else {
-            files.push(StoredFile {
-                path: grants_path,
-                bytes,
-            });
-        }
-        let snapshot = Snapshot {
+    ) -> Record {
+        let unchanged = previous == Some(revision);
+        let snapshot = (!unchanged).then(|| Snapshot {
             revision: revision.to_string(),
             at: now,
-            source: Source::File,
+            source: source.clone(),
             pending_restart: pending_restart
                 .iter()
                 .copied()
                 .map(str::to_string)
                 .collect(),
-            files,
-        };
-        self.store.record(
-            applied_event(now, Source::File, revision, false),
-            Some(snapshot),
-            revision,
+            files: self.version_files(raw),
+        });
+        Record {
+            event: applied_event(now, source, revision, unchanged),
+            snapshot,
+            running: revision.to_string(),
+            served: None,
             now,
-        );
+        }
     }
 
-    /// gateway.yaml, then each env file, then the grants file when this hook has one.
+    /// gateway.yaml, then each env file (design D-3 M6: the grants file is
+    /// not part of a config version; grants versions are recorded separately).
     fn version_files(&self, raw: &RawInputs) -> Vec<StoredFile> {
-        let mut files = Vec::with_capacity(raw.env_files.len() + 2);
+        let mut files = Vec::with_capacity(raw.env_files.len() + 1);
         files.push(StoredFile {
             path: self.config_path.clone(),
             bytes: Some(raw.gateway_yaml.clone()),
@@ -526,16 +422,6 @@ impl HistoryHook {
             path: path.clone(),
             bytes: bytes.clone(),
         }));
-        if let Some(path) = &self.grants_path {
-            let bytes = match &raw.grants {
-                Some(grants) => Some(grants.clone()),
-                None => self.store.newest_file_bytes(path),
-            };
-            files.push(StoredFile {
-                path: path.clone(),
-                bytes,
-            });
-        }
         files
     }
 }
@@ -564,67 +450,6 @@ fn read_stored(path: &Path) -> Result<Option<crate::wiped_bytes::WipedBytes>, St
     }
 }
 
-/// A disk read refused or failed while recording, or a save that did not land.
-enum Noted {
-    Write(std::io::Error),
-    Read(String),
-}
-
-fn record_in(
-    mode: &mut StoreMode,
-    bounds: Bounds,
-    event: Event,
-    snapshot: Option<Snapshot>,
-    running: &str,
-    now: u64,
-) -> Option<Noted> {
-    let path = match mode {
-        StoreMode::MemoryOnly { state } => {
-            remember(state, event, snapshot, bounds, running, now);
-            return None;
-        }
-        StoreMode::Disk { path } => path.clone(),
-    };
-    #[cfg(test)]
-    let job = seams::JobSeams::take(&path);
-    #[cfg(test)]
-    job.park(seams::ParkAt::BeforeRead);
-    #[cfg(test)]
-    let loaded = job.read(&path);
-    #[cfg(not(test))]
-    let loaded = load_state(&path);
-    // The path clone ended the borrow of `mode`, so a failed read can switch it.
-    match loaded {
-        Ok(mut state) => {
-            remember(&mut state, event, snapshot, bounds, running, now);
-            #[cfg(test)]
-            job.park(seams::ParkAt::BeforeCheck);
-            #[cfg(test)]
-            job.park(seams::ParkAt::AfterCheck);
-            #[cfg(test)]
-            if job.fault == Some(seams::Fault::Write) {
-                job.done();
-                return Some(Noted::Write(std::io::Error::other("injected write fault")));
-            }
-            // Written under the mode lock, so the file never ends on an older
-            // state than a record that raced this one. The bytes are wiped
-            // when `save_state` drops them.
-            let saved = save_state(&path, &state).err().map(Noted::Write);
-            #[cfg(test)]
-            job.done();
-            saved
-        }
-        Err(reason) => {
-            let mut state = State::default();
-            remember(&mut state, event, snapshot, bounds, running, now);
-            *mode = StoreMode::MemoryOnly { state };
-            #[cfg(test)]
-            job.done();
-            Some(Noted::Read(reason))
-        }
-    }
-}
-
 fn remember(
     state: &mut State,
     event: Event,
@@ -648,12 +473,6 @@ fn load_state(path: &Path) -> Result<State, String> {
         return Ok(State::default());
     };
     serde_json::from_slice(text.as_bytes()).map_err(|error| error.to_string())
-}
-
-fn save_state(path: &Path, state: &State) -> Result<(), std::io::Error> {
-    let bytes = serde_json::to_vec(state).map_err(std::io::Error::from)?;
-    let bytes = crate::wiped_bytes::WipedBytes::new(bytes);
-    write_atomic(path, bytes.as_bytes(), FileMode::Private, Symlink::Replace)
 }
 
 /// A stored version written before `source` existed is a file reload.
@@ -689,17 +508,26 @@ fn snapshot_total(snapshots: &[Snapshot]) -> usize {
 /// Drop non-running versions past `max_age_secs`, then the oldest non-running
 /// version until the count and the byte total both fit. `running` stays.
 fn evict_snapshots(snapshots: &mut Vec<Snapshot>, bounds: Bounds, running: &str, now: u64) {
+    // Only the newest copy of the running revision is pinned (t12): an older
+    // copy of the same revision ages and counts out like any other.
+    let mut pinned = snapshots
+        .iter()
+        .rposition(|snapshot| snapshot.revision == running);
+    let mut index = 0;
     snapshots.retain(|snapshot| {
-        snapshot.revision == running || now.saturating_sub(snapshot.at) <= bounds.max_age_secs
+        let keep = Some(index) == pinned || now.saturating_sub(snapshot.at) <= bounds.max_age_secs;
+        index += 1;
+        keep
     });
+    pinned = snapshots
+        .iter()
+        .rposition(|snapshot| snapshot.revision == running);
     while snapshots.len() > bounds.snapshots || snapshot_total(snapshots) > bounds.snapshot_bytes {
-        let Some(index) = snapshots
-            .iter()
-            .position(|snapshot| snapshot.revision != running)
-        else {
+        let Some(oldest) = (0..snapshots.len()).find(|i| Some(*i) != pinned) else {
             break;
         };
-        snapshots.remove(index);
+        snapshots.remove(oldest);
+        pinned = pinned.map(|p| if p > oldest { p - 1 } else { p });
     }
 }
 
@@ -737,9 +565,12 @@ mod reload_tests;
 #[cfg(test)]
 #[path = "history_route_tests.rs"]
 mod route_tests;
+#[path = "history_save.rs"]
+mod save;
 #[cfg(test)]
 #[path = "history_save_tests.rs"]
 mod save_tests;
+pub(crate) use save::Record;
 #[path = "history_task.rs"]
 mod task;
 pub(crate) use task::{PendingRecord, RecordSlot};

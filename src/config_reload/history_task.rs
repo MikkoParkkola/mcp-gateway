@@ -79,9 +79,15 @@ impl RecordSlot {
             if let Some(gate) = &reached {
                 gate.park_async().await;
             }
-            // ponytail: stub, today's synchronous record off the runtime's
-            // workers with no deadline; D-2 bounds it.
-            let _ = tokio::task::spawn_blocking(move || live.run_record(pending)).await;
+            if let Some(hook) = live.history_hook() {
+                #[cfg(test)]
+                if let Some(pause) = live.record_pause() {
+                    let _ = tokio::task::spawn_blocking(move || pause()).await;
+                }
+                let record = hook.build(pending, crate::clock::unix_secs().unwrap_or(0));
+                // Bounded by the save deadline (design D-2).
+                hook.store.save_bounded(record).await;
+            }
             #[cfg(test)]
             if let Some(gate) = reached {
                 gate.finished();

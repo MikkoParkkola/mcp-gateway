@@ -159,6 +159,7 @@ impl LiveConfig {
     }
 
     /// Run `pending` on this thread: the test pause first, then the hook.
+    #[cfg(test)]
     pub(crate) fn run_record(&self, pending: crate::config_reload::history::PendingRecord) {
         let Some(hook) = &self.history else {
             return;
@@ -168,6 +169,12 @@ impl LiveConfig {
             pause();
         }
         hook.run(pending, crate::clock::unix_secs().unwrap_or(0));
+    }
+
+    /// The test pause, for the record task.
+    #[cfg(test)]
+    pub(crate) fn record_pause(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.record_pause.clone()
     }
 
     /// The history hook, for the record task.
@@ -311,11 +318,18 @@ impl LiveConfig {
                 let recorded = live.history.as_ref().map(|_| raw.clone());
                 let live = live.with_applied(raw);
                 let published = live.applied_now();
-                // Startup records on this thread, before the holder is shared.
-                if let Some(pending) =
-                    live.pending_publish(recorded, None, published, Source::Start)
-                {
-                    live.run_record(pending);
+                // Startup: open and this record on one worker, bounded by one
+                // deadline, before the holder is shared (design D-1, gpt G1).
+                if let (Some(hook), Some(pending)) = (
+                    live.history.clone(),
+                    live.pending_publish(recorded, None, published, Source::Start),
+                ) {
+                    #[cfg(test)]
+                    if let Some(pause) = &live.record_pause {
+                        pause();
+                    }
+                    let record = hook.build(pending, crate::clock::unix_secs().unwrap_or(0));
+                    hook.store.start(record);
                 }
                 live
             }
@@ -441,25 +455,12 @@ impl LiveConfig {
     }
 
     /// New grants over the published config: only the grants part changes,
-    /// and the revision is recomputed under the same gate as a reload.
-    /// The replaced and the new revision are both read under that write
-    /// lock; the history hook runs after the locks drop.
+    /// and the revision is recomputed under the same gate as a reload. Nothing
+    /// is recorded in the config history: grants versions are recorded separately.
     pub(crate) fn set_grants(&self, grants: Option<&[u8]>) {
-        let Some((replaced, published)) = self.replace_part(|key, inputs| {
+        let _ = self.replace_part(|key, inputs| {
             inputs.grants = grants.map(|g| revision::part_digest(key, g));
-        }) else {
-            return;
-        };
-        let Some(hook) = &self.history else {
-            return;
-        };
-        hook.on_grants(
-            grants,
-            &published.revision,
-            published.pending_restart.as_slice(),
-            Some(replaced.revision.as_str()),
-            crate::clock::unix_secs().unwrap_or(0),
-        );
+        });
     }
 
     /// Apply `change` to the published inputs and return the replaced and

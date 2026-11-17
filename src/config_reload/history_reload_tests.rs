@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use super::record_tests::{
@@ -15,7 +14,6 @@ use crate::config::{Config, FailsafeConfig, LiveEnv};
 use crate::config_reload::reload_context::replace::{Audit, replace_audited};
 use crate::config_reload::{IdentityGrantSink, ReloadContext};
 use crate::gateway::test_helpers::write_owner_only;
-use crate::identity_grants::LocalIdentityGrantStore;
 
 const H6_FLAG: &str = "H6_SCENARIO";
 const H6_SCENARIO: &str = "config_reload::history::reload_tests::h6_consumed_scenario";
@@ -75,14 +73,6 @@ fn start(
         store,
         env,
     }
-}
-
-fn grant_sink(path: &std::path::Path) -> Arc<IdentityGrantSink> {
-    Arc::new(IdentityGrantSink::new(
-        Arc::new(parking_lot::RwLock::new(LocalIdentityGrantStore::default())),
-        Arc::new(AtomicU64::new(0)),
-        path.to_path_buf(),
-    ))
 }
 
 #[tokio::test]
@@ -302,7 +292,9 @@ async fn h5_a_version_holds_every_operator_file_with_presence() {
         .expect("a missing env file reloads");
 
     let gateway = path_string(&started.path);
-    let expected = vec![gateway, env_spelling.clone(), grants_spelling.clone()];
+    // gateway.yaml and the env files: the grants file is not part of a config
+    // version (design D-3 M6; grants versions are recorded separately).
+    let expected = vec![gateway, env_spelling.clone()];
     let lists: Vec<Vec<String>> = started.store.snapshots().iter().map(file_paths).collect();
     assert_eq!(lists, vec![expected.clone(), expected]);
     let snapshots = started.store.snapshots();
@@ -320,11 +312,9 @@ async fn h5_a_version_holds_every_operator_file_with_presence() {
             .map(|file| file.bytes.clone()),
         Some(None)
     );
-    assert_eq!(
-        newer
-            .and_then(|snapshot| stored(snapshot, &grants_spelling))
-            .map(|file| file.bytes.clone()),
-        Some(Some(GRANTS_EMPTY.as_bytes().to_vec()))
+    assert!(
+        newer.is_some_and(|snapshot| stored(snapshot, &grants_spelling).is_none()),
+        "no grants entry in a config version"
     );
 }
 
@@ -420,59 +410,6 @@ async fn h6_consumed_scenario() {
     assert!(
         holds(&file, MARKER),
         "a marker planted in gateway.yaml is found"
-    );
-}
-
-#[tokio::test]
-async fn h7_a_grants_change_with_a_broken_config_is_two_events() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let grants_file = dir.path().join("grants.yaml");
-    write_owner_only(&grants_file, GRANTS_EMPTY).expect("grants file");
-    let grants_spelling = path_string(&grants_file);
-    let yaml = format!(
-        "{ONE_BACKEND}security:\n  identity_grants:\n    enabled: true\n    path: '{grants_spelling}'\n"
-    );
-    let started = start(
-        dir.path(),
-        &yaml,
-        Some(grants_spelling.clone()),
-        Some(GRANTS_EMPTY.as_bytes().to_vec()),
-        None,
-        Some(grant_sink(&grants_file)),
-    );
-    let before = started
-        .ctx
-        .live_config
-        .applied_now()
-        .map(|applied| applied.revision.clone());
-    let changed = format!("{GRANTS_EMPTY}\n");
-    write_owner_only(&grants_file, &changed).expect("edit the grants");
-    write_owner_only(&started.path, REFUSED_PORT).expect("break the config");
-    let outcome = started.ctx.reload_outcome().await;
-    assert!(outcome.is_err(), "the config half refused: {outcome:?}");
-
-    let events = started.store.events();
-    let applied = events.iter().rev().nth(1);
-    let refused = events.last();
-    assert_eq!(applied.map(|event| event.outcome), Some(Outcome::Applied));
-    assert_eq!(refused.map(|event| event.outcome), Some(Outcome::Refused));
-    let revision = applied.and_then(|event| event.revision.clone());
-    assert_ne!(revision.as_deref(), before.as_deref());
-    let snapshots = started.store.snapshots();
-    let granted = snapshots
-        .iter()
-        .find(|snapshot| Some(snapshot.revision.as_str()) == revision.as_deref());
-    assert_eq!(
-        granted
-            .and_then(|snapshot| stored(snapshot, &grants_spelling))
-            .map(|file| file.bytes.clone()),
-        Some(Some(changed.into_bytes()))
-    );
-    assert_eq!(
-        refused
-            .and_then(|event| event.still_running.as_ref())
-            .map(|running| running.revision.as_str()),
-        revision.as_deref()
     );
 }
 

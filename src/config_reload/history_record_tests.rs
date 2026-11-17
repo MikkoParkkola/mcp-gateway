@@ -69,7 +69,8 @@ pub(super) fn hold_at(
     dir: &Path,
     raw: RawInputs,
     config_path: String,
-    grants_path: Option<String>,
+    // Grants versions are recorded separately; the argument stays for its callers.
+    _grants_path: Option<String>,
     config: Config,
     pause: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> (LiveConfig, Arc<ConfigHistory>) {
@@ -77,7 +78,6 @@ pub(super) fn hold_at(
     let hook = HistoryHook {
         store: Arc::clone(&store),
         config_path,
-        grants_path,
     };
     let mut live = LiveConfig::new(config).with_history(hook);
     if let Some(pause) = pause {

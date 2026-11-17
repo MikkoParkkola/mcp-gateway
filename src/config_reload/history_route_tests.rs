@@ -106,7 +106,6 @@ async fn stage(yaml: &str, keys: &[Key]) -> Result<Held<impl Send>, String> {
     let hook = HistoryHook {
         store: Arc::clone(&store),
         config_path: path.display().to_string(),
-        grants_path: None,
     };
     let live = Arc::new(
         crate::config_reload::LiveConfig::with_auth(evaluated.config, resolved)
