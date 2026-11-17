@@ -41,16 +41,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.a18d7389a108.js",
-        include_bytes!("shell/gateway.a18d7389a108.js"),
+        "gateway.a15765357c1f.js",
+        include_bytes!("shell/gateway.a15765357c1f.js"),
     ),
     (
-        "shell.4a10a657d852.js",
-        include_bytes!("shell/shell.4a10a657d852.js"),
+        "shell.b410045c062e.js",
+        include_bytes!("shell/shell.b410045c062e.js"),
     ),
     (
-        "shell.c3a77326a918.css",
-        include_bytes!("shell/shell.c3a77326a918.css"),
+        "shell.c460caebf770.css",
+        include_bytes!("shell/shell.c460caebf770.css"),
+    ),
+    (
+        "shell.nojs.4e34f233c1ba.css",
+        include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
         "tips.93dac071a1b5.json",
@@ -61,8 +65,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.de4fdffd8c4c.js",
-        include_bytes!("shell/tools.de4fdffd8c4c.js"),
+        "tools.3ec2d575eff3.js",
+        include_bytes!("shell/tools.3ec2d575eff3.js"),
     ),
     (
         "tooltip.5251c22696fd.css",

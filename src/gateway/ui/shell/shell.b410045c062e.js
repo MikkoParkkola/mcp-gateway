@@ -2130,12 +2130,6 @@ function boot() {
     document.getElementById('content').focus();
   });
   render();
-  // The document shows the card until this module has wired the page. `ready`
-  // on the document element is what the stylesheet keys on; from here the card
-  // stays hidden until a signed-out session asks for a key, as it did when the
-  // markup itself carried `hidden`.
-  document.getElementById('signin').hidden = true;
-  document.documentElement.classList.add('ready');
   // Nothing the frame's first paint draws needs an /ui/api answer, so the boot reads
   // and the live stream start once that paint is out: on a slow link they would
   // otherwise take round trips from the stylesheet and fonts. A screen's own data
