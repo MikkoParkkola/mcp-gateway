@@ -495,17 +495,9 @@ impl CapabilityExecutor {
             _ => None,
         };
 
-        // Per-host pacing: one lookup decides admission, the client (no
-        // redirects, no protocol retries) and the attempts together. Taken
-        // after every await but the send, so a slow credential lookup cannot
-        // hold an admitted call back until the next one is admitted beside it.
-        let paced = crate::capability::pacing::admit(&url)?;
-        let client = if paced {
-            &self.client.paced
-        } else {
-            &self.client.http
-        };
-        let mut request = client.request(method, &url).headers(headers);
+        // The whole request is assembled, and every fallible step taken, on
+        // the normal client first, so a call that fails here spends no permit.
+        let mut request = self.client.http.request(method, &url).headers(headers);
         if let Some((param_name, credential)) = &query_credential {
             request = request.query(&[(*param_name, credential.as_str())]);
         }
@@ -540,11 +532,27 @@ impl CapabilityExecutor {
         }
 
         let timeout = Duration::from_secs(provider.timeout);
+        let request = request.timeout(timeout).build().map_err(|e| {
+            Error::Protocol(format!(
+                "Request: could not be built: {}",
+                client::redact_url(e)
+            ))
+        })?;
+
+        // Per-host pacing: one lookup decides admission, the client (no
+        // redirects, no protocol retries) and the attempts together, taken
+        // immediately before the send: nothing between can fail or wait.
+        let paced = crate::capability::pacing::admit(&url)?;
+        let client = if paced {
+            &self.client.paced
+        } else {
+            &self.client.http
+        };
         // Retry timeouts only for idempotent HTTP methods; a timeout on a
         // mutating method may have already been processed upstream.
         let idempotent = matches!(method_upper.as_str(), "GET" | "HEAD" | "OPTIONS" | "TRACE");
         let response = send_attempts(
-            request.timeout(timeout),
+            reqwest::RequestBuilder::from_parts(client.clone(), request),
             &self.client.redirects,
             "Request",
             idempotent,
@@ -560,7 +568,9 @@ impl CapabilityExecutor {
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
-                .and_then(crate::capability::pacing::host_key)
+                // A relative Location names the request's own host.
+                .and_then(|loc| url::Url::parse(&url).ok()?.join(loc).ok())
+                .and_then(|target| crate::capability::pacing::host_key(target.as_str()))
                 .map_or_else(|| "another host".to_owned(), |k| k.host);
             return Err(Error::Protocol(format!(
                 "a paced provider does not follow redirects; {} answered {} pointing to {target}",
