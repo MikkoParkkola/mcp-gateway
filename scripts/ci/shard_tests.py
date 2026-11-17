@@ -551,6 +551,79 @@ def self_test() -> int:
         assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    # H1: every shard, on every OS, gives cargo and a prebuilt lib
+    # binary a private gateway home beside its TMPDIR, and removes it after the
+    # shard, also when cargo fails (R6.1, R6.4, R6.5). The recorder stands in
+    # for cargo and writes down what it was given.
+    record_dir = tempfile.mkdtemp(prefix="shard-record-")
+    record = os.path.join(record_dir, "env.json")
+    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR")
+    recorder_src = (
+        "import json, os, sys\n"
+        f"keys = {keys!r}\n"
+        "if '--list' in sys.argv:\n"
+        "    sys.exit(0)\n"
+        "json.dump({k: os.environ.get(k) for k in keys}, open(os.environ['RECORD_ENV'], 'w'))\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "sys.exit(int(os.environ.get('RECORD_RC', '0')))\n"
+    )
+    recorder = (sys.executable, "-c", recorder_src)
+
+    def home_given(os_kind: str) -> str:
+        seen = json.load(open(record, encoding="utf-8"))
+        home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
+        assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
+        assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
+        assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        if os_kind in TMP_GUARDED:
+            shard_tmp = seen["TMPDIR"]
+            assert shard_tmp and os.path.dirname(home) == os.path.dirname(shard_tmp), (os_kind, seen)
+            assert not os.path.commonpath([home, shard_tmp]) == shard_tmp, "beside, not inside, TMPDIR"
+        return home
+
+    os.environ["RECORD_ENV"] = record
+    try:
+        for os_kind in sorted(SHARDS):
+            shard = sorted(SHARDS[os_kind])[0]
+            assert run_steps(os_kind, shard, recorder) == [], (os_kind, shard)
+            assert not os.path.exists(home_given(os_kind)), (os_kind, "the shard removes its home")
+        os.environ["RECORD_RC"] = "1"
+        try:
+            failed = run_steps("linux", "lib-a", recorder)
+        finally:
+            del os.environ["RECORD_RC"]
+        assert any("cargo exited 1" in f for f in failed), failed
+        assert not os.path.exists(home_given("linux")), "a failed shard removes its home too"
+        if os.name == "posix":
+            binary = os.path.join(record_dir, "fake-lib")
+            with open(binary, "w", encoding="utf-8") as f:
+                f.write(f"#!{sys.executable}\n{recorder_src}")
+            single = next(name for name, steps in SHARDS["linux"].items() if len(steps) == 1)
+            assert run_prebuilt("linux", single, binary) == 0, "the prebuilt control run"
+            assert not os.path.exists(home_given("linux")), "a prebuilt shard removes its home"
+    finally:
+        del os.environ["RECORD_ENV"]
+        shutil.rmtree(record_dir, ignore_errors=True)
+    # R5.2: a forgotten harness. A test binary given no home builds its
+    # fallback in TMPDIR, and the leftover check names it. Given the shard's
+    # home it builds none, and the shard stays green.
+    forgetful = (sys.executable, "-c", (
+        "import os, tempfile\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "if os.environ.get('PLANT_FORGOTTEN') or not os.environ.get('MCP_GATEWAY_TEST_HOME_DIR'):\n"
+        "    tempfile.mkdtemp(prefix='mcp-gateway-test-home-')\n"
+    ))
+    os.environ["PLANT_FORGOTTEN"] = "1"
+    try:
+        forgot = run_steps("linux", "lib-a", forgetful)
+    finally:
+        del os.environ["PLANT_FORGOTTEN"]
+    assert len(forgot) == 1 and forgot[0].startswith("left in TMPDIR: mcp-gateway-test-home-"), forgot
+    assert run_steps("linux", "lib-a", forgetful) == [], "given the shard's home, no fallback is built"
     print("shard_tests self-test: ok")
     return 0
 

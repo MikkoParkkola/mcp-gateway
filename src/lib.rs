@@ -191,12 +191,16 @@ pub mod skills;
 #[doc(hidden)]
 pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
+#[cfg(test)]
+mod home_contention_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
 #[cfg(test)]
 mod test_dir_keep;
 #[cfg(test)]
 pub(crate) mod test_fixture_host;
+#[cfg(test)]
+pub(crate) mod test_home;
 #[cfg(test)]
 pub(crate) mod test_late_write;
 #[cfg(test)]

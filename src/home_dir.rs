@@ -111,9 +111,75 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
     dirs::config_dir()
 }
 
+/// The home a lookup resolves to: the test override, else the private test
+/// home when one is given, else the platform home.
+///
+/// Red-stage stub: today's rule, which ignores `test_home`.
+#[cfg(test)]
+pub(crate) fn resolve_home(
+    override_home: Option<PathBuf>,
+    platform_home: Option<PathBuf>,
+    _test_home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    override_home.or(platform_home)
+}
+
+/// The config directory a lookup resolves to. Under the override,
+/// `XDG_CONFIG_HOME` else `<override>/.config`; without it, `<test_home>/.config`
+/// when a test home is given (an inherited `XDG_CONFIG_HOME` is ignored), else
+/// the platform config directory.
+///
+/// Red-stage stub: today's rule, which ignores `test_home`.
+#[cfg(test)]
+pub(crate) fn resolve_config(
+    override_home: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    platform_config: Option<PathBuf>,
+    _test_home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    match override_home {
+        Some(home) => Some(xdg.unwrap_or_else(|| home.join(".config"))),
+        None => platform_config,
+    }
+}
+
+#[cfg(test)]
+#[path = "home_dir_probe_tests.rs"]
+mod probe_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn p(path: &str) -> Option<PathBuf> {
+        Some(PathBuf::from(path))
+    }
+
+    /// R1.1-R1.3, R1.8: the override wins, then the test home, then the platform.
+    #[test]
+    fn resolve_home_prefers_override_then_test_home_then_platform() {
+        assert_eq!(resolve_home(p("/o"), p("/p"), p("/t")), p("/o"));
+        assert_eq!(resolve_home(None, p("/p"), p("/t")), p("/t"));
+        assert_eq!(resolve_home(None, p("/p"), None), p("/p"));
+        assert_eq!(resolve_home(None, None, None), None);
+    }
+
+    /// R1.4-R1.7, R1.9: XDG counts only under the override; without it the test
+    /// home decides, and the platform value is used only outside a test home.
+    #[test]
+    fn resolve_config_honours_xdg_only_under_the_override() {
+        assert_eq!(resolve_config(p("/o"), p("/x"), p("/pc"), p("/t")), p("/x"));
+        assert_eq!(
+            resolve_config(p("/o"), None, p("/pc"), p("/t")),
+            p("/o/.config")
+        );
+        assert_eq!(
+            resolve_config(None, p("/x"), p("/pc"), p("/t")),
+            p("/t/.config")
+        );
+        assert_eq!(resolve_config(None, p("/x"), p("/pc"), None), p("/pc"));
+        assert_eq!(resolve_config(None, None, None, None), None);
+    }
 
     #[test]
     fn tilde_rest_names_home_paths() {

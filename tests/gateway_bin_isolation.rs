@@ -55,6 +55,58 @@ fn a_cleared_environment_still_opens_the_store_under_the_fixture_home() {
     );
 }
 
+/// R8 (D2): in the gateway binary the operator's
+/// `MCP_GATEWAY_CONFIG_DIR` still decides the data dir when a test home is set.
+/// The startup task store opens under it and not under the home. The test-home
+/// rule that ignores the variable applies only to test builds.
+#[test]
+fn the_operator_data_dir_wins_over_the_test_home_in_the_binary() {
+    let fixture = tempfile::tempdir().expect("a fixture home");
+    let operator = tempfile::tempdir().expect("an operator data dir");
+    let chosen = operator.path().join("tasks");
+    let under_home = fixture.path().join(".mcp-gateway").join("tasks");
+    let mut child = gateway_bin::command(fixture.path(), gateway_bin::Inherit::Nothing)
+        .env("MCP_GATEWAY_CONFIG_DIR", operator.path())
+        .args(["serve", "--stdio"])
+        .current_dir(fixture.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn() // spawn-check: waits for exit: the row reaps it before its fixture drops
+        .expect("the gateway starts");
+
+    // Bounded only as a hang guard: the store appears as the child starts.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !chosen.is_dir() && Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("child status") {
+            panic!("the gateway exited ({status}) before opening its store");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let opened = chosen.is_dir();
+
+    drop(child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.try_wait().expect("child status").is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.wait();
+    assert!(
+        opened,
+        "the task store was not created under MCP_GATEWAY_CONFIG_DIR {}",
+        operator.path().display()
+    );
+    assert!(
+        !under_home.exists(),
+        "the task store also appeared under the test home {}",
+        under_home.display()
+    );
+}
+
 /// `gateway_bin::Reaped`: a test's gateway is stopped, and every process it
 /// started is gone, before the folders it writes into are removed.
 #[cfg(unix)]

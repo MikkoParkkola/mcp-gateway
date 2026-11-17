@@ -13,6 +13,8 @@
 //! Every test pins its environment with an overlay, so a key in the developer's
 //! own environment cannot decide it.
 
+use std::path::{Path, PathBuf};
+
 use base64::Engine as _;
 
 use super::*;
@@ -308,4 +310,204 @@ async fn registered_gateway_events_opener_refuses_a_plain_tempdir() {
         std::panic::resume_unwind(panic);
     }
     // Returning normally makes should_panic fail when the exemption survives.
+}
+
+// ── R4 (HOME.4): the private data dir, seen from a child ────────────
+
+/// Set in the child [`r4_child`] runs in.
+const R4_CASE: &str = "MCP_GW_TEST_R4_CASE";
+/// The directory the child's home and data dir must lie under before it builds.
+const R4_ROOT: &str = "MCP_GW_TEST_R4_ROOT";
+/// Set to plant a malformed ranker file in the child's own data dir first.
+const R4_PLANT: &str = "MCP_GW_TEST_R4_PLANT";
+const RANKER_WARNING: &str = "Failed to load search ranker usage data";
+const MALFORMED: &[u8] = b"{not json";
+
+/// Runs [`r4_child`] with `platform_home` as HOME and USERPROFILE, every test-home
+/// variable removed (unless `override_home` is given), and `tmp` as its temp
+/// dir. Fails if the child refused to build outside `root`.
+fn r4(
+    platform_home: &Path,
+    tmp: &Path,
+    root: &Path,
+    override_home: Option<&Path>,
+    plant: bool,
+) -> std::collections::BTreeMap<String, String> {
+    let mut cmd = crate::test_home::test_binary();
+    cmd.args([
+        "--exact",
+        "gateway::server::tests::build_meta_wiring::r4_child",
+        "--ignored",
+        "--nocapture",
+    ])
+    .env_remove("MCP_GATEWAY_TEST_HOME_DIR")
+    .env_remove("XDG_CONFIG_HOME")
+    .env_remove("MCP_GATEWAY_CONFIG_DIR")
+    .env("HOME", platform_home)
+    .env("USERPROFILE", platform_home)
+    .env(R4_CASE, "1")
+    .env(R4_ROOT, root);
+    for key in ["TMPDIR", "TMP", "TEMP"] {
+        cmd.env(key, tmp);
+    }
+    if let Some(home) = override_home {
+        cmd.env("MCP_GATEWAY_TEST_HOME_DIR", home);
+    }
+    if plant {
+        cmd.env(R4_PLANT, "1");
+    }
+    let out = cmd.output().expect("spawn the r4 child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("REFUSED"),
+        "the child resolved outside its root and refused to build:\n{stdout}\n{stderr}"
+    );
+    assert!(out.status.success(), "r4 child failed:\n{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("r4 child ok"),
+        "r4 child ran no case:\n{stdout}\n{stderr}"
+    );
+    stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("PROBE "))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+/// Every regular file under `root`, relative to it, sorted.
+#[cfg(unix)]
+fn files_under(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read dir") {
+            let path = entry.expect("entry").path();
+            let kind = std::fs::symlink_metadata(&path)
+                .expect("metadata")
+                .file_type();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file() {
+                found.push(path.strip_prefix(root).expect("under root").to_path_buf());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+#[cfg(unix)]
+fn plant_in(home: &Path) -> PathBuf {
+    let planted = home.join(".mcp-gateway").join("usage.json");
+    std::fs::create_dir_all(planted.parent().expect("parent")).expect("data dir");
+    std::fs::write(&planted, MALFORMED).expect("plant");
+    planted
+}
+
+/// R4.1: a malformed ranker file in the platform home's data dir is never read
+/// or touched. The child builds under its private fallback, and the platform
+/// home holds exactly the planted file afterwards.
+#[cfg(unix)]
+#[test]
+fn r4_build_meta_never_reads_the_platform_homes_data_dir() {
+    let platform = tempfile::tempdir().expect("platform home");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let planted = plant_in(platform.path());
+    let seen = r4(platform.path(), tmp.path(), tmp.path(), None, false);
+    assert_eq!(seen["WARNED"], "false", "the planted file was read");
+    assert!(
+        PathBuf::from(&seen["DATA"]).starts_with(tmp.path()),
+        "{seen:?}"
+    );
+    assert_eq!(
+        files_under(platform.path()),
+        vec![PathBuf::from(".mcp-gateway").join("usage.json")]
+    );
+    assert_eq!(std::fs::read(&planted).expect("read back"), MALFORMED);
+}
+
+/// R4.2, the control: pointed at the same home through the override, the child
+/// does read the planted file. Without it, a broken log capture would let R4.1
+/// pass on a child that reads everything.
+#[cfg(unix)]
+#[test]
+fn r4_control_the_same_plant_is_read_through_the_override() {
+    let platform = tempfile::tempdir().expect("platform home");
+    let tmp = tempfile::tempdir().expect("tmp");
+    plant_in(platform.path());
+    let seen = r4(
+        platform.path(),
+        tmp.path(),
+        platform.path(),
+        Some(platform.path()),
+        false,
+    );
+    assert_eq!(
+        seen["WARNED"], "true",
+        "the planted file was not read: {seen:?}"
+    );
+}
+
+/// R4.3 (Windows, path evidence only: the platform lookup ignores HOME and
+/// USERPROFILE, so nothing is planted): the child builds under its fallback.
+#[cfg(windows)]
+#[test]
+fn r4_build_meta_resolves_under_the_fallback_on_windows() {
+    let platform = tempfile::tempdir().expect("platform home");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let seen = r4(platform.path(), tmp.path(), tmp.path(), None, false);
+    assert!(
+        PathBuf::from(&seen["DATA"]).starts_with(tmp.path()),
+        "{seen:?}"
+    );
+}
+
+/// R4.4: the private data dir is the one read. A malformed ranker file the
+/// child plants there is reported.
+#[test]
+fn r4_build_meta_reads_the_private_data_dir() {
+    let platform = tempfile::tempdir().expect("platform home");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let seen = r4(platform.path(), tmp.path(), tmp.path(), None, true);
+    assert_eq!(
+        seen["WARNED"], "true",
+        "the private data dir was not read: {seen:?}"
+    );
+}
+
+#[test]
+#[ignore = "run by the r4 rows, in a child whose home each row sets"]
+fn r4_child() {
+    if std::env::var_os(R4_CASE).is_none() {
+        return;
+    }
+    let root = PathBuf::from(std::env::var_os(R4_ROOT).expect("root"));
+    let home = crate::home_dir::home_dir().expect("a home");
+    let data = crate::config_persistence::gateway_data_dir();
+    // Refuse before anything is built, so a red or mutant run never writes
+    // outside the parent's directories, a real Windows home included.
+    if !home.starts_with(&root) || !data.starts_with(&root) {
+        println!(
+            "REFUSED home={} data={} root={}",
+            home.display(),
+            data.display(),
+            root.display()
+        );
+        std::process::exit(3);
+    }
+    if std::env::var_os(R4_PLANT).is_some() {
+        std::fs::create_dir_all(&data).expect("data dir");
+        std::fs::write(data.join("usage.json"), MALFORMED).expect("plant");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (_meta, warnings) =
+        crate::test_log_capture::capture_warnings(|| runtime.block_on(built(Config::default())));
+    println!("PROBE DATA={}", data.display());
+    println!("PROBE WARNED={}", warnings.contains(RANKER_WARNING));
+    println!("r4 child ok");
 }
