@@ -819,4 +819,6 @@ mod fetch_rows;
 #[cfg(test)]
 mod fetch_shim_rows;
 #[cfg(test)]
+mod fetch_uv_rows;
+#[cfg(test)]
 mod tests;
