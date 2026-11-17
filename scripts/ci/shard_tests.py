@@ -34,6 +34,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -276,7 +277,14 @@ def private_home(base: dict[str, str] | None, tmp: str | None):
     shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
     (not inside it, so the leftover check never reads it) and removed after the shard, also when a
     step fails. The config and data dirs the lib resolves are set beneath it."""
-    home = tempfile.mkdtemp(prefix="shard-home-", dir=os.path.dirname(tmp) if tmp else None)
+    home = os.path.join(
+        os.path.dirname(tmp) if tmp else tempfile.gettempdir(), f"shard-home-{secrets.token_hex(8)}"
+    )
+    # Owner-only on POSIX. Not on Windows: there a 0o700 mkdir (what mkdtemp does) writes a
+    # protected DACL that also grants OWNER RIGHTS (S-1-3-4), and the gateway refuses a lock dir
+    # that any SID but the user, SYSTEM and Administrators may write, so every auth-on start under
+    # this home failed. A plain mkdir inherits the account's own temp-dir ACL instead.
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
     env = dict(os.environ if base is None else base)
     env["MCP_GATEWAY_TEST_HOME_DIR"] = home
     env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
@@ -586,7 +594,9 @@ def self_test() -> int:
         f"keys = {keys!r}\n"
         "if '--list' in sys.argv:\n"
         "    sys.exit(0)\n"
-        "json.dump({k: os.environ.get(k) for k in keys}, open(os.environ['RECORD_ENV'], 'w'))\n"
+        "seen = {k: os.environ.get(k) for k in keys}\n"
+        "seen['mode'] = os.stat(seen['MCP_GATEWAY_TEST_HOME_DIR']).st_mode & 0o777\n"
+        "json.dump(seen, open(os.environ['RECORD_ENV'], 'w'))\n"
         "print('     Running unittests src/lib.rs (x)')\n"
         "print('running 99999 tests')\n"
         "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
@@ -600,6 +610,8 @@ def self_test() -> int:
         assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
         assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
         assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        if os.name != "nt":
+            assert seen["mode"] == 0o700, ("the home is owner-only", os_kind, oct(seen["mode"]))
         if os_kind in TMP_GUARDED:
             # A prebuilt binary gets its BY_BINARY folder; the shard's own TMPDIR is above it.
             shard_tmp = seen["TMPDIR"]
