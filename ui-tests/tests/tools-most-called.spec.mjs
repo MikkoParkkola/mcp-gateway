@@ -219,6 +219,25 @@ test('M12: the panel search starts empty after a catalogue search', async ({ pag
   await expect(search(page)).toHaveValue('');
 });
 
+test('M21: Enter in the empty panel search opens every tool, whatever server the catalogue was left on', async ({ page }) => {
+  await toolsScreen(page, { tools: [
+    tool('alpha_read', 'alpha', 3, 1),
+    tool('bravo_write', 'bravo', 2, 1),
+    tool('bravo_list', 'bravo', 0, 0),
+  ] });
+  await page.goto('/ui/tools/status?view=all');
+  // The premise: the catalogue narrowed to one server.
+  await page.getByRole('combobox', { name: 'Server' }).selectOption('bravo');
+  await expect.poll(() => catalogueNames(page)).toEqual(['bravo_list', 'bravo_write']);
+  // In-app navigation keeps the screen's module state, where the server filter lives.
+  await page.locator('nav.route-nav a[data-page="tools"]').click();
+  await expect(page).toHaveURL('/ui/tools/status');
+  await expect(mostCalled(page)).toBeVisible();
+  await search(page).press('Enter');
+  await expect(page).toHaveURL('/ui/tools/status?view=all');
+  await expect.poll(() => catalogueNames(page)).toEqual(['alpha_read', 'bravo_list', 'bravo_write']);
+});
+
 for (const width of WIDTHS) {
   test(`M10: the landing panel passes axe and never scrolls sideways at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

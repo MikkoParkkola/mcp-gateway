@@ -175,7 +175,10 @@ function mostCalled(body, read) {
   search.addEventListener('keydown', (ev) => {
     if (ev.isComposing || ev.key !== 'Enter' || search.value !== '') return;
     ev.preventDefault();
+    // Enter in an empty box promises every tool: no narrowing from an earlier
+    // catalogue visit survives, as the See all link's 'clear' does.
     filters.query = '';
+    filters.server = '';
     queueCatalogue(search, read);
   });
   const rows = topCalled(list);
