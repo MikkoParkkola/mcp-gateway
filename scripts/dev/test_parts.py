@@ -760,6 +760,13 @@ def apply(root: Path) -> list[str]:
     return sorted(edits)
 
 
+def _report(findings: list[Finding]) -> int:
+    for f in findings:
+        print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
+    print(f"test_parts: {len(findings)} findings")
+    return 1 if findings else 0
+
+
 def main(argv: list[str], root: Path | None = None) -> int:
     root = root or Path(__file__).resolve().parents[2]
     if argv[1:] == ["apply"]:
@@ -775,14 +782,15 @@ def main(argv: list[str], root: Path | None = None) -> int:
             print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
         return 1 if left else 0
     if len(argv) == 4 and argv[1] == "expect":  # expect TARGET OUTDIR: the union job's per-part name lists
+        # The refusals evaluate every CI configuration with `rustc --print cfg`, which only CI may run (pre-push
+        # blocks the compiler), so they run here, before any list is written, not in `check`.
+        findings = check(root, configs=_expect_module().ci_configs(root) or None)
+        if findings:
+            return _report(findings)
         print(f"test_parts: expected per part {_expect_module().write_expect(_walk_api(), root, argv[2], Path(argv[3]))}")
         return 0
     if argv[1:] == ["check"]:
-        findings = check(root, configs=_expect_module().ci_configs(root) or None)
-        for f in findings:
-            print(f"{f.path}:{f.line}: {f.code}: {f.message}", file=sys.stderr)
-        print(f"test_parts: {len(findings)} findings")
-        return 1 if findings else 0
+        return _report(check(root))
     print("usage: test_parts.py check|apply|expect TARGET OUTDIR", file=sys.stderr)
     return 2
 
