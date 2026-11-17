@@ -149,8 +149,12 @@ fn c3c_a_save_parked_before_its_read_leaves_a_complete_memory_record() {
 fn c10d_a_sidecar_held_past_the_deadline_keeps_the_record_in_memory() {
     paused(|| async {
         let dir = tempfile::tempdir().expect("tempdir");
+        let installed = seams::install(dir.path());
         let rig = rig_in(dir, ONE_BACKEND);
         let before = bytes_of(rig.dir.path());
+        // The late job, once the sidecar frees, parks at its generation check,
+        // so the row watches it reach the check and fail it (code review r2).
+        let gate = installed.seams.park(ParkAt::BeforeCheck);
         let lock = rig.dir.path().join("config-history.json.lock");
         let held = crate::fs_lock::ExclusiveFileLock::try_acquire(&lock).expect("hold the sidecar");
         let base = crate::fs_lock::lock_attempts(&lock);
@@ -177,6 +181,16 @@ fn c10d_a_sidecar_held_past_the_deadline_keeps_the_record_in_memory() {
         );
         assert_eq!(rig.store.events().len(), 1, "memory-only with this record");
         drop(held);
-        assert_eq!(bytes_of(rig.dir.path()), before, "still byte-identical");
+        tokio::time::timeout(Duration::from_secs(30), gate.arrival())
+            .await
+            .expect("the late job took the sidecar and reached its check");
+        gate.release();
+        gate.completion().await;
+        assert_eq!(
+            bytes_of(rig.dir.path()),
+            before,
+            "the late job wrote nothing"
+        );
+        drop(installed);
     });
 }

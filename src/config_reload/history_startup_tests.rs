@@ -55,6 +55,24 @@ pub(super) fn start_bounded(dir: tempfile::TempDir) -> Option<(Rig, String, Dura
     started.recv_timeout(SAVE_DEADLINE + MARGIN).ok()
 }
 
+/// Wait, in real time and bounded, for a released gate's guarded step to finish.
+fn completed(gate: &seams::Gate) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(30), gate.completion())
+                .await
+                .expect("the released worker finished");
+        });
+}
+
+/// One warning, not more: the count of the memory-only line in `logged`.
+fn warnings_in(logged: &str) -> usize {
+    logged.matches("config history kept in memory only").count()
+}
+
 /// A first startup, then its directory, for a second startup over its file.
 fn first_start() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -88,8 +106,9 @@ fn c13a_an_open_parked_before_its_read_does_not_hold_startup() {
         logged.contains(&path.join("config-history.json").display().to_string()),
         "one warning names the file: {logged}"
     );
+    assert_eq!(warnings_in(&logged), 1, "exactly one warning: {logged}");
     gate.release();
-    futures::executor::block_on(gate.completion());
+    completed(&gate);
     assert_eq!(bytes_of(&path), before, "byte-identical");
     assert!(copies_in(&path).is_empty(), "nothing moved aside");
 }
@@ -122,10 +141,15 @@ fn c13b_a_late_quarantine_only_copies_the_unparseable_bytes() {
         "memory-only with the startup record"
     );
     gate.release();
-    futures::executor::block_on(gate.completion());
+    completed(&gate);
     let copies = copies_in(&path);
     assert_eq!(copies.len(), 1, "one copy: {copies:?}");
     assert_eq!(std::fs::read(&copies[0]).expect("copy"), unparseable);
+    // Nothing else: the late link moved the file aside and no save followed it.
+    assert!(
+        !path.join("config-history.json").exists(),
+        "no history file written after the late quarantine"
+    );
 }
 
 /// C13c: the startup record's save parked after a passed check: released, the
@@ -141,7 +165,7 @@ fn c13c_a_late_startup_rename_writes_only_the_workers_state() {
     };
     assert!(took < SAVE_DEADLINE + MARGIN, "took {took:?}");
     gate.release();
-    futures::executor::block_on(gate.completion());
+    completed(&gate);
     let file: serde_json::Value = serde_json::from_slice(&bytes_of(&path)).expect("parses");
     let sources: Vec<&str> = file["events"]
         .as_array()
@@ -237,6 +261,7 @@ fn c9_startup_with_the_sidecar_held_elsewhere_ends_within_the_deadline() {
         logged.contains("config-history.json.lock"),
         "names the sidecar: {logged}"
     );
+    assert_eq!(warnings_in(&logged), 1, "exactly one warning: {logged}");
     assert!(status.success(), "the holder ran cleanly");
 }
 
@@ -260,10 +285,12 @@ fn c12_child_scenario() {
         started.config,
         None,
     );
+    let took = begun.elapsed();
+    assert!(took < SAVE_DEADLINE + MARGIN, "took {took:?}");
+    // It waited for the held sidecar to its deadline, not gave up at once.
     assert!(
-        begun.elapsed() < SAVE_DEADLINE + MARGIN,
-        "took {:?}",
-        begun.elapsed()
+        took + Duration::from_secs(1) >= SAVE_DEADLINE,
+        "waited only {took:?}"
     );
     assert_eq!(bytes_of(&dir), before, "the child never wrote");
     assert_eq!(store.events().len(), 1, "the child's record is in memory");

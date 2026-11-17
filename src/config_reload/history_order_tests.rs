@@ -108,7 +108,13 @@ async fn r_order_records_land_in_swap_order_through_every_entry_point() {
         "the run had both outcomes: {events:?}"
     );
     assert_eq!(events, observed, "events in exactly the observer's order");
-    for snapshot in rig.store.snapshots().iter().skip(1) {
+    let snapshots = rig.store.snapshots();
+    assert!(
+        snapshots.len() > 1,
+        "the run stored versions to check: {}",
+        snapshots.len()
+    );
+    for snapshot in snapshots.iter().skip(1) {
         let swapped = log.iter().find_map(|entry| match entry {
             Observed::Swap { revision, files } if *revision == snapshot.revision => Some(files),
             _ => None,
@@ -151,10 +157,15 @@ async fn c_cancel_a_dropped_reload_keeps_its_record_and_its_place() {
     let second = tokio::spawn(async move { ctx.reload_outcome().await });
     // Either the second reload waits for the first record's guard (the order
     // holds), or it finishes while the first record is still parked (broken).
-    tokio::select! {
-        () = installed.seams.guard_waited() => {}
-        () = async { while !second.is_finished() { tokio::task::yield_now().await; } } => {}
-    }
+    let decided = async {
+        tokio::select! {
+            () = installed.seams.guard_waited() => {}
+            () = async { while !second.is_finished() { tokio::task::yield_now().await; } } => {}
+        }
+    };
+    tokio::time::timeout(HANG, decided)
+        .await
+        .expect("the second reload either waited for the guard or finished");
     first_gate.release();
     tokio::time::timeout(HANG, second)
         .await
