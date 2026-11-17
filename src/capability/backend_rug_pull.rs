@@ -21,7 +21,7 @@ impl CapabilityBackend {
         let mut detected = Vec::new();
 
         for dir in &dirs {
-            detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
+            detect_rug_pulls_in_dir(dir, Path::new(dir), &mut detected).await;
         }
 
         // The name each file was trusted as comes from its path, which the
@@ -133,9 +133,18 @@ impl CapabilityBackend {
         &self,
         file: String,
         capability: super::CapabilityDefinition,
+        source: Option<super::ServedSource>,
     ) -> crate::Result<()> {
         let name = capability.name.clone();
         self.register_capability(capability)?;
+        // `register_capability` records no file. Stamp the one this admission
+        // trusted, under the catalogue lock, before the name is looked up.
+        if let Some(source) = source {
+            let mut caps = self.capabilities.write();
+            if let Some(&pos) = caps.index.get(&name) {
+                caps.sources[pos] = Some(source);
+            }
+        }
         self.loaded_from.write().insert(file, name);
         Ok(())
     }
@@ -184,7 +193,7 @@ fn declared_pin(content: &str) -> Result<Option<String>, ()> {
 
 /// Recursively walk a directory and report any YAML file whose embedded
 /// `sha256:` pin does not match the file's current content.
-async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
+async fn detect_rug_pulls_in_dir(root: &str, dir: &Path, out: &mut Vec<RugPullRecord>) {
     let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
         return;
     };
@@ -197,7 +206,7 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
             continue;
         }
         if path.is_dir() {
-            Box::pin(detect_rug_pulls_in_dir(&path, out)).await;
+            Box::pin(detect_rug_pulls_in_dir(root, &path, out)).await;
             continue;
         }
         if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
@@ -226,7 +235,9 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
                 .unwrap_or_default();
             out.push(RugPullRecord {
                 capability: name,
-                file: path.display().to_string(),
+                // The same string the loader stored in `loaded_from`: a display
+                // path and a joined configured path must not be two keys.
+                file: super::super::loader::source_path(root, &path),
                 expected,
                 actual,
                 loaded_as: None,

@@ -1,0 +1,2 @@
+src/gateway/server/stdio_startup.rs	log_capability_dirs	1	Logs each capability directory's load outcome once the operation lock is released; decides nothing
+src/gateway/server/mod.rs	attach_capability_revision	1	Hands the published config to the capability catalogue before the listener binds; decides nothing

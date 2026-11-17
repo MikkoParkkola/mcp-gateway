@@ -75,6 +75,13 @@ async fn http_startup(dirs: &[&std::path::Path], setup: impl FnOnce(&Gateway)) -
     let watcher = Box::pin(gateway.start_capability_watcher(&meta, &webhooks, &shutdown))
         .await
         .expect("VOID: the capability step starts");
+    // As run does after this step, once LiveConfig is built and before the
+    // bind: a scan that parked becomes ready only through this attach.
+    if let Some(backend) = meta.get_capabilities() {
+        backend.attach_revision(Arc::new(crate::config_reload::LiveConfig::new(
+            gateway.config.clone(),
+        )));
+    }
     Started {
         meta,
         shutdown,

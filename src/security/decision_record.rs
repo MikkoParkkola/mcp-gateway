@@ -87,12 +87,30 @@ pub(crate) struct DecisionFinding {
     pub location: String,
 }
 
+/// How much of the capability catalogue a config revision covers.
+///
+/// Serialized as `covered`, `not_loaded` or `partial`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Coverage {
+    /// Every configured directory was read.
+    Covered,
+    /// The files had not been read.
+    NotLoaded,
+    /// A configured directory or file could not be read.
+    Partial,
+}
+
 /// The decision object as written and as read back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Decision {
     pub v: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_revision: Option<String>,
+    /// Whether `config_revision` covers capability files. Absent on a record
+    /// written before the field existed: that id does not cover them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_revision_capabilities: Option<Coverage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -123,6 +141,20 @@ pub(crate) struct Decision {
 /// The decision object version this gateway writes: version 2 records carry
 /// the declared effect.
 pub(crate) const DECISION_VERSION: u8 = 2;
+
+/// Coverage of the capability part a revision names.
+fn coverage_of(
+    part: &crate::config_reload::revision::CapabilityPart<
+        crate::config_reload::revision::PartDigest,
+    >,
+) -> Coverage {
+    use crate::config_reload::revision::CapabilityPart;
+    match part {
+        CapabilityPart::Loaded(_) => Coverage::Covered,
+        CapabilityPart::NotLoaded => Coverage::NotLoaded,
+        CapabilityPart::Partial(_) => Coverage::Partial,
+    }
+}
 
 /// Whether the record being written is of a refused call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,18 +377,43 @@ impl Noted {
                 ((DecisionKind::Unrecorded, None), None)
             }
         };
-        let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
-        let config_revision = applied.as_ref().map(|a| a.revision.clone());
-        let running_revision = live
-            .and_then(crate::config_reload::LiveConfig::running_revision)
-            .filter(|running| config_revision.as_deref() != Some(*running))
-            .map(str::to_owned);
+        let now = live.map(crate::config_reload::LiveConfig::applied_now);
+        let config_revision = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .published
+                .as_ref()
+                .map(|applied| applied.revision.clone())
+        });
+        // Both come from the one read. A second read could pair this
+        // revision with a running revision from after a reload.
+        let running_revision = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .running
+                .clone()
+                .filter(|running| config_revision.as_deref() != Some(running.as_str()))
+        });
+        // Present whenever a revision is. The part is what that id covers.
+        let config_revision_capabilities = now.as_ref().and_then(|snapshot| {
+            snapshot
+                .published
+                .as_ref()
+                .map(|applied| coverage_of(applied.capability_part()))
+        });
         Decision {
             v: DECISION_VERSION,
             config_revision,
+            config_revision_capabilities,
             running_revision,
-            pending_restart: applied
-                .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
+            pending_restart: now
+                .as_ref()
+                .and_then(|snapshot| snapshot.published.as_ref())
+                .map(|applied| {
+                    applied
+                        .pending_restart
+                        .iter()
+                        .map(|field| (*field).to_owned())
+                        .collect()
+                })
                 .unwrap_or_default(),
             kind,
             rule_id: rule_id.map(|id| id.as_str().to_owned()),
@@ -396,3 +453,7 @@ mod read_tests;
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
+
+#[cfg(test)]
+#[path = "decision_record_capability_tests.rs"]
+mod capability_tests;

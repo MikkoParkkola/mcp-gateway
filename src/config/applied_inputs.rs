@@ -7,13 +7,27 @@ use std::collections::BTreeSet;
 use super::config_file::ConfigFile;
 use super::env_overlay::SecretFileDigests;
 use super::{Config, EnvOverlay, OverlayEnv, ResolvedEnvFiles, secret_ref};
-use crate::config_reload::revision::RawInputs;
+use crate::config_reload::revision::{CapabilityPart, RawBytes, RawInputs};
 
 impl Config {
+    /// The capability part a startup revision carries.
+    ///
+    /// Enabled has not read the files (`NotLoaded`). Disabled is the empty
+    /// loaded list, so its id is the one from before capability files were
+    /// an input.
+    pub(crate) fn capability_part(&self) -> CapabilityPart<RawBytes> {
+        if self.capabilities.enabled {
+            CapabilityPart::NotLoaded
+        } else {
+            CapabilityPart::Loaded(Vec::new())
+        }
+    }
+
     /// What a resolving evaluation read: the file's bytes, each env file's
     /// parsed bytes, and every value it consumed from outside the files.
     /// A `SecretRef` resolved lazily after load is not an input of the load.
     pub(super) fn raw_inputs(
+        &self,
         path: Option<&ConfigFile>,
         overlay: &EnvOverlay,
         env_paths: &ResolvedEnvFiles,
@@ -55,7 +69,7 @@ impl Config {
             gateway_yaml: text.as_bytes().to_vec(),
             grants: None,
             env_files: overlay.env_file_inputs(env_paths.as_paths()),
-            capabilities: Vec::new(),
+            capabilities: self.capability_part(),
             consumed,
         }
     }

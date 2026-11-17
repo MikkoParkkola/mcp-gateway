@@ -155,6 +155,7 @@ fn decided() -> crate::security::decision_record::Decision {
     Decision {
         v: 1,
         config_revision: Some("hmac-sha256:00".to_owned()),
+        config_revision_capabilities: None,
         running_revision: None,
         pending_restart: Vec::new(),
         kind: DecisionKind::DefaultAllow,

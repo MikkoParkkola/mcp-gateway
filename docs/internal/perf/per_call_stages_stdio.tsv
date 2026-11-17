@@ -110,6 +110,7 @@ src/gateway/server/identity_grants.rs	snapshot_time	-	startup identity-grant aud
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	stdio_identity_grants	-	startup identity-grant audit for stdio, before serving
 src/gateway/server/listener.rs	serve	-	the HTTP listener loop, started once per serve; the timed rows call the router in-process and over stdio pipes, with no socket
+src/gateway/server/mod.rs	attach_capability_revision	-	startup: hands the published config to the capability catalogue before the listener binds, not per call
 src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup config, not per call
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup config, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup path resolution, not per call
@@ -244,6 +245,7 @@ src/gateway/server/stdio_single.rs	stdio_routing_keys_only	stdio_invoke_tiny	on 
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, untimed: only when params._meta must be merged into the arguments; the timed rows carry no _meta
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	-	startup step of the stdio loop, once per serve
 src/gateway/server/stdio_startup.rs	key_error	-	startup error of the stdio loop, once per serve
+src/gateway/server/stdio_startup.rs	log_capability_dirs	-	startup log of the stdio loop's capability directories, once per serve
 src/gateway/server/stdio_tasks.rs	advertised	-	initialize and server/discover answers only
 src/gateway/server/stdio_tasks.rs	default_auth	-	builds stdio's auth once at session start
 src/gateway/server/stdio_tasks.rs	degraded	-	task store open failure at session start

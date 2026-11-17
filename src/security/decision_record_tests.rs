@@ -8,6 +8,7 @@ fn decision(kind: DecisionKind, rule_id: Option<&str>) -> Decision {
     Decision {
         v: 1,
         config_revision: Some("hmac-sha256:00aa".to_owned()),
+        config_revision_capabilities: None,
         running_revision: None,
         pending_restart: Vec::new(),
         kind,
@@ -129,5 +130,63 @@ fn a_decision_finding_carries_no_description_or_match() {
         keys,
         ["location", "scan_type", "severity"].into_iter().collect(),
         "{value}"
+    );
+}
+
+fn bare_decision(coverage: &str) -> String {
+    format!(
+        r#"{{"v":2,"kind":"grant","decided":"fresh","config_revision_capabilities":{coverage}}}"#
+    )
+}
+
+/// A record written without the field reads as absent and says capabilities
+/// were not included. Partial names the directories that could be read.
+/// Covered adds nothing.
+#[test]
+fn d1_absent_coverage_says_not_included_and_partial_names_the_directories() {
+    use super::Coverage;
+    use super::read::capabilities_line;
+
+    for (variant, name) in [
+        (Coverage::Covered, "covered"),
+        (Coverage::NotLoaded, "not_loaded"),
+        (Coverage::Partial, "partial"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(variant).expect("name"),
+            serde_json::json!(name),
+            "{name}"
+        );
+    }
+
+    let absent: super::Decision =
+        serde_json::from_str(r#"{"v":2,"kind":"grant","decided":"fresh"}"#)
+            .expect("a record written before the field");
+    assert_eq!(absent.config_revision_capabilities, None);
+    assert_eq!(
+        capabilities_line(absent.config_revision_capabilities),
+        "capabilities not included",
+        "no field"
+    );
+    assert_eq!(
+        capabilities_line(Some(Coverage::NotLoaded)),
+        "capabilities not included",
+        "not_loaded"
+    );
+
+    let partial: super::Decision =
+        serde_json::from_str(&bare_decision("\"partial\"")).expect("partial");
+    assert_eq!(
+        partial.config_revision_capabilities,
+        Some(Coverage::Partial)
+    );
+    assert_eq!(
+        capabilities_line(Some(Coverage::Partial)),
+        "capabilities included from the directories that could be read"
+    );
+    assert_eq!(
+        capabilities_line(Some(Coverage::Covered)),
+        "",
+        "covered adds nothing"
     );
 }
