@@ -5,7 +5,7 @@
 // modules pass, and each planted fault fails. No browser needed.
 import { readFileSync, readdirSync } from 'node:fs';
 import { test, expect } from './base.mjs';
-import { SHELL_DIR, readCopy, readScreens, readShell, scanScreens, shapeProblems, pairingProblems, rowFormProblems } from './copy-check.mjs';
+import { SHELL_DIR, readCopy, readScreens, readShell, scanScreens, shapeProblems, pairingProblems, rowFormProblems, orderProblems } from './copy-check.mjs';
 
 test('C8 the real copy has the agreed shape', () => {
   expect(shapeProblems(readCopy())).toEqual([]);
@@ -187,5 +187,40 @@ test.describe('C10 every tip in row form, or listed as still free text', () => {
       .toContain('_pending_rows: not an array of ids');
     expect(shapeProblems({ ...base(), _pending_rows: ['a.status.free', 3] }))
       .toContain('_pending_rows: not an array of ids');
+  });
+});
+
+test.describe('C11 rows in the frame-36 order, five labels only', () => {
+  test('C11 the real copy: every row tip uses the five labels in order', () => {
+    expect(orderProblems(readCopy())).toEqual([]);
+  });
+
+  const one = (rows) => orderProblems({ _pending_rows: [], 'a.status.b': { title: 'T', rows } });
+  const row = (label) => [label, `${label} text.`];
+
+  test('C11 all five labels in order pass', () => {
+    expect(one(['What', 'Window', 'Source', 'Default', 'Why'].map(row))).toEqual([]);
+  });
+  test('C11a rows that do not apply are left out: What then Why passes', () => {
+    expect(one(['What', 'Why'].map(row))).toEqual([]);
+  });
+  test('C11b Why before What fails', () => {
+    expect(one(['Why', 'What'].map(row))).toEqual(['a.status.b: rows out of order: Why before What']);
+  });
+  test('C11b Default before Source fails', () => {
+    expect(one(['What', 'Default', 'Source'].map(row))).toEqual(['a.status.b: rows out of order: Default before Source']);
+  });
+  test('C11c a label used twice fails', () => {
+    expect(one(['What', 'What'].map(row))).toEqual(['a.status.b: label What appears twice']);
+  });
+  test('C11d a label outside the five fails', () => {
+    expect(one(['What', 'Next'].map(row)))
+      .toEqual(['a.status.b: label Next is not one of What, Window, Source, Default, Why']);
+  });
+  test('C11d labels are exact: lower-case what is not What', () => {
+    expect(one(['what'].map(row))).toEqual(['a.status.b: label what is not one of What, Window, Source, Default, Why']);
+  });
+  test('C11e a free-text tip is not judged here', () => {
+    expect(orderProblems({ _pending_rows: ['a.status.b'], 'a.status.b': { title: 'T', text: 'Why first.' } })).toEqual([]);
   });
 });

@@ -202,3 +202,10 @@ export function rowFormProblems(copy) {
   }
   return out;
 }
+
+/**
+ * C11 (red-first stub): each row tip's labels are the frame-36 five, in contract order.
+ */
+export function orderProblems(_copy) {
+  return [];
+}
