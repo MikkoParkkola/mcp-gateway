@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 pub(super) fn minimal_cap(name: &str) -> CapabilityDefinition {
     CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: "Does something useful.".to_string(),
@@ -40,6 +41,7 @@ pub(super) fn providers_with_base_url(base_url: &str) -> ProvidersConfig {
     named.insert(
         "primary".to_string(),
         ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -65,6 +67,7 @@ pub(super) fn providers_with_path(base_url: &str, path: &str) -> ProvidersConfig
     named.insert(
         "primary".to_string(),
         ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -310,6 +313,7 @@ fn provider_missing_url_is_error() {
     named.insert(
         "primary".to_string(),
         ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -341,6 +345,7 @@ fn placeholder_with_schema_property_passes() {
     // THEN: no CAP-006 error
     let cap = with_input_schema(
         CapabilityDefinition {
+            attribution: None,
             fulcrum: "1.0".to_string(),
             name: "get_item".to_string(),
             description: "Fetches an item.".to_string(),
@@ -372,6 +377,7 @@ fn placeholder_without_schema_property_is_error() {
     // THEN: CAP-006 error
     let cap = with_input_schema(
         CapabilityDefinition {
+            attribution: None,
             fulcrum: "1.0".to_string(),
             name: "get_item".to_string(),
             description: "Fetches an item.".to_string(),
@@ -403,6 +409,7 @@ fn env_placeholder_in_url_is_ignored() {
     // THEN: no CAP-006 error (env refs are not schema params)
     let cap = with_input_schema(
         CapabilityDefinition {
+            attribution: None,
             fulcrum: "1.0".to_string(),
             name: "my_tool".to_string(),
             description: "Uses env ref.".to_string(),
@@ -438,6 +445,7 @@ fn static_params_overlap_with_params_is_warning() {
     named.insert(
         "primary".to_string(),
         ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -485,6 +493,7 @@ fn static_params_no_overlap_passes() {
     named.insert(
         "primary".to_string(),
         ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -557,6 +566,7 @@ fn path_without_leading_slash_is_warning() {
     // THEN: CAP-008 warning
     let cap = with_input_schema(
         CapabilityDefinition {
+            attribution: None,
             fulcrum: "1.0".to_string(),
             name: "my_tool".to_string(),
             description: "Tool.".to_string(),

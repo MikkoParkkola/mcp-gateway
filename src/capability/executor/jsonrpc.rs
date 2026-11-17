@@ -482,6 +482,7 @@ mod tests {
         use crate::capability::definition::{ProviderConfig, RestConfig};
 
         let provider = ProviderConfig {
+            rate_limit: None,
             service: "jsonrpc".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -510,6 +511,7 @@ mod tests {
         use crate::capability::definition::{ProviderConfig, RestConfig};
 
         let provider = ProviderConfig {
+            rate_limit: None,
             service: "jsonrpc".to_string(),
             cost_per_call: 0.0,
             timeout: 30,

@@ -233,6 +233,7 @@ fn build_routing_instructions_includes_chain_section_when_chains_present() {
     use std::collections::HashMap;
 
     let make_cap = |name: &str, category: &str, chains: Vec<&str>| CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: format!("{name} description"),
@@ -278,6 +279,7 @@ fn build_routing_instructions_omits_chain_section_when_no_chains() {
     use std::collections::HashMap;
 
     let cap = CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: "tool_a".to_string(),
         description: "Tool A".to_string(),

@@ -84,7 +84,7 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
     /// A limiter that is always on, for one fixed `quota`: no config, no
     /// enable switch. It shares [`Self::acquire`]'s clock-step handling and
     /// wait calculation.
-    #[cfg(feature = "webui")]
+    /// Used by the web UI's limiters and capability pacing.
     pub(crate) fn always_on(quota: Quota, clock: C) -> Self {
         Self {
             enabled: AtomicBool::new(true),

@@ -56,7 +56,16 @@ mod linear_get_issue_tests;
 #[cfg(test)]
 mod linear_write_tests;
 mod loader;
+#[cfg(test)]
+mod maps_attribution_tests;
+#[cfg(test)]
+pub(crate) mod maps_harness;
+#[cfg(test)]
+mod maps_pacing_tests;
 mod openapi;
+mod pacing;
+#[cfg(test)]
+mod pacing_tests;
 mod parser;
 mod pin_file;
 mod read_only_call;

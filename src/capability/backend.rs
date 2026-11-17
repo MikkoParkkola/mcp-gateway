@@ -436,6 +436,10 @@ impl CapabilityBackend {
         let replaced = caps.contains(&name);
         caps.upsert(capability);
         caps.unloaded.remove(&name);
+        // The host policy is the whole catalogue's.
+        crate::capability::pacing::seed(&crate::capability::pacing::declared_intervals(
+            caps.entries.iter(),
+        ));
         self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children

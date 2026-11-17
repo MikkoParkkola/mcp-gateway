@@ -43,6 +43,11 @@ pub struct CapabilityDefinition {
     #[serde(default)]
     pub description: String,
 
+    /// The credit the provider's licence requires, set on every successful
+    /// result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<String>,
+
     /// Input/output schema
     #[serde(default)]
     pub schema: SchemaDefinition,
@@ -168,9 +173,23 @@ pub struct ProviderConfig {
     )]
     pub timeout: u64,
 
+    /// The least time between two requests to this provider's host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RateLimit>,
+
     /// REST configuration
     #[serde(default)]
     pub config: RestConfig,
+}
+
+/// A provider's `rate_limit`: one request per `interval_ms` to its host.
+/// Built by deserializing a capability file; `non_exhaustive` so a field
+/// added later breaks no caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RateLimit {
+    /// Milliseconds between two requests, 1 to 600000.
+    pub interval_ms: u64,
 }
 
 fn resolved_endpoint(endpoint: &str, base_url: &str, path: &str) -> String {

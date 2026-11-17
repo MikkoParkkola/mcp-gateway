@@ -768,6 +768,9 @@ mod guide_alloc_tests;
 /// A published pre-release's task row is refused, never stripped, when served.
 #[cfg(test)]
 mod legacy_row_planted_tests;
+/// Pacing and attribution through `gateway_invoke`.
+#[cfg(test)]
+mod maps_invoke_tests;
 #[cfg(test)]
 mod oracle_audit_tests;
 #[cfg(test)]

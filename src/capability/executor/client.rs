@@ -32,31 +32,50 @@ use crate::{Error, Result};
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
 pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
-    over(route(proxy))
+    over(|| route(proxy))
 }
 
-/// [`build`] over `builder`, for a test that supplies its own resolver: the
-/// same settings, redirect policy and redirect count.
+/// [`build`] over `route`, for a test that supplies its own resolver: the
+/// same construction, settings, redirect policies and redirect count, for
+/// both the normal and the paced client.
 #[cfg(test)]
-pub(super) fn build_over(builder: reqwest::ClientBuilder) -> CapabilityClient {
-    over(builder)
+pub(super) fn build_over(route: impl Fn() -> reqwest::ClientBuilder) -> CapabilityClient {
+    over(route)
 }
 
-/// A [`CapabilityClient`] over `builder`'s route, counting its redirects.
-fn over(builder: reqwest::ClientBuilder) -> CapabilityClient {
+/// A [`CapabilityClient`] over `route`, counting its redirects. `route` is
+/// called once per client: a builder is not `Clone`.
+fn over(route: impl Fn() -> reqwest::ClientBuilder) -> CapabilityClient {
     let redirects = Arc::new(AtomicU64::new(0));
-    let http = configured(builder, Arc::clone(&redirects));
-    CapabilityClient { http, redirects }
+    let http = configured(route(), Arc::clone(&redirects));
+    let paced = settings(route())
+        // A paced call is exactly one request: no hop, which
+        // would be a second request the pacer never admitted, and no
+        // protocol-level resend.
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .expect("Failed to create HTTP client");
+    CapabilityClient {
+        http,
+        paced,
+        redirects,
+    }
 }
 
-/// [`build`]'s settings and redirect policy, over `builder`'s route, the
-/// policy counting each redirect response into `seen`.
-fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
+/// The settings both clients share.
+fn settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
+}
+
+/// [`build`]'s settings and redirect policy, over `builder`'s route, the
+/// policy counting each redirect response into `seen`.
+fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
+    settings(builder)
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             // A response came back, whether this hop is followed or refused.
             seen.fetch_add(1, Ordering::SeqCst);
@@ -100,14 +119,19 @@ fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
 #[derive(Debug, Clone)]
 pub(crate) struct CapabilityClient {
     pub(super) http: Client,
+    /// For a call to a paced host: no redirects, no protocol
+    /// retries. Built with `http`'s route and settings.
+    pub(super) paced: Client,
     pub(super) redirects: Arc<AtomicU64>,
 }
 
 impl CapabilityClient {
-    /// `http`, counting nothing: a test client with its own redirect policy.
+    /// `http`, counting nothing: a test client with its own redirect policy,
+    /// serving paced calls too.
     #[cfg(test)]
     pub(super) fn uncounted(http: Client) -> Self {
         Self {
+            paced: http.clone(),
             http,
             redirects: Arc::default(),
         }
