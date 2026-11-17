@@ -148,7 +148,7 @@ fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
 
 /// R2.3: the running test binary is started only through
 /// [`test_binary`], except at the listed sites that wrap it in a shell and
-/// apply [`child_env`] themselves, and at two production uses.
+/// apply [`child_env`] themselves, and at the production uses (the gateway starting itself).
 #[test]
 fn every_test_binary_spawn_goes_through_test_binary() {
     const OWN: (&str, &str) = ("src/test_home.rs", "test_binary");
@@ -168,8 +168,9 @@ fn every_test_binary_spawn_goes_through_test_binary() {
         ),
         ("src/home_dir_probe_tests.rs", "spawn_r1a_child"),
     ];
-    const PRODUCTION: [(&str, &str); 2] = [
+    const PRODUCTION: [(&str, &str); 3] = [
         ("src/preview_sandbox/mod.rs", "start"),
+        ("src/preview_sandbox/mod.rs", "start_fetching"),
         ("src/gateway/server/window_saver.rs", "start_window_saver"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
