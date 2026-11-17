@@ -658,6 +658,18 @@ def test_f12_every_selected_user_doc_is_scanned() -> None:
     assert docs and not missing, missing[:5]
 
 
+def test_f17_a_shell_option_cluster_before_the_script() -> None:
+    # `sh -ec "..."`: the script is a quoted command line, scanned on its own.
+    text = 'CMD ["sh", "-ec", "mcp-gateway --host 0.0.0.0"]\n'
+    assert scan(K8_FILE, text) == expect(K8_FILE, [(1, "mcp-gateway --host")]), scan(K8_FILE, text)
+
+
+def test_f10_every_command_bearing_systemd_directive() -> None:
+    for verb in ("ExecStopPost", "ExecCondition"):
+        text = f"[Service]\n{verb}=/usr/local/bin/mcp-gateway --host 0.0.0.0\n"
+        assert scan(K6_FILE, text) == expect(K6_FILE, [(2, "mcp-gateway --host")]), (verb, scan(K6_FILE, text))
+
+
 def test_g1_serve_host_resolves_through_parent() -> None:
     text = sh("mcp-gateway serve --host x")
     assert scan("docs/g1.md", text) == expect("docs/g1.md", [(2, "mcp-gateway --host")]), scan("docs/g1.md", text)

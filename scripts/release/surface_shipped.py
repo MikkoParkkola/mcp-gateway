@@ -756,7 +756,7 @@ def _scan_dockerfile(file: str, text: str, table: CliTable) -> list[Hit]:
     return hits
 
 
-_SYSTEMD_EXEC = re.compile(r"(ExecStartPre|ExecStartPost|ExecStart|ExecReload|ExecStop)\s*=(.*)$")
+_SYSTEMD_EXEC = re.compile(r"(ExecStartPre|ExecStartPost|ExecStart|ExecReload|ExecStopPost|ExecStop|ExecCondition)\s*=(.*)$")
 # systemd exec prefixes, any combination, sit in front of the executable path.
 _EXEC_PREFIX = re.compile(r"^[-@+!]+")
 
