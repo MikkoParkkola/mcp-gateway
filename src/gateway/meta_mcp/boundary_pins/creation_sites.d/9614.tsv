@@ -1,2 +1,0 @@
-# file	function	kind	count	class	reason
-src/config_reload/history.rs	save_state	helper:write_atomic	1	helper	calls the crate's write_atomic
