@@ -119,6 +119,7 @@ gateway::ui::activity::reader::tests
 gateway::ui::backends::signin::outcome_tests
 gateway::ui::backends::signin::tests
 gateway::ui::backends::signin::timing_tests
+gateway::ui::cli_parity_tests
 gateway::ui::keys_create_fixture_tests
 idempotency::tests
 key_server::issuance_row_tests

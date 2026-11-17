@@ -210,6 +210,30 @@ class Refusals(ExpectRows):
         both = '    #[cfg(all(windows, target_os = "macos"))]\n    #[test]\n    fn t3() {}\n'
         self.assert_refused(tree(src__a_DOT_rs=part1_module(both)), "test-nowhere")
 
+    def test_expect_refuses_before_it_writes_lists(self):
+        """The union job's `expect` runs the refusals over the CI table's configurations first (only CI has the
+        compiler they need): a shape expect cannot name fails the job and writes no list. `check`, which pre-push
+        runs with the compiler blocked, stays without them."""
+        body = "    #[cfg(made_up)]\n    #[test]\n    fn t2() {}\n"
+        table = "config\tx86_64-unknown-linux-gnu\t--all-features\t\n"
+        files = tree(**{"src__a_DOT_rs": part1_module(body), "scripts__dev__test-parts-ci_DOT_tsv": table})
+        expect_module = self.tool._expect_module()
+        expect_module.print_cfg = lambda target: LINUX
+        saved = self.tool._expect_module
+        self.tool._expect_module = lambda: expect_module
+        try:
+            with TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                write_tree(root, files)
+                out = root / "expected"
+                rc = self.tool.main(["test_parts.py", "expect", "x86_64-unknown-linux-gnu", str(out)], root=root)
+                self.assertEqual(rc, 1, "expect wrote lists over a shape it cannot name")
+                self.assertFalse(out.exists(), "expect wrote lists before refusing")
+                expect_module.print_cfg = lambda target: self.fail("check ran the compiler")
+                self.assertEqual(self.tool.main(["test_parts.py", "check"], root=root), 0)
+        finally:
+            self.tool._expect_module = saved
+
     def test_a_nowhere_row_lets_only_its_own_test_pass(self):
         """X9's shrink-only allowance: the test a `nowhere` row of the CI table names is not refused; its neighbour,
         compiled nowhere too, still is."""
