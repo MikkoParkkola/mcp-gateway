@@ -311,7 +311,13 @@ impl HttpGateway {
     pub async fn stop(mut self) {
         let status = self.process.reap().await;
         let logs = self.logs();
-        let _ = self.process.stop().await;
+        // stop() reaps again, which returns the drain's recorded status, then
+        // removes the folders; the two must agree.
+        assert_eq!(
+            self.process.stop().await,
+            status,
+            "stop returns the drain's status"
+        );
         #[cfg(unix)]
         assert!(
             status.success(),
