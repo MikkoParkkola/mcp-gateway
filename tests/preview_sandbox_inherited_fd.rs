@@ -7,6 +7,10 @@
 //! concurrent test in the same binary starts.
 #![cfg(target_os = "linux")]
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -18,6 +22,7 @@ use tokio::io::AsyncReadExt as _;
 
 #[tokio::test]
 async fn an_inherited_descriptor_makes_the_preview_refuse() {
+    require_private_home!();
     let file = tempfile::tempfile().unwrap();
     rustix::io::fcntl_setfd(file.as_fd(), rustix::io::FdFlags::empty()).unwrap();
     let target = Target {
@@ -57,4 +62,13 @@ async fn an_inherited_descriptor_makes_the_preview_refuse() {
         "{stderr}"
     );
     drop(file);
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

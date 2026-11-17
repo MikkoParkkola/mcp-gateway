@@ -14,6 +14,12 @@
 
 #![allow(unsafe_code)] // set_var is unsafe in edition 2024
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -104,6 +110,7 @@ providers:
 
 #[test]
 fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic() {
+    require_private_home!();
     let (listener, proxy) = bind_recording_proxy();
     set_env_proxy(&proxy);
     runtime().block_on(check_no_env_proxy_traffic(listener));
@@ -158,4 +165,13 @@ async fn check_no_env_proxy_traffic(listener: std::net::TcpListener) {
             "capability discovery went through the environment proxy"
         );
     }
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

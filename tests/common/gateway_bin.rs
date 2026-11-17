@@ -60,15 +60,18 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
 /// `home` as the test-home override and every platform-home variable (`HOME`,
 /// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) under a second directory,
 /// `env_home`. A pure addition: no existing caller changes.
-///
-/// RED STUB: returns the command unchanged until the implementation lands.
 pub fn isolated_with_env_home(
     command: Command,
     home: &Path,
     env_home: &Path,
     inherit: Inherit,
 ) -> Command {
-    let _ = (home, env_home, inherit);
+    let mut command = isolated(command, home, inherit);
+    command
+        .env("HOME", env_home)
+        .env("USERPROFILE", env_home)
+        .env("APPDATA", env_home.join("AppData").join("Roaming"))
+        .env("LOCALAPPDATA", env_home.join("AppData").join("Local"));
     command
 }
 

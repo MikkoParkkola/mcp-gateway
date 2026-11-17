@@ -9,6 +9,12 @@
 
 #![allow(unsafe_code)] // set_var is unsafe in edition 2024
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -106,6 +112,7 @@ fn egress_proxy(url: &str) -> CapabilityConfig {
 /// hop itself. An IP-literal destination is still refused.
 #[test]
 fn capabilities_egress_proxy_is_the_only_proxy_route() {
+    require_private_home!();
     let (from_env, env_url) = bind_recording_proxy();
     set_env_proxy(&env_url);
     runtime().block_on(check_opt_in(from_env));
@@ -144,5 +151,14 @@ async fn check_opt_in(from_env: std::net::TcpListener) {
         env_seen.load(Ordering::SeqCst),
         0,
         "the environment proxy carried a call"
+    );
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
     );
 }

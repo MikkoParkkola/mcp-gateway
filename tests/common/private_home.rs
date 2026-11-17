@@ -10,7 +10,7 @@
 //! names a private directory, so a bare `cargo test` never reads or writes the
 //! real home. Harnesses set the override (`scripts/ci/shard_tests.py`,
 //! `spark-cargo`).
-#![allow(dead_code)]
+#![allow(dead_code, reason = "each test crate uses part of this helper")]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -25,8 +25,138 @@ macro_rules! require_private_home {
     };
 }
 
-/// RED STUB: refuses nothing yet. The rule lands with the implementation.
-pub fn require_private_home_now() {}
+/// Refuse to run unless the gateway home this process resolves is private.
+/// The checks run in order; the first failure panics naming its check and the
+/// fix for it.
+pub fn require_private_home_now() {
+    if let Err(refusal) = judge() {
+        let fix = if refusal.env_fix {
+            "env -u XDG_CONFIG_HOME -u MCP_GATEWAY_CONFIG_DIR MCP_GATEWAY_TEST_HOME_DIR=$(mktemp -d) cargo test ... \
+             (PowerShell: Remove-Item Env:XDG_CONFIG_HOME, Env:MCP_GATEWAY_CONFIG_DIR -ErrorAction Ignore; \
+             $env:MCP_GATEWAY_TEST_HOME_DIR = (New-Item -ItemType Directory (Join-Path $env:TEMP (New-Guid))).FullName)"
+        } else {
+            "MCP_GATEWAY_TEST_HOME_DIR=$(mktemp -d) cargo test ... \
+             (PowerShell: $env:MCP_GATEWAY_TEST_HOME_DIR = (New-Item -ItemType Directory (Join-Path $env:TEMP (New-Guid))).FullName)"
+        };
+        panic!(
+            "private home refused (check {}): {}. This test resolves the gateway home in-process \
+             and would otherwise use the real one. Run: {fix}",
+            refusal.check, refusal.why
+        );
+    }
+}
+
+/// Why the rule refused: the check that failed, what it found, and whether
+/// the fix must also clear the config and data variables.
+struct Refusal {
+    check: u8,
+    why: String,
+    env_fix: bool,
+}
+
+fn refused(check: u8, why: String, env_fix: bool) -> Result<(), Refusal> {
+    Err(Refusal {
+        check,
+        why,
+        env_fix,
+    })
+}
+
+/// The seven checks of the rule (design-refusal.md), in order.
+fn judge() -> Result<(), Refusal> {
+    // 1. The release library ignores the override.
+    if !cfg!(debug_assertions) {
+        return refused(
+            1,
+            "these tests need a debug build: the release library ignores MCP_GATEWAY_TEST_HOME_DIR"
+                .into(),
+            false,
+        );
+    }
+    // 2. An override at all.
+    let Some(home) =
+        std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").filter(|value| !value.is_empty())
+    else {
+        return refused(
+            2,
+            "MCP_GATEWAY_TEST_HOME_DIR is unset or empty".into(),
+            false,
+        );
+    };
+    let home = PathBuf::from(home);
+    // 3. An existing directory, judged before any canonicalisation.
+    if !home.is_dir() {
+        return refused(
+            3,
+            format!(
+                "MCP_GATEWAY_TEST_HOME_DIR={} names no existing directory",
+                home.display()
+            ),
+            false,
+        );
+    }
+    // 4. Not the real home by any spelling; both sides canonicalised.
+    let canonical_home = std::fs::canonicalize(&home);
+    let real = real_home_raw().map(|real| std::fs::canonicalize(real));
+    let canonical_home = match (canonical_home, real) {
+        (Ok(ours), Some(Ok(real))) if ours != real => ours,
+        (Ok(_), Some(Ok(_))) => {
+            return refused(4, format!("{} is the real home", home.display()), false);
+        }
+        _ => {
+            return refused(
+                4,
+                format!(
+                    "{} or the real home cannot be resolved, so it cannot be shown not to be the real home",
+                    home.display()
+                ),
+                false,
+            );
+        }
+    };
+    // 5 and 6. The config and data variables: unset, or exactly under the override.
+    for (check, var, name) in [
+        (5, "XDG_CONFIG_HOME", ".config"),
+        (6, "MCP_GATEWAY_CONFIG_DIR", ".mcp-gateway"),
+    ] {
+        let Some(value) = std::env::var_os(var) else {
+            continue;
+        };
+        let path = PathBuf::from(&value);
+        let parent_is_home = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .is_some_and(|parent| parent == canonical_home);
+        if value.is_empty() || path.file_name() != Some(name.as_ref()) || !parent_is_home {
+            return refused(
+                check,
+                format!(
+                    "{var} must be unset or <override>/{name}; it is {:?}",
+                    value
+                ),
+                true,
+            );
+        }
+    }
+    // 7. Leaves that exist must stay inside the override (no link out).
+    for name in [".config", ".mcp-gateway"] {
+        let leaf = home.join(name);
+        if leaf.symlink_metadata().is_err() {
+            continue;
+        }
+        let inside =
+            std::fs::canonicalize(&leaf).is_ok_and(|real| real == canonical_home.join(name));
+        if !inside {
+            return refused(
+                7,
+                format!("{name} resolves outside the override: {}", leaf.display()),
+                true,
+            );
+        }
+    }
+    Ok(())
+}
 
 /// The variable a row's child reads to know it is the child of that row.
 pub const ROW_CHILD: &str = "MCP_GW_ROW_CHILD";
@@ -236,4 +366,41 @@ pub fn canonical_leaf(path: &Path) -> PathBuf {
 /// The env value for `name` as given to the child, for building literal envs.
 pub fn os(value: impl Into<OsString>) -> OsString {
     value.into()
+}
+
+/// T3-T5, one per binary: in a child whose test-home override is a fresh A and
+/// whose platform home is a second dir B, with every inherited gateway
+/// variable stripped, the gateway data dir this binary resolves is A's
+/// `.mcp-gateway`. A library that ignored the override would resolve B's.
+pub fn assert_routes_to_the_override(module_path: &str, name: &str) {
+    if is_row_child(name) {
+        assert!(
+            std::env::var_os("MCP_GATEWAY_CONFIG_DIR").is_none(),
+            "premise: the data-dir variable is stripped, so home routing decides"
+        );
+        let a = PathBuf::from(std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").expect("the override"));
+        let data = mcp_gateway::config_persistence::gateway_data_dir();
+        assert_eq!(
+            canonical_leaf(&data),
+            canonical(&a).join(".mcp-gateway"),
+            "{}",
+            data.display()
+        );
+        return;
+    }
+    let a = fresh_private_dir();
+    let b = fresh_private_dir();
+    let command = crate::gateway_bin::isolated_with_env_home(
+        Command::new(std::env::current_exe().expect("the test binary")),
+        a.path(),
+        b.path(),
+        crate::gateway_bin::Inherit::Environment,
+    );
+    let _kept = run_row_child(
+        command,
+        &test_path(module_path, name),
+        false,
+        &Expect::Pass,
+        vec![a, b],
+    );
 }
