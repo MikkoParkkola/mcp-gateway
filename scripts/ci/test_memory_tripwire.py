@@ -23,18 +23,26 @@ def pages_for(mib: int) -> int:
     return mib * MIB // PAGE
 
 
-def run(pswpout: int | None, peak_bytes: int | None = 13_000 * MIB, vmstat_line: str | None = None):
+SWAPS = "Filename\tType\tSize\tUsed\tPriority\n/swapfile-ci\tfile\t8388604\t0\t-2\n"
+
+
+def run(pswpout: int | None, peak_bytes: int | None = 13_000 * MIB, vmstat_line: str | None = None,
+        zswpout: int | None = None, swaps: str = SWAPS):
     with TemporaryDirectory() as tmp:
         t = Path(tmp)
         if vmstat_line is not None:
             (t / "vmstat").write_text(vmstat_line)
         elif pswpout is not None:
-            (t / "vmstat").write_text(f"nr_free_pages 12345\npswpin 7\npswpout {pswpout}\npgfault 99\n")
+            z = f"zswpout {zswpout}\n" if zswpout is not None else ""
+            (t / "vmstat").write_text(f"nr_free_pages 12345\npswpin 7\npswpout {pswpout}\n{z}pgfault 99\n")
         if peak_bytes is not None:
             (t / "memory.peak").write_text(f"{peak_bytes}\n")
+        (t / "swaps").write_text(swaps)
+        (t / "meminfo").write_text("MemTotal:       16367576 kB\nMemFree:  1 kB\n")
         out = t / "trend.txt"
         done = subprocess.run(["bash", str(SCRIPT), str(LIMIT), str(out)], capture_output=True, text=True,
-                              env={**os.environ, "MEM_VMSTAT": str(t / "vmstat"), "MEM_PEAK_CGROUP": str(t)})
+                              env={**os.environ, "MEM_VMSTAT": str(t / "vmstat"), "MEM_PEAK_CGROUP": str(t),
+                                   "MEM_SWAPS": str(t / "swaps"), "MEM_MEMINFO": str(t / "meminfo")})
         return done, out.read_text() if out.exists() else ""
 
 
@@ -65,6 +73,23 @@ class Tripwire(unittest.TestCase):
                 done, _ = run(**kwargs)
                 self.assertNotEqual(done.returncode, 0)
                 self.assertIn("pswpout", done.stdout + done.stderr)
+
+    def test_a_runner_without_active_swap_fails_closed(self):
+        # With no swap device a whole build cannot swap, so a zero count would pass it: refuse to judge instead.
+        done, _ = run(0, swaps="Filename\tType\tSize\tUsed\tPriority\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("no active swap", done.stdout + done.stderr)
+
+    def test_zswap_writes_count_toward_the_limit(self):
+        # zswap keeps compressed pages off the swap device, so pswpout alone would miss them.
+        done, trend = run(0, zswpout=pages_for(LIMIT + 1))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn(f"swap_out_mib={LIMIT + 1}", trend)
+
+    def test_the_trend_records_the_runner_s_ram_and_swap(self):
+        _, trend = run(0)
+        self.assertIn("mem_total_mib=15983", trend)
+        self.assertIn("swap_total_mib=8191", trend)
 
     def test_a_missing_memory_peak_is_reported_and_gates_nothing(self):
         done, trend = run(0, peak_bytes=None)
