@@ -188,8 +188,11 @@ function mostCalled(body, read) {
       // The whole catalogue is one click away, with or without calls this hour.
       catalogueLink(`See all ${plural(list.length, 'tool', 'tools')}`, 'clear')));
   if (rows.length === 0) {
+    // null is the API's "not measured": with no measured call this hour and a
+    // count missing, "no calls" would be a claim the gateway cannot make.
+    const unmeasured = list.some((t) => typeof t.calls_1h !== 'number');
     section.append(h('div', { class: 'tools-called-empty' },
-      h('p', { class: 'muted' }, 'No tool calls in the last hour.')));
+      h('p', { class: 'muted' }, unmeasured ? 'No count for the last hour yet.' : 'No tool calls in the last hour.')));
   } else {
     // Scrolls in its own region on a narrow screen, reachable from the keyboard.
     section.append(h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Most called tools' }, h('table', { class: 't tools-called' },

@@ -129,6 +129,29 @@ test('M5: an hour with no calls shows the empty line and the catalogue link', as
   await expect(panel.locator('tr')).toHaveCount(0);
 });
 
+test('M5b: an hour that was not measured says so, never "no calls"', async ({ page }) => {
+  // Measured zeros beside counts the API reports as not measured (null).
+  await toolsScreen(page, { tools: [
+    tool('zero_one', 'alpha', 0, 0),
+    tool('unmeasured_one', 'alpha', null, null),
+    tool('unmeasured_two', 'bravo', null, 2),
+  ] });
+  await page.goto('/ui/tools/status');
+  const panel = mostCalled(page);
+  await expect(panel).toContainText('No count for the last hour yet.');
+  await expect(panel).not.toContainText('No tool calls in the last hour.');
+  await expect(panel.getByRole('link', { name: 'See all 3 tools', exact: true })).toBeVisible();
+  // The other side: a measured call this hour is listed, and no empty line shows.
+  await toolsScreen(page, { tools: [
+    tool('called_one', 'alpha', 4, 1),
+    tool('unmeasured_one', 'alpha', null, null),
+  ] });
+  await page.goto('/ui/tools/status');
+  await expect(panelRow(page, 'called_one')).toHaveCount(1);
+  await expect(mostCalled(page)).not.toContainText('No count for the last hour yet.');
+  await expect(mostCalled(page)).not.toContainText('No tool calls in the last hour.');
+});
+
 test('M6: typing on Status opens the A-to-Z list and keeps every key', async ({ page }) => {
   // bravo_lookup matches by name. catalog_fetch matches by description.
   // delta_ping's server is bravo; today's search does not read the server.
