@@ -144,24 +144,35 @@ fn judge() -> Result<(), Refusal> {
     // 7. Nothing under the override leads out of it. Discovery reads more than
     // `.config` and `.mcp-gateway` (`.cursor`, `.claude.json`, ...), so every link
     // and directory, at any depth, must resolve inside.
-    if let Some((rel, at)) = first_way_out(&home, &canonical_home, "") {
-        return refused(
-            7,
-            format!("{rel} resolves outside the override: {}", at.display()),
-            true,
-        );
+    if let Some((why, at)) = first_way_out(&home, &canonical_home, "") {
+        return refused(7, format!("{why}: {}", at.display()), true);
     }
     Ok(())
 }
 
-/// The first entry under `dir` that resolves outside `canonical_home`, with its
-/// path relative to the override, `/`-joined. Links and directories are judged
-/// by where they resolve (a Windows junction too, whichever it reports as);
-/// only real directories are descended, so a link is never followed. A dangling
-/// link counts as outside; an entry removed meanwhile (a concurrent test) is
-/// skipped. Plain files need no check: their directory was already judged.
+/// The first entry under `dir` that leads outside `canonical_home`, or that
+/// cannot be judged, as (reason, path); the reason names the entry relative to
+/// the override, `/`-joined. Links and directories are judged by where they
+/// resolve (a Windows junction too, whichever it reports as); only real
+/// directories are descended, so a link is never followed. A dangling link
+/// counts as outside. Any error but "not found" refuses: a directory that cannot
+/// be listed may still open by a known path (an execute-only one does). Only an
+/// entry removed meanwhile (a concurrent test) is skipped. Plain files need no
+/// check: their directory was already judged.
 fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String, PathBuf)> {
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    let here = if rel.is_empty() { "the override" } else { rel };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if gone(&e) => return None,
+        Err(e) => return Some((format!("{here} cannot be listed ({e})"), dir.to_path_buf())),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if gone(&e) => continue,
+            Err(e) => return Some((format!("{here} cannot be listed ({e})"), dir.to_path_buf())),
+        };
         let at = entry.path();
         let name = entry.file_name();
         let rel = if rel.is_empty() {
@@ -169,8 +180,10 @@ fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String
         } else {
             format!("{rel}/{}", name.to_string_lossy())
         };
-        let Ok(meta) = at.symlink_metadata() else {
-            continue;
+        let meta = match at.symlink_metadata() {
+            Ok(meta) => meta,
+            Err(e) if gone(&e) => continue,
+            Err(e) => return Some((format!("{rel} cannot be read ({e})"), at)),
         };
         let link = meta.file_type().is_symlink();
         if !link && !meta.is_dir() {
@@ -178,8 +191,8 @@ fn first_way_out(dir: &Path, canonical_home: &Path, rel: &str) -> Option<(String
         }
         match std::fs::canonicalize(&at) {
             Ok(resolved) if resolved.starts_with(canonical_home) => {}
-            Err(_) if at.symlink_metadata().is_err() => continue,
-            _ => return Some((rel, at)),
+            Err(_) if at.symlink_metadata().is_err_and(|e| gone(&e)) => continue,
+            _ => return Some((format!("{rel} resolves outside the override"), at)),
         }
         if !link && let Some(found) = first_way_out(&at, canonical_home, &rel) {
             return Some(found);

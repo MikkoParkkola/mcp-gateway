@@ -372,6 +372,39 @@ fn r18_a_dangling_symlink_is_refused() {
     );
 }
 
+/// R19: a directory that cannot be listed is refused. An execute-only `.cursor`
+/// still opens `.cursor/mcp.json` by its known path, here a link out.
+#[cfg(unix)]
+#[test]
+fn r19_an_unlistable_directory_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    /// Gives the directory its mode back before the dirs are removed, failing
+    /// run or not; declared after `home`, so it drops first.
+    struct Listable(std::path::PathBuf);
+    impl Drop for Listable {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    let cursor = home.path().join(".cursor");
+    std::fs::create_dir(&cursor).expect("a dir");
+    std::os::unix::fs::symlink(decoy.path(), cursor.join("mcp.json")).expect("a symlink");
+    std::fs::set_permissions(&cursor, std::fs::Permissions::from_mode(0o100))
+        .expect("execute-only");
+    let _listable = Listable(cursor.clone());
+    assert!(
+        std::fs::read_dir(&cursor).is_err() && cursor.join("mcp.json").symlink_metadata().is_ok(),
+        "premise: .cursor cannot be listed yet opens by a known path (fails as root)"
+    );
+    probe(
+        with_override(home.path()),
+        &refuse(&["(check 7)", ".cursor cannot be listed", FIX_ENV], &[]),
+        vec![decoy],
+    );
+}
+
 /// R0c: a link that stays inside the override is accepted: check 7 judges where
 /// a link resolves, not that it is one.
 #[cfg(unix)]
