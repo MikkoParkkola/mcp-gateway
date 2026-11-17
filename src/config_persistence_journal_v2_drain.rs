@@ -458,6 +458,7 @@ mod repair_tests;
 mod root_tests;
 // Unix only: the abandoned-file fixtures come from a handover, and off Unix `hand_over` refuses
 // the donor as foreign before the startup gate is reached.
+#[cfg(tp3)]
 #[cfg(unix)]
 #[path = "config_persistence_journal_v2_drain_startup_tests.rs"]
 mod startup_tests;

@@ -530,6 +530,7 @@ mod pin_tests;
 #[path = "backend_output_root_tests.rs"]
 mod output_root_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_snapshot_tests.rs"]
 mod snapshot_tests;

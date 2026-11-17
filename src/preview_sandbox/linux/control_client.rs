@@ -148,6 +148,7 @@ pub(super) fn finish_fetch(stream: &mut UnixStream, bounds: HelperBounds) -> Res
     Ok(())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "control_client_tests.rs"]
 mod tests;

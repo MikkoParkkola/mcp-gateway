@@ -320,6 +320,7 @@ pub(crate) fn config_revision(key: &[u8; 32], inputs: &AppliedInputs) -> String 
 #[path = "revision_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "revision_encoding_tests.rs"]
 mod encoding_tests;

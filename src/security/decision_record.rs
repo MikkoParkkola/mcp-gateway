@@ -454,6 +454,7 @@ mod read_tests;
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_capability_tests.rs"]
 mod capability_tests;

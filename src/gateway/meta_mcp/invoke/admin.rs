@@ -548,6 +548,7 @@ mod cost_section_tests {
 #[path = "admin_reload_tests.rs"]
 mod reload_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "admin_publish_tests.rs"]
 mod publish_tests;

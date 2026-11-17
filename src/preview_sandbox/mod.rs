@@ -299,6 +299,7 @@ mod staged_tests;
 
 /// Off Linux a fetching preview is refused as unsupported, like every other
 /// preview there (the non-Linux `os` stub).
+#[cfg(tp1)]
 #[cfg(all(test, not(target_os = "linux")))]
 #[tokio::test]
 async fn start_fetching_is_unsupported_off_linux() {

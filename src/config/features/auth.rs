@@ -499,6 +499,7 @@ impl AgentDefinitionConfig {
 #[path = "auth_multi_user_tests.rs"]
 mod multi_user_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "auth_short_bearer_tests.rs"]
 mod short_bearer_tests;

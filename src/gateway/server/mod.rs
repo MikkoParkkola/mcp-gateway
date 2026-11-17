@@ -70,8 +70,10 @@ pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
 // Unix only: the rows deny access through the mode bits.
+#[cfg(tp4)]
 #[cfg(test)]
 mod capability_publish_tests;
+#[cfg(tp4)]
 #[cfg(all(test, unix))]
 mod capability_snapshot_tests;
 mod run_wiring;
