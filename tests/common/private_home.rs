@@ -160,7 +160,7 @@ fn judge() -> Result<(), Refusal> {
 /// be listed may still open by a known path (an execute-only one does). Only an
 /// entry removed meanwhile (a concurrent test) is skipped. A plain file is
 /// refused only when it is the real home's file at the same relative path (a
-/// hard link to real config; unix only, see `is_the_real_file`).
+/// hard link to real config; unix only, see `real_file_reason`).
 fn first_way_out(
     dir: &Path,
     canonical_home: &Path,
@@ -194,8 +194,8 @@ fn first_way_out(
         };
         let link = meta.file_type().is_symlink();
         if !link && !meta.is_dir() {
-            if is_the_real_file(&meta, real_home, &rel) {
-                return Some((format!("{rel} is a hard link to the real home's {rel}"), at));
+            if let Some(why) = real_file_reason(&meta, real_home, &rel) {
+                return Some((why, at));
             }
             continue;
         }
@@ -211,23 +211,39 @@ fn first_way_out(
     None
 }
 
-/// Unix: the test-home file is the very file at the same relative path under
-/// the real home (same device and inode), so a write through it changes real
-/// config. The gateway's own hard links (journal publishes, kept backups) stay
+/// Unix: why a plain test-home file may be the real home's file at the same
+/// relative path (same device and inode), so a write through it changes real
+/// config. A file with one name cannot be another path's file. For one with
+/// more names, only "not found" (or a non-directory on the way) proves the real
+/// path absent; any other error refuses, so an unreadable real home fails
+/// closed. The gateway's own hard links (journal publishes, kept backups) stay
 /// inside the test home, so they never match.
 #[cfg(unix)]
-fn is_the_real_file(meta: &std::fs::Metadata, real_home: Option<&Path>, rel: &str) -> bool {
+fn real_file_reason(
+    meta: &std::fs::Metadata,
+    real_home: Option<&Path>,
+    rel: &str,
+) -> Option<String> {
+    use std::io::ErrorKind;
     use std::os::unix::fs::MetadataExt;
-    real_home
-        .and_then(|real| std::fs::metadata(real.join(rel)).ok())
-        .is_some_and(|real| real.dev() == meta.dev() && real.ino() == meta.ino())
+    if meta.nlink() < 2 {
+        return None;
+    }
+    match std::fs::metadata(real_home?.join(rel)) {
+        Ok(theirs) => (theirs.dev() == meta.dev() && theirs.ino() == meta.ino())
+            .then(|| format!("{rel} is a hard link to the real home's {rel}")),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => None,
+        Err(e) => Some(format!(
+            "{rel} has more than one name and the real home's {rel} cannot be read ({e})"
+        )),
+    }
 }
 
 /// Not unix: std has no stable file id, so a hard link to real config is not
 /// detected here. A declared limit of check 7.
 #[cfg(not(unix))]
-fn is_the_real_file(_: &std::fs::Metadata, _: Option<&Path>, _: &str) -> bool {
-    false
+fn real_file_reason(_: &std::fs::Metadata, _: Option<&Path>, _: &str) -> Option<String> {
+    None
 }
 
 /// The variable a row's child reads to know it is the child of that row.

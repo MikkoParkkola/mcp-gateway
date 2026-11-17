@@ -365,7 +365,11 @@ fn r18_a_dangling_symlink_is_refused() {
     probe(
         with_override(home.path()),
         &refuse(
-            &["(check 7)", ".claude.json resolves outside the override", FIX_ENV],
+            &[
+                "(check 7)",
+                ".claude.json resolves outside the override",
+                FIX_ENV,
+            ],
             &[],
         ),
         vec![home, decoy],
@@ -443,6 +447,57 @@ fn r20_a_hard_link_to_real_config_is_refused() {
             &[],
         ),
         vec![home, decoy],
+    );
+}
+
+/// R21: a test-home file with more than one name is refused when the real home's
+/// file at the same path cannot be read: the comparison fails closed. The decoy
+/// real home's `.cursor` cannot be searched (mode 0o600), and the test home holds
+/// a hard link to the file inside it, made before the mode change.
+#[cfg(unix)]
+#[test]
+fn r21_an_unreadable_real_counterpart_is_refused() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    /// Gives the decoy's `.cursor` its mode back before the dirs are removed,
+    /// failing run or not; declared after `decoy`, so it drops first.
+    struct Searchable(std::path::PathBuf);
+    impl Drop for Searchable {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let home = fresh_private_dir();
+    let decoy = fresh_private_dir();
+    let real_dir = decoy.path().join(".cursor");
+    let real = real_dir.join("mcp.json");
+    let at = home.path().join(".cursor").join("mcp.json");
+    std::fs::create_dir(&real_dir).expect("the decoy's .cursor");
+    std::fs::create_dir(home.path().join(".cursor")).expect("the test home's .cursor");
+    std::fs::write(&real, "{}").expect("the decoy's config");
+    std::fs::hard_link(&real, &at).expect("a hard link");
+    std::fs::set_permissions(&real_dir, std::fs::Permissions::from_mode(0o600))
+        .expect("unsearchable");
+    let _searchable = Searchable(real_dir.clone());
+    let denied =
+        std::fs::metadata(&real).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    assert!(
+        denied && std::fs::metadata(&at).is_ok_and(|m| m.nlink() == 2),
+        "premise: the real file cannot be read, the test-home name is one of two (fails as root)"
+    );
+    let mut command = with_override(home.path());
+    command.env("HOME", decoy.path());
+    probe(
+        command,
+        &refuse(
+            &[
+                "(check 7)",
+                ".cursor/mcp.json has more than one name and the real home's .cursor/mcp.json \
+                 cannot be read",
+                FIX_ENV,
+            ],
+            &[],
+        ),
+        vec![home],
     );
 }
 
@@ -564,7 +619,10 @@ mod r9_windows_aliases {
             .expect("cmd runs");
         assert!(out.status.success(), "cmd failed: {}", out.status);
         let (pairs, odd) = out.stdout.as_chunks::<2>();
-        assert!(odd.is_empty(), "cmd /u printed an odd byte count: not UTF-16");
+        assert!(
+            odd.is_empty(),
+            "cmd /u printed an odd byte count: not UTF-16"
+        );
         let units: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
         let short = String::from_utf16_lossy(&units).trim().to_string();
         assert!(!short.is_empty(), "cmd printed no short form");
