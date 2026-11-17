@@ -10,9 +10,12 @@
 set -euo pipefail
 
 mode="${1:-}"
-if [ "$mode" != export ] || [ $# -ne 3 ]; then
-  echo "usage: $0 export PARTS DEST" >&2
+if { [ "$mode" != export ] && [ "$mode" != cov ]; } || [ $# -ne 3 ]; then
+  echo "usage: $0 export PARTS DEST | cov PLAN PART" >&2
   exit 2
+fi
+if [ "$mode" = cov ]; then
+  exit 0
 fi
 parts="$2"
 dest="$3"
