@@ -5,7 +5,7 @@
 
 use super::{
     CapabilityBackend, CapabilityDefinition, CapabilityLoader, DirectoryLoad, HashMap, Result,
-    debug, definition_changed, info, validate_capability_account_binding, warn,
+    debug, definition_changed, info, part_from, validate_capability_account_binding, warn,
 };
 
 impl CapabilityBackend {
@@ -53,8 +53,13 @@ impl CapabilityBackend {
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
         let loaded = CapabilityLoader::load_directory_with_paths(path).await?;
         let mut report = DirectoryLoad {
-            admitted: loaded.len(),
+            admitted: loaded.files.len(),
             rejected: Vec::new(),
+            unreadable: loaded
+                .failures
+                .iter()
+                .map(|failure| failure.path.clone())
+                .collect(),
         };
 
         // Register directory for future hot-reloads.
@@ -69,9 +74,11 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
-        for (file, cap) in loaded {
-            let capability = cap.name.clone();
-            if let Err(error) = self.admit_from(file, cap) {
+        for file in loaded.files {
+            let capability = file.definition.name.clone();
+            // Digest outside the catalogue lock. The bytes are not stored.
+            let source = self.source_of(&file.path, &file.bytes);
+            if let Err(error) = self.admit_from(file.path, file.definition, Some(source)) {
                 warn!(
                     backend = %self.name,
                     capability = %capability,
@@ -98,60 +105,76 @@ impl CapabilityBackend {
     ///
     /// Returns an error if reloading fails for all directories.
     pub async fn reload(&self) -> Result<usize> {
+        // Held through the publish; this reload's log lines are written after
+        // it is released, so a blocked log write never holds up the next
+        // catalogue operation.
+        let operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
+        let mut failed_dirs: Vec<(String, String)> = Vec::new();
+        let mut refused_logs: Vec<(String, String)> = Vec::new();
 
-        if dirs.is_empty() {
-            debug!(backend = %self.name, "No directories to reload");
-            return Ok(0);
-        }
+        // Before any note, so this reload's set is not the one still stored
+        // on the catalogue. Install below is what stores it. An empty
+        // directory list still installs: the fresh set replaces a partial
+        // one left by an earlier operation.
+        self.begin_reload_coverage();
 
-        let mut paths = Vec::new();
+        let mut loaded_files = Vec::new();
         let mut total = 0;
         // A directory that could not be read leaves the catalogue partial:
         // its capabilities are missing from this load, not deleted.
+        // A file that could not be read does not: the directory was listed,
+        // and that file is simply not served. Coverage hears both.
         let mut partial = false;
 
         for dir in &dirs {
             match CapabilityLoader::load_directory_with_paths(dir).await {
                 Ok(loaded) => {
-                    total += loaded.len();
-                    paths.extend(loaded);
+                    total += loaded.files.len();
+                    for failure in &loaded.failures {
+                        self.note_unreadable(&failure.path);
+                    }
+                    loaded_files.extend(loaded.files);
                 }
                 Err(e) => {
                     partial = true;
-                    warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
+                    self.note_unreadable(dir);
+                    failed_dirs.push((dir.clone(), e.to_string()));
                 }
             }
         }
 
         // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) = (Vec::with_capacity(paths.len()), Vec::new());
+        let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        for (file, cap) in paths {
-            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
+        for file in loaded_files {
+            match validate_capability_account_binding(
+                &file.definition,
+                self.executor.account_strategies(),
+            ) {
                 Ok(()) => {
-                    trusted.push((file, cap.name.clone()));
-                    admitted.push(cap);
+                    let source = self.source_of(&file.path, &file.bytes);
+                    trusted.push((file.path, file.definition.name.clone()));
+                    admitted.push((file.definition, Some(source)));
                 }
                 Err(error) => {
                     total -= 1;
-                    refused.insert(cap.name.clone());
-                    warn!(
-                        backend = %self.name,
-                        capability = %cap.name,
-                        error = %error,
-                        "Capability refused on reload: its account binding does not resolve"
-                    );
+                    refused.insert(file.definition.name.clone());
+                    refused_logs.push((file.definition.name.clone(), error.to_string()));
                 }
             }
         }
 
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
-        {
+        // The seq and the snapshot are taken here, after install, and the
+        // publish below runs only once this guard has dropped.
+        let (seq, part) = {
             let mut caps = self.capabilities.write();
-            let incoming: HashMap<&str, &CapabilityDefinition> =
-                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
+            let incoming: HashMap<&str, &CapabilityDefinition> = admitted
+                .iter()
+                .map(|(cap, _)| (cap.name.as_str(), cap))
+                .collect();
             // Revoke the in-flight calls of a capability that is gone OR edited,
             // and stop its children: a call holding the old definition must not
             // start or replace a child under the new one.
@@ -165,8 +188,15 @@ impl CapabilityBackend {
                     revoked.insert(name.clone());
                 }
             }
-            caps.replace_all(admitted);
+            // A row holds the swap here, before the catalogue is replaced,
+            // while this write lock is still held.
+            #[cfg(test)]
+            super::super::op_gate::reach(super::super::op_gate::Step::Swap);
+            caps.install(admitted);
             caps.settle_absent(refused);
+            // With the entries, under the same lock: the part names this
+            // catalogue and the coverage of the operation that wrote it.
+            caps.unread = self.recording.lock().clone();
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             self.set_catalogue_partial(partial);
@@ -175,10 +205,35 @@ impl CapabilityBackend {
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
-        }
+            // After install, still under this lock: the seq and the part name
+            // the catalogue this swap wrote, not the one it replaced.
+            let seq = self.alloc_seq();
+            let part = part_from(&caps);
+            (seq, part)
+        };
+        // The catalogue lock is released. A row holds this gap. The publish
+        // runs with that lock free; the operation lock is still held.
+        #[cfg(test)]
+        super::super::op_gate::reach(super::super::op_gate::Step::BeforePublish);
+        self.publish_revision(seq, part);
         self.catalogue_changed();
         self.note_admitted(trusted, !partial);
+        drop(operation);
 
+        if dirs.is_empty() {
+            debug!(backend = %self.name, "No directories to reload");
+        }
+        for (dir, error) in &failed_dirs {
+            warn!(backend = %self.name, directory = %dir, error = %error, "Failed to reload directory");
+        }
+        for (capability, error) in &refused_logs {
+            warn!(
+                backend = %self.name,
+                capability = %capability,
+                error = %error,
+                "Capability refused on reload: its account binding does not resolve"
+            );
+        }
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
     }

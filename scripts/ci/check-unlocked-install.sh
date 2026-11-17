@@ -51,6 +51,15 @@ tasks:
 EOF
 chmod 600 "$config"
 
+# The log exists before the start. The redirect below opens it in the background
+# child, and under load the first poll can run before that child does: reading a
+# missing file fails under set -e, and the script would exit having printed
+# nothing: a merge train's cheap gate saw exactly that on 2026-11-16 (exit 1,
+# empty output, load 10.1). Nothing outside this script can delay the child's
+# open, so no self-test row can reproduce this; the guarantee is structural and
+# rests on this line.
+: > "$log"
+
 # An isolated home on every lookup path, so nothing reads or writes the
 # runner's own; RUST_LOG keeps the info-level banner the wait reads.
 HOME="$home" USERPROFILE="$home" MCP_GATEWAY_TEST_HOME_DIR="$home" \
@@ -78,12 +87,17 @@ while :; do
     fail "the installed gateway exited (status $status) before serving; a refusal by the email-hash self-check names the known answer that missed"
   fi
   # Only complete lines: a last line without its newline may be mid-write, and
-  # a prefix such as `port=39` would read as a wrong port.
-  if [ -n "$(tail -c 1 "$log")" ]; then
-    text=$(sed '$d' "$log")
-  else
-    text=$(cat "$log")
-  fi
+  # a prefix such as `port=39` would read as a wrong port. One read per poll:
+  # testing the last byte and then reading again is two snapshots, and the
+  # binary can write an unterminated line between them. The x keeps a trailing
+  # newline that $(...) would strip.
+  snap=$(cat "$log"; printf x)
+  snap=${snap%x}
+  case $snap in
+    *$'\n') text=$snap ;;           # every line complete
+    *$'\n'*) text=${snap%$'\n'*} ;; # drop the unterminated last line
+    *) text= ;;                     # one line, still being written
+  esac
   # The bound port from the `Listening` banner, colour codes removed.
   port=$(printf '%s\n' "$text" | sed -E 's/\x1b\[[0-9;]*m//g' | grep 'Listening' | grep -oE 'port=[0-9]+' | tail -n 1 | cut -d= -f2 || true)
   # Both, in one wait: serving, and the line `start_key_server` logs only after

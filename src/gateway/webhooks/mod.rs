@@ -439,7 +439,7 @@ async fn webhook_handler(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = crate::ids::new_v4().to_string();
 
     // Parse JSON from raw bytes (keep raw bytes for signature validation).
     let payload: Value = match serde_json::from_slice(&body) {

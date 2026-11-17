@@ -19,7 +19,6 @@ use super::*;
 use std::sync::Arc;
 
 use chrono::{TimeDelta, Utc};
-use uuid::Uuid;
 
 use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
@@ -38,7 +37,7 @@ fn issue(signer: &BnautAttestationSigner, identity: &str) -> crate::attestation:
     signer.issue(
         &TokenRequest {
             agent_identity: identity.to_owned(),
-            task_uuid: Uuid::new_v4(),
+            task_uuid: crate::ids::new_v4(),
             capabilities: vec![TOOL.to_string()],
         },
         Utc::now(),
@@ -359,7 +358,7 @@ async fn task_dispatch_enforce_from_config_carries_token() {
     let short = config_signer().issue(
         &TokenRequest {
             agent_identity: "alice".to_owned(),
-            task_uuid: Uuid::new_v4(),
+            task_uuid: crate::ids::new_v4(),
             capabilities: vec![TOOL.to_string()],
         },
         Utc::now(),

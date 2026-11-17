@@ -117,18 +117,11 @@ pub(super) fn acquire(path: &Path) -> Locked {
 
 pub(super) fn reopen(locked: Locked) -> DrainSession {
     let state = match open(&locked).expect("fixture reopen") {
-        Some(OpenJournal::Current(state)) => Some(JournalSession {
-            target: locked.target.clone(),
-            state: *state,
-            backing: super::super::Backing::Journal,
-        }),
+        Some(OpenJournal::Current(state)) => Some(*state),
         _ => None,
     };
-    DrainSession {
-        configured: locked.target.clone(),
-        locked,
-        journal: state,
-    }
+    let configured = locked.target.clone();
+    DrainSession::new(locked, configured, state)
 }
 
 pub(super) fn reread(owner: &mut DrainSession) {

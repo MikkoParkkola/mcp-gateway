@@ -10,7 +10,6 @@ server:
   port: 39401
 
 capabilities:
-  enabled: true
 
   # Load capabilities from directories:
   directories:

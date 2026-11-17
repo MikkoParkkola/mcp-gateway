@@ -383,17 +383,6 @@ fn principal_digest_of(authority: &str, subject: &str) -> Result<String, Account
     Ok(crate::hashing::sha256_hex(&encoded))
 }
 
-/// 32 random bytes, base64url without padding (43 characters).
-fn random_secret() -> Result<String, AccountError> {
-    use base64::Engine as _;
-    use ring::rand::SecureRandom as _;
-    let mut bytes = [0_u8; 32];
-    ring::rand::SystemRandom::new()
-        .fill(&mut bytes)
-        .map_err(|_| AccountError::StorageUnavailable)?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
-}
-
 #[cfg(test)]
 mod digest_tests {
     /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the

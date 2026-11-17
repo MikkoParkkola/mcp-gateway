@@ -285,7 +285,13 @@ the next `pull_request` event that carries it: push after labelling (an empty co
 `git commit --allow-empty -m "ci: run the OS shards" && git push`) or close and reopen the pull
 request. A label added at creation (`gh pr create --label`) or a re-run of an earlier run does not
 start them. The macOS lib shard takes about 75 minutes, and the macOS runners also serve every
-train, so the label is for changes that need it.
+train, so the label is for changes that need it. One part of this is enforced: the check
+`OS-sensitive diff carries the os-int label` also demands `os-sensitive` when the diff adds or
+removes a Rust line that sends a signal, manages a process group or session, reaps a child or reads
+a process errno (`SIGTERM`, `Signal::`, `kill_process(`, `start_kill`, `.kill()`, `process_group`,
+`setsid`, `waitid`, `try_wait`, `child.wait(`, `Errno::CHILD` and the other words in
+`OS_PROC_WORDS` in `scripts/ci/os_sensitive_diff.py`); its message gives the `gh pr edit` command.
+A change with no such word beside unchanged process code is not caught; the merge train still is.
 **The `os-int` label.** A pull request whose diff adds or removes a Rust or TOML line that names
 the secret store, the keychain or a file lock (`secret_store`, `SecretStore`, `keychain`,
 `security_framework`, `fs_lock`, `flock`, `fcntl`, `keyring`, `fd-lock`, `lock_shared`; the
@@ -303,6 +309,12 @@ every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).
 The batch must carry the harness (`run_mutants.py`, `mutants.yml`) byte-identical to the release
 branch, or the run aborts: after a harness change merges, re-copy both files into every open
 `throwaway/mutants-*` branch before pushing it again.
+Hosted repeats re-run one filtered lib test on the binary CI already built. Push
+`throwaway/repeat-<name>` as the commit under test plus one commit that adds only
+`.repeat/spec.json` (`sha`, `filter`, `runs`, `parallel`, `exact`). CI for that sha must
+have finished; its binary artifact lives 1 day. The job reuses that binary and compiles
+nothing. Read the verdict as PASSED/TOTAL in the job summary. Limits: `runs` <= 50,
+`parallel` <= 4. One queue is shared with other lanes (concurrency group `repeat-linux-hosted`).
 
 ### Moving code between files
 

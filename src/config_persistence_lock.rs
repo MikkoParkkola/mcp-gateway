@@ -472,7 +472,7 @@ fn acquire(
 
 /// Why [`off_runtime`] has no result.
 #[derive(Debug, PartialEq)]
-enum NoResult {
+pub(crate) enum NoResult {
     /// Not started: [`MAX_ABANDONED`] earlier threads are still stuck.
     Stalled,
     /// The thread could not start, or ended without a result.
@@ -503,8 +503,9 @@ const LEFT: u8 = 2;
 /// detached thread, not `spawn_blocking`, so filesystem work stalled on an
 /// NFS or FUSE mount never holds the runtime's shutdown (as the reload's own
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
-/// it finishes, even if the awaiting caller is dropped.
-async fn off_runtime<T: Send + 'static>(
+/// it finishes, even if the awaiting caller is dropped. Crate-visible for the startup gate,
+/// whose repair, probes and drains run here like the lock itself.
+pub(crate) async fn off_runtime<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, NoResult> {
     off_runtime_in(&ABANDONED, work).await
@@ -629,6 +630,9 @@ pub(crate) fn lock_config_blocking_deferred(
 mod reader;
 #[cfg(test)]
 use reader::creation_blocked;
+// The startup gate, compiled for tests only until the serve paths take it, proves absence here.
+#[cfg(test)]
+pub(crate) use reader::absent;
 pub(crate) use reader::{
     ReaderLock, journal_pending, no_writer_possible, reader_lock, reader_lock_deferred,
 };

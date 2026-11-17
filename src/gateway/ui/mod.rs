@@ -21,6 +21,10 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+/// Every web UI change has a CLI form; CLI commands and config writes are
+/// classified for remote use.
+#[cfg(test)]
+pub(crate) mod cli_parity_tests;
 mod config_file;
 /// Every UI API answer type is classified for the api command.
 #[cfg(test)]

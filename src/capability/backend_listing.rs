@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::CapabilityBackend;
+use super::{CapabilityBackend, CapabilityDefinition, Tool};
 use crate::backend::BackendRegistry;
 
 /// A stored token can change on disk without a notice: the watch looks again
@@ -15,6 +15,89 @@ use crate::backend::BackendRegistry;
 const RECHECK: Duration = Duration::from_secs(300);
 
 impl CapabilityBackend {
+    /// Get the tools clients are shown (pre-built MCP tool representations).
+    ///
+    /// A capability whose required login is missing is left out until it is
+    /// supplied: the catalogue is a library, and a tool that can only fail is
+    /// noise in every listing.
+    pub fn get_tools(&self) -> Vec<Tool> {
+        let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
+        caps.entries
+            .iter()
+            .zip(caps.tools.iter())
+            .filter(|(entry, _tool)| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut oauth_seen)
+                    .is_none()
+            })
+            .map(|(_entry, tool)| tool.clone())
+            .collect()
+    }
+
+    /// Get tools visible in `current_state`.
+    ///
+    /// A capability is included when its `visible_in_states` list is **empty**
+    /// (always visible — backward compat) or when it contains `current_state`.
+    ///
+    /// Also leaves out a capability whose required login is missing, as
+    /// [`Self::get_tools`] does.
+    pub fn get_tools_for_state(&self, current_state: &str) -> Vec<Tool> {
+        let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
+        caps.entries
+            .iter()
+            .zip(caps.tools.iter())
+            .filter(|(entry, _tool)| {
+                (entry.visible_in_states.is_empty()
+                    || entry.visible_in_states.iter().any(|s| s == current_state))
+                    && self
+                        .executor
+                        .missing_credential(&entry.auth, &mut oauth_seen)
+                        .is_none()
+            })
+            .map(|(_entry, tool)| tool.clone())
+            .collect()
+    }
+
+    /// Whether clients are shown the capability `name`: it exists and its
+    /// required login (if any) is in place. A name this backend does not hold
+    /// is not its to hide, so it counts as listed.
+    pub fn is_listed(&self, name: &str) -> bool {
+        self.is_listed_in(name, &mut HashMap::new())
+    }
+
+    /// [`Self::is_listed`] for a pass over many names: `seen` memoises the
+    /// per-provider OAuth lookups, so one listing or search reads each
+    /// provider's token once however many capabilities use it.
+    pub fn is_listed_in(&self, name: &str, seen: &mut HashMap<String, bool>) -> bool {
+        self.capabilities.read().get(name).is_none_or(|entry| {
+            self.executor
+                .missing_credential(&entry.auth, seen)
+                .is_none()
+        })
+    }
+
+    /// Get a specific capability by name — O(1) via the name index.
+    pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
+        self.capabilities.read().get(name).cloned()
+    }
+
+    /// List all capability names in insertion order.
+    pub fn list(&self) -> Vec<String> {
+        self.capabilities
+            .read()
+            .entries
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
+    }
+
+    /// List all capability definitions (cloned, insertion order).
+    pub fn list_capabilities(&self) -> Vec<CapabilityDefinition> {
+        self.capabilities.read().entries.clone()
+    }
+
     /// The names clients are shown now, sorted. A change between two calls is
     /// a change of what `tools/list` answers.
     pub fn listed_names(&self) -> Vec<String> {
@@ -76,6 +159,13 @@ impl CapabilityBackend {
     /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
+        self.announce_scanned(registry);
+    }
+
+    /// Announce the startup scan's catalogue, once the scan is complete: by
+    /// [`Self::finish_initial_scan`], by the scan's own publish, or by the
+    /// attach that delivers a parked scan's part.
+    pub(crate) fn announce_scanned(&self, registry: &BackendRegistry) {
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: the capability catalogue announcing its own listing"

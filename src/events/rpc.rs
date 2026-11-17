@@ -502,12 +502,18 @@ impl EventsHub {
 
     /// Wait until an attempt claimed before subscription `id` was removed
     /// has settled, so nothing reaches the callback after the unsubscribe
-    /// answer (T23). Bounded by the client's own total timeout; `false` when
-    /// the attempt is still busy at the bound.
+    /// answer (T23), its ended notices' attempts included. Bounded by the
+    /// client's own total timeout; `false` when the attempt is still busy at
+    /// the bound.
     async fn settled(&self, id: &str) -> bool {
         let deadline = tokio::time::Instant::now() + super::client::TOTAL_TIMEOUT * 2;
         loop {
-            let busy = self.runtime.busy.lock().contains(id);
+            let busy = self
+                .runtime
+                .busy
+                .lock()
+                .iter()
+                .any(|key| super::outbox::busy_key_of(key, id));
             if !busy {
                 return true;
             }

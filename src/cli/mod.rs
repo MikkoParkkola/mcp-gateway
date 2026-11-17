@@ -137,7 +137,7 @@ pub struct Cli {
     pub port: Option<u16>,
 
     /// Host address to bind to (overrides config file)
-    #[arg(long, env = "MCP_GATEWAY_HOST")]
+    #[arg(hide = true, long, env = "MCP_GATEWAY_HOST")]
     pub host: Option<String>,
 
     /// Minimum log level: trace, debug, info, warn, or error
@@ -150,11 +150,11 @@ pub struct Cli {
     pub log_level: String,
 
     /// Log output format: "text" for human-readable, "json" for structured
-    #[arg(long, env = "MCP_GATEWAY_LOG_FORMAT", global = true)]
+    #[arg(hide = true, long, env = "MCP_GATEWAY_LOG_FORMAT", global = true)]
     pub log_format: Option<String>,
 
     /// Disable Meta-MCP mode and expose all tools directly
-    #[arg(long)]
+    #[arg(hide = true, long)]
     pub no_meta_mcp: bool,
 
     /// RFC-0060 U1 measurement window (`record` turns it on). The operator's
@@ -382,7 +382,7 @@ pub(crate) enum Command {
         format: crate::validator::ValidatorOutputFormat,
 
         /// Minimum severity to report
-        #[arg(short, long, default_value = "info", value_enum)]
+        #[arg(hide = true, short, long, default_value = "info", value_enum)]
         severity: crate::validator::SeverityFilter,
 
         /// Auto-fix issues where possible (rewrites YAML in place)
@@ -478,7 +478,7 @@ pub(crate) enum Command {
 
         /// Write this value into gateway.yaml as typed instead of storing it in
         /// the secret store; may be repeated (an env KEY, or header:NAME)
-        #[arg(long = "keep-as-text", value_name = "KEY")]
+        #[arg(hide = true, long = "keep-as-text", value_name = "KEY")]
         keep_as_text: Vec<String>,
 
         /// Rewrite the whole file when the change cannot be made in place
@@ -612,9 +612,6 @@ pub(crate) enum Command {
     ///
     /// # Preview changes without writing anything
     /// mcp-gateway upgrade --dry-run
-    ///
-    /// # Silent mode for post_install hooks (errors only)
-    /// mcp-gateway upgrade --quiet
     /// ```
     #[command(about = "Apply post-upgrade migrations and update version stamp")]
     Upgrade {
@@ -624,7 +621,7 @@ pub(crate) enum Command {
 
         /// Suppress progress output; errors and breaking-change notices are
         /// still written to stderr (useful for Homebrew `post_install`)
-        #[arg(long, short)]
+        #[arg(hide = true, long, short)]
         quiet: bool,
 
         /// Override the data directory (default: ~/.mcp-gateway)
@@ -682,7 +679,6 @@ pub enum ToolCommand {
     /// Call a registered tool with JSON arguments
     ///
     /// Arguments can be supplied as:
-    /// - A JSON blob via `--args '{"key": "value"}'`
     /// - Individual `key=value` pairs: `invoke weather_current location=London`
     /// - JSON piped on stdin: `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
     ///
@@ -698,7 +694,7 @@ pub enum ToolCommand {
         capabilities: Option<PathBuf>,
 
         /// JSON argument blob (merged with key=value pairs)
-        #[arg(short, long)]
+        #[arg(hide = true, short, long)]
         args: Option<String>,
 
         /// Additional key=value argument pairs (may be repeated)

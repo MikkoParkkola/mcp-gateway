@@ -64,7 +64,9 @@ impl TraceId {
     /// Generate a random `TraceId`.
     #[must_use]
     pub fn generate() -> Self {
-        Self(rand::rng().random())
+        #[allow(clippy::disallowed_methods, reason = "id: a W3C trace context TraceId")]
+        let bytes = rand::rng().random();
+        Self(bytes)
     }
 
     /// Parse from a 32-character lowercase hex string.
@@ -108,7 +110,9 @@ impl SpanId {
     /// Generate a random `SpanId`.
     #[must_use]
     pub fn generate() -> Self {
-        Self(rand::rng().random())
+        #[allow(clippy::disallowed_methods, reason = "id: a W3C trace context SpanId")]
+        let bytes = rand::rng().random();
+        Self(bytes)
     }
 
     /// Parse from a 16-character lowercase hex string.

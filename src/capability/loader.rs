@@ -3,8 +3,7 @@
 //! Capability directory loader
 
 use super::{
-    CapabilityDefinition, Issue, IssueSeverity, parse_capability_file, validate_capability,
-    validate_capability_definition,
+    CapabilityDefinition, Issue, IssueSeverity, validate_capability, validate_capability_definition,
 };
 use crate::{Error, Result};
 use std::path::Path;
@@ -13,6 +12,59 @@ use tracing::{debug, info, warn};
 /// Loader for capability definitions from directories
 pub struct CapabilityLoader;
 
+/// One capability file the loader parsed, with the bytes that parse accepted.
+pub(crate) struct LoadedCapability {
+    /// The configured directory as written, joined with the walk's relative path.
+    pub(crate) path: String,
+    /// The buffer [`super::parser::parse_capability_text`] accepted.
+    pub(crate) bytes: Vec<u8>,
+    /// The capability that parse produced.
+    pub(crate) definition: CapabilityDefinition,
+}
+
+/// A file in a readable directory that could not be read or parsed.
+pub(crate) struct FileFailure {
+    /// [`source_path`] of the file that failed. The error itself is logged
+    /// where the read fails; callers need only which file.
+    pub(crate) path: String,
+}
+
+/// What one directory read produced.
+///
+/// `Err` from the loader is a directory that itself could not be listed.
+/// `failures` are files inside a directory that could.
+pub(crate) struct DirectoryFiles {
+    /// Files that parsed and passed the unloadable checks.
+    pub(crate) files: Vec<LoadedCapability>,
+    /// Files that did not. The directory itself was readable.
+    pub(crate) failures: Vec<FileFailure>,
+}
+
+/// The path a served file is known by: `root` exactly as configured, joined
+/// with the walk's relative path. No canonicalisation.
+///
+/// The trailing separator is stripped only to test the prefix. It stays in
+/// the result, so `capabilities/` and `capabilities` stay different strings.
+/// A file the prefix does not contain keeps `file`'s display, which is the
+/// key rug-pull detection already looked up.
+pub(crate) fn source_path(root: &str, file: &Path) -> String {
+    let trimmed = root.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return file.display().to_string();
+    }
+    let Ok(relative) = file.strip_prefix(Path::new(trimmed)) else {
+        return file.display().to_string();
+    };
+    if relative.as_os_str().is_empty() {
+        return root.to_string();
+    }
+    // The configured directory as written, joined with the platform's
+    // separator: on Windows the walk's relative path carries backslashes, and
+    // a rug-pull record and a loaded-from key must equal the path a caller
+    // builds with `Path::join`. On Unix this is the same string as `{root}/{relative}`.
+    Path::new(root).join(relative).display().to_string()
+}
+
 impl CapabilityLoader {
     /// Load all capabilities from a directory (recursive)
     ///
@@ -20,8 +72,7 @@ impl CapabilityLoader {
     /// directory rather than one line per unpinned file — pinning is opt-in
     /// per file by design, so an unpinned public catalog is expected, not a
     /// misconfiguration to warn about file-by-file. Per-file detail (path +
-    /// computed hash) is still available at DEBUG via
-    /// [`super::parser::parse_capability_file`].
+    /// computed hash) is still logged at DEBUG from the text parser.
     ///
     /// # Errors
     ///
@@ -29,20 +80,28 @@ impl CapabilityLoader {
     pub async fn load_directory(path: &str) -> Result<Vec<CapabilityDefinition>> {
         let loaded = Self::load_directory_with_paths(path).await?;
         Ok(loaded
+            .files
             .into_iter()
-            .map(|(_, capability)| capability)
+            .map(|file| file.definition)
             .collect())
     }
 
-    /// [`Self::load_directory`], each capability beside the path it was
-    /// loaded from: what a later pin mismatch on that path names as trusted.
+    /// [`Self::load_directory`], each capability beside the path and the bytes
+    /// the parse accepted, plus each file in that directory the read or the
+    /// parse refused.
+    ///
+    /// One read per file. A missing directory, a path that is not a directory,
+    /// or a listing that fails is still `Err`.
     ///
     /// # Errors
     ///
     /// As [`Self::load_directory`].
-    pub(crate) async fn load_directory_with_paths(
-        path: &str,
-    ) -> Result<Vec<(String, CapabilityDefinition)>> {
+    pub(crate) async fn load_directory_with_paths(path: &str) -> Result<DirectoryFiles> {
+        // Before the directory is read, and before any await, so a row can
+        // hold this operation at its load on the thread that is polling it.
+        #[cfg(test)]
+        super::op_gate::reach(super::op_gate::Step::Load);
+        let root = path;
         let path = Path::new(path);
 
         if !path.exists() {
@@ -59,27 +118,31 @@ impl CapabilityLoader {
             )));
         }
 
-        let mut loaded = Vec::new();
-        Self::load_directory_recursive(path, &mut loaded).await?;
-        let (paths, capabilities): (Vec<String>, Vec<CapabilityDefinition>) =
-            loaded.into_iter().unzip();
+        let mut files = Vec::new();
+        let mut failures = Vec::new();
+        Self::load_directory_recursive(root, path, &mut files, &mut failures).await?;
 
-        let unpinned = count_unpinned(&capabilities);
+        let unpinned = count_unpinned(files.iter().map(|file| &file.definition));
         info!(
-            count = capabilities.len(),
+            count = files.len(),
             unpinned,
             path = %path.display(),
             "Loaded capabilities: {} loaded, {unpinned} unpinned",
-            capabilities.len(),
+            files.len(),
         );
 
-        Ok(paths.into_iter().zip(capabilities).collect())
+        Ok(DirectoryFiles { files, failures })
     }
 
-    /// Recursively load capabilities from a directory
+    /// Recursively load capabilities from a directory.
+    ///
+    /// `root` stays the configured directory string. Subdirectories are not a
+    /// new root: the path joined for each file is relative to `root`.
     async fn load_directory_recursive(
+        root: &str,
         dir: &Path,
-        capabilities: &mut Vec<(String, CapabilityDefinition)>,
+        files: &mut Vec<LoadedCapability>,
+        failures: &mut Vec<FileFailure>,
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
             Error::Config(format!("Failed to read directory {}: {e}", dir.display()))
@@ -106,19 +169,27 @@ impl CapabilityLoader {
 
             if path.is_dir() {
                 // Recurse into subdirectories
-                Box::pin(Self::load_directory_recursive(&path, capabilities)).await?;
+                Box::pin(Self::load_directory_recursive(root, &path, files, failures)).await?;
             } else if path
                 .extension()
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
             {
-                // Load YAML files
+                // Load YAML files. A file error does not fail the directory:
+                // the caller hears it in `failures` and the file is not served.
                 match Self::load_capability_file(&path).await {
-                    Ok(cap) => {
-                        debug!(name = %cap.name, path = %path.display(), "Loaded capability");
-                        capabilities.push((path.display().to_string(), cap));
+                    Ok((bytes, definition)) => {
+                        debug!(name = %definition.name, path = %path.display(), "Loaded capability");
+                        files.push(LoadedCapability {
+                            path: source_path(root, &path),
+                            bytes,
+                            definition,
+                        });
                     }
                     Err(e) => {
                         warn!(error = %e, path = %path.display(), "Failed to load capability");
+                        failures.push(FileFailure {
+                            path: source_path(root, &path),
+                        });
                     }
                 }
             }
@@ -129,14 +200,27 @@ impl CapabilityLoader {
 
     /// Load and validate a single capability file.
     ///
-    /// Runs both the legacy `validate_capability` check and the structural
-    /// validator.  Structural errors cause the capability to be skipped (this
-    /// function returns `Err`); structural warnings are logged but the capability
-    /// is still loaded.
-    async fn load_capability_file(path: &Path) -> Result<CapabilityDefinition> {
-        let capability = parse_capability_file(path).await?;
+    /// One read. The returned bytes are the buffer the parse accepted.
+    /// Structural errors cause the capability to be skipped (this function
+    /// returns `Err`); structural warnings are logged but the capability is
+    /// still loaded.
+    async fn load_capability_file(path: &Path) -> Result<(Vec<u8>, CapabilityDefinition)> {
+        let bytes = tokio::fs::read(path).await.map_err(|e| {
+            Error::Config(format!(
+                "Failed to read capability file {}: {e}",
+                path.display()
+            ))
+        })?;
+        // Invalid UTF-8 is a per-file failure, as a read error was.
+        let text = std::str::from_utf8(&bytes).map_err(|e| {
+            Error::Config(format!(
+                "Failed to read capability file {}: {e}",
+                path.display()
+            ))
+        })?;
+        let capability = super::parser::parse_capability_text(text, path)?;
         refuse_unloadable(&capability, path, IssueLog::EachIssue)?;
-        Ok(capability)
+        Ok((bytes, capability))
     }
 
     /// Load capabilities from multiple directories
@@ -246,8 +330,12 @@ pub(crate) fn refuse_unloadable(
 /// directory-level `N loaded, M unpinned` summary log so an operator can see
 /// catalog pin coverage at a glance instead of scanning one INFO line per
 /// unpinned file (MIK-6742).
-fn count_unpinned(capabilities: &[CapabilityDefinition]) -> usize {
-    capabilities.iter().filter(|c| c.sha256.is_none()).count()
+fn lacks_pin(capability: &CapabilityDefinition) -> bool {
+    capability.sha256.is_none()
+}
+
+fn count_unpinned<'a>(capabilities: impl IntoIterator<Item = &'a CapabilityDefinition>) -> usize {
+    capabilities.into_iter().filter(|c| lacks_pin(c)).count()
 }
 
 #[cfg(test)]

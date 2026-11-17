@@ -85,7 +85,7 @@ jobs:
   scope:
     name: Decide whether the change is docs-only
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -115,7 +115,7 @@ jobs:
   public-repo-hygiene:
     name: Public repo hygiene
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -282,7 +282,7 @@ jobs:
     name: Service template smoke
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -300,7 +300,7 @@ jobs:
     name: First-use usability smoke
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -321,7 +321,7 @@ jobs:
     name: Upgrade rehearsal (3.5.1 -> this build)
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       # The v3.5.1 release asset, pinned: SHA256SUMS.txt comes from the same
@@ -412,7 +412,7 @@ jobs:
     name: Helm chart lint + render
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned: the goldens are Helm 4 renders, and `latest` falls back to
@@ -429,7 +429,7 @@ jobs:
     name: Helm OCI package/push/pull
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       registry:
         image: mirror.gcr.io/library/registry:2
@@ -462,7 +462,7 @@ jobs:
     name: Helm supply chain (cosign + SBOM)
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       registry:
         image: mirror.gcr.io/library/registry:2
@@ -488,7 +488,7 @@ jobs:
     name: Helm air-gap export/import
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       registry:
         image: mirror.gcr.io/library/registry:2
@@ -518,7 +518,7 @@ jobs:
     name: K8s kind apply+upgrade+rollback
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate kind rollback smoke script
@@ -551,7 +551,7 @@ jobs:
     name: Clippy (pedantic)
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -802,7 +802,7 @@ jobs:
     name: Windows check
     needs: [windows-shards, windows-clippy]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -832,7 +832,7 @@ jobs:
     name: Heavy checks (merge train)
     needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -991,7 +991,7 @@ jobs:
     name: macOS check
     needs: [macos-shards]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Read this run's job timings for the limit watch below.
     permissions:
       contents: read
@@ -1028,7 +1028,7 @@ jobs:
   os-int-label:
     name: OS-sensitive diff carries the os-int label
     if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'throwaway/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1102,7 +1102,7 @@ jobs:
   linux-lib-build:
     name: Linux lib test binary
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1134,7 +1134,7 @@ jobs:
   test-shards:
     name: Linux shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1157,7 +1157,7 @@ jobs:
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
       # The skips themselves live in scripts/ci/shard_tests.py (SKIPS).
-      # ADR-027: ubuntu-latest restricts unprivileged user namespaces through
+      # ADR-027: Ubuntu 24.04 and later restrict unprivileged user namespaces through
       # AppArmor, which refuses the command preview's sandbox. Lifting it here
       # lets the sandbox tests run, and PREVIEW_SANDBOX_REQUIRED turns a
       # refused sandbox into a failure instead of a skip.
@@ -1208,7 +1208,7 @@ jobs:
     name: Linux shard ${{ matrix.shard }}
     needs: [linux-lib-build]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1255,7 +1255,7 @@ jobs:
     name: Tests
     needs: [linux-lib-build, test-shards-lib, test-shards]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1283,7 +1283,7 @@ jobs:
   test-throwaway-hosted:
     name: Tests (throwaway)
     if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/') && vars.MCPGW_TRUSTED_RUNNER != 'ready' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1389,7 +1389,7 @@ jobs:
     name: gws dry-run conformance
     needs: [scope, linux-lib-build]
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1433,7 +1433,7 @@ jobs:
     name: Linux keychain against gnome-keyring
     needs: [scope, linux-lib-build]
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1492,7 +1492,7 @@ jobs:
   release-signing-checks:
     name: Release signing checks
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the release asset checker
@@ -1513,7 +1513,7 @@ jobs:
   binary-signing-rehearsal:
     name: Binary signing rehearsal (draft release)
     if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_binary_signing == true || inputs.rehearse_binary_signing == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: write
@@ -1645,7 +1645,7 @@ jobs:
   package-tests:
     name: Tests build from the packaged crate
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1669,7 +1669,7 @@ jobs:
     name: Format
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -1682,7 +1682,7 @@ jobs:
     name: Dependency audit
     needs: scope
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -1732,7 +1732,7 @@ jobs:
   public-claims:
     name: Public claims
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -1755,7 +1755,7 @@ jobs:
   # green and was first seen on a tag.
   release-script-tests:
     name: Release tooling unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Below runs-on: the wiring mutation harness anchors on name + runs-on.
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
@@ -1846,7 +1846,7 @@ jobs:
   release-criteria:
     name: Release criteria ledger (report-only off a tag, blocking on one)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The ledger is a live working document: a row edited mid-flight must not
     # block unrelated PRs, but a stale header count must not reach a tag. On a
     # tag this job blocks, and the container publish below depends on it —
@@ -1876,7 +1876,7 @@ jobs:
     # The count step reads docs/release/v4.0.0-supported-matrix.md, so it runs on
     # docs-only changes too; the binary steps skip them (fail-open, as above).
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # tests/capability_pin_policy.rs already asserts the privilege rule and the
     # drift rule, but only behind a full --all-features build. This is the drift
     # half in two seconds on the cheapest runner, so a capability file rewritten
@@ -1908,7 +1908,7 @@ jobs:
   secrets-scan:
     name: Secrets scan
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1926,7 +1926,7 @@ jobs:
     # trufflehog only flags verified live secret VALUES it can see in the
     # diff. This is the class of bug fixed in #323 (redact credentials from
     # Debug output). Pure stdlib Python, no extra deps, so it stays fast.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the leak-lint parser (fail on parser regression)
@@ -1942,7 +1942,7 @@ jobs:
     # server started. That build is too heavy for every pull request, so the
     # checker it relies on is tested here instead, against stub binaries, in
     # seconds: a change that made it pass everything fails the pull request.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the checker refuses what it must
@@ -1960,7 +1960,7 @@ jobs:
     # The one 800-line gate (MIK-8210): test files are held too, and the
     # baseline ratchets against the base commit, so a PR can neither add a row
     # nor raise an allowance.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2002,7 +2002,7 @@ jobs:
     # second instead of failing a clippy run after a full build. CamelCase is
     # only printed, since clippy accepts known words this check cannot list.
     # The rows pin what clippy flags and what it accepts.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2027,7 +2027,7 @@ jobs:
     # src/events/mod.rs, nothing else there. The guard has no behaviour of its
     # own to see red, so its self-test runs first and must refuse a synthetic
     # source change that edits a core file.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2045,7 +2045,7 @@ jobs:
     # window goes red on a loaded runner, on a change that touched nothing
     # near it. Such a test waits on an event instead. The allowlist only
     # shrinks: against the base, a new row fails.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2084,7 +2084,7 @@ jobs:
     # whole gateway down. A new unwrap/expect/panic-family site in product code
     # carries an `// invariant:` comment; existing ones are in a baseline the
     # scanner writes, which only shrinks against the base.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2129,7 +2129,7 @@ jobs:
     # version of this check reported 72 false orphans. Declarations are
     # followed from the crate roots, so a file declared only by an uncompiled
     # file is itself reported, and every `.rs` under `src/` is swept (#1339).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2199,7 +2199,7 @@ jobs:
     # servers that refuse everything, refuse nothing, and carry the control, so
     # a probe that has silently stopped exercising its control fails here rather
     # than going green against a stale install. Stdlib Python, no extra deps.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the drift probes (fail when a probe stops discriminating)
@@ -2219,7 +2219,7 @@ jobs:
     # half: every entry is a pinned npm or PyPI release or a hosted URL. The
     # live lookups run in registry-packages.yml (registry changes, pushes,
     # daily), so an upstream deprecation never turns an unrelated PR red.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the guard refuses what it claims to
@@ -2426,7 +2426,7 @@ jobs:
 
   docker-manifest:
     name: Docker manifest list
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same condition as docker-build, whose digests this job assembles, and
     # the tag clause is scoped to a push for the same reason: a dispatch aimed
     # at a tag ref must not admit the release steps. Those steps carry the
@@ -2783,7 +2783,7 @@ jobs:
       && needs.docker-manifest.outputs.is_prerelease == 'false')
       || (github.event_name == 'workflow_dispatch'
       && (inputs.rehearse_chart_publish == true || inputs.rehearse_chart_publish == 'true')))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # One publisher per package at a time, queued, never cancelled: the lookup
     # that refuses to replace a version and the push must not interleave.
@@ -2898,7 +2898,7 @@ jobs:
     # it to every client that browses the registry.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.docker-manifest.outputs.is_prerelease != 'true'
     needs: docker-manifest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write

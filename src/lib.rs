@@ -69,6 +69,7 @@ mod counters;
 mod coverage_canary;
 pub(crate) mod debug_trust_roots;
 mod health_history;
+pub(crate) mod ids;
 pub(crate) mod random_secret;
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]

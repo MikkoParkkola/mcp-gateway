@@ -27,7 +27,6 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 use crate::gateway::session_id::{SessionId, session_fp};
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
@@ -231,7 +230,7 @@ impl ProxyManager {
         params: &SamplingCreateMessageParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
-        let id = format!("sampling-{}", Uuid::new_v4());
+        let id = format!("sampling-{}", crate::ids::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
         // Held across the await: on an outer timeout or a task abort no arm
@@ -286,7 +285,7 @@ impl ProxyManager {
         params: &ElicitationCreateParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
-        let id = format!("elicitation-{}", Uuid::new_v4());
+        let id = format!("elicitation-{}", crate::ids::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
         // Held across the await: on an outer timeout or a task abort no arm
@@ -405,7 +404,7 @@ impl ProxyManager {
         session_id: &str,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
-        let id = format!("roots-{}", Uuid::new_v4());
+        let id = format!("roots-{}", crate::ids::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
         // Held across the await: on an outer timeout or a task abort no arm of

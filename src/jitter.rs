@@ -19,7 +19,12 @@ pub(crate) fn full_jitter(bound: Duration) -> Duration {
         return bound;
     }
     let nanos = u64::try_from(bound.as_nanos()).unwrap_or(u64::MAX);
-    Duration::from_nanos(rand::random_range(0..=nanos))
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "jitter: full jitter over the backoff bound"
+    )]
+    let drawn = rand::random_range(0..=nanos);
+    Duration::from_nanos(drawn)
 }
 
 #[cfg(test)]

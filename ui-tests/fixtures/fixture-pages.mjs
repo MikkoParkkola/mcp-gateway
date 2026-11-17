@@ -42,6 +42,8 @@ const probed = {
     link.id = 'probe-link';
     link.textContent = 'servers';
     el.replaceChildren(`value ${value} `, link);
+    // L2c (shell-layout.spec.mjs): a screen that focuses what it drew.
+    if (value === 'focus') link.focus();
     // A render that has written part of the page and then faults.
     if (fault) null.call();
   },

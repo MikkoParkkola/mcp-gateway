@@ -57,8 +57,8 @@ browser makes. Those are reviewed by hand against this page.
   connection.
 - **Audit and SIEM exports are files.** The export sink writes a local file
   (`src/control_plane/export.rs`, `FileExportSink`).
-- **The web UI loads nothing from other hosts.** Both the dashboard (`/ui`,
-  `/ui/classic`) and the new shell serve their scripts from the gateway itself
+- **The web UI loads nothing from other hosts.** Both the dashboard (`/ui`)
+  and the new shell serve their scripts from the gateway itself
   and send a content security policy that limits what the browser loads and
   connects to over the network to the gateway's own origin
   (`src/gateway/ui/mod.rs`, `src/gateway/ui/shell.rs`). The new shell's
@@ -86,7 +86,7 @@ browser makes. Those are reviewed by hand against this page.
 | `src/preview_sandbox/proxy.rs` | a command preview fetches its `npx` or `uvx` package (not reachable from a route yet) | `registry.npmjs.org`, `pypi.org` or `files.pythonhosted.org` on port 443, never an address on the deny list or one of this machine's own |
 | `src/gateway/ui/import.rs` | you import from a URL in the web UI | the URL you entered |
 | `src/commands/skills.rs` | you run `skills` with an `http(s)` source | that URL |
-| `src/commands/doctor/npm_pin.rs` | you run `doctor`; on by default, off with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` or `security.posture: hardened` (`src/commands/doctor/npm_pin.rs`) | `registry.npmjs.org`, one request per npx package an enabled stdio backend pins. The request path is the package name; the pinned version is compared locally, not sent. The User-Agent is `mcp-gateway-doctor`. An `HTTPS_PROXY` you set is used |
+| `src/commands/doctor/npm_pin.rs` | you run `doctor`; on by default, off with `--no-registry-check` or `security.posture: hardened` (`src/commands/doctor/npm_pin.rs`) | `registry.npmjs.org`, one request per npx package an enabled stdio backend pins. The request path is the package name; the pinned version is compared locally, not sent. The User-Agent is `mcp-gateway-doctor`. An `HTTPS_PROXY` you set is used |
 | `src/commands/doctor.rs`, `src/commands/doctor/ws_reach.rs` | you run `doctor` | your configured HTTP and WebSocket backends |
 | `src/commands/doctor/health.rs`, `src/commands/stats.rs`, `src/commands/dashboard_link_admin.rs`, `src/commands/api.rs`, `src/commands/config_export/mod.rs` | you run `doctor`, `stats`, `dashboard-link`, `api`, `events dead-letters` or `config export` | the gateway your config names, normally this machine's; `stats`, `api` and `events dead-letters` take `--url` to point at another |
 

@@ -37,7 +37,7 @@ jobs:
   playwright:
     name: UI tests (Playwright)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) || contains(github.head_ref, 'ui-tests') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 15, not 5: a cold Chromium install exceeds 5 min, and the cache saves only on success.
     # 30 since the page budgets' spread run: 20 loads per page, phone loads at 4x CPU.
     timeout-minutes: 30
