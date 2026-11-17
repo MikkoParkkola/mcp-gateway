@@ -230,6 +230,7 @@ fn assert_mint(reply: &Reply) {
     );
 }
 
+#[cfg(feature = "metrics")]
 fn assert_document_refusal(reply: &Reply) {
     assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
     assert_eq!(reply.header(header::LOCATION).as_deref(), Some(REFUSED));
