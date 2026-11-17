@@ -117,7 +117,7 @@ async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir)
 
 /// A key reload. The published config does not carry the fixture's key table
 /// (the fixture installs it directly), so a key edit replaces the whole auth
-/// section, as live_keys_dashboard_tests.rs does.
+/// section, as `live_keys_dashboard_tests.rs` does.
 fn reload_keys(state: &AppState, keys: Vec<ApiKeyConfig>) {
     reload(state, |config| config.auth = auth_with(keys));
 }
@@ -334,10 +334,9 @@ fn rotate(state: &AppState, name: &str, new_secret: &str) {
 fn url_has_no_secret_query(url: &str) {
     let query = url
         .split_once('?')
-        .map(|(_, query)| query.split('#').next().unwrap_or(query))
-        .unwrap_or("");
+        .map_or("", |(_, query)| query.split('#').next().unwrap_or(query));
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-        let name = pair.split_once('=').map(|(name, _)| name).unwrap_or(pair);
+        let name = pair.split_once('=').map_or(pair, |(name, _)| name);
         assert!(
             !matches!(name, "bootstrap" | "code" | "key"),
             "{url} carries {name}"

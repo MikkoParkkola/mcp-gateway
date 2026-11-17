@@ -208,6 +208,7 @@ impl OriginPolicy {
     /// only a loopback origin this listener admits. An unparseable `public_url`
     /// admits nothing. Compared by [`same_origin`], so a default port written
     /// out and one a browser omits are the same origin.
+    #[cfg(feature = "webui")]
     pub(crate) fn admits_signin(&self, origin: &str) -> bool {
         let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
         let config = self.live_config.get();
