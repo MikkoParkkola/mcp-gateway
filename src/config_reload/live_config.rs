@@ -221,6 +221,7 @@ impl LiveConfig {
     pub(crate) fn observe_overlay(&self) {
         let revision = self
             .applied_now()
+            .published
             .map(|applied| applied.revision.clone())
             .unwrap_or_default();
         self.observe(crate::config_reload::history::seams::Observed::Overlay { revision });
@@ -249,7 +250,10 @@ impl LiveConfig {
         self.history.as_ref()?;
         #[cfg(test)]
         self.observe(crate::config_reload::history::seams::Observed::Refusal);
-        let served = self.applied_now().map(|applied| applied.revision.clone());
+        let served = self
+            .applied_now()
+            .published
+            .map(|applied| applied.revision.clone());
         Some(crate::config_reload::history::PendingRecord::Refused {
             source,
             served,
@@ -355,7 +359,7 @@ impl LiveConfig {
                 // Cloned only when a hook will record it; `with_applied` takes the original.
                 let recorded = live.history.as_ref().map(|_| raw.clone());
                 let live = live.with_applied(raw);
-                let published = live.applied_now();
+                let published = live.applied_now().published;
                 // Startup: open and this record on one worker, bounded by one
                 // deadline, before the holder is shared (design D-1, gpt G1).
                 if let (Some(hook), Some(pending)) = (

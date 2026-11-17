@@ -158,7 +158,7 @@ async fn h2_an_unchanged_reload_is_an_event_without_a_snapshot() {
     assert_eq!(newest.as_ref().map(|event| event.unchanged), Some(true));
     assert_eq!(
         newest.as_ref().and_then(|event| event.revision.clone()),
-        rig.ctx.live_config.running_revision().map(str::to_string)
+        rig.ctx.live_config.running_revision()
     );
     assert_eq!(snapshot_revisions(&rig.store), before_snapshots);
 
@@ -242,6 +242,7 @@ fn h6a_a_publish_leaves_the_history_file_with_its_version() {
     live.set_inputs(with_marker(token(b"rotated")), &[]);
     let published = live
         .applied_now()
+        .published
         .map(|applied| applied.revision.clone())
         .expect("a keyed holder publishes a revision");
 

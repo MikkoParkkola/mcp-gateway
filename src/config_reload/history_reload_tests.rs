@@ -209,6 +209,7 @@ async fn h3_a_refused_reload_is_an_event_without_bytes_naming_its_line() {
         .ctx
         .live_config
         .applied_now()
+        .published
         .map(|applied| applied.revision.clone());
     assert_ne!(
         served.as_deref(),
@@ -441,6 +442,7 @@ async fn h10_the_version_holds_the_published_bytes_not_the_disk() {
         .ctx
         .live_config
         .applied_now()
+        .published
         .map(|applied| applied.revision.clone());
     assert_eq!(
         newest.map(|snapshot| snapshot.revision.as_str()),

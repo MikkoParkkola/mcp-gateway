@@ -120,6 +120,7 @@ fn c3(at: ParkAt) {
                 .ctx
                 .live_config
                 .applied_now()
+                .published
                 .map(|applied| applied.revision.clone());
             assert_eq!(
                 persisted.last().map(|snapshot| snapshot.revision.clone()),

@@ -374,6 +374,7 @@ async fn c12_a_save_in_another_process_waits_for_the_sidecar_and_never_writes() 
         .ctx
         .live_config
         .applied_now()
+        .published
         .map(|applied| applied.revision.clone());
     assert_eq!(
         persisted.last().map(|snapshot| snapshot.revision.clone()),

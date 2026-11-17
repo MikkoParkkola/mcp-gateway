@@ -252,7 +252,10 @@ fn t7_a_rotated_key_gives_a_new_id_and_keeps_the_old() {
             config_path: "gateway.yaml".to_string(),
         })
         .with_startup_revision(&rotated, Some(raw));
-    let k2 = live.applied_now().map(|applied| applied.revision.clone());
+    let k2 = live
+        .applied_now()
+        .published
+        .map(|applied| applied.revision.clone());
 
     assert_ne!(k1, k2);
     let fresh = ConfigHistory::open(dir.path(), Bounds::default(), 1);
