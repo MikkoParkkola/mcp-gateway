@@ -14,7 +14,9 @@ const ID = /^[a-z0-9-]+\.(status|actions|settings)\.[a-z0-9-]+$/;
 // page while the page or tab is unbuilt; `_pending_later` maps an id under a
 // built tab to the part of the page that will draw it, so a page can land part
 // by part. Before cutover both must be empty (the pending list's own check).
-const META = new Set(['_pending', '_pending_later']);
+// `_pending_rows` lists ids still in free text, to be rewritten into frame-36 rows;
+// before cutover it must be empty like the others.
+const META = new Set(['_pending', '_pending_later', '_pending_rows']);
 // A part is named in plain words; the length cap keeps it a name, not a note.
 const PART_MAX = 60;
 
@@ -112,6 +114,9 @@ export function shapeProblems(copy) {
   if (later !== undefined && (!later || typeof later !== 'object' || Array.isArray(later))) {
     out.push('_pending_later: not an object');
   }
+  const pendingRows = copy._pending_rows;
+  const rowIds = Array.isArray(pendingRows) && pendingRows.every((id) => typeof id === 'string' && id !== '');
+  if (pendingRows !== undefined && !rowIds) out.push('_pending_rows: not an array of ids');
   for (const [id, e] of Object.entries(copy)) {
     if (META.has(id)) continue;
     if (!e || typeof e !== 'object' || Array.isArray(e)) { out.push(`${id}: not an object`); continue; }
@@ -170,8 +175,30 @@ export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
 }
 
 /**
- * C10 (red-first stub): every entry is in frame-36 row form unless `_pending_rows` lists it as still free text.
+ * C10: every entry is in frame-36 row form unless `_pending_rows` lists it as still free text.
  */
-export function rowFormProblems(_copy) {
-  return [];
+export function rowFormProblems(copy) {
+  const out = [];
+  const listed = Array.isArray(copy._pending_rows) ? copy._pending_rows : [];
+  const pending = new Set(listed);
+  for (const [id, entry] of Object.entries(copy)) {
+    if (!META.has(id) && entry && typeof entry === 'object' && 'text' in entry && !pending.has(id)) {
+      out.push(`${id}: free text; rewrite it into rows or list it in _pending_rows`);
+    }
+  }
+  // Own keys only: a listed `__proto__` or `constructor` names no copy.
+  const own = (id) => (Object.hasOwn(copy, id) ? copy[id] : undefined);
+  for (const id of listed) {
+    const entry = own(id);
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && !META.has(id) && 'rows' in entry) {
+      out.push(`${id}: listed in _pending_rows but already in rows`);
+    }
+  }
+  for (const id of listed) {
+    const entry = own(id);
+    if (META.has(id) || !entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      out.push(`${id}: listed in _pending_rows with no copy`);
+    }
+  }
+  return out;
 }
