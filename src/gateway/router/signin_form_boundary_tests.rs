@@ -5,7 +5,7 @@
 //! (stream error, wrong method, over-limit body, wrong content type) are
 //! `no-store` and cookie-free. Fixture and helpers are the parent's.
 
-use super::super::e5_dashboard_session_tests::redeem;
+use super::super::e5_dashboard_session_tests::{redeem, send_to};
 use super::super::tests::test_router_app_state_with_auth_and_config;
 use super::*;
 #[cfg(feature = "metrics")]
@@ -335,6 +335,81 @@ async fn n6e_a_numeric_self_origin_on_a_network_bind_is_refused() {
         "{:?}",
         signin_records(&log)
     );
+}
+
+/// A wildcard bind serves loopback too. With no `public_url`, the gateway's
+/// own loopback page posts with its numeric loopback Origin, which the guard
+/// admits on a non-loopback bind; the route admits it and mints, on `0.0.0.0`
+/// and on `::`.
+#[tokio::test]
+async fn n6f_a_wildcard_bind_admits_its_own_loopback_page() {
+    for bind in ["0.0.0.0", "::"] {
+        let mut config = crate::config::Config::default();
+        config.server.host = bind.to_string();
+        let (mut state, _dir) =
+            test_router_app_state_with_auth_and_config(&auth_with(fixture_keys()), config).await;
+        let (log, _audit_dir) = with_audit(&mut state);
+        let authority = format!("127.0.0.1:{}", listener_port(&state));
+        let mut request = form_post(
+            SIGNIN,
+            Some(&format!("http://{authority}")),
+            Body::from(format!("key={ADMIN_SECRET}")),
+            FORM,
+            None,
+            true,
+        );
+        request.headers_mut().insert(
+            header::HOST,
+            authority.parse().expect("a host header value"),
+        );
+        let minted = send(&state, request).await;
+        assert_eq!(
+            minted.status,
+            StatusCode::SEE_OTHER,
+            "{bind}: {}",
+            minted.body
+        );
+        assert_mint(&minted);
+        assert_eq!(
+            signin_records(&log).len(),
+            1,
+            "{bind}: {:?}",
+            signin_records(&log)
+        );
+    }
+}
+
+/// Host, port and TLS are restart-only. A reload that changes the port leaves
+/// the listener on the old one, and the page it serves posts from that origin.
+/// Through a router built before the reload, as in production, the running
+/// listener's origin still mints.
+#[tokio::test]
+async fn n6g_a_reloaded_port_does_not_refuse_the_running_listeners_origin() {
+    let (mut state, _dir) = fixture().await;
+    let (log, _audit_dir) = with_audit(&mut state);
+    let port = listener_port(&state);
+    let running = format!("http://127.0.0.1:{port}");
+    let router = super::super::create_router(Arc::clone(&state));
+    reload(&state, |config| config.server.port = port + 1);
+    assert_eq!(
+        state.live_config.running().server.port,
+        port,
+        "premise: the listener keeps its port until a restart"
+    );
+    let minted = send_to(
+        router,
+        form_post(
+            SIGNIN,
+            Some(&running),
+            Body::from(format!("key={ADMIN_SECRET}")),
+            FORM,
+            None,
+            true,
+        ),
+    )
+    .await;
+    assert_mint(&minted);
+    assert_eq!(signin_records(&log).len(), 1, "{:?}", signin_records(&log));
 }
 
 /// `http://127.0.0.2` and `https://gw.example:8443` are the guard's 403s,

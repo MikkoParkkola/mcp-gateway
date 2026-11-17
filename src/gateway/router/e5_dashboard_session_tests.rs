@@ -141,7 +141,7 @@ pub(super) async fn send(state: &Arc<AppState>, request: Request<Body>) -> Reply
 
 /// `request` through an already built router, so state captured when the
 /// router was built (as in production) stays captured across reloads.
-async fn send_to(router: axum::Router, request: Request<Body>) -> Reply {
+pub(super) async fn send_to(router: axum::Router, request: Request<Body>) -> Reply {
     let response = tokio::time::timeout(Duration::from_secs(30), router.oneshot(request))
         .await
         .expect("the request finished")
