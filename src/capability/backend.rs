@@ -247,7 +247,7 @@ impl CapabilityBackend {
 
     /// The part of [`Self::unload_capability`] done under the catalogue's
     /// write lock: remove `name` and publish the removal under a new epoch.
-    pub(super) fn remove_locked(
+    fn remove_locked(
         &self,
         caps: &mut parking_lot::RwLockWriteGuard<'_, IndexedCapabilities>,
         name: &str,
@@ -276,7 +276,7 @@ impl CapabilityBackend {
 
     /// The part of [`Self::unload_capability`] done after the lock is
     /// released.
-    pub(super) fn after_unload(&self, name: &str) {
+    fn after_unload(&self, name: &str) {
         self.catalogue_changed();
         // After the epoch bump: a call that started before it is stopped here,
         // and one that starts after it is refused at `acquire`.
@@ -467,6 +467,8 @@ impl CapabilityBackend {
         {
             return Err(crate::Error::Config(format!("{name}: {reason}")));
         }
+        // Only a definition that paces a host can put others on a paced one.
+        let paces = !crate::capability::pacing::declared_intervals([&capability]).is_empty();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
         caps.unloaded.remove(&name);
@@ -486,6 +488,11 @@ impl CapabilityBackend {
         }
         drop(caps);
         self.catalogue_changed();
+        // A paced REST definition can put a GraphQL or JSON-RPC provider
+        // registered earlier on a paced host, as a directory load can.
+        if paces {
+            self.unload_unpaced_protocols();
+        }
         Ok(())
     }
 

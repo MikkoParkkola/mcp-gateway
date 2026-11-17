@@ -934,6 +934,26 @@ async fn rl15e_a_graphql_directory_loaded_first_is_still_refused() {
     );
 }
 
+#[test]
+fn rl15f_registering_a_paced_rest_provider_unloads_a_graphql_one_on_its_host() {
+    let url = "http://rl15f.test:9/g";
+    let backend = CapabilityBackend::new("rl15f", Arc::new(executor(Names::default())));
+    let gql =
+        crate::capability::parse_capability(&rpc_yaml("rl15fgql", "graphql", url)).expect("cap");
+    backend
+        .register_capability(gql)
+        .expect("registers while unpaced");
+    assert!(backend.has_capability("rl15fgql"), "premise: registered");
+    backend
+        .register_capability(cap("rl15frest", url, Some(30_000), false))
+        .expect("the paced REST provider registers");
+    assert!(backend.has_capability("rl15frest"));
+    assert!(
+        !backend.has_capability("rl15fgql"),
+        "unloaded once its host is paced"
+    );
+}
+
 // ── LD8: direct registration obeys the loader's rules ────────────────
 
 #[test]

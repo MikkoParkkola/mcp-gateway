@@ -301,7 +301,7 @@ impl CapabilityBackend {
     /// logging each at WARN. Judged and removed under one write lock, so a
     /// definition re-registered meanwhile is judged as it stands. It may come
     /// from an earlier directory, so no directory's count is adjusted.
-    fn unload_unpaced_protocols(&self) {
+    pub(super) fn unload_unpaced_protocols(&self) {
         let mut caps = self.capabilities.write();
         let intervals = crate::capability::pacing::declared_intervals(caps.entries.iter());
         let refused: Vec<(String, String)> = caps
