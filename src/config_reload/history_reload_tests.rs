@@ -212,7 +212,7 @@ async fn h3_a_refused_reload_is_an_event_without_bytes_naming_its_line() {
         .published
         .map(|applied| applied.revision.clone());
     assert_ne!(
-        served.as_deref(),
+        served,
         rig.ctx.live_config.running_revision(),
         "the premise: the served version moved off the startup one"
     );
