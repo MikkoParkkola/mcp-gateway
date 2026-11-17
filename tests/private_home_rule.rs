@@ -757,9 +757,17 @@ fn g1_every_listed_test_starts_with_the_rule() {
             if line.trim() != "require_private_home!();" {
                 continue;
             }
+            // The rule is the first statement: only items (`use`, `const`,
+            // `static`) may sit between the fn's opening brace and it.
             let opener = lines[..i]
                 .iter()
-                .rposition(|l| !l.trim().is_empty())
+                .rposition(|l| {
+                    let t = l.trim();
+                    !t.is_empty()
+                        && !t.starts_with("use ")
+                        && !t.starts_with("const ")
+                        && !t.starts_with("static ")
+                })
                 .expect("a line before");
             let sig = lines[..=opener]
                 .iter()

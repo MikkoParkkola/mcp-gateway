@@ -97,7 +97,7 @@ fn judge() -> Result<(), Refusal> {
     }
     // 4. Not the real home by any spelling; both sides canonicalised.
     let canonical_home = std::fs::canonicalize(&home);
-    let real = real_home_raw().map(|real| std::fs::canonicalize(real));
+    let real = real_home_raw().map(std::fs::canonicalize);
     let canonical_home = match (canonical_home, real) {
         (Ok(ours), Some(Ok(real))) if ours != real => ours,
         (Ok(_), Some(Ok(_))) => {
@@ -132,8 +132,8 @@ fn judge() -> Result<(), Refusal> {
             return refused(
                 check,
                 format!(
-                    "{var} must be unset or <override>/{name}; it is {:?}",
-                    value
+                    "{var} must be unset or <override>/{name}; it is \"{}\"",
+                    path.display()
                 ),
                 true,
             );

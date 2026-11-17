@@ -347,8 +347,8 @@ fn selection_in(value: &Value) -> Option<&Value> {
 /// after; request bodies are otherwise never logged.
 #[tokio::test]
 async fn a_selection_change_is_on_its_audit_record() {
-    require_private_home!();
     use mcp_gateway::security::{TransparencyLogConfig, TransparencyLogger};
+    require_private_home!();
     let url = stub(Arc::default()).await;
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("gateway.yaml");
