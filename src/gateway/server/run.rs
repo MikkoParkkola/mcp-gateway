@@ -211,6 +211,7 @@ impl Gateway {
             .with_startup_revision(&record_key, self.env.take_startup_inputs()),
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));
+        super::attach_capability_revision(&meta_mcp, &live_config);
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
         let export_status =
