@@ -23,12 +23,13 @@ test('C1 C2 the real screens and copy pair up by page and tab', () => {
   expect(pairingProblems(readCopy(), scan)).toEqual([]);
 });
 
-test('C9 Tools draws its Status note and keeps Try a tool pending under the null Actions tab', () => {
+test('C9 Tools draws its Status note and keeps Run as pending-later under Actions', () => {
   const scan = scanScreens(readScreens());
-  expect(scan.tabs.tools).toEqual({ status: true, actions: false, settings: false });
+  expect(scan.tabs.tools).toEqual({ status: true, actions: true, settings: false });
   expect(scan.drawn.has('tools.status.load-11-tools-and-reach')).toBe(true);
   const copy = readCopy();
-  expect(copy._pending.tools).toEqual(['tools.actions.run-as']);
+  expect(copy._pending.tools).toBeUndefined();
+  expect(copy._pending_later['tools.actions.run-as']).toBeTruthy();
 });
 
 test('S1 the tooltip module imports nothing from the shell', () => {

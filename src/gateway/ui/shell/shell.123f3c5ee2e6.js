@@ -376,15 +376,17 @@ let authEpoch = 0;
 /**
  * An error from /ui/api: its HTTP status (0 when no answer came at all),
  * whether an ok answer's body could not be read, and for a refusal the
- * gateway's own code and sentence when its JSON body carried them.
+ * gateway's own code and sentence when its JSON body carried them, plus
+ * the parsed JSON body (or null when there is none or it cannot be read).
  */
 export class ApiError extends Error {
-  constructor(status, path, { unreadable = false, code = null, serverMessage = null } = {}) {
+  constructor(status, path, { unreadable = false, code = null, serverMessage = null, body = null } = {}) {
     super(`${path} answered ${status}`);
     this.status = status;
     this.unreadable = unreadable;
     this.code = code;
     this.serverMessage = serverMessage;
+    this.body = body;
   }
 }
 
@@ -395,10 +397,12 @@ const REFUSAL_BODY_MS = 2000;
 
 /**
  * A JSON refusal's words: `{error: code, message: sentence}`, or a flat
- * `{error: sentence}`. Any other body, or one that cannot be read, gives none.
+ * `{error: sentence}`. `body` is the parsed JSON object, or null when there
+ * is none or it cannot be read. Any other body, or one that cannot be read,
+ * gives no code or sentence.
  */
 async function refusalWords(reply) {
-  if (!(reply.headers.get('content-type') ?? '').includes('json')) return {};
+  if (!(reply.headers.get('content-type') ?? '').includes('json')) return { body: null };
   const text = (v) => (typeof v === 'string' && v.trim() ? v.slice(0, SERVER_MESSAGE_MAX) : null);
   let timer;
   try {
@@ -406,13 +410,13 @@ async function refusalWords(reply) {
     const parse = reply.json();
     parse.catch(() => {}); // settled late, after the race: nothing waits for it any more
     const body = await Promise.race([parse, late]);
-    if (!body || typeof body !== 'object') return {};
+    if (!body || typeof body !== 'object') return { body: null };
     const message = text(body.message);
-    if (message) return { code: text(body.error), serverMessage: message };
-    return body.message === undefined ? { serverMessage: text(body.error) } : {};
+    if (message) return { code: text(body.error), serverMessage: message, body };
+    return body.message === undefined ? { serverMessage: text(body.error), body } : { body };
   } catch (err) {
     if (err?.name === 'AbortError') throw err; // the caller's own cancel stays a cancel
-    return {}; // an unreadable refusal body: its status still says what happened
+    return { body: null }; // an unreadable refusal body: its status still says what happened
   } finally {
     clearTimeout(timer);
   }
@@ -1863,7 +1867,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.d82a4a9834d8.js');
+    m = await import('/ui/assets/tooltip.e4507448157b.js');
   } catch {
     return;
   }
