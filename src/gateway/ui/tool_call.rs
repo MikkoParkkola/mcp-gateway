@@ -119,6 +119,7 @@ pub(super) async fn call(
             "bad_request",
             "the body must be application/json",
             Disposition::NotRun,
+            None,
         );
         return finish(refused, detail, Disposition::NotRun, None);
     }
@@ -159,13 +160,17 @@ pub(super) async fn call(
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let outcome = ui_call.outcome();
     // A closed channel: the task ended without an answer (it panicked).
-    let answer = answer.ok().flatten();
+    let (answer, recorded) = answer.unwrap_or_default();
+    // The receipt, chosen here only: the trace dispatch noted, or for a call
+    // refused before dispatch the trace its refusal record was written under.
+    // No path carries both, and neither when no record was written.
+    let receipt = outcome.trace.clone().or(recorded);
     let (status, disposition) = classify(&outcome, answer.as_ref());
     let response = if status == StatusCode::OK {
-        ran(answer.as_ref(), latency_ms, outcome.trace.as_deref())
+        ran(answer.as_ref(), latency_ms, receipt.as_deref())
     } else {
         let (code, message) = wording(status);
-        refusal(status, code, message, disposition)
+        refusal(status, code, message, disposition, receipt.as_deref())
     };
     finish(response, detail, disposition, outcome.trace)
 }
@@ -182,6 +187,7 @@ async fn parse(parts: &Parts, body: Body) -> Result<CallRequest, Box<Response>> 
                 "too_large",
                 "the body is over the gateway's size limit",
                 Disposition::NotRun,
+                None,
             )));
         }
         Err(_) => {
@@ -190,6 +196,7 @@ async fn parse(parts: &Parts, body: Body) -> Result<CallRequest, Box<Response>> 
                 "bad_request",
                 "the body could not be read",
                 Disposition::NotRun,
+                None,
             )));
         }
     };
@@ -199,6 +206,7 @@ async fn parse(parts: &Parts, body: Body) -> Result<CallRequest, Box<Response>> 
             "bad_request",
             "the body is not a JSON object",
             Disposition::NotRun,
+            None,
         )));
     };
     serde_json::from_value::<CallRequest>(Value::Object(object)).map_err(|_| {
@@ -207,6 +215,7 @@ async fn parse(parts: &Parts, body: Body) -> Result<CallRequest, Box<Response>> 
             "invalid",
             "expected server, tool, arguments (an object) and confirm_write only",
             Disposition::NotRun,
+            None,
         ))
     })
 }
@@ -230,6 +239,7 @@ fn admit(
             "signing_required",
             "this gateway requires signed calls; use a signing client",
             Disposition::NotRun,
+            None,
         )));
     }
     // One of the few UI calls that may run at once, and the drain tracker's
@@ -243,6 +253,7 @@ fn admit(
             "busy",
             "too many tool calls are running from the web UI; nothing was run",
             Disposition::NotRun,
+            None,
         ))),
     }
 }
@@ -261,16 +272,19 @@ fn past_deadline(ui_call: &UiCall, detail: Map<String, Value>) -> Response {
             "no answer in time; the tool may still be running",
         )
     };
+    // The trace dispatch noted before the deadline, if it got that far.
+    let trace = ui_call.outcome().trace;
     finish(
         refusal(
             StatusCode::GATEWAY_TIMEOUT,
             "deadline",
             message,
             disposition,
+            trace.as_deref(),
         ),
         detail,
         disposition,
-        ui_call.outcome().trace,
+        trace,
     )
 }
 
@@ -312,7 +326,7 @@ fn spawn_call(
         tokio::sync::OwnedSemaphorePermit,
         tokio::sync::OwnedSemaphorePermit,
     ),
-    answered: tokio::sync::oneshot::Sender<Option<Value>>,
+    answered: tokio::sync::oneshot::Sender<Answer>,
     follow_up: FollowUp,
 ) {
     let state = Arc::clone(state);
@@ -327,8 +341,7 @@ fn spawn_call(
             ))
             .await
             .into_response();
-        let answer = read_answer(reply).await;
-        if let Err(answer) = answered.send(answer) {
+        if let Err((answer, _)) = answered.send(read_answer(reply).await) {
             let outcome = ui_call.outcome();
             let mut fields = follow_up.detail;
             // Named as the layer names the route's own record.
@@ -412,9 +425,14 @@ fn refusal(
     code: &'static str,
     message: &'static str,
     disposition: Disposition,
+    receipt: Option<&str>,
 ) -> Response {
     let mut body = crate::gateway::http_error::structured_error_body(code, message);
     body["disposition"] = disposition.as_str().into();
+    // Only a call that left a record names it; never a placeholder.
+    if let Some(receipt) = receipt {
+        body["receipt"] = receipt.into();
+    }
     (status, axum::Json(body)).into_response()
 }
 
@@ -456,14 +474,22 @@ fn internal_request(parts: &axum::http::request::Parts, ask: &CallRequest) -> Re
     request
 }
 
-/// The MCP answer's JSON-RPC body. Reading it commits its delivery record.
-async fn read_answer(reply: Response) -> Option<Value> {
+/// What the spawned call sends back: the answer's JSON-RPC body, and the
+/// trace of the refusal record written for a call refused before dispatch.
+type Answer = (Option<Value>, Option<Arc<str>>);
+
+/// The MCP answer's JSON-RPC body, and the trace its refusal record was
+/// written under, read off the response before the body is. Reading the body
+/// commits its delivery record.
+async fn read_answer(reply: Response) -> Answer {
+    let recorded = crate::gateway::router::refusal_record_trace(&reply).map(Arc::from);
     // The gateway built this answer itself: the `/mcp` route sends the same
     // bytes to an MCP client.
-    let bytes = axum::body::to_bytes(reply.into_body(), usize::MAX)
+    let body = axum::body::to_bytes(reply.into_body(), usize::MAX)
         .await
-        .ok()?;
-    serde_json::from_slice(&bytes).ok()
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    (body, recorded)
 }
 
 /// The tool's own result inside a `gateway_invoke` answer, without the

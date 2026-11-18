@@ -249,6 +249,12 @@ impl<'a> Refused<'a> {
             Ok(trace) => {
                 let mut response =
                     build_error_response(Some(id), code, message, self.session_id, status);
+                // Only a written record names a receipt; the frame's trace
+                // may be the ambient one.
+                #[cfg(feature = "webui")]
+                response
+                    .extensions_mut()
+                    .insert(super::helpers::RefusalRecorded(trace.clone()));
                 super::helpers::trace_error_frame(&mut response, trace);
                 response
             }

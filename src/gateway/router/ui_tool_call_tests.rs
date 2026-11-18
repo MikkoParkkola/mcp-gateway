@@ -319,6 +319,17 @@ pub(super) fn records(fx: &Fx) -> Vec<Value> {
 }
 
 /// The route's `admin_action` records.
+/// A refusal body with its receipt's value masked: each call names its own
+/// trace, so two answers alike differ only there. Whether a receipt is present
+/// stays compared.
+fn unreceipted(body: &Value) -> Value {
+    let mut body = body.clone();
+    if let Some(receipt) = body.get_mut("receipt") {
+        *receipt = Value::String("<receipt>".to_string());
+    }
+    body
+}
+
 pub(super) fn admin_actions(fx: &Fx) -> Vec<Value> {
     records(fx)
         .into_iter()
@@ -444,8 +455,8 @@ async fn t10_no_such_server_is_not_run() {
     assert_eq!(body["disposition"], "not_run", "{body} {:#?}", records(&fx));
     let (denied_status, denied) = post(&fx, ADMIN_DENIED, call("write", true)).await;
     assert_eq!(
-        (status, &body),
-        (denied_status, &denied),
+        (status, unreceipted(&body)),
+        (denied_status, unreceipted(&denied)),
         "as a denied tool"
     );
     assert!(status.is_client_error(), "{status}");
@@ -476,7 +487,7 @@ async fn t28_a_missing_tool_and_a_denied_one_answer_alike() {
     assert_eq!(mask(&denied), mask(&missing), "/mcp: {denied} vs {missing}");
     let (s1, b1) = post(&fx, ADMIN_DENIED, call("write", true)).await;
     let (s2, b2) = post(&fx, ADMIN_DENIED, call("missing", true)).await;
-    assert_eq!((s1, &b1), (s2, &b2), "the route");
+    assert_eq!((s1, unreceipted(&b1)), (s2, unreceipted(&b2)), "the route");
     assert!(s1.is_client_error(), "{s1} {b1}");
     assert_eq!(sent(&fx), 0);
 }

@@ -461,9 +461,12 @@ async fn b5_the_deadline_both_orders() {
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{late}");
     assert_eq!(late["disposition"], "may_have_run", "{late}");
     assert_eq!(sent(&fx), 1, "the slow call was sent");
+    // The slow call's own records: the early call's completion record may land
+    // after `before` too, under its own trace.
     let mut trace = admin_actions(&fx)
         .into_iter()
         .skip(before)
+        .filter(|action| action["tool"] == "slow")
         .find_map(|action| action["invocation_trace"].as_str().map(str::to_owned));
     if trace.is_none() {
         // The completion record lands after the 504 and names the same trace.
@@ -472,7 +475,7 @@ async fn b5_the_deadline_both_orders() {
                 if let Some(found) = admin_actions(&fx)
                     .into_iter()
                     .skip(before)
-                    .find(|action| action["completion"] == true)
+                    .find(|action| action["tool"] == "slow" && action["completion"] == true)
                 {
                     return found;
                 }
@@ -704,5 +707,39 @@ async fn b11_failed_closed_write_no_receipt() {
         std::fs::read_to_string(log.path()).unwrap_or_default(),
         written,
         "the premise: the failing log wrote nothing for this call"
+    );
+}
+
+/// B10: the receipt accessor reads only the success-only marker. A refusal
+/// built inside an ambient trace carries that trace on its frame and no
+/// marker: no receipt. With the marker the written trace comes back.
+#[tokio::test]
+async fn b10_the_receipt_reads_only_a_written_record() {
+    let mut response = crate::gateway::trace::with_trace_id("t-ambient".to_string(), async {
+        super::helpers::build_error_response(
+            Some(crate::protocol::RequestId::Number(1)),
+            -32600,
+            "refused",
+            "",
+            StatusCode::FORBIDDEN,
+        )
+    })
+    .await;
+    let frame = response
+        .extensions()
+        .get::<super::helpers::ErrorFrame>()
+        .expect("an error response carries its frame");
+    assert_eq!(
+        frame.trace.as_deref(),
+        Some("t-ambient"),
+        "the premise: the ambient trace seeds the frame"
+    );
+    assert_eq!(super::refusal_record_trace(&response), None);
+    response
+        .extensions_mut()
+        .insert(super::helpers::RefusalRecorded("t-written".to_string()));
+    assert_eq!(
+        super::refusal_record_trace(&response).as_deref(),
+        Some("t-written")
     );
 }
