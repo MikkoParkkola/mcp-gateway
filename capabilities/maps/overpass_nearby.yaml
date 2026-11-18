@@ -1,4 +1,4 @@
-sha256: 435c4eefd44bb206bb89e782d6fddbd869b5a83d3e6ab954db5d2da93cf74bdf
+sha256: 8f19e698281aae1b0d5b5ed466734872f7c387e799c9ff07b213a1bcf567e348
 fulcrum: "1.0"
 name: overpass_nearby
 description: >-
@@ -70,6 +70,11 @@ schema:
 providers:
   primary:
     service: rest
+    # Overpass may queue a query for a slot, then run it for up to the
+    # query's [timeout:25]; the 30 s default cut real answers short. Under
+    # 60 s, the common MCP client default, so the caller still gets this
+    # gateway's error rather than its own client's timeout.
+    timeout: 55
     rate_limit:
       interval_ms: 2000
     config:
