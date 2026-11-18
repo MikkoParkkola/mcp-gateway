@@ -347,7 +347,12 @@ async fn t_overpass_success() {
     let sent = url::Url::parse(line.rsplit(' ').next().expect("url")).expect("recorded URL");
     assert_eq!(seen.method, "GET");
     assert_eq!(seen.path, sent.path());
-    assert_eq!(query(&seen), sent.query_pairs().into_owned().collect());
+    // As sorted lists, not maps: a duplicated parameter stays visible.
+    let mut got = seen.query.clone();
+    got.sort();
+    let mut want: Vec<(String, String)> = sent.query_pairs().into_owned().collect();
+    want.sort();
+    assert_eq!(got, want);
     assert!(seen.body.is_empty(), "no body: {:?}", seen.body);
     assert_eq!(user_agent(&seen), UA);
     let out = structured(&result);
