@@ -782,6 +782,7 @@ async fn f2_t2_the_run_child_holds_no_control_connection() {
 /// added beside them.
 #[tokio::test]
 async fn ca_files_are_read_only_from_the_run_child() {
+    require_private_home!();
     let script = "d=/etc/mcp-gateway-preview
         test -f $d/ca.pem && echo ca-present
         (echo x > $d/ca.pem) 2>/dev/null && echo ca-writable
@@ -818,6 +819,7 @@ async fn ca_files_are_read_only_from_the_run_child() {
 /// staging" fails; this fails loudly if the temp dir is not `/tmp`.
 #[tokio::test]
 async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
+    require_private_home!();
     let Some(Started { mut child, .. }) = fetching("sleep 30").await else {
         return;
     };

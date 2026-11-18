@@ -838,7 +838,10 @@ fn mutant_switch_grandchild() {
 
 /// G1's literal list: every test that calls `require_private_home!()`, as
 /// (binary, fn), from the per-test probe (51 tests) plus the
-/// probe fn. It may only grow: a test that newly resolves the home joins it.
+/// probe fn, and the two CA rows the release line added later, which start a
+/// preview through the same `fetching()` path as the probed
+/// `r1_a_fetching_preview_runs_its_target_after_the_handshake`. It may only
+/// grow: a test that newly resolves the home joins it.
 const WRAPPED: &[(&str, &str)] = &[
     (
         "audit_verify_pairing_cli",
@@ -960,6 +963,10 @@ const WRAPPED: &[(&str, &str)] = &[
     ),
     (
         "preview_sandbox_linux",
+        "ca_files_are_read_only_from_the_run_child",
+    ),
+    (
+        "preview_sandbox_linux",
         "canaries_outside_the_binds_are_unreadable",
     ),
     (
@@ -982,6 +989,10 @@ const WRAPPED: &[(&str, &str)] = &[
     (
         "preview_sandbox_linux",
         "r6b_a_helper_that_never_connects_is_refused",
+    ),
+    (
+        "preview_sandbox_linux",
+        "the_ca_snapshot_sits_under_tmp_on_this_host",
     ),
     (
         "preview_sandbox_linux",
