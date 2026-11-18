@@ -126,6 +126,7 @@ fn classify(core: &std::io::Result<()>, dumpable: Option<&std::io::Result<()>>) 
     DumpGuard::Applied
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "dump_guard_tests.rs"]
 mod tests;

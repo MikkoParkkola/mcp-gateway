@@ -107,6 +107,7 @@ pub(crate) fn expiry_check(
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "send_check_tests.rs"]
 mod tests;

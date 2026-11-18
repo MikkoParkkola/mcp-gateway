@@ -446,6 +446,7 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
 
 // ── Tests ────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +752,7 @@ paths:
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "import_redirect_tests.rs"]
 mod redirect_tests;

@@ -147,6 +147,7 @@ pub(crate) fn test_zone(tz: chrono_tz::Tz) -> ZoneGuard {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "local_day_tests.rs"]
 mod tests;

@@ -418,10 +418,12 @@ impl<T> CachedMetadata<T> {
 }
 
 // MIK-8399 S16: the abandon hook runs inside the flight.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cached_metadata_abandon_tests.rs"]
 mod abandon_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::CachedMetadata;

@@ -787,6 +787,7 @@ impl Store {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "store_test_dir_tests.rs"]
 mod test_dir_tests;

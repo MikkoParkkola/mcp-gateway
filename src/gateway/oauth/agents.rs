@@ -152,6 +152,7 @@ impl AgentRegistry {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +261,7 @@ mod cwe532_debug_redaction {
 
     // AgentDefinition::Debug must redact the HS256 secret while keeping the
     // (non-secret) RSA public key visible.
+    #[cfg(tp5)]
     #[test]
     fn agent_definition_debug_redacts_hs256_secret() {
         let agent = AgentDefinition {

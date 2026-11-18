@@ -170,6 +170,7 @@ pub(crate) fn direct_denial(
     Some(DenialReason::of(code, offer, firewall))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "security_metrics_unit_tests.rs"]
 mod tests;

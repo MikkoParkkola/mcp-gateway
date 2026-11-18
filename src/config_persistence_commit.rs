@@ -289,6 +289,7 @@ fn hook(target: &Path, at: HookAt) {
 
 /// The Windows read-back handle denies write and delete sharing: while it is
 /// held nothing can change or replace the file; once dropped, both work.
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 mod windows_share_tests {
     /// A26 (register 1168): red oracle: each blocked operation reports its

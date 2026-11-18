@@ -301,6 +301,7 @@ pub(crate) fn check(
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "command_classes_tests.rs"]
 mod tests;

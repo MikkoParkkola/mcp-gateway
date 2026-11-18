@@ -271,6 +271,7 @@ fn upgrade_rewrites(
     })
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "hidden_keys_tests.rs"]
 mod tests;

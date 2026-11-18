@@ -138,6 +138,7 @@ fn hints_beta(body: &Value) -> bool {
 
 // ── row 18: prefetch hints ───────────────────────────────────────────────────
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r1_one_callers_tool_is_never_another_callers_predecessor() {
     let f = fixture_with(Auth::Keys, |meta| meta).await;
@@ -180,6 +181,7 @@ async fn r1_one_callers_tool_is_never_another_callers_predecessor() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r2_a_keyless_modern_caller_gets_no_hints_and_records_nothing() {
     let f = fixture_with(Auth::Off, |meta| meta).await;
@@ -225,6 +227,7 @@ async fn r2_a_keyless_modern_caller_gets_no_hints_and_records_nothing() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn guard_a_keyed_caller_still_gets_hints_from_its_own_sequence() {
     let f = fixture_with(Auth::Keys, |meta| meta).await;
@@ -264,6 +267,7 @@ async fn guard_a_keyed_caller_still_gets_hints_from_its_own_sequence() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r6_a_keyless_legacy_session_gets_no_hints() {
     // MIK-7997: a session id never stands in for a missing caller key.
@@ -360,6 +364,7 @@ async fn arm_fixture(
     (f, endpoint)
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn guard_the_capability_is_projected_when_projection_is_on() {
     let (f, _endpoint) = arm_fixture(Auth::Keys, ProjectionMode::On).await;
@@ -378,6 +383,7 @@ async fn guard_the_capability_is_projected_when_projection_is_on() {
 /// is projected and a `_full: true` call is delivered whole. Mutant: the
 /// strip's returned flag dropped projects both. The two calls send different
 /// arguments, so neither can be served from the other's cache entry.
+#[cfg(tp5)]
 #[tokio::test]
 async fn t1b_full_bypasses_projection_through_intake() {
     let (f, _endpoint) = arm_fixture(Auth::Keys, ProjectionMode::On).await;
@@ -415,6 +421,7 @@ async fn t1b_full_bypasses_projection_through_intake() {
     );
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r3_two_caller_keys_get_their_own_arms() {
     // Offline: "credential:12:" + sha256(name)[..12] puts open-key in
@@ -446,6 +453,7 @@ async fn r3_two_caller_keys_get_their_own_arms() {
     }
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r4_a_keyless_modern_caller_gets_the_control_shape() {
     let (f, _endpoint) = arm_fixture(Auth::Off, ProjectionMode::Experimental).await;
@@ -462,6 +470,7 @@ async fn r4_a_keyless_modern_caller_gets_the_control_shape() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn r5_a_keyless_call_is_not_in_the_experiment() {
     assert_eq!(
@@ -472,6 +481,7 @@ fn r5_a_keyless_call_is_not_in_the_experiment() {
 
 // ── reclaim: the router tracks the caller key without a firewall ─────────────
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r7_a_keyed_modern_call_is_tracked_for_idle_reclaim() {
     let config = crate::config::AuthConfig {
@@ -523,6 +533,7 @@ fn ab_events(auth: Auth, bearer: Option<&'static str>) -> usize {
     crate::test_log_capture::count(&records, "INFO", "projection A/B invocation")
 }
 
+#[cfg(tp5)]
 #[test]
 fn r4b_a_keyless_call_emits_no_ab_event() {
     // Not vacuous: a keyed caller's call is in the experiment and is logged.

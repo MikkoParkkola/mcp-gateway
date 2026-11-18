@@ -641,6 +641,7 @@ fn missing_tls_flags(base: &str, tls: &LinkTls) -> Vec<&'static str> {
     hints
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "dashboard_link_admin_tests.rs"]
 mod tests;

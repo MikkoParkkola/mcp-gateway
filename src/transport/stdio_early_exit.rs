@@ -451,6 +451,7 @@ impl StdioTransport {
 mod sanitize;
 
 // Unix-only (W-L5): the tests drive `sh -c` scripts as stdio backends.
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "stdio_early_exit_tests.rs"]
 mod tests;

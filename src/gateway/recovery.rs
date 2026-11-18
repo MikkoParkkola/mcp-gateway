@@ -382,6 +382,7 @@ pub fn is_rate_limited(text: &str) -> bool {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

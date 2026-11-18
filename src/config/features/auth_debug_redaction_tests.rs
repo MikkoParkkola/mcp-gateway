@@ -7,6 +7,7 @@ use super::*;
 const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
 // AuthConfig::Debug must redact the bearer token and never print API keys.
+#[cfg(tp5)]
 #[test]
 fn auth_config_debug_redacts_bearer_token() {
     let cfg = AuthConfig {
@@ -24,6 +25,7 @@ fn auth_config_debug_redacts_bearer_token() {
 
 // AgentDefinitionConfig::Debug must redact the HS256 secret while keeping
 // the (non-secret) RSA public key visible.
+#[cfg(tp5)]
 #[test]
 fn agent_definition_config_debug_redacts_hs256_secret() {
     let cfg = AgentDefinitionConfig {

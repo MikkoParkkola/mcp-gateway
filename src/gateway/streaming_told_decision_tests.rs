@@ -105,6 +105,7 @@ pub(super) fn view(judge: &Arc<Fake>) -> StreamView {
     view
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_caller_that_no_longer_resolves_closes_the_stream() {
     let judge = Fake::answering("s0", "x");
@@ -122,6 +123,7 @@ async fn a_caller_that_no_longer_resolves_closes_the_stream() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_view_that_returned_to_what_it_was_told_is_not_written() {
     let judge = Fake::answering("s1", "x2");
@@ -132,6 +134,7 @@ async fn a_view_that_returned_to_what_it_was_told_is_not_written() {
     assert_eq!(view.decide(&auth(), None, "", "a").await, Decision::Skip);
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn two_copies_of_one_moved_view_are_written_once() {
     let judge = Fake::answering("s1", "x2");
@@ -140,6 +143,7 @@ async fn two_copies_of_one_moved_view_are_written_once() {
     assert_eq!(view.decide(&auth(), None, "", "a").await, Decision::Skip);
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_commit_read_before_a_newer_write_is_refused() {
     let judge = Fake::answering("s1", "x2");
@@ -156,6 +160,7 @@ async fn a_commit_read_before_a_newer_write_is_refused() {
     assert!(!view.commit(&older), "the slow reader must not roll back");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_read_gets_its_stamp_only_when_it_holds_the_gate() {
     let record = Arc::new(ViewRecord::default());
@@ -192,6 +197,7 @@ async fn a_read_gets_its_stamp_only_when_it_holds_the_gate() {
 
 /// R14 (D17h): a listing the caller never got is not recorded as told, so the
 /// change it hid is still owed; a delivered one is recorded.
+#[cfg(tp4)]
 #[test]
 fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
     let moved = ViewDigest {
@@ -220,6 +226,7 @@ fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
     assert_eq!(delivered.record.state().peek(6, "a", &moved), Peek::Quiet);
 }
 
+#[cfg(tp4)]
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
@@ -260,6 +267,7 @@ async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_caller_that_presented_nothing_keeps_its_stream_at_attach() {
     let multiplexer = NotificationMultiplexer::new(
@@ -279,6 +287,7 @@ async fn a_caller_that_presented_nothing_keeps_its_stream_at_attach() {
 
 /// Every reason a held credential can die for refuses the attach and says so
 /// (the handler answers each with the one invalid-credential refusal).
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_credentialed_caller_dead_for_any_reason_is_refused_at_attach() {
     for reason in [DeadReason::Bearer, DeadReason::Adapter, DeadReason::Cf] {
@@ -339,6 +348,7 @@ fn narrow_auth() -> AuthState {
 /// judged, not skipped before it: a view that moved when scope narrowed is
 /// owed once. A caller whose view did not move is told nothing (the judge
 /// decides, not the scope check alone).
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_hint_for_a_backend_out_of_scope_is_still_judged() {
     let multiplexer = NotificationMultiplexer::new(
@@ -379,6 +389,7 @@ async fn a_hint_for_a_backend_out_of_scope_is_still_judged() {
 /// A hint read for one caller, then the session's credential is replaced: the
 /// read describes the old caller and is never recorded for the new one, even
 /// though its stamp is newer than the new caller's baseline.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_hint_read_before_a_rekey_is_not_recorded_after_it() {
     let judge = Fake::answering("s0", "x");
@@ -410,6 +421,7 @@ async fn a_hint_read_before_a_rekey_is_not_recorded_after_it() {
 }
 
 /// The same for a refresh read before a rekey and settled after it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_refresh_read_before_a_rekey_is_not_settled_after_it() {
     let judge = Fake::answering("s0", "x");

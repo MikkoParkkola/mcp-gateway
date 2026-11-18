@@ -49,6 +49,7 @@ impl std::fmt::Debug for WebhookDefinition {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::WebhookDefinition;

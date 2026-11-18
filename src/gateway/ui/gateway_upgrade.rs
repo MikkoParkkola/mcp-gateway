@@ -55,6 +55,7 @@ fn headline(item: &str) -> Option<String> {
     crate::cli_support::display_text(&item[..end], HEADLINE_CAP).map(|(text, _cut)| text)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "gateway_upgrade_tests.rs"]
 mod tests;

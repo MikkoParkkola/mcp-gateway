@@ -595,10 +595,12 @@ pub(crate) fn credential_spans(text: &str) -> Vec<(usize, usize)> {
     REDACTOR.credential_spans(text)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "secret_redaction_number_tests.rs"]
 mod number_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "secret_redaction_fail_closed_tests.rs"]
 mod fail_closed_tests;

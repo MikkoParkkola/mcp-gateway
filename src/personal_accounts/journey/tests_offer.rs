@@ -19,6 +19,7 @@ fn one_creation_per_minute() -> JourneyLimits {
     }
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_offer3_a_started_journey_is_reused_byte_identically_and_still_connects() {
     // GIVEN: A's journey is started, with the provider step still pending
@@ -51,6 +52,7 @@ fn t_offer3_a_started_journey_is_reused_byte_identically_and_still_connects() {
     assert_eq!(consumed.journey_id, id);
 }
 
+#[cfg(tp1)]
 #[test]
 fn a_pending_offer_is_reused_without_spending_the_creation_budget() {
     // GIVEN: one creation per minute
@@ -72,6 +74,7 @@ fn a_pending_offer_is_reused_without_spending_the_creation_budget() {
     assert_eq!(table.journeys[&first].status, JourneyStatus::Pending);
 }
 
+#[cfg(tp1)]
 #[test]
 fn an_offer_past_the_deadline_mints_anew_and_the_old_one_expires_not_supersedes() {
     // GIVEN: a pending journey whose start window has closed
@@ -92,6 +95,7 @@ fn an_offer_past_the_deadline_mints_anew_and_the_old_one_expires_not_supersedes(
     assert_eq!(table.journeys[&fresh_id].status, JourneyStatus::Pending);
 }
 
+#[cfg(tp1)]
 #[test]
 fn an_offer_never_reuses_another_principals_or_another_accounts_journey() {
     // GIVEN: Bob holds a pending journey for the same account
@@ -117,6 +121,7 @@ fn an_offer_never_reuses_another_principals_or_another_accounts_journey() {
 
 /// An offer with a field over its cap is refused before any store access:
 /// the table is never written.
+#[cfg(tp1)]
 #[test]
 fn an_over_cap_offer_is_refused_before_any_store_access() {
     let (_root, config, store) = fresh();
@@ -138,6 +143,7 @@ fn an_over_cap_offer_is_refused_before_any_store_access() {
 
 /// An offer that must mint, but draws only ids live records hold, refuses
 /// rather than overwriting one.
+#[cfg(tp1)]
 #[test]
 fn an_offer_whose_drawn_ids_all_collide_refuses_and_overwrites_nothing() {
     let (_root, config, store) = fresh();

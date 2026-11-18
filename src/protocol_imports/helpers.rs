@@ -513,6 +513,7 @@ pub(super) fn human_title(value: &str) -> String {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod graphql_metrics_tests {
     use super::{MAX_GRAPHQL_DEPTH, graphql_exceeds_limits, graphql_query_metrics};

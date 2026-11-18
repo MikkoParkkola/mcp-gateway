@@ -1417,7 +1417,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_HOST` | INTERNAL | follows --host; config server.host remains | hidden variable: still read and applied; left out of the docs; UPGRADING names it | src/cli/mod.rs:135 |
 | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | INTERNAL | the operator's RFC-0060 U1 measurement window (`record`), hidden like its flag (MIK-8783) | replaces `server.protocol_revision_window`; see upgrading.d/8783.md | src/cli/mod.rs:163 |
 | `MCP_GATEWAY_KIND_CLUSTER` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:19 |
-| `MCP_GATEWAY_KIND_KEEP` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/README.md:155 |
+| `MCP_GATEWAY_KIND_KEEP` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:23 |
 | `MCP_GATEWAY_KIND_NAMESPACE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:20 |
 | `MCP_GATEWAY_LOG_FORMAT` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:148 |
 | `MCP_GATEWAY_LOG_LEVEL` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:142 |

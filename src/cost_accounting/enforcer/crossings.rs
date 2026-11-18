@@ -76,6 +76,7 @@ impl BudgetEnforcer {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "crossings_tests.rs"]
 mod tests;

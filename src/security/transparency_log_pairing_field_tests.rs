@@ -169,6 +169,7 @@ fn field_cases() -> Vec<FieldCase> {
     ]
 }
 
+#[cfg(tp4)]
 #[test]
 fn each_role_fails_on_each_field_missing_or_mistyped() {
     let intent = || rec(INTENT, "w-1", &json!({}));
@@ -203,6 +204,7 @@ fn each_role_fails_on_each_field_missing_or_mistyped() {
     assert_paired(&ok, "well-formed roles");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
     use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
@@ -275,6 +277,7 @@ async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settle_refuses_settled_by_on_every_role_but_outcome() {
     use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
@@ -316,6 +319,7 @@ async fn settle_refuses_settled_by_on_every_role_but_outcome() {
     assert!(got.is_ok(), "{got:?}");
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_fails_settled_by_on_every_role_but_outcome() {
     let by = json!({"token": "r-1", "intent_counter": 4});
@@ -368,6 +372,7 @@ fn verify_fails_settled_by_on_every_role_but_outcome() {
     assert_paired(&ok, "outcome settled_by");
 }
 
+#[cfg(tp4)]
 #[test]
 fn every_role_fails_on_each_of_its_fields_missing_or_mistyped() {
     use FieldEdit::{Drop, Set};

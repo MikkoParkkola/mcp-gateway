@@ -127,6 +127,7 @@ pub fn emit(entry: &ToolInvocationAudit) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

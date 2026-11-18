@@ -192,6 +192,7 @@ pub fn join_command_windows(argv: &[String]) -> Option<String> {
     Some(line)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

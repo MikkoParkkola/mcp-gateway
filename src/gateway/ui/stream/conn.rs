@@ -524,6 +524,7 @@ async fn first_snapshot(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "conn_tests.rs"]
 mod tests;

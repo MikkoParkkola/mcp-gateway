@@ -104,7 +104,8 @@ test.describe('frames', () => {
       if (act === 'tools') {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
         await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: frameTools() } }));
-        await page.goto('/ui/tools/status');
+        // Frame 48q is the catalogue, which lives at ?view=all (its own address bar).
+        await page.goto('/ui/tools/status?view=all');
         await page.getByRole('button', { name: 'filesystem.list_dir', exact: true }).click();
       } else {
         // The fixture pages give Overview its subtitle, as a real screen will.

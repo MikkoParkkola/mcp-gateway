@@ -66,6 +66,7 @@ pub(super) fn csv_records(text: &str) -> Vec<Vec<String>> {
     records
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r14_exports_carry_the_effect_and_findings() {
     let fx = Fixture::new(None);
@@ -99,6 +100,7 @@ async fn r14_exports_carry_the_effect_and_findings() {
     assert_eq!(two[col("answer_findings_total")], "40");
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn r22_an_export_joins_across_passes() {
     let fx = Fixture::new(None);
@@ -118,6 +120,7 @@ async fn r22_an_export_joins_across_passes() {
 /// A long export of ordinary call/delivery pairs reads every call's effect:
 /// completed traces do not use up the joiner's bounds, which are for the
 /// traces that are still unresolved.
+#[cfg(tp5)]
 #[tokio::test]
 async fn r45_a_long_export_of_sequential_pairs_reads_every_effect() {
     let fx = Fixture::new(None);

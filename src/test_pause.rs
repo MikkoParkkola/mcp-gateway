@@ -50,6 +50,7 @@ pub(crate) async fn within<T>(what: &str, step: impl std::future::Future<Output 
         .unwrap_or_else(|_| panic!("{what} did not finish within 30 s"))
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

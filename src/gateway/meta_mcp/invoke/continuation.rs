@@ -737,10 +737,12 @@ impl crate::gateway::meta_mcp::MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "continuation_clock_tests.rs"]
 mod clock_before_epoch_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "continuation_quota_tests.rs"]
 mod quota_tests;

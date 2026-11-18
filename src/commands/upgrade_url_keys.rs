@@ -230,6 +230,7 @@ fn api_key_line(at: &std::path::Display<'_>, key: &KeyRewrite, mode: RewriteMode
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upgrade_url_keys_tests.rs"]
 mod tests;

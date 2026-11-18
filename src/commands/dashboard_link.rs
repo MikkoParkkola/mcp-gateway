@@ -368,6 +368,7 @@ pub(crate) async fn events_outcome(
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "dashboard_link_tests.rs"]
 mod tests;

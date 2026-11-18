@@ -169,18 +169,29 @@ fn log_text(log: &crate::security::TransparencyLogger) -> String {
 fn the_adopt_store_seam_is_absent_from_non_test_builds() {
     let source = include_str!("discovery_adopt.rs");
     let lines: Vec<&str> = source.lines().collect();
+    // Gated: `#[cfg(test)]` on the line itself or on one of the four above.
+    let gated_at = |lines: &[&str], n: usize| {
+        lines[n].contains("#[cfg(test)]")
+            || lines[..n]
+                .iter()
+                .rev()
+                .take(4)
+                .any(|l| l.trim() == "#[cfg(test)]")
+    };
+    // The lib test split puts its part tag above the test cfg, so the window
+    // still reaches the cfg; a tag alone does not gate.
+    assert!(gated_at(
+        &["#[cfg(tp1)]", "#[cfg(test)]", "struct AdoptStoreForTest;"],
+        2
+    ));
+    assert!(!gated_at(&["#[cfg(tp1)]", "struct AdoptStoreForTest;"], 1));
     let mut seen = 0;
     for (n, line) in lines.iter().enumerate() {
         if !line.contains("AdoptStoreForTest") || line.trim_start().starts_with("//") {
             continue;
         }
         seen += 1;
-        let gated = line.contains("#[cfg(test)]")
-            || lines[..n]
-                .iter()
-                .rev()
-                .take(4)
-                .any(|l| l.trim() == "#[cfg(test)]");
+        let gated = gated_at(&lines, n);
         assert!(gated, "line {}: the seam outside cfg(test): {line}", n + 1);
     }
     assert!(seen >= 3, "premise: the seam is named ({seen} sites)");

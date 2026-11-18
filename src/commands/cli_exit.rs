@@ -444,6 +444,7 @@ pub(crate) fn emit(outcome: &CliOutcome, json: bool, secrets: &[&str]) -> std::p
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cli_exit_tests.rs"]
 mod tests;

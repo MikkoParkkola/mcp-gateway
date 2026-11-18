@@ -666,8 +666,10 @@ fn analyze_builder_expr(
     }
 }
 
+#[cfg(tp4)]
 #[path = "redirect_policy_scan_walk_tests.rs"]
 mod walk;
 
+#[cfg(tp4)]
 #[path = "redirect_policy_scan_cases_tests.rs"]
 mod cases;

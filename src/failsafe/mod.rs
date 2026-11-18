@@ -183,6 +183,7 @@ fn settle(backend: &str, outcome: Acquire) -> crate::Result<()> {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,7 +35,9 @@ launchd_template="$repo_root/deploy/single-node/com.mikkoparkkola.mcp-gateway.pl
 
 grep -Fq '${PWD}/gateway.yaml:/config.yaml:ro' "$docker_template"
 grep -Fq '${PWD}/capabilities:/capabilities:ro' "$docker_template"
-grep -Fq '["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]' "$docker_template"
+grep -Fq '["--config", "/config.yaml", "--port", "39400"]' "$docker_template"
+# The container binds every interface through the env overlay, not a hidden flag.
+grep -Fq 'MCP_GATEWAY_SERVER__HOST: "0.0.0.0"' "$docker_template"
 # That wide bind is only legal because the template declares why. Asserted here
 # so removing the declaration fails the smoke rather than the container.
 grep -Fq 'MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND' "$docker_template"
@@ -50,7 +52,8 @@ else
 fi
 
 grep -Fq "WorkingDirectory=/etc/mcp-gateway" "$systemd_template"
-grep -Fq "ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml --host 127.0.0.1 --port 39400" "$systemd_template"
+grep -Fq "ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml --port 39400" "$systemd_template"
+grep -Fq "Environment=MCP_GATEWAY_SERVER__HOST=127.0.0.1" "$systemd_template"
 grep -Fq "ReadOnlyPaths=/etc/mcp-gateway" "$systemd_template"
 
 python3 - "$launchd_template" <<'PY'
@@ -64,13 +67,13 @@ expected_args = [
     "/usr/local/bin/mcp-gateway",
     "--config",
     "/usr/local/etc/mcp-gateway/gateway.yaml",
-    "--host",
-    "127.0.0.1",
     "--port",
     "39400",
 ]
 if plist.get("ProgramArguments") != expected_args:
     raise SystemExit("launchd ProgramArguments do not match the documented config path")
+if plist.get("EnvironmentVariables", {}).get("MCP_GATEWAY_SERVER__HOST") != "127.0.0.1":
+    raise SystemExit("launchd template must bind loopback through MCP_GATEWAY_SERVER__HOST")
 if plist.get("WorkingDirectory") != "/usr/local/etc/mcp-gateway":
     raise SystemExit("launchd WorkingDirectory does not match the config directory")
 if plist.get("RunAtLoad") is not True or plist.get("KeepAlive") is not True:
@@ -92,9 +95,39 @@ sock.close()
 PY
   )"
 
+  # The templates force the bind address through MCP_GATEWAY_SERVER__HOST. Give
+  # the config file a different server.host, so the gateway answers on 127.0.0.1
+  # only if the variable overrides the file (on Linux 127.0.0.2 binds and the
+  # check below fails; on macOS the bind itself fails).
+  python3 - "$layout_dir/gateway.yaml" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+out, i, done = [], 0, False
+while i < len(lines):
+    line = lines[i]
+    out.append(line)
+    if line.rstrip() == "server:":
+        out.append("  host: 127.0.0.2")
+        i += 1
+        while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
+            if not re.match(r"^\s+host\s*:", lines[i]):
+                out.append(lines[i])
+            i += 1
+        done = True
+        continue
+    i += 1
+if not done:
+    out += ["server:", "  host: 127.0.0.2"]
+open(path, "w").write("\n".join(out) + "\n")
+PY
+  grep -q "host: 127.0.0.2" "$layout_dir/gateway.yaml"
+
   (
     cd "$layout_dir"
-    HOME="$home" "$bin" --config gateway.yaml --host 127.0.0.1 --port "$port" \
+    HOME="$home" MCP_GATEWAY_SERVER__HOST=127.0.0.1 "$bin" --config gateway.yaml --port "$port" \
       >"$tmp/$label.log" 2>&1 &
     echo "$!" >"$tmp/$label.pid"
   )

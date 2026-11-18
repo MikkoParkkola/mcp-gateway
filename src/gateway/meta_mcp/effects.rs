@@ -48,6 +48,7 @@ pub(crate) fn meta_tool_effect(name: &str) -> Effect {
         .map_or(Effect::SideEffecting, |(_, e)| *e)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

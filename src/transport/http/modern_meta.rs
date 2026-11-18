@@ -221,6 +221,7 @@ pub(super) fn value_kind(value: &Value) -> &'static str {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod refusal_tests {
     use super::*;

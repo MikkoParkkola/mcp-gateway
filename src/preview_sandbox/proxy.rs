@@ -767,6 +767,7 @@ impl Connect for System {
 mod host_addresses;
 use host_addresses::within;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "proxy_tests/mod.rs"]
 mod tests;

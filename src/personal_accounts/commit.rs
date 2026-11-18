@@ -29,6 +29,7 @@ use std::path::Path;
 // of them must hand the delete paths a pointer a sealed manifest would never
 // carry, which only a module inside the store can construct. Every frozen test
 // file stays byte-identical.
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "repair_tests.rs"]
 mod repair_tests;

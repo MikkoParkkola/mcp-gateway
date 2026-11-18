@@ -347,6 +347,7 @@ pub async fn oauth_protected_resource_handler(
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

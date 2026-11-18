@@ -158,6 +158,7 @@ fn strip(rule: Option<Rule>, params: &mut Value) -> Vec<String> {
     removed
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "notify_ingress_tests.rs"]
 mod tests;

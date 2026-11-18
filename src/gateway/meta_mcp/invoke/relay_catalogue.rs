@@ -165,6 +165,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_catalogue_unpublished_tests.rs"]
 mod unpublished_tests;

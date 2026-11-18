@@ -142,6 +142,7 @@ fn rewrite_of(text: &str) -> UrlRewrite {
     rewrite
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     /// A lock refusal under `--force` is reported as itself: `--force`

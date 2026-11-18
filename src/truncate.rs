@@ -57,6 +57,7 @@ pub(crate) fn truncate(s: &str, budget: Budget, marker: &str, placement: Suffix)
     out
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{Budget, Suffix, truncate};

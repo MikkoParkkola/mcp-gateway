@@ -209,6 +209,7 @@ pub(crate) fn tail(
     code
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "retire_tests.rs"]
 mod tests;

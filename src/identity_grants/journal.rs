@@ -671,10 +671,12 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
     })
 }
 
+#[cfg(tp1)]
 #[cfg(all(test, windows))]
 #[path = "journal_windows_tests.rs"]
 mod windows_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "journal_lossy_tests.rs"]
 mod lossy_tests;

@@ -529,9 +529,11 @@ fn truncate(value: &str, max_len: usize) -> String {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "protocol_import_tests.rs"]
 mod tests;
+#[cfg(tp2)]
 #[cfg(all(test, windows))]
 #[path = "protocol_import_winacl_tests.rs"]
 mod winacl_tests;

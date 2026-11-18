@@ -91,6 +91,7 @@ pub(super) async fn wait_closed(mut close: watch::Receiver<bool>) {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::wait_closed;

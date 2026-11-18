@@ -204,8 +204,10 @@ fn every_server_that_can_reach_any_address_is_classified_on_purpose() {
     );
 }
 
+/// Asana retired its `/sse` endpoint (HTTP 410), the last catalog entry on
+/// the legacy handshake. A new one is a deliberate change to this list.
 #[test]
-fn only_asana_speaks_the_legacy_sse_handshake() {
+fn no_catalog_entry_speaks_the_legacy_sse_handshake() {
     assert_eq!(
         names(|e| matches!(
             e.transport,
@@ -214,7 +216,7 @@ fn only_asana_speaks_the_legacy_sse_handshake() {
                 ..
             }
         )),
-        ["asana"]
+        Vec::<&str>::new()
     );
 }
 
