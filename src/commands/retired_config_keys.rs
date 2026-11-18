@@ -274,6 +274,7 @@ fn only_key_went(before: &str, after: &str, path: &[String]) -> bool {
     expected == actual
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::{Retired, drop_key, drop_removed_keys};

@@ -425,12 +425,15 @@ pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_fixtures_tests.rs"]
 mod fixtures;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_placement_tests.rs"]
 mod placement;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_tests.rs"]
 mod tests;

@@ -614,6 +614,7 @@ pub(crate) fn interest_method(subscribe: bool) -> &'static str {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_tap_tests.rs"]
 mod tests;

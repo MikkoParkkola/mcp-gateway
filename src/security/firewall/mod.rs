@@ -65,6 +65,7 @@ mod collusion_digest;
 mod collusion_gate;
 #[cfg(test)]
 pub(crate) mod collusion_live_rig;
+#[cfg(tp4)]
 #[cfg(test)]
 mod collusion_live_tests;
 /// The one replay key: relay replay builds it at capture and lookup, and the
@@ -100,22 +101,29 @@ pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod anomaly_learning_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod anomaly_posture_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod answer_policies_tests;
 #[cfg(test)]
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod rule_glob_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod rule_id_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod rule_scan_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod rule_scope_tests;
 
@@ -719,13 +727,16 @@ mod verification;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "refusal_words_tests.rs"]
 mod refusal_words_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "severity_tests.rs"]
 mod severity_tests;

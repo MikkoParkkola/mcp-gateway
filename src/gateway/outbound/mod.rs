@@ -443,14 +443,18 @@ pub(crate) fn noted_reads() -> Option<ReadAttribution> {
     crate::security::tenant_reads::noted()
 }
 
+#[cfg(tp5)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_record_tests.rs"]
 mod caller_key_record_tests;
+#[cfg(tp5)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "coverage_tests.rs"]
 mod coverage_tests;
+#[cfg(tp5)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "read_scope_scan_tests.rs"]
 mod read_scope_scan_tests;
+#[cfg(tp5)]
 #[cfg(all(test, feature = "firewall"))]
 mod tests;

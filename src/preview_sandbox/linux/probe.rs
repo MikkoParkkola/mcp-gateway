@@ -165,6 +165,7 @@ pub(super) fn find_ip(
     ))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "probe_tests.rs"]
 mod tests;

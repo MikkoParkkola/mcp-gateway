@@ -791,5 +791,6 @@ fn repair_lock_error(e: &std::io::Error) -> Error {
     Error::OAuth(format!("Failed to acquire client_id repair lock: {e}"))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;

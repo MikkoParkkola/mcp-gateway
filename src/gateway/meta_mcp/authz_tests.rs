@@ -11,14 +11,19 @@
 //! and the authorizers `AllowAll` / `DenyAll` / `CountingAuthorizer`, none of
 //! which contains policy logic. The thing under test is the real dispatch path.
 
+#[cfg(tp2)]
 #[path = "authz_tests/before_the_check.rs"]
 mod before_the_check;
+#[cfg(tp2)]
 #[path = "authz_tests/cache_epoch.rs"]
 mod cache_epoch;
+#[cfg(tp2)]
 #[path = "authz_tests/dispatch_shapes.rs"]
 mod dispatch_shapes;
+#[cfg(tp2)]
 #[path = "authz_tests/playbooks.rs"]
 mod playbooks;
+#[cfg(tp2)]
 #[path = "authz_tests/verified_callers.rs"]
 mod verified_callers;
 

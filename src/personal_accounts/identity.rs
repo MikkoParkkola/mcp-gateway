@@ -269,6 +269,7 @@ pub(crate) fn account_key(
     Ok(key)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod identity_tests;

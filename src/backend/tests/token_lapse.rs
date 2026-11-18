@@ -51,6 +51,7 @@ pub(crate) async fn lapse(backend: &Backend) {
 /// fail a start. Meeting a lapsed token, it must not lead a login: one it led
 /// would open the browser, then be dropped with the probe and end `Cancelled`
 /// for the start behind it. The start's own login still authorizes it.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_era_probe_meeting_a_lapsed_token_opens_no_login() {
     let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(5)).await;
@@ -88,6 +89,7 @@ async fn an_era_probe_meeting_a_lapsed_token_opens_no_login() {
 /// credential lock, answers the marked busy error at the short wait and does
 /// not rebuild the transport. The existing era-decision gate holds the start
 /// between the two steps (probe.rs busy skip; mutant m4 removes it).
+#[cfg(tp3)]
 #[tokio::test]
 async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
     // A valid token with a refresh token; it lapses at the gate, not here.

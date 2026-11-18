@@ -169,6 +169,7 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

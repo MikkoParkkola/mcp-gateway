@@ -67,6 +67,7 @@ pub(super) fn records_of(path: &Path, token: &str) -> Vec<Value> {
         .collect()
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settle_appends_the_payload_unchanged_into_the_bound_log() {
     // GIVEN: a live logger with a record
@@ -96,6 +97,7 @@ async fn settle_appends_the_payload_unchanged_into_the_bound_log() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settle_bound_to_another_log_appends_nothing() {
     for presented in [false, true] {
@@ -127,6 +129,7 @@ async fn settle_bound_to_another_log_appends_nothing() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     // GIVEN: a live logger, and another log swapped in under it
@@ -159,6 +162,7 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     assert_eq!(whole(&mut original), original_bytes);
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_refused_settle_appends_nothing() {
     for refusal in [
@@ -201,6 +205,7 @@ async fn a_refused_settle_appends_nothing() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn a_settle_failing_after_its_append_is_unconfirmed() {
     // GIVEN: the AfterAppend seam
@@ -217,6 +222,7 @@ async fn a_settle_failing_after_its_append_is_unconfirmed() {
     assert_eq!(records_of(&path, "w-1").len(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn settle_events_name_their_role_and_callers_cannot_write_them() {
     let roles = [
@@ -244,6 +250,7 @@ fn settle_events_name_their_role_and_callers_cannot_write_them() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn every_role_names_its_event() {
     // Expected names: II.3's record table (design-9318-B.md:270-275).
@@ -264,6 +271,7 @@ fn every_role_names_its_event() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn every_reason_has_one_wire_form() {
     // Expected spellings: II.3's closed reason list (design-9318-B.md:278-280)

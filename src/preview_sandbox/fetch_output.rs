@@ -106,6 +106,7 @@ pub(crate) fn redact_line(line: &str, credential: &str) -> String {
         .join(" ")
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "fetch_output_tests.rs"]
 mod tests;

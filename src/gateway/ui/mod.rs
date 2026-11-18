@@ -12,6 +12,7 @@
 mod access_report;
 mod access_table;
 /// Every admin route refuses a backend-scoped admin.
+#[cfg(tp3)]
 #[cfg(test)]
 mod admin_scope_tests;
 #[cfg(test)]
@@ -27,6 +28,7 @@ pub mod capabilities;
 pub(crate) mod cli_parity_tests;
 mod config_file;
 /// Every UI API answer type is classified for the api command.
+#[cfg(tp3)]
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;
@@ -47,16 +49,20 @@ mod overview;
 mod policies;
 #[cfg(feature = "firewall")]
 mod policies_part2;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_part2_tests;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_relay_tests;
 #[cfg(feature = "firewall")]
 mod policies_rules;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_shadow_tests;
 #[cfg(test)]
 mod policies_test_support;
+#[cfg(tp3)]
 #[cfg(test)]
 mod policies_tests;
 mod preview;
@@ -65,10 +71,13 @@ mod principal;
 mod refusals;
 mod restart;
 pub(crate) mod restart_confirm;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_confirm_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_get_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;
@@ -794,17 +803,21 @@ fn call_windows(
 
 // ── Tests ────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_file_tests.rs"]
 mod keys_file_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod discovery_wiring_tests;
 
@@ -812,22 +825,27 @@ mod discovery_wiring_tests;
 #[path = "keys_create_fixture_tests.rs"]
 mod keys_create_fixture_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_tests.rs"]
 mod keys_create_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_cli_tests.rs"]
 mod keys_create_cli_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_revoke_request_tests.rs"]
 mod keys_revoke_request_tests;

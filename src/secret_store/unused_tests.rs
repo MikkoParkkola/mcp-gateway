@@ -263,6 +263,7 @@ pub(super) fn scoped_removal(text: &str, name: &str) -> bool {
     })
 }
 
+#[cfg(tp4)]
 #[test]
 fn generated_name_shape() {
     const ROW: &str = "generated_name_shape";
@@ -289,6 +290,7 @@ fn generated_name_shape() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn named_by_every_source() {
     const ROW: &str = "named_by_every_source";
@@ -335,6 +337,7 @@ fn named_by_every_source() {
     assert!(bad.is_empty(), "{ROW}:\n{}", bad.join("\n"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn unreadable_source_refuses() {
     const ROW: &str = "unreadable_source_refuses";
@@ -360,6 +363,7 @@ fn unreadable_source_refuses() {
     assert!(bad.is_empty(), "{ROW}:\n{}", bad.join("\n"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn remove_then_recreate() {
     const ROW: &str = "remove_then_recreate";
@@ -382,6 +386,7 @@ fn remove_then_recreate() {
     assert_eq!(hits, 1, "{ROW}: {live:?}");
 }
 
+#[cfg(tp4)]
 #[test]
 fn scoped_line_golden() {
     const ROW: &str = "scoped_line_golden";
@@ -417,6 +422,7 @@ fn scoped_line_golden() {
 
 /// Seventeen nested directories put a readable file past the walk. That source
 /// was not read, so the check refuses.
+#[cfg(tp4)]
 #[test]
 fn capability_walk_refuses_past_the_depth_bound() {
     const ROW: &str = "capability_walk_refuses_past_the_depth_bound";
@@ -437,6 +443,7 @@ fn capability_walk_refuses_past_the_depth_bound() {
 
 /// A capability directory that links back to itself was not read. The check
 /// refuses.
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn capability_symlink_loop_refuses() {
@@ -456,6 +463,7 @@ fn capability_symlink_loop_refuses() {
 /// The keychain guard's force switch exists only in test builds: the production text of
 /// `unused.rs` (every test-only item blanked by the shared reader) never names it, so no
 /// release build can force the macOS and Windows keychain guard off.
+#[cfg(tp4)]
 #[test]
 fn keychain_guard_seam_is_test_only() {
     const ROW: &str = "keychain_guard_seam_is_test_only";

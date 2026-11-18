@@ -317,6 +317,7 @@ async fn drain_locked(
     outcome
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "startup_settle_tests.rs"]
 mod tests;

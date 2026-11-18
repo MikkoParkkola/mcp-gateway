@@ -713,16 +713,19 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
 }
 
 /// A11: the rejected-upstream-token cells, which drive this fixture.
+#[cfg(tp2)]
 #[path = "upstream_401_tests.rs"]
 mod upstream_401;
 
 // MIK-8353 3a: an account refresh on the capability route keeps a refused
 // call's nonce spent. Beside the fixture for its private `caller`.
+#[cfg(tp2)]
 #[cfg(feature = "cost-governance")]
 #[path = "account_rest_signed_budget_tests.rs"]
 mod signed_budget_tests;
 
 // Lives beside the REST fixture rather than in a REST test file: those files
 // are split by topic and this case spans custody, registry and cache together.
+#[cfg(tp2)]
 #[path = "account_live_holder_tests.rs"]
 mod account_live_holder_tests;

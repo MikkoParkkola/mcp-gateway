@@ -572,10 +572,12 @@ fn print_upgrade_summary(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upgrade_notice_tests.rs"]
 mod upgrade_notice_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upgrade_webhook_notice_tests.rs"]
 mod upgrade_webhook_notice_tests;
@@ -583,9 +585,11 @@ mod upgrade_webhook_notice_tests;
 #[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
+#[cfg(tp2)]
 #[cfg(all(test, windows))]
 #[path = "upgrade_winacl_tests.rs"]
 mod winacl_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;

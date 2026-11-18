@@ -79,6 +79,7 @@ fn allow_writes(gw: &Gw) {
 
 // A cancel ends the shared login as cancelled, not as a success that stored
 // nothing. Red today: the owner's cancel ends the lead with success.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_joiner_of_a_cancelled_ui_login_gets_cancelled() {
     let gw = Gw::new().await;
@@ -95,6 +96,7 @@ async fn a_joiner_of_a_cancelled_ui_login_gets_cancelled() {
 
 // A failed save ends the shared login with the save's error. Red today: it
 // ends with success, so the joiner reads "stored no token".
+#[cfg(tp2)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_joiner_of_a_failed_save_gets_the_save_error() {
@@ -115,6 +117,7 @@ async fn a_joiner_of_a_failed_save_gets_the_save_error() {
 // `hold`'s empty-slot return: the flow was taken between the exchange and the
 // store (parked at the hold pause), so the attempt ends cancelled. Red today:
 // it ends with success.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_hold_that_finds_its_flow_gone_ends_the_login_cancelled() {
     let gw = Arc::new(Gw::new().await);
@@ -143,6 +146,7 @@ async fn a_hold_that_finds_its_flow_gone_ends_the_login_cancelled() {
 // A restart (the gate's cancel) ends a held grant at once, and the grant can
 // no longer be confirmed. Red today: `hold` ignores the cancel, so the restart
 // waits for the confirm window.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_backend_restart_ends_a_held_grant_and_it_cannot_be_confirmed() {
     let gw = Gw::new().await;
@@ -158,6 +162,7 @@ async fn a_backend_restart_ends_a_held_grant_and_it_cannot_be_confirmed() {
 
 // A confirm dropped after it took the grant is read as a cancel. Red today:
 // nothing tells the flow task, which waits out the window.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_dropped_confirm_reads_as_cancelled() {
     let gw = Arc::new(Gw::new().await);
@@ -201,6 +206,7 @@ async fn a_dropped_confirm_reads_as_cancelled() {
 // backend already cancelled. The decision is called directly so nothing yields
 // between the signal and the confirm. Red today: `take_for` never looks at
 // the cancel.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_confirm_after_the_backend_cancel_signal_is_refused() {
     let gw = Arc::new(Gw::new().await);

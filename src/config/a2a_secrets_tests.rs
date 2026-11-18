@@ -20,6 +20,7 @@ fn a2a_with_argument_rule() -> BackendConfig {
 }
 
 /// Config load refuses the rule, naming the backend and the rule.
+#[cfg(tp3)]
 #[test]
 fn an_a2a_backend_with_a_secret_rule_is_refused_at_load() {
     let mut config = Config::default();

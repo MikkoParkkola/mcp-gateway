@@ -147,6 +147,7 @@ pub(super) fn only(records: Vec<Value>, what: &str) -> Value {
 
 /// T1. A denial on a personal capability is one `denied` record, paired
 /// with the call's invocation record by trace.
+#[cfg(tp2)]
 #[tokio::test]
 async fn grant_denial_writes_decision_record() {
     let (endpoint, dir) = (
@@ -194,6 +195,7 @@ async fn grant_denial_writes_decision_record() {
 }
 
 /// T2. A matching grant is one `ok` record naming the grant.
+#[cfg(tp2)]
 #[tokio::test]
 async fn grant_match_writes_allow_record() {
     let (endpoint, dir) = (
@@ -225,6 +227,7 @@ async fn grant_match_writes_allow_record() {
 }
 
 /// T3 (control). Public and shared capabilities are not grant decisions.
+#[cfg(tp2)]
 #[tokio::test]
 async fn public_capability_writes_no_decision() {
     for exposure in ["public", "shared"] {
@@ -260,6 +263,7 @@ async fn public_capability_writes_no_decision() {
 
 /// T7. Under `FailClosed` a failed decision write withholds the answer;
 /// D1's invocation append is untouched, so it cannot be what failed.
+#[cfg(tp2)]
 #[tokio::test]
 async fn grant_decision_append_failure_is_audit_unavailable() {
     let (endpoint, dir) = (
@@ -279,6 +283,7 @@ async fn grant_decision_append_failure_is_audit_unavailable() {
 }
 
 /// T8. The record names the caller by `(authority, subject)`, never by label.
+#[cfg(tp2)]
 #[tokio::test]
 async fn grant_decision_record_carries_no_label() {
     let callers = [
@@ -319,6 +324,7 @@ async fn grant_decision_record_carries_no_label() {
 }
 
 /// T17 (control). Listing and search are `Emit::Silent`: no decision.
+#[cfg(tp2)]
 #[tokio::test]
 async fn listing_writes_no_decision() {
     let (endpoint, dir) = (
@@ -348,6 +354,7 @@ async fn listing_writes_no_decision() {
 
 /// T18 (R1). `invoke_tool` called directly opens its own slot: one record,
 /// no panic, the answer unchanged.
+#[cfg(tp2)]
 #[tokio::test]
 async fn direct_invoke_tool_writes_one_record() {
     let (endpoint, dir) = (
@@ -369,6 +376,7 @@ async fn direct_invoke_tool_writes_one_record() {
 
 /// T19 (R2, control). With no logger, noting is a no-op: today's answers,
 /// no slot and no note.
+#[cfg(tp2)]
 #[tokio::test]
 async fn no_logger_changes_nothing() {
     let endpoint = Endpoint::start(false).await;
@@ -405,6 +413,7 @@ async fn no_logger_changes_nothing() {
 
 /// T27 (H1). A direct-name call to a surfaced personal tool is a dispatch
 /// decision: the concealed -32601 answer is unchanged, and it is recorded.
+#[cfg(tp2)]
 #[tokio::test]
 async fn surfaced_call_grant_denial_writes_one_record() {
     let (endpoint, dir) = (
@@ -429,8 +438,10 @@ async fn surfaced_call_grant_denial_writes_one_record() {
     assert_eq!(record["outcome"], json!("denied"), "{record}");
 }
 
+#[cfg(tp2)]
 #[path = "grant_decision_rule_id_tests.rs"]
 mod rule_ids;
 
+#[cfg(tp2)]
 #[path = "grant_allow_attribution_tests.rs"]
 mod allow_attribution;

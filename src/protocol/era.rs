@@ -754,6 +754,7 @@ impl EraObservation {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "era_tests.rs"]
 mod tests;

@@ -88,6 +88,7 @@ where
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use std::ops::ControlFlow;

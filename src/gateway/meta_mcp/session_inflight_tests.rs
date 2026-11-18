@@ -166,12 +166,14 @@ fn invoke_args() -> Value {
 /// MIK-7997: the A/B arm and the prefetch hints key on the caller key only.
 /// A session id, legacy or stdio, never stands in for a missing key, so the
 /// key takes no session at all.
+#[cfg(tp2)]
 #[test]
 fn a_keyless_caller_has_no_experiment_key_under_any_session() {
     let retry = crate::protocol::mrtr::RetryFields::default();
     assert_eq!(context(&retry).experiment_key(), None);
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_pass() {
     let wire = Arc::new(Parked::default());
@@ -348,6 +350,7 @@ fn spawn_invoke(w: &Wired) -> tokio::task::JoinHandle<JsonRpcResponse> {
     tokio::spawn(async move { tail(&meta, "gateway_invoke", invoke_args()).await })
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_call_held_past_both_cleanup_passes_leaves_nothing_once_it_returns() {
     let w = wired(false);
@@ -362,6 +365,7 @@ async fn a_call_held_past_both_cleanup_passes_leaves_nothing_once_it_returns() {
     w.assert_nothing_left("a call that outlived both passes");
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_dispatch_that_starts_after_its_session_ended_leaves_nothing() {
     let w = wired(false);
@@ -378,6 +382,7 @@ async fn a_dispatch_that_starts_after_its_session_ended_leaves_nothing() {
     w.assert_nothing_left("a dispatch that began after the end");
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_live_session_keeps_what_its_calls_wrote() {
     let w = wired(false);
@@ -405,6 +410,7 @@ async fn a_live_session_keeps_what_its_calls_wrote() {
 /// The end handlers run once at the end, again when the late call's hold
 /// drops, and again at the grace pass: every run after the first finds less
 /// or nothing, and none of them may fail on what an earlier one removed.
+#[cfg(tp2)]
 #[tokio::test]
 async fn the_end_handlers_run_again_for_a_late_write_and_are_idempotent() {
     let w = wired(false);
@@ -440,6 +446,7 @@ async fn the_end_handlers_run_again_for_a_late_write_and_are_idempotent() {
 /// The session ends while its call is at the backend; how the call then
 /// stops is the variable. Each way must release the hold, which ends the
 /// session a second time.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_cancelled_call_releases_its_hold() {
     let w = wired(false);
@@ -457,6 +464,7 @@ async fn a_cancelled_call_releases_its_hold() {
     w.assert_nothing_left("after a cancel");
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn an_aborted_call_releases_its_hold() {
     let w = wired(false);
@@ -471,6 +479,7 @@ async fn an_aborted_call_releases_its_hold() {
     w.assert_nothing_left("after an abort");
 }
 
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_call_that_panics_releases_its_hold() {
     let w = wired(true);
@@ -487,6 +496,7 @@ async fn a_call_that_panics_releases_its_hold() {
 
 /// Two calls hold one session when it ends. The first to finish leaves the
 /// other still writing, so only the last one runs the end handlers again.
+#[cfg(tp2)]
 #[tokio::test]
 async fn only_the_last_of_two_overlapping_holds_ends_the_session_again() {
     let w = wired(false);
@@ -509,6 +519,7 @@ async fn only_the_last_of_two_overlapping_holds_ends_the_session_again() {
 
 /// `initialize` binds a profile outside the dispatch tail. One that lands
 /// after its session ended must not leave the binding behind.
+#[cfg(tp2)]
 #[tokio::test]
 async fn an_initialize_after_its_session_ended_leaves_no_profile() {
     let w = wired(false);

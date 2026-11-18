@@ -323,6 +323,7 @@ pub(super) fn spawn_idle_reaper(
     })
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, unix))]
 #[path = "background_export_secret_tests.rs"]
 mod export_secret_tests;

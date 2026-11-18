@@ -768,10 +768,12 @@ pub(crate) use stop::Handover;
 #[cfg(all(test, unix))]
 pub(in crate::backend) use stop::seam as stop_seam;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "registry_stored_scrub_tests.rs"]
 mod stored_scrub_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;

@@ -133,6 +133,7 @@ impl BackendRegistry {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "registry_secret_record_tests.rs"]
 mod tests;

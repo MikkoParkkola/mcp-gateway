@@ -9,7 +9,10 @@ Type=simple
 User=mcp-gateway
 Group=mcp-gateway
 WorkingDirectory=/etc/mcp-gateway
-ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml --host 127.0.0.1 --port 39400
+# Loopback only, whatever gateway.yaml's server.host says; the env overlay
+# overrides the config file.
+Environment=MCP_GATEWAY_SERVER__HOST=127.0.0.1
+ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml --port 39400
 Restart=on-failure
 RestartSec=5s
 # The gateway's stop takes at most its stop timeout (30 s by default) from the

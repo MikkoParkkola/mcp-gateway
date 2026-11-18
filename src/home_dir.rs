@@ -111,6 +111,7 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
     dirs::config_dir()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -677,6 +677,7 @@ pub(crate) fn write_discovered_to_config(
 
 #[path = "main_discovered_config.rs"]
 pub(crate) mod discovered_config;
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;

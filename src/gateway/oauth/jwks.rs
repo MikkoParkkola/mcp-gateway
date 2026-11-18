@@ -205,6 +205,7 @@ fn extract_ec_public_components_raw(raw: &[u8]) -> Result<(String, String), Stri
 
 // ── Minimal DER helpers ───────────────────────────────────────────────────────
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

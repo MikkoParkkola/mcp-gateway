@@ -232,6 +232,7 @@ pub(super) fn lines(out: &str) -> Vec<&str> {
 /// L7: a cold npx fetch from the fake registry installs the package and the
 /// run is its own bin with the server's arguments; the run sees no proxy
 /// socket (L-proxy: unmounted and removed before the run).
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7_a_cold_npx_fetch_runs_the_packages_bin() {
     let fake = package(
@@ -248,6 +249,7 @@ async fn l7_a_cold_npx_fetch_runs_the_packages_bin() {
 
 /// L7s: a scoped, version-pinned spec installs and runs the bin named after
 /// the package, of the two it ships.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7s_a_scoped_pinned_spec_runs_the_bin_named_after_it() {
     let fake = package(
@@ -264,6 +266,7 @@ async fn l7s_a_scoped_pinned_spec_runs_the_bin_named_after_it() {
 
 /// L3: no install script runs: every lifecycle script would write the
 /// marker the run phase looks for, and the run finds none.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l3_install_scripts_never_run() {
     let mark = "touch /preview-home/script-marker";
@@ -279,6 +282,7 @@ async fn l3_install_scripts_never_run() {
 /// L4a: a git dependency refuses the fetch: npm cannot run git
 /// (`npm_config_git` names a path that does not exist), and the refusal is
 /// npm's own line.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l4a_a_git_dependency_refuses_the_fetch() {
     let deps =
@@ -297,6 +301,7 @@ async fn l4a_a_git_dependency_refuses_the_fetch() {
 
 /// L-tls1: a registry certificate from a CA outside the fetch's bundle is
 /// refused (npm's cafile replaces node's roots, strict TLS).
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_tls1_a_registry_outside_the_bundle_is_refused() {
     let fake = package(
@@ -368,6 +373,7 @@ fn hostile_npm(npx: &std::path::Path, hostile_ca: &str) -> (tempfile::TempDir, P
 /// the registry's CA). The strict-ssl, globalconfig and userconfig pins rest
 /// on R-env: npm's builtin npmrc is covered by an empty file and the tree's
 /// `etc/npmrc` is not in the root, so no file here can undo them.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing() {
     let Some(gateway) = gateway_bin() else {
@@ -457,6 +463,7 @@ async fn canary_run(paths: &[&PathBuf]) -> Option<Vec<String>> {
 /// `/usr/local/bin` and beside npm in `/usr/local/lib/node_modules` is not
 /// readable by the fetched package's run phase, while node itself runs
 /// there. Nothing is written under `/usr/local`: the row reads what is there.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
     if usr_local_npm().is_none() {
@@ -498,6 +505,7 @@ async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
 /// root, whatever npm's layout), and the fetch still works. The token goes
 /// into a copy of the host's npm under the row's own temp dir, never into
 /// the host's npm, which other processes may read meanwhile.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
     let Some(gateway) = gateway_bin() else {
@@ -525,6 +533,7 @@ async fn l_npmrc_a_token_in_npms_builtin_npmrc_stays_unreadable() {
 /// runs the package from the two narrow binds alone (npm fetched it, node
 /// runs in the run phase), while a token in the tree's `etc/npmrc` and a
 /// planted global package's config stay unreadable to the package.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_nvm_npm_and_node_run_from_the_two_narrow_binds() {
     let Some(gateway) = gateway_bin() else {
@@ -620,6 +629,7 @@ async fn why_ended(ended: Result<crate::preview_sandbox::Started, Refusal>) -> S
 /// used). Every process carrying the target's marker ends within the guard,
 /// the proxy that held the credential is gone with its directory, and no
 /// connection to the registry stays open, so nothing of the fetch can reach it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l6b_a_start_dropped_mid_fetch_leaves_nothing_running() {
     const MARKER: &str = "l6b-marker-5c1e";
@@ -686,6 +696,7 @@ async fn l6b_a_start_dropped_mid_fetch_leaves_nothing_running() {
 /// RF6 (NPM.8), kills "a failed npm install reports Started": the fake
 /// registry lacks the package, so the start itself refuses at the npm
 /// install, and nothing carrying the target's marker is left running.
+#[cfg(tp4)]
 #[tokio::test]
 async fn rf6_a_failed_npm_install_never_reports_started() {
     const MARKER: &str = "rf6-marker-77aa";

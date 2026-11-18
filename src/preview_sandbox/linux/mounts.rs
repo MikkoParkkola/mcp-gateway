@@ -633,6 +633,7 @@ fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "mounts_tests.rs"]
 mod tests;

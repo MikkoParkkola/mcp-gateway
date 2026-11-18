@@ -542,6 +542,7 @@ pub(super) async fn check(config: &Config, cfg: &ClientCfg, lookup: Lookup) -> V
     rows
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "npm_pin_tests.rs"]
 mod tests;

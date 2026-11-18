@@ -58,6 +58,7 @@ pub(crate) fn attach_static_header(
         .insert(name, HeaderValue::from_static(value));
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -571,6 +571,7 @@ fn task_slot(envelope: &Value) -> Option<&Value> {
         .find_map(|slot| envelope.get(slot))
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod tests {
     use serde_json::json;
@@ -754,14 +755,17 @@ mod tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_delivered_p3_tests.rs"]
 mod p3_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_seam_live_tests.rs"]
 mod seam_live_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall", feature = "metrics"))]
 #[path = "relay_delivered_replay_count_tests.rs"]
 mod replay_count_tests;

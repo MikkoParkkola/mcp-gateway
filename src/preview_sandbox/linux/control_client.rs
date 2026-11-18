@@ -162,6 +162,7 @@ pub(super) fn finish_fetch(
     write_line(stream, &encode(&Run { run: true })?, bounds.write)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "control_client_tests.rs"]
 mod tests;

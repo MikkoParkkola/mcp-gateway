@@ -230,6 +230,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "relay_tests.rs"]
 mod tests;

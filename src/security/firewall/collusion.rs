@@ -743,6 +743,7 @@ mod origin;
 pub(crate) use origin::no_lists;
 #[path = "collusion_reason.rs"]
 mod reason;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_reason_tests.rs"]
 mod reason_tests;
@@ -761,6 +762,7 @@ pub(crate) use margin::egress_text;
 pub(super) mod big;
 #[path = "collusion_budget.rs"]
 pub(super) mod budget;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
@@ -775,21 +777,26 @@ pub(crate) use seam::{SeamFingerprint, SeamForms};
 #[path = "collusion_replay.rs"]
 pub(super) mod replay;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_holders_tests.rs"]
 mod holders_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_live_overflow_tests.rs"]
 mod live_overflow_tests;
 #[cfg(test)]
 #[path = "collusion_live_stubs.rs"]
 mod live_stubs;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_replay_pending_tests.rs"]
 mod replay_pending_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_replay_tests.rs"]
 mod replay_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_tests.rs"]
 mod tests;

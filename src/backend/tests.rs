@@ -20,19 +20,30 @@ use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolAnnotations, ToolsLi
 use crate::transport::Transport;
 use crate::{Error, Result};
 
+#[cfg(tp3)]
 mod breaker_and_status;
+#[cfg(tp3)]
 mod build_first;
+#[cfg(tp3)]
 mod era_probe;
+#[cfg(tp3)]
 mod login_cohort;
+#[cfg(tp3)]
 mod login_detach;
+#[cfg(tp3)]
 mod login_join;
+#[cfg(tp3)]
 mod login_probe;
 pub(crate) mod login_server;
 pub(crate) mod login_window;
+#[cfg(tp3)]
 mod metric_label;
+#[cfg(tp3)]
 mod per_identity_catalogue;
+#[cfg(tp3)]
 mod race_rows;
 pub(crate) mod token_lapse;
+#[cfg(tp3)]
 mod tool_cache;
 
 struct MockTransport {
@@ -135,8 +146,10 @@ fn sample_tool(name: &str) -> Tool {
     }
 }
 
+#[cfg(tp3)]
 #[path = "declared_effect_tests.rs"]
 mod declared_effect_tests;
+#[cfg(tp3)]
 #[path = "prepare_tool_metadata_tests.rs"]
 mod prepare_tool_metadata_tests;
 
@@ -324,4 +337,5 @@ async fn probe_backend(mock: Arc<ProbeMock>, resolve_era: bool) -> Arc<Backend> 
 }
 
 // Rows 9d, 9f and 10e: the unserved count across an era invalidation (#579).
+#[cfg(tp3)]
 mod unserved_era;

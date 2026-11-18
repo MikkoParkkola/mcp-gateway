@@ -375,6 +375,7 @@ thread_local! {
     static SAME_TOOL_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;

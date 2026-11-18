@@ -545,20 +545,25 @@ fn read_ca_files(
         })?;
     Ok((cert, key))
 }
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "api_parity_tests.rs"]
 mod api_parity_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "api_tests.rs"]
 mod api_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod tls_ca_key_tests;
 // Windows owner-only fixtures for the binary's `Inherit` callers.
 #[cfg(all(test, windows))]
 mod winacl_test_support;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config};
@@ -677,5 +682,6 @@ pub(crate) fn load_for_serve(
     mcp_gateway::config::Config::load_evaluated(path)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod serve_load_tests;

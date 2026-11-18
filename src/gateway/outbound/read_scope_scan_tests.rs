@@ -192,9 +192,15 @@ fn doc_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().all(|a| a.path().is_ident("doc"))
 }
 
-/// Whether `attrs` is exactly `#[cfg(test)]`.
+/// Whether `attrs` is exactly `#[cfg(test)]`, ignoring the lib test split's
+/// part tags (`#[cfg(tpK)]`, each a separate attribute that only narrows which
+/// part compiles the module): a tagged test module is still test-gated.
 fn cfg_test_only(attrs: &[syn::Attribute]) -> bool {
-    matches!(attrs, [only] if only.path().is_ident("cfg")
+    let rest: Vec<&syn::Attribute> = attrs
+        .iter()
+        .filter(|a| !crate::test_source_text::part_tag(a))
+        .collect();
+    matches!(rest.as_slice(), [only] if only.path().is_ident("cfg")
         && only.parse_args::<syn::Path>().is_ok_and(|p| p.is_ident("test")))
 }
 
@@ -357,6 +363,29 @@ fn entries(file: &syn::File, found: &mut Entries) {
             .unsupported
             .push("more than one test module".to_owned());
     }
+}
+
+/// The lib test split's part tag is a separate `#[cfg(tpK)]` above an
+/// unchanged `#[cfg(test)]`: the module is still test-gated, and a tag alone
+/// does not make one.
+#[test]
+fn a_part_tag_beside_the_test_cfg_still_reads_as_test_only() {
+    let module = |text: &str| syn::parse_str::<syn::ItemMod>(text).expect("a module item");
+    assert!(cfg_test_only(
+        &module("#[cfg(tp2)]\n#[cfg(test)]\nmod t {}").attrs
+    ));
+    assert!(cfg_test_only(&module("#[cfg(test)]\nmod t {}").attrs));
+    assert!(!cfg_test_only(&module("#[cfg(tp2)]\nmod t {}").attrs));
+    assert!(!cfg_test_only(
+        &module("#[cfg(tp2)]\n#[cfg(unix)]\nmod t {}").attrs
+    ));
+    // The token check's test-fn reader goes through cfg_test_only after
+    // dropping doc comments.
+    let function = |text: &str| syn::parse_str::<syn::ItemFn>(text).expect("a fn item");
+    assert!(cfg_test_fn(
+        &function("/// Doc.\n#[cfg(tp4)]\n#[cfg(test)]\nfn f() {}").attrs
+    ));
+    assert!(!cfg_test_fn(&function("#[cfg(tp4)]\nfn f() {}").attrs));
 }
 
 /// Every exposed function of the judge, whatever its parameters, opens with

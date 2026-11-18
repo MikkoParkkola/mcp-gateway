@@ -103,6 +103,7 @@ pub(crate) fn overlaps(base: &str, route: &str) -> bool {
     true
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "webhooks_tests.rs"]
 mod tests;

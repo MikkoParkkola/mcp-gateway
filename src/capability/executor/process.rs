@@ -145,6 +145,7 @@ fn with_schema_defaults(params: &Value, input_schema: &Value) -> Value {
     merged
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;

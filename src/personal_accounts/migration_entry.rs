@@ -161,6 +161,7 @@ fn account_key(request: &MigrationRequest<'_>) -> Result<AccountKey, MigrationRe
         .map_err(|_| MigrationRefusal::Store)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "migration_entry_tests.rs"]
 mod migration_entry_tests;

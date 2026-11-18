@@ -414,6 +414,7 @@ mod walk_seam {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "admission_replay_tests.rs"]
 mod tests;

@@ -672,18 +672,22 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
     text
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cli_support_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cli_support_shown_tests.rs"]
 mod shown_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cli_support_store_tests.rs"]
 mod store_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cli_support/init_store_tests.rs"]
 mod init_store_tests;

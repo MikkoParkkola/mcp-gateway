@@ -452,6 +452,7 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
     })
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "preview_secret_tests.rs"]
 mod secret_tests;

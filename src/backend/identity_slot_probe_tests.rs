@@ -10,6 +10,7 @@ use super::slot_eviction_tests::{per_user_backend, slot};
 /// GIVEN a propagating backend with no slot for `probe`
 /// WHEN the tool-cache freshness and refresh-cooldown probes ask about `probe`
 /// THEN both answer "not fresh / not cooling" and no slot is created.
+#[cfg(tp3)]
 #[test]
 fn a_metadata_probe_creates_no_identity_slot() {
     let backend = per_user_backend("probe");

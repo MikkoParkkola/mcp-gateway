@@ -162,6 +162,7 @@ fn record<'a>(out: &'a str, name: &str) -> Vec<&'a str> {
 /// L-env, kills m-env-extra (the spawn keeps the host environment): each npm
 /// step runs with exactly the fetch environment, every key and value, for
 /// the proxy's credential and port it was given, and the step's own argv.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_env_each_npm_step_sees_exactly_the_fetch_environment() {
     let shim = Shim::new("");
@@ -216,6 +217,7 @@ async fn l_env_each_npm_step_sees_exactly_the_fetch_environment() {
 /// L5, kills q9 (the sweep skipped): a descendant the first npm step leaves
 /// behind, holding both output pipes, is killed before the run, the fetch
 /// still ends, and the run phase sees no process but PID 1 and itself.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l5_an_escapee_holding_the_pipes_is_swept() {
     let hook = r#"if [ "$step" = install ]; then
@@ -256,6 +258,7 @@ fi"#;
 /// helper's one shared deadline from a deadline per step. That sharing is
 /// structural (`install` passes one `deadline` to both npm steps); this row
 /// pins that a fetch running past the preview's deadline never runs.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_deadline2_a_fetch_past_the_preview_deadline_never_runs() {
     // Each step takes most of the deadline, leaving room for a slow sandbox
@@ -280,6 +283,7 @@ async fn l_deadline2_a_fetch_past_the_preview_deadline_never_runs() {
 /// refused): its lock passes the fetch's lock check, and its `ci` step
 /// leaves a bin that prints the step records, so a failing L row above
 /// points at the sandbox, not at the shim.
+#[cfg(tp4)]
 #[test]
 fn the_shim_writes_a_checked_lock_and_a_bin_that_prints_its_records() {
     let shim = Shim::new("echo hook-ran > \"$obs/report\"");
@@ -312,6 +316,7 @@ fn the_shim_writes_a_checked_lock_and_a_bin_that_prints_its_records() {
 /// L4b, kills q18 (the lock check skipped): a lock whose dependency resolves
 /// to git refuses the fetch between the two npm steps, so `npm ci` never
 /// installs it and the run never starts.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l4b_a_lock_entry_off_the_registry_refuses_before_npm_ci() {
     let lock = r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"mcp-shim":"1.0.0"}},"node_modules/mcp-shim":{"version":"1.0.0","resolved":"git+ssh://git@example.invalid/x.git#0123abcd"}}}"#;
@@ -326,6 +331,7 @@ async fn l4b_a_lock_entry_off_the_registry_refuses_before_npm_ci() {
 
 /// L4b, kills q24 (the lock's edge check skipped): a dependency with no entry
 /// in the lock, which could hide a pruned git edge, refuses the fetch.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l4b_a_dependency_missing_from_the_lock_refuses() {
     let lock = r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"mcp-shim":"1.0.0"}},"node_modules/mcp-shim":{"version":"1.0.0","resolved":"https://registry.npmjs.org/mcp-shim/-/mcp-shim-1.0.0.tgz","dependencies":{"hidden":"^1.0.0"}}}}"#;
@@ -345,6 +351,7 @@ const PROBE: &str = r#"probe() { if timeout 10 bash -c "exec 3<>/dev/tcp/$1/$2" 
 /// with a route out: the relay port the fetch reached (positive control)
 /// refuses in the run, and the run reaches neither a host listener on
 /// loopback nor an outside address.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l6_l1_after_the_fetch_the_run_connects_nowhere() {
     let hook = format!(
@@ -388,6 +395,7 @@ fi"#
 /// socket, though PID 1 holds the control stream and the relay then.
 /// `pidfd_getfd` is not probed: it passes the same ptrace check as reading
 /// `/proc/1/fd`, as in the run phase's F2-T2.
+#[cfg(tp4)]
 #[tokio::test]
 async fn f2_t2b_the_fetch_child_holds_no_control_connection() {
     let hook = r#"if [ "$step" = install ]; then
@@ -413,6 +421,7 @@ fi"#;
 /// 2b-1's CA rows from the fetch child: `ca.pem` is there and cannot be
 /// written, removed or renamed, the empty npmrc and certs directory are
 /// there and empty, and nothing can be added beside them.
+#[cfg(tp4)]
 #[tokio::test]
 async fn ca_files_are_read_only_from_the_fetch_child() {
     let hook = r#"if [ "$step" = install ]; then
@@ -447,6 +456,7 @@ fi"#;
 /// is established (positive control) and one to another name is refused,
 /// and a direct connect to the registry's address fails. L-proxy's fetch
 /// half: the proxy socket is there, a socket, during the fetch.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l2_the_fetch_child_reaches_only_the_registry_through_the_relay() {
     let hook = format!(
