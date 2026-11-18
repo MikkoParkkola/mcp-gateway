@@ -48,9 +48,8 @@ CARGO_CONFIG = Path(".cargo/config.toml")
 # memory tripwire's limit, so they are not the build the lib test split removes.
 CARGO_RE = re.compile(r"\bcargo\s+(test|llvm-cov|bench)\b([^\n|;&]*)")
 BUILD_TESTS = re.compile(r"\bcargo\s+build\b[^\n|;&]*\s--(tests|all-targets|benches)\b")
-# A single-target selector among cargo's own arguments: a whole word, so --tests and a test binary's --test-threads
-# (after `--`) are not one.
-SINGLE_TARGET = re.compile(r"(?<!\S)--(test|bin|doc|example|bench)(?![\w-])")
+SINGLE_TARGET = re.compile(r"--(test|bin|doc|example|bench)\b")
+# Where cargo's own arguments end: SINGLE_TARGET reads only those, so a test binary's --test-threads is not one.
 TEST_ARGS = re.compile(r"\s--(?:\s|$)")
 # The & of a redirection (2>&1, <&0, &>file): part of one command, not a separator, so the matchers above may cross it.
 REDIRECT_AMP = re.compile(r"(?<=[<>])&|&(?=>)")
@@ -127,8 +126,8 @@ N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"
 # assignment words, or among a declaration builtin's names; `n+=` and `n[i]=` change $n too.
 _ASSIGN_WORD = r"""[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*"""
 N_ASSIGNED = re.compile(
-    # Words that may stand before a simple command, a case's head, and a case arm's pattern.
-    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+|case\s+.*?\s+in\s+|\(?[^()]*\)\s*)*"
+    # Words that may stand before a simple command, and a case arm's pattern (with its case head, if on the line).
+    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+|\(?[^()]*\)\s*)*"
     # n as a for or select loop's variable,
     r"(?:(?:for|select)\s+n(?![\w=])|"
     # or assigned, after other assignment words or among a declaration builtin's names.
