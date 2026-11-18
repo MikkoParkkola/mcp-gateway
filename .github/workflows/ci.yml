@@ -1416,6 +1416,11 @@ jobs:
         env:
           MCP_GATEWAY_TEST_PART: "4"
         run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Install uv 0.13.1 for the real-uv rows
+        run: |
+          pipx install --quiet 'uv==0.13.1'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/uvx" --version | grep -q '^uv 0\.13\.1 ' || { echo "::error::uvx is not uv 0.13.1"; exit 1; }
       - name: Run the probe's rows
         env:
           MCP_GATEWAY_TEST_PART: "4"
@@ -1432,10 +1437,17 @@ jobs:
           bin=$(scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-run --message-format=json-render-diagnostics \
             | python3 -c 'import json, sys; [print(m["executable"]) for m in map(json.loads, (l for l in sys.stdin if l.startswith("{"))) if m.get("reason") == "compiler-artifact" and m.get("executable") and "lib" in m["target"]["kind"]]')
           [ -n "$bin" ] || { echo "::error::no lib test binary was built"; exit 1; }
-          python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))' "$bin" --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
+          python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))' "$bin" --exact --show-output "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
           rc=${PIPESTATUS[0]}
           if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
             echo "::error::expected ${#rows[@]} rows to run"
+            exit 1
+          fi
+          # A real-uv row without uv prints its skip line and passes: each one listed must say it ran.
+          real=$(printf '%s\n' "${rows[@]}" | grep -c 'fetch_uv_real_rows::' || true)
+          ran=$(grep -c 'real-uv row ran: ' "$RUNNER_TEMP/rows.log" || true)
+          if [ "$ran" -lt "$real" ]; then
+            echo "::error::$real real-uv rows listed, $ran ran (the rest took the skip path)"
             exit 1
           fi
           exit "$rc"
@@ -1482,6 +1494,11 @@ jobs:
         env:
           MCP_GATEWAY_TEST_PART: "4"
         run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Install uv 0.13.1 for the real-uv rows
+        run: |
+          pipx install --quiet 'uv==0.13.1'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/uvx" --version | grep -q '^uv 0\.13\.1 ' || { echo "::error::uvx is not uv 0.13.1"; exit 1; }
       - name: Run the probe's rows
         env:
           MCP_GATEWAY_TEST_PART: "4"
@@ -1498,10 +1515,17 @@ jobs:
           bin=$(scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-run --message-format=json-render-diagnostics \
             | python3 -c 'import json, sys; [print(m["executable"]) for m in map(json.loads, (l for l in sys.stdin if l.startswith("{"))) if m.get("reason") == "compiler-artifact" and m.get("executable") and "lib" in m["target"]["kind"]]')
           [ -n "$bin" ] || { echo "::error::no lib test binary was built"; exit 1; }
-          python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))' "$bin" --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
+          python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))' "$bin" --exact --show-output "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
           rc=${PIPESTATUS[0]}
           if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
             echo "::error::expected ${#rows[@]} rows to run"
+            exit 1
+          fi
+          # A real-uv row without uv prints its skip line and passes: each one listed must say it ran.
+          real=$(printf '%s\n' "${rows[@]}" | grep -c 'fetch_uv_real_rows::' || true)
+          ran=$(grep -c 'real-uv row ran: ' "$RUNNER_TEMP/rows.log" || true)
+          if [ "$ran" -lt "$real" ]; then
+            echo "::error::$real real-uv rows listed, $ran ran (the rest took the skip path)"
             exit 1
           fi
           exit "$rc"
