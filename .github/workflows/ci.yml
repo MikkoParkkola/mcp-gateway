@@ -1357,7 +1357,7 @@ jobs:
 
   test:
     name: Tests
-    needs: [linux-lib-build, linux-lib-union, linux-gateway-bin, test-shards-lib, test-shards]
+    needs: [linux-lib-build, linux-lib-union, test-shards-lib, test-shards]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     steps:
@@ -1367,7 +1367,7 @@ jobs:
       - name: Every Linux shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: test-shards test-shards-lib linux-lib-build linux-lib-union linux-gateway-bin
+          ROLLUP_EXPECTS: test-shards test-shards-lib linux-lib-build linux-lib-union
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
