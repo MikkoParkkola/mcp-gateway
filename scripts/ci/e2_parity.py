@@ -87,16 +87,19 @@ def counts(d: Path, skips: list[str]) -> list[str]:
     minus the skipped ones: passed + failed + ignored equals that, and `filtered out` equals the skipped count."""
     import re
     names = [s for flag, s in zip(skips[::2], skips[1::2]) if flag == "--skip"]
-    summaries, current = [], None
+    summaries, current, last = [], None, None
+    # A section's own summary is its last one: tests that re-run their binary with a filter print summaries first.
     for line in (d / "run.log").read_text().splitlines():
-        if "Running unittests src/lib.rs" in line:
-            current = "lib"
-        elif re.search(r"\bRunning\b", line):
-            current = "other"
+        line = re.sub(r"\x1b\[[0-9;]*m", "", line)  # cargo colours its "Running" lines
+        if re.search(r"\bRunning\b|\bDoc-tests\b", line):
+            if current == "lib" and last:
+                summaries.append(last)
+            current, last = ("lib" if "Running unittests src/lib.rs" in line else "other"), None
         m = re.search(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; (\d+) filtered out", line)
         if m and current == "lib":
-            summaries.append(tuple(int(x) for x in m.groups()))
-            current = None
+            last = tuple(int(x) for x in m.groups())
+    if current == "lib" and last:
+        summaries.append(last)
     parts = sorted(d.glob("p*.txt"), key=lambda p: int(p.stem[1:]))
     problems = [] if len(summaries) == len(parts) else [f"{len(summaries)} lib summaries for {len(parts)} parts"]
     for p, (passed, failed, ignored, filtered) in zip(parts, summaries):
