@@ -244,7 +244,8 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
 
         // Pacing is wired into REST only, so a paced host takes no GraphQL call
         // (a retained definition may predate the host's pacing).
-        crate::capability::pacing::refuse_unpaced_protocol(&graphql_config.endpoint, "GraphQL")?;
+        crate::capability::pacing::refuse_unpaced_protocol(&graphql_config.endpoint, "GraphQL")
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let timeout = Duration::from_secs(ctx.timeout_secs);
         let response = super::send_with_retry(
             self.executor
