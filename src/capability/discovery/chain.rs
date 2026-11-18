@@ -253,6 +253,7 @@ impl<'a> DiscoveryChain<'a> {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

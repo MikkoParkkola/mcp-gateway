@@ -712,6 +712,7 @@ fn note_environment_server(name: &str, key: &str) {
     );
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,18 +772,22 @@ mod tests {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "config_scanner_ws_tests.rs"]
 mod ws_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "config_scanner_zed_tests.rs"]
 mod zed_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "config_scanner_vscode_tests.rs"]
 mod vscode_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "config_scanner_entry_tests.rs"]
 mod entry_tests;

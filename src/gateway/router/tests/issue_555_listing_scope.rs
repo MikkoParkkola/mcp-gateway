@@ -32,13 +32,20 @@ use crate::identity_grants::{
 };
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+#[cfg(tp5)]
 mod backend_scope;
+#[cfg(tp5)]
 #[cfg(feature = "cost-governance")]
 mod cost_scope;
+#[cfg(tp5)]
 mod direct_route;
+#[cfg(tp5)]
 mod direct_session;
+#[cfg(tp5)]
 mod guide;
+#[cfg(tp5)]
 mod meta_tools;
+#[cfg(tp5)]
 mod residuals;
 
 /// Every backend tool the fixture configures, as `(server, tool)`.
@@ -391,6 +398,7 @@ pub(super) fn refused(body: &Value) -> bool {
 }
 
 /// T1 (ported from #555): a backend outside the caller's scope is not listed.
+#[cfg(tp5)]
 #[tokio::test]
 async fn tools_list_withholds_a_backend_the_caller_is_not_scoped_to() {
     let f = fixture(Auth::Keys).await;
@@ -407,6 +415,7 @@ async fn tools_list_withholds_a_backend_the_caller_is_not_scoped_to() {
 
 /// T2 (positive control, green today): a caller scoped to both still sees
 /// both, so T1 is a filter and not a blanket withholding.
+#[cfg(tp5)]
 #[tokio::test]
 async fn tools_list_in_scope_caller_still_sees_its_tools() {
     let f = fixture(Auth::Keys).await;
@@ -420,6 +429,7 @@ async fn tools_list_in_scope_caller_still_sees_its_tools() {
 }
 
 /// T3: the per-key tool scope decides listing as it decides invocation.
+#[cfg(tp5)]
 #[tokio::test]
 async fn tools_list_honours_per_key_tool_scope() {
     let f = fixture(Auth::Keys).await;
@@ -434,6 +444,7 @@ async fn tools_list_honours_per_key_tool_scope() {
 }
 
 /// T4: a global policy denial is not listed, even to an anonymous caller.
+#[cfg(tp5)]
 #[tokio::test]
 async fn tools_list_hides_global_policy_denials_from_anonymous() {
     let f = fixture(Auth::Off).await;
@@ -447,6 +458,7 @@ async fn tools_list_hides_global_policy_denials_from_anonymous() {
 
 /// T5 (property): for every surfaced tool, listed ⇔ a direct-name call is not
 /// refused. An invariant over the configured set, not a name list.
+#[cfg(tp5)]
 #[tokio::test]
 async fn list_equals_invoke_surfaced() {
     for (auth, key) in [
@@ -473,6 +485,7 @@ async fn list_equals_invoke_surfaced() {
 /// per-tool allowlist (`decide_tool_target`), not only by backend scope. `read-key` may
 /// reach every backend but call only `alpha_read`, so the direct list of `beta` drops
 /// `beta_tool`, which no global policy denies. The meta-route T3 cannot see this filter.
+#[cfg(tp5)]
 #[tokio::test]
 async fn direct_tools_list_drops_a_tool_outside_the_key_allowlist() {
     let f = fixture(Auth::Keys).await;

@@ -664,6 +664,7 @@ impl ShadowControlPlaneAsset {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests;
 

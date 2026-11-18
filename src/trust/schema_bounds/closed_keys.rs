@@ -616,5 +616,6 @@ thread_local! {
     static NOTHING_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;

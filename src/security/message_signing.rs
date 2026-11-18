@@ -467,6 +467,7 @@ fn build_signature_block(sig: &str, nonce: Option<&str>, ts: u64, key_id: &str) 
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "message_signing_v2_tests.rs"]
 mod v2_tests;
@@ -475,6 +476,7 @@ mod v2_tests;
 #[path = "message_signing_nonce_tests.rs"]
 mod nonce_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "message_signing_tests.rs"]
 mod tests;
@@ -483,6 +485,7 @@ mod tests;
 #[path = "message_signing_nonce_metrics_support.rs"]
 pub(crate) mod nonce_metrics_support;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "metrics"))]
 #[path = "message_signing_nonce_metrics_tests.rs"]
 mod nonce_metrics_tests;

@@ -177,24 +177,30 @@ impl Stage {
 #[path = "route_check_matrix_table_tests.rs"]
 mod table;
 pub(crate) use table::expect;
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
 
 /// The stored task-read matrix (MIK-8392).
+#[cfg(tp4)]
 mod stored_read;
 
 /// The response-stage matrix (MIK-8689).
+#[cfg(tp4)]
 mod response;
 
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_keyed_tests.rs"]
 mod keyed;
 
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_p3_tests.rs"]
 mod p3;
 
+#[cfg(tp4)]
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_step_tests.rs"]
 mod step;
@@ -202,6 +208,7 @@ mod step;
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
 /// A length check alone would pass a list that repeats one variant and
 /// misses another.
+#[cfg(tp4)]
 #[test]
 fn every_route_and_stage_is_listed_exactly_once() {
     let mut routes = [0u8; Route::ALL.len()];
@@ -217,6 +224,7 @@ fn every_route_and_stage_is_listed_exactly_once() {
 }
 
 /// Every gap names its ticket, and the table answers every pair.
+#[cfg(tp4)]
 #[test]
 fn the_table_answers_every_route_and_stage() {
     let mut gaps = 0;
@@ -395,6 +403,7 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
 /// change that strands a cell, fails here.
 // Every live row compiles only with both features (`rows` needs firewall, the
 // R3 nonce row needs cost-governance), so the claim is checked where it holds.
+#[cfg(tp4)]
 #[cfg(all(feature = "firewall", feature = "cost-governance"))]
 #[test]
 fn every_stated_cell_is_driven_or_named_undriven() {
@@ -421,4 +430,5 @@ fn every_stated_cell_is_driven_or_named_undriven() {
 }
 
 /// The `tools/list_changed` axis (MIK-8350).
+#[cfg(tp4)]
 mod list_changed;

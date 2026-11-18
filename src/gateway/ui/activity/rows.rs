@@ -458,6 +458,7 @@ pub(super) fn in_scope(line: &Line, kind: Kind, backends: &[String]) -> bool {
             .is_some_and(|server| BackendGrant::of_list(backends).admits(server))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "rows_tests.rs"]
 mod tests;

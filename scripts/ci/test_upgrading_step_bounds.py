@@ -29,6 +29,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.y
 STEP = "UPGRADING checks on the assembled guide"
 MEMLOG = "scripts/ci/with-memory-log.sh"
 EXPORT_LIB = 'python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'
+LIB_PARTS = 'scripts/ci/lib-parts.sh export "$PART" "$RUNNER_TEMP/lib-bin"'  # the Linux build, in parts
 
 
 def step_block(text: str, name: str = STEP) -> list[str] | None:
@@ -68,7 +69,7 @@ def phase_problems(cmds: list[str], with_run: bool) -> list[str]:
     pc = at(lambda c: c.startswith('echo "phase compile'))
     # `--no-run` counts only before a trailing comment. The shared lib test build compiles through export-lib.
     build = at(lambda c: (c.startswith("cargo test") and "--no-run" in c.partition("#")[0])
-               or c.startswith(EXPORT_LIB))
+               or c.startswith(EXPORT_LIB) or c.startswith(LIB_PARTS))
     if pc < 0:
         out.append('no `echo "phase compile...` line')
     else:

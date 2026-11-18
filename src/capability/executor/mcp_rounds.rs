@@ -72,6 +72,7 @@ fn prepare_object(result: Value) -> Option<Map<String, Value>> {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::{Error, after_dispatch};

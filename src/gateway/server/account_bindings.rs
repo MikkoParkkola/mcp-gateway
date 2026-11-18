@@ -315,6 +315,7 @@ impl super::Gateway {
 /// the process-wide install site: 5 minutes, clamped further by the strategy.
 const ASSERTION_TTL_SECS: i64 = 300;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "account_bindings_tests.rs"]
 mod account_bindings_tests;

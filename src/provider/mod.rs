@@ -334,6 +334,7 @@ pub trait Transform: Send + Sync + 'static {
     async fn transform_result(&self, tool: &str, result: Value) -> Result<Value>;
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};

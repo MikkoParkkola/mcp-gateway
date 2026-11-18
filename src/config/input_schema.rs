@@ -38,6 +38,7 @@ impl super::BackendConfig {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::InputSchemaEnforcement;

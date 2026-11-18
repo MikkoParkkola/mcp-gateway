@@ -807,6 +807,7 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod fetch_registry;
 #[cfg(test)]

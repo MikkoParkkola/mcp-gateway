@@ -445,6 +445,7 @@ mod seam {
 #[cfg(test)]
 #[path = "unused_delete_tests.rs"]
 mod delete_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "unused_seam_tests.rs"]
 mod seam_tests;

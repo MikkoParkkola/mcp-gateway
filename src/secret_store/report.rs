@@ -184,6 +184,7 @@ fn offline_sources(
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "report_tests.rs"]
 mod tests;

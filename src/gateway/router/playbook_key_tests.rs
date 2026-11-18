@@ -140,6 +140,7 @@ pub(super) fn calls(fx: &Fx) -> usize {
 
 /// PRK.3a: unkeyed, both steps run (control); keyed, both steps run too. Red
 /// on base: the second step reuses the client's entry and is refused 409.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_keyed_playbook_runs_every_step() {
     let fx = served(Answer::Ok, vec![reads("two", &["one", "two"], json!({}))]).await;
@@ -155,6 +156,7 @@ async fn a_keyed_playbook_runs_every_step() {
 
 /// PRK.3b: a second identical keyed call is the client retrying the run: it
 /// gets the run's complete report back and no step is dispatched again.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_keyed_retry_replays_the_run_without_running_a_step() {
     let fx = served(Answer::Ok, vec![reads("two", &["one", "two"], json!({}))]).await;
@@ -171,6 +173,7 @@ async fn a_keyed_retry_replays_the_run_without_running_a_step() {
 
 /// PRK.3c (green pin): the same key on a run with different arguments is a
 /// reused key, refused like any other, and runs nothing.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_key_reused_for_another_run_is_refused() {
     let fx = served(Answer::Ok, vec![reads("one", &["one"], json!({}))]).await;
@@ -197,6 +200,7 @@ async fn a_key_reused_for_another_run_is_refused() {
 
 /// ID: two steps with IDENTICAL arguments are two calls, both run. Red on
 /// base: the second step meets the first step's entry under the client's key.
+#[cfg(tp1)]
 #[tokio::test]
 async fn two_identical_steps_both_run() {
     let fx = served(Answer::Ok, vec![reads("same", &["one", "one"], json!({}))]).await;
@@ -212,6 +216,7 @@ async fn two_identical_steps_both_run() {
 /// direct route shares the execution store, where the key belongs to the
 /// playbook's execution: the direct call is refused with the store's
 /// mismatch, never served a step's answer, and the backend does not run.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_step_never_settles_the_clients_own_key() {
     let fx = served(Answer::Ok, vec![reads("one", &["one"], json!({}))]).await;
@@ -237,6 +242,7 @@ async fn a_step_never_settles_the_clients_own_key() {
 /// ADV (green pin): a client key that spells a step's scope (`K|step:0`) is
 /// its own key, never a step's, in both population orders: each call reaches
 /// the backend.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_client_key_spelling_a_step_scope_shares_no_entry() {
     for run_first in [true, false] {
@@ -301,6 +307,7 @@ impl crate::transport::Transport for Unsigned {
 /// keyed or not: the failure follows a send, so the side effect may be done.
 /// One backend call either way. Before that rule the engine re-sent it, and only
 /// the key's stored failure kept a keyed run to one call (unkeyed: two).
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_step_that_ran_and_failed_is_sent_once_keyed_or_not() {
     use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
@@ -361,6 +368,7 @@ async fn a_step_that_ran_and_failed_is_sent_once_keyed_or_not() {
 /// is pinned at `admit_meta_sync` itself (m9), not here: the corrected request
 /// addresses a different round.
 /// Red on base: the retry fields open a new round and re-run the steps.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_run_carrying_input_responses_is_refused_and_reserves_nothing() {
     let fx = served(Answer::Ok, vec![reads("one", &["one"], json!({}))]).await;
@@ -394,6 +402,7 @@ async fn a_run_carrying_input_responses_is_refused_and_reserves_nothing() {
 /// D3b: the same with `requestState: ""` on a sync call. The base control is
 /// the generic -32602 continuation routing gives; the row pins the playbook's
 /// own reason. Red on base: the generic message.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_run_carrying_request_state_is_refused_for_the_playbook_reason() {
     let fx = served(Answer::Ok, vec![reads("one", &["one"], json!({}))]).await;

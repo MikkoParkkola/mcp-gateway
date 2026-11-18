@@ -16,6 +16,7 @@ use super::*;
 
 /// E5-T6: the cookie's lifetime is the absolute limit the server enforces,
 /// including a configured one.
+#[cfg(tp1)]
 #[tokio::test]
 async fn cookie_max_age_equals_absolute_timeout() {
     let (state, _dir) = fixture().await;
@@ -44,6 +45,7 @@ async fn cookie_max_age_equals_absolute_timeout() {
 
 /// E5-T18: a fresh link works even while the browser still holds a dead
 /// cookie; that is exactly when an operator uses one.
+#[cfg(tp1)]
 #[tokio::test]
 async fn bootstrap_redeems_past_a_dead_cookie() {
     let (state, _dir) = fixture().await;
@@ -86,6 +88,7 @@ pub(in super::super) fn bootstrap_value(link: &str) -> String {
 
 /// E5-T7: an admin credential re-arms a fresh single-use link without a
 /// restart; the replaced value is dead.
+#[cfg(tp1)]
 #[tokio::test]
 async fn rearm_issues_fresh_single_use_link() {
     let (state, _dir) = fixture().await;
@@ -124,6 +127,7 @@ async fn rearm_issues_fresh_single_use_link() {
 
 /// E5-T7 (refusals): only a credential that redemption itself accepts may
 /// mint a link; a session cannot renew itself past the absolute cap.
+#[cfg(tp1)]
 #[tokio::test]
 async fn only_a_static_admin_credential_may_mint_a_link() {
     let (state, _dir) = fixture().await;
@@ -149,6 +153,7 @@ async fn only_a_static_admin_credential_may_mint_a_link() {
 
 /// A gateway bound to a network address cannot hand out a link: redemption
 /// needs a loopback peer, so the link could never open.
+#[cfg(tp1)]
 #[tokio::test]
 async fn no_link_is_minted_for_a_network_bind() {
     let (state, _dir) = fixture().await;
@@ -163,6 +168,7 @@ async fn no_link_is_minted_for_a_network_bind() {
 
 /// A wildcard bind, in any spelling, mints a loopback link a browser here can
 /// open; `localhost` keeps its name.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_wildcard_bind_mints_a_loopback_link() {
     for (bind, host) in [
@@ -187,6 +193,7 @@ async fn a_wildcard_bind_mints_a_loopback_link() {
 
 /// Session limits apply on reload, so a reload that changes only them is not
 /// reported as waiting for a restart; any other `auth` change still is.
+#[cfg(tp1)]
 #[test]
 fn session_limits_are_not_reported_as_restart_only() {
     let live = crate::config_reload::LiveConfig::new(crate::config::Config::default());
@@ -205,6 +212,7 @@ fn session_limits_are_not_reported_as_restart_only() {
 
 /// A reload that edits the restart-only listener fields changes nothing about
 /// the link: it names the address and scheme this process actually serves.
+#[cfg(tp1)]
 #[tokio::test]
 async fn the_link_names_the_running_listener_not_a_pending_reload() {
     let (state, _dir) = fixture().await;
@@ -226,6 +234,7 @@ async fn the_link_names_the_running_listener_not_a_pending_reload() {
 /// Cookie security is read per request, not captured when the router is
 /// built: a reloaded HTTPS `public_url` marks the logout cookie `Secure`, and
 /// removing it lets a plain-HTTP link sign in with a non-`Secure` cookie.
+#[cfg(tp1)]
 #[tokio::test]
 async fn cookie_security_follows_a_reloaded_public_url() {
     let (state, _dir) = fixture().await;
@@ -255,6 +264,7 @@ async fn cookie_security_follows_a_reloaded_public_url() {
 /// reload names an HTTPS `public_url`, shows the one-time code for the public
 /// origin instead of setting a `Secure` cookie a browser on `http://` would
 /// drop. A wrong value is still refused without naming the deployment.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_stale_http_link_hands_off_after_an_https_reload() {
     let (state, _dir) = fixture().await;
@@ -289,6 +299,7 @@ pub(in super::super) fn session_handle(out: &Reply) -> String {
 
 /// A link minted with an admin key that expires opens a session that ends
 /// when the key does, not a full absolute limit later.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_link_minted_by_an_expiring_key_ends_with_the_key() {
     let mut admin = api_key(ADMIN_KEY, true);
@@ -335,6 +346,7 @@ async fn a_link_minted_by_an_expiring_key_ends_with_the_key() {
 /// Two admin keys share one name (a config that skipped load validation);
 /// the one listed first never expires. A link minted with the expiring one
 /// still ends with it, whichever order the keys are listed in.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_link_takes_the_expiry_of_the_key_that_minted_it_not_its_namesake() {
     const OTHER_KEY: &str = "namesake-admin-key";
@@ -391,6 +403,7 @@ async fn a_link_takes_the_expiry_of_the_key_that_minted_it_not_its_namesake() {
 }
 
 /// On `server.port: 0` the minted link names the port the listener bound.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_minted_link_names_the_bound_port() {
     let (state, _dir) = fixture().await;
@@ -403,6 +416,7 @@ async fn a_minted_link_names_the_bound_port() {
 
 /// An explicit admin credential decides the request even when the browser
 /// also sends a live session cookie; the cookie alone still may not mint.
+#[cfg(tp1)]
 #[tokio::test]
 async fn an_admin_credential_beside_a_live_session_cookie_may_mint() {
     let (state, _dir) = fixture().await;
@@ -415,6 +429,7 @@ async fn an_admin_credential_beside_a_live_session_cookie_may_mint() {
 
 /// A presented `Authorization` header decides alone: a wrong bearer is 401
 /// even beside a live session cookie, never a fallback to the cookie.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_wrong_bearer_beside_a_live_session_cookie_is_refused() {
     let (state, _dir) = fixture().await;

@@ -84,6 +84,7 @@ pub(super) fn beta_shape(path: &Path) {
     rechain(path, beta_records(path));
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_log_with_the_former_separate_predecessor_record_verifies_unchanged() {
     // GIVEN: a log in the shape the separate predecessor record left: an
@@ -119,6 +120,7 @@ fn a_log_with_the_former_separate_predecessor_record_verifies_unchanged() {
     assert!(verify(&path, false).ok);
 }
 
+#[cfg(tp4)]
 #[test]
 fn log_id_upgrade() {
     // GIVEN: a beta-shaped log that verifies
@@ -159,6 +161,7 @@ fn log_id_upgrade() {
     assert!(r.ok, "{:?}", r.error_message);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_caller_cannot_append_an_audit_log_identified_record() {
     // GIVEN: a log with its minted id
@@ -190,6 +193,7 @@ pub(super) fn swap_in(src: &Path, dst: &Path) {
     std::fs::rename(&tmp, dst).unwrap();
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_log_replaced_under_a_live_logger_is_adopted_with_its_id() {
     // GIVEN: a live logger on one log, and a second log with its own id
@@ -240,6 +244,7 @@ fn unfinish_genesis(path: &Path, marked: bool) {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_unfinished_genesis_gets_its_one_identified_record() {
     for marked in [true, false] {
@@ -269,6 +274,7 @@ fn an_unfinished_genesis_gets_its_one_identified_record() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_log_whose_identified_record_expired_gets_no_second_one() {
     // GIVEN: a log rotated until retention expired the segment that held its
@@ -292,6 +298,7 @@ fn a_log_whose_identified_record_expired_gets_no_second_one() {
     assert!(identified(&path).is_empty(), "no second identified record");
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_log_whose_identified_record_expired_with_no_segment_left_gets_no_second_one() {
     // GIVEN: a log whose identified record expired with its segment, and
@@ -323,6 +330,7 @@ fn a_log_whose_identified_record_expired_with_no_segment_left_gets_no_second_one
     assert!(identified(&path).is_empty(), "no second identified record");
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_torn_identified_record_is_repaired_exactly_once() {
     // The torn line cut mid-record, and cut by its closing byte only: both
@@ -359,6 +367,7 @@ fn a_torn_identified_record_is_repaired_exactly_once() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn the_id_scan_finds_an_identified_record_after_an_oversized_line() {
     // GIVEN: a beta active file whose identified record follows a line over

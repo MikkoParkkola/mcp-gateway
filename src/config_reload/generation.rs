@@ -251,6 +251,7 @@ pub(crate) mod refuse_hook {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "generation_rule_id_tests.rs"]
 mod rule_id_tests;

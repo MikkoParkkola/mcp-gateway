@@ -329,6 +329,7 @@ impl SandboxDescriptor {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "descriptor_tests.rs"]
 mod tests;

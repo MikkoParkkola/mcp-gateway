@@ -121,6 +121,7 @@ pub(super) fn record(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "configured_secrets_tests.rs"]
 mod tests;

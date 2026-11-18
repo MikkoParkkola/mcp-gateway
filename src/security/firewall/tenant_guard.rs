@@ -377,6 +377,7 @@ fn cut_string(text: &str) -> Option<String> {
     close(text).or_else(|| close(&text[..text.rfind('\\')?]))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "tenant_attribution_tests.rs"]
 mod attribution_tests;

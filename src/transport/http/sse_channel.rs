@@ -363,6 +363,7 @@ impl super::HttpTransport {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "sse_channel_tests.rs"]
 mod tests;

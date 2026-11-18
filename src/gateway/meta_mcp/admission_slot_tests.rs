@@ -26,6 +26,7 @@ fn settled_after(slots: &[PoolKey]) -> Option<PoolKey> {
 /// GUARD (killed by mutant 6, Shared serialised as null): `None`,
 /// `Some(Shared)` and `Some(PerUser)` each come back unchanged, and `Shared`
 /// is a value, never null.
+#[cfg(tp2)]
 #[test]
 fn the_stored_slot_survives_a_json_round_trip() {
     for slot in [None, Some(PoolKey::Shared), Some(per_user("b-1"))] {
@@ -49,6 +50,7 @@ fn the_stored_slot_survives_a_json_round_trip() {
     }
 }
 
+#[cfg(tp2)]
 #[test]
 fn a_lease_noting_two_slots_stores_none() {
     let (a, b) = (per_user("a"), per_user("b"));

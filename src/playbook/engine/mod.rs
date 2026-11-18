@@ -529,11 +529,15 @@ fn build_output(
 // Tests
 // ============================================================================
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod busy_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod envelope_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod step_retry_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;

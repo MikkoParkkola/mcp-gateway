@@ -96,6 +96,7 @@ async fn nothing_issued(ks: &crate::key_server::KeyServer) {
 /// NEW.W.1: the confirmed row exists when the store activates, and after an
 /// abrupt restart on the same storage.
 /// Mutant: append after activation, or skip the append.
+#[cfg(tp5)]
 #[tokio::test]
 async fn failclosed_confirmed_row_precedes_the_bearer_and_survives_restart() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -123,6 +124,7 @@ async fn failclosed_confirmed_row_precedes_the_bearer_and_survives_restart() {
 /// NEW.W.2: append failure, admission error, no task started and an
 /// unconfirmed write each refuse with a 503 and issue nothing.
 /// Mutant: any one cell proceeds to activation.
+#[cfg(tp5)]
 #[tokio::test]
 async fn failclosed_every_non_confirmed_outcome_refuses_with_503() {
     for cell in Cell::ALL {
@@ -261,6 +263,7 @@ impl TokenStore for RowFirst {
 /// NEW.W.3: under `BestEffort` every cell still mints, the row is simply
 /// missing, and the bearer is valid.
 /// Mutant: `BestEffort` refuses like `FailClosed`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn besteffort_every_cell_mints_without_the_row() {
     // An admission error cannot arise on a healthy BestEffort log (it never
@@ -289,6 +292,7 @@ async fn besteffort_every_cell_mints_without_the_row() {
 /// NEW.W.2: a commit refused as revoked activates nothing even though the
 /// row landed.
 /// Mutant: activate on any landed row.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_revoked_commit_issues_nothing_even_with_a_row() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -347,6 +351,7 @@ impl TokenStore for Revoking {
 
 /// NEW.W.4: the row carries the safe envelope only.
 /// Mutant: serialize the verified identity, or add name/groups.
+#[cfg(tp5)]
 #[tokio::test]
 async fn the_row_holds_the_safe_envelope_and_no_email() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -380,6 +385,7 @@ async fn the_row_holds_the_safe_envelope_and_no_email() {
 /// NEW.W.4: the key server reaches the audit log through the one helper;
 /// the startup key record is the only other writer.
 /// Mutant: a second append path in the key server.
+#[cfg(tp5)]
 #[test]
 fn only_the_issuance_helper_appends_from_the_key_server() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/key_server");
@@ -430,6 +436,7 @@ fn only_the_issuance_helper_appends_from_the_key_server() {
 /// A mint dropped while its issuance write is held activates nothing and
 /// gives its slot back; the write, released later, only leaves a row.
 /// Mutant: activate or keep the slot on drop.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_mint_dropped_during_its_issuance_write_leaves_no_slot_or_token() {
     use std::future::Future;

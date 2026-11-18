@@ -198,6 +198,7 @@ pub(super) fn reached_in(dir: &std::path::Path, boundary: Boundary) -> Result<()
     reached(boundary)
 }
 
+#[cfg(tp5)]
 #[test]
 fn a_fault_fires_once_at_its_own_boundary_and_then_disarms() {
     let armed = arm(Boundary::ManifestRename);
@@ -220,6 +221,7 @@ fn a_fault_fires_once_at_its_own_boundary_and_then_disarms() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn an_unarmed_boundary_is_transparent() {
     for boundary in ALL {
@@ -227,6 +229,7 @@ fn an_unarmed_boundary_is_transparent() {
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn every_boundary_is_listed_once_and_named_uniquely() {
     let mut names: Vec<&str> = ALL.iter().map(|boundary| boundary.name()).collect();

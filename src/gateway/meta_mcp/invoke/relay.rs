@@ -623,10 +623,12 @@ pub(crate) use staging::{
 #[cfg(feature = "firewall")]
 pub(crate) use staging::{commit_with, stage_with, take_staged_now};
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_refusal_tests.rs"]
 mod refusal_tests;

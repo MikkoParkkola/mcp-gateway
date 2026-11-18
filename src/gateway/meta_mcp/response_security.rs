@@ -568,14 +568,17 @@ pub(in crate::gateway) use delivery_record::record_answer_delivery;
 #[path = "chain_receipt.rs"]
 pub(crate) mod chain_receipt;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_challenge_tests.rs"]
 mod challenge_tests;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "chain_emission_tests.rs"]
 mod chain_emission_tests;

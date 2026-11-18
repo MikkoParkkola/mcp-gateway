@@ -88,6 +88,7 @@ fn expected(key: &RuleKey, rules: &[PolicyRuleConfig]) -> Vec<Option<RuleId>> {
     rules.iter().map(|r| Some(mtls_id(key, r))).collect()
 }
 
+#[cfg(tp4)]
 #[test]
 fn mtls_rule_ids_are_keyed_and_stable() {
     let (one, two) = (
@@ -127,6 +128,7 @@ fn mtls_rule_ids_are_keyed_and_stable() {
 const GOLDEN_FORM: &str = "{\"match\":{\"cn\":\"agent-1\",\"ou\":null,\"san_uri\":null,\"san_dns\":null,\"any\":null},\"allow\":{\"backends\":[\"*\"],\"tools\":[\"*\"]},\"deny\":{\"backends\":[],\"tools\":[\"write\"]}}";
 const GOLDEN_ID: &str = "mtls:33b399957189fd71800e528a230b8f079f89d17bf169c65984f8be16c92e6e36";
 
+#[cfg(tp4)]
 #[test]
 fn mtls_rule_id_hashes_the_configured_rule() {
     let key = RuleKey::from_derived([7; 32]);

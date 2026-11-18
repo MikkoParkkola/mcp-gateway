@@ -752,30 +752,43 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_owner_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_refs_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_confirm_tests;
+#[cfg(tp3)]
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_load_tests;
+#[cfg(tp3)]
 #[cfg(all(test, target_os = "macos"))]
 mod keychain_macos_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_ref_tests;
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 mod keychain_windows_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_file_ref_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_files_store_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_ref_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
@@ -791,18 +804,22 @@ mod cleartext_credential_guard;
 #[path = "a2a_secrets_tests.rs"]
 mod a2a_secrets;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_secret_order_tests.rs"]
 mod account_secret_order_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_consumer_config_tests.rs"]
 mod account_consumer_config_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "descriptor_config_tests.rs"]
 mod descriptor_config_tests;

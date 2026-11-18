@@ -44,6 +44,7 @@ fn posture_name(config: &Config) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::super::CheckStatus;

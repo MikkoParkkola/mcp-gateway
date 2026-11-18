@@ -86,6 +86,7 @@ pub(super) fn assert_fails(r: &VerifyResult, at: u64, rule: &str, token: &str) {
     assert!(msg.contains(&format!("(token {token})")), "{token}: {msg}");
 }
 
+#[cfg(tp4)]
 #[test]
 fn equal_repeats_collapse_and_a_dependent_naming_the_second_pairs() {
     // GIVEN: one intent written twice, equal, and an outcome naming the
@@ -103,6 +104,7 @@ fn equal_repeats_collapse_and_a_dependent_naming_the_second_pairs() {
     assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_dependent_naming_no_intent_of_its_token_and_role_fails() {
     const RULE: &str = "names no intent of its token at that counter";
@@ -136,6 +138,7 @@ fn a_dependent_naming_no_intent_of_its_token_and_role_fails() {
     assert_fails(&other_role, 5, RULE, "w-1");
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_intent_pairs_with_a_terminal_record_and_warns_without_one() {
     let intent = || rec(INTENT, "w-1", &json!({}));
@@ -177,6 +180,7 @@ fn an_intent_pairs_with_a_terminal_record_and_warns_without_one() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_token_and_role_with_two_different_records_fails() {
     const RULE: &str = "two different records for one token and role";
@@ -250,6 +254,7 @@ fn a_token_and_role_with_two_different_records_fails() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn delivery_stopped_without_an_outcome_fails() {
     const STOPPED: &str = "config_write_delivery_stopped";
@@ -265,6 +270,7 @@ fn delivery_stopped_without_an_outcome_fails() {
     assert_paired(&paired, "stopped then outcome");
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn two_equal_settles_of_one_intent_collapse() {
     use super::settle::{IntentKind, Role};
@@ -312,6 +318,7 @@ pub(super) fn settled(token: &str, at: u64, by: &str, by_at: u64) -> Map<String,
     )
 }
 
+#[cfg(tp4)]
 #[test]
 fn settled_by_resolves_against_the_recovery_attempts_intents() {
     const RULE: &str = "settled_by names no intent";
@@ -407,6 +414,7 @@ fn both_modes(path: &Path) -> [(VerifyMode, VerifyResult); 2] {
         .map(|m| (m, verify_segments(path, &cfg(path, 1, false), m).unwrap()))
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn dependents_below_at_and_above_the_boundary() {
     use super::settle::{IntentKind, Role};
@@ -453,6 +461,7 @@ async fn dependents_below_at_and_above_the_boundary() {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn settled_by_below_the_boundary_is_expired_not_failed() {
     use super::settle::{IntentKind, Role};
@@ -487,6 +496,7 @@ fn plain(v: &Value) -> Map<String, Value> {
     v.as_object().unwrap().clone()
 }
 
+#[cfg(tp4)]
 #[test]
 fn legacy_intents_are_counted_once_and_mismatched_records_warn_once() {
     // GIVEN: two legacy intents (no prefix), a settle intent, and two
@@ -527,6 +537,7 @@ fn tamper(path: &Path, counter: u64) {
     std::fs::write(path, body).unwrap();
 }
 
+#[cfg(tp4)]
 #[test]
 fn under_a_failed_chain_pairing_findings_are_unverified_warnings() {
     const STOPPED_RULE: &str = "delivery stopped with no outcome";
@@ -564,6 +575,7 @@ fn under_a_failed_chain_pairing_findings_are_unverified_warnings() {
     assert_fails(&verify_records(records()), 4, STOPPED_RULE, "w-1");
 }
 
+#[cfg(tp4)]
 #[test]
 fn repeats_differing_only_in_time_fields_collapse() {
     // GIVEN: one intent written twice, differing only in `timestamp` and
@@ -586,6 +598,7 @@ fn repeats_differing_only_in_time_fields_collapse() {
     assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_mismatched_record_warning_names_its_file_by_position_not_path() {
     // GIVEN: a log holding one mismatched record
@@ -612,6 +625,7 @@ fn a_mismatched_record_warning_names_its_file_by_position_not_path() {
 /// `intent_counter`, and its `settled_by` when it has one.
 const LOOKUPS_PER_DEPENDENT: usize = 2;
 
+#[cfg(tp4)]
 #[test]
 fn intent_lookups_grow_with_the_dependents_not_their_square() {
     // GIVEN: a thousand tokens, each an intent, a recovery attempt's
@@ -642,6 +656,7 @@ fn intent_lookups_grow_with_the_dependents_not_their_square() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn records_after_the_first_failure_are_still_paired() {
     // GIVEN: a valid intent, an unrelated malformed record, then the
@@ -666,6 +681,7 @@ pub(super) const WRITER_INTENTS: [&str; 4] = [
     "config_backend_intent",
 ];
 
+#[cfg(tp4)]
 #[test]
 fn every_intent_kind_recovery_and_stopped_fail_on_two_different_records() {
     const RULE: &str = "two different records for one token and role";
@@ -701,6 +717,7 @@ fn every_intent_kind_recovery_and_stopped_fail_on_two_different_records() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn settled_by_pairs_with_any_equal_recovery_repeat_but_not_a_counter_between() {
     // GIVEN: w-1's intent (3), r-1's recovery intent (4), a plain record
@@ -722,6 +739,7 @@ fn settled_by_pairs_with_any_equal_recovery_repeat_but_not_a_counter_between() {
     assert_fails(&between, 7, "settled_by names no intent", "w-1");
 }
 
+#[cfg(tp4)]
 #[test]
 fn mismatched_records_warn_once_per_rotated_file_by_position() {
     // GIVEN: two mismatched records in the first file, none in the second,

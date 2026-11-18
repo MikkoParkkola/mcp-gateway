@@ -37,6 +37,7 @@ fn token(claims: &Value, algorithm: Algorithm, secret: &[u8]) -> String {
 /// and is refused (the adapter answers 403 through `refuse`), now through
 /// `VerifiedIdentity::checked` rather than a check of its own. Mutant:
 /// the emptiness test in `names_someone` removed.
+#[cfg(tp4)]
 #[test]
 fn an_assertion_naming_no_one_is_refused() {
     let key = DecodingKey::from_secret(SECRET);
@@ -47,6 +48,7 @@ fn an_assertion_naming_no_one_is_refused() {
     ));
 }
 
+#[cfg(tp4)]
 #[test]
 fn identities_are_namespaced_and_profile_claims_are_discarded() {
     let key = DecodingKey::from_secret(SECRET);
@@ -76,6 +78,7 @@ fn trusted(installation: &str, secret: &[u8]) -> Trusted {
 
 /// Installations sharing a header are resolved by SIGNATURE, and exactly
 /// one of them must succeed.
+#[cfg(tp4)]
 #[test]
 fn shared_header_resolves_to_exactly_one_installation() {
     const OTHER: &[u8] = b"fixture-second-installation-secret-987654321";
@@ -110,6 +113,7 @@ fn shared_header_resolves_to_exactly_one_installation() {
     assert!(resolve_identity(&ambiguous, "owui", &desk).is_err());
 }
 
+#[cfg(tp4)]
 #[test]
 fn invalid_signatures_algorithms_and_claims_are_refused() {
     let runtime = runtime("desk");
@@ -180,6 +184,7 @@ pub(super) fn verified_receipt(
 /// D11 (MIK-8350): a held assertion must recheck future issuance, so a
 /// clock rolled back past `iat - skew` kills it exactly where fresh
 /// verification of the same token starts refusing it.
+#[cfg(tp4)]
 #[test]
 fn held_adapter_assertion_rechecks_future_issuance_after_clock_rollback() {
     let mut adapter = runtime("desk");
@@ -233,6 +238,7 @@ fn held_adapter_assertion_rechecks_future_issuance_after_clock_rollback() {
 /// The inclusive side of the future-issuance boundary: at `iat - skew`
 /// the held assertion is live and fresh verification still succeeds,
 /// while one second earlier fresh verification refuses the token.
+#[cfg(tp4)]
 #[test]
 fn adapter_future_issuance_boundary_matches_fresh_verification() {
     let mut adapter = runtime("desk");
@@ -266,6 +272,7 @@ fn adapter_future_issuance_boundary_matches_fresh_verification() {
 
 /// Expiry is inclusive at `exp + skew` and dead one second later, for
 /// the held assertion and for fresh verification alike.
+#[cfg(tp4)]
 #[test]
 fn adapter_expiry_boundary_matches_fresh_verification() {
     let mut adapter = runtime("desk");
@@ -299,6 +306,7 @@ fn adapter_expiry_boundary_matches_fresh_verification() {
 
 /// A coherent negative `iat` keeps its signed meaning: issued before
 /// the epoch, expiring after it, it is admitted and held live.
+#[cfg(tp4)]
 #[test]
 fn adapter_coherent_negative_issuance_remains_admitted() {
     let mut adapter = runtime("desk");
@@ -323,6 +331,7 @@ fn adapter_coherent_negative_issuance_remains_admitted() {
 
 /// A clock that reads before the epoch answers not-live and refuses
 /// fresh verification; it never falls back to reading the time as zero.
+#[cfg(tp4)]
 #[test]
 fn adapter_unreadable_clock_is_not_live() {
     let mut adapter = runtime("desk");
@@ -350,6 +359,7 @@ fn adapter_unreadable_clock_is_not_live() {
 /// verification. The token is otherwise coherent and unexpired at the
 /// reading clock, and `exp + skew` does not overflow for `exp` zero, so
 /// verification reaches the original conversion branch that refuses it.
+#[cfg(tp4)]
 #[test]
 fn adapter_out_of_range_skew_is_refused() {
     let mut adapter = runtime("desk");

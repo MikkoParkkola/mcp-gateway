@@ -323,10 +323,12 @@ fn step_error_text(error: &crate::Error) -> String {
     crate::error::step_failure_text(error, error.to_string())
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "step_retry_tests.rs"]
 mod step_retry_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     #![allow(

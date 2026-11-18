@@ -743,18 +743,22 @@ mod may_have_run;
 #[path = "error_origin.rs"]
 mod origin;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "error_pre_send_scan_tests.rs"]
 mod pre_send_scan_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "error_rpc_code_tests.rs"]
 mod rpc_code_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "error_non_exhaustive_tests.rs"]
 mod non_exhaustive_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "error_origin_tests.rs"]
 mod origin_tests;
