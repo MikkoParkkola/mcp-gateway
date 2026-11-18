@@ -370,6 +370,9 @@ fn run_npm(
 fn sweep(bound: Duration) -> Result<(), String> {
     use rustix::process::{Pid, Signal, WaitOptions, kill_process, wait};
     let deadline = Instant::now() + bound;
+    if !bound.is_zero() {
+        return Ok(());
+    }
     loop {
         let others: Vec<i32> = fs::read_dir("/proc")
             .map_err(|e| format!("sweeping the fetch ({e})"))?
