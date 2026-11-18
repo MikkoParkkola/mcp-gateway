@@ -1152,6 +1152,37 @@ jobs:
         if: always()
         run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
+  # THROWAWAY ONLY (never merged): E2 parity for the lib test split's run mode. Each job builds today's single
+  # `cargo test --no-run` once as the independent oracle, then each part and the other targets, compares them, and
+  # runs the job's new split command end to end (scripts/ci/e2_run.sh).
+  e2:
+    name: E2 ${{ matrix.shape }} shape (throwaway)
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shape: [verify, packaged]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/add-swap
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: E2 parity and end-to-end run
+        env:
+          SHAPE: ${{ matrix.shape }}
+        run: bash scripts/ci/e2_run.sh "$SHAPE" "$RUNNER_TEMP/e2"
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2-${{ matrix.shape }}
+          path: ${{ runner.temp }}/e2
+          retention-days: 7
+          if-no-files-found: warn
+
   # Every run: each part's binary lists exactly the tests the source puts in that part (scripts/dev/test_parts.py
   # expect, every cfg evaluated with CI's compiler), parts exactly 1..N, none empty, no test in two parts
   # (scripts/ci/lib_union.py). `!cancelled()`: a failed part leg makes this red, never skipped.
