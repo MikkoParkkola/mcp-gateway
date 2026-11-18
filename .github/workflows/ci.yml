@@ -1398,22 +1398,10 @@ jobs:
       # Hosted runners only: the trusted machine sizes its own memory.
       - if: runner.environment == 'github-hosted'
         uses: ./.github/actions/add-swap
-      # The release tooling's Python suites, which `release-script-tests` runs
-      # but which that job skips here. Without this, a throwaway meant to show
-      # a workflow-wiring or release-script test going red passes on cargo
-      # alone. Every suite runs and all failures are reported; seconds, no cargo.
-      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
-        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
-      - name: Release tooling Python suites
-        run: |
-          set -uo pipefail
-          fail=0
-          for suite in scripts/release/test_*.py; do
-            echo "::group::$suite"
-            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
-            echo "::endgroup::"
-          done
-          exit "$fail"
+      # Sandbox-row probe (this branch never merges): only the rows named in
+      # .probe-rows run, as the Linux lib shards run them, with user
+      # namespaces allowed, the gateway binary built here and the sandbox
+      # required, so a row that cannot run fails instead of skipping.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
@@ -1422,13 +1410,28 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
-      # Each skip names the job that runs the test in full, and its ticket:
-      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
-      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
-      #   release.yml `verify` needs it green on the released revision.
-      - name: Run the tests
-        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
-        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Allow unprivileged user namespaces (preview sandbox tests)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build the gateway binary for the sandbox rows
+        env:
+          MCP_GATEWAY_TEST_PART: "4"
+        run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Run the probe's rows
+        env:
+          MCP_GATEWAY_TEST_PART: "4"
+          PREVIEW_SANDBOX_REQUIRED: "1"
+          PREVIEW_SANDBOX_GATEWAY_BIN: ${{ github.workspace }}/target/debug/mcp-gateway
+        run: |
+          set -uo pipefail
+          mapfile -t rows < <(grep -v '^#' .probe-rows | grep .)
+          [ "${#rows[@]}" -gt 0 ] || { echo "::error::.probe-rows names no row"; exit 1; }
+          scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-fail-fast -- --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
+          rc=${PIPESTATUS[0]}
+          if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
+            echo "::error::expected ${#rows[@]} rows to run"
+            exit 1
+          fi
+          exit "$rc"
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
   # named test fails on a mutant and passes on the fix; that is logic, not
@@ -1454,22 +1457,10 @@ jobs:
       # Hosted runners only: the trusted machine sizes its own memory.
       - if: runner.environment == 'github-hosted'
         uses: ./.github/actions/add-swap
-      # The release tooling's Python suites, which `release-script-tests` runs
-      # but which that job skips here. Without this, a throwaway meant to show
-      # a workflow-wiring or release-script test going red passes on cargo
-      # alone. Every suite runs and all failures are reported; seconds, no cargo.
-      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
-        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
-      - name: Release tooling Python suites
-        run: |
-          set -uo pipefail
-          fail=0
-          for suite in scripts/release/test_*.py; do
-            echo "::group::$suite"
-            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }
-            echo "::endgroup::"
-          done
-          exit "$fail"
+      # Sandbox-row probe (this branch never merges): only the rows named in
+      # .probe-rows run, as the Linux lib shards run them, with user
+      # namespaces allowed, the gateway binary built here and the sandbox
+      # required, so a row that cannot run fails instead of skipping.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
@@ -1478,13 +1469,28 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
-      # Each skip names the job that runs the test in full, and its ticket:
-      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
-      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
-      #   release.yml `verify` needs it green on the released revision.
-      - name: Run the tests
-        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
-        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Allow unprivileged user namespaces (preview sandbox tests)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build the gateway binary for the sandbox rows
+        env:
+          MCP_GATEWAY_TEST_PART: "4"
+        run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Run the probe's rows
+        env:
+          MCP_GATEWAY_TEST_PART: "4"
+          PREVIEW_SANDBOX_REQUIRED: "1"
+          PREVIEW_SANDBOX_GATEWAY_BIN: ${{ github.workspace }}/target/debug/mcp-gateway
+        run: |
+          set -uo pipefail
+          mapfile -t rows < <(grep -v '^#' .probe-rows | grep .)
+          [ "${#rows[@]}" -gt 0 ] || { echo "::error::.probe-rows names no row"; exit 1; }
+          scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-fail-fast -- --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
+          rc=${PIPESTATUS[0]}
+          if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
+            echo "::error::expected ${#rows[@]} rows to run"
+            exit 1
+          fi
+          exit "$rc"
 
   # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
   # shipped gws_* capability builds. `--dry-run` needs no credentials and sends
