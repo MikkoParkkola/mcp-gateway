@@ -38,11 +38,18 @@ jobs:
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
           PREVIEW_SANDBOX_GATEWAY_BIN: ${{ github.workspace }}/target/debug/mcp-gateway
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
         run: |
           set -uo pipefail
           mapfile -t rows < <(grep -v '^#' docs/probe-rows.txt | grep .)
           [ "${#rows[@]}" -gt 0 ] || { echo "::error::docs/probe-rows.txt names no row"; exit 1; }
-          scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-fail-fast -- --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
+          # Built by cargo, then launched from Python as the Linux lib shards launch their prebuilt
+          # binaries: subprocess closes every descriptor above 2, so nothing the shell or cargo holds
+          # open reaches the sandbox helper (which refuses any it inherits).
+          bin=$(scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-run --message-format=json-render-diagnostics \
+            | python3 -c 'import json, sys; [print(m["executable"]) for m in map(json.loads, (l for l in sys.stdin if l.startswith("{"))) if m.get("reason") == "compiler-artifact" and m.get("executable") and "lib" in m["target"]["kind"]]')
+          [ -n "$bin" ] || { echo "::error::no lib test binary was built"; exit 1; }
+          python3 -c 'import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))' "$bin" --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
           rc=${PIPESTATUS[0]}
           if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
             echo "::error::expected ${#rows[@]} rows to run"
