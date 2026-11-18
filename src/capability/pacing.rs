@@ -249,14 +249,8 @@ pub(crate) fn unpaced_protocol_refusal(
             .unwrap_or_default();
         // Paced by this catalogue, or by the process: another backend, or a
         // host a reload dropped that keeps its bucket.
-        let paced_now = |key: &HostKey| {
-            pacers()
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains_key(key)
-        };
         if let Some(key) =
-            host_key(&endpoint).filter(|key| intervals.contains_key(key) || paced_now(key))
+            host_key(&endpoint).filter(|key| intervals.contains_key(key) || is_paced(&endpoint))
         {
             return Some(format!(
                 "{} is paced by a rate_limit; a {protocol} provider may not call it",
