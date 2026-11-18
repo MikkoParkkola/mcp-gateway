@@ -159,7 +159,8 @@ def packaged_build_problems(text: str) -> list[str]:
     # One command names n, and a canonical read sits before the loop, so that command is the read and runs first.
     if (not loop or len(writes) != 1
             or not any(" ".join(cmd.split()) == N_READ for cmd in run_commands(block[:loop.start()]))
-            or any(PART_CALL.search(cmd) for cmd in run_commands(outside))):
+            or any(PART_CALL.search(cmd) for cmd in run_commands(outside))
+            or not all(PART_CALL.search(cmd) for cmd in run_commands(loop.group(1)))):
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
                    "from scripts/dev/test-parts-build.rs")
     return out
@@ -298,7 +299,7 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
         last_build = max((i for i, s in enumerate(steps) if step_builds(s)), default=-1)
-        if not any(any(cmd.startswith(TRIPWIRE) for cmd in run_commands(str(s.get("run", ""))))
+        if not any((run_commands(str(s.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
                    and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
