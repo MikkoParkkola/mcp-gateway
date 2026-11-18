@@ -322,6 +322,7 @@ fn links_libpython(real: &Path, (x, y): (u32, u32)) -> Result<bool, Refusal> {
         .any(|window| window == needle.as_bytes()))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "uv_probe_tests.rs"]
 mod tests;

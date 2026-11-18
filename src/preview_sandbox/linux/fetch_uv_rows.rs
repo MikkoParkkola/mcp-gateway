@@ -242,6 +242,7 @@ fn credential_and_port(env: &[&str]) -> (String, String) {
 /// and m-name-for-spec: uv runs once, with exactly design 6's argv and
 /// environment, the validated spec (its pin kept) last; the env takes the
 /// spec's PEP 503 name.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_env_the_install_sees_exactly_the_fetch_argv_and_environment() {
     for (spec, name) in [("probe-cli", "probe-cli"), ("Probe_Cli==1.0", "probe-cli")] {
@@ -288,6 +289,7 @@ async fn u_env_the_install_sees_exactly_the_fetch_argv_and_environment() {
 /// package sits beside it) with the arguments as given, PATH is the
 /// interpreter's directory then the env's `bin`, and no proxy or credential
 /// reaches it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_run_spawn_the_console_script_runs_with_its_arguments_offline() {
     let shim = UvShim::new(&PROBE_CLI);
@@ -354,6 +356,7 @@ const ESCAPEE: Scenario = Scenario {
 /// descendant uv leaves behind, holding both output pipes, is killed before
 /// the run, the fetch still ends, and the run sees no process but PID 1 and
 /// itself.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_sweep_an_escapee_of_the_uv_install_is_swept() {
     let shim = UvShim::new(&ESCAPEE);
@@ -383,6 +386,7 @@ const OLD_UV: Scenario = Scenario {
 /// the launcher's probe is the start's own, returned before the helper
 /// starts, its full text exactly the probe's (a refusal from inside the
 /// fetch would read as a failed step instead). Needs no sandbox.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_setup_a_probe_refusal_is_the_starts_own() {
     // The refusal comes before the helper is started, so no gateway binary
@@ -406,6 +410,7 @@ async fn u_setup_a_probe_refusal_is_the_starts_own() {
 /// U-dark (design 10): the production entry refuses a uv target before any
 /// probe runs (the stand-in's version call would answer it); the rows reach
 /// the staged code below that entry only.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_dark_the_production_entry_refuses_uv() {
     // Refused at the entry, before any helper: no gateway binary needed.

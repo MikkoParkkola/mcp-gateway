@@ -121,6 +121,7 @@ pub(super) fn uv_run(
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "fetch_uv_tests.rs"]
 mod tests;

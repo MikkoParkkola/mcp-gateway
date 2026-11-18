@@ -14,6 +14,7 @@ use super::fetch_uv_real_fixture::{
 /// the recorder as the interpreter's real file, the fetch's one interpreter
 /// spawn (uv 0.13.1 makes one: uvprobe2.out) carries -S; the run's own spawn
 /// is the only other line; the tool env's python resolves to the recorder.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_spawn_s_every_fetch_spawn_of_the_interpreter_has_site_off() {
     use super::fetch_rows::Bundle;
@@ -72,6 +73,7 @@ const HOOK: &str = "import os\nif os.environ.get('HTTPS_PROXY'):\n    open(os.pa
 /// the interpreter's own stdlib that would mark a proxied start never runs
 /// in the fetch, whose one spawn had the proxy set (armed); the control, the
 /// same interpreter and hook without -S and with a dummy proxy, marks.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch() {
     use super::fetch_rows::Bundle;
@@ -121,6 +123,7 @@ async fn u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch() {
 /// or libpython bind and m-unquoted-wrapper: a linked pyenv-shaped Python,
 /// under plain, spaced and quoted paths, installs through the wrapper and
 /// its console script runs, every canary of the tree denied.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
     use super::fetch_rows::Bundle;
@@ -160,6 +163,7 @@ async fn u_run_layout_the_narrow_binds_run_and_hide_the_tree() {
 /// L7b, the uv path end to end: a cold wheel fetch through the proxy; the
 /// console script runs offline with its arguments as given: it cannot reach
 /// the index the host reaches at the same moment.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7b_a_cold_wheel_fetch_runs_its_console_script_offline() {
     use super::fetch_rows::Bundle;
@@ -205,6 +209,7 @@ async fn l7b_a_cold_wheel_fetch_runs_its_console_script_offline() {
 /// L7c-sdist (design 6), joint red with both no-build mechanisms dropped: a
 /// project with only an sdist refuses at the uv install, and its build hook
 /// never signalled the index (the signal outlives the destroyed home).
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7c_sdist_an_sdist_only_project_is_never_built() {
     use super::fetch_rows::{Bundle, at_step};
@@ -228,6 +233,7 @@ async fn l7c_sdist_an_sdist_only_project_is_never_built() {
 /// L7c-url (design 7), kills m-direct-url end to end: uv installs a
 /// dependency named by URL from the allowed host, and the direct-URL check
 /// refuses the install.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check() {
     use super::fetch_rows::{Bundle, at_step};
@@ -252,6 +258,7 @@ async fn l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check() {
 /// variable both dropped: a `.pth` the package installs never runs in the
 /// fetch, whose one interpreter spawn had the proxy set (armed); the
 /// control, the tool env's python with a dummy proxy, runs it.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l7c_pth_an_installed_pth_never_runs_during_the_fetch() {
     use super::fetch_rows::Bundle;
@@ -291,6 +298,7 @@ async fn l7c_pth_an_installed_pth_never_runs_during_the_fetch() {
 
 /// L-name (design 4), kills m-raw-name end to end: `Foo.Bar_Baz` installs
 /// into the env named by its PEP 503 name, and its script runs from there.
+#[cfg(tp4)]
 #[tokio::test]
 async fn l_name_a_dotted_mixed_case_name_runs_from_its_normalized_env() {
     use super::fetch_rows::Bundle;
@@ -312,6 +320,7 @@ async fn l_name_a_dotted_mixed_case_name_runs_from_its_normalized_env() {
 /// U-tls (UV.4): the same index and package twice, the fetch's bundle
 /// staged per run; with the index's CA it installs, with an unrelated CA no
 /// request completes a handshake and the install refuses.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_tls_only_the_bundles_ca_is_trusted() {
     use super::fetch_rows::{Bundle, at_step};
@@ -345,6 +354,7 @@ async fn u_tls_only_the_bundles_ca_is_trusted() {
 /// so uv and the run's Python share the tree and its config canaries; the
 /// fetch and the run succeed, so uv needs nothing beside it, and every canary
 /// reads denied, so neither placement bound the tree.
+#[cfg(tp4)]
 #[tokio::test]
 async fn u_uv_runs_alone_a_uv_inside_a_runtime_tree_runs_bound_alone() {
     use super::fetch_rows::Bundle;

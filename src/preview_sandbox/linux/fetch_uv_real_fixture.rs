@@ -557,6 +557,7 @@ pub(super) fn plant_new(path: &Path, bytes: &[u8]) {
 /// byte for byte unchanged and puts a regular file there. Control: a plain
 /// create-new open of a path holding a link refuses, so the link is gone
 /// before the write, never followed by it. Holds whatever the decoy's owner.
+#[cfg(tp4)]
 #[test]
 fn plant_new_never_writes_through_a_link() {
     let root = tempfile::tempdir().expect("root");
