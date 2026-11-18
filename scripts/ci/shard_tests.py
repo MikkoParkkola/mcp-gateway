@@ -818,7 +818,8 @@ def parts_rows() -> None:
     with tempfile.TemporaryDirectory() as d:
         log = os.path.join(d, "runs")
 
-        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False) -> None:
+        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False,
+                 rc: int = 0) -> None:
             folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
             os.makedirs(folder, exist_ok=True)
             exe = os.path.join(folder, f"lib-tests-p{k}")
@@ -828,9 +829,11 @@ def parts_rows() -> None:
                         'if [ "$1" = --list ]; then shift; f="$1"\n'
                         f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
                         f'echo "p{k} $*" >> {log}\n'
-                        f'echo "${{MCP_GATEWAY_TEST_HOME_DIR:-none}}" > {log}.home\n'
+                        'h="${MCP_GATEWAY_TEST_HOME_DIR:-none}"; [ -d "$h" ] && there=exists || there=missing\n'
+                        f'echo "$h|${{XDG_CONFIG_HOME:-none}}|${{MCP_GATEWAY_CONFIG_DIR:-none}}|$there" > {log}.home\n'
                         + ('touch "$TMPDIR/leftover"\n' if residue else "")
-                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n')
+                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n'
+                        + f'exit {rc}\n')
             os.chmod(exe, 0o755)
             with open(os.path.join(folder, "list.txt"), "w") as f:
                 f.write("".join(f"{t}: test\n" for t in (names if listed is None else listed)))
@@ -855,10 +858,21 @@ def parts_rows() -> None:
         assert run_one("--exact", "m3::t3", d, []) == 0
         runs = open(log).read().splitlines()
         assert runs == ["p3 m3::t3 --exact"], runs
-        # H1: the run gets a private gateway home of its own, removed after it.
-        home = open(log + ".home").read().strip()
-        assert os.path.basename(home).startswith("shard-home-"), ("run-one gives the binary a home", home)
-        assert not os.path.exists(home), ("run-one removes its home", home)
+        # H1: the run gets a private gateway home of its own, present while it runs, with the config and data
+        # dirs beneath it, and removed after it.
+        def run_home() -> str:
+            home, xdg, cfg, there = open(log + ".home").read().strip().split("|")
+            assert os.path.basename(home).startswith("shard-home-"), ("run-one gives the binary a home", home)
+            assert (xdg, cfg) == (os.path.join(home, ".config"), os.path.join(home, ".mcp-gateway")), (xdg, cfg)
+            assert there == "exists", ("the home exists while the binary runs", home)
+            assert not os.path.exists(home), ("run-one removes its home", home)
+            return home
+        run_home()
+        # A failing binary: its exit code is run-one's, and the home is still removed.
+        fresh()
+        part(3, ["m3::upgrade_x3", "m3::t3"], rc=3)
+        assert run_one("--exact", "m3::t3", d, []) == 3, "run-one passes the binary's exit code on"
+        run_home()
         fresh()
         import contextlib
         import io
