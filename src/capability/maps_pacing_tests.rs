@@ -880,13 +880,34 @@ async fn rl19c_a_same_named_weaker_backend_does_not_loosen_a_stricter_one() {
     weak.register_capability(cap("rl19cw", &url, Some(300), false))
         .expect("registered");
     call(&strict, "rl19cs", "a").await.expect("admitted");
-    // Past the weak interval, inside the strict one: only the strict rules.
-    tokio::time::sleep(Duration::from_millis(1800)).await;
+    // The refusal names the interval that rules: the strict one.
     let err = call(&weak, "rl19cw", "b")
         .await
         .expect_err("the strictest interval holds");
     refusal_wait(&err, "rl19c.test", 30_000);
     assert_eq!(stub.count(), 1);
+}
+
+/// A dropped backend's declarations are withdrawn: the surviving weaker
+/// backend's interval then governs the host.
+#[tokio::test]
+async fn rl19d_a_dropped_stricter_backend_hands_the_host_to_the_survivor() {
+    let stub = Stub::start(Reply::json("{}")).await;
+    let url = stub.url("rl19d.test", "/s");
+    let strict = CapabilityBackend::new("rl19d-strict", Arc::new(executor(Names::default())));
+    strict
+        .register_capability(cap("rl19ds", &url, Some(30_000), false))
+        .expect("registered");
+    let weak = CapabilityBackend::new("rl19d-weak", Arc::new(executor(Names::default())));
+    weak.register_capability(cap("rl19dw", &url, Some(300), false))
+        .expect("registered");
+    call(&strict, "rl19ds", "a").await.expect("admitted");
+    drop(strict);
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    call(&weak, "rl19dw", "b")
+        .await
+        .expect("the survivor's interval now governs");
+    assert_eq!(stub.count(), 2);
 }
 
 // ── RL20: no permit is spent on a call that never reaches the wire ───

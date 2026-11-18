@@ -152,6 +152,14 @@ pub struct CapabilityBackend {
     scan_completions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+impl Drop for CapabilityBackend {
+    /// Withdraw this backend's pacing declarations: the hosts it paced keep
+    /// their buckets, at the strictest interval a surviving backend declares.
+    fn drop(&mut self) {
+        crate::capability::pacing::seed(self.pacing_owner, &HashMap::new());
+    }
+}
+
 /// Record of a detected rug-pull event for a single capability.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RugPullRecord {
