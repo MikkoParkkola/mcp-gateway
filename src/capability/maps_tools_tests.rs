@@ -31,17 +31,25 @@ fn recorded(name: &str) -> Reply {
     recorded_in(RUN, name)
 }
 
+/// The MANIFEST line of `name` in the recording `run`, split on spaces:
+/// name, time, status, content type (one or more words), then the URL.
+fn manifest_fields(run: &str, name: &str) -> Vec<String> {
+    let manifest = std::fs::read_to_string(repo("tests/fixtures/maps").join(run).join("MANIFEST"))
+        .expect("MANIFEST");
+    manifest
+        .lines()
+        .find(|l| l.split(' ').next() == Some(name))
+        .unwrap_or_else(|| panic!("{name} in MANIFEST"))
+        .split(' ')
+        .map(str::to_owned)
+        .collect()
+}
+
 /// As [`recorded`], from the recording `run`.
 fn recorded_in(run: &str, name: &str) -> Reply {
     let dir = repo("tests/fixtures/maps").join(run);
     let body = std::fs::read_to_string(dir.join(format!("{name}.json"))).expect("fixture body");
-    let manifest = std::fs::read_to_string(dir.join("MANIFEST")).expect("MANIFEST");
-    let line = manifest
-        .lines()
-        .find(|l| l.split(' ').next() == Some(name))
-        .unwrap_or_else(|| panic!("{name} in MANIFEST"));
-    // name time status content-type... url
-    let fields: Vec<&str> = line.split(' ').collect();
+    let fields = manifest_fields(run, name);
     let status: u16 = fields[2].parse().expect("status");
     let url_at = fields.len() - 1;
     let content_type = fields[3..url_at].join(" ");
@@ -335,16 +343,12 @@ async fn t_overpass_success() {
         json!({ "latitude": 60.1699, "longitude": 24.9384, "category": "cafe", "radius": 500, "limit": 20 }),
     )
     .await;
-    // The request is the one Overpass answered 200: the record job's, as its
-    // MANIFEST wrote it down (a GET with no body, the same User-Agent).
-    let manifest =
-        std::fs::read_to_string(repo("tests/fixtures/maps").join(PR_RUN).join("MANIFEST"))
-            .expect("MANIFEST");
-    let line = manifest
-        .lines()
-        .find(|l| l.split(' ').next() == Some("overpass_nearby"))
-        .expect("overpass_nearby in MANIFEST");
-    let sent = url::Url::parse(line.rsplit(' ').next().expect("url")).expect("recorded URL");
+    // The path and query are those of the request Overpass answered 200, as
+    // the record job's MANIFEST wrote its URL down. The MANIFEST records no
+    // method, body or headers: GET, no body and the User-Agent are the
+    // shipped tool's own request, checked against the workflow's values.
+    let fields = manifest_fields(PR_RUN, "overpass_nearby");
+    let sent = url::Url::parse(fields.last().expect("url")).expect("recorded URL");
     assert_eq!(seen.method, "GET");
     assert_eq!(seen.path, sent.path());
     // As sorted lists, not maps: a duplicated parameter stays visible.

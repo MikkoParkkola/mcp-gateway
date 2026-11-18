@@ -90,10 +90,11 @@ impl Stub {
                 let method = request.method().to_string();
                 let path = request.uri().path().to_owned();
                 let headers = request.headers().clone();
+                // A body that cannot be read fails the row, never reads as empty.
                 let body = axum::body::to_bytes(request.into_body(), usize::MAX)
                     .await
-                    .map(|b| b.to_vec())
-                    .unwrap_or_default();
+                    .expect("the request body")
+                    .to_vec();
                 record.lock().push(Seen {
                     method,
                     path,
