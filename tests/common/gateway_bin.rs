@@ -56,10 +56,13 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
     command
 }
 
-/// `command` with an empty environment plus the named variables the parent
-/// has, for a child that must see only them (the private-home rule's probe
-/// children). A pure addition: no existing caller changes.
-pub fn with_only_env(mut command: Command, names: &[&str]) -> Command {
+/// The running test binary with an empty environment plus the named
+/// variables the parent has, for a child that must see only them (the
+/// private-home rule's probe children). It builds its own command, so it
+/// can never clear an isolated gateway command. A pure addition: no
+/// existing caller changes.
+pub fn test_binary_with_only_env(names: &[&str]) -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
     command.env_clear();
     for name in names {
         if let Some(value) = std::env::var_os(name) {

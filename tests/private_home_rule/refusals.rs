@@ -6,7 +6,7 @@
 use super::{FIX, probe, with_override};
 #[cfg(unix)]
 use crate::private_home::Expect;
-use crate::private_home::{canonical, fresh_private_dir, literal_env_command, refuse};
+use crate::private_home::{self, canonical, fresh_private_dir, literal_env_command, refuse};
 use std::path::Path;
 #[cfg(windows)]
 use std::process::Command;
