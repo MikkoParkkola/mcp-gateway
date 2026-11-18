@@ -165,6 +165,13 @@ pub(crate) struct ConfigHistory {
     /// Raised when a save is abandoned at its deadline; a save renames only
     /// while this still equals the ticket it took (design D-2).
     generation: std::sync::atomic::AtomicU64,
+    /// Test-only: every registered temp dir containing this history, taken
+    /// at open (`crate::test_dir_keep`). A save its test left running (a
+    /// watched reload's record) then lands before the dir goes, never while
+    /// it is being removed, where its sidecar open would leave the dir behind.
+    /// Declared last, so the store's other fields drop first.
+    #[cfg(test)]
+    _kept_dirs: Vec<Arc<tempfile::TempDir>>,
 }
 
 impl ConfigHistory {
@@ -184,6 +191,8 @@ impl ConfigHistory {
             data_dir: data_dir.to_path_buf(),
             record_guard: Arc::new(tokio::sync::Mutex::new(())),
             generation: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            _kept_dirs: crate::test_dir_keep::kept_dirs_for(data_dir),
         }
     }
 

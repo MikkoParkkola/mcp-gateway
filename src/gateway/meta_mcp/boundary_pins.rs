@@ -64,6 +64,8 @@ mod live_generation;
 #[cfg(tp2)]
 mod needle_attach_sites;
 #[cfg(tp2)]
+mod notification_egress;
+#[cfg(tp2)]
 mod packaged;
 #[cfg(tp2)]
 mod pinned_generation;
