@@ -314,13 +314,19 @@ async function toolPage(body, ctx) {
   h('p', {}, catalogueLink('Back to all tools', 'keep')));
 }
 
+/** Marker for Try a tool. The screen itself is not this. */
+function actionsTab(body) {
+  body.append(h('section', { class: 'tools-try', 'data-try-stub': true },
+    h('h2', {}, 'Try a tool')));
+}
+
 register('tools', {
   title: 'Tools',
   tabs: {
     // One renderer, two routes: no object is the list, an object is a tool.
     status: (body, ctx) => (ctx.object ? toolPage(body, ctx) : statusTab(body, ctx)),
     // Try a tool comes with its API; scopes live in Access, so no Settings.
-    actions: null,
+    actions: actionsTab,
     settings: null,
   },
   entries: [{ label: 'All tools', path: CATALOGUE_PATH, kind: 'go' }],

@@ -631,6 +631,9 @@ mod ui_tool_call_gates_tests;
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_tests;
 #[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_receipt_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod webhook_scope_tests;
 

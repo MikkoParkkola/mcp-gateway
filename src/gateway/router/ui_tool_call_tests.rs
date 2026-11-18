@@ -24,7 +24,7 @@ use crate::transport::Transport;
 
 const ROUTE: &str = "/ui/api/tools/call";
 pub(super) const ADMIN: &str = "k-admin";
-const USER: &str = "k-user";
+pub(super) const USER: &str = "k-user";
 /// An admin key denied `write` by policy.
 const ADMIN_DENIED: &str = "k-admin-deny";
 pub(super) const SERVER: &str = "alpha";
@@ -280,7 +280,7 @@ async fn register_as(
 }
 
 /// POST `body` to the route as `key`; the status and the JSON answer.
-async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
         .uri(ROUTE)
@@ -302,7 +302,7 @@ async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
     )
 }
 
-fn call(tool: &str, confirm_write: bool) -> Value {
+pub(super) fn call(tool: &str, confirm_write: bool) -> Value {
     json!({"server": SERVER, "tool": tool, "arguments": {}, "confirm_write": confirm_write})
 }
 
