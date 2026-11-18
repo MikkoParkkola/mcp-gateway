@@ -54,6 +54,7 @@ pub(super) fn uv_env(credential: &str, port: u16, path: &str) -> Vec<(String, St
         ("UV_NO_BUILD", "1"),
         ("UV_NO_CONFIG", "1"),
         ("UV_PYTHON_DOWNLOADS", "never"),
+        ("UV_COMPILE_BYTECODE", "0"),
         // No UV_COMPILE_BYTECODE, whatever its value: uv reads it as its
         // --compile-bytecode option, which with the install's
         // --no-compile-bytecode is a usage error, so every fetch would fail.
