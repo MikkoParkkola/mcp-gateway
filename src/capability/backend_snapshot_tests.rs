@@ -276,6 +276,7 @@ async fn p3_yaml_reload_keeps_the_part_and_seq_until_a_capability_reload() {
                 ..RawInputs::default()
             },
             &[],
+            crate::config_reload::history::Source::File,
         );
     });
 

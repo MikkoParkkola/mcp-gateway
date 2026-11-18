@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config_reload::history::Source;
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 
 use super::{EvaluatedReload, ReloadContext, STOPPED};
@@ -147,11 +148,17 @@ impl ReloadContext {
     pub(super) async fn reload_outcome_locked_at(
         &self,
         path: &std::path::Path,
+        source: Source,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
-        let outcome = self.reload_transaction(path).await;
+        // Before anything changes: records stay in the order reloads take
+        // this, which is `lock_reload`'s (design D-1).
+        let mut slot = crate::config_reload::history::RecordSlot::take(&self.live_config).await;
+        let outcome = self
+            .reload_transaction(path, source.clone(), &mut slot)
+            .await;
         let refusals = &self.reporting.refusals;
         match &outcome {
             Ok(_) => {
@@ -176,8 +183,11 @@ impl ReloadContext {
                     line,
                 );
                 self.reporting.tally.refused();
+                let pending = self.live_config.refused_record(source, line);
+                slot.spawn(&self.live_config, pending);
             }
         }
+        slot.finish().await;
         outcome
     }
 
@@ -196,7 +206,7 @@ impl ReloadContext {
             self.reload_owed.store(true, SeqCst);
         }
         if self.reload_owed.load(SeqCst)
-            && let Err(error) = self.reload_outcome_locked_at(target).await
+            && let Err(error) = self.reload_outcome_locked_at(target, Source::File).await
         {
             let class = match crate::config_reload::reload_failure(&error.text) {
                 crate::config_reload::ReloadFailure::ShuttingDown => "shutting_down",
@@ -249,6 +259,7 @@ pub(crate) struct ConfigHeld<'a> {
     pub(crate) locked: crate::config_persistence::lock::Locked,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{ReloadRefusal, ReloadRefusalKind};

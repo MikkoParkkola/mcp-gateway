@@ -95,6 +95,19 @@ class CheckMacosExclusions(unittest.TestCase):
             ["not run on macOS and not listed: src/reload/mod.rs e2e_tests"],
         )
 
+    def test_a_part_tag_alone_does_not_keep_a_test_off_macos(self) -> None:
+        # Every OS builds every part tag in a whole build: a tag is not an OS gate (2,949 false hits without this).
+        self.assertEqual(self.tree("#[cfg(tp2)]\n#[test]\nfn probe() {}\n"), [])
+
+    def test_a_part_tag_inside_the_attribute_run_keeps_the_module_seen(self) -> None:
+        # The lib test split adds a separate `#[cfg(tpK)]` line above `#[cfg(test)]`, which may sit between the
+        # macOS gate and the test cfg.
+        rust = '#[cfg(target_os = "linux")]\n#[cfg(tp2)]\n#[cfg(test)]\nmod e2e_tests;\n'
+        self.assertEqual(
+            self.tree(rust, path="src/reload/mod.rs"),
+            ["not run on macOS and not listed: src/reload/mod.rs e2e_tests"],
+        )
+
     def test_a_file_kept_off_apple_is_seen_as_a_whole(self) -> None:
         rust = '#![cfg(all(unix, not(target_vendor = "apple")))]\n#[test]\nfn a() {}\n'
         self.assertEqual(

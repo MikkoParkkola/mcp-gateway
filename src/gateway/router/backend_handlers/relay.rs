@@ -192,6 +192,7 @@ pub(super) fn commit_direct_receipts(state: &AppState, delivered: bool) {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "relay_tests.rs"]
 mod tests;

@@ -261,6 +261,7 @@ impl Default for ProcessScanner {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

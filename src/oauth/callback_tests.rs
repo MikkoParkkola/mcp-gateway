@@ -8,6 +8,7 @@ use super::*;
 // CallbackParams deserialization
 // =========================================================================
 
+#[cfg(tp5)]
 #[test]
 fn callback_params_success_case() {
     let params: CallbackParams =
@@ -18,6 +19,7 @@ fn callback_params_success_case() {
     assert!(params.error_description.is_none());
 }
 
+#[cfg(tp5)]
 #[test]
 fn callback_params_error_case() {
     let params: CallbackParams =
@@ -31,6 +33,7 @@ fn callback_params_error_case() {
     assert!(params.code.is_none());
 }
 
+#[cfg(tp5)]
 #[test]
 fn callback_params_carries_the_issuer() {
     // RFC 9207: the authorization server returns `iss`. It has to survive
@@ -40,6 +43,7 @@ fn callback_params_carries_the_issuer() {
     assert_eq!(params.iss.as_deref(), Some("https://auth.example.com"));
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_server_forwards_the_issuer_to_the_redeemer() {
     // The mix-up defence lives at redeem time, so the value the server
@@ -59,6 +63,7 @@ async fn callback_server_forwards_the_issuer_to_the_redeemer() {
     assert_eq!(result.iss.as_deref(), Some("https://auth.example.com"));
 }
 
+#[cfg(tp5)]
 #[test]
 fn callback_params_empty_query() {
     let params: CallbackParams = serde_urlencoded::from_str("").unwrap();
@@ -67,6 +72,7 @@ fn callback_params_empty_query() {
     assert!(params.error.is_none());
 }
 
+#[cfg(tp5)]
 #[test]
 fn escape_html_escapes_provider_error_text() {
     assert_eq!(
@@ -79,6 +85,7 @@ fn escape_html_escapes_provider_error_text() {
 // start_callback_server - binds and provides URL
 // =========================================================================
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_server_binds_to_random_port() {
     let server = start_callback_server("test_state".to_string(), None, None, None)
@@ -122,11 +129,13 @@ fn ipv6_loopback_available() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_ipv4_callback_host_is_advertised_as_configured() {
     served_where_advertised("127.0.0.1", "127.0.0.1").await;
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
     if !ipv6_loopback_available() {
@@ -144,6 +153,7 @@ async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
 
 /// MIK-7739: the redirect URI's host keeps the configured IPv6 spelling,
 /// checked without binding, so it holds on a machine with no IPv6 loopback.
+#[cfg(tp5)]
 #[test]
 fn an_ipv6_callback_host_keeps_its_configured_spelling() {
     let ip = "0:0:0:0:0:0:0:1".parse().ok();
@@ -155,6 +165,7 @@ fn an_ipv6_callback_host_keeps_its_configured_spelling() {
 
 /// Any other host keeps today's behaviour: the redirect URI names
 /// `localhost`, and the server answers on 127.0.0.1, never beyond loopback.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_non_loopback_host_keeps_the_localhost_redirect_on_loopback() {
     let server = start_callback_server("s".to_string(), Some("callback.example"), None, None)
@@ -173,6 +184,7 @@ async fn a_non_loopback_host_keeps_the_localhost_redirect_on_loopback() {
     assert_eq!(outcome.expect("a code").1.code, "c");
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_server_binds_to_specified_port() {
     // Use port 0 as fallback since specific ports might be taken
@@ -183,6 +195,7 @@ async fn callback_server_binds_to_specified_port() {
     server.stop().await;
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_server_custom_path() {
     let server = start_callback_server("st".to_string(), None, None, Some("/auth/cb"))
@@ -196,6 +209,7 @@ async fn callback_server_custom_path() {
 // Full callback flow (server + HTTP request)
 // =========================================================================
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_flow_success() {
     let state = "csrf_state_123".to_string();
@@ -219,6 +233,7 @@ async fn callback_flow_success() {
     assert_eq!(url, callback_url);
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_flow_state_mismatch() {
     let server = start_callback_server("expected_state".to_string(), Some("127.0.0.1"), None, None)
@@ -264,6 +279,7 @@ async fn callback_flow_state_mismatch() {
     }
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_flow_error_from_provider() {
     let server = start_callback_server("some_state".to_string(), None, None, None)
@@ -293,6 +309,7 @@ async fn callback_flow_error_from_provider() {
 /// MIK-8658 (K3): provider text holding the busy marker is no busy lock.
 /// The provider's text no longer reaches the error at all (only its RFC 6749
 /// code does), so the marker cannot reach the busy check either.
+#[cfg(tp5)]
 #[tokio::test]
 async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
     let server = start_callback_server("s".to_string(), None, None, None)
@@ -315,6 +332,7 @@ async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
     assert!(!busy, "{error}");
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn callback_flow_missing_code() {
     let server = start_callback_server("state123".to_string(), None, None, None)
@@ -379,6 +397,7 @@ pub(in crate::oauth) fn capture() -> (
 /// MIK-7324.COV.3: the operator's log names a forged state as a possible
 /// CSRF attempt, and a good callback as a success, each by its event name.
 // Current-thread on purpose: `capture()` is thread-local.
+#[cfg(tp5)]
 #[tokio::test(flavor = "current_thread")]
 async fn callback_outcomes_are_logged_by_event_name() {
     let (guard, buffer) = capture();
@@ -475,6 +494,7 @@ async fn assert_refused(client: &reqwest::Client, full_url: String) -> String {
 
 /// CBSTATE.1: a wrong or missing state with an error is refused and the login
 /// continues to a later valid callback.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_wrong_or_missing_state_with_an_error_is_refused_and_the_login_continues() {
     for refused_query in [
@@ -501,6 +521,7 @@ async fn a_wrong_or_missing_state_with_an_error_is_refused_and_the_login_continu
 
 /// CBSTATE.2: a wrong or missing state without an error is refused and the
 /// login continues to a later valid callback.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_wrong_or_missing_state_without_an_error_is_refused_and_the_login_continues() {
     for refused_query in [
@@ -532,6 +553,7 @@ async fn a_wrong_or_missing_state_without_an_error_is_refused_and_the_login_cont
 /// CBSTATE.3: a provider error with the right state ends the login with it.
 /// The provider's free text stays on the page the person sees and leaves the
 /// error the login ends with (retargeted from pinning it there).
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
     let (server, url, client) = start_test_server("expected").await;
@@ -567,6 +589,7 @@ async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
 /// attacker text, and no `provider_error` event.
 // Current-thread on purpose: `capture()` is thread-local, so the axum
 // handler must run on this thread for its events to be captured.
+#[cfg(tp5)]
 #[tokio::test(flavor = "current_thread")]
 async fn a_refused_request_logs_only_the_mismatch_and_no_attacker_text() {
     let (guard, buffer) = capture();
@@ -616,6 +639,7 @@ async fn a_refused_request_logs_only_the_mismatch_and_no_attacker_text() {
 }
 
 /// REPEAT.1(a): three refusals then a valid callback completes the login.
+#[cfg(tp5)]
 #[tokio::test]
 async fn three_refusals_then_a_valid_callback_completes_the_login() {
     let (server, url, client) = start_test_server("expected").await;
@@ -637,6 +661,7 @@ async fn three_refusals_then_a_valid_callback_completes_the_login() {
 }
 
 /// REPEAT.1(b): three refusals then the window ends the wait.
+#[cfg(tp5)]
 #[tokio::test]
 async fn three_refusals_then_the_window_ends_the_wait() {
     let (server, url, client) = start_test_server("expected").await;
@@ -658,6 +683,7 @@ async fn three_refusals_then_the_window_ends_the_wait() {
 }
 
 /// REPEAT.1(c): three refusals then cancellation ends the wait.
+#[cfg(tp5)]
 #[tokio::test]
 async fn three_refusals_then_cancellation_ends_the_wait() {
     let (server, url, client) = start_test_server("expected").await;
@@ -706,6 +732,7 @@ async fn provider_error_trace(query: &str) -> (String, String) {
 /// RFC 6749 error code from the allow-list does, and `other` stands in for any
 /// code off it.
 // Current-thread on purpose: `capture()` is thread-local.
+#[cfg(tp5)]
 #[tokio::test(flavor = "current_thread")]
 async fn a_provider_error_description_is_never_logged() {
     let (log, err) = provider_error_trace(
@@ -743,6 +770,7 @@ async fn a_provider_error_description_is_never_logged() {
 /// A command-line or startup callback page is unchanged: the login is done
 /// when the code arrives, so the person may close the window. Green today and
 /// pinned so the UI page change cannot leak into it.
+#[cfg(tp5)]
 #[tokio::test]
 async fn the_cli_callback_page_still_says_the_window_can_be_closed() {
     let (_server, url, client) = start_test_server("expected").await;

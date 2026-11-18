@@ -368,6 +368,7 @@ fn of_kind(scalar: &Scalar, kind: ValueKind) -> Result<Scalar, String> {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_fields_tests.rs"]
 mod tests;

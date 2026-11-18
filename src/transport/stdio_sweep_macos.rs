@@ -397,6 +397,7 @@ impl ProcessTable for MacTable {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_sweep_macos_tests.rs"]
 mod tests;

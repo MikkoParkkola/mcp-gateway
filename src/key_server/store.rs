@@ -627,6 +627,7 @@ pub fn spawn_reaper(
     });
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

@@ -207,6 +207,7 @@ fn colour_code(s: &str) -> Option<usize> {
     OWN.contains(&params).then_some(2 + params.len() + 1)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "log_escape_tests.rs"]
 mod tests;

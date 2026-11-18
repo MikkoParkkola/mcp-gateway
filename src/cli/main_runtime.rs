@@ -47,10 +47,43 @@ impl RuntimeShutdown {
     }
 }
 
+/// A multi-thread runtime and a count of its live threads, workers and blocking
+/// pool alike. Only the line a shutdown logs when it leaves work behind reads
+/// the count; whether work was left running is the wait's own bound.
+pub(crate) struct CountedRuntime {
+    pub(crate) tokio: tokio::runtime::Runtime,
+    live_threads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountedRuntime {
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let live_threads = std::sync::Arc::new(AtomicUsize::new(0));
+        let (started, stopped) = (
+            std::sync::Arc::clone(&live_threads),
+            std::sync::Arc::clone(&live_threads),
+        );
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                started.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_thread_stop(move || {
+                stopped.fetch_sub(1, Ordering::SeqCst);
+            })
+            .build()
+            .expect("build the tokio runtime");
+        Self {
+            tokio,
+            live_threads,
+        }
+    }
+}
+
 /// The runtime, shut down by its mode when dropped: on the normal path and on
 /// a panic out of `dispatch` alike.
 struct ShutdownGuard {
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: Option<CountedRuntime>,
     mode: RuntimeShutdown,
     /// The HTTP stop's plan, once stored: its runtime deadline bounds the wait.
     plan: crate::retire::RetireCell,
@@ -76,27 +109,37 @@ impl Drop for ShutdownGuard {
 /// out with blocking work still running, which it also logs at ERROR so an
 /// operator can tell a stalled disk or mount from a clean exit.
 pub(crate) fn shut_down(
-    runtime: tokio::runtime::Runtime,
+    runtime: CountedRuntime,
     mode: RuntimeShutdown,
     plan: Option<crate::retire::RetirePlan>,
 ) -> bool {
+    let CountedRuntime {
+        tokio: runtime,
+        live_threads,
+    } = runtime;
     let RuntimeShutdown::Bounded(timeout) = mode else {
         drop(runtime);
         return false;
     };
     let timeout = wait_bound(timeout, plan, tokio::time::Instant::now());
+    let tasks = runtime.handle().clone();
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(timeout);
     // `shutdown_timeout` returns as soon as the blocking pool is idle, so a
     // wait that lasted the whole bound is read as work left running. Work
     // that ended in the bound's last instant reads the same; the log is a
     // pointer to look at the disk, not a proof.
-    let left_running = started.elapsed() >= timeout;
+    let waited = started.elapsed();
+    let left_running = waited >= timeout;
     if left_running {
+        // What can be known without tracking each blocking call: the threads
+        // and tasks still alive. The count never decides the exit.
         tracing::error!(
             target: "mcp_gateway::runtime",
-            ?timeout,
-            "shutdown exited with blocking work still running after the bound \
+            ?waited,
+            live_runtime_threads = live_threads.load(std::sync::atomic::Ordering::SeqCst),
+            live_tasks = tasks.metrics().num_alive_tasks(),
+            "shutdown reached the end of its wait with blocking work still running \
              (a disk or mount write that never returned; under doctor, its 1 s bound, \
              possibly the npm lookup's name resolution?)"
         );
@@ -105,15 +148,17 @@ pub(crate) fn shut_down(
 }
 
 /// The runtime's wait for blocking work: `timeout`, or under an HTTP stop's
-/// plan the lesser of [`crate::retire::RUNTIME_WAIT_CAP`] and what is left to
-/// the plan's runtime deadline at `now` (none once it has passed).
+/// plan what is left to the plan's runtime deadline at `now` (none once it has
+/// passed). The deadline comes from the stop's own budget, so blocking work
+/// that ends inside it is waited for, however slow the machine; only work still
+/// running at the deadline is left behind.
 pub(crate) fn wait_bound(
     timeout: std::time::Duration,
     plan: Option<crate::retire::RetirePlan>,
     now: tokio::time::Instant,
 ) -> std::time::Duration {
     plan.map_or(timeout, |plan| {
-        crate::retire::RUNTIME_WAIT_CAP.min(plan.runtime_end().saturating_duration_since(now))
+        plan.runtime_end().saturating_duration_since(now)
     })
 }
 
@@ -127,12 +172,7 @@ pub(crate) fn block_on<F: std::future::Future>(
     future: F,
 ) -> (F::Output, bool) {
     let mut guard = ShutdownGuard {
-        runtime: Some(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("build the tokio runtime"),
-        ),
+        runtime: Some(CountedRuntime::new()),
         mode,
         plan: std::sync::Arc::clone(plan),
     };
@@ -140,11 +180,13 @@ pub(crate) fn block_on<F: std::future::Future>(
         .runtime
         .as_ref()
         .expect("the guard holds the runtime until it shuts down")
+        .tokio
         .block_on(future);
     let left_running = guard.shut_down();
     (output, left_running)
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "main_runtime_tests.rs"]
 mod tests;

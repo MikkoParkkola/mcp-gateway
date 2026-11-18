@@ -249,6 +249,7 @@ fn is_trivial_name(name: &str) -> bool {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

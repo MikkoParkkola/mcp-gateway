@@ -400,6 +400,7 @@ fn backend_missing(id: RequestId, backend_name: &str) -> JsonRpcResponse {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,6 +5,7 @@
 
 use super::env_support::{RecordingHome, config_naming_env_files, env_file, startup_through};
 use super::*;
+use crate::config_reload::history::Source;
 use crate::config_reload::revision::{AppliedInputs, ConsumedSource, RawInputs, config_revision};
 
 fn revision(live: &LiveConfig) -> Option<String> {
@@ -91,7 +92,7 @@ fn the_published_revision_names_the_published_inputs() {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(default_generation(&live), inputs.clone(), &[]);
+    live.set_applied(default_generation(&live), inputs.clone(), &[], Source::File);
     let id_of = |raw: RawInputs| {
         config_revision(
             &revision_key(),
@@ -117,7 +118,12 @@ fn the_published_revision_names_the_published_inputs() {
 #[test]
 fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
-    live.set_applied(default_generation(&live), RawInputs::default(), &[]);
+    live.set_applied(
+        default_generation(&live),
+        RawInputs::default(),
+        &[],
+        Source::File,
+    );
     assert_eq!(revision(&live), None);
 }
 
@@ -131,7 +137,12 @@ fn a_reload_keeps_the_grants_their_sink_published() {
         gateway_yaml: b"server:\n  port: 2\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(default_generation(&live), reloaded.clone(), &[]);
+    live.set_applied(
+        default_generation(&live),
+        reloaded.clone(),
+        &[],
+        Source::File,
+    );
     let expected = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..reloaded
@@ -249,6 +260,7 @@ fn an_outstanding_environment_change_is_pending_restart() {
         default_generation(&live),
         RawInputs::default(),
         &["GW_SECRET_NAME".to_owned()],
+        Source::File,
     );
     assert_eq!(
         pending(&live),

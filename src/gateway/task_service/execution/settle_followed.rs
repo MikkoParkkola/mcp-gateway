@@ -126,6 +126,7 @@ pub(super) fn committed_author(screened: ErrorAuthor, kept: bool) -> ErrorAuthor
     if kept { screened } else { ErrorAuthor::Gateway }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

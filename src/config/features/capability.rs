@@ -223,6 +223,7 @@ impl CapabilityConfig {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

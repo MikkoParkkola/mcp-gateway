@@ -260,6 +260,7 @@ fn d(row: &IdentityGrant) -> Option<String> {
 }
 
 /// T2a: an add then a revoke between two loads yields two records.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t2a_add_then_revoke_between_loads_yields_two_records() {
     let f = Fixture::new();
@@ -283,6 +284,7 @@ async fn t2a_add_then_revoke_between_loads_yields_two_records() {
 }
 
 /// T2a fields: a journal record carries expiry, the CLI's clock and the OS hint.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t2a_journal_record_carries_the_entry_fields() {
     let f = Fixture::new();
@@ -302,6 +304,7 @@ async fn t2a_journal_record_carries_the_entry_fields() {
 }
 
 /// T2b: a second reconciliation with no change records nothing more.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t2b_repeated_reconciliation_never_duplicates() {
     let f = Fixture::new();
@@ -313,6 +316,7 @@ async fn t2b_repeated_reconciliation_never_duplicates() {
 }
 
 /// T4a: a direct edit with no journal entry is out-of-band.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4a_direct_edit_is_out_of_band() {
     let f = Fixture::new();
@@ -329,6 +333,7 @@ async fn t4a_direct_edit_is_out_of_band() {
 }
 
 /// T4b: a deleted row, and an empty `grants` list, are out-of-band per id.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4b_deleted_rows_are_out_of_band() {
     let f = Fixture::new();
@@ -351,6 +356,7 @@ async fn t4b_deleted_rows_are_out_of_band() {
 }
 
 /// T4d: a direct edit that a later CLI revoke overwrote is still seen.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4d_edit_absorbed_by_a_cli_change_is_still_out_of_band() {
     let f = Fixture::new();
@@ -369,6 +375,7 @@ async fn t4d_edit_absorbed_by_a_cli_change_is_still_out_of_band() {
 
 /// T4e: the same transition repeated in later reconciliations is recorded
 /// each time, under a fresh event id.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4e_repeated_transitions_get_fresh_ids() {
     let f = Fixture::new();
@@ -391,6 +398,7 @@ async fn t4e_repeated_transitions_get_fresh_ids() {
 
 /// T4f + T4j: with no baseline, a journalled grant whose row differs is
 /// out-of-band, but a first `revoke` of a grant that predates the journal is not.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4f_t4j_no_baseline() {
     let f = Fixture::new();
@@ -418,6 +426,7 @@ async fn t4f_t4j_no_baseline() {
 }
 
 /// T4l: a grant added outside the CLI after a baseline is out-of-band.
+#[cfg(tp3)]
 #[tokio::test]
 async fn t4l_unjournalled_add_is_out_of_band() {
     let f = Fixture::new();
@@ -436,6 +445,7 @@ async fn t4l_unjournalled_add_is_out_of_band() {
 /// JRN.3: only a recorded plan warns about a row changed outside the
 /// gateway. A refused prepare warns nothing, and neither does the retry's
 /// prepare; its record warns once with the file, the row and both digests.
+#[cfg(tp3)]
 #[tokio::test]
 async fn only_a_recorded_plan_warns_about_an_outside_change() {
     let f = Fixture::new();
@@ -469,6 +479,7 @@ async fn only_a_recorded_plan_warns_about_an_outside_change() {
 
 /// JRN.3: a record whose appends fail still warns once about a row changed
 /// outside the gateway: the change is already published.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_failed_append_still_warns_about_an_outside_change() {
     let f = Fixture::new();

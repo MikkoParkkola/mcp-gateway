@@ -158,6 +158,7 @@ fn edit_entry(text: &str, index: usize, edit: Edit<'_>) -> Option<(String, usize
     })
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::{KeyLeft, KeyRewrite, hash_plaintext_api_keys};

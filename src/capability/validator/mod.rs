@@ -51,6 +51,7 @@ mod checks;
 #[cfg(feature = "webui")]
 pub(crate) use checks::is_known_placeholder;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests;
 

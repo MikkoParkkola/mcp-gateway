@@ -269,15 +269,19 @@ fn seal(file: &mut File, path: &Path, frames: &[Vec<u8>]) -> Result<(), Handover
 }
 
 // The success-path rows need a file that passes the owner check, which only exists on Unix.
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_admit_tests.rs"]
 mod admit_tests;
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_crash_tests.rs"]
 mod crash_tests;
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_handover_tests.rs"]
 mod tests;
+#[cfg(tp3)]
 #[cfg(all(test, not(unix)))]
 #[path = "config_persistence_journal_v2_drain_handover_windows_tests.rs"]
 mod windows_tests;

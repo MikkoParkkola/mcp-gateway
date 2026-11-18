@@ -66,6 +66,9 @@ pub(crate) struct Plan {
 pub(crate) struct FetchPaths {
     /// The gateway's control socket, in the proxy's owner-only directory.
     pub(crate) control: String,
+    /// The fetch's CA snapshot, beside it: opened by the helper before it
+    /// stages the root (never a bind target, so not refused under `/tmp`).
+    pub(crate) ca: String,
 }
 
 /// The preview's home inside the new root: a fresh tmpfs, `HOME`, working

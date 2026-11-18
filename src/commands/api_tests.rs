@@ -36,6 +36,7 @@ fn args(path: &str) -> ApiArgs {
         path: path.to_string(),
         data: None,
         if_match: None,
+        limit: None,
         json: false,
         url: None,
         tls: DashboardLinkTls::default(),

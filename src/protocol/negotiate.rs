@@ -172,6 +172,7 @@ pub fn is_version_mismatch_error(error_msg: &str) -> bool {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

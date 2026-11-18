@@ -333,6 +333,7 @@ impl SubscriptionId {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::SubscriptionId;

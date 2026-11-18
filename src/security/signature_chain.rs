@@ -465,6 +465,7 @@ pub(crate) fn verify_chain(
     Ok(links)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "signature_chain_tests.rs"]
 mod tests;

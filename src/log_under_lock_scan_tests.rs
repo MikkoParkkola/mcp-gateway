@@ -647,6 +647,17 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// The lib test split's part tag is a separate attribute beside the test
+/// cfg: a tagged module is still test-only, and a tag alone is not.
+#[test]
+fn a_part_tag_beside_the_test_cfg_is_still_test_only() {
+    let module = |text: &str| syn::parse_str::<syn::ItemMod>(text).expect("a module item");
+    assert!(has_cfg_test(
+        &module("#[cfg(tp2)]\n#[cfg(test)]\nmod t {}").attrs
+    ));
+    assert!(!has_cfg_test(&module("#[cfg(tp2)]\nmod t {}").attrs));
+}
+
 /// Scan parsed files: every log macro written under a held guard.
 fn scan(files: &[(String, syn::File)]) -> Vec<Hit> {
     let parsed: Vec<syn::File> = files.iter().map(|(_, f)| f.clone()).collect();

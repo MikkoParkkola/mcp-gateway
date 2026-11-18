@@ -114,6 +114,7 @@ fn session_handle(reply: &Reply) -> String {
 
 /// The loopback redemption spends the link, shows a code and where to enter
 /// it, and sets no cookie a browser would scope to the loopback host.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_loopback_redemption_shows_a_code_for_the_public_origin() {
     let (state, _dir) = behind_https_front().await;
@@ -131,6 +132,7 @@ async fn a_loopback_redemption_shows_a_code_for_the_public_origin() {
 }
 
 /// The form on the public origin holds nothing and is served to anyone.
+#[cfg(tp1)]
 #[tokio::test]
 async fn the_code_form_is_served_on_the_public_origin() {
     let (state, _dir) = behind_https_front().await;
@@ -161,6 +163,7 @@ async fn the_code_form_is_served_on_the_public_origin() {
 /// The code, posted through the proxy, sets a Secure session cookie and sends
 /// the browser on to `/dashboard`; the session is an admin one, and nothing
 /// in the reply repeats the code.
+#[cfg(tp1)]
 #[tokio::test]
 async fn the_code_signs_in_through_the_proxy() {
     let (state, _dir) = behind_https_front().await;
@@ -185,6 +188,7 @@ async fn the_code_signs_in_through_the_proxy() {
 
 /// A code is single use, and a wrong one neither signs in nor spends the
 /// live one.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_code_is_single_use_and_a_wrong_one_spends_nothing() {
     let (state, _dir) = behind_https_front().await;
@@ -205,6 +209,7 @@ async fn a_code_is_single_use_and_a_wrong_one_spends_nothing() {
 
 /// A browser already holding a session cookie, live or dead, still signs in
 /// with the code: the exchange runs before the cookie is judged.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_code_signs_in_past_a_live_or_dead_cookie() {
     for dead in [false, true] {
@@ -228,6 +233,7 @@ async fn a_code_signs_in_past_a_live_or_dead_cookie() {
 }
 
 /// A cross-site post is refused by the origin gate and spends nothing.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_cross_site_post_of_the_code_is_refused() {
     let (state, _dir) = behind_https_front().await;
@@ -242,6 +248,7 @@ async fn a_cross_site_post_of_the_code_is_refused() {
 }
 
 /// A link can be minted in this shape: its redemption now works.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_link_is_minted_behind_an_https_front() {
     let (state, _dir) = behind_https_front().await;
@@ -257,6 +264,7 @@ async fn a_link_is_minted_behind_an_https_front() {
 }
 
 /// A code older than a minute is refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_code_expires_after_a_minute() {
     let (state, _dir) = behind_https_front().await;
@@ -272,6 +280,7 @@ async fn a_code_expires_after_a_minute() {
 
 /// A code whose minting credential expired between the two steps is refused
 /// rather than turned into a session that is already dead.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_code_past_its_credential_cap_is_refused() {
     let (state, _dir) = behind_https_front().await;
@@ -288,6 +297,7 @@ async fn a_code_past_its_credential_cap_is_refused() {
 
 /// A live session cookie does not leave a link unspent: the exchange decides
 /// a link, not the cookie beside it.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_link_redeemed_with_a_live_cookie_is_spent() {
     let (state, _dir) = fixture().await;
@@ -302,6 +312,7 @@ async fn a_link_redeemed_with_a_live_cookie_is_spent() {
 }
 
 /// Every answer on the handoff path is private, a router 405 included.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_wrong_method_on_the_code_path_is_private_too() {
     let (state, _dir) = behind_https_front().await;
@@ -312,6 +323,7 @@ async fn a_wrong_method_on_the_code_path_is_private_too() {
 
 /// A code posted on the loopback origin is refused and not spent: a cookie
 /// set there would be scoped to the wrong host, and the sign-in would fail.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
     let (state, _dir) = behind_https_front().await;
@@ -347,6 +359,7 @@ async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
 /// R11: behind an HTTPS front, a clock before 1970 is decided before any
 /// hand-off or compare: the live link and a wrong one get the same clock
 /// refusal, and the live link is kept.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r11_a_clock_refusal_behind_an_https_front_is_the_same_for_every_link() {
     let (state, _dir) = behind_https_front().await;
@@ -385,6 +398,7 @@ fn submit_navigating(code: &str) -> Request<Body> {
 
 /// R5: a wrong, a used and an expired code send a browser to the same shell
 /// address, byte for byte; without Fetch Metadata each keeps today's 401.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r5_every_refused_code_sends_a_browser_to_the_same_place() {
     let (wrong_state, _a) = behind_https_front().await;
@@ -449,6 +463,7 @@ async fn r5_every_refused_code_sends_a_browser_to_the_same_place() {
 
 /// R7 (F): a code posted on another origin keeps its own 401 for a browser
 /// too: it says where to enter the code, and says nothing about the code.
+#[cfg(tp1)]
 #[tokio::test]
 async fn r7_a_code_on_another_origin_is_not_redirected() {
     let (state, _dir) = behind_https_front().await;

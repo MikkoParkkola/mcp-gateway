@@ -573,6 +573,7 @@ fn difference(
 
 /// Every non-GET route of the access table has exactly one table entry, and
 /// no entry names a route the access table (so the router) does not have.
+#[cfg(tp3)]
 #[test]
 fn every_ui_change_has_one_cli_form() {
     let rows: BTreeSet<String> = plain_rows()
@@ -601,6 +602,7 @@ fn every_ui_change_has_one_cli_form() {
 
 /// Every leaf subcommand clap builds in this build is classified, and no
 /// entry names one it does not build.
+#[cfg(tp3)]
 #[test]
 fn every_cli_subcommand_is_classified() {
     let mut built = BTreeSet::new();
@@ -631,6 +633,7 @@ fn every_cli_subcommand_is_classified() {
 /// Every call of a shared config writer in the CLI's production code is
 /// classified, counted per file, fn and writer: a call added to or removed
 /// from a listed fn fails, and so does an entry for a call that is gone.
+#[cfg(tp3)]
 #[test]
 fn every_config_write_site_is_classified() {
     let found = write_sites();
@@ -666,6 +669,7 @@ fn every_config_write_site_is_classified() {
 /// No import renames a config writer or its module, or brings `write` or a
 /// persistence writer in by its bare name, so every call keeps the name
 /// [`write_sites`] looks for (the alias rewrite's name is unique already).
+#[cfg(tp3)]
 #[test]
 fn no_import_hides_a_config_writer() {
     let hides = regex::Regex::new(concat!(
@@ -699,6 +703,7 @@ fn no_import_hides_a_config_writer() {
 }
 
 /// Every class that claims a remote form names a change in [`UI_CHANGES`].
+#[cfg(tp3)]
 #[test]
 fn each_remote_class_names_a_ui_change() {
     let changes: BTreeSet<(&str, &str)> = UI_CHANGES.iter().map(|c| (c.method, c.path)).collect();
@@ -722,6 +727,7 @@ fn each_remote_class_names_a_ui_change() {
 
 /// Every entry says why: no empty reason, area or note, and each Part B item
 /// is one of G1 to G9.
+#[cfg(tp3)]
 #[test]
 fn every_entry_gives_its_reason() {
     for c in UI_CHANGES {

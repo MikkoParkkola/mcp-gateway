@@ -504,18 +504,22 @@ fn frame(
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "listen_stream_tests.rs"]
 mod stream_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "listen_tests.rs"]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "session_heal_tests.rs"]
 mod session_heal_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "legacy_pin_tests.rs"]
 mod legacy_pin_tests;

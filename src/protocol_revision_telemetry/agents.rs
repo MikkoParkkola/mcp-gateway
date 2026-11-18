@@ -59,6 +59,7 @@ fn user_agent_family(user_agent: Option<&str>) -> &'static str {
     .unwrap_or("other")
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "agents_tests.rs"]
 mod tests;

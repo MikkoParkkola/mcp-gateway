@@ -120,6 +120,7 @@ fn github_body(payload: &Value) -> &Value {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

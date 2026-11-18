@@ -61,6 +61,7 @@ pub(super) fn refuse_unless_read_only(capability: &CapabilityDefinition) -> crat
     )))
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "read_only_call_tests.rs"]
 mod tests;

@@ -259,6 +259,7 @@ pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_write_whole_tests.rs"]
 mod write_whole_tests;

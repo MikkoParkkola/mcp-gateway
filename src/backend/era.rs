@@ -528,10 +528,12 @@ fn note_removed_method_refused(backend: &str, method: &str) {
     .increment(1);
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_discarded_probe_tests.rs"]
 mod discarded_probe_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

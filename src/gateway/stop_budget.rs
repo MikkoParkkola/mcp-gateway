@@ -196,6 +196,7 @@ async fn within<F: std::future::Future>(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "stop_budget_tests.rs"]
 mod tests;

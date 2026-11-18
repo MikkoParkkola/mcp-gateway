@@ -444,6 +444,7 @@ fn wanted_call(e: &Entry) -> Option<bool> {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_ledger_tests.rs"]
 mod tests;

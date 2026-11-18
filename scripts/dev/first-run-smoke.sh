@@ -73,7 +73,7 @@ fixture_port="$(cat "$port_file")"
 
 (
   cd "$work"
-  HOME="$home" "$bin" --config gateway.yaml --host 127.0.0.1 --port "$port" \
+  HOME="$home" MCP_GATEWAY_SERVER__HOST=127.0.0.1 "$bin" --config gateway.yaml --port "$port" \
     >"$tmp/gateway.log" 2>&1 &
   echo "$!" >"$tmp/gateway.pid"
 )

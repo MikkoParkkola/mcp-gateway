@@ -242,6 +242,7 @@ pub(super) fn with_audit(
 // ── Logout ──────────────────────────────────────────────────────────────
 
 /// E5-T4: logout revokes the session on the server, not just in the browser.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_revokes_server_side() {
     let (state, _dir) = fixture().await;
@@ -281,6 +282,7 @@ async fn logout_revokes_server_side() {
 /// through the bounded append, and the 303 comes back on the bound's answer.
 /// The oracle is that answer, not the elapsed time (MIK-8222): a logout that
 /// waited on the write would get the write's answer, and none from the bound.
+#[cfg(tp1)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logout_is_not_held_by_a_stalled_audit_write() {
     let (mut state, _dir) = fixture().await;
@@ -304,6 +306,7 @@ async fn logout_is_not_held_by_a_stalled_audit_write() {
 
 /// E5-T19 (route): logging out with a cookie already past its limit writes
 /// no logout record: that session ended at its limit.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_of_an_expired_session_writes_no_record() {
     let (mut state, _dir) = fixture().await;
@@ -323,6 +326,7 @@ async fn logout_of_an_expired_session_writes_no_record() {
 
 /// E5-T5: an audit outage never blocks logout, and neither does an expired
 /// session: logout sits outside the auth and audit layers.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_works_while_audit_degraded_or_expired() {
     let (mut state, _dir) = fixture().await;
@@ -358,6 +362,7 @@ async fn logout_works_while_audit_degraded_or_expired() {
 
 /// Logout writes one `admin_action` record when the log is healthy, and the
 /// record never carries the handle.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_writes_one_admin_action_record() {
     let (mut state, _dir) = fixture().await;
@@ -396,6 +401,7 @@ async fn logout_writes_one_admin_action_record() {
 
 /// A cross-site page cannot log the operator out: the origin guard refuses a
 /// foreign `Origin` before the route runs.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_cross_site_logout_is_refused() {
     let (state, _dir) = fixture().await;
@@ -414,6 +420,7 @@ async fn a_cross_site_logout_is_refused() {
 }
 
 /// E5-T15: GET cannot log anybody out, so a link or an image cannot either.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_is_post_only() {
     let (state, _dir) = fixture().await;
@@ -429,6 +436,7 @@ async fn logout_is_post_only() {
 
 /// E5-T24: an HTTPS `public_url` written in any letter case marks cookies
 /// `Secure`; the scheme is case-insensitive.
+#[cfg(tp1)]
 #[tokio::test]
 async fn an_uppercase_https_public_url_still_marks_cookies_secure() {
     let (state, _dir) = fixture().await;
@@ -444,6 +452,7 @@ async fn an_uppercase_https_public_url_still_marks_cookies_secure() {
 }
 
 /// E5-T11: on a TLS-fronted gateway the clearing cookie is `Secure` too.
+#[cfg(tp1)]
 #[tokio::test]
 async fn logout_cookie_is_secure_on_tls() {
     let (state, _dir) = fixture().await;
@@ -461,6 +470,7 @@ async fn logout_cookie_is_secure_on_tls() {
 
 /// E5-T10: a dead cookie gets its own answer, not "Missing credential", and a
 /// bearer presented with it is still honoured.
+#[cfg(tp1)]
 #[tokio::test]
 async fn expired_cookie_gets_session_expired_401() {
     let (state, _dir) = fixture().await;
@@ -499,6 +509,7 @@ async fn expired_cookie_gets_session_expired_401() {
 
 /// E5-T12 (router half): the dashboard's own refreshes are answered but never
 /// extend the session, so an unattended tab ends at the idle limit.
+#[cfg(tp1)]
 #[tokio::test]
 async fn poll_marked_requests_do_not_extend() {
     let (state, _dir) = fixture().await;
@@ -518,6 +529,7 @@ async fn poll_marked_requests_do_not_extend() {
 
 /// E5-T12b: the server-rendered dashboard refreshes to the poll URL, because
 /// a meta refresh cannot set a header.
+#[cfg(tp1)]
 #[tokio::test]
 async fn dashboard_meta_refresh_targets_poll_url() {
     let (state, _dir) = fixture().await;
@@ -536,6 +548,7 @@ async fn dashboard_meta_refresh_targets_poll_url() {
 }
 
 /// E5-T12c (guard, passes today): an unmarked request is activity.
+#[cfg(tp1)]
 #[tokio::test]
 async fn unmarked_activity_extends() {
     let (state, _dir) = fixture().await;
@@ -551,6 +564,7 @@ async fn unmarked_activity_extends() {
 
 /// E5-T13: delivery re-checks (`auth::live::current_client`) never count as
 /// activity, so server push cannot keep a session alive.
+#[cfg(tp1)]
 #[tokio::test]
 async fn delivery_check_does_not_touch() {
     let (state, _dir) = fixture().await;
@@ -586,6 +600,7 @@ async fn delivery_check_does_not_touch() {
 
 /// E5-T16: a dead cookie on a public path is dropped, not fatal: the request
 /// proceeds as the public identity, and a bearer beside it still counts.
+#[cfg(tp1)]
 #[tokio::test]
 async fn expired_cookie_on_public_path_passes() {
     let (state, _dir) = fixture_with(&["/health", STATUS]).await;
@@ -609,6 +624,7 @@ async fn expired_cookie_on_public_path_passes() {
 
 /// E5-T17: limits come from the live config, so a reload applies to sessions
 /// already open, for both the idle and the absolute limit.
+#[cfg(tp1)]
 #[tokio::test]
 async fn reload_changes_limits() {
     let (state, _dir) = fixture().await;
@@ -646,18 +662,22 @@ pub(super) mod link;
 #[path = "e5_dashboard_session_tests/handoff.rs"]
 pub(super) mod handoff;
 
+#[cfg(tp1)]
 #[path = "e5_dashboard_session_tests/refused_redirect.rs"]
 mod refused_redirect;
 
+#[cfg(tp1)]
 #[path = "e5_dashboard_session_tests/clock.rs"]
 mod clock;
 
 /// MIK-8786: the auth facts `/ui/api/status` states, per caller kind.
+#[cfg(tp1)]
 #[path = "e5_dashboard_session_tests/status_auth.rs"]
 mod status_auth;
 
 /// D4 (MIK-7570.METRICS.2): an expired session answered with its own 401 is
 /// counted as `session_expired`; a bearer beside the dead cookie is not.
+#[cfg(tp1)]
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn expired_session_refusal_is_counted() {
@@ -705,6 +725,7 @@ async fn expired_session_refusal_is_counted() {
 /// before dispatch (`meta_mcp/invoke.rs`, `record_invocation`), so a tool
 /// whose calls all failed is listed like any other. The page must not call
 /// those calls a success.
+#[cfg(tp1)]
 #[tokio::test]
 async fn dashboard_claims_no_outcome_for_counted_calls() {
     let (mut state, _dir) = fixture().await;
