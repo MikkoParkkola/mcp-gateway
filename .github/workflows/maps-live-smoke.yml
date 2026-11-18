@@ -100,7 +100,9 @@ jobs:
           while IFS='|' read -r name gap; do
             total=$((total + 1))
             sleep "$gap"
-            "$RUNNER_TEMP/lib-bin/p1/lib-tests-p1" "capability::maps_live_tests::${name}" --ignored --exact > row.log 2>&1
+            # stdin from /dev/null: the loop reads its rows from stdin, so a test
+            # that read stdin would swallow the rows after it.
+            "$RUNNER_TEMP/lib-bin/p1/lib-tests-p1" "capability::maps_live_tests::${name}" --ignored --exact < /dev/null > row.log 2>&1
             rc=$?
             tail -30 row.log
             # Both: the process exited 0 and its summary reports the one test passed.
