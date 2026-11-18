@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! 2b-1: the read-only CA snapshot a fetching preview gets.
+#![cfg(target_os = "linux")]
 
 use super::{fetching, finish};
 use mcp_gateway::preview_sandbox::Started;
