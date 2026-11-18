@@ -9,7 +9,7 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,7 +36,7 @@ fn in_child(case: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
     let out_path = dir.path().join("stdout");
     let err_path = dir.path().join("stderr");
-    let mut proc = Command::new(std::env::current_exe().expect("test binary"))
+    let mut proc = crate::test_home::test_binary()
         .args([
             "--exact",
             "key_server::piilog_capture_tests::child",
