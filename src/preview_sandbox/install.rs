@@ -254,6 +254,14 @@ pub(crate) fn check_direct_url(
         let Some(stem) = name.as_encoded_bytes().strip_suffix(b".dist-info") else {
             continue;
         };
+        // Only a directory, or a link read through below, can hold metadata.
+        // Anything else refuses by its kind, not by whichever error the
+        // platform gives for a path under a file (Linux: not a directory;
+        // Windows: not found, which would read as "no direct URL").
+        let kind = entry.file_type().map_err(|_| unreadable())?;
+        if !kind.is_dir() && !kind.is_symlink() {
+            return Err(unreadable());
+        }
         match std::fs::symlink_metadata(entry.path().join("direct_url.json")) {
             Ok(_) => return Err(refuse("the install holds a package from a direct URL")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
