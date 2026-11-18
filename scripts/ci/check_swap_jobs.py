@@ -634,6 +634,9 @@ def self_test() -> int:
         ("a helper job whose tripwire is only echoed",
          {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {**tripwire, "run": "echo " + tripwire["run"]}]}},
          True, True),
+        ("a helper job whose tripwire is behind ||",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {**tripwire, "run": "true || " + tripwire["run"]}]}},
+         True, True),
         # Placement reads each command as the census does: a build named only in a comment is not a later build step.
         ("a step after the tripwire that names a build only in a comment",
          {**allowed, ("ci.yml", "new"): {"steps": [helper_build, tripwire,
@@ -755,6 +758,8 @@ def self_test() -> int:
         # The read must come before the loop, or the loop runs on whatever n held before the block.
         ("the canonical read after the part loop",
          shape.format(part, rest).replace(n_line, "").replace("  done\n", "  done\n" + n_line, 1), True),
+        # The loop's body is a whitelist too: only the part call, so nothing can cut the loop short.
+        ("a break after the first part build", shape.format(part + "\n    break", rest), True),
         # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
         ("a whole build chained after the part call on its line",
          shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
