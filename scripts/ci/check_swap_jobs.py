@@ -520,6 +520,8 @@ def self_test() -> int:
     swap = {"uses": ACTION}
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
+        ("a build continued between cargo and test, no swap step",
+         job({"run": "cargo \\\n  test --all-features --lib --no-run"}), True, 1),
         ("swap after the build", job({"run": "cargo test --all-features"}, swap), True, 1),
         ("swap before the build", job(swap, {"run": "cargo test --all-features"}), True, 0),
         ("a copied swap script", job({"run": "sudo swapon /swapfile"}, {"run": "cargo test"}), True, 2),
@@ -619,6 +621,13 @@ def self_test() -> int:
                                                    tripwire]}}, True, True),
         ("a helper job whose tripwire runs before the build",
          {**allowed, ("ci.yml", "new"): {"steps": [tripwire, helper_build]}}, True, True),
+        # The tripwire counts only as a command that runs it: not a comment, not an echo of its path.
+        ("a helper job whose tripwire is commented out",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {**tripwire, "run": "# " + tripwire["run"]}]}},
+         True, True),
+        ("a helper job whose tripwire is only echoed",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, {**tripwire, "run": "echo " + tripwire["run"]}]}},
+         True, True),
         # Placement reads each command as the census does: a build named only in a comment is not a later build step.
         ("a step after the tripwire that names a build only in a comment",
          {**allowed, ("ci.yml", "new"): {"steps": [helper_build, tripwire,
