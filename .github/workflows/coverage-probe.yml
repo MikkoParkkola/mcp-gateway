@@ -39,6 +39,7 @@ on:
       - "scripts/release/critical_function_coverage.py"
       - "scripts/release/critical_path_coverage.py"
       - "scripts/ci/coverage_shards.py"
+      - "scripts/ci/coverage_union.py"
       - "scripts/ci/coverage_shard_*.sh"
       - "scripts/ci/testdata/llvm_cov_report_v.txt"
       - "src/coverage_canary.rs"
@@ -254,13 +255,15 @@ jobs:
       - name: Reports
         run: |
           set -o pipefail
-          # -v prints each llvm-cov command with every -object it reads.
-          cargo llvm-cov report -v --summary-only --json --output-path cov.json 2>&1 | tee report-json.log
-          cargo llvm-cov report -v --lcov --output-path linux.lcov 2>&1 | tee report-lcov.log
-          # Each report read every executable a part built with coverage sections.
-          for log in report-json.log report-lcov.log; do
-            python3 scripts/ci/coverage_shards.py objects "$log" shards/cov-shard-*/manifest.txt
-          done
+          # -v prints the llvm-cov export command with every -object it reads. One export over all five lib part
+          # executables reads each function through the first part's mapping, and the parts give one function
+          # different hashes, so other parts' counts read zero there: this single report is kept for diagnosis and
+          # for the join's check that it loses no line or function the single report has.
+          cargo llvm-cov report -v --lcov --output-path linux-single.lcov 2>&1 | tee report-lcov.log
+          # The report read every executable a part built with coverage sections.
+          python3 scripts/ci/coverage_shards.py objects report-lcov.log shards/cov-shard-*/manifest.txt
+          # One export per part plus one for the rest, joined line by line (scripts/ci/coverage_union.py).
+          python3 scripts/ci/coverage_union.py report-lcov.log linux-single.lcov linux.lcov
           # A never-called function must show at zero: a merge that lost binaries would drop it.
           python3 scripts/ci/coverage_shards.py canary linux.lcov
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -269,11 +272,11 @@ jobs:
           retention-days: 90
           name: coverage-linux
           path: |
-            cov.json
             linux.lcov
+            linux-single.lcov
+            mismatch.txt
             all-run.log
             sdk-run.log
-            report-json.log
             report-lcov.log
             shards/*/tests.tsv
             shards/*/manifest.txt
@@ -293,7 +296,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version ${{ env.COVERAGE_LLVM_COV }}
       - name: Allow symlink creation
         shell: pwsh
         run: >-
@@ -360,7 +363,7 @@ jobs:
           status=0 functions=0 paths=0
           # stderr too, so a grader that cannot run shows why in the summary.
           python3 scripts/release/critical_function_coverage.py "$@" > functions.txt 2>&1 || functions=$?
-          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt 2>&1 || paths=$?
+          python3 scripts/release/critical_path_coverage.py art/coverage-linux/linux.lcov > paths.txt 2>&1 || paths=$?
           [ "$functions" = 0 ] && [ "$paths" = 0 ] || status=1
           # A grader's 3 is a missing report: no grade, never a graded FAIL (MIK-8265).
           verdict=$([ $status = 0 ] && echo PASS || echo FAIL)

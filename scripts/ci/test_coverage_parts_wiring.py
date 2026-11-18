@@ -273,12 +273,16 @@ class CoveragePartsWiring(unittest.TestCase):
             self.assertFalse(missing, "W5 item 6 missing from on.pull_request.paths: " + ", ".join(missing))
 
         with self.subTest(item=7):
-            # The logged Running-line format depends on this literal installer version.
+            # The logged Running-line format depends on the installer version: every install pins it, through the
+            # workflow's one COVERAGE_LLVM_COV (the Linux jobs' existing pin) or the literal, and that is 0.9.1.
+            pin = r"--version (?:0\.9\.1|\"?\$COVERAGE_LLVM_COV\"?|\$\{\{ env\.COVERAGE_LLVM_COV \}\})(?:\s|$)"
             missing = [f"{job}/{step.get('name', index)}" for job, value in jobs.items()
                        for index, step in enumerate(value.get("steps", []))
                        if "cargo install cargo-llvm-cov" in step.get("run", "")
-                       and not re.search(r"--version 0\.9\.1(?:\s|$)", commands(step["run"]))]
-            self.assertFalse(missing, "W5 item 7 missing --version 0.9.1 in: " + ", ".join(missing))
+                       and not re.search(pin, commands(step["run"]))]
+            if str(doc.get("env", {}).get("COVERAGE_LLVM_COV")) != "0.9.1":
+                missing.append("workflow env COVERAGE_LLVM_COV = 0.9.1")
+            self.assertFalse(missing, "W5 item 7 missing the 0.9.1 pin in: " + ", ".join(missing))
 
         with self.subTest(item=8):
             ci_runs = "\n".join(commands(step.get("run", "")) for job in ci.get("jobs", {}).values()
@@ -300,12 +304,13 @@ class CoveragePartsWiring(unittest.TestCase):
         union = "python3 scripts/ci/coverage_union.py report-lcov.log linux-single.lcov linux.lcov\n"
         tests = "python3 scripts/ci/test_coverage_union.py\npython3 scripts/release/test_coverage_grade.py\n"
         control = {
+            "env": {"COVERAGE_LLVM_COV": "0.9.1"},
             "on": {"pull_request": {"paths": ["scripts/ci/coverage_union.py",
                                               "scripts/release/critical_path_coverage.py"]}},
             "jobs": {
                 "linux-grade": {"steps": [
                     {"name": "Reports", "run": report + union
-                     + "python3 scripts/ci/coverage_shards.py objects linux.lcov\n"
+                     + "python3 scripts/ci/coverage_shards.py objects report-lcov.log shards/cov-shard-*/manifest.txt\n"
                      + "python3 scripts/ci/coverage_shards.py canary linux.lcov\n"},
                     {"uses": "actions/upload-artifact@fixture", "with": {"name": "coverage-linux",
                      "path": "linux.lcov\nlinux-single.lcov\nmismatch.txt\n"}},
@@ -337,7 +342,7 @@ class CoveragePartsWiring(unittest.TestCase):
                 if item == 1:
                     steps[0]["run"] = steps[0]["run"].replace(report + union, union + report)
                 elif item == 2:
-                    steps[0]["run"] = steps[0]["run"].replace("objects linux.lcov", "objects linux-single.lcov")
+                    steps[0]["run"] = steps[0]["run"].replace("objects report-lcov.log", "objects linux.lcov")
                 elif item == 3:
                     doc["jobs"]["grade"]["steps"][0]["run"] = "python3 scripts/release/critical_path_coverage.py wrong.lcov"
                 elif item == 5:
