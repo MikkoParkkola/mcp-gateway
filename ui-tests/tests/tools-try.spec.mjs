@@ -801,6 +801,30 @@ test('E1b the admin guard says Not run and does not look up a receipt', async ({
   expect(bag.listings).toHaveLength(0);
 });
 
+test('E1c a refused call whose receipt is not listed says Blocked and does not link it', async ({ page }) => {
+  const cfg = {};
+  cfg.onCall = (route) => route.fulfill({
+    status: 403,
+    json: {
+      error: 'refused',
+      message: 'the firewall rule denied this call',
+      disposition: 'not_run',
+      receipt: 't-nolog',
+    },
+  });
+  cfg.onListing = (route) => route.fulfill({ json: { rows: [] } });
+  const bag = await open(page, cfg);
+  const run = runOf(page, 'web.search');
+  await expect(run).toBeVisible();
+  await run.click();
+  await expect.poll(() => bag.listings.length).toBe(4);
+  expect(bag.listings.map((l) => l.q)).toEqual(['t-nolog', 't-nolog', 't-nolog', 't-nolog']);
+  await expect(panel(page)).toContainText('Blocked');
+  await expect(panel(page)).toContainText('Firewall steps not recorded yet');
+  await expect(panel(page).locator('a[href^="/ui/activity/"]')).toHaveCount(0);
+  expect(bag.receipts).toHaveLength(0);
+});
+
 test('E2 a failed call that may have run', async ({ page }) => {
   const cfg = {};
   cfg.onCall = (route) => route.fulfill({
