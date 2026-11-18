@@ -293,7 +293,8 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
         last_build = max((i for i, s in enumerate(steps) if step_builds(s)), default=-1)
-        if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()"
+        if not any(any(cmd.startswith(TRIPWIRE) for cmd in run_commands(str(s.get("run", ""))))
+                   and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
                             "after its last build step")
@@ -343,7 +344,7 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
             problems.append(f"{name}: step {i} copies a swap script; use {ACTION}")
     if not linux_hosted(job):
         return False, problems
-    first_build = next((i for i, s in enumerate(steps) if builds_library(str(s.get("run", "")))), None)
+    first_build = next((i for i, s in enumerate(steps) if step_builds(s)), None)
     if first_build is None:
         return False, problems
     swap = next((i for i, s in enumerate(steps) if s.get("uses") == ACTION), None)
@@ -431,7 +432,7 @@ def memlog_problems(file: str, name: str, job: dict) -> list[str]:
         if isinstance(limit, int):
             limit_total += limit
         run = str(step.get("run", ""))
-        if not any(builds_library(cmd) for cmd in run_commands(run)):
+        if not step_builds(step):
             continue
         bare = [] if whole_step_wrapped(run) else unwrapped_builds(run)
         if bare:
