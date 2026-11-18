@@ -40,7 +40,6 @@ pub(super) fn npm_env(credential: &str, port: u16, path: &str) -> Vec<(String, S
         ("npm_config_https_proxy", proxy.as_str()),
         ("npm_config_proxy", proxy.as_str()),
         ("NO_PROXY", ""),
-        ("npm_config_ignore_scripts", "true"),
         ("npm_config_registry", "https://registry.npmjs.org/"),
         ("npm_config_git", "/nonexistent/git"),
         ("npm_config_audit", "false"),
@@ -283,7 +282,6 @@ fn install(
     let lock_only = [
         "install",
         "--package-lock-only",
-        "--ignore-scripts",
         "--prefix",
         prefix,
         npm.spec.as_str(),
@@ -295,7 +293,7 @@ fn install(
         .map_err(FetchFailure::at(FetchStep::LockCheck))?;
     run_npm(
         &npm.npm,
-        &["ci", "--ignore-scripts", "--prefix", prefix],
+        &["ci", "--prefix", prefix],
         &env,
         deadline,
         limits,
