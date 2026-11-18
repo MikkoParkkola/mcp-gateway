@@ -15,6 +15,8 @@ use crate::capability::{
 };
 
 const RUN: &str = "run-44178019895";
+/// The feature's own live run: the first to record Overpass's success.
+const PR_RUN: &str = "run-44215521926";
 const UA: &str = "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)";
 const OSM: &str = "© OpenStreetMap contributors";
 const OPEN_METEO: &str = "Data by Open-Meteo.com (CC BY 4.0)";
@@ -26,7 +28,12 @@ fn repo(rel: &str) -> PathBuf {
 /// The recorded answer `name`, replayed with its recorded status and content
 /// type (from the run's MANIFEST).
 fn recorded(name: &str) -> Reply {
-    let dir = repo("tests/fixtures/maps").join(RUN);
+    recorded_in(RUN, name)
+}
+
+/// As [`recorded`], from the recording `run`.
+fn recorded_in(run: &str, name: &str) -> Reply {
+    let dir = repo("tests/fixtures/maps").join(run);
     let body = std::fs::read_to_string(dir.join(format!("{name}.json"))).expect("fixture body");
     let manifest = std::fs::read_to_string(dir.join("MANIFEST")).expect("MANIFEST");
     let line = manifest
@@ -83,7 +90,18 @@ async fn call(
     fixture: &str,
     args: Value,
 ) -> (crate::capability::maps_harness::Seen, crate::Result<Value>) {
-    let stub = Stub::start(recorded(fixture)).await;
+    call_in(RUN, rel, host, fixture, args).await
+}
+
+/// As [`call`], replaying the answer recorded in `run`.
+async fn call_in(
+    run: &str,
+    rel: &str,
+    host: &str,
+    fixture: &str,
+    args: Value,
+) -> (crate::capability::maps_harness::Seen, crate::Result<Value>) {
+    let stub = Stub::start(recorded_in(run, fixture)).await;
     let capability = shipped(rel, host, &stub);
     let name = capability.name.clone();
     let b = backend(capability);
@@ -303,6 +321,29 @@ async fn t_overpass_at_capacity() {
     };
     assert!(text.contains("502"), "the status surfaces: {text}");
     assert!(!text.contains(OSM), "no credit on an error: {text}");
+}
+
+/// Overpass's success answer, from the feature's own live run: the same QL
+/// goes out, and the twenty cafes it found come back with the credit.
+#[tokio::test]
+async fn t_overpass_success() {
+    let (seen, result) = call_in(
+        PR_RUN,
+        "maps/overpass_nearby.yaml",
+        "t-overpass-ok.test",
+        "overpass_nearby",
+        json!({ "latitude": 60.1699, "longitude": 24.9384, "category": "cafe", "radius": 500, "limit": 20 }),
+    )
+    .await;
+    assert_eq!(seen.path, "/api/interpreter");
+    let out = structured(&result);
+    let elements = out["elements"].as_array().expect("elements");
+    assert_eq!(elements.len(), 20, "the recorded twenty: {out}");
+    assert!(
+        elements.iter().all(|e| e["tags"]["amenity"] == "cafe"),
+        "every element is a cafe: {out}"
+    );
+    assert_eq!(out["attribution"], OSM);
 }
 
 #[tokio::test]
@@ -632,7 +673,14 @@ fn ld7_a_catalogue_load_logs_the_refused_file_at_warn() {
 
 #[test]
 fn t_schemas_each_recorded_success_validates_against_its_shipped_schema() {
-    let dir = repo("tests/fixtures/maps").join(RUN);
+    for (run, count) in [(RUN, 7), (PR_RUN, 8)] {
+        schemas_of(run, count);
+    }
+}
+
+/// T-schemas for one recording `run` holding `count` successes.
+fn schemas_of(run: &str, count: usize) {
+    let dir = repo("tests/fixtures/maps").join(run);
     // Every recorded 200 is checked: a new recording must be mapped here.
     let tool_of = |fixture: &str| match fixture {
         "geocode" | "geocode_none" => "maps/geocode.yaml",
@@ -654,7 +702,11 @@ fn t_schemas_each_recorded_success_validates_against_its_shipped_schema() {
             (tool_of(fixture), fixture)
         })
         .collect();
-    assert_eq!(successes.len(), 7, "premise: the seven recorded successes");
+    assert_eq!(
+        successes.len(),
+        count,
+        "premise: {run}'s recorded successes"
+    );
     for (rel, fixture) in successes {
         let capability = as_shipped(rel);
         let raw: Value = serde_json::from_str(
@@ -665,7 +717,7 @@ fn t_schemas_each_recorded_success_validates_against_its_shipped_schema() {
         let verdict = crate::capability::validate_output(&published, &capability.schema.output);
         assert!(
             verdict.is_valid(),
-            "{fixture} against {rel}: {:?}",
+            "{run} {fixture} against {rel}: {:?}",
             verdict.violations
         );
     }

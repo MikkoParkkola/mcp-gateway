@@ -35,6 +35,31 @@ not connect to overpass-api.de, so it recorded nothing and there was no third
 run. An Overpass success answer is recorded later, by the live run on the
 feature's own pull request.
 
+## run-44215521926
+
+- Workflow run: https://github.com/MikkoParkkola/mcp-gateway/actions/runs/44215521926
+- Recording branch head: e8a093c911bd53ca6da9a8115befd00cb6807a2a (the feature's own
+  pull request, #5056)
+- Recorded: 2026-11-18, 01:24:16Z to 01:25:02Z (times per file in `MANIFEST`)
+
+Every request answered 200, Overpass included: `overpass_nearby.json` is its
+success answer (20 cafes within 500 m of 60.1699, 24.9384), the one the first
+run could not record. The other seven are a second recording of the same
+requests; the rows keep reading the first run's, and T-schemas checks both.
+
+| File | Status | Content type |
+|---|---|---|
+| geocode.json | 200 | application/json; charset=utf-8 |
+| geocode_none.json | 200 | application/json; charset=utf-8 |
+| weather.json | 200 | application/json; charset=utf-8 |
+| nominatim_search.json | 200 | application/json; charset=utf-8 |
+| nominatim_reverse.json | 200 | application/json; charset=utf-8 |
+| photon_search.json | 200 | application/json |
+| overpass_nearby.json | 200 | application/json |
+| osrm_route.json | 200 | application/json; charset=UTF-8 |
+
+The full URLs are in `run-44215521926/MANIFEST`.
+
 ## Licences of the recorded data
 
 - Open-Meteo answers (geocode, weather): Open-Meteo.com, CC BY 4.0.
