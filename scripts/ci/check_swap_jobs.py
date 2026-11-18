@@ -747,6 +747,9 @@ def self_test() -> int:
         # One mention of n, so only the canonical-read rule can refuse it.
         ("the read prints a constant", shape.format(part, rest).replace(
             n_line, "  n=\"$(sed 's/.*/2/;q' scripts/dev/test-parts-build.rs)\"\n"), True),
+        # The read must come before the loop, or the loop runs on whatever n held before the block.
+        ("the canonical read after the part loop",
+         shape.format(part, rest).replace(n_line, "").replace("  done\n", "  done\n" + n_line, 1), True),
         # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
         ("a whole build chained after the part call on its line",
          shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
