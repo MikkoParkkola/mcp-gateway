@@ -568,6 +568,7 @@ fn blocked_execution_reason(plan: &KubernetesClusterApplyPlan) -> String {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cluster_tests.rs"]
 mod tests;

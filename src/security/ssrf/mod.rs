@@ -105,9 +105,11 @@ mod resolver;
 
 pub(crate) use destination::DestinationPolicy;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod loopback_name_tests;
 

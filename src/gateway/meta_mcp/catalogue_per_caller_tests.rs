@@ -301,6 +301,7 @@ pub(super) async fn listed_for(
 /// everyone passes — including to the anonymous caller, which is the fail-open
 /// the design forbids at §4.6 row 2 and §7 Q1. The third row is what keeps the
 /// fix for the first from becoming a blanket loosening of the isolation guard.
+#[cfg(tp2)]
 #[tokio::test]
 async fn each_identity_sees_its_own_catalogue_and_no_one_elses() {
     let (_log, meta, wire) = per_identity_gateway().await;
@@ -420,6 +421,7 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// Two-directional: the identified half must produce a record, or the
 /// anonymous half's "zero" passes against a gateway whose audit logging is
 /// simply broken.
+#[cfg(tp2)]
 #[tokio::test]
 async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
     let file = crate::security::transparency_log::temp::TempLog::new();
@@ -572,6 +574,7 @@ fn expiring_backend(ttl: Duration) -> (Arc<Backend>, Arc<ChangingCatalogue>) {
 /// RED before the freshness check: `backend_tools_for_discovery` returned any
 /// non-empty snapshot without consulting the TTL, so the second read was served
 /// `catalogue_before_change` from cache and the fetch count stayed at 1.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
     let (backend, wire) = expiring_backend(Duration::from_millis(30));
@@ -634,6 +637,7 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
 /// (single-flight joins the held fetch) and fail the bounded wait. A count
 /// read after the read cannot say this; the cold read's refresh may already
 /// have counted (MIK-8354).
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch() {
     // A zero TTL: the slot is stale the moment it is filled (`elapsed() < ttl`
@@ -721,6 +725,7 @@ impl crate::transport::Transport for PoisonedOnly {
 /// WHEN search-style discovery (no empty-cache fetch) reads it
 /// THEN a background refresh still reaches the upstream, so a description
 /// fixed upstream is served again instead of staying hidden forever.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_shared_slot_withholding_every_tool_still_refreshes_past_its_ttl() {
     let backend = Arc::new(Backend::new(
@@ -764,11 +769,14 @@ async fn a_shared_slot_withholding_every_tool_still_refreshes_past_its_ttl() {
     );
 }
 
+#[cfg(tp2)]
 #[path = "catalogue_families_per_caller_tests.rs"]
 mod catalogue_families_per_caller_tests;
 
+#[cfg(tp2)]
 #[path = "catalogue_stateless_oauth_guard_tests.rs"]
 mod catalogue_stateless_oauth_guard_tests;
 
+#[cfg(tp2)]
 #[path = "caller_forward_identity_tests.rs"]
 mod caller_forward_identity_tests;

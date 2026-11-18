@@ -306,6 +306,7 @@ complete -c mcp-gateway -l no-meta-mcp -d 'Disable Meta-MCP mode'
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

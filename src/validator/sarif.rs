@@ -225,6 +225,7 @@ pub fn to_sarif_multi(file_results: &[(&str, &[ValidationResult])]) -> SarifRepo
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

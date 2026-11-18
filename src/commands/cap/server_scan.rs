@@ -255,6 +255,7 @@ fn failure_line(what: &str, error: &impl std::fmt::Display) -> mcp_gateway::cli_
     mcp_gateway::cli_support::shown(&format!("❌ {what}: {error}"))
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "server_scan_failure_tests.rs"]
 mod failure_tests;

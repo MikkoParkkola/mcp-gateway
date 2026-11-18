@@ -385,6 +385,7 @@ impl Default for ToolPolicy {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +579,7 @@ mod tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "policy_rule_id_tests.rs"]
 mod rule_id_tests;

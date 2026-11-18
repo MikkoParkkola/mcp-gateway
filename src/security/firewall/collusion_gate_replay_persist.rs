@@ -347,6 +347,7 @@ impl Firewall {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_gate_replay_persist_tests.rs"]
 mod tests;

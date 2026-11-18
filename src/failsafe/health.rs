@@ -354,10 +354,12 @@ impl LatencyHistogram {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "health_slow_tests.rs"]
 mod slow_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +473,7 @@ mod tests {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "health_clock_tests.rs"]
 mod clock_tests;

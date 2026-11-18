@@ -52,6 +52,7 @@ pub(crate) fn reserved_port() -> u16 {
     panic!("no free port in {FIRST}..{}", FIRST + SPAN);
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{FIRST, SPAN, reserved_port};

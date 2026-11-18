@@ -561,6 +561,7 @@ pub enum ToolChoice {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "types_tests.rs"]
 mod tests;

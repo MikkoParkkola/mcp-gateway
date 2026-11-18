@@ -140,6 +140,7 @@ fn mib(bytes: usize) -> String {
     format!("{} MiB", bytes / (1024 * 1024))
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

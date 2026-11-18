@@ -789,6 +789,7 @@ pub(crate) use seal::seal_open_slot;
 #[path = "grant_audit_seams.rs"]
 pub(crate) mod seams;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod kind_pin_tests {
     /// The decision set reads grant decisions back by this kind: one rename

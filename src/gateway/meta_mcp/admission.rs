@@ -773,6 +773,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "admission_tests.rs"]
 mod tests;
@@ -781,14 +782,17 @@ mod tests;
 #[path = "admission_slot_tests.rs"]
 mod slot_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]
 mod round_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "admission_withheld_tests.rs"]
 mod withheld_tests;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "metrics"))]
 #[path = "unkeyed_metric_tests.rs"]
 mod unkeyed_metric_tests;

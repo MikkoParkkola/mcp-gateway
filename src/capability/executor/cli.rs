@@ -363,14 +363,17 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     text[cut..].to_owned()
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "cli_firewall_tests.rs"]
 mod firewall_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "cli_literal_tests.rs"]
 mod literal_tests;

@@ -262,6 +262,7 @@ async fn regenerate_changed_files(paths: &[PathBuf], out_dir: &Path, agent_paths
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +317,7 @@ metadata:
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "watcher_burst_tests.rs"]
 mod burst_tests;

@@ -221,6 +221,7 @@ async fn row(arm: Arm, path: Path, relay: Relay) -> Option<String> {
 }
 
 /// MIK-8176 SLOT.1, SLOT.2, SLOT.4 and SLOT.6: every arm x path x relay row.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_question_withheld_after_finalization_gives_its_slot_back() {
     let mut failures = Vec::new();
@@ -246,6 +247,7 @@ fn state_of(body: &str) -> Option<String> {
 /// still held, it is redeemable. The retry is accepted (the backend asks
 /// again, so one slot is held after it, the new one), and the spent envelope
 /// is refused on a second retry.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_delivered_question_is_redeemed_once() {
     let mut failures = Vec::new();
@@ -314,6 +316,7 @@ pub(super) fn notify_first(method: &str, params: Option<&Value>) -> bool {
 /// envelopes; without the keyring the redactor rewrites the sealed
 /// `requestState` and the answer is refused (-32600) instead of withheld or
 /// delivered, which is how the streamed `ReadJudgeWithheld` row failed.
+#[cfg(tp1)]
 #[tokio::test]
 async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
     use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;

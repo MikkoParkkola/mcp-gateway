@@ -112,6 +112,7 @@ impl Transform for FilterTransform {
 // Tests
 // ============================================================================
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

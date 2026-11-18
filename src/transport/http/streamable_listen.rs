@@ -260,6 +260,7 @@ impl UpstreamListen for StreamableListenSession {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "streamable_listen_tests.rs"]
 mod tests;

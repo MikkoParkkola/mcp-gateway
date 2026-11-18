@@ -211,6 +211,7 @@ pub struct ProjectionSpec {
     pub body: Option<BodySpec>,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{

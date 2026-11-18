@@ -113,6 +113,7 @@ fn dm_crypt(entry: &str) -> Option<bool> {
     Some(uuid.starts_with("CRYPT-"))
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{Swap, linux_swap};

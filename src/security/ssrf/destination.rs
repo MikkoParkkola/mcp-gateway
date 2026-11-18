@@ -143,6 +143,7 @@ pub(super) fn private_reachable(addr: IpAddr) -> bool {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "destination_tests.rs"]
 mod tests;

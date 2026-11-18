@@ -286,6 +286,7 @@ fn walk(root: &Value, node: &Value, found: &mut Vec<String>) {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -266,6 +266,7 @@ fn config_error(message: impl Into<String>) -> Error {
     Error::ConfigValidation(message.into())
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;

@@ -145,6 +145,7 @@ fn assert_refusal(result: Result<()>, code: i32, expected: &str) {
 
 const CAPACITY: &str = "Signing nonce capacity exceeded";
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_principal_buckets_follow_live_entries_only() {
     let store = NonceStore::with_clock_for_test(3, 2);
@@ -196,6 +197,7 @@ fn signing_nonce_principal_buckets_follow_live_entries_only() {
     assert_eq!(store.principal_bucket_count_for_test(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_global_capacity_refuses_without_growing_or_evicting() {
     let store = NonceStore::with_limits_for_test(2, 2);
@@ -220,6 +222,7 @@ fn signing_nonce_global_capacity_refuses_without_growing_or_evicting() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_principal_quota_reserves_capacity_for_another_principal() {
     let store = NonceStore::with_limits_for_test(3, 1);
@@ -241,6 +244,7 @@ fn signing_nonce_principal_quota_reserves_capacity_for_another_principal() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_principal_limit_counts_multiple_live_nonces() {
     let store = NonceStore::with_limits_for_test(5, 2);
@@ -257,6 +261,7 @@ fn signing_nonce_principal_limit_counts_multiple_live_nonces() {
     assert_eq!(store.len(), 4);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_global_limit_counts_entries_not_principal_buckets() {
     let store = NonceStore::with_limits_for_test(2, 10);
@@ -268,6 +273,7 @@ fn signing_nonce_global_limit_counts_entries_not_principal_buckets() {
     assert_eq!(store.len(), 2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_uniqueness_is_global_across_principals() {
     let store = NonceStore::with_limits_for_test(5, 2);
@@ -281,6 +287,7 @@ fn signing_nonce_uniqueness_is_global_across_principals() {
     assert_eq!(store.len(), 2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_utf8_limits_accept_exact_boundaries() {
     for nonce in ["x".to_owned(), "x".repeat(256), "🦀".repeat(64)] {
@@ -298,6 +305,7 @@ fn signing_nonce_utf8_limits_accept_exact_boundaries() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_invalid_bytes_never_consume_store_capacity() {
     let mut accepted = Vec::new();
@@ -320,6 +328,7 @@ fn signing_nonce_invalid_bytes_never_consume_store_capacity() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_invalid_bytes_precede_full_store_capacity() {
     for nonce in [String::new(), "x".repeat(257), "🦀".repeat(65)] {
@@ -339,6 +348,7 @@ fn signing_nonce_invalid_bytes_precede_full_store_capacity() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_expired_full_store_admits_immediately_without_background_tick() {
     let store = NonceStore::with_limits_for_test(2, 2);
@@ -357,6 +367,7 @@ fn signing_nonce_expired_full_store_admits_immediately_without_background_tick()
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_expiry_reclaims_only_expired_principal_capacity() {
     let store = NonceStore::with_limits_for_test(2, 1);
@@ -379,6 +390,7 @@ fn signing_nonce_expiry_reclaims_only_expired_principal_capacity() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_capacity_refusal_does_not_poison_the_refused_nonce() {
     let store = NonceStore::with_limits_for_test(1, 1);
@@ -395,6 +407,7 @@ fn signing_nonce_capacity_refusal_does_not_poison_the_refused_nonce() {
     assert_eq!(store.len(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_replay_has_precedence_over_full_capacity() {
     let store = NonceStore::with_limits_for_test(1, 1);
@@ -407,6 +420,7 @@ fn signing_nonce_replay_has_precedence_over_full_capacity() {
     assert_eq!(store.len(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_background_eviction_reclaims_quota_before_readmission() {
     let store = NonceStore::with_limits_for_test(1, 1);
@@ -444,6 +458,7 @@ fn paused_store(first: &str) -> (NonceStore, mpsc::Receiver<()>, ReleaseOnDrop) 
     (store, arrival, ReleaseOnDrop(Some(release)))
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_same_nonce_race_observes_real_guard_exclusion() {
     let (store, arrival, release) = paused_store("racing");
@@ -480,6 +495,7 @@ fn signing_nonce_same_nonce_race_observes_real_guard_exclusion() {
     assert_eq!(store.len(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_last_global_slot_race_observes_one_shared_guard() {
     let (store, arrival, release) = paused_store("first-key");
@@ -515,6 +531,7 @@ fn signing_nonce_last_global_slot_race_observes_one_shared_guard() {
     assert_eq!(store.len(), 1);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_readmission_uses_new_deadline_and_reassigns_principal_quota() {
     let store = NonceStore::with_clock_for_test(3, 1);
@@ -550,6 +567,7 @@ fn signing_nonce_readmission_uses_new_deadline_and_reassigns_principal_quota() {
     assert_eq!(store.len(), 2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn signing_nonce_cleanup_cannot_erase_a_concurrent_fresh_readmission() {
     let mut store = NonceStore::with_clock_for_test(2, 2);
@@ -607,6 +625,7 @@ fn signing_nonce_cleanup_cannot_erase_a_concurrent_fresh_readmission() {
 /// MIK-7869: only the registration a call made can be given back, by the
 /// principal that made it; the give-back frees its bucket and its expiry
 /// record, and never erases a newer registration of the same nonce.
+#[cfg(tp4)]
 #[test]
 fn release_unused_frees_only_the_registration_that_was_made() {
     let store = NonceStore::with_clock_for_test(8, 8);

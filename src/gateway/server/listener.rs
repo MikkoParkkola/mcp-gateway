@@ -48,6 +48,7 @@ pub(super) async fn serve(
     Ok(())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "listener_tests.rs"]
 mod tests;

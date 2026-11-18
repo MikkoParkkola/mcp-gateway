@@ -454,10 +454,12 @@ pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
 #[path = "ui_diff_show.rs"]
 mod show;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_diff_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_diff_refusal_tests.rs"]
 mod refusal_tests;

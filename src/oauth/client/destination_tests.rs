@@ -92,6 +92,7 @@ async fn assert_refused(advertised: Advertised, which: &str) {
     assert_eq!(error.to_rpc_code(), -32600, "{which}: {error}");
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_accepts_public_advertised_urls() {
     initialize(&Advertised {
@@ -103,6 +104,7 @@ async fn hardened_oauth_accepts_public_advertised_urls() {
     .expect("control: every advertised URL is a name");
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_refuses_private_authorization_server() {
     assert_refused(
@@ -116,6 +118,7 @@ async fn hardened_oauth_refuses_private_authorization_server() {
     .await;
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_refuses_private_registration() {
     assert_refused(
@@ -129,6 +132,7 @@ async fn hardened_oauth_refuses_private_registration() {
     .await;
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_refuses_private_token_endpoint() {
     assert_refused(
@@ -146,6 +150,7 @@ fn target(text: &str) -> url::Url {
     url::Url::parse(text).unwrap()
 }
 
+#[cfg(tp3)]
 #[test]
 fn oauth_redirect_hop_policy() {
     let private = target("http://169.254.169.254/latest");
@@ -185,6 +190,7 @@ pub(super) async fn counting_listener() -> (u16, Arc<std::sync::atomic::AtomicUs
     (port, accepted)
 }
 
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_client_is_pinned() {
     for (destination, reaches) in [
@@ -286,6 +292,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
 /// private literal is never followed under `Public`. The first request uses a
 /// literal too, which never reaches the resolver, so the pinned client can
 /// reach a loopback mock at all.
+#[cfg(tp3)]
 #[tokio::test]
 async fn hardened_oauth_client_refuses_a_literal_redirect() {
     // `Configured` sends `http://` loopback through its direct client (the
@@ -321,6 +328,7 @@ async fn hardened_oauth_client_refuses_a_literal_redirect() {
 /// `Private`) reaches a loopback authorization server, and still refuses a
 /// link-local or IPv6 metadata endpoint it is sent to, by advertisement or by a
 /// redirect hop.
+#[cfg(tp3)]
 #[tokio::test]
 async fn listed_private_backend_oauth_policy() {
     let initialize = |advertised: Advertised| async move {
@@ -394,6 +402,7 @@ async fn listed_private_backend_oauth_policy() {
 /// MIK-7701: a redirect hop the destination policy refuses is a policy
 /// answer, typed `-32600 SSRF blocked`, not a generic OAuth failure, both
 /// from `initialize` (discovery) and from a token or registration request.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refused_oauth_redirect_is_typed_ssrf_blocked() {
     let origin = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
@@ -477,6 +486,7 @@ fn private_client(port: u16, storage: Arc<TokenStorage>) -> OAuthClient {
 /// The protected-resource discovery falls back to the base URL when the
 /// document is missing, but a policy refusal is not a missing document: it is
 /// surfaced, not walked past.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refused_protected_resource_redirect_is_not_walked_past() {
     let port = serve_with_refused_resource("http://127.0.0.1:1/register".to_string()).await;
@@ -491,6 +501,7 @@ async fn a_refused_protected_resource_redirect_is_not_walked_past() {
 
 /// Dynamic registration falls back to a generated client id when the
 /// endpoint fails, but not when the destination policy refused it.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refused_registration_redirect_is_not_walked_past() {
     let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
@@ -526,6 +537,7 @@ async fn a_refused_registration_redirect_is_not_walked_past() {
 
 /// A token refresh whose endpoint redirects to a refused address answers
 /// `-32600 SSRF blocked` from the refresh entry point itself.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refused_token_refresh_redirect_is_typed_ssrf_blocked() {
     let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
@@ -623,6 +635,7 @@ pub(super) fn count_browsers(client: &mut OAuthClient) -> Arc<AtomicUsize> {
 
 /// `get_token` answers a refused refresh with the refusal, rather than
 /// starting an authorization that would meet the same policy.
+#[cfg(tp3)]
 #[tokio::test]
 async fn get_token_surfaces_a_refused_refresh_without_authorizing() {
     let dir = tempfile::tempdir().unwrap();
@@ -638,6 +651,7 @@ async fn get_token_surfaces_a_refused_refresh_without_authorizing() {
 
 /// An authorization abandoned at a refused registration releases the
 /// callback listener it had already bound.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_refused_registration_releases_the_callback_listener() {
     let (refused, registration) =
@@ -703,6 +717,7 @@ async fn a_refused_registration_releases_the_callback_listener() {
 /// The background task stops at a refused refresh: every later attempt meets
 /// the same policy, and re-authorizing is not the remedy, so the refusal is
 /// what it logs (MIK-7756).
+#[cfg(tp3)]
 #[tokio::test]
 async fn background_renewal_stops_at_a_refused_refresh() {
     let dir = tempfile::tempdir().unwrap();
@@ -711,6 +726,7 @@ async fn background_renewal_stops_at_a_refused_refresh() {
 
 /// The headless `client_credentials` fallback, taken when no refresh token is
 /// held, stops at the same refusal.
+#[cfg(tp3)]
 #[tokio::test]
 async fn background_renewal_stops_at_a_refused_client_credentials_grant() {
     let dir = tempfile::tempdir().unwrap();
@@ -751,6 +767,7 @@ async fn assert_renewal_stops_at_the_refusal(mut client: OAuthClient) {
 
 /// A refresh redirect to a name is refused, typed as SSRF, when the policy
 /// refuses what the name resolves to; a policy that allows it does not.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_redirect_to_a_refused_name_is_a_typed_refusal() {
     let target = url::Url::parse("https://localhost/token").unwrap();

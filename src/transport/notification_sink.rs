@@ -517,6 +517,7 @@ pub(crate) fn translate_back(notification: &mut JsonRpcNotification) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "notification_sink_tests.rs"]
 mod tests;

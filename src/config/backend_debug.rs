@@ -96,6 +96,7 @@ impl std::fmt::Debug for TransportConfig {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

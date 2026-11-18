@@ -22,6 +22,7 @@ pub(super) fn as_task(mut body: Value, key: &str) -> Value {
 
 /// T12. An unsigned task's worker writes its execution decision, traced,
 /// before the task settles. Since MIK-8315 the submit's decision comes first.
+#[cfg(tp5)]
 #[tokio::test]
 async fn unsigned_task_writes_the_workers_record() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -39,6 +40,7 @@ async fn unsigned_task_writes_the_workers_record() {
 
 /// T13. A signed task has two records: signing preparation's (untraced
 /// shape, on the request) and then the worker's (traced).
+#[cfg(tp5)]
 #[tokio::test]
 async fn signed_task_writes_preparation_and_execution_records() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -64,6 +66,7 @@ async fn signed_task_writes_preparation_and_execution_records() {
 
 /// T14. A worker cancelled while its capability call is held, after the
 /// grant check has noted: the note is still written, the task is cancelled.
+#[cfg(tp5)]
 #[tokio::test]
 async fn cancelled_worker_keeps_its_pending_record() {
     let row = armed(true, true, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -99,6 +102,7 @@ async fn cancelled_worker_keeps_its_pending_record() {
 /// T14b. The same cancellation on a stalled log: the dropped slot hands its
 /// note to a bounded write, which the stall refuses at once instead of
 /// pinning a thread.
+#[cfg(tp5)]
 #[tokio::test]
 async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
     let row = armed(true, true, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -150,6 +154,7 @@ type Body = fn(i64) -> Value;
 /// -32005, not as chain orchestration's -32603 or a partial result: a
 /// single `gateway_invoke`, a `gateway_execute` chain, and a playbook whose
 /// step policy is `continue`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn worker_decision_write_failure_settles_as_audit_unavailable() {
     let variants: [(&str, Body); 3] = [
@@ -202,6 +207,7 @@ async fn worker_decision_write_failure_settles_as_audit_unavailable() {
 /// refused at submit as a name that matches no tool (MIK-8326; route-check-parity
 /// P3), and recorded once. The run-time re-check is pinned by the chokepoint's
 /// F5 and the worker's policy check.
+#[cfg(tp5)]
 #[tokio::test]
 async fn surfaced_task_grant_denial_writes_one_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;

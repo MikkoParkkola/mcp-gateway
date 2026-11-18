@@ -71,6 +71,7 @@ fn bundle(path: &Path) -> Vec<u8> {
     ndjson(&all(path, CAPS, ndjson_size), json!({}), &signer())
 }
 
+#[cfg(tp5)]
 #[test]
 fn e1_a_valid_export_verifies_and_every_edit_fails() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -151,6 +152,7 @@ fn e1_a_valid_export_verifies_and_every_edit_fails() {
     assert_eq!(verify_export(cut, &t), Err(ExportRefusal::Torn));
 }
 
+#[cfg(tp5)]
 #[test]
 fn e3_export_and_receipt_signatures_are_separate_domains() {
     let s = signer();
@@ -173,6 +175,7 @@ fn e3_export_and_receipt_signatures_are_separate_domains() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn e4_tampered_rows_are_marked_and_counted() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -209,6 +212,7 @@ fn e4_tampered_rows_are_marked_and_counted() {
     assert_eq!(manifest["integrity_failed"], 2);
 }
 
+#[cfg(tp5)]
 #[test]
 fn e5_each_cap_cuts_where_it_says_and_names_itself() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -274,6 +278,7 @@ fn e5_each_cap_cuts_where_it_says_and_names_itself() {
     assert_eq!(CAPS.scan, 512 << 20);
 }
 
+#[cfg(tp5)]
 #[test]
 fn e6_rows_carry_the_entry_chain_and_hmac_fields_as_recorded() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -299,6 +304,7 @@ fn e6_rows_carry_the_entry_chain_and_hmac_fields_as_recorded() {
     }
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn e2_ndjson_without_a_key_is_409_and_csv_still_works() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -337,6 +343,7 @@ async fn e2_ndjson_without_a_key_is_409_and_csv_still_works() {
     assert!(verify_export(&body, &trust(&s)).is_ok());
 }
 
+#[cfg(tp5)]
 #[test]
 fn manifest_counters_are_per_source_log() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -385,6 +392,7 @@ pub(super) fn between_passes() {
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
     // Retention removes the segment the export is in between two passes.
@@ -457,6 +465,7 @@ fn a_reset_between_passes_aborts_instead_of_mixing_traversals() {
     assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
 }
 
+#[cfg(tp5)]
 #[test]
 fn an_unreadable_line_is_counted_in_the_signed_manifest() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -471,6 +480,7 @@ fn an_unreadable_line_is_counted_in_the_signed_manifest() {
     assert_eq!(manifest["unreadable"], 1);
 }
 
+#[cfg(tp5)]
 #[test]
 fn the_whole_download_stays_within_the_byte_cap() {
     let dir = crate::test_dir_keep::kept_tempdir();

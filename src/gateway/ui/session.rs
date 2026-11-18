@@ -412,6 +412,7 @@ fn loopback_authority(host: &str, port: u16) -> String {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod mik_8659_dashboard_tests {
     pub(super) async fn t1f_app_state(

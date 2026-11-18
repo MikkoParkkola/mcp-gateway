@@ -135,6 +135,7 @@ pub(crate) mod seam {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

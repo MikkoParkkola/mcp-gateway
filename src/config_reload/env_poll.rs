@@ -383,6 +383,7 @@ impl EnvReloadCounts {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "env_poll_tests.rs"]
 mod tests;

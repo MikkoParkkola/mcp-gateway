@@ -535,6 +535,7 @@ pub(crate) fn node_verifies(body: &Value, nonce: &str) -> Result<Value, String> 
 
 /// A relay refusal on `/mcp` comes from the collusion detector, not a
 /// configured rule: its record names kind firewall and no rule.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_relay_refusal_records_no_rule() {
     let run = read_then_relay(DELIVERED_PROSE, false).await;

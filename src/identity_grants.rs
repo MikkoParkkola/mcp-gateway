@@ -80,6 +80,7 @@ pub enum GrantScope {
 
 #[doc(hidden)]
 pub mod journal;
+#[cfg(tp3)]
 #[cfg(test)]
 mod journal_tests;
 #[path = "identity_grants_matching.rs"]
@@ -647,16 +648,20 @@ pub struct LocalIdentityGrantStore {
     key: Option<crate::security::rule_id::RuleKey>,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "identity_grants_subject_tests.rs"]
 mod subject_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "identity_grants_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "identity_grants_agent_key_tests.rs"]
 mod agent_key_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod rule_id_tests;

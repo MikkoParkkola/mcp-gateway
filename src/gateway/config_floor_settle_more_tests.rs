@@ -264,7 +264,14 @@ mod disconnect {
             .audit(IntentKind::Adopt)
             .expect("an unaudited gateway with auth off writes");
         async move {
-            let _ = replace_audited(ctx, replace, audit, RELOAD_LOCK_WAIT).await;
+            let _ = replace_audited(
+                ctx,
+                replace,
+                audit,
+                crate::config_reload::history::Source::Ui { who: String::new() },
+                RELOAD_LOCK_WAIT,
+            )
+            .await;
         }
     }
 

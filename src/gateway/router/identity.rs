@@ -473,26 +473,32 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[path = "identity_test_fixture.rs"]
 mod test_fixture;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "identity_header_tests.rs"]
 mod tests;
 
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "identity_control_tests.rs"]
 mod control_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "identity_cf_edge_tests.rs"]
 mod cf_edge_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "identity_admission_tests.rs"]
 mod admission_tests;
 
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]
 mod caller_key_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod mik_8659_caller_tests {
     use super::caller_key;

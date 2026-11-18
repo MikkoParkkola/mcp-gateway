@@ -12,6 +12,7 @@
 mod access_report;
 mod access_table;
 /// Every admin route refuses a backend-scoped admin.
+#[cfg(tp3)]
 #[cfg(test)]
 mod admin_scope_tests;
 #[cfg(test)]
@@ -26,6 +27,10 @@ pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+/// Every UI API answer type is classified for the api command.
+#[cfg(tp3)]
+#[cfg(test)]
+mod content_types_tests;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
@@ -44,16 +49,20 @@ mod overview;
 mod policies;
 #[cfg(feature = "firewall")]
 mod policies_part2;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_part2_tests;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_relay_tests;
 #[cfg(feature = "firewall")]
 mod policies_rules;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_shadow_tests;
 #[cfg(test)]
 mod policies_test_support;
+#[cfg(tp3)]
 #[cfg(test)]
 mod policies_tests;
 mod preview;
@@ -62,10 +71,13 @@ mod principal;
 mod refusals;
 mod restart;
 pub(crate) mod restart_confirm;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_confirm_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_get_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod restart_tests;
 mod secret_slots;
@@ -110,10 +122,20 @@ async fn write_audited(
     context: Arc<ReloadContext>,
     replace: Replace,
     kind: IntentKind,
+    who: &crate::security::audit::AuditWho,
 ) -> Result<ReplaceOutcome, ReplaceError> {
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(kind)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
@@ -642,7 +664,13 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         .into_response();
     };
 
-    match reload_context.manual_reload_outcome().await {
+    let who = admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    match reload_context
+        .manual_reload_outcome(crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        })
+        .await
+    {
         Ok(outcome) => (
             StatusCode::OK,
             Json(json!({
@@ -775,17 +803,21 @@ fn call_windows(
 
 // ── Tests ────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_file_tests.rs"]
 mod keys_file_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod discovery_wiring_tests;
 
@@ -793,22 +825,27 @@ mod discovery_wiring_tests;
 #[path = "keys_create_fixture_tests.rs"]
 mod keys_create_fixture_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_tests.rs"]
 mod keys_create_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_cli_tests.rs"]
 mod keys_create_cli_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_revoke_request_tests.rs"]
 mod keys_revoke_request_tests;

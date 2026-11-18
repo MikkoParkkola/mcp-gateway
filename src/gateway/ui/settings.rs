@@ -304,7 +304,9 @@ pub(super) async fn settings_save(
         state.transparency_log.clone(),
         GatewayAuth::of(state.live_config.running().auth.enabled),
     );
-    match ui_save(ctx, posture, base, edit, secrets, RELOAD_LOCK_WAIT).await {
+    let who =
+        super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
         Ok(saved) => Json(json!({
             "revision": saved.revision.as_str(), "changed": saved.changed,
             "restart_required": restart_fields(&fields, &saved.reload),
@@ -587,24 +589,30 @@ fn secret_target(
     .map_err(Box::new)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_answer_tests.rs"]
 mod answer_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_cli_tests.rs"]
 mod cli_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_floor_tests.rs"]
 mod floor_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_route_tests.rs"]
 mod route_tests;
 #[cfg(test)]
 #[path = "settings_support_tests.rs"]
 mod test_support;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_unused_tests.rs"]
 mod unused_route_tests;

@@ -141,6 +141,24 @@ fn subjects_proven_behind_one_shared_key_stay_apart() {
 /// type cannot reach `principal_source` (MIK-8330). A new caller fails here.
 #[test]
 fn the_identity_only_binding_is_called_only_by_the_a2a_residue() {
+    // Where a file's production text ends: the file's own inline unit-test
+    // module (by convention its tail) is not production; a `#[path]` test
+    // module is a separate file.
+    let cut = |text: &str| -> usize {
+        text.match_indices("#[cfg(test)]\nmod ")
+            .find(|(at, _)| {
+                text[*at..]
+                    .lines()
+                    .nth(1)
+                    .is_some_and(|line| line.trim_end().ends_with('{'))
+            })
+            .map_or(text.len(), |(at, _)| at)
+    };
+    // The lib test split's part tag sits above the test cfg: the tagged tail
+    // module is still cut, and the production line before it is kept.
+    let tagged = "fn live() {}\n#[cfg(tp3)]\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
+    assert!(!tagged[..cut(tagged)].contains("fn t()"));
+    assert!(tagged[..cut(tagged)].contains("fn live()"));
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut callers = Vec::new();
     for entry in walkdir::WalkDir::new(&root) {
@@ -156,15 +174,7 @@ fn the_identity_only_binding_is_called_only_by_the_a2a_residue() {
             continue;
         }
         let text = std::fs::read_to_string(entry.path()).expect("readable source");
-        // The file's own inline unit-test module (by convention its tail) is
-        // not production; a `#[path]` test module is a separate file.
-        let tail = text.match_indices("#[cfg(test)]\nmod ").find(|(at, _)| {
-            text[*at..]
-                .lines()
-                .nth(1)
-                .is_some_and(|line| line.trim_end().ends_with('{'))
-        });
-        let production = &text[..tail.map_or(text.len(), |(at, _)| at)];
+        let production = &text[..cut(&text)];
         for line in production.lines().map(str::trim_start) {
             if line.starts_with("//") || line.contains("fn principal_fingerprint(") {
                 continue;
