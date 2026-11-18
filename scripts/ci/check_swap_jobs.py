@@ -116,6 +116,7 @@ WHOLE_BUILD_ALLOWED = {
 PACKAGED_BUILD = "scripts/ci/packaged-tests.sh build"
 TRIPWIRE = "scripts/ci/memory-tripwire.sh"
 PACKAGED_SCRIPT = Path("scripts/ci/packaged-tests.sh")
+# Matched at the start of a command: a part call is the command itself, not text inside an echo or another command.
 PART_CALL = re.compile(r"""MCP_GATEWAY_TEST_PART="\$k"\s+cargo\s+test\b.*\s--lib\b""")
 REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
 SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
@@ -146,8 +147,8 @@ def packaged_build_problems(text: str) -> list[str]:
     commands = run_commands(block)
     calls = [cmd for cmd in commands if re.search(r"\bcargo\s+test\b", cmd) or builds_library(cmd)]
     out = [f"`{c}` is neither one part nor the other targets" for c in calls
-           if not PART_CALL.search(c) and not (REST_CALL.search(c) and not SELECTS_LIB.search(c))]
-    if not any(PART_CALL.search(c) for c in calls):
+           if not PART_CALL.match(c) and not (REST_CALL.search(c) and not SELECTS_LIB.search(c))]
+    if not any(PART_CALL.match(c) for c in calls):
         out.append("the build mode builds no part")
     if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
         out.append("the build mode builds no non-lib test target")
@@ -159,8 +160,8 @@ def packaged_build_problems(text: str) -> list[str]:
     # One command names n, and a canonical read sits before the loop, so that command is the read and runs first.
     if (not loop or len(writes) != 1
             or not any(" ".join(cmd.split()) == N_READ for cmd in run_commands(block[:loop.start()]))
-            or any(PART_CALL.search(cmd) for cmd in run_commands(outside))
-            or not all(PART_CALL.search(cmd) for cmd in run_commands(loop.group(1)))):
+            or any(PART_CALL.match(cmd) for cmd in run_commands(outside))
+            or not all(PART_CALL.match(cmd) for cmd in run_commands(loop.group(1)))):
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
                    "from scripts/dev/test-parts-build.rs")
     return out
