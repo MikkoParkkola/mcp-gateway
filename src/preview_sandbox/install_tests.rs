@@ -774,3 +774,7 @@ fn u_direct_a_dist_info_named_in_raw_bytes_is_checked() {
     std::fs::write(raw.join("direct_url.json"), "{}").expect("taint");
     assert_eq!(check_direct_url(&env, far()), Err(direct_url_refusal()));
 }
+
+#[cfg(unix)]
+#[path = "install_link_tests.rs"]
+mod link_tests;
