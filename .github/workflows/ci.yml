@@ -1898,6 +1898,8 @@ jobs:
         run: python3 scripts/release/test_check_surface_inventory.py
       - name: User docs and examples list only KEEP keys (MIK-8044.SURF.2)
         run: python3 scripts/release/test_surface_docs.py
+      - name: Shipped files use only KEEP commands, flags and variables
+        run: python3 scripts/release/test_surface_shipped.py
       - name: Test the UPGRADING fragment assembler (MIK-8185)
         run: python3 scripts/release/test_upgrading_fragments.py
       - name: UPGRADING covers every non-KEEP surface row (MIK-8044.SURF.6)
