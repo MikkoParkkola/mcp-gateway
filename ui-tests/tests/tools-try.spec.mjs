@@ -282,6 +282,29 @@ test('F5 optional enum and optional boolean: default is left out', async ({ page
   expect(bag.calls.at(-1).body.arguments).toEqual({});
 });
 
+test('F12 a boolean and an enum default show beside the control and are left out', async ({ page }) => {
+  const cfg = {
+    tools: [tool('web.search', 'search', 'read', {
+      type: 'object',
+      properties: {
+        notify: { type: 'boolean', default: true },
+        mode: { type: 'string', enum: ['fast', 'deep'], default: 'fast' },
+      },
+    })],
+  };
+  const bag = await open(page, cfg);
+  const notify = panel(page).getByLabel('notify', { exact: true });
+  const mode = panel(page).getByLabel('mode', { exact: true });
+  await expect(notify).toBeVisible();
+  // The option list already says "true" and "fast". The default sits beside the control.
+  await expect(notify.locator('..').locator('span.muted')).toHaveText('true');
+  await expect(mode.locator('..').locator('span.muted')).toHaveText('fast');
+  await expect(notify.locator('option:checked')).toHaveText('default');
+  await expect(mode.locator('option:checked')).toHaveText('default');
+  await sends(bag, 1, () => runOf(page, 'web.search').click());
+  expect(bag.calls[0].body.arguments).toEqual({});
+});
+
 test('F6 an empty required number blocks Run and names the field', async ({ page }) => {
   const cfg = {
     tools: [tool('web.search', 'search', 'read', {
@@ -441,6 +464,23 @@ test('F10 loading, a failed tools list, and an empty list', async ({ page }) => 
   }
 });
 
+test('F11 a property named __proto__ is sent as its own key', async ({ page }) => {
+  const cfg = {
+    tools: [tool('web.search', 'search', 'read', {
+      type: 'object',
+      properties: { ['__proto__']: { type: 'string' } },
+    })],
+  };
+  const bag = await open(page, cfg);
+  const field = panel(page).getByLabel('__proto__', { exact: true });
+  await expect(field).toBeVisible();
+  await field.fill('owned');
+  await sends(bag, 1, () => runOf(page, 'web.search').click());
+  const args = bag.calls[0].body.arguments;
+  expect(Object.prototype.hasOwnProperty.call(args, '__proto__')).toBe(true);
+  expect(args).toEqual({ ['__proto__']: 'owned' });
+});
+
 test('F8 a root the form cannot model is one JSON field; none sends {}', async ({ page }) => {
   const cfg = {
     tools: [
@@ -472,6 +512,30 @@ test('F8 a root the form cannot model is one JSON field; none sends {}', async (
   await expect(panel(page).getByRole('textbox')).toHaveCount(0);
   await sends(bag, 1, () => runOf(page, 'empty.schema').click());
   expect(bag.calls.at(-1).body.arguments).toEqual({});
+});
+
+test('F8b a whole-arguments value that is not an object blocks Run, and an allOf root is one JSON field', async ({ page }) => {
+  const cfg = {
+    tools: [
+      tool('one.of', 's', 'read', { oneOf: [{ type: 'object' }] }),
+      tool('all.of', 's', 'read', {
+        allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { required: ['a'] }],
+      }),
+    ],
+  };
+  const bag = await open(page, cfg);
+  const box = panel(page).getByRole('textbox');
+  await expect(box).toBeVisible();
+  const run = runOf(page, 'one.of');
+  for (const bad of ['[1,2]', '"text"', '5']) {
+    await box.fill(bad);
+    await sends(bag, 0, () => run.click({ timeout: 5000 }));
+    await expect(box).toHaveAttribute('aria-invalid', 'true');
+  }
+  expect(bag.calls).toHaveLength(0);
+  await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
+  await expect(panel(page).getByRole('textbox')).toBeVisible();
+  await expect(panel(page).getByLabel('a', { exact: true })).toHaveCount(0);
 });
 
 test('R1 Run sends the exact body, typed', async ({ page }) => {
@@ -508,6 +572,24 @@ test('R2 a successful answer names the time and the result', async ({ page }) =>
   await run.click();
   await expect(panel(page)).toContainText('Answered in 212 ms');
   await expect(panel(page)).toContainText('Helsinki in November');
+});
+
+test('R4 empty content draws structured content as text', async ({ page }) => {
+  const cfg = {};
+  cfg.onCall = (route) => route.fulfill({
+    json: {
+      result: { content: [], structuredContent: { rows: 3 } },
+      is_error: false,
+      latency_ms: 212,
+      disposition: 'ran',
+    },
+  });
+  await open(page, cfg);
+  const run = runOf(page, 'web.search');
+  await expect(run).toBeVisible();
+  await run.click();
+  await expect(panel(page)).toContainText('Answered in 212 ms');
+  await expect(panel(page)).toContainText('"rows": 3');
 });
 
 test('R2b an error result is not an answer', async ({ page }) => {
@@ -784,6 +866,61 @@ test('W5 Enter confirms and Esc cancels', async ({ page }) => {
   expect(bag.calls[0].body.confirm_write).toBe(true);
 });
 
+test('W6 the write confirm has a Cancel button that sends nothing and keeps the form', async ({ page }) => {
+  const cfg = {
+    tools: [tool('fs.write', 'fs', 'write', {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+    })],
+  };
+  const bag = await open(page, cfg);
+  const run = runOf(page, 'fs.write');
+  await expect(run).toBeVisible();
+  await page.getByLabel('path').fill('/tmp/kept');
+  await sends(bag, 0, () => run.click());
+  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
+  await sends(bag, 0, () => page.getByRole('button', { name: 'Cancel', exact: true }).click());
+  expect(bag.calls).toHaveLength(0);
+  await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
+});
+
+test('W7 a 409 after opening Status shows no confirm and sends nothing more', async ({ page }) => {
+  let release = () => {};
+  let started = () => {};
+  const entered = new Promise((res) => { started = res; });
+  const cfg = {
+    tools: [tool('web.search', 'search', 'read', {
+      type: 'object',
+      properties: { query: { type: 'string' } },
+    })],
+  };
+  cfg.onCall = async (route) => {
+    started();
+    await new Promise((res) => { release = res; });
+    return route.fulfill({
+      status: 409,
+      json: { error: 'confirm_write_required', message: 'confirm the write', disposition: 'not_run' },
+    });
+  };
+  try {
+    const bag = await open(page, cfg);
+    const run = runOf(page, 'web.search');
+    await expect(run).toBeVisible();
+    await page.getByLabel('query').fill('helsinki');
+    await run.click();
+    await entered;
+    expect(bag.calls).toHaveLength(1);
+    await page.locator('nav.tabs').getByRole('link', { name: 'Status', exact: true }).click();
+    await expect(page).toHaveURL(/\/ui\/tools\/status$/);
+    await expect(panel(page)).toHaveCount(0);
+    await sends(bag, 0, () => release());
+    await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toHaveCount(0);
+    expect(bag.calls).toHaveLength(1);
+  } finally {
+    release();
+  }
+});
+
 test('E1 a refused call with a receipt says Blocked and links the receipt', async ({ page }) => {
   const cfg = {};
   cfg.onCall = (route) => route.fulfill({
@@ -882,6 +1019,25 @@ test('E3 a deadline says the tool may still be running', async ({ page }) => {
   await expect(panel(page)).toContainText('Timed out; the tool may still be running');
 });
 
+test('E3b a 504 that did not run says Not run and never Timed out', async ({ page }) => {
+  const cfg = {};
+  cfg.onCall = (route) => route.fulfill({
+    status: 504,
+    json: {
+      error: 'deadline',
+      message: 'no answer in time; nothing was run',
+      disposition: 'not_run',
+    },
+  });
+  await open(page, cfg);
+  const run = runOf(page, 'web.search');
+  await expect(run).toBeVisible();
+  await run.click();
+  await expect(panel(page)).toContainText('Not run');
+  await expect(panel(page)).toContainText('no answer in time; nothing was run');
+  await expect(panel(page)).not.toContainText('Timed out');
+});
+
 test('E4 audit down before the call says Not run', async ({ page }) => {
   const cfg = {};
   cfg.onCall = (route) => route.fulfill({
@@ -909,6 +1065,29 @@ test('E5 audit down after the call may have run', async ({ page }) => {
   await expect(panel(page)).toContainText('The tool may have run');
   await expect(panel(page)).toContainText('the audit log is down');
   await expect(panel(page)).not.toContainText('Not run');
+});
+
+test('E9 a 5xx with no disposition says the tool may have run', async ({ page }) => {
+  const replies = [
+    {
+      status: 503,
+      json: { error: 'audit log unavailable; the call may have run but its result is withheld' },
+    },
+    { status: 500, json: { error: 'upstream is down' } },
+  ];
+  const cfg = { onCall: (route) => route.fulfill(replies.shift()) };
+  await open(page, cfg);
+  const run = runOf(page, 'web.search');
+  await expect(run).toBeVisible();
+  await run.click();
+  await expect(panel(page)).toContainText('The tool may have run');
+  await expect(panel(page)).toContainText('audit log unavailable; the call may have run but its result is withheld');
+  await expect(panel(page)).not.toContainText('Not run');
+  await run.click();
+  await expect(panel(page)).toContainText('upstream is down');
+  await expect(panel(page)).toContainText('The tool may have run');
+  await expect(panel(page)).not.toContainText('Not run');
+  await expect(panel(page)).not.toContainText('audit log unavailable; the call may have run but its result is withheld');
 });
 
 test('E6 no answer from the gateway leaves the form usable', async ({ page }) => {
@@ -968,6 +1147,40 @@ test('E8 a second Run while one is in flight sends nothing', async ({ page }) =>
     expect(bag.calls).toHaveLength(1);
     release();
     await expect(run).toBeEnabled();
+  } finally {
+    release();
+  }
+});
+
+test('E8b another tool\'s Run stays disabled while a call is in flight and clicking it sends nothing', async ({ page }) => {
+  let release = () => {};
+  let started = () => {};
+  const entered = new Promise((res) => { started = res; });
+  const cfg = {
+    tools: [
+      tool('web.search', 'search', 'read', { type: 'object', properties: {} }),
+      tool('notes.list', 'notes', 'read', { type: 'object', properties: {} }),
+    ],
+  };
+  cfg.onCall = async (route) => {
+    started();
+    await new Promise((res) => { release = res; });
+    return route.fulfill({ json: ran({ text: 'done' }) });
+  };
+  try {
+    const bag = await open(page, cfg);
+    const run = runOf(page, 'web.search');
+    await expect(run).toBeVisible();
+    await run.click();
+    await entered;
+    await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
+    const next = runOf(page, 'notes.list');
+    await expect(next).toBeVisible();
+    await expect(next).toBeDisabled();
+    await sends(bag, 0, () => next.click({ force: true, timeout: 5000 }));
+    expect(bag.calls).toHaveLength(1);
+    release();
+    await expect(next).toBeEnabled();
   } finally {
     release();
   }
@@ -1098,30 +1311,30 @@ test('X1 tool text is text, never markup', async ({ page }) => {
 });
 
 const answerStates = [
-  ['ran', { json: ran({ text: 'Helsinki in November' }) }],
-  ['is_error', { json: ran({ text: 'backend failed', error: true }) }],
+  ['ran', { json: ran({ text: 'Helsinki in November' }) }, 'Helsinki in November'],
+  ['is_error', { json: ran({ text: 'backend failed', error: true }) }, 'The tool answered with an error'],
   ['blocked', {
     status: 403,
     json: { error: 'refused', message: 'the firewall rule denied this call', disposition: 'not_run' },
-  }],
-  ['bad request', { status: 400, json: { error: 'bad_request', message: 'limit must be a number' } }],
-  ['missing', { status: 404, json: { error: 'not_found', message: 'no such tool' } }],
+  }, 'Blocked'],
+  ['bad request', { status: 400, json: { error: 'bad_request', message: 'limit must be a number' } }, 'limit must be a number'],
+  ['missing', { status: 404, json: { error: 'not_found', message: 'no such tool' } }, 'no such tool'],
   ['failed', {
     status: 500,
     json: { error: 'failed', message: 'the call failed after it was sent', disposition: 'may_have_run' },
-  }],
+  }, 'the call failed after it was sent'],
   ['deadline', {
     status: 504,
     json: { error: 'deadline', message: 'no answer in time; the tool may still be running', disposition: 'may_have_run' },
-  }],
+  }, 'Timed out; the tool may still be running'],
   ['audit not run', {
     status: 503,
     json: { error: 'audit_unavailable', message: 'the audit log is down', disposition: 'not_run' },
-  }],
+  }, 'Not run'],
   ['audit may', {
     status: 503,
     json: { error: 'audit_unavailable', message: 'the audit log is down', disposition: 'may_have_run' },
-  }],
+  }, 'The tool may have run'],
 ];
 
 test('L1 every answer links Connect a client', async ({ page }) => {
@@ -1138,12 +1351,14 @@ test('L1 every answer links Connect a client', async ({ page }) => {
   const run = runOf(page, 'web.search');
   await expect(run).toBeVisible();
   const link = panel(page).getByRole('link', { name: 'Connect a client' });
-  for (const [name] of answerStates) {
+  for (const [name, , shown] of answerStates) {
     await run.click();
+    await expect(panel(page), name).toContainText(shown);
     await expect(link, name).toHaveAttribute('href', '/ui/gateway/settings');
   }
   cfg.onCall = (route) => route.abort('failed');
   await run.click();
+  await expect(panel(page)).toContainText('No answer from the gateway; the tool may have run');
   await expect(link).toHaveAttribute('href', '/ui/gateway/settings');
 });
 
@@ -1156,13 +1371,15 @@ test('A1 axe passes on the form and on each answer, and the answer is a live reg
   expect(['polite', 'assertive']).toContain(await live.first().getAttribute('aria-live'));
   expect(await blockingViolations(page)).toEqual([]);
   const run = runOf(page, 'web.search');
-  for (const [name] of answerStates) {
+  for (const [name, , shown] of answerStates) {
     await run.click();
+    await expect(panel(page), name).toContainText(shown);
     await expect(live.first(), name).toBeVisible();
     expect(await blockingViolations(page), name).toEqual([]);
   }
   cfg.onCall = (route) => route.abort('failed');
   await run.click();
+  await expect(panel(page)).toContainText('No answer from the gateway; the tool may have run');
   await expect(live.first()).toBeVisible();
   expect(await blockingViolations(page)).toEqual([]);
 });
