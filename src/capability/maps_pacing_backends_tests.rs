@@ -5,7 +5,7 @@
 //! attempts, redirects and reload. Here: GraphQL and JSON-RPC on a paced host
 //! (RL15), `base_url` providers and the strictest of several backends (RL18,
 //! RL19), the sweeps (RL15e-g), direct registration (LD8) and withdrawn
-//! declarations (RL19b).
+//! declarations (`RL19b`).
 
 use super::*;
 
