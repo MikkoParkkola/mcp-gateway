@@ -340,6 +340,7 @@ fn run_npm(
         .arg("npm")
         .args(args)
         .env_clear()
+        .env("PREVIEW_HOST_LEAK", "1")
         .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(plan::HOME)
         .stdin(Stdio::null())
