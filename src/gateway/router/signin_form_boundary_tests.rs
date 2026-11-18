@@ -689,3 +689,26 @@ async fn n_router_wrong_content_type_is_415() {
     assert_no_store(&reply);
     assert_no_cookie(&reply);
 }
+
+/// N3d: the sign-in reads Gateway admin standing. An admin key scoped to one
+/// backend (`InScope` standing) is refused exactly as a standard key is; the
+/// same key at every backend (`Gateway`) mints. The two posts differ only in
+/// the key's backends.
+#[tokio::test]
+async fn n3d_an_admin_key_scoped_to_one_backend_is_refused() {
+    const SCOPED_NAME: &str = "n3d-scoped-admin";
+    const SCOPED_SECRET: &str = "n3d-scoped-admin-key";
+    let (state, _dir) = fixture().await;
+    let origin = http_origin(&state, "127.0.0.1");
+    let post = || post_signin(Some(&origin), &format!("key={SCOPED_SECRET}"), None, true);
+    let mut scoped = named_key(SCOPED_NAME, SCOPED_SECRET, true);
+    scoped.backends = vec!["alpha".to_string()];
+    reload_keys(&state, vec![scoped]);
+    let refused = send(&state, post()).await;
+    assert_eq!(refused.status, StatusCode::SEE_OTHER, "{}", refused.body);
+    assert_eq!(refused.header(header::LOCATION).as_deref(), Some(REFUSED));
+    assert_no_cookie(&refused);
+
+    reload_keys(&state, vec![named_key(SCOPED_NAME, SCOPED_SECRET, true)]);
+    assert_mint(&send(&state, post()).await);
+}
