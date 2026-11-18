@@ -21,7 +21,7 @@ const NESTED_RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(60)
 #[tokio::test]
 async fn a_relative_state_dir_assigns_an_absolute_cache() {
     let scratch = tempfile::tempdir().expect("scratch working directory");
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", SCENARIO, "--nocapture"])
         .env(SCENARIO_ENV, "1")
@@ -91,7 +91,7 @@ async fn a_cache_dir_that_cannot_be_created_is_assigned_to_no_runner() {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let blocker = scratch.path().join("blocker");
     std::fs::write(&blocker, b"").expect("a regular file in the state path");
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", BLOCKED_SCENARIO, "--nocapture"])
         .env(BLOCKED_SCENARIO_ENV, "1")

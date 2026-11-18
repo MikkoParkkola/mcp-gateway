@@ -506,6 +506,7 @@ mod identity_propagation_audit {
             .arg("-c")
             .arg(script)
             .arg(&exe)
+            .envs(crate::test_home::child_env())
             .env(ENV_VAR, &path)
             // Under a zero file-size limit the child's coverage profile is written
             // empty and corrupts the measured set (#2573); give it a private file.

@@ -251,6 +251,7 @@ fn mint_audit_write_failure_returns_generic_error_no_leak() {
         .arg("-c")
         .arg(script)
         .arg(&exe)
+        .envs(crate::test_home::child_env())
         .env(ENV_VAR, &path)
         // Under a zero file-size limit the child's coverage profile is written
         // empty and corrupts the measured set (#2573); give it a private file.

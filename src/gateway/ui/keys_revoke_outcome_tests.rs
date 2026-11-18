@@ -59,7 +59,7 @@ fn a_keychain_backed_target_revokes_by_its_resolved_digest() {
     const VAR: &str = "MCPGW_R4_OUTCOME_DIGEST";
     if std::env::var_os(VAR).is_none() {
         // Isolate the ambient value in a child; never mutate the runner's environment.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = crate::test_home::test_binary()
             .arg("a_keychain_backed_target_revokes_by_its_resolved_digest")
             .env(VAR, spec("ambient"))
             .output()

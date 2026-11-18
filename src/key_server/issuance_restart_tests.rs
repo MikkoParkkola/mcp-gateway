@@ -9,7 +9,6 @@
 //! reads the retained files.
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 use super::issuance_row_tests::{bearer_of, mint};
@@ -43,7 +42,7 @@ fn log_config(dir: &Path, rotating: bool) -> Arc<TransparencyLogConfig> {
 
 /// Run `case` in a child that mints, records the JTI, and aborts.
 fn run_child(dir: &Path, case: &str) -> Vec<String> {
-    let out = Command::new(std::env::current_exe().expect("test binary"))
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "key_server::issuance_restart_tests::restart_child",
