@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -165,8 +166,8 @@ class CoverageUnionRows(unittest.TestCase):
         # SINGLE's control export is not one of the command's N+1 exports.
         self.calls.write_text("")
 
-    def run_union(self):
-        done = self.run_command([sys.executable, SCRIPT, self.log, self.single, self.out])
+    def run_union(self, script=SCRIPT):
+        done = self.run_command([sys.executable, script, self.log, self.single, self.out])
         self.success(done)
 
     def grade_function(self, report):
@@ -210,14 +211,19 @@ class CoverageUnionRows(unittest.TestCase):
     def union_record(self):
         return read_records(self.out.read_text())[str(self.union_path)]
 
-    def reject_union(self, *messages):
-        done = self.run_command([sys.executable, SCRIPT, self.log, self.single, self.out])
+    def reject_union(self, *messages, script=SCRIPT):
+        previous = self.out.read_bytes() if self.out.exists() else None
+        done = self.run_command([sys.executable, script, self.log, self.single, self.out])
         # Missing implementation must stay red, even for expected rejection cases.
-        self.assertTrue(SCRIPT.is_file(), "missing command: scripts/ci/coverage_union.py")
+        self.assertTrue(script.is_file(), "missing command: scripts/ci/coverage_union.py")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertFalse(self.out.exists(), "a failed gate must not publish OUT")
+        if previous is None:
+            self.assertFalse(self.out.exists(), "a failed gate must not publish OUT")
+        else:
+            self.assertEqual(self.out.read_bytes(), previous, "a failed gate must preserve OUT")
         for message in messages:
             self.assertIn(message, done.stdout + done.stderr)
+        return done
 
     def assert_recounted(self, report):
         records = read_records(report)
@@ -516,6 +522,300 @@ class CoverageUnionRows(unittest.TestCase):
     def test_C1_canary_called_only_in_fourth_part_is_detected(self):
         # Only FNDA changes: DA coverage cannot accidentally trigger this check.
         self.check_canary(1, ["canary called 1 times"])
+
+    def log_command(self, argv):
+        return f"     Running `{shlex.join(argv)}`\n"
+
+    def reject_object_spelling(self, spelling):
+        self.fixture()
+        index = self.argv.index("-object")
+        path = self.argv[index + 1]
+        # Keep the other groups intact: each fixture changes just one spelling.
+        tokens = {
+            "equals": [f"-object={path}"],
+            "long": ["--object", path],
+            "long_equals": [f"--object={path}"],
+            "flag": ["-object", "-show-regions"],
+            "trailing": ["-object"],
+            "positional": [path],
+        }[spelling]
+        argv = self.argv[:index] + self.argv[index + 2:]
+        if spelling == "positional":
+            index = argv.index("export") + 1
+        elif spelling == "trailing":
+            index = len(argv)
+        argv[index:index] = tokens
+        self.log.write_text(self.log_command(argv))
+        self.reject_union(tokens[0])
+
+    def test_O1_equals_object_is_rejected(self):
+        self.reject_object_spelling("equals")
+
+    def test_O1_long_object_is_rejected(self):
+        self.reject_object_spelling("long")
+
+    def test_O1_long_equals_object_is_rejected(self):
+        self.reject_object_spelling("long_equals")
+
+    def test_O1_object_followed_by_flag_is_rejected(self):
+        self.reject_object_spelling("flag")
+
+    def test_O1_trailing_object_is_rejected(self):
+        self.reject_object_spelling("trailing")
+
+    def test_O1_positional_object_is_rejected(self):
+        self.reject_object_spelling("positional")
+
+    def test_O1_object_path_pairs_pass(self):
+        self.fixture()
+        self.run_union()
+
+    def check_failed_export(self, group):
+        self.fixture()
+        objects = self.others if group == "other" else [self.parts[3]]
+        table = json.loads(self.table_path.read_text())
+        table["exit_status"] = {json.dumps(objects): 1}
+        self.save_table(table)
+        # Prove the fake wrote valid-looking lcov before returning failure.
+        done = self.run_command(without_other_objects(self.argv, set(objects)))
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(read_records(done.stdout))
+        self.assertTrue(done.stdout.endswith("end_of_record\n"))
+        self.calls.write_text("")
+        self.reject_union("llvm-cov export failed", group)
+
+    def test_X1_other_export_nonzero_is_rejected(self):
+        self.check_failed_export("other")
+
+    def test_X1_fourth_export_nonzero_is_rejected(self):
+        self.check_failed_export("p4")
+
+    def other_mismatch(self, table):
+        # One mapping has a profile under a different hash: exactly one warning.
+        table["objects"][self.other][0]["hash"] = "unrecorded"
+        return table
+
+    def existing_out(self):
+        self.out.write_bytes(b"previous published report\r\n\x00\xff\n")
+        return self.out.read_bytes()
+
+    def test_X2_existing_out_survives_gate_a(self):
+        self.fixture()
+        table = self.other_mismatch(json.loads(self.table_path.read_text()))
+        self.prepare_exports(table)
+        previous = self.existing_out()
+        self.reject_union("mismatched data", "other")
+        self.assertEqual(self.out.read_bytes(), previous)
+
+    def test_X2_existing_out_survives_gate_b(self):
+        table = self.join_fixture()
+        single = self.override_single(table)
+        # Only a DA count changes, leaving gate (a) and the function gate intact.
+        single["records"][f"{self.union_name}|hash-1"]["lines"][10] = 1
+        self.prepare_exports(table)
+        previous = self.existing_out()
+        self.reject_union("gate (b)")
+        self.assertEqual(self.out.read_bytes(), previous)
+
+    def test_X2_passing_run_replaces_existing_out(self):
+        self.fixture()
+        previous = self.existing_out()
+        self.run_union()
+        self.assertNotEqual(self.out.read_bytes(), previous)
+        self.assertEqual(read_records(self.out.read_text())[str(self.f_path)]["lines"], F_LINES)
+        self.assert_recounted(self.out.read_text())
+
+    def test_X3_stray_reports_are_not_joined(self):
+        self.fixture()
+        table = json.loads(self.table_path.read_text())
+        self.prepare_exports(table)
+        # Neither filename is an output of this run; globbing would ingest both.
+        stray_files = []
+        for index, name in enumerate(("p9.lcov", "stale.lcov"), start=1):
+            filename = str(self.root / f"src/stray_{index}.rs")
+            stray_files.append(filename)
+            write(self.out.parent, name,
+                  f"SF:{filename}\nFN:901,stray_{index}\nFNDA:1,stray_{index}\n"
+                  "FNF:1\nFNH:1\nDA:901,1\nLF:1\nLH:1\nend_of_record\n")
+            for export in self.exports.values():
+                self.assertNotIn(filename, read_records(export))
+        self.run_union()
+        records = read_records(self.out.read_text())
+        for filename in stray_files:
+            self.assertNotIn(filename, records)
+        expected_files = {filename for export in self.exports.values()
+                          for filename in read_records(export)}
+        self.assertEqual(set(records), expected_files)
+
+    def test_X4_hash_seeds_produce_identical_bytes(self):
+        self.fixture()
+        table = json.loads(self.table_path.read_text())
+        filenames = []
+        # Many distinct string keys expose set/dict ordering that tiny inputs hide.
+        for file_index in range(17):
+            filename = str(write(self.root, f"src/order_{file_index}.rs", "\n" * 30))
+            filenames.append(filename)
+            for function_index in range(11):
+                name = f"order_{file_index}_function_{function_index}"
+                line = function_index + 1
+                for part_index, obj in enumerate(self.parts):
+                    count = (file_index + function_index + part_index) % 9
+                    self.add_function(table, obj, name, count, {line: count},
+                                      start=line, filename=filename)
+        self.prepare_exports(table)
+        results = []
+        for seed in (0, 1, 12345):
+            self.env["PYTHONHASHSEED"] = str(seed)
+            # Remove OUT so an implementation cannot pass by leaving it untouched.
+            self.out.unlink(missing_ok=True)
+            done = self.run_command([sys.executable, SCRIPT, self.log, self.single, self.out])
+            results.append((seed, done, self.out.read_bytes() if self.out.exists() else None))
+        for seed, done, report in results:
+            self.success(done)
+            self.assertIsNotNone(report, f"seed {seed} did not write OUT")
+            records = read_records(report.decode("utf-8"))
+            for filename in filenames:
+                self.assertEqual(len(records[filename]["functions"]), 11)
+            self.assert_recounted(report.decode("utf-8"))
+        self.assertEqual(results[0][2], results[1][2])
+        self.assertEqual(results[0][2], results[2][2])
+
+    def test_M1_zero_running_lines_is_rejected(self):
+        self.fixture()
+        self.log.write_text("report had no command\n")
+        self.reject_union("Running", "0")
+
+    def test_M1_two_running_lines_are_rejected(self):
+        self.fixture()
+        self.log.write_text(self.log.read_text() * 2)
+        self.reject_union("Running", "2")
+
+    def test_M1_non_lcov_line_beside_lcov_is_ignored(self):
+        self.fixture()
+        other = [arg for arg in self.argv if arg != "-format=lcov"]
+        self.log.write_text(self.log_command(other) + self.log.read_text())
+        self.run_union()
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(len(calls), 6)
+        self.assertTrue(all("-format=lcov" in argv for argv in calls))
+
+    def test_M1_non_lcov_line_alone_is_rejected(self):
+        self.fixture()
+        self.log.write_text(self.log_command([arg for arg in self.argv if arg != "-format=lcov"]))
+        self.reject_union("Running", "0")
+
+    def test_M1_matching_line_without_objects_is_rejected(self):
+        self.fixture()
+        self.log.write_text(self.log_command(without_other_objects(self.argv, set())))
+        self.reject_union("no -object")
+
+    def test_M1_missing_profile_is_rejected(self):
+        self.fixture()
+        profile = next(arg.split("=", 1)[1] for arg in self.argv
+                       if arg.startswith("-instr-profile="))
+        Path(profile).unlink()
+        self.reject_union("-instr-profile")
+
+    def three_part_tree(self, groups=(1, 2, 3), duplicate=False):
+        self.fixture()
+        table = json.loads(self.table_path.read_text())
+        self.parts = [self.parts[number - 1] for number in groups]
+        if duplicate:
+            second = str(write(self.root, "target/debug/deps/p2/second-object", "object\n"))
+            table["objects"][second] = deepcopy(table["objects"][self.parts[1]])
+            self.parts.append(second)
+        self.argv = without_other_objects(self.argv, set()) + [
+            token for obj in [*self.parts, *self.others] for token in ("-object", obj)]
+        self.log.write_text(self.log_command(self.argv))
+        self.prepare_exports(table)
+        # Run from the original cwd, but resolve N and lib_union beside the copy.
+        # This rejects hardcoded N=5 and reading the build script through cwd.
+        tree = self.root / "three-part-repo"
+        write(tree, "scripts/dev/test-parts-build.rs", "const N: u32 = 3;\n")
+        script = tree / "scripts/ci/coverage_union.py"
+        script.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / "scripts/ci/lib_union.py", script.parent / "lib_union.py")
+        self.assertTrue(SCRIPT.is_file(), "missing command: scripts/ci/coverage_union.py")
+        shutil.copy2(SCRIPT, script)
+        return script
+
+    def test_M2_three_part_build_passes(self):
+        script = self.three_part_tree()
+        self.run_union(script)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(len(calls), 4)
+        self.assertCountEqual(calls, [without_other_objects(self.argv, set(objects))
+                                     for objects in [self.others, *([obj] for obj in self.parts)]])
+
+    def test_M2_missing_second_folder_is_rejected(self):
+        script = self.three_part_tree(groups=(1, 3))
+        self.reject_folder_set(script, "p2")
+
+    def test_M2_extra_fourth_folder_is_rejected(self):
+        script = self.three_part_tree(groups=(1, 2, 3, 4))
+        self.reject_folder_set(script, "p4")
+
+    def reject_folder_set(self, script, folder):
+        done = self.reject_union(script=script)
+        message = done.stdout + done.stderr
+        # The diagnostic may name the offending folder or the expected set/range.
+        self.assertTrue(folder in message or ("p1" in message and "p3" in message), message)
+
+    def test_M2_two_objects_in_second_folder_are_rejected(self):
+        script = self.three_part_tree(duplicate=True)
+        self.reject_union("p2", script=script)
+
+    def test_M3_zero_other_and_part_counts_are_recorded(self):
+        self.fixture()
+        table = json.loads(self.table_path.read_text())
+        # Each part has a different warning count; p4 and other print no warning.
+        for number, obj in enumerate(self.parts, start=1):
+            for extra in range(number if number != 4 else 0):
+                name = f"mismatch_{number}_{extra}"
+                self.add_function(table, obj, name, 0, {400 + extra: 0},
+                                  start=400 + extra, filename=str(self.f_path))
+                table["records"].pop(f"{name}|hash-{number}")
+                table["records"][f"{name}|different-hash"] = {"calls": 1, "lines": {}}
+        self.prepare_exports(table)
+        expected_counts = [0, 3, 4, 5, 0, 7]
+        for objects, count in zip([self.others, *([obj] for obj in self.parts)], expected_counts):
+            done = self.run_command(without_other_objects(self.argv, set(objects)))
+            self.success(done)
+            expected = f"warning: {count} functions have mismatched data\n" if count else ""
+            self.assertEqual(done.stderr, expected)
+        self.calls.write_text("")
+        self.run_union()
+        self.assertEqual((self.out.parent / "mismatch.txt").read_text(),
+                         "other 0\np1 3\np2 4\np3 5\np4 0\np5 7\n")
+
+    def test_M3_one_other_mismatch_is_rejected(self):
+        self.fixture()
+        table = self.other_mismatch(json.loads(self.table_path.read_text()))
+        self.prepare_exports(table)
+        done = self.run_command(without_other_objects(self.argv, set(self.others)))
+        self.success(done)
+        self.assertEqual(done.stderr, "warning: 1 functions have mismatched data\n")
+        self.calls.write_text("")
+        self.reject_union("mismatched data", "other")
+
+    def check_unparsed_mismatch(self, group):
+        self.fixture()
+        objects = self.others if group == "other" else [self.parts[3]]
+        table = json.loads(self.table_path.read_text())
+        warning = "warning: mismatched data could not be counted\n"
+        table["export_overrides"] = {json.dumps(objects): {"stderr": warning}}
+        self.prepare_exports(table)
+        done = self.run_command(without_other_objects(self.argv, set(objects)))
+        self.success(done)
+        self.assertEqual(done.stderr, warning)
+        self.calls.write_text("")
+        self.reject_union("unparsed")
+
+    def test_M3_unparsed_other_warning_is_rejected(self):
+        self.check_unparsed_mismatch("other")
+
+    def test_M3_unparsed_part_warning_is_rejected(self):
+        self.check_unparsed_mismatch("p4")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ start, hash and lines (line numbers). Optional exit_status maps a JSON-encoded
 ordered object-path list (json.dumps defaults) to the exit code for that call.
 Optional export_overrides uses the same keys to replace objects or records for
 one call, allowing gate fixtures to disagree with the all-objects baseline.
+An optional stderr string replaces the generated warning for unparsed-warning tests.
 Function entries may include branches as [line, block, branch, taken] arrays.
 Even a failing export writes its lcov, to allow partial-output checks later.
 FAKE_LLVM_COV_LOG receives one full sys.argv JSON array per invocation.
@@ -44,7 +45,9 @@ def main():
             count = record["lines"].get(str(line), 0)
             lines[line] = max(lines.get(line, 0), count)
 
-    if mismatches:
+    if "stderr" in table:
+        sys.stderr.write(table["stderr"])
+    elif mismatches:
         print(f"warning: {mismatches} functions have mismatched data", file=sys.stderr)
     for filename, (functions, lines, branches) in sorted(files.items()):
         print(f"SF:{filename}")
