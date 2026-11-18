@@ -1416,6 +1416,10 @@ jobs:
         env:
           MCP_GATEWAY_TEST_PART: "4"
         run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Install patchelf for the pyenv-shaped fixture
+        run: |
+          sudo apt-get install -y -q patchelf
+          patchelf --version
       - name: Install uv 0.13.1 for the real-uv rows
         run: |
           pipx install --quiet 'uv==0.13.1'
@@ -1497,6 +1501,10 @@ jobs:
         env:
           MCP_GATEWAY_TEST_PART: "4"
         run: scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+      - name: Install patchelf for the pyenv-shaped fixture
+        run: |
+          sudo apt-get install -y -q patchelf
+          patchelf --version
       - name: Install uv 0.13.1 for the real-uv rows
         run: |
           pipx install --quiet 'uv==0.13.1'
