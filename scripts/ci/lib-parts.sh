@@ -6,8 +6,8 @@
 #
 # lib-parts.sh cov PLAN PART: run one coverage part (scripts/ci/coverage_shards.py run PLAN PART). A lib part, lib-K,
 # runs with its test part set and under the memory gate (scripts/ci/compile-cgroup.sh), then its lib test executable
-# is renamed mcp_gateway-HASH-pK so the merge keeps each part's executable apart. Any other part runs with the part
-# variable removed, without the gate or the rename. A failed run keeps its status and renames nothing.
+# is moved to deps/pK/mcp_gateway-HASH so the merge keeps each part's executable apart. Any other part runs with
+# the part variable removed, without the gate or the move. A failed run keeps its status and moves nothing.
 #
 # The one place MCP_GATEWAY_TEST_PART is set: only as a prefix on the command that compiles part K, never exported
 # to the caller (workflow lines may not name it; scripts/release/test_grep_no_test_hook.py). Every part is checked
@@ -46,11 +46,22 @@ check_part() {
 if [ "$mode" = cov ]; then
   plan="$2"
   part="$3"
+  deps=target/llvm-cov-target/debug/deps
   if [[ "$part" = lib-* ]]; then
     k="${part#lib-}"
     n="$(part_count)"
     check_part "$k" "$n"
-    deps=target/llvm-cov-target/debug/deps
+  fi
+  # cargo llvm-cov clean leaves these folders; a restored cache would put an earlier run's part executable
+  # into this run's bundle. Match the whole directory name so p256 crate artifacts survive.
+  for directory in "$deps"/p[0-9]*/; do
+    name="${directory%/}"
+    name="${name##*/}"
+    if [[ -d "$directory" && "$name" =~ ^p[0-9]+$ ]]; then
+      rm -rf -- "$directory"
+    fi
+  done
+  if [[ "$part" = lib-* ]]; then
     mkdir -p "$deps"
     # mktemp creates the marker now, so its mtime is this run's start.
     marker="$(mktemp "$deps/.coverage-start.XXXXXX")"
@@ -58,12 +69,12 @@ if [ "$mode" = cov ]; then
     MCP_GATEWAY_TEST_PART="$k" "$root/scripts/ci/compile-cgroup.sh" \
       python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
     # The one lib test executable this run built: an executable mcp_gateway-HASH with no extension. A binary already
-    # renamed for a part (-pK), or older than this run's marker, is never a candidate even in a reused target dir.
+    # in a per-part subdirectory, or older than this run's marker, is never a candidate even in a reused target dir.
     executables=()
     while IFS= read -r -d '' executable; do
       executables+=("$executable")
     done < <(find "$deps" -maxdepth 1 -type f -perm -u+x -newer "$marker" \
-      -name 'mcp_gateway-*' ! -name '*.*' ! -name '*-p[0-9]*' -print0)
+      -name 'mcp_gateway-*' ! -name '*.*' -print0)
     if [ "${#executables[@]}" -ne 1 ]; then
       hint=""
       # In a reused target dir cargo may not relink an unchanged binary, so it stays older than the marker.
@@ -73,7 +84,10 @@ if [ "$mode" = cov ]; then
       echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}$hint" >&2
       exit 1
     fi
-    mv "${executables[0]}" "${executables[0]}-p$k"
+    # cargo llvm-cov report only reads executables named like cargo names them (mcp_gateway-HASH).
+    # It searches deps recursively, so a per-part folder keeps the five executables apart.
+    mkdir -p "$deps/p$k"
+    mv "${executables[0]}" "$deps/p$k/"
   else
     env -u MCP_GATEWAY_TEST_PART python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
   fi

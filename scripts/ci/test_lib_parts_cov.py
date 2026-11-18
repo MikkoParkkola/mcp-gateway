@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Coverage helper rows H1-H12, with a fake Python runner and compile gate."""
+"""Coverage helper rows H1-H13, with a fake Python runner and compile gate."""
 
 from __future__ import annotations
 
@@ -219,6 +219,21 @@ class Coverage(unittest.TestCase):
         self.assertEqual(self.snapshot(root / DEPS), before,
                          "a refused part must leave previous bundles and every other file unchanged")
         self.assertEqual(log, [], "a refused part must not run the gate or runner")
+
+    def test_h13_cleanup_preserves_p256_crate_artifacts(self):
+        # A crate name starting with p<digits> is not a whole-name part directory.
+        decoys = ("p256-0123abcd.d", "p256-0123abcd/x")
+        done, root, _log, before = self.run_cov(
+            "lib-3", stale=(*decoys, "p2/mcp_gateway-abc123"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        after = self.snapshot(root / DEPS)
+        for name in decoys:
+            self.assertEqual(after.get(name), before[name],
+                             f"p256 decoy {name} must survive part cleanup unchanged")
+            self.assertEqual((root / DEPS / name).stat().st_mtime, 1,
+                             f"p256 decoy {name} must keep its modification time")
+        self.assertFalse((root / DEPS / "p2").exists(),
+                         "the stale p2 directory must be removed")
 
 
 if __name__ == "__main__":
