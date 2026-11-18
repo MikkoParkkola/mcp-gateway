@@ -12,6 +12,7 @@ No real cgroup or sudo is used. Kernel movement/killing remains runner-level.
 
 from __future__ import annotations
 
+import faulthandler
 import json
 import os
 import re
@@ -348,6 +349,11 @@ class CompileCgroup(unittest.TestCase):
     def setUp(self):
         self.row_started = time.monotonic()
         self.waits = []
+        # A row that never returns (one pre-fix run sat 57 minutes in a signal row, its cleanup never reached) prints
+        # every thread's stack and ends the suite instead of holding the runner until the job timeout. Registered
+        # first, so it is cancelled last and still covers the fixture cleanups.
+        faulthandler.dump_traceback_later(self.note_wait("row hang budget", 300), exit=True)
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         # Cleanups run in reverse order, so report after fixture cleanup, even
         # when the test or a later cleanup fails.
         self.addCleanup(self.report_timing)
