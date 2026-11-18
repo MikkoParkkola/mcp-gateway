@@ -106,6 +106,12 @@ mcp-gateway kubernetes apply-plan \
   deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
   --namespace mcp-gateway \
   --format table
+
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --execute \
+  --format plain
 ```
 
 The apply plan emits `kubernetes.cluster_apply_plan.v1`. By default, preflight
@@ -151,8 +157,8 @@ deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
 ```
 
 The fixture creates a disposable kind cluster, installs the CRDs in that
-cluster, and runs the server-side dry-run wrapper. Set
-`MCP_GATEWAY_KIND_KEEP=1` to keep the cluster for inspection.
+cluster, and runs the server-side dry-run wrapper. To keep the cluster for
+inspection, set the keep variable at the top of `scripts/kind-smoke.sh`.
 
 ## Current Gaps
 
