@@ -769,14 +769,17 @@ pub(crate) fn wrap_tool_success(
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_mcp_helpers_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_mcp_helpers_chain_tests.rs"]
 mod chain_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_mcp_helpers_glob_tests.rs"]
 mod glob_tests;

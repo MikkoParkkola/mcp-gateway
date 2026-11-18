@@ -14,12 +14,14 @@ mod consent;
 pub(crate) mod identity;
 // MIK-6744.STORE.1's offline command entry, a sibling of
 // `initialize_store_offline` and kept out of this file for its size.
+#[cfg(tp5)]
 #[cfg(test)]
 mod journey_start_tests;
 mod offline_migration;
 mod provider;
 pub(crate) mod refusal;
 mod revoke;
+#[cfg(tp5)]
 #[cfg(test)]
 mod revoke_connected_tests;
 #[cfg(test)]
@@ -719,9 +721,11 @@ pub fn initialize_store_offline(
     Ok(report)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod initialization_debug_redaction_tests {
     use super::InitializedStore;

@@ -656,7 +656,7 @@ const TOOLS = [
 
 async function toolsScreen(page) {
   await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await shellReady(page);
 }
 

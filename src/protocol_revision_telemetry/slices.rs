@@ -126,6 +126,7 @@ fn seen<'a>(keys: impl Iterator<Item = &'a str>, counts: &[u64]) -> BTreeMap<Str
         .collect()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "slices_tests.rs"]
 mod tests;

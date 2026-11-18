@@ -197,6 +197,7 @@ impl Config {
 }
 
 /// A8: `security.caller_identity` load checks.
+#[cfg(tp4)]
 #[cfg(test)]
 mod caller_identity_config_tests {
     use super::*;

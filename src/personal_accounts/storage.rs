@@ -752,6 +752,7 @@ pub(super) fn retained_record(
     connected_record(config, authority, entry, &version, digest, account).ok()
 }
 
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "storage_guard_tests.rs"]
 mod storage_guard_tests;

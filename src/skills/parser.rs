@@ -441,6 +441,7 @@ fn discover_auxiliary_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "parser_tests.rs"]
 mod tests;

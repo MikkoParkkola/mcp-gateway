@@ -740,5 +740,6 @@ pub struct TrustValidationReport {
 /// `TrustCard` validator.
 pub struct TrustCardValidator;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;

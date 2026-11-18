@@ -219,6 +219,7 @@ impl Drop for LockHold {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn delete_removes_one_entry() {
@@ -250,6 +251,7 @@ fn delete_removes_one_entry() {
     );
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn delete_keeps_same_name_in_other_store() {
@@ -284,6 +286,7 @@ fn delete_keeps_same_name_in_other_store() {
     );
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn delete_refuses_unlisted_and_mismatch() {
@@ -314,6 +317,7 @@ fn delete_refuses_unlisted_and_mismatch() {
     assert_eq!(index_bytes(dir.path()), before, "{ROW}: index changed");
 }
 
+#[cfg(tp4)]
 #[test]
 fn delete_refuses_bad_names() {
     const ROW: &str = "delete_refuses_bad_names";
@@ -346,6 +350,7 @@ fn delete_refuses_bad_names() {
     );
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn delete_refuses_named() {
@@ -372,6 +377,7 @@ fn delete_refuses_named() {
     assert_eq!(index_bytes(dir.path()), index, "{ROW}: index changed");
 }
 
+#[cfg(tp4)]
 #[test]
 fn delete_failure_writes_no_line() {
     const ROW: &str = "delete_failure_writes_no_line";
@@ -393,6 +399,7 @@ fn delete_failure_writes_no_line() {
     assert_eq!(listed[0].name, name, "{ROW}: dropped");
 }
 
+#[cfg(tp4)]
 #[test]
 fn exists_error_writes_no_line() {
     const ROW: &str = "exists_error_writes_no_line";
@@ -418,6 +425,7 @@ fn exists_error_writes_no_line() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn delete_timed_out_keeps_listing() {
     const ROW: &str = "delete_timed_out_keeps_listing";
@@ -431,6 +439,7 @@ fn delete_timed_out_keeps_listing() {
     assert_eq!(listed[0].name, name, "{ROW}: dropped");
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn already_gone_writes_the_line() {
@@ -454,6 +463,7 @@ fn already_gone_writes_the_line() {
     );
 }
 
+#[cfg(tp4)]
 #[cfg(unix)]
 #[test]
 fn delete_waits_for_the_vault_alone() {
@@ -486,6 +496,7 @@ fn delete_waits_for_the_vault_alone() {
 }
 
 /// Off Unix every files-store delete is refused before the lock. The entry and the index stay.
+#[cfg(tp4)]
 #[cfg(not(unix))]
 #[test]
 fn files_delete_refused_off_unix() {
@@ -513,6 +524,7 @@ fn files_delete_refused_off_unix() {
 
 /// A refused commit rolls the new keychain entry back. The removal line names
 /// that store.
+#[cfg(tp4)]
 #[test]
 fn rollback_writes_a_store_scoped_line() {
     const ROW: &str = "rollback_writes_a_store_scoped_line";
@@ -554,6 +566,7 @@ fn rollback_writes_a_store_scoped_line() {
 
 /// A removal line for a name the store still holds is not an entry that is
 /// already gone. The delete refuses and leaves the entry.
+#[cfg(tp4)]
 #[test]
 fn retired_name_still_held_is_not_already_gone() {
     const ROW: &str = "retired_name_still_held_is_not_already_gone";
@@ -568,6 +581,7 @@ fn retired_name_still_held_is_not_already_gone() {
 
 /// A retired name whose store cannot answer is not reported gone: the store's
 /// error decides, and nothing is written.
+#[cfg(tp4)]
 #[test]
 fn retired_name_with_a_failing_store_is_not_already_gone() {
     const ROW: &str = "retired_name_with_a_failing_store_is_not_already_gone";

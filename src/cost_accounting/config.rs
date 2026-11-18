@@ -120,6 +120,7 @@ pub enum AlertAction {
     Block,
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

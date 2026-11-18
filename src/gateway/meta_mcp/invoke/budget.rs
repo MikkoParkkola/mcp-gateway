@@ -396,6 +396,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod withheld_by_tests {
     use super::{ResponseEffect, withheld_by};

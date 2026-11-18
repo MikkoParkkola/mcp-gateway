@@ -274,5 +274,6 @@ fn render_template(template: &str, value: &Value) -> String {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;

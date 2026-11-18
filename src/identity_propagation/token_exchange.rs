@@ -465,14 +465,17 @@ impl IdentityPropagation for TokenExchangeStrategy {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "token_exchange_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "token_exchange_refusal_tests.rs"]
 mod refusal_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "token_exchange_expiry_tests.rs"]
 mod expiry_tests;

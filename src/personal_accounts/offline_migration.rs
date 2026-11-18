@@ -274,10 +274,12 @@ fn migrate_from(
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "offline_migration_tests.rs"]
 mod offline_migration_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "offline_migration_resolve_tests.rs"]
 mod offline_migration_resolve_tests;

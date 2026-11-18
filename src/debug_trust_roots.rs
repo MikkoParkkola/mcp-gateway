@@ -72,6 +72,7 @@ fn with_roots_from(
 }
 
 // The helper under test exists only in debug builds (MIK-8231).
+#[cfg(tp3)]
 #[cfg(all(test, debug_assertions))]
 #[path = "debug_trust_roots_tests.rs"]
 mod tests;

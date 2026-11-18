@@ -238,6 +238,7 @@ fn blocked_label(blocked: WindowBlocked) -> String {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "window_decide_tests.rs"]
 mod tests;

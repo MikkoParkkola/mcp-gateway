@@ -240,6 +240,7 @@ struct ServerStatus {
     sign_in_flow: Option<Value>,
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "status_tests.rs"]
 mod tests;

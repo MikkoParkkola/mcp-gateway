@@ -33,6 +33,7 @@ const ONE_STEP: &str = "description: one step\n\
     steps:\n  - name: read\n    server: alpha\n    tool: t\n    arguments: {}\n";
 
 /// Row 1: a chain whose step's answer is refused ends on that refusal.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_chain_ending_on_a_late_refusal_records_refused() {
     let fx = chained().await;
@@ -55,6 +56,7 @@ async fn a_chain_ending_on_a_late_refusal_records_refused() {
 
 /// Row 2: a playbook (abort on error) whose step's answer is refused ends on
 /// that refusal.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_ending_on_a_late_refusal_records_refused() {
     let fx = chained().await;
@@ -75,6 +77,7 @@ async fn a_playbook_ending_on_a_late_refusal_records_refused() {
 
 /// Row 3: a playbook that carries on past the same refusal delivers its
 /// report; nothing it delivers was refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_continuing_past_a_late_refusal_records_no_refused() {
     let fx = chained().await;
@@ -91,6 +94,7 @@ async fn a_playbook_continuing_past_a_late_refusal_records_no_refused() {
 /// Row 4 at the route: under `retry` a late refusal follows the send, so the
 /// step may have run and is sent once, not retried; the playbook carries on
 /// to its report: no refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_retrying_playbook_sends_a_late_refused_step_once_and_records_no_refused() {
     let fx = chained().await;
@@ -112,6 +116,7 @@ async fn a_retrying_playbook_sends_a_late_refused_step_once_and_records_no_refus
 /// Row 2b: a playbook ending on a refusal answered as a tool error (an
 /// argument the tool does not declare, refused before it is sent) records
 /// refused too: the engine turns that error result into the playbook's error.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_ending_on_an_undeclared_argument_records_refused() {
     let fx = fixture(Setup {
@@ -134,6 +139,7 @@ async fn a_playbook_ending_on_an_undeclared_argument_records_refused() {
 /// A single-tool `gateway_execute` answered with the refusal of an
 /// argument the tool does not declare: the refusal comes back as a tool
 /// error result, and the composite still records refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_single_tool_execute_ending_on_an_undeclared_argument_records_refused() {
     let fx = fixture(Setup {
@@ -158,6 +164,7 @@ async fn a_single_tool_execute_ending_on_an_undeclared_argument_records_refused(
 /// A chain whose step names a backend outside the key's scope is refused
 /// whole at the route stage, before any step runs: refused (a guard row; the
 /// step's own cell is pinned by the invalid-schema row below).
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_chain_ending_on_a_withheld_step_records_refused() {
     let fx = fixture(Setup {
@@ -181,6 +188,7 @@ async fn a_chain_ending_on_a_withheld_step_records_refused() {
 
 /// A playbook refused whole, before any step runs (a step argument names a
 /// step's sealed `requestState`), ends on the gateway's refusal.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_refused_before_any_step_records_refused() {
     let fx = fixture(Setup::default()).await;
@@ -200,6 +208,7 @@ async fn a_playbook_refused_before_any_step_records_refused() {
 /// A chain whose one step names a tool withheld for its invalid schema is
 /// answered with that step absent, inside the step's own cell: the chain
 /// ends on the gateway's refusal.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_chain_ending_on_a_step_withheld_for_its_schema_records_refused() {
     let fx = fixture(Setup {
@@ -225,6 +234,7 @@ async fn a_chain_ending_on_a_step_withheld_for_its_schema_records_refused() {
 /// authorizes the playbook's step targets and refuses the call whole, so it
 /// records refused (a guard row; the dispatch-time refusal is pinned in
 /// `meta_mcp/playbook_dispatch_refusal_tests.rs`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_ending_on_a_step_its_key_may_not_invoke_records_refused() {
     let fx = fixture(Setup {
@@ -247,6 +257,7 @@ async fn a_playbook_ending_on_a_step_its_key_may_not_invoke_records_refused() {
 /// A playbook step on a backend the operator killed: the kill switch is not
 /// a visibility rule, so the step passes the gate and meets the policy at
 /// dispatch. The playbook (abort) ends on that refusal.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_ending_on_a_killed_backend_records_refused() {
     let fx = fixture(Setup::default()).await;

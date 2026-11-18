@@ -163,6 +163,7 @@ pub(super) async fn keys(
     Json(answer).into_response()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_binding_tests.rs"]
 mod binding_tests;

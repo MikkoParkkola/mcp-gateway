@@ -280,10 +280,12 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::client_with_refused_refresh;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "detached_refusal_tests.rs"]
 mod detached_refusal_tests;

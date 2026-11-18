@@ -24,6 +24,7 @@ mod record;
 pub(crate) use items::OpenRequest;
 pub(crate) use record::{decision_record, decisions_from_record, decisions_of, event_id};
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests;
 

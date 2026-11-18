@@ -19,14 +19,9 @@ fn the_compose_service_declares_the_name_clients_dial() {
     let compose: Value = yaml::from_str(COMPOSE).expect("compose yaml must parse");
     let service = &compose["services"]["mcp-gateway"];
 
-    let command = service["command"]
-        .as_sequence()
-        .expect("command is a list")
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
-    assert!(
-        command.contains(&"0.0.0.0"),
+    assert_eq!(
+        service["environment"]["MCP_GATEWAY_SERVER__HOST"].as_str(),
+        Some("0.0.0.0"),
         "this test exists because the container binds a non-loopback address"
     );
 

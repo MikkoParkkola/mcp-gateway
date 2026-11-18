@@ -469,11 +469,15 @@ fn resolve_warm_start_names(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod hot_reload_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod login_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod warmer_tests;

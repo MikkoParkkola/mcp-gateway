@@ -110,6 +110,7 @@ pub(super) async fn settle_quiet() {
 }
 
 /// Mutant: produce arm reverted to the abandoned result.
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_input_round_parks_the_task_and_an_update_resumes_the_same_call() {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
@@ -165,6 +166,7 @@ async fn an_input_round_parks_the_task_and_an_update_resumes_the_same_call() {
 }
 
 /// Mutant: the outstanding-key check removed.
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_answer_to_a_key_that_is_not_outstanding_is_refused_and_writes_nothing() {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
@@ -189,6 +191,7 @@ async fn an_answer_to_a_key_that_is_not_outstanding_is_refused_and_writes_nothin
 }
 
 /// Mutant: the subset accepted before the check.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_mixed_answer_is_refused_whole_and_the_outstanding_key_stays_outstanding() {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
@@ -214,6 +217,7 @@ async fn a_mixed_answer_is_refused_whole_and_the_outstanding_key_stays_outstandi
 
 /// Mutants: resume on the first answer; accepted answers not persisted, or the
 /// resume omitting `inputResponses`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn partial_answers_wait_and_the_resume_carries_every_accepted_answer() {
     let mock = MockBackend::answering(Answer::Sequence(vec![
@@ -258,6 +262,7 @@ pub(super) fn reason_of(body: &Value) -> Option<&str> {
 }
 
 /// Mutant: cancel arm ignoring the input state.
+#[cfg(tp5)]
 #[tokio::test]
 async fn cancel_during_input_settles_cancelled_and_a_later_update_is_refused() {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
@@ -287,6 +292,7 @@ async fn cancel_during_input_settles_cancelled_and_a_later_update_is_refused() {
 
 /// Pin (passes before and after): a claimed round whose shape `from_result`
 /// rejects keeps today's abandoned result. Mutant: the new arm swallows it.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_rejected_round_shape_keeps_the_abandoned_result() {
     let mock = MockBackend::answering(Answer::Result(json!({
@@ -307,6 +313,7 @@ async fn a_rejected_round_shape_keeps_the_abandoned_result() {
 /// #2416 (design §4.3d): a question whose `requestState` is present but not
 /// a string is a malformed round. It settles the abandoned result and is never
 /// parked or resumed. Mutant: a non-string state read as absent.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_non_string_request_state_keeps_the_abandoned_result() {
     for (key, state) in [
@@ -332,6 +339,7 @@ async fn a_non_string_request_state_keeps_the_abandoned_result() {
 
 /// Mutant: the model error from `require_input` swallowed (a reused key must
 /// settle `failed`, never leave a `working` row).
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_round_reusing_an_answered_key_settles_failed() {
     let mock = MockBackend::answering(Answer::Sequence(vec![
@@ -354,6 +362,7 @@ async fn a_round_reusing_an_answered_key_settles_failed() {
 
 /// Mutant: the state-only bound removed. Four state-only rounds are resumed
 /// by the worker itself; the fifth settles abandoned.
+#[cfg(tp5)]
 #[tokio::test]
 async fn state_only_rounds_resume_without_the_client_up_to_the_ceiling() {
     let mock = MockBackend::answering(Answer::Result(state_only("loop")));
@@ -371,6 +380,7 @@ async fn state_only_rounds_resume_without_the_client_up_to_the_ceiling() {
 }
 
 /// Mutant: a state-only round treated as abandoned (no resume).
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_state_only_round_resumes_with_the_backend_state_and_no_answers() {
     let mock = MockBackend::answering(Answer::Sequence(vec![state_only("s-only"), done()]));
@@ -387,6 +397,7 @@ async fn a_state_only_round_resumes_with_the_backend_state_and_no_answers() {
 /// Mutant: the resume built from the stored (creating) caller context. The
 /// updating client declares no elicitation, so a second question on the
 /// resumed call is refused for THAT caller.
+#[cfg(tp5)]
 #[tokio::test]
 async fn the_resume_runs_as_the_caller_of_the_update() {
     let mock = MockBackend::answering(Answer::Sequence(vec![

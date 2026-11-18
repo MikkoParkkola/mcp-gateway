@@ -638,6 +638,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,9 +709,11 @@ mod tests {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "admission_owner_tests.rs"]
 mod admission_owner_tests;

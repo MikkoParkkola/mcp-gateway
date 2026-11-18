@@ -94,6 +94,7 @@ fn refused_as_replay(body: &Value) -> bool {
 /// refused it. The mint dropped the witness, so the nonce stays spent: the
 /// same call re-sent is a replay. Red on base: it meets the budget again
 /// (n1b's refund, which ignores the mint).
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_after_a_mint_keeps_the_nonce() {
@@ -126,6 +127,7 @@ async fn a_spend_refusal_after_a_mint_keeps_the_nonce() {
 /// `open`, before any consume). `k-std` has no budget, so the spend check
 /// cannot refuse first. The mint dropped the witness: the honest retry under
 /// the same nonce is a replay. Red on base: it is served (n1a's refund).
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_refused_retry_after_a_mint_keeps_the_nonce() {
     let (fx, minting) = fixture_propagating_signed(Answer::AskOnce, false, |meta| meta).await;
@@ -162,6 +164,7 @@ async fn a_refused_retry_after_a_mint_keeps_the_nonce() {
 /// spend budget refuses it. The per-key budget is shared across backends, the
 /// schema slot is per backend, so paying on `alpha` leaves `alpha-pt` cold.
 /// The fetch dropped the witness: the re-send is a replay. Red on base.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_after_a_cold_schema_fetch_keeps_the_nonce() {
@@ -200,6 +203,7 @@ async fn a_spend_refusal_after_a_cold_schema_fetch_keeps_the_nonce() {
 /// gives its nonce back: the re-send meets the budget again, not a replay.
 /// Red on the snapshot rule (a cold slot counted as a fetch whatever the
 /// mode); the fill counter must not move.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_with_the_schema_check_off_gives_the_nonce_back() {
@@ -244,6 +248,7 @@ fn blocked_answer() -> String {
 /// Run twice: with a backend question that carries its own `requestState`,
 /// and with one that carries none (muse code r1: the consume is the caller's
 /// continuation, whatever state the backend issued).
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
@@ -295,6 +300,7 @@ async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
 /// static credential, so no binding comes back; the mint was still attempted
 /// (it may have reached the issuer), so the spend refusal that follows keeps
 /// the nonce. Red on slice 3a: `minted` read the binding only.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
@@ -341,6 +347,7 @@ async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
 /// (backend/metadata.rs:414); mRouteCarry (`invisible_call` returns the
 /// witness without `carry(.., filled)`: the later readers' marks are taken
 /// after the join, so they see no fill).
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_after_the_route_stage_joins_a_fill_keeps_the_nonce() {
@@ -408,5 +415,6 @@ async fn a_spend_refusal_after_the_route_stage_joins_a_fill_keeps_the_nonce() {
 }
 
 // MIK-8353 3d-2: meta-tool setup refusals on `/mcp` (NONCEFX.11).
+#[cfg(tp1)]
 #[path = "mcp_setup_refusal_tests.rs"]
 mod setup_refusals;

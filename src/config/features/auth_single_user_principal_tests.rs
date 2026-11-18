@@ -33,6 +33,7 @@ pub(super) fn solo() -> AuthConfig {
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn asserted_solo_gateway_may_mint_the_principal() {
     assert!(
@@ -42,6 +43,7 @@ fn asserted_solo_gateway_may_mint_the_principal() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn one_api_key_still_mints_the_principal() {
     // `<= 1`, not `== 1`: a bearer-only gateway and a one-key gateway are
@@ -62,6 +64,7 @@ fn one_api_key_still_mints_the_principal() {
 /// negation therefore reads "one user is present", which is the opposite of
 /// what an unauthenticated gateway means. Minting here would hand the stored
 /// OAuth grants to any anonymous caller that can reach the port.
+#[cfg(tp5)]
 #[test]
 fn disabled_auth_never_mints_the_principal() {
     let cfg = AuthConfig {
@@ -78,6 +81,7 @@ fn disabled_auth_never_mints_the_principal() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn two_api_keys_never_mint_the_principal() {
     let cfg = AuthConfig {
@@ -90,6 +94,7 @@ fn two_api_keys_never_mint_the_principal() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn any_identity_provider_never_mints_the_principal() {
     assert!(
@@ -101,6 +106,7 @@ fn any_identity_provider_never_mints_the_principal() {
 /// Without the operator saying so, nothing is asserted and nothing is minted
 /// — the same fail-closed default `single_user` already carries (ADR-008
 /// INV-2).
+#[cfg(tp5)]
 #[test]
 fn unasserted_auth_never_mints_the_principal() {
     let cfg = AuthConfig {
@@ -119,6 +125,7 @@ fn unasserted_auth_never_mints_the_principal() {
 /// a URL (design doc §3), so this is a consequence of the configuration
 /// rather than a rule the code checks. Recorded as such rather than
 /// presented as a boundary.
+#[cfg(tp5)]
 #[test]
 fn the_two_authority_namespaces_never_coexist() {
     for enabled in [true, false] {

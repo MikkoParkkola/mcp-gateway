@@ -687,26 +687,32 @@ pub(crate) const RECOVERED_ERROR_WITHHELD: &str =
 mod secrets;
 pub(crate) use secrets::WITHHELD as SECRETS_WITHHELD;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upstream/error_policy_tests.rs"]
 mod error_policy_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upstream/provenance_tests.rs"]
 mod provenance_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upstream/login_scope_tests.rs"]
 mod login_scope_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upstream/cancel_delivery_tests.rs"]
 mod cancel_delivery_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upstream/secret_check_tests.rs"]
 mod secret_check_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

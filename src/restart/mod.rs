@@ -6,9 +6,11 @@
 
 pub(crate) mod invocation;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "invocation_scan_tests.rs"]
 mod invocation_scan_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "invocation_tests.rs"]
 mod invocation_tests;

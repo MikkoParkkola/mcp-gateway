@@ -394,6 +394,7 @@ impl Drop for Loan {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

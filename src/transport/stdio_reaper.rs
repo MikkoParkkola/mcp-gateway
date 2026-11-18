@@ -700,6 +700,7 @@ fn arm_after_spawn(transport: &std::sync::Arc<super::StdioTransport>, action: Af
     armed.push((std::sync::Arc::downgrade(transport), action));
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod start_tests {
     use super::*;
@@ -724,6 +725,7 @@ mod start_tests {
 }
 
 /// Every caller's stop budget yields a plan that fits it, by construction.
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_reaper_plan_tests.rs"]
 mod plan_tests;

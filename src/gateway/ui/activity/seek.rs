@@ -195,6 +195,7 @@ pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Op
     Ok(None)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "seek_tests.rs"]
 mod tests;

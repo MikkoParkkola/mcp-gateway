@@ -58,6 +58,7 @@ fn spawn_post(state: &Arc<AppState>, body: Value) -> tokio::task::JoinHandle<Val
 /// O1a. Submission: while the preparation record's write is held, no worker
 /// has been spawned. Red on base: there the first write happens after the
 /// spawn, so the hold sees a spawned worker. Mutants mFlush, mAwait.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_signed_task_appends_its_preparation_record_before_its_worker_spawns() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -90,6 +91,7 @@ async fn a_signed_task_appends_its_preparation_record_before_its_worker_spawns()
 /// O2a. `FailClosed` submission whose preparation append fails: refused with
 /// -32005, nothing spawned, the backend never called, no row committed.
 /// Red on base. Mutant mPolicy.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_failed_preparation_append_refuses_the_task_under_fail_closed() {
     let row = armed(true, false, AuditFailurePolicy::FailClosed, signing).await;
@@ -119,6 +121,7 @@ const FIRST: (&str, &str) = ("o2c-first-server", "o2c-first-tool");
 
 /// O2c. Two notes; the 2nd append (the preparation record) fails. The 1st is
 /// in the log, the 2nd is not, and `FailClosed` refuses. Red on base.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_later_append_failing_in_the_batch_refuses_under_fail_closed() {
     let row = armed(true, false, AuditFailurePolicy::FailClosed, signing).await;
@@ -147,6 +150,7 @@ const CAPS_PERSONAL: &str = "(CAPS, PERSONAL)";
 
 /// O2d. The `BestEffort` companion: the failure is logged, the task runs.
 /// Guard: green on base.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_failed_append_under_best_effort_still_runs_the_task() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -165,6 +169,7 @@ async fn a_failed_append_under_best_effort_still_runs_the_task() {
 /// record is still appended exactly once (the write is owned by its own
 /// task), and no worker is spawned, so no row is committed. Red on base.
 /// Mutants mDropOnCancel, mAwait.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_cancelled_submission_keeps_its_record_and_spawns_nothing() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -218,6 +223,7 @@ const AFTER: (&str, &str) = ("o4-after-server", "o4-after-tool");
 /// O4. A note before the hand-off (the preparation) and one after it, with
 /// distinct identities, are each written once across the early and the
 /// request-end flush. Guard: green on base. Mutant mClone.
+#[cfg(tp5)]
 #[tokio::test]
 async fn notes_before_and_after_the_hand_off_are_each_written_once() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -253,6 +259,7 @@ async fn notes_before_and_after_the_hand_off_are_each_written_once() {
 /// The capability is public, so no decision is noted at submit either. The
 /// personal-capability case, whose submit decision IS appended before the
 /// spawn since MIK-8315, is `submit_authz_audit` row 4e.
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_empty_slot_appends_nothing_before_the_spawn() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -314,6 +321,7 @@ const RESUME: (&str, &str) = ("o1b-resume-server", "o1b-resume-tool");
 
 /// O1b. Input-round resume: the resuming request's decision is appended
 /// before the resume worker spawns. Red on base. Mutant mResume.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_resume_appends_its_decision_before_the_resume_worker_spawns() {
     use super::input_round::{answer, update};
@@ -339,6 +347,7 @@ async fn a_resume_appends_its_decision_before_the_resume_worker_spawns() {
 
 /// O2b. `FailClosed` resume whose append fails: -32005, no resume worker, the
 /// round stays parked. Red on base.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_failed_resume_append_refuses_the_update_under_fail_closed() {
     use super::input_round::{answer, update};

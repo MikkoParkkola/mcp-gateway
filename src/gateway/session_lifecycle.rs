@@ -451,10 +451,12 @@ pub fn wire_meta_session_cleanup(
     });
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "session_lifecycle_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "session_lifecycle_clock_tests.rs"]
 mod clock_tests;

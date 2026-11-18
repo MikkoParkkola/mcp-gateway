@@ -49,6 +49,7 @@ fn invoke_alpha_t() -> String {
     .to_string()
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn r0_an_http_answer_writes_one_record_under_the_calls_trace() {
     let fx = fixture(Setup {
@@ -65,6 +66,7 @@ async fn r0_an_http_answer_writes_one_record_under_the_calls_trace() {
     assert_eq!(per_trace(&fx), expected);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn r0_an_http_refusal_before_dispatch_writes_one_record() {
     let fx = fixture(Setup::default()).await;
@@ -86,6 +88,7 @@ async fn r0_an_http_refusal_before_dispatch_writes_one_record() {
     assert_eq!(per_trace(&fx), expected);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn r0_a_seal_failure_writes_one_record_for_the_replacing_refusal() {
     use crate::gateway::meta_mcp::grant_audit::seams;

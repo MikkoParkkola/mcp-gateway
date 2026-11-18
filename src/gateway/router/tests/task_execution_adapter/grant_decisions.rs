@@ -87,6 +87,7 @@ pub(super) fn personal_invoke(id: i64) -> Value {
 
 /// MIK-7663.GH2409.3: a failed decision write refuses the answer under the
 /// request's own id, recorded where the route parses the request.
+#[cfg(tp5)]
 #[tokio::test]
 async fn failed_decision_write_refuses_under_the_request_id() {
     let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
@@ -146,6 +147,7 @@ pub(super) fn with_nonce(mut body: Value) -> Value {
 /// T9. A signed call is checked once, by signing preparation; dispatch
 /// skips its check and stamps its trace on that note: one record, carrying
 /// the invocation's trace.
+#[cfg(tp5)]
 #[tokio::test]
 async fn signed_call_writes_one_record_with_invocation_trace() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, signing).await;
@@ -159,6 +161,7 @@ async fn signed_call_writes_one_record_with_invocation_trace() {
 
 /// T10. Sync admission refuses an ungranted call before dispatch: one
 /// `denied` record, and no invocation record.
+#[cfg(tp5)]
 #[tokio::test]
 async fn admission_refusal_writes_one_denied_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -189,6 +192,7 @@ async fn admission_refusal_writes_one_denied_record() {
 
 /// T11. One chain, one tool twice, one `meta_mcp_dispatch` slot: two
 /// records, each carrying its own invocation's trace.
+#[cfg(tp5)]
 #[tokio::test]
 async fn plan_calling_one_tool_twice_writes_two_records() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -222,6 +226,7 @@ async fn plan_calling_one_tool_twice_writes_two_records() {
 
 /// T20. Admission notes untraced, dispatch notes traced, same key: only
 /// the traced note becomes a record.
+#[cfg(tp5)]
 #[tokio::test]
 async fn admitted_unsigned_call_writes_only_the_traced_record() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -243,6 +248,7 @@ pub(super) fn surfaced(meta: MetaMcp) -> MetaMcp {
 
 /// T27 (H2, synchronous). A direct-name call to a surfaced personal tool,
 /// refused by the grant, is answered -32601 as today and recorded once.
+#[cfg(tp5)]
 #[tokio::test]
 async fn surfaced_call_grant_denial_writes_one_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;

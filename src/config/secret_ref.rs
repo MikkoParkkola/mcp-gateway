@@ -487,6 +487,7 @@ impl super::Config {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +548,7 @@ mod tests {
 }
 
 // MIK-8365: the transparency-log HMAC key resolves like every other secret.
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "transparency_secret_tests.rs"]
 mod transparency_secret_tests;

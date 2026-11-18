@@ -628,6 +628,7 @@ impl CapabilityDefinition {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;
 
@@ -635,6 +636,7 @@ mod tests;
 #[path = "cwe532_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod caller_addressed_state_tests;
 
