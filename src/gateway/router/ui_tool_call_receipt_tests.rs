@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::ui_tool_call_tests::{
-    ADMIN, SERVER, USER, Fx, Stub, admin_actions, call, fixture, post, sent,
+    ADMIN, Fx, SERVER, Stub, USER, admin_actions, call, fixture, post, sent,
 };
 
 fn keys_of(body: &Value) -> Vec<&str> {
@@ -72,9 +72,10 @@ fn activity_query(receipt: &str) -> String {
 /// A Block rule for `read` on shell injection, on the fixture's own gateway.
 #[cfg(feature = "firewall")]
 fn arm_firewall(fx: &mut Fx) {
-    use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule, ScanType};
+    use crate::security::firewall::{
+        Firewall, FirewallAction, FirewallConfig, FirewallRule, ScanType,
+    };
     let state = Arc::get_mut(&mut fx.state).expect("the fixture state is unique");
-    let meta = Arc::get_mut(&mut state.meta_mcp).expect("the fixture meta is unique");
     let config = FirewallConfig {
         rules: vec![FirewallRule {
             tool_match: "read".to_string(),
@@ -89,11 +90,14 @@ fn arm_firewall(fx: &mut Fx) {
         }],
         ..FirewallConfig::default()
     };
-    let firewall = Firewall::from_config(config, None).with_continuations(meta.continuation());
+    let firewall =
+        Firewall::from_config(config, None).with_continuations(state.meta_mcp.continuation());
     super::firewall_publish_fixture::publish_firewall(state, &firewall);
     let firewall = Arc::new(firewall);
     state.firewall = Some(Arc::clone(&firewall));
-    meta.set_firewall(Some(firewall));
+    Arc::get_mut(&mut state.meta_mcp)
+        .expect("the fixture meta is unique")
+        .set_firewall(Some(firewall));
 }
 
 fn install_stub(fx: &Fx, gate: Option<Arc<tokio::sync::Notify>>) {
@@ -187,7 +191,11 @@ async fn b3_receipt_is_additive() {
     );
     let (status, guard) = post(&fx, USER, call("read", false)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{guard}");
-    assert_eq!(keys_of(&guard), ["error"], "the guard keeps its key: {guard}");
+    assert_eq!(
+        keys_of(&guard),
+        ["error"],
+        "the guard keeps its key: {guard}"
+    );
 
     let (status, ok) = post(&fx, ADMIN, call("read", false)).await;
     assert_eq!(status, StatusCode::OK, "{ok}");
@@ -204,7 +212,9 @@ async fn b4_the_admin_reads_the_call_back() {
     let fx = fixture().await;
     let (status, body) = post(&fx, ADMIN, call("read", false)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let receipt = body["receipt"].as_str().expect("a 200 call already names a receipt");
+    let receipt = body["receipt"]
+        .as_str()
+        .expect("a 200 call already names a receipt");
     let (status, listed) = get_json(&fx, &activity_query(receipt)).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     let row = listed["rows"]
