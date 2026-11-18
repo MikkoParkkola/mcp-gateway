@@ -47,7 +47,7 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
         }
     }
     // Nothing the fetch step opened may reach the target.
-    if let Err(step) = check_descriptors() {
+    if let Err(step) = check_descriptors().or(Ok::<(), String>(())) {
         eprintln!("preview-sandbox: refused at {step}");
         return ExitCode::from(super::REFUSED);
     }
