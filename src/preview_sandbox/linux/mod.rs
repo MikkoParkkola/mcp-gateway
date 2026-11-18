@@ -133,7 +133,7 @@ fn launch(unshare: &Path, helper: &Path, plan: &Plan) -> Result<tokio::process::
         .envs(plan.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         // Killing `unshare` makes `--kill-child` kill the helper, PID 1 of the
         // namespace, and with it every process inside.
         .kill_on_drop(true);
