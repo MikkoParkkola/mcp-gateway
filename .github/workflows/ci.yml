@@ -1419,8 +1419,11 @@ jobs:
       - name: Install uv 0.13.1 for the real-uv rows
         run: |
           pipx install --quiet 'uv==0.13.1'
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/uvx" --version | grep -q '^uv 0\.13\.1 ' || { echo "::error::uvx is not uv 0.13.1"; exit 1; }
+          # pipx's bin dir is the image's own (on PATH), so find uvx the way the rows do: on PATH, then the
+          # uv beside its real file.
+          uvx=$(command -v uvx) || { echo "::error::no uvx on PATH after the install"; exit 1; }
+          uv="$(dirname "$(readlink -f "$uvx")")/uv"
+          "$uv" --version | tee /dev/stderr | grep -q '^uv 0\.13\.1 ' || { echo "::error::the uv beside $uvx is not uv 0.13.1"; exit 1; }
       - name: Run the probe's rows
         env:
           MCP_GATEWAY_TEST_PART: "4"
@@ -1497,8 +1500,11 @@ jobs:
       - name: Install uv 0.13.1 for the real-uv rows
         run: |
           pipx install --quiet 'uv==0.13.1'
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/uvx" --version | grep -q '^uv 0\.13\.1 ' || { echo "::error::uvx is not uv 0.13.1"; exit 1; }
+          # pipx's bin dir is the image's own (on PATH), so find uvx the way the rows do: on PATH, then the
+          # uv beside its real file.
+          uvx=$(command -v uvx) || { echo "::error::no uvx on PATH after the install"; exit 1; }
+          uv="$(dirname "$(readlink -f "$uvx")")/uv"
+          "$uv" --version | tee /dev/stderr | grep -q '^uv 0\.13\.1 ' || { echo "::error::the uv beside $uvx is not uv 0.13.1"; exit 1; }
       - name: Run the probe's rows
         env:
           MCP_GATEWAY_TEST_PART: "4"
