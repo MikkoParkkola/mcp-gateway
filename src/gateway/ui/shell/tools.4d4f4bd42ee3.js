@@ -340,7 +340,8 @@ function rootMode(schema) {
   if (typeof schema !== 'object' || Array.isArray(schema)) return 'json';
   if (Object.keys(schema).length === 0) return 'none';
   if (schema.type === 'object' && schema.properties && typeof schema.properties === 'object'
-      && !Array.isArray(schema.properties) && !schema.$ref && !schema.oneOf && !schema.anyOf) {
+      && !Array.isArray(schema.properties) && !schema.$ref && !schema.oneOf && !schema.anyOf
+      && !schema.allOf) {
     return 'fields';
   }
   return 'json';
@@ -364,6 +365,15 @@ function defaultBits(prop) {
   const placeholder = typeof d === 'string' || typeof d === 'number' || typeof d === 'boolean'
     ? String(d) : jsonText(d);
   return { extra: [h('span', { class: 'muted' }, 'default')], placeholder };
+}
+
+/** A boolean or enum default is text beside the control; a select has no placeholder. */
+function defaultShown(prop) {
+  if (!prop || !Object.prototype.hasOwnProperty.call(prop, 'default')) return [];
+  const d = prop.default;
+  const shown = typeof d === 'string' || typeof d === 'number' || typeof d === 'boolean'
+    ? String(d) : jsonText(d);
+  return [h('span', { class: 'muted' }, shown)];
 }
 
 function wrapField(id, name, control, extra = []) {
@@ -396,7 +406,11 @@ function jsonControl(name, required, { root = false, i, prop } = {}) {
         if (required) return { invalid: true };
         return { present: false };
       }
-      try { return { present: true, value: JSON.parse(el.value) }; } catch { return { invalid: true }; }
+      let value;
+      try { value = JSON.parse(el.value); } catch { return { invalid: true }; }
+      // The whole arguments value has to be one JSON object. An array, a string or a number is not.
+      if (root && (value === null || typeof value !== 'object' || Array.isArray(value))) return { invalid: true };
+      return { present: true, value };
     },
   };
 }
@@ -455,7 +469,7 @@ function makeField(name, prop, required, i) {
       h('option', { value: 'true' }, 'true'),
       h('option', { value: 'false' }, 'false'));
     return {
-      wrap: wrapField(id, name, el), el, name,
+      wrap: wrapField(id, name, el, defaultShown(prop)), el, name,
       read() {
         if (el.value === '') return { present: false };
         return { present: true, value: el.value === 'true' };
@@ -468,7 +482,7 @@ function makeField(name, prop, required, i) {
     ...(required ? { required: true, 'aria-required': 'true' } : {}),
   }, ...enumOptions(prop, optional));
   return {
-    wrap: wrapField(id, name, el), el, name,
+    wrap: wrapField(id, name, el, defaultShown(prop)), el, name,
     read() {
       if (optional && el.value === '') return { present: false };
       try { return { present: true, value: JSON.parse(el.value) }; } catch { return { invalid: true }; }
@@ -490,10 +504,10 @@ function collectArgs(fields) {
     const r = fields[0].read();
     markField(fields[0], r.invalid);
     if (r.invalid) return null;
-    const v = r.value;
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    return r.value;
   }
-  const args = {};
+  // A normal object drops a key named __proto__. The arguments map has to keep it.
+  const args = Object.create(null);
   let ok = true;
   for (const f of fields) {
     const r = f.read();
@@ -517,7 +531,10 @@ function resultText(result) {
     if (item && item.type === 'text' && item.text != null) parts.push(String(item.text));
     else if (item != null) parts.push(jsonText(item));
   }
-  return parts.join('\n');
+  const text = parts.join('\n');
+  if (text) return text;
+  if (result.structuredContent != null) return oneLine(result.structuredContent);
+  return '';
 }
 
 function countsText(content, answer) {
@@ -555,12 +572,13 @@ function outcomeNodes({ status, unreadable, body, message }) {
     if (text) nodes.push(h('pre', { class: 'mono' }, text));
     return nodes;
   }
-  if (status === 504) {
+  if (status === 504 && disp === 'may_have_run') {
     nodes.push(h('p', {}, 'Timed out; the tool may still be running'));
     if (message) nodes.push(h('p', {}, message));
     return nodes;
   }
-  if (disp === 'may_have_run') {
+  // A 5xx with no disposition (the admin layer's own refusal) may have run. An explicit not_run did not.
+  if (disp === 'may_have_run' || (disp == null && status >= 500)) {
     nodes.push(h('p', {}, 'The tool may have run'));
     if (message) nodes.push(h('p', {}, message));
     return nodes;
@@ -579,9 +597,11 @@ function askToRun(name) {
   return new Promise((resolve) => {
     const title = h('p', { id: 'try-ask-title' }, `${name} can change things. Run it?`);
     const goBtn = h('button', { type: 'button', class: 'btn' }, 'Run');
-    const dialog = h('dialog', { class: 'tools-try-ask', 'aria-labelledby': 'try-ask-title' }, title, goBtn);
+    const cancelBtn = h('button', { type: 'button', class: 'btn' }, 'Cancel');
+    const dialog = h('dialog', { class: 'tools-try-ask', 'aria-labelledby': 'try-ask-title' }, title, goBtn, cancelBtn);
     let yes = false;
     goBtn.addEventListener('click', () => { yes = true; dialog.close(); });
+    cancelBtn.addEventListener('click', () => { dialog.close(); });
     dialog.addEventListener('close', () => { dialog.remove(); resolve(yes); });
     document.body.append(dialog);
     dialog.showModal();
@@ -590,8 +610,10 @@ function askToRun(name) {
 }
 
 function mountTryForm(slot, answer, tools, ctx) {
+  const section = answer.closest('section');
   let seq = 0;
-  let busyGen = 0;
+  // The lock follows the outstanding call, not the picked tool or the run number.
+  let inFlight = false;
   let fields = [];
   let runBtn = null;
   let mainNodes = [];
@@ -714,9 +736,10 @@ function mountTryForm(slot, answer, tools, ctx) {
       if (runId !== seq) return;
       if (err instanceof ApiError && !confirmWrite
           && (err.code === 'confirm_write_required' || err.body?.error === 'confirm_write_required')) {
+        // A confirm for a run the user has left, or for an older run, never opens and never resends.
+        if (runId !== seq || !section.isConnected) return;
         const yes = await askToRun(tool.name);
-        if (runId !== seq) return;
-        if (!yes) return;
+        if (runId !== seq || !section.isConnected || !yes) return;
         return callTool(runId, tool, args, true);
       }
       if (runId !== seq) return;
@@ -736,25 +759,29 @@ function mountTryForm(slot, answer, tools, ctx) {
     showOutcome(runId, { status: 200, body });
   };
 
+  const syncRun = () => {
+    if (runBtn && runBtn.isConnected) runBtn.disabled = inFlight;
+  };
+
   const onRun = async () => {
-    if (runBtn.disabled) return;
+    if (!runBtn || runBtn.disabled || inFlight) return;
     const args = collectArgs(fields);
     if (!args) return;
     const tool = chosen();
-    const gen = ++busyGen;
-    runBtn.disabled = true;
+    inFlight = true;
+    syncRun();
     try {
       let confirmWrite = false;
       if (tool.class !== 'read') {
         const yes = await askToRun(tool.name);
-        if (gen !== busyGen) return;
-        if (!yes) return;
+        if (!yes || !section.isConnected) return;
         confirmWrite = true;
       }
       const runId = ++seq;
       await callTool(runId, tool, args, confirmWrite);
     } finally {
-      if (gen === busyGen && runBtn.isConnected) runBtn.disabled = false;
+      inFlight = false;
+      syncRun();
     }
   };
 
@@ -763,13 +790,13 @@ function mountTryForm(slot, answer, tools, ctx) {
     fields = fieldsFor(t.schema);
     fieldsBox.replaceChildren(...fields.map((f) => f.wrap));
     runBtn = h('button', { class: 'btn', type: 'button' }, `Run ${t.name}`);
+    runBtn.disabled = inFlight;
     runBtn.addEventListener('click', onRun);
     form.replaceChildren(pickerField, fieldsBox, runBtn);
   };
 
   picker.addEventListener('change', () => {
     seq += 1;
-    busyGen += 1;
     clearAnswer();
     rebuild();
   });
