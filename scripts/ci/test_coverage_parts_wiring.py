@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""C4 and W1-W4: coverage part wiring, checked against the live checkout."""
+"""C4 and W1-W5: coverage part wiring, checked against the live checkout."""
 from __future__ import annotations
 
 import ast
@@ -200,6 +200,156 @@ class CoveragePartsWiring(unittest.TestCase):
                 with patch.object(Path, "read_text", with_mutation):
                     with self.assertRaises(AssertionError):
                         self.test_W4_one_coverage_part_per_job()
+
+    def test_W5_union_report_and_grade_wiring(self) -> None:
+        source = (ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8")
+        doc = yaml.safe_load(source)
+        ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+        prepush = (ROOT / "scripts/dev/prepush-ci-checks.txt").read_text(encoding="utf-8")
+
+        def commands(text):
+            # Comments cannot satisfy an executable wiring requirement; join shell continuations.
+            return "\n".join(line.strip() for line in text.replace("\\\n", " ").splitlines()
+                             if not line.lstrip().startswith("#"))
+
+        jobs = doc.get("jobs", {})
+        steps = jobs.get("linux-grade", {}).get("steps", [])
+        reports = [step for step in steps if step.get("name") == "Reports"]
+        run = commands(reports[0].get("run", "")) if len(reports) == 1 else ""
+        union = "python3 scripts/ci/coverage_union.py report-lcov.log linux-single.lcov linux.lcov"
+        with self.subTest(item=1):
+            # Preserve the single export for diagnosis and feed its logged command to the union once.
+            report = re.search(r"^cargo llvm-cov report -v --lcov\b[^\n]*", run, re.M)
+            joins = list(re.finditer(r"^" + re.escape(union) + r"\s*$", run, re.M))
+            missing = []
+            if len(reports) != 1:
+                missing.append("exactly one linux-grade Reports step")
+            if not report or not re.search(r"--output-path\s+linux-single\.lcov(?:\s|$)", report[0]):
+                missing.append("cargo llvm-cov report -v --lcov writing linux-single.lcov")
+            if not report or not re.search(r"\btee\s+report-lcov\.log(?:\s|$)", report[0]):
+                missing.append("report command logging to report-lcov.log")
+            if len(joins) != 1 or run.count("scripts/ci/coverage_union.py") != 1:
+                missing.append("exactly one " + union)
+            elif not report or joins[0].start() <= report.end():
+                missing.append("union command after the lcov report in the same Reports step")
+            self.assertFalse(missing, "W5 item 1 missing: " + "; ".join(missing))
+
+        with self.subTest(item=2):
+            missing = [f"{consumer} reading linux.lcov" for consumer in ("objects", "canary")
+                       if not re.search(r"^python3 scripts/ci/coverage_shards\.py " + consumer
+                                        + r"\s+linux\.lcov(?:\s|$)", run, re.M)]
+            if any("--summary-only" in line and "--json" in line for line in run.splitlines()):
+                missing.append("removal of the --summary-only --json report")
+            self.assertFalse(missing, "W5 item 2 missing: " + "; ".join(missing))
+
+        with self.subTest(item=3):
+            grade = "\n".join(commands(step.get("run", ""))
+                              for step in jobs.get("grade", {}).get("steps", []))
+            self.assertRegex(grade, r"(?m)^python3 scripts/release/critical_path_coverage\.py "
+                             r"art/coverage-linux/linux\.lcov(?:\s|$)",
+                             "W5 item 3 missing: grade runs critical_path_coverage.py on art/coverage-linux/linux.lcov")
+
+        with self.subTest(item=4):
+            # Include comments and upload paths: no stale JSON input should remain as an example.
+            self.assertTrue("cov.json" not in source,
+                            "W5 item 4 missing: removal of every cov.json reference from coverage-probe.yml")
+
+        with self.subTest(item=5):
+            uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")
+                       and step.get("with", {}).get("name") == "coverage-linux"]
+            paths = {line.strip() for step in uploads for line in step["with"].get("path", "").splitlines()}
+            missing = sorted({"linux-single.lcov", "mismatch.txt"} - paths)
+            self.assertFalse(missing, "W5 item 5 missing from coverage-linux upload: " + ", ".join(missing))
+
+        with self.subTest(item=6):
+            # PyYAML's YAML 1.1 loader reads the unquoted GitHub Actions key `on` as True.
+            triggers = doc.get("on", doc.get(True, {}))
+            paths = triggers.get("pull_request", {}).get("paths", [])
+            missing = sorted({"scripts/ci/coverage_union.py", "scripts/release/critical_path_coverage.py"}
+                             - set(paths))
+            self.assertFalse(missing, "W5 item 6 missing from on.pull_request.paths: " + ", ".join(missing))
+
+        with self.subTest(item=7):
+            # The logged Running-line format depends on this literal installer version.
+            missing = [f"{job}/{step.get('name', index)}" for job, value in jobs.items()
+                       for index, step in enumerate(value.get("steps", []))
+                       if "cargo install cargo-llvm-cov" in step.get("run", "")
+                       and not re.search(r"--version 0\.9\.1(?:\s|$)", commands(step["run"]))]
+            self.assertFalse(missing, "W5 item 7 missing --version 0.9.1 in: " + ", ".join(missing))
+
+        with self.subTest(item=8):
+            ci_runs = "\n".join(commands(step.get("run", "")) for job in ci.get("jobs", {}).values()
+                                for step in job.get("steps", []))
+            missing = [f"{script} in {location}"
+                       for script in ("scripts/ci/test_coverage_union.py", "scripts/release/test_coverage_grade.py")
+                       for location, text in (("ci.yml run steps", ci_runs), ("prepush-ci-checks.txt", commands(prepush)))
+                       if not re.search(r"(?m)^python3 " + re.escape(script) + r"(?:\s|$)", text)]
+            self.assertFalse(missing, "W5 item 8 missing: " + "; ".join(missing))
+
+    def test_W5_rejects_workflow_mutations(self) -> None:
+        # A passing in-memory control prevents today's unrelated red items from killing a mutant.
+        # A fresh TestCase has no running outcome, so its subTests propagate AssertionError here.
+        workflow = ROOT / ".github/workflows/coverage-probe.yml"
+        ci_path = ROOT / ".github/workflows/ci.yml"
+        prepush_path = ROOT / "scripts/dev/prepush-ci-checks.txt"
+        read_text = Path.read_text
+        report = "cargo llvm-cov report -v --lcov --output-path linux-single.lcov 2>&1 | tee report-lcov.log\n"
+        union = "python3 scripts/ci/coverage_union.py report-lcov.log linux-single.lcov linux.lcov\n"
+        tests = "python3 scripts/ci/test_coverage_union.py\npython3 scripts/release/test_coverage_grade.py\n"
+        control = {
+            "on": {"pull_request": {"paths": ["scripts/ci/coverage_union.py",
+                                              "scripts/release/critical_path_coverage.py"]}},
+            "jobs": {
+                "linux-grade": {"steps": [
+                    {"name": "Reports", "run": report + union
+                     + "python3 scripts/ci/coverage_shards.py objects linux.lcov\n"
+                     + "python3 scripts/ci/coverage_shards.py canary linux.lcov\n"},
+                    {"uses": "actions/upload-artifact@fixture", "with": {"name": "coverage-linux",
+                     "path": "linux.lcov\nlinux-single.lcov\nmismatch.txt\n"}},
+                    {"run": "cargo install cargo-llvm-cov --locked --version 0.9.1"}]},
+                "grade": {"steps": [{"run": "python3 scripts/release/critical_path_coverage.py "
+                                     "art/coverage-linux/linux.lcov"}]},
+                "windows-grade": {"steps": [{"run": "cargo install cargo-llvm-cov --locked --version 0.9.1"}]},
+            },
+        }
+        source = yaml.safe_dump(control)
+        ci_source = yaml.safe_dump({"jobs": {"checks": {"steps": [{"run": tests}]}}})
+
+        def check(workflow_text, ci_text=ci_source):
+            sources = {workflow: workflow_text, ci_path: ci_text, prepush_path: tests}
+
+            def with_mutation(path, *args, **kwargs):
+                return sources[path] if path in sources else read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", with_mutation):
+                CoveragePartsWiring().test_W5_union_report_and_grade_wiring()
+
+        with self.subTest(case="passing control"):
+            check(source)
+        for item in range(1, 9):
+            with self.subTest(item=item):
+                doc = yaml.safe_load(source)
+                steps = doc["jobs"]["linux-grade"]["steps"]
+                mutated_ci = ci_source
+                if item == 1:
+                    steps[0]["run"] = steps[0]["run"].replace(report + union, union + report)
+                elif item == 2:
+                    steps[0]["run"] = steps[0]["run"].replace("objects linux.lcov", "objects linux-single.lcov")
+                elif item == 3:
+                    doc["jobs"]["grade"]["steps"][0]["run"] = "python3 scripts/release/critical_path_coverage.py wrong.lcov"
+                elif item == 5:
+                    steps[1]["with"]["path"] = "linux.lcov\nlinux-single.lcov\n"
+                elif item == 6:
+                    doc["on"]["pull_request"]["paths"].remove("scripts/ci/coverage_union.py")
+                elif item == 7:
+                    doc["jobs"]["windows-grade"]["steps"][0]["run"] = "cargo install cargo-llvm-cov --locked"
+                elif item == 8:
+                    mutated_ci = ci_source.replace("scripts/ci/test_coverage_union.py", "scripts/ci/other_test.py")
+                mutated = yaml.safe_dump(doc)
+                if item == 4:
+                    mutated += "# cov.json is stale even in a comment\n"
+                with self.assertRaisesRegex(AssertionError, f"W5 item {item} missing"):
+                    check(mutated, mutated_ci)
 
 
 RUN_BY_PATH = ("scripts/ci/with-memory-log.sh", "scripts/ci/lib-parts.sh", "scripts/ci/memory-tripwire.sh",
