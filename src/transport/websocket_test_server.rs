@@ -38,6 +38,9 @@ pub(crate) enum Behaviour {
     /// As `Normal`, but a `tools/call` answers with the headers of the
     /// upgrade request its connection arrived with.
     EchoUpgradeHeaders,
+    /// As `Normal`, but the progress frame's `message` quotes the call's
+    /// arguments, as a backend echoing its input in a status line would.
+    EchoInProgress,
     /// Reject an `initialize` proposing anything outside `speaks` with a
     /// version-mismatch error that lists `speaks`; answer one inside it by
     /// selecting `selects`, whatever was proposed.
@@ -227,7 +230,12 @@ fn answer(frame: &Value, behaviour: Behaviour, seen: &Seen) -> Option<Vec<Value>
                 frames.push(json!({
                     "jsonrpc": "2.0",
                     "method": "notifications/progress",
-                    "params": { "progressToken": token, "progress": 1 }
+                    "params": if behaviour == Behaviour::EchoInProgress {
+                        json!({ "progressToken": token, "progress": 1,
+                                "message": frame["params"]["arguments"].to_string() })
+                    } else {
+                        json!({ "progressToken": token, "progress": 1 })
+                    }
                 }));
             }
             let content = json!([{ "type": "text", "text": echo.to_string() }]);

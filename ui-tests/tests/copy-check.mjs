@@ -14,7 +14,9 @@ const ID = /^[a-z0-9-]+\.(status|actions|settings)\.[a-z0-9-]+$/;
 // page while the page or tab is unbuilt; `_pending_later` maps an id under a
 // built tab to the part of the page that will draw it, so a page can land part
 // by part. Before cutover both must be empty (the pending list's own check).
-const META = new Set(['_pending', '_pending_later']);
+// `_pending_rows` lists ids still in free text, to be rewritten into frame-36 rows;
+// before cutover it must be empty like the others.
+const META = new Set(['_pending', '_pending_later', '_pending_rows']);
 // A part is named in plain words; the length cap keeps it a name, not a note.
 const PART_MAX = 60;
 
@@ -112,6 +114,9 @@ export function shapeProblems(copy) {
   if (later !== undefined && (!later || typeof later !== 'object' || Array.isArray(later))) {
     out.push('_pending_later: not an object');
   }
+  const pendingRows = copy._pending_rows;
+  const rowIds = Array.isArray(pendingRows) && pendingRows.every((id) => typeof id === 'string' && id !== '');
+  if (pendingRows !== undefined && !rowIds) out.push('_pending_rows: not an array of ids');
   for (const [id, e] of Object.entries(copy)) {
     if (META.has(id)) continue;
     if (!e || typeof e !== 'object' || Array.isArray(e)) { out.push(`${id}: not an object`); continue; }
@@ -166,5 +171,70 @@ export function pairingProblems(copy, { drawn, nonLiteral, tabs }) {
     }
   }
   for (const id of pending) if (!(id in copy)) out.push(`${id}: pending with no copy`);
+  return out;
+}
+
+/**
+ * C10: every entry is in frame-36 row form unless `_pending_rows` lists it as still free text.
+ */
+export function rowFormProblems(copy) {
+  const out = [];
+  const listed = Array.isArray(copy._pending_rows) ? copy._pending_rows : [];
+  const pending = new Set(listed);
+  for (const [id, entry] of Object.entries(copy)) {
+    if (!META.has(id) && entry && typeof entry === 'object' && 'text' in entry && !pending.has(id)) {
+      out.push(`${id}: free text; rewrite it into rows or list it in _pending_rows`);
+    }
+  }
+  // Own keys only: a listed `__proto__` or `constructor` names no copy.
+  const own = (id) => (Object.hasOwn(copy, id) ? copy[id] : undefined);
+  for (const id of listed) {
+    const entry = own(id);
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && !META.has(id) && 'rows' in entry) {
+      out.push(`${id}: listed in _pending_rows but already in rows`);
+    }
+  }
+  for (const id of listed) {
+    const entry = own(id);
+    if (META.has(id) || !entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      out.push(`${id}: listed in _pending_rows with no copy`);
+    }
+  }
+  return out;
+}
+
+// Frame 36's contract order; the unit goes in Window's text and "Automatic" is
+// the Default row's value; rows that don't apply are left out.
+const ROW_LABELS = ['What', 'Window', 'Source', 'Default', 'Why'];
+
+/**
+ * C11: each row tip's labels are the frame-36 five, in contract order.
+ */
+export function orderProblems(copy) {
+  const out = [];
+  const filled = (v) => typeof v === 'string' && v.trim() !== '';
+  for (const [id, entry] of Object.entries(copy)) {
+    if (META.has(id) || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    // Free text is not this check, and a malformed rows value belongs to shapeProblems.
+    if ('text' in entry || !Array.isArray(entry.rows)) continue;
+    const rows = entry.rows;
+    if (rows.length === 0 || !rows.every((r) => Array.isArray(r) && r.length === 2 && r.every(filled))) continue;
+    const seen = new Set();
+    let furthest = -1;
+    for (const [label] of rows) {
+      const at = ROW_LABELS.indexOf(label);
+      if (at < 0) {
+        out.push(`${id}: label ${label} is not one of ${ROW_LABELS.join(', ')}`);
+        continue;
+      }
+      if (seen.has(label)) {
+        out.push(`${id}: label ${label} appears twice`);
+        continue;
+      }
+      seen.add(label);
+      if (at < furthest) out.push(`${id}: rows out of order: ${ROW_LABELS[furthest]} before ${label}`);
+      else furthest = at;
+    }
+  }
   return out;
 }

@@ -8,7 +8,7 @@
 //! a call sends, never what its answer echoes.
 
 /// Every file holding secret echo or scrub rows, read at build time.
-const ROW_FILES: [(&str, &str); 11] = [
+const ROW_FILES: [(&str, &str); 12] = [
     (
         "src/gateway/router/secret_echo_tests.rs",
         include_str!("../../../../src/gateway/router/secret_echo_tests.rs"),
@@ -16,6 +16,10 @@ const ROW_FILES: [(&str, &str); 11] = [
     (
         "src/gateway/router/secret_echo_stored_tests.rs",
         include_str!("../../../../src/gateway/router/secret_echo_stored_tests.rs"),
+    ),
+    (
+        "src/gateway/router/secret_echo_notify_tests.rs",
+        include_str!("../../../../src/gateway/router/secret_echo_notify_tests.rs"),
     ),
     (
         "src/transport/websocket_scrub_tests.rs",
