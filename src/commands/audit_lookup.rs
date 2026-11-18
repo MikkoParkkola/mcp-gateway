@@ -305,6 +305,7 @@ pub(crate) async fn run_with(
 /// What `audit lookup-email` prints and exits with. Checks in order (design D4): resolve the gateway, the token,
 /// stdin, the window, the request. Every failure prints through `CliError::outcome` with every secret known at
 /// that point: the token, then the email or cursor too (design D5).
+// Rows only: production enters through `lookup_run`, which also returns the run's secrets for `emit`.
 #[cfg(test)]
 pub(crate) async fn lookup_outcome(
     args: LookupEmailArgs,

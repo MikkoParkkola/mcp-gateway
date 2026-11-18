@@ -749,6 +749,9 @@ async fn lost_oversized_and_unparsable_answers() {
     finish();
 }
 
+// The T6-T7 stdout-safety row (`answers::stdout_safety_has_three_separate_outcomes`) lives in
+// remote_answer_tests.rs, moved there for the file-size ceiling.
+
 #[path = "remote_input_tests.rs"]
 mod input;
 

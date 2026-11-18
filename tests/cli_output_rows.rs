@@ -7,7 +7,6 @@
 #![cfg(all(unix, feature = "webui"))]
 
 #[path = "common/gateway_bin.rs"]
-#[allow(dead_code, reason = "shared harness; this binary uses a subset")]
 mod gateway_bin;
 
 use std::io::{Read as _, Write as _};
@@ -25,7 +24,7 @@ fn stand_in(status: u16, body: &'static str) -> String {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { return };
-            let mut request = [0_u8; 65536];
+            let mut request = vec![0_u8; 65536];
             let _ = stream.read(&mut request);
             let head = format!(
                 "HTTP/1.1 {status} Stand-in\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -38,7 +37,7 @@ fn stand_in(status: u16, body: &'static str) -> String {
     base
 }
 
-/// The binary with `args`, an empty home, `token` as MCP_GATEWAY_TOKEN when given, and `stdin`.
+/// The binary with `args`, an empty home, `token` as `MCP_GATEWAY_TOKEN` when given, and `stdin`.
 fn run(args: &[&str], token: Option<&str>, stdin: &[u8]) -> (Option<i32>, String, String) {
     let home = tempfile::tempdir().expect("home");
     run_in(home.path(), args, token, stdin)
@@ -60,7 +59,7 @@ fn run_in(
     if let Some(token) = token {
         command.env("MCP_GATEWAY_TOKEN", token);
     }
-    let mut child = command.spawn().expect("spawn");
+    let mut child = command.spawn().expect("spawn"); // spawn-check: waits for exit: one-shot CLI, reaped by wait_with_output
     child
         .stdin
         .take()
@@ -128,9 +127,9 @@ macro_rules! check_eq {
     }};
 }
 
-/// T13: each remote command through its real entry point, one success and one refusal (401), as the process sees it.
+/// T13: each remote command through its real entry point succeeds as the process sees it.
 #[test]
-fn remote_commands_exit_with_the_table_through_the_binary() {
+fn remote_commands_succeed_through_the_binary() {
     let mut misses: Vec<String> = Vec::new();
     let ok_link = stand_in(200, r#"{"link":"https://gw.test/once"}"#);
     check_eq!(
@@ -194,6 +193,18 @@ fn remote_commands_exit_with_the_table_through_the_binary() {
         "api stdout"
     );
 
+    assert!(
+        misses.is_empty(),
+        "{} mismatch(es):\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}
+
+/// T13: each remote command through its real entry point refuses (401) with the shared exit and text.
+#[test]
+fn remote_commands_refuse_with_the_table_through_the_binary() {
+    let mut misses: Vec<String> = Vec::new();
     let refused = stand_in(401, r#"{"message":"denied"}"#);
     let remedy = format!("Set MCP_GATEWAY_TOKEN to a valid token for {refused}, then retry.");
     let want = (
