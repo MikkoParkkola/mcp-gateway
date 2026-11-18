@@ -146,7 +146,9 @@ const LOCK_CAP: u64 = 4 * 1024 * 1024;
 /// and `expired`, the proxy socket removed), and the run is returned only
 /// when the fetch and all of the teardown succeeded.
 pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> Result<Run, String> {
-    lo_up(&npm.ip)?;
+    if npm.ip.is_empty() {
+        lo_up(&npm.ip)?;
+    }
     let relay = Relay::start(Path::new(PROXY_SOCKET), MAX_PAIRS)
         .map_err(|e| format!("starting the relay ({e})"))?;
     let issued = match control_client::start_fetch(control, HELPER_BOUNDS) {
