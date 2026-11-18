@@ -200,6 +200,7 @@ fn refuse_script(what: &str, file: &Path) -> Result<(), Refusal> {
 /// binds when both share a tree.
 pub(super) fn place_uv(uv: &Path, system: &[String]) -> Result<PythonPlace, Refusal> {
     narrow_place(&program_bind(uv, system), vec![utf8(uv)?], "uv", uv)
+        .map(|_| PythonPlace::default())
 }
 
 /// What the root must show of the interpreter in both phases, and what it
