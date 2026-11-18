@@ -24,9 +24,11 @@ use crate::capability::CapabilityExecutor;
 /// One request the stub received.
 #[derive(Debug, Clone)]
 pub(crate) struct Seen {
+    pub(crate) method: String,
     pub(crate) path: String,
     pub(crate) query: Vec<(String, String)>,
     pub(crate) headers: HeaderMap,
+    pub(crate) body: Vec<u8>,
 }
 
 /// What the stub answers.
@@ -85,10 +87,19 @@ impl Stub {
                             .collect()
                     })
                     .unwrap_or_default();
+                let method = request.method().to_string();
+                let path = request.uri().path().to_owned();
+                let headers = request.headers().clone();
+                let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .map(|b| b.to_vec())
+                    .unwrap_or_default();
                 record.lock().push(Seen {
-                    path: request.uri().path().to_owned(),
+                    method,
+                    path,
                     query,
-                    headers: request.headers().clone(),
+                    headers,
+                    body,
                 });
                 match reply {
                     Reply::Body {
