@@ -677,6 +677,9 @@ def self_test() -> int:
         ("echo a >&2; b", ["echo a >&2", "b"]),
         # An escaped > is a literal character, so the & after it separates.
         ("echo a \\>& b", ["echo a \\>", "b"]),
+        # A redirection's target ends the redirection: an escape or a quote after > leaves the next & a separator.
+        ("echo x >\\a& b", ["echo x >\\a", "b"]),
+        ('echo x >"a"& b', ['echo x >"a"', "b"]),
         ("echo \\; b", ["echo \\; b"]),
         ('echo "a\\"; b"; c', ['echo "a\\"; b"', "c"]),
         ("echo 'a\\'; b", ["echo 'a\\'", "b"]),
