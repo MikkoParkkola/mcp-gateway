@@ -26,6 +26,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions; written under the directory lock",
     ),
     (
+        "src/capability/loader.rs",
+        "capability YAML, read once; the parsed and digested bytes are the same; public definitions",
+    ),
+    (
         "src/capability/openapi/convert.rs",
         "OpenAPI spec input; public",
     ),
@@ -71,7 +75,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "operator-named request body for one api call (--data @FILE), read size-capped at 16 MiB and sent as given; not a config or secret file",
     ),
     (
-        "src/commands/dashboard_link.rs",
+        "src/commands/dashboard_link_admin.rs",
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
     ),
     (
@@ -327,6 +331,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/personal_accounts/storage.rs",
         "own stricter check: O_NOFOLLOW, fstat, no group or world bits (R4)",
+    ),
+    (
+        "src/preview_sandbox/linux/ca_bundle.rs",
+        "the preview fetch's CA bundle: public CA certificates read from one descriptor, and their snapshot written 0444; no secret",
     ),
     (
         "src/preview_sandbox/control.rs",

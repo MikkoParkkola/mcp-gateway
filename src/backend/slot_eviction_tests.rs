@@ -293,6 +293,7 @@ fn rearm(backend: &Backend, binding: &str, upstream: &Arc<CountingUpstream>) {
 // The observable is positive twice over: the next read REACHED the backend
 // (the fill counter moved) and returned the POST-revocation list. Neither half
 // is an absence, so neither can be manufactured by the probe.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c1_a_revoked_callers_populated_slot_does_not_survive() {
     let backend = per_user_backend("c1_hub");
@@ -339,6 +340,7 @@ async fn c1_a_revoked_callers_populated_slot_does_not_survive() {
 // GREEN AGAINST A NO-OP EVICTOR BY CONSTRUCTION. An evictor that does nothing
 // trivially preserves B, so this cell discriminates only once C1 passes. It is
 // recorded as such rather than counted as coverage of the stub.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c2_an_unaffected_callers_slot_is_preserved_byte_for_byte() {
     let backend = per_user_backend("c2_hub");
@@ -388,6 +390,7 @@ async fn c2_an_unaffected_callers_slot_is_preserved_byte_for_byte() {
 // The observable is deliberately NOT "the key is absent" — a concurrent reader
 // may legitimately recreate it, so key-absence would go red for the wrong
 // reason.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c3_eviction_does_not_decline_against_a_busy_slot() {
     let backend = per_user_backend("c3_hub");
@@ -439,6 +442,7 @@ async fn c3_eviction_does_not_decline_against_a_busy_slot() {
 //
 // GREEN BEFORE ANY IMPLEMENTATION, by design — it is labelled a control, not
 // counted as coverage.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c6_control_a_populated_slot_and_the_shared_slot_both_serve() {
     let backend = per_user_backend("c6_hub");
@@ -474,6 +478,7 @@ async fn c6_control_a_populated_slot_and_the_shared_slot_both_serve() {
 // Goes red when only the first matching backend is evicted: a loop that breaks
 // on the first hit, or one that evicts per-subject rather than per-(subject,
 // backend). Passes C1–C8 undetected, because every other cell uses one backend.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c9_every_backend_holding_the_subject_is_evicted() {
     let first = per_user_backend("c9_hub_a");
@@ -546,6 +551,7 @@ async fn c9_every_backend_holding_the_subject_is_evicted() {
 // exposes a seam between them. This cell pins the observable half (a busy
 // slot's transport survives the eviction that removed it); the interleaving
 // itself needs MVP piece 6's signature change before it can be driven.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c12_eviction_removes_a_busy_slot_without_closing_its_transport() {
     let backend = per_user_backend("c12_hub");
@@ -598,6 +604,7 @@ async fn c12_eviction_removes_a_busy_slot_without_closing_its_transport() {
 // no-op evictor; the A half asserts the revocation really landed. Key-absence
 // is sound HERE because this cell has no concurrent reader to recreate the
 // slot, and it is read through the non-creating probe.
+#[cfg(tp3)]
 #[tokio::test]
 async fn c13_a_poisoned_audience_does_not_let_one_revocation_reach_another_caller() {
     let backend = per_user_backend("c13_hub");

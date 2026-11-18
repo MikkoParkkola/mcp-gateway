@@ -319,6 +319,7 @@ fn inspect_settled_pinned(
     (response, decided)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{

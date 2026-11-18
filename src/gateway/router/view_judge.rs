@@ -384,6 +384,7 @@ impl AppState {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "view_judge_tests.rs"]
 mod tests;

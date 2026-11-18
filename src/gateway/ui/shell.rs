@@ -65,12 +65,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.f472c300c624.json"),
     ),
     (
-        "tools.24f226efcd24.css",
-        include_bytes!("shell/tools.24f226efcd24.css"),
+        "tools.48250b71fa84.js",
+        include_bytes!("shell/tools.48250b71fa84.js"),
     ),
     (
-        "tools.949ee5144de5.js",
-        include_bytes!("shell/tools.949ee5144de5.js"),
+        "tools.5cacef0c94f9.css",
+        include_bytes!("shell/tools.5cacef0c94f9.css"),
     ),
     (
         "tooltip.5251c22696fd.css",
@@ -170,10 +170,12 @@ pub(super) async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_budget_tests.rs"]
 mod budget_tests;

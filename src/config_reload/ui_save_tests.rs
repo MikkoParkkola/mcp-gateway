@@ -129,12 +129,14 @@ impl Gw {
             vault: Vault::with_lock(self.dir.path(), self.dir.path().join("vault.lock")),
             store: Arc::clone(&self.store) as Arc<dyn SecretStore + Send + Sync>,
         };
+        let who = crate::security::audit::AuditWho::gateway();
         ui_save(
             Arc::clone(&self.ctx),
             posture,
             base,
             SaveEdit { fields },
             Some(target),
+            &who,
             WAIT,
         )
         .await

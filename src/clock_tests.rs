@@ -5,6 +5,7 @@
 use super::test_clock;
 use super::*;
 
+#[cfg(tp3)]
 #[test]
 fn a_clock_before_the_epoch_is_an_error_in_every_form() {
     let _clock = test_clock::before_epoch();
@@ -12,6 +13,7 @@ fn a_clock_before_the_epoch_is_an_error_in_every_form() {
     assert_eq!(utc_now(), Err(ClockBeforeEpoch));
 }
 
+#[cfg(tp3)]
 #[test]
 fn an_access_check_on_an_unreadable_clock_is_expired_whatever_it_compares() {
     let _clock = test_clock::before_epoch();
@@ -19,6 +21,7 @@ fn an_access_check_on_an_unreadable_clock_is_expired_whatever_it_compares() {
     assert_eq!(expired_by_utc(|_| Validity::Live), Validity::Expired);
 }
 
+#[cfg(tp3)]
 #[test]
 fn a_readable_clock_runs_the_sites_own_comparison() {
     let _clock = test_clock::at_secs(1_000);
@@ -41,6 +44,7 @@ fn a_readable_clock_runs_the_sites_own_comparison() {
     );
 }
 
+#[cfg(tp3)]
 #[test]
 fn the_guard_restores_the_real_clock() {
     {
@@ -53,6 +57,7 @@ fn at(secs: u64) -> JwtClaimTime {
     JwtClaimTime::At(secs)
 }
 
+#[cfg(tp3)]
 #[test]
 fn the_jwt_window_near_the_epoch_neither_underflows_nor_admits_the_expired() {
     let _clock = test_clock::at_secs(100);
@@ -67,6 +72,7 @@ fn the_jwt_window_near_the_epoch_neither_underflows_nor_admits_the_expired() {
     assert_eq!(jwt_window(at(0), JwtClaimTime::Absent, 60), Validity::Live);
 }
 
+#[cfg(tp3)]
 #[test]
 fn the_jwt_window_boundaries_and_malformed_claims() {
     let _clock = test_clock::at_secs(1_000);
@@ -104,6 +110,7 @@ fn the_jwt_window_boundaries_and_malformed_claims() {
     );
 }
 
+#[cfg(tp3)]
 #[test]
 fn the_jwt_window_on_an_unreadable_clock_is_expired() {
     let _clock = test_clock::before_epoch();
@@ -115,6 +122,7 @@ fn the_jwt_window_on_an_unreadable_clock_is_expired() {
 
 /// MIK-8202 E4: an audit row is stamped with the time on a readable clock,
 /// and kept undated (`null`, `clock_invalid: true`) on one before 1970.
+#[cfg(tp3)]
 #[test]
 fn an_audit_row_is_kept_undated_on_an_unreadable_clock() {
     let mut dated = serde_json::Map::new();
@@ -133,6 +141,7 @@ fn an_audit_row_is_kept_undated_on_an_unreadable_clock() {
 /// the `test_clock` `thread_local!` block, and no lock, atomic or once-cell
 /// appears in code. Comment lines are skipped (the module doc names the
 /// forbidden types).
+#[cfg(tp3)]
 #[test]
 fn clock_rs_holds_no_shared_mutable_state() {
     let code: Vec<&str> = include_str!("clock.rs")
@@ -221,6 +230,21 @@ pub(crate) fn product_code(src: &str) -> String {
         }
     }
     out.join("\n")
+}
+
+/// The lib test split puts a `#[cfg(tpK)]` line above a test module's
+/// unchanged `#[cfg(test)]`: the module is still dropped from product code.
+#[cfg(tp3)]
+#[test]
+fn product_code_drops_a_part_tagged_test_module() {
+    let code = product_code(
+        "fn live() {}\n#[cfg(tp3)]\n#[cfg(test)]\nmod t {\n    fn probe() { now(); }\n}\nfn after() {}\n",
+    );
+    assert!(
+        code.contains("fn live()") && code.contains("fn after()"),
+        "{code}"
+    );
+    assert!(!code.contains("probe"), "{code}");
 }
 
 /// The brace-balanced block that opens at the first `{` from `from`.
@@ -415,6 +439,7 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
 /// `home_dir`'s allowed body), each make the final `assert!` below fail, naming
 /// the file; a `#[cfg(test)]` item holding an alias, and a
 /// `cfg_attr(test, allow(..))` scope, are controls that stay green.
+#[cfg(tp3)]
 #[test]
 fn no_disallowed_methods_allow_or_clock_alias_hides_a_clock_read() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -467,6 +492,7 @@ fn assert_holes(cases: &[(&str, String, usize)]) {
 /// Kills "a statement allow is scoped to the next block": a statement's allow
 /// reaches that statement only, a function's its body, past further
 /// attributes and line breaks.
+#[cfg(tp3)]
 #[test]
 fn an_allow_reaches_exactly_its_statement_or_item() {
     assert_holes(&[
@@ -515,6 +541,7 @@ fn an_allow_reaches_exactly_its_statement_or_item() {
 /// Kills "a literal or a comment moves the scope": a `;` or a bracket inside
 /// a literal or a comment neither ends nor opens a scope, and a clock name
 /// inside a literal is no read.
+#[cfg(tp3)]
 #[test]
 fn literals_and_comments_move_no_scope() {
     assert_holes(&[
@@ -544,6 +571,7 @@ fn literals_and_comments_move_no_scope() {
 /// Kills "any word picks the scope": the item introducer after visibility and
 /// qualifiers decides, so a type or a turbofish naming `fn` stays a statement,
 /// an allow on `mod name;` fails closed, and an extern block is a body.
+#[cfg(tp3)]
 #[test]
 fn the_item_introducer_picks_the_scope() {
     assert_holes(&[

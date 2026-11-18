@@ -703,6 +703,7 @@ mod list;
 #[path = "config_persistence_keyedit_template.rs"]
 mod template;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_keyedit_tests.rs"]
 mod tests;

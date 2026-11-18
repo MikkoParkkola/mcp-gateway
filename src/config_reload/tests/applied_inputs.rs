@@ -5,10 +5,13 @@
 
 use super::env_support::{RecordingHome, config_naming_env_files, env_file, startup_through};
 use super::*;
+use crate::config_reload::history::Source;
 use crate::config_reload::revision::{AppliedInputs, ConsumedSource, RawInputs, config_revision};
 
 fn revision(live: &LiveConfig) -> Option<String> {
-    live.applied_now().map(|applied| applied.revision.clone())
+    live.applied_now()
+        .published
+        .map(|applied| applied.revision.clone())
 }
 
 fn revision_key() -> [u8; 32] {
@@ -89,7 +92,7 @@ fn the_published_revision_names_the_published_inputs() {
         gateway_yaml: b"server:\n  port: 1\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(default_generation(&live), inputs.clone(), &[]);
+    live.set_applied(default_generation(&live), inputs.clone(), &[], Source::File);
     let id_of = |raw: RawInputs| {
         config_revision(
             &revision_key(),
@@ -115,7 +118,12 @@ fn the_published_revision_names_the_published_inputs() {
 #[test]
 fn without_a_revision_key_no_revision_is_published() {
     let live = LiveConfig::new(Config::default());
-    live.set_applied(default_generation(&live), RawInputs::default(), &[]);
+    live.set_applied(
+        default_generation(&live),
+        RawInputs::default(),
+        &[],
+        Source::File,
+    );
     assert_eq!(revision(&live), None);
 }
 
@@ -129,7 +137,12 @@ fn a_reload_keeps_the_grants_their_sink_published() {
         gateway_yaml: b"server:\n  port: 2\n".to_vec(),
         ..RawInputs::default()
     };
-    live.set_applied(default_generation(&live), reloaded.clone(), &[]);
+    live.set_applied(
+        default_generation(&live),
+        reloaded.clone(),
+        &[],
+        Source::File,
+    );
     let expected = RawInputs {
         grants: Some(b"[]\n".to_vec()),
         ..reloaded
@@ -153,11 +166,11 @@ fn rotated_env_files_under_an_unchanged_config_get_a_new_revision() {
         .with_revision_key(revision_key())
         .with_applied(env(b"K=1\n"));
     let before = revision(&live);
-    assert_eq!(before.as_deref(), live.running_revision());
+    assert_eq!(before.as_deref(), live.running_revision().as_deref());
     live.set_inputs(env(b"K=2\n"), &[]);
     assert_ne!(revision(&live), before);
     assert_eq!(
-        live.running_revision(),
+        live.running_revision().as_deref(),
         before.as_deref(),
         "startup's stays"
     );
@@ -179,7 +192,10 @@ fn startup_inputs_are_moved_into_the_first_publish_and_taken_once() {
     let live = LiveConfig::new(Config::default())
         .with_startup_revision(&record_key, live_env.take_startup_inputs());
     assert!(revision(&live).is_some(), "startup publishes a revision");
-    assert_eq!(live.running_revision(), revision(&live).as_deref());
+    assert_eq!(
+        live.running_revision().as_deref(),
+        revision(&live).as_deref()
+    );
     assert!(
         live_env.take_startup_inputs().is_none(),
         "the slot is empty after the startup publish, and a second take gets nothing"
@@ -209,7 +225,7 @@ fn startup_grants_are_in_the_running_revision() {
         live_env.set_startup_grants(grants.map(<[u8]>::to_vec));
         let live = LiveConfig::new(Config::default())
             .with_startup_revision(&record_key, live_env.take_startup_inputs());
-        let running = live.running_revision().map(str::to_owned);
+        let running = live.running_revision();
         (running, revision(&live))
     };
     let (with_grants, published) = startup(Some(b"grants: []\n"));
@@ -234,7 +250,8 @@ fn an_outstanding_environment_change_is_pending_restart() {
         .with_applied(RawInputs::default());
     let pending = |live: &LiveConfig| {
         live.applied_now()
-            .map(|a| a.pending_restart.clone())
+            .published
+            .map(|applied| applied.pending_restart.clone())
             .unwrap_or_default()
     };
     live.set_inputs(RawInputs::default(), &["GW_SECRET_NAME".to_owned()]);
@@ -243,6 +260,7 @@ fn an_outstanding_environment_change_is_pending_restart() {
         default_generation(&live),
         RawInputs::default(),
         &["GW_SECRET_NAME".to_owned()],
+        Source::File,
     );
     assert_eq!(
         pending(&live),

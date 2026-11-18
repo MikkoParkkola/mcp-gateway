@@ -15,6 +15,16 @@ use super::CapabilityBackend;
 /// `initial_scan` bits: the scan has loaded every directory; a directory
 /// failed to load.
 const COMPLETE: u8 = 0b01;
+
+/// Set the complete bit. `true` when this call is the one that set it.
+///
+/// The handoff and [`CapabilityBackend::mark_initial_scan_complete`] share
+/// the bit. A second caller sees `false` and must not treat that as another
+/// time the scan became ready.
+pub(super) fn note_scan_complete(bits: &std::sync::atomic::AtomicU8) -> bool {
+    let prev = bits.fetch_or(COMPLETE, std::sync::atomic::Ordering::Release);
+    prev & COMPLETE == 0
+}
 const FAILED: u8 = 0b10;
 /// A capability reload arrived before the scan completed and awaits its turn.
 const RELOAD_HELD: u8 = 0b100;
@@ -24,6 +34,10 @@ impl CapabilityBackend {
     /// [`Self::mark_initial_scan_complete`] runs. Called by startup before it
     /// spawns the background load.
     pub(crate) fn begin_initial_scan(&self) {
+        // A new scan starts its completion count at zero.
+        #[cfg(test)]
+        self.scan_completions
+            .store(0, std::sync::atomic::Ordering::Release);
         self.initial_scan
             .store(0, std::sync::atomic::Ordering::Release);
     }
@@ -36,6 +50,11 @@ impl CapabilityBackend {
         let _ = self
             .records_at_scan_complete
             .set(self.rug_pull_records().len());
+        // Counted beside the flag: the flag stays true, so a second call is
+        // otherwise invisible.
+        #[cfg(test)]
+        self.scan_completions
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         // Release pairs with the Acquire below: a probe that sees `true` also
         // sees every capability the scan registered before marking.
         self.initial_scan
@@ -75,6 +94,14 @@ impl CapabilityBackend {
     #[must_use]
     pub(crate) fn initial_scan_complete(&self) -> bool {
         self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & COMPLETE != 0
+    }
+
+    /// How many times [`Self::mark_initial_scan_complete`] has run since the
+    /// last [`Self::begin_initial_scan`].
+    #[cfg(test)]
+    pub(crate) fn scan_completions(&self) -> usize {
+        self.scan_completions
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Whether every configured directory loaded (meaningful once the scan
@@ -167,6 +194,7 @@ impl CapabilityBackend {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -194,6 +222,7 @@ mod tests {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod failed_tests {
     use std::sync::Arc;
@@ -215,6 +244,7 @@ mod failed_tests {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod held_reload_tests {
     use std::sync::Arc;

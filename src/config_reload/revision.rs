@@ -14,10 +14,14 @@
 //! dropped. Only the digests outlive the publish, so a later grants change can
 //! recompute the id without the process holding any input's bytes.
 //!
-//! Not yet covered: capability definitions (their part is an empty list until
-//! the capability loader hands its bytes over), so nothing may present an id
-//! as naming capability state; and CLI flag overrides applied after the load,
-//! which are process arguments rather than inputs.
+//! Capability files are a [`CapabilityPart`]. `Loaded` is the count and the
+//! sorted entries, the bytes a gateway with capabilities disabled already
+//! publishes, including the empty list. `NotLoaded` is `u64::MAX` and nothing
+//! after it: the files have not been read. `Partial` is `u64::MAX - 1`, then
+//! that same count and entries: a directory or a file could not be read. A
+//! file count a process can hold sits below either marker, so the frame stays
+//! v1. The load sequence is not an input. CLI flag overrides applied after
+//! the load are process arguments rather than inputs.
 //!
 //! Encoding (shared with configuration history, which keys stored versions by
 //! this id):
@@ -28,7 +32,10 @@
 //!          TAG || part(D(gateway.yaml))
 //!              || (part(D(grants file)) | ABSENT)
 //!              || count || part(path) || (part(D(bytes)) | ABSENT) per env file, configured order
-//!              || count || part(path) || part(D(bytes)) per capability file, sorted
+//!              || capability part:
+//!                   Loaded:    count || part(path) || part(D(bytes)) per file, sorted
+//!                   NotLoaded: u64_be(u64::MAX)
+//!                   Partial:   u64_be(u64::MAX - 1) || count || entries, as Loaded
 //!              || count || part(source) || part(name) || part(D(value)) per consumed value,
 //!                          sorted, duplicates once))
 //! part(b) = 0x01 || u64_be(len b) || b;  ABSENT = 0x00;  count = u64_be(n)
@@ -49,6 +56,41 @@ pub(crate) type RawBytes = Vec<u8>;
 
 /// A keyed digest of one input part.
 pub(crate) type PartDigest = [u8; 32];
+
+/// How much of the capability catalogue this revision names.
+///
+/// `T` is [`RawBytes`] on the way in and [`PartDigest`] once published.
+/// `Loaded` is today's list. The other two variants exist so a startup that
+/// has not read the files, and a read that missed a directory or a file, are
+/// not the same value as an empty catalogue. `Default` is the empty loaded
+/// list: an in-memory config and a derived `AppliedInputs` stay what they
+/// were when the list was a `Vec`.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum CapabilityPart<T> {
+    /// The files have not been read.
+    NotLoaded,
+    /// Some configured directory or file could not be read. The vec is what
+    /// was read.
+    Partial(Vec<(String, T)>),
+    /// Every configured directory was read. The vec is every served file.
+    Loaded(Vec<(String, T)>),
+}
+
+impl<T> Default for CapabilityPart<T> {
+    fn default() -> Self {
+        Self::Loaded(Vec::new())
+    }
+}
+
+impl<T> CapabilityPart<T> {
+    /// The entries a loaded or partial part carries. `NotLoaded` has none.
+    pub(crate) fn entries(&self) -> &[(String, T)] {
+        match self {
+            Self::NotLoaded => &[],
+            Self::Partial(entries) | Self::Loaded(entries) => entries,
+        }
+    }
+}
 
 /// Where a consumed value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +130,7 @@ pub(crate) struct RawInputs {
     /// Configured env files in order; `None` for one that does not exist
     /// (the loader skips it), so a missing file and an empty one differ.
     pub env_files: Vec<(String, Option<RawBytes>)>,
-    pub capabilities: Vec<(String, RawBytes)>,
+    pub capabilities: CapabilityPart<RawBytes>,
     pub consumed: Vec<ConsumedInput<RawBytes>>,
 }
 
@@ -98,7 +140,11 @@ pub(crate) struct AppliedInputs {
     pub gateway_yaml: PartDigest,
     pub grants: Option<PartDigest>,
     pub env_files: Vec<(String, Option<PartDigest>)>,
-    pub capabilities: Vec<(String, PartDigest)>,
+    pub capabilities: CapabilityPart<PartDigest>,
+    /// Load sequence of [`Self::capabilities`]. Not an input: [`config_revision`]
+    /// does not write it. A reload copies it with the part, so a gateway.yaml
+    /// reload does not look like sequence zero.
+    pub capability_seq: u64,
     pub consumed: Vec<ConsumedInput<PartDigest>>,
 }
 
@@ -118,6 +164,12 @@ impl AppliedInputs {
     /// Digest `raw` under `key`; the raw bytes are dropped here.
     pub(crate) fn digest(key: &[u8; 32], raw: RawInputs) -> Self {
         let d = |bytes: &[u8]| part_digest(key, bytes);
+        let digest_entries = |entries: Vec<(String, RawBytes)>| {
+            entries
+                .into_iter()
+                .map(|(path, bytes)| (path, part_digest(key, &bytes)))
+                .collect()
+        };
         // Consumed field by field: each buffer drops as soon as it is digested.
         Self {
             gateway_yaml: d(&raw.gateway_yaml),
@@ -127,11 +179,15 @@ impl AppliedInputs {
                 .into_iter()
                 .map(|(path, bytes)| (path, bytes.map(|b| d(&b))))
                 .collect(),
-            capabilities: raw
-                .capabilities
-                .into_iter()
-                .map(|(path, bytes)| (path, d(&bytes)))
-                .collect(),
+            capabilities: match raw.capabilities {
+                CapabilityPart::NotLoaded => CapabilityPart::NotLoaded,
+                CapabilityPart::Partial(entries) => {
+                    CapabilityPart::Partial(digest_entries(entries))
+                }
+                CapabilityPart::Loaded(entries) => CapabilityPart::Loaded(digest_entries(entries)),
+            },
+            // The sequence is published state, not bytes the load read.
+            capability_seq: 0,
             consumed: raw
                 .consumed
                 .into_iter()
@@ -161,7 +217,7 @@ impl fmt::Debug for RawInputs {
             .field("gateway_yaml_len", &self.gateway_yaml.len())
             .field("grants_len", &self.grants.as_ref().map(Vec::len))
             .field("env_files", &self.env_files.len())
-            .field("capabilities", &self.capabilities.len())
+            .field("capabilities", &self.capabilities.entries().len())
             .field("consumed", &self.consumed.len())
             .finish()
     }
@@ -172,43 +228,76 @@ impl fmt::Debug for AppliedInputs {
         f.debug_struct("AppliedInputs")
             .field("grants", &self.grants.is_some())
             .field("env_files", &self.env_files.len())
-            .field("capabilities", &self.capabilities.len())
+            .field("capabilities", &self.capabilities.entries().len())
             .field("consumed", &self.consumed.len())
             .finish_non_exhaustive()
     }
 }
 
+fn push_part(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.push(1);
+    out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn push_count(out: &mut Vec<u8>, n: u64) {
+    out.extend_from_slice(&n.to_be_bytes());
+}
+
+/// The count and the sorted entries `Loaded` and `Partial` share.
+fn write_capability_entries(out: &mut Vec<u8>, entries: &[(String, PartDigest)]) {
+    let mut caps: Vec<_> = entries.iter().collect();
+    caps.sort();
+    push_count(out, caps.len() as u64);
+    for (path, digest) in caps {
+        push_part(out, path.as_bytes());
+        push_part(out, digest);
+    }
+}
+
+/// The capability section of the preimage.
+///
+/// A count of zero is the empty loaded list. `NotLoaded` is `u64::MAX`, which
+/// that count cannot be, or a gateway that has not read the files would
+/// publish the same id as one with an empty catalogue. `Partial` is
+/// `u64::MAX - 1` and then the same count and entries as `Loaded`. The load
+/// sequence is not written: it is not an input.
+fn write_capability_part(out: &mut Vec<u8>, part: &CapabilityPart<PartDigest>) {
+    match part {
+        CapabilityPart::NotLoaded => push_count(out, u64::MAX),
+        CapabilityPart::Partial(entries) => {
+            push_count(out, u64::MAX - 1);
+            write_capability_entries(out, entries);
+        }
+        CapabilityPart::Loaded(entries) => write_capability_entries(out, entries),
+    }
+}
+
+/// The capability section alone, so a test can compare it to bytes it built.
+#[cfg(test)]
+pub(crate) fn capability_preimage(part: &CapabilityPart<PartDigest>) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_capability_part(&mut out, part);
+    out
+}
+
 /// The revision id of `inputs` under `key` (the derived revision key).
 pub(crate) fn config_revision(key: &[u8; 32], inputs: &AppliedInputs) -> String {
-    fn part(out: &mut Vec<u8>, bytes: &[u8]) {
-        out.push(1);
-        out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
-        out.extend_from_slice(bytes);
-    }
-    fn count(out: &mut Vec<u8>, n: usize) {
-        out.extend_from_slice(&(n as u64).to_be_bytes());
-    }
     let mut m = TAG.to_vec();
-    part(&mut m, &inputs.gateway_yaml);
+    push_part(&mut m, &inputs.gateway_yaml);
     match &inputs.grants {
-        Some(grants) => part(&mut m, grants),
+        Some(grants) => push_part(&mut m, grants),
         None => m.push(0),
     }
-    count(&mut m, inputs.env_files.len());
+    push_count(&mut m, inputs.env_files.len() as u64);
     for (path, digest) in &inputs.env_files {
-        part(&mut m, path.as_bytes());
+        push_part(&mut m, path.as_bytes());
         match digest {
-            Some(digest) => part(&mut m, digest),
+            Some(digest) => push_part(&mut m, digest),
             None => m.push(0),
         }
     }
-    let mut caps: Vec<_> = inputs.capabilities.iter().collect();
-    caps.sort();
-    count(&mut m, caps.len());
-    for (path, digest) in caps {
-        part(&mut m, path.as_bytes());
-        part(&mut m, digest);
-    }
+    write_capability_part(&mut m, &inputs.capabilities);
     let mut consumed: Vec<_> = inputs
         .consumed
         .iter()
@@ -217,15 +306,21 @@ pub(crate) fn config_revision(key: &[u8; 32], inputs: &AppliedInputs) -> String 
     consumed.sort_unstable();
     // A value resolved twice during one load is one input, not two.
     consumed.dedup();
-    count(&mut m, consumed.len());
+    push_count(&mut m, consumed.len() as u64);
     for (source, name, digest) in consumed {
-        part(&mut m, source.as_bytes());
-        part(&mut m, name.as_bytes());
-        part(&mut m, digest);
+        push_part(&mut m, source.as_bytes());
+        push_part(&mut m, name.as_bytes());
+        push_part(&mut m, digest);
     }
     format!("hmac-sha256:{}", crate::hashing::hmac_sha256_hex(key, &m))
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "revision_tests.rs"]
 mod tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "revision_encoding_tests.rs"]
+mod encoding_tests;

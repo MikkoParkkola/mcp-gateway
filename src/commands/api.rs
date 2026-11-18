@@ -5,7 +5,7 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::process::ExitCode;
 
 use mcp_gateway::cli::api::{ApiArgs, ApiMethod};
@@ -18,6 +18,10 @@ use super::dashboard_link::{
 };
 
 const BODY_LIMIT: u64 = 16 * 1024 * 1024;
+
+#[path = "api_stream.rs"]
+mod stream;
+pub(crate) use stream::write_outcome;
 
 const UNCERTAIN_MESSAGE: &str = "The gateway may have applied this change.";
 const UNCERTAIN_REMEDY: &str =
@@ -165,6 +169,9 @@ pub async fn run_api_command(
             port_override,
             host_override,
         ) {
+            Ok((base, tls)) if stream::streamed(&base, &args.path) => {
+                stream::run_production(&args, &base, &tls, token.clone()).await
+            }
             Ok((base, tls)) => {
                 run_api_with(
                     &args,
@@ -212,38 +219,37 @@ pub async fn run_api_command(
             &outcome,
             args.json,
             redaction,
-            &mut std::io::stdout().lock(),
+            // Not locked up front: a streamed run's printing thread may hold
+            // stdout past its deadline, and an empty answer must not wait.
+            &mut std::io::stdout(),
             &mut std::io::stderr().lock(),
         )
         .code(),
     )
 }
 
-/// Keep output failures in the same error sink as all other API failures.
-pub(crate) fn write_outcome(
-    outcome: &ApiOutcome,
-    json: bool,
-    token: &str,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-) -> ApiExit {
-    if let Err(error) = stdout.write_all(&outcome.stdout) {
-        if error.kind() == std::io::ErrorKind::BrokenPipe {
-            return ApiExit::Ok;
-        }
-        let failure = ApiError::new(
-            ApiExit::LocalFailure,
-            "Could not write command output.",
-            "Check the output destination before repeating the command.",
-        )
-        .outcome(json, token);
-        let _ = stderr.write_all(failure.stderr.as_bytes());
-        return failure.exit;
+/// The credential to send, or the refusal that ends the command before any
+/// request: none, empty, or holding a control character (a credential travels
+/// in a header line, so it can never hold CR or LF).
+fn resolve_token(credential: Result<String, TokenError>, origin: &str) -> Result<String, ApiError> {
+    match credential {
+        Ok(token) if token.chars().any(char::is_control) => Err(ApiError::new(
+            ApiExit::Usage,
+            "MCP_GATEWAY_TOKEN holds a control character.",
+            "Unset or replace MCP_GATEWAY_TOKEN, then retry.",
+        )),
+        Ok(token) => Ok(token),
+        Err(TokenError::Missing) => Err(ApiError::new(
+            ApiExit::AuthRefused,
+            "No gateway credential is available.",
+            login_remedy(origin),
+        )),
+        Err(TokenError::Blank) => Err(ApiError::new(
+            ApiExit::Usage,
+            "MCP_GATEWAY_TOKEN is empty.",
+            "Unset or replace MCP_GATEWAY_TOKEN, then retry.",
+        )),
     }
-    if stderr.write_all(outcome.stderr.as_bytes()).is_err() {
-        return ApiExit::LocalFailure;
-    }
-    outcome.exit
 }
 
 /// Validation completes before send can receive the credential.
@@ -269,25 +275,13 @@ where
         Ok(url) => url,
         Err(error) => return error.outcome(args.json, redaction),
     };
+    if let Err(error) = stream::check_args(args, &url) {
+        return error.outcome(args.json, redaction);
+    }
     let origin = url.origin().ascii_serialization();
-    let token = match credential {
+    let token = match resolve_token(credential, &origin) {
         Ok(token) => token,
-        Err(TokenError::Missing) => {
-            return ApiError::new(
-                ApiExit::AuthRefused,
-                "No gateway credential is available.",
-                login_remedy(&origin),
-            )
-            .outcome(args.json, "");
-        }
-        Err(TokenError::Blank) => {
-            return ApiError::new(
-                ApiExit::Usage,
-                "MCP_GATEWAY_TOKEN is empty.",
-                "Unset or replace MCP_GATEWAY_TOKEN, then retry.",
-            )
-            .outcome(args.json, "");
-        }
+        Err(error) => return error.outcome(args.json, ""),
     };
     let if_match = match args.if_match.as_deref().map(|value| {
         if value.chars().any(char::is_control) {

@@ -192,6 +192,7 @@ fn descriptors(registry: &WebhookRegistry) -> Vec<EventDescriptor> {
         .collect()
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::{Inbound, dedupe_key};

@@ -420,31 +420,9 @@ exports for Kubernetes status, Events, OTel, and SIEM adapters. It also includes
 a deterministic controller-manager loop for bounded CI cycles or continuous
 operator reconciliation over a reviewed resource stream, plus a gated cluster
 apply command plan and opt-in executor for preflight, server-side dry-run,
-apply, verification, evidence export, and rollback handles.
-
-```bash
-mcp-gateway kubernetes plan \
-  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
-  --namespace mcp-gateway
-
-mcp-gateway kubernetes controller \
-  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
-  --namespace mcp-gateway \
-  --cycles 2
-
-mcp-gateway kubernetes apply-plan \
-  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
-  --namespace mcp-gateway
-
-mcp-gateway kubernetes apply-plan \
-  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
-  --namespace mcp-gateway \
-  --execute \
-  --format plain
-
-deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
-deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
-```
+apply, verification, evidence export, and rollback handles. The package README
+documents each command: the reconcile plan, the controller manager, the cluster
+apply plan and its executor, the server-side dry-run wrapper and the kind smoke.
 
 Free/core deployment remains Docker, Docker Compose, and single-node service
 templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
@@ -1165,7 +1143,8 @@ step 2: the old secret stops working as soon as the change applies. Rotation fie
 restart. Load refuses a `principal` another credential already resolves to, and any two equal
 digests among all keys and the bearer token.
 
-`hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
+`hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. It
+refuses a new key under 20 bytes (exit 2); `--verify` still checks a shorter key chosen before 4.0. A
 plaintext API key in `auth.api_keys`, or an `env:` variable that holds a key rather than a digest, fails the
 load with an error that names the entry or variable but never the value. See
 [UPGRADING-4.0.md](UPGRADING-4.0.md) item 41.

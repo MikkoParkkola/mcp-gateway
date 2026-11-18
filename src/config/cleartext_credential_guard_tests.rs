@@ -59,6 +59,7 @@ fn refusal(backend: BackendConfig) -> String {
 
 // Row 1 — the guard must not fire on TLS. A guard that refuses everything
 // passes every REFUSED row and is still wrong.
+#[cfg(tp3)]
 #[test]
 fn https_non_loopback_with_credential_passes() {
     let backend = with_oauth(http_backend(&format!("https://{REMOTE}:8080")));
@@ -66,6 +67,7 @@ fn https_non_loopback_with_credential_passes() {
 }
 
 // Row 2 — the case the whole change exists for.
+#[cfg(tp3)]
 #[test]
 fn cleartext_non_loopback_with_credential_is_refused() {
     let backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
@@ -78,6 +80,7 @@ fn cleartext_non_loopback_with_credential_is_refused() {
 
 // Row 3 — cleartext alone is a posture, not a leak. Refusing it would break
 // every plain internal backend that carries no credential at all.
+#[cfg(tp3)]
 #[test]
 fn cleartext_non_loopback_without_credential_passes() {
     let backend = http_backend(&format!("http://{REMOTE}:8080"));
@@ -87,6 +90,7 @@ fn cleartext_non_loopback_without_credential_passes() {
 // Rows 4-8, 21 — the loopback carve-out, one row per way of spelling it.
 // 127.0.0.2 and the decimal form are the rows that a `== "127.0.0.1"`
 // comparison fails; LOCALHOST is the row a case-sensitive compare fails.
+#[cfg(tp3)]
 #[test]
 fn loopback_spellings_with_credential_pass() {
     for url in [
@@ -107,6 +111,7 @@ fn loopback_spellings_with_credential_pass() {
 
 // Row 9 — the opt-out is the whole reason a refusal is acceptable. If this
 // row fails the guard is a wall, not a gate.
+#[cfg(tp3)]
 #[test]
 fn explicit_opt_in_permits_cleartext_credentials() {
     let mut backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
@@ -116,6 +121,7 @@ fn explicit_opt_in_permits_cleartext_credentials() {
 
 // Row 10 — identity propagation mints a per-user credential for this
 // backend, so the backend is credential-bearing whether or not oauth is set.
+#[cfg(tp3)]
 #[test]
 fn identity_propagation_counts_as_a_credential() {
     let mut backend = http_backend(&format!("http://{REMOTE}"));
@@ -135,6 +141,7 @@ fn identity_propagation_counts_as_a_credential() {
 }
 
 // Row 11 — secret injection puts the credential on the wire by definition.
+#[cfg(tp3)]
 #[test]
 fn secret_injection_counts_as_a_credential() {
     let mut backend = http_backend(&format!("http://{REMOTE}"));
@@ -156,6 +163,7 @@ fn secret_injection_counts_as_a_credential() {
 // Rows 12-13 — any static header, not a known-name list. A guard that only
 // knows `Authorization` misses the header half of the real deployments,
 // which is why row 13 is separate from row 12.
+#[cfg(tp3)]
 #[test]
 fn any_static_header_counts_as_a_credential() {
     for header in ["Authorization", "X-Custom-Token"] {
@@ -171,6 +179,7 @@ fn any_static_header_counts_as_a_credential() {
 
 // Row 14 — userinfo IS the credential; reqwest turns it into a Basic header.
 // No other credential is configured on this backend.
+#[cfg(tp3)]
 #[test]
 fn url_userinfo_alone_counts_as_a_credential() {
     let backend = http_backend(&format!("http://user:pw@{REMOTE}"));
@@ -185,6 +194,7 @@ fn url_userinfo_alone_counts_as_a_credential() {
 // (`src/config/mod.rs:1031-1032`), so either half alone is a credential.
 // Row 14 above pairs them and would survive a loosening to require both;
 // this row is what forbids that loosening.
+#[cfg(tp3)]
 #[test]
 fn url_username_without_a_password_counts_as_a_credential() {
     let backend = http_backend(&format!("http://user@{REMOTE}"));
@@ -197,6 +207,7 @@ fn url_username_without_a_password_counts_as_a_credential() {
 
 // The other half of Row 2: a password with no username. Same predicate,
 // opposite arm, so a loosening in either direction fails a test.
+#[cfg(tp3)]
 #[test]
 fn url_password_without_a_username_counts_as_a_credential() {
     let backend = http_backend(&format!("http://:pw@{REMOTE}"));
@@ -208,6 +219,7 @@ fn url_password_without_a_username_counts_as_a_credential() {
 }
 
 // Row 15 — a disabled backend connects to nothing, so it leaks nothing.
+#[cfg(tp3)]
 #[test]
 fn disabled_backend_skips_the_cleartext_guard() {
     let mut backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
@@ -218,6 +230,7 @@ fn disabled_backend_skips_the_cleartext_guard() {
 // Row 18 — and the skip drops ONLY the new predicate. An empty or malformed
 // URL on a disabled backend keeps failing exactly as it does today,
 // otherwise the skip has quietly widened what config load accepts.
+#[cfg(tp3)]
 #[test]
 fn disabled_backend_still_fails_the_existing_url_checks() {
     for url in ["", "not a url"] {
@@ -233,6 +246,7 @@ fn disabled_backend_still_fails_the_existing_url_checks() {
 // Rows 19, 19b — a query string on a backend URL is operator-supplied
 // per-request material sent in cleartext. Whether it is benign is not
 // decidable here, so both spellings are refused.
+#[cfg(tp3)]
 #[test]
 fn url_query_counts_as_a_credential() {
     for url in [
@@ -250,6 +264,7 @@ fn url_query_counts_as_a_credential() {
 // Row 20 — MIK-7221: the refusal is printed on startup and pasted into
 // support threads. It may name the backend and nothing else. An implementer
 // who copies `OidcError::InsecureJwksUri`, which echoes the URL, fails here.
+#[cfg(tp3)]
 #[test]
 fn refusal_message_names_the_backend_and_leaks_nothing() {
     let message = refusal(http_backend(&format!("http://user:pw@{REMOTE}")));
@@ -270,6 +285,7 @@ fn refusal_message_names_the_backend_and_leaks_nothing() {
 
 // Rows 16-17 — the a2a transport is the second spelling of the same URL.
 // Guarding one and not the other is how the first guard stops mattering.
+#[cfg(tp3)]
 #[cfg(feature = "a2a")]
 #[test]
 fn a2a_url_is_guarded_on_the_same_terms() {
@@ -290,6 +306,7 @@ fn a2a_url_is_guarded_on_the_same_terms() {
 
 // MIK-8063: credentials written into an a2a_url's userinfo are credentials on
 // the wire too (sent as HTTP Basic), on the same terms as any other.
+#[cfg(tp3)]
 #[cfg(feature = "a2a")]
 #[test]
 fn a2a_url_userinfo_is_a_credential_on_the_same_terms() {
@@ -314,6 +331,7 @@ fn a2a_url_userinfo_is_a_credential_on_the_same_terms() {
 /// MIK-8857.API4.4: `cleartext_override_in_effect` is the guard asked a second
 /// time, so it must agree with it on every carrier and every kind of address:
 /// in effect exactly when the flag is set and the guard refuses without it.
+#[cfg(tp3)]
 #[test]
 fn the_override_is_in_effect_exactly_where_the_guard_would_refuse() {
     type Carrier = (&'static str, fn(BackendConfig) -> BackendConfig);

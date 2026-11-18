@@ -6,55 +6,76 @@
 // test that drives a real startup must call the same one rather than a copy of
 // its policy.
 pub(crate) mod account_bindings;
+#[cfg(tp4)]
 #[cfg(test)]
 mod attestation_start_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audit_start_tests;
 mod background;
 mod build_meta;
 mod cleartext;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_share_tests;
 mod construct;
 mod control_plane_store;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_estimate_restart_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restore_attribution_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
 mod health_floor;
 mod health_wiring;
+#[cfg(tp4)]
 #[cfg(test)]
 mod key_server_start_tests;
 /// The startup notice that the read verdict runs with the firewall off.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod read_verdict_notice_tests;
 #[cfg(test)]
 pub(crate) use events_wiring::listener_mint_for_test;
 mod first_list_wait;
+#[cfg(tp4)]
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 mod provenance_signer;
+#[cfg(tp4)]
 #[cfg(test)]
 mod real_store_guard_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod remote_provenance_start_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod replica_state_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
+// Unix only: the rows deny access through the mode bits.
+#[cfg(tp4)]
+#[cfg(test)]
+mod capability_publish_tests;
+#[cfg(tp4)]
+#[cfg(all(test, unix))]
+mod capability_snapshot_tests;
 mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -66,6 +87,7 @@ mod stdio_delivery;
 mod stdio_dispatch;
 mod stdio_dispatches;
 /// ADR-023: the sanitise flag over stdio follows a reload.
+#[cfg(tp4)]
 #[cfg(test)]
 mod stdio_live_flag_tests;
 mod stdio_loop;
@@ -80,11 +102,13 @@ mod stdio_single;
 mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
+#[cfg(tp4)]
 #[cfg(test)]
 mod stop_budget_start_tests;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tilde_tests;
 pub(crate) use stdio_nonce::StdioNonce;
@@ -101,10 +125,11 @@ mod warmstart;
 mod window_saver;
 #[cfg(test)]
 mod window_seal_http_backend;
+#[cfg(tp4)]
 #[cfg(test)]
 mod window_seal_http_tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::router::CallerStanding;
@@ -176,6 +201,19 @@ pub(crate) type StdioTelemetry =
 /// The standing stdio serves its resource and prompt surfaces at: the client
 /// spawned this process, so it holds whatever the operator holds.
 const STDIO: CallerStanding = CallerStanding::Admin;
+
+/// Hand the published config to the capability catalogue. The catalogue scan
+/// starts before this handle exists: attaching delivers a part that scan
+/// parked, and a scan still loading publishes into this handle. Called once
+/// per backend, before the HTTP listener binds.
+fn attach_capability_revision(
+    meta_mcp: &super::meta_mcp::MetaMcp,
+    live_config: &Arc<crate::config_reload::LiveConfig>,
+) {
+    if let Some(capabilities) = meta_mcp.get_capabilities() {
+        capabilities.attach_revision(Arc::clone(live_config));
+    }
+}
 
 fn expand_home_path(path: &str) -> PathBuf {
     crate::home_dir::expand_or_cwd(path)
@@ -264,6 +302,21 @@ fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
     configured_minting_strategy_kind(config).is_some()
 }
 
+impl Gateway {
+    /// The config history this gateway records its versions into, kept under
+    /// `data_dir`. A discovered config file is reloaded like a named one, so
+    /// it is recorded too; with neither there is no file to record.
+    fn history_hook(&self, data_dir: &Path) -> Option<crate::config_reload::history::HistoryHook> {
+        let path = self
+            .config_path
+            .as_deref()
+            .or(self.watched_config.as_deref())?;
+        // A config version holds gateway.yaml and the env files; grants
+        // versions are recorded separately.
+        Some(crate::config_reload::history::hook_for(data_dir, path))
+    }
+}
+
 /// Backends whose gateway-held OAuth token is not blessed for shared use
 /// (`oauth.enabled && !oauth.shared_account`) — the set the GW.3 startup
 /// warning names (MIK-6784).
@@ -301,12 +354,15 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 /// full tool access. If the ledger ever gains shared storage, revisit it.
 pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod gateway_bootstrap_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod stdio_forward_path_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

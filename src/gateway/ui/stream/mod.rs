@@ -13,12 +13,16 @@ mod probe;
 mod sent;
 mod watcher;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod guard_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod id_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod merge_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod merge_two_log_tests;
 

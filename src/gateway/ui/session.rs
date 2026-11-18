@@ -235,6 +235,7 @@ fn is_wildcard(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_unspecified())
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod mik_8659_dashboard_tests {
     async fn t1f_app_state(

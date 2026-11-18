@@ -38,6 +38,7 @@ impl fmt::Debug for AccountDescriptor {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::super::AccountDescriptor;

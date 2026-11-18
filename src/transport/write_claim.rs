@@ -49,6 +49,7 @@ pub(crate) fn cancelled_params(id: &crate::protocol::RequestId) -> serde_json::V
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::WriteClaim;

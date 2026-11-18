@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import glob
 import json
 import os
 import re
@@ -121,23 +122,15 @@ OUTPUT = {"windows": ["--show-output"]}
 # must match, most allowed, why). An entry is matched by its contents too, so
 # a leftover from any other source fails even when its folder name is generic.
 # It may only shrink: the self-test holds each entry and count to
-# LEFTOVER_CEILING.
+# LEFTOVER_CEILING. Empty since the late audit writes were fixed: the audit
+# high-water mark they left in a plain temp dir no longer appears in any lib or
+# int shard.
 TMP_GUARDED = {"linux"}
-_TMP = r"\.tmp[A-Za-z0-9]{6}"
-KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
-    (_TMP, r"audit\.jsonl\.hwm", 3,
-     "an audit write that outlives its test's temp dir "
-     "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
-     "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
-     "gateway::router::task_lifecycle_tests)"),
-]
+KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = []
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
-# can only lose entries. A leaked TempLog folder is named `audit-log-*` and
-# matches none of these.
-LEFTOVER_CEILING: dict[tuple[str, str], int] = {
-    (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
-}
+# can only lose entries.
+LEFTOVER_CEILING: dict[tuple[str, str], int] = {}
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -451,6 +444,10 @@ def self_test() -> int:
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
     hwm = ["audit.jsonl.hwm"]
+    # KNOWN_LEFTOVERS is empty, so the matcher's rules are held with a synthetic source: without
+    # it every folder fails and the stray and contents cases below would pass whatever the rules.
+    synthetic = [(r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm", 3, "a synthetic source")]
+    assert unexpected({".tmpAb12Cd": hwm}, synthetic) == [], "the synthetic source allows its own folder"
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
@@ -463,8 +460,12 @@ def self_test() -> int:
     # left one. Each of its three shapes now fails, even alone.
     for files in (home, control, full):
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
-    # A leaked TempLog folder is never one of the tolerated plain temp dirs.
-    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
+    # Neither a leaked TempLog folder nor, since the late audit writes were fixed,
+    # a plain temp dir holding only the audit high-water mark is tolerated.
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == [".tmpAb12Cd", "audit-log-Ab12Cd"]
+    # The folder-name rule itself, held with the synthetic source: the same files pass in a
+    # .tmp-named folder and fail in a TempLog-named one.
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}, synthetic) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
     # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
@@ -479,17 +480,16 @@ def self_test() -> int:
               ["audit.jsonl.hwm", "subs/sub_u1_pt.json"]]
     for files in stores:
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
-    # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3),):
-        names = [f".tmpAb12C{i}" for i in range(most + 1)]
-        assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
-    # A plain temp folder is tolerated only for what a known source writes: a
-    # stray file, a known file beside a stray one, an empty folder and a plain
-    # file all fail, though each has a tolerated name.
+    # No source is known any more, so not even one audit high-water-mark folder
+    # passes (the per-source count itself is held by "the count bounds a source").
+    assert unexpected({".tmpAb12C0": hwm}) == [".tmpAb12C0"]
+    # A plain temp folder is tolerated only for what its source writes: a stray
+    # file, a source's file beside a stray one and an empty folder all fail under
+    # the synthetic source, though each folder has a name it matches.
     for files in (["other.db"], [*hwm, "other.db"], [*home, "keys/secret.pem"],
                   [*control, "gateway-control-plane/other.jsonl"],
                   [*full, "serve.log.1"], [*full, ".mcp-gateway/tasks/task-x.json"], []):
-        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
+        assert unexpected({".tmpAb12Cd": files}, synthetic) == [".tmpAb12Cd"], files
     # The same check end to end: a run that leaves a generically named temp
     # folder holding a stray file turns red on it.
     fake_dir = (*fake[:2], fake[2].replace(
@@ -507,8 +507,8 @@ def self_test() -> int:
     # Every file is named, the fourth too: no "+1 more" hides the writer.
     assert planted == ["left in TMPDIR: .tmpXyZ789 (a.db 0B, b.db 0B, c.db 0B, other.db 0B)"], \
         planted
-    # Through the same step, a planted gateway home now turns red, and the one
-    # known source's leftover, the audit high-water mark, stays green.
+    # Through the same step, a planted gateway home turns red, and so does the
+    # audit high-water mark that used to be the one known source.
     fake_home = (*fake[:2], fake[2].replace(
         "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
         "d = os.path.join(os.environ['TMPDIR'], '.tmpHoMe12', 'tasks', 'stdio')\n"
@@ -526,12 +526,13 @@ def self_test() -> int:
         "d = os.path.join(os.environ['TMPDIR'], '.tmpKnoWn1')\n"
         "    os.makedirs(d)\n"
         "    open(os.path.join(d, 'audit.jsonl.hwm'), 'w').close()"))
-    assert fake_known != fake, "the planted known source must replace the planted file"
+    assert fake_known != fake, "the planted former known source must replace the planted file"
     os.environ["PLANT_LEAK"] = "1"
     try:
-        assert run_steps("linux", "lib-a", fake_known) == [], "a known source turned red"
+        known_run = run_steps("linux", "lib-a", fake_known)
     finally:
         del os.environ["PLANT_LEAK"]
+    assert known_run == ["left in TMPDIR: .tmpKnoWn1 (audit.jsonl.hwm 0B)"], known_run
     # The same on real folders: files_in feeds the match, and a link to a
     # folder beside an allowed file is a stray of its own.
     with tempfile.TemporaryDirectory() as root:
@@ -548,9 +549,12 @@ def self_test() -> int:
         found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
         assert found[".tmpKnown1"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
-        assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
+        assert unexpected(found) == [".tmpKnown1", ".tmpLink01", ".tmpStray1"], found
+        # Under the synthetic source the link and the stray still fail on their contents alone.
+        assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    parts_rows()
     print("shard_tests self-test: ok")
     return 0
 
@@ -699,6 +703,104 @@ def prebuilt_rows() -> None:
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
+def parts_rows() -> None:
+    """S1 and S2: the shard and single-test consumers on five part binaries (fake ones that record each run)."""
+    n = 5
+    with tempfile.TemporaryDirectory() as d:
+        log = os.path.join(d, "runs")
+
+        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            body = " ".join(names)
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; f="$1"\n'
+                        f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
+                        f'echo "p{k} $*" >> {log}\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write("".join(f"{t}: test\n" for t in (names if listed is None else listed)))
+
+        def fresh(names_by_part=None):
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                part(k, (names_by_part or {}).get(k, [f"m{k}::upgrade_x{k}", f"m{k}::t{k}"]))
+
+        fresh()
+        assert part_binaries(d)[1] == [], part_binaries(d)[1]
+        shutil.rmtree(os.path.join(d, "linux-lib-tests-p3"))
+        assert part_binaries(d)[1], "a missing part passed"
+        fresh()
+        part(2, ["m2::t2"], listed=["m2::t2", "m2::other"])
+        assert part_binaries(d)[1], "a binary differing from its list.txt passed"
+        fresh({1: ["m1::t1", "shared::x"], 2: ["shared::x"]})
+        assert part_binaries(d)[1], "two parts sharing a test passed"
+        # run-one, exact: exactly one test over all parts, run once on its binary.
+        fresh()
+        assert run_one("--exact", "m3::t3", d, []) == 0
+        runs = open(log).read().splitlines()
+        assert runs == ["p3 m3::t3 --exact"], runs
+        fresh()
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert which_one("m4::t4", d, []) == 0
+        assert buf.getvalue().strip().endswith("lib-tests-p4"), buf.getvalue()
+        assert which_one("m9::none", d, []) == 1, "which found a test that is not there"
+        fresh()
+        assert run_one("--exact", "m9::none", d, []) == 1, "zero selected passed"
+        fresh({1: ["a::dup", "b::dup"]})
+        assert run_one("--exact", "dup", d, []) == 1, "an exact name matching nothing exactly passed"
+        # run-one, module: at least one, all on one part, by exact names. The prefix is anchored: libtest's filter
+        # also lists part 2's name, which holds the prefix only in the middle.
+        fresh({4: ["upgrade_notice_tests::a", "upgrade_notice_tests::b", "m4::t4"], 2: ["m2::upgrade_notice_tests::c"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 0
+        assert open(log).read().split() == ["p4", "upgrade_notice_tests::a", "upgrade_notice_tests::b", "--exact"]
+        fresh({1: ["upgrade_notice_tests::a"], 2: ["upgrade_notice_tests::b"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 1, "a module split over parts passed"
+        fresh()
+        assert run_one("--module", "nothing_tests::", d, []) == 1, "an empty module selection passed"
+        # S1, run-prebuilt-parts: each binary runs its half under today's guards; the floor is on the sum.
+        def shard_part(k: int, count: int, residue: bool = False) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            names = f"gateway::g{k} other::o{k}"
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; [ "$1" = --format ] && shift 2\n'
+                        '  case "$1 $2" in\n'
+                        f'    "gateway:: "*) for t in {names}; do case $t in gateway::*) echo "$t: test";; esac; done;;\n'
+                        f'    "--skip gateway::") for t in {names}; do case $t in gateway::*) ;; *) echo "$t: test";; esac; done;;\n'
+                        f'    *) for t in {names}; do echo "$t: test"; done;;\n'
+                        '  esac; exit 0; fi\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {count} tests"; echo "test result: ok. {count} passed; 0 failed; 0 ignored"\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write(f"gateway::g{k}: test\nother::o{k}: test\n")
+
+        def shards(count: int, residue_part: int | None = None) -> None:
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                shard_part(k, count, residue=k == residue_part)
+
+        big = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
+        shards(big // n + 1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 0
+        shards(1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 1, "a sum under the floor passed"
+        shards(big // n + 1, residue_part=3)
+        assert run_prebuilt_parts("linux", "lib-b", d) == 1, "a leftover from the middle part passed"
+
+
 def per_binary_rows() -> None:
     """Each test binary gets its own TMPDIR under BY_BINARY, so a leftover names the binary that left it."""
     # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to
@@ -755,13 +857,17 @@ def per_binary_rows() -> None:
         got = run("leak")
         assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpXyZ789 (tasks/task-x.json 0B)",
                        "left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"], got
-        # A known leftover inside a binary's folder stays tolerated, and its count is shared across
-        # binaries (two here, within the allowance of three).
-        assert run("hwm") == [], run("hwm")
+        # An audit high-water mark inside a binary's folder fails too, named under each binary
+        # that left it.
+        got = run("hwm")
+        assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpHwmA12 (audit.jsonl.hwm 0B)",
+                       "left in TMPDIR: gh452_session_owner/.tmpHwmA12 (audit.jsonl.hwm 0B)"], got
         assert run("") == [], "clean binaries leave only their empty folders"
-    # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
+    # An allowance is shared across binaries: with a known source of three, four leftovers in four
+    # binaries fail on the fourth (held with an explicit list now that KNOWN_LEFTOVERS is empty).
     four = {f"bin{i}/.tmpAb12C{i}": ["audit.jsonl.hwm"] for i in range(4)}
-    assert unexpected(four) == ["bin3/.tmpAb12C3"], unexpected(four)
+    three = [(r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm", 3, "a source allowed three")]
+    assert unexpected(four, three) == ["bin3/.tmpAb12C3"], unexpected(four, three)
     # An unexpected empty folder at the top of TMPDIR still fails, as before.
     assert unexpected({"stray": []}) == ["stray"]
 
@@ -825,11 +931,12 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
     return out
 
 
-def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
-    """Run a PREBUILT or SHARED_BUILD shard from an exported lib test binary, as `cargo test` would run it:
-    from the package root with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run`
-    applies (the binary's own BY_BINARY folder as TMPDIR, a leftover fails the shard). Same floor and report."""
-    ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
+def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
+    """Run SHARD's selection on one exported lib test binary, as `cargo test` would run it: from the package root
+    with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run` applies (the binary's own
+    BY_BINARY folder as TMPDIR, a leftover fails the shard). (Tests selected, problems), the halves' partition of
+    this binary's list included; the floor is the caller's."""
+    ((step, _args, test_args, _floor),) = SHARDS[os_kind][shard]
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
@@ -850,15 +957,120 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     rc = p.wait()
     # The binary prints no cargo `Running` header: arm the count as cargo's would.
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
-    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")
-    failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
-    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
+    failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
+    return n, failed
+
+
+def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
+    """Run a PREBUILT or SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    n, failed = _run_binary(os_kind, shard, binary)
+    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
+    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
+
+
+def part_binaries(directory: str) -> tuple[dict[int, str], list[str]]:
+    """The lib test part binaries under DIRECTORY (`*/pK/lib-tests-pK`, one artifact folder each) and the problems
+    that stop a run before any test: parts other than exactly 1..N, a binary whose `--list` differs from the
+    `list.txt` the union job checked, or two parts listing the same test."""
+    n = int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
+                      open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    found: dict[int, str] = {}
+    out: list[str] = []
+    for path in sorted(glob.glob(os.path.join(directory, "*", "p*", "lib-tests-p*"))):
+        m = re.fullmatch(r"lib-tests-p(\d+)", os.path.basename(path))
+        if m is None or os.path.basename(os.path.dirname(path)) != f"p{m.group(1)}":
+            continue
+        k = int(m.group(1))
+        if k in found:
+            out.append(f"part {k} appears twice")
+        found[k] = path
+    if sorted(found) != list(range(1, n + 1)):
+        out.append(f"part binaries {sorted(found)}, not exactly 1..{n}")
+    owner: dict[str, int] = {}
+    for k, path in sorted(found.items()):
+        os.chmod(path, 0o755)
+        listed_now = subprocess.run([path, "--list"], capture_output=True, text=True, cwd=ROOT).stdout
+        names = {x[: -len(": test")] for x in listed_now.splitlines() if x.endswith(": test")}
+        recorded = os.path.join(os.path.dirname(path), "list.txt")
+        if not os.path.isfile(recorded) or names != {x[: -len(": test")] for x in open(recorded).read().splitlines()
+                                                     if x.endswith(": test")}:
+            out.append(f"part {k}'s binary does not list what its list.txt recorded")
+        for name in names:
+            if name in owner:
+                out.append(f"{name} is listed by parts {owner[name]} and {k}")
+            owner.setdefault(name, k)
+    return found, out
+
+
+def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
+    """Run a SHARED_BUILD shard across the lib test part binaries: the parts are checked first, then each binary
+    runs the shard's half under today's guards, and the floor applies to the sum."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    binaries, failed = part_binaries(directory)
+    total = 0
+    if not failed:
+        for k, path in sorted(binaries.items()):
+            n, problems = _run_binary(os_kind, shard, path)
+            total += n
+            failed += [f"part {k}: {x}" for x in problems]
+    print(f"::notice::{os_kind} {shard} {step} (parts): selected {total} (floor {floor})")
+    failed += [f"{step}: selected {total} tests over the parts, below the floor of {floor}"] * (total < floor)
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def which_one(name: str, directory: str, extra: list[str]) -> int:
+    """Print the one part binary that holds exactly-named test NAME (a step that must run the binary itself, as the
+    keychain steps inside their D-Bus session do). Fails unless exactly one test over the parts matches."""
+    binaries, failed = part_binaries(directory)
+    hits = []
+    for k, path in sorted(binaries.items()):
+        out = subprocess.run([path, "--list", name, "--exact", *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        hits += [path for x in out.splitlines() if x.endswith(": test")]
+    if len(hits) != 1:
+        failed.append(f"{name}: {len(hits)} tests selected over the parts, not exactly one")
+    for f in failed:
+        print(f"::error::which {f}", file=sys.stderr)
+    if failed:
+        return 1
+    print(hits[0])
+    return 0
+
+
+def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
+    """List PATTERN on every part binary first, then run it once. `--exact`: exactly one test in total (libtest
+    `--exact`). `--module`: names under the anchored path prefix PATTERN, at least one, all on one binary, run there
+    by exact name. EXTRA passes through (for example `--ignored`)."""
+    binaries, failed = part_binaries(directory)
+    hits: dict[int, list[str]] = {}
+    for k, path in sorted(binaries.items()):
+        args = [pattern, "--exact"] if mode == "--exact" else [pattern]
+        out = subprocess.run([path, "--list", *args, *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        names = [x[: -len(": test")] for x in out.splitlines() if x.endswith(": test")]
+        if mode == "--module":
+            names = [x for x in names if x.startswith(pattern)]
+        if names:
+            hits[k] = names
+    count = sum(len(v) for v in hits.values())
+    if mode == "--exact" and count != 1:
+        failed.append(f"{pattern}: {count} tests selected over the parts, not exactly one")
+    if mode == "--module" and (not count or len(hits) != 1):
+        failed.append(f"{pattern}: {count} tests on {len(hits)} parts; a module filter needs one part")
+    for f in failed:
+        print(f"::error::run-one {f}")
+    if failed:
+        return 1
+    ((k, names),) = hits.items()
+    env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    return subprocess.run([binaries[k], *names, "--exact", *extra], env=env, cwd=ROOT).returncode
 
 
 # Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
@@ -948,6 +1160,13 @@ def main(argv: list[str]) -> int:
         return export_lib(argv[2])
     if len(argv) == 4 and argv[1] == "wait-lib":
         return wait_lib(argv[2], argv[3])
+    if len(argv) == 5 and argv[1] == "run-prebuilt-parts" and argv[3] in SHARED_BUILD.get(argv[2], ()):
+        return run_prebuilt_parts(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == "which":
+        return which_one(argv[2], argv[3], argv[5:] if len(argv) > 4 and argv[4] == "--" else [])
+    if len(argv) >= 5 and argv[1] == "run-one" and argv[2] in ("--exact", "--module"):
+        extra = argv[6:] if len(argv) > 5 and argv[5] == "--" else []
+        return run_one(argv[2], argv[3], argv[4], extra)
     if (len(argv) == 5 and argv[1] == "run-prebuilt"
             and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
         return run_prebuilt(argv[2], argv[3], argv[4])

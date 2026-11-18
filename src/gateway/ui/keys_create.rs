@@ -378,8 +378,16 @@ async fn write_audited(
         .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
+    let account = who.account.clone();
     let audit = AuditPosture::of(Some(log), auth).key_write(IntentKind::KeyCreate, who, name)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    replace_audited(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: account },
+        RELOAD_LOCK_WAIT,
+    )
+    .await
 }
 
 /// Whether the live generation holds `name` under `digest` (a spec): the

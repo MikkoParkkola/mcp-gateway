@@ -549,16 +549,17 @@ DOC_MENTIONS_ALLOWED: dict[tuple[str, str], str] = {
 }
 
 
-def doc_set() -> list:
+def doc_set(root: Path = ROOT) -> list:
     """Every user-facing file the check reads: the user docs the env surface
     already counts as published (ENV_DOC_GLOBS, deploy/ aside: the chart is
     checked through values.yaml and its renders), minus UPGRADING, release
-    notes and CHANGELOG, which must name hidden and removed keys."""
+    notes and CHANGELOG, which must name hidden and removed keys. `root` lets
+    surface_shipped.py select the same files in another tree."""
     out = set()
     for glob in inv.ENV_DOC_GLOBS:
         if glob.startswith("deploy/"):
             continue
-        for path in ROOT.glob(glob):
+        for path in root.glob(glob):
             if not path.is_file() or inv.ENV_DOC_SKIP.search(path.name):
                 continue
             if path.suffix == ".md" or (path.suffix in (".yaml", ".yml") and path.name not in NOT_GATEWAY_CONFIGS):

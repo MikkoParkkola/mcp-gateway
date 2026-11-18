@@ -99,10 +99,12 @@ fn build_display_name(cn: Option<&String>, san_uris: &[String]) -> String {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "identity_differential_tests.rs"]
 mod differential_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

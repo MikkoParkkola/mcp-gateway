@@ -343,6 +343,7 @@ fn sanitize_steps(steps: &mut [Value]) -> Result<()> {
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -488,6 +489,7 @@ mod tests {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "protocol_alloc_tests.rs"]
 mod alloc_tests;

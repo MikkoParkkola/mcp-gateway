@@ -788,13 +788,18 @@ pub(super) fn recorded_in_scope(server: &str, tool: &str) -> Scoped<Option<Visib
 mod gate_absent;
 pub(crate) use gate_absent::{clear_gate_absent, mark_gate_absent, take_gate_absent};
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod account_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod alloc_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod key_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod memo_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod semantics_tests;

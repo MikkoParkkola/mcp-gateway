@@ -1,7 +1,7 @@
 # T1b: every production allow of a clippy ban, the registry's or the root list's (file, fn, kind, class, banned names inside with counts).
 src/backend/registry.rs	resolve_unwarmed	statement	Lifecycle	getx1
 src/capability/backend_listing.rs	announce_listing_change	statement	Lifecycle	nudge_cataloguex1
-src/capability/backend_listing.rs	finish_initial_scan	statement	Lifecycle	nudge_catalogue_scannedx1
+src/capability/backend_listing.rs	announce_scanned	statement	Lifecycle	nudge_catalogue_scannedx1
 src/clock.rs	-	module	the one place the wall clock is read	SystemTime::nowx1
 src/config_reload/grant_reload.rs	reload_identity_grants	statement	Lifecycle	allx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1
@@ -11,7 +11,6 @@ src/config_reload/apply.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/apply.rs	apply_patch	statement	Lifecycle	removex1
 src/config_reload/refusals.rs	startup_refusals	statement	Admin	allx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
-src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_context_lock.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
 src/config_reload/reload_context_lock.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1

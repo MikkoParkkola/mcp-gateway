@@ -574,6 +574,7 @@ fn has_nested_label(calls: &ReplayCallList) -> bool {
     false
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_replay_tests.rs"]
 mod tests;

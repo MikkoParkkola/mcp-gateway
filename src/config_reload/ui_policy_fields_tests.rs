@@ -99,6 +99,7 @@ async fn save(
     name: &str,
     value: Scalar,
 ) -> Result<super::UiSaved, UiRefused> {
+    let who = crate::security::audit::AuditWho::gateway();
     ui_save(
         Arc::clone(ctx),
         AuditPosture::of(None, GatewayAuth::Off),
@@ -107,6 +108,7 @@ async fn save(
             fields: vec![(id(name), Param::default(), SaveValue::Set(value))],
         },
         None,
+        &who,
         WAIT,
     )
     .await

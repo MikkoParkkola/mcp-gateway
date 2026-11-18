@@ -8,11 +8,16 @@
 
 use super::*;
 
+#[cfg(tp1)]
 mod cells;
+#[cfg(tp1)]
 mod keyed;
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod reload;
+#[cfg(tp1)]
 mod resume;
+#[cfg(tp1)]
 mod tasks;
 
 /// In the key's scope, never registered.
@@ -249,6 +254,7 @@ fn assert_cells_equal<T: PartialEq + std::fmt::Debug>(row: &str, answers: &[(&st
 }
 
 /// MIK-8387.ORACLE.1/.3, `/mcp` `gateway_invoke`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn o1_invoke_answers_an_unreachable_backend_as_an_absent_one() {
     // The pins are written from `ABSENT_T`; the production text must match.
@@ -257,12 +263,14 @@ async fn o1_invoke_answers_an_unreachable_backend_as_an_absent_one() {
 }
 
 /// MIK-8387.ORACLE.1/.3, `/mcp` `gateway_execute` (one-step chain).
+#[cfg(tp1)]
 #[tokio::test]
 async fn o2_execute_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::CodeMode, Route::Execute).await;
 }
 
 /// MIK-8387.ORACLE.1/.3, the direct route `/mcp/{name}`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn o3_direct_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::Plain, Route::Direct).await;
@@ -273,6 +281,7 @@ async fn o3_direct_answers_an_unreachable_backend_as_an_absent_one() {
 /// registered backend withheld from it. Green on the tip by construction (the
 /// scope check runs before the lookup, `direct_caller.rs` D2-b); a mutant that
 /// moves it after the lookup must turn this row red.
+#[cfg(tp1)]
 #[tokio::test]
 async fn o4_direct_missing_and_withheld_backends_answer_alike_for_a_verified_caller() {
     let missing_fx = scoped_fixture(MetaMode::Plain).await;
@@ -293,6 +302,7 @@ async fn o4_direct_missing_and_withheld_backends_answer_alike_for_a_verified_cal
 /// MIK-8387.ORACLE.2: the wire hides why, the record does not. Each
 /// out-of-scope call writes one `denied` record carrying the scope refusal's
 /// code, whatever the caller was told.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a1_the_record_keeps_the_scope_refusal_for_every_out_of_scope_name() {
     for route in [Route::Invoke, Route::Direct] {
@@ -309,6 +319,7 @@ async fn a1_the_record_keeps_the_scope_refusal_for_every_out_of_scope_name() {
 
 /// MIK-8387.ORACLE.1 (r2 F4): every method on `/mcp/{name}` passes the same
 /// envelope scope check, so each has the same split.
+#[cfg(tp1)]
 #[tokio::test]
 async fn o3m_every_direct_method_answers_an_unreachable_backend_as_an_absent_one() {
     for method in ["tools/list", "prompts/get", "resources/read"] {
@@ -318,6 +329,7 @@ async fn o3m_every_direct_method_answers_an_unreachable_backend_as_an_absent_one
 
 /// MIK-8387 D7: `/mcp` `prompts/get` of `server/p` checks scope first, then
 /// looks the backend up, so it has the same split.
+#[cfg(tp1)]
 #[tokio::test]
 async fn p1_meta_prompt_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::Plain, Route::MetaPrompt).await;
@@ -348,6 +360,7 @@ async fn empty_grant_answers(route: Route) -> Vec<(&'static str, (StatusCode, St
 /// MIK-8387.EMPTY.3 (flipped by [`EMPTY_GRANT_TICKET`]): on `/mcp` an empty
 /// grant answers a registered name as it answers an unregistered one, with
 /// the grant message (UPGRADING-4.0 section 32), decided before any lookup.
+#[cfg(tp1)]
 #[tokio::test]
 async fn e1_an_empty_grant_answers_every_mcp_name_alike_with_its_grant_message() {
     let answers = empty_grant_answers(Route::Invoke).await;
@@ -378,6 +391,7 @@ async fn e1_an_empty_grant_answers_every_mcp_name_alike_with_its_grant_message()
 /// MIK-8387 D2, direct route: a key with `backends: []` reaches nothing, so
 /// every name gets the one grant message, which names no backend and keeps
 /// its upgrade pointer. Guards that PR-A leaves the envelope branch alone.
+#[cfg(tp1)]
 #[tokio::test]
 async fn e1_an_empty_grant_answers_every_direct_name_alike_with_its_grant_message() {
     let answers = empty_grant_answers(Route::Direct).await;
@@ -390,6 +404,7 @@ async fn e1_an_empty_grant_answers_every_direct_name_alike_with_its_grant_messag
 
 /// MIK-8387 D7 regression guard: `gateway_list_tools` already answers a
 /// backend outside the scope as an absent one (A3, `search.rs:475-480`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn l1_listing_already_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::Plain, Route::MetaList).await;

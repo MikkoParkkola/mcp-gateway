@@ -87,6 +87,7 @@ fn violations(files: &[(String, String)]) -> Vec<String> {
     found
 }
 
+#[cfg(tp4)]
 #[test]
 fn every_send_has_a_timer() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -116,6 +117,7 @@ fn every_send_has_a_timer() {
 }
 
 /// The scanner names a planted untimed send and a timer on the branch.
+#[cfg(tp4)]
 #[test]
 fn the_scan_names_planted_violations() {
     let files = vec![

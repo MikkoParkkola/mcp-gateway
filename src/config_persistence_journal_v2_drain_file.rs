@@ -30,9 +30,7 @@ pub(crate) async fn drain_abandoned(
     let target = session.locked.target.clone();
     let path = abandoned_path(&target);
     if let Some(journal) = &session.journal {
-        let mut tokens = journal.state.writer.iter().chain(&journal.state.attempts);
-        let first = tokens.next();
-        if !first.is_some_and(|token| token.handed_over) || !tokens.all(|token| token.handed_over) {
+        if handover_of(&journal.state) != Handover::All {
             return Err(DrainError::Journal);
         }
         match hand_over(session) {
@@ -94,6 +92,30 @@ pub(crate) async fn drain_abandoned(
         return Err(refused(&path, Refusal::Incomplete, DrainError::FileRefused));
     }
     remove(&target, &path)
+}
+
+/// How far a journal's tokens are handed over to the abandoned file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Handover {
+    /// No token handed over, including a journal with no tokens at all (an unaudited write).
+    NotHandedOver,
+    /// Some tokens handed over and some not: no drain may finish it.
+    Partial,
+    /// At least one token, and every token handed over: the handover's own resume finishes it.
+    All,
+}
+
+/// The one definition of "handed over", shared by this drain's guard and the startup gate.
+pub(crate) fn handover_of(state: &JournalV2) -> Handover {
+    let tokens = || state.writer.iter().chain(&state.attempts);
+    match (
+        tokens().filter(|token| token.handed_over).count(),
+        tokens().count(),
+    ) {
+        (0, _) => Handover::NotHandedOver,
+        (handed, total) if handed == total => Handover::All,
+        _ => Handover::Partial,
+    }
 }
 
 /// Remove the drained file whole, then sync its directory.
@@ -275,15 +297,19 @@ fn refused(path: &Path, why: Refusal, error: DrainError) -> DrainError {
 }
 
 // The success-path rows need a file that passes the owner check, which only exists on Unix.
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_file_crash_tests.rs"]
 mod crash_tests;
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_file_refusal_tests.rs"]
 mod refusal_tests;
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_file_tests.rs"]
 mod tests;
+#[cfg(tp3)]
 #[cfg(all(test, not(unix)))]
 #[path = "config_persistence_journal_v2_drain_file_windows_tests.rs"]
 mod windows_tests;

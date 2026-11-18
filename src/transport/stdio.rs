@@ -535,44 +535,54 @@ use progress::{progress_token_string, request_progress_token};
 #[path = "stdio_write.rs"]
 mod write;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_tap_tests.rs"]
 mod tap_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_frame_tests.rs"]
 mod frame_tests;
 
 // Unix-only: the fake backend is a `sh` script.
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "stdio_negotiation_tests.rs"]
 mod negotiation_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_start_refusal_tests.rs"]
 mod start_refusal_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_spawn_classification_tests.rs"]
 mod spawn_classification_tests;
 
 // Unix-only: the fake backend is a `sh` script.
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "stdio_eof_request_tests.rs"]
 mod eof_request_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_cache_abs_tests.rs"]
 mod cache_abs_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_cache_runner_tests.rs"]
 mod cache_runner_tests;

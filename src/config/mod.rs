@@ -89,6 +89,7 @@ pub(crate) use secret_file::{
 };
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
+pub(crate) use features::MIN_SECRET_LEN;
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyBinding, ApiKeyConfig,
     ApiKeyKind, AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit,
@@ -544,6 +545,10 @@ impl Config {
         }
         let (mut secret_refs, mut files, configured) = match expansion {
             Expansion::Resolve => {
+                // Before references become values: a stored token is not measured.
+                config
+                    .auth
+                    .enforce_bearer_floor(config.security.posture, &overlay)?;
                 let (mut refs, configured) = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 let auth_enabled = config.auth.enabled;
@@ -573,7 +578,7 @@ impl Config {
         // secrets this evaluation read.
         let inputs = match expansion {
             Expansion::Resolve => {
-                Self::raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
+                config.raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
             }
             Expansion::Literal => RawInputs::default(),
         };
@@ -747,30 +752,43 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_owner_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_refs_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod backend_url_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_confirm_tests;
+#[cfg(tp3)]
 #[cfg(all(test, target_os = "linux"))]
 mod keychain_linux_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_load_tests;
+#[cfg(tp3)]
 #[cfg(all(test, target_os = "macos"))]
 mod keychain_macos_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod keychain_ref_tests;
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 mod keychain_windows_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_file_ref_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_files_store_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod secret_ref_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
@@ -786,18 +804,22 @@ mod cleartext_credential_guard;
 #[path = "a2a_secrets_tests.rs"]
 mod a2a_secrets;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_secret_order_tests.rs"]
 mod account_secret_order_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "account_consumer_config_tests.rs"]
 mod account_consumer_config_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "descriptor_config_tests.rs"]
 mod descriptor_config_tests;

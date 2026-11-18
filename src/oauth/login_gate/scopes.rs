@@ -281,5 +281,6 @@ impl Provenance {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;

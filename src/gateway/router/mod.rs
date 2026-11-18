@@ -82,287 +82,394 @@ mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
 mod direct_guards;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod adapter_get_rollback_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod allowed_root_watch_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod audit_degraded_tests;
 /// MIK-8392.STORED.1 T10: a revoked account's stored task read.
 mod backend_choke;
+#[cfg(tp1)]
 #[cfg(test)]
 mod body_limit_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod callback_admin_denial_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod chokepoint_direct_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
+#[cfg(tp1)]
 #[cfg(test)]
 mod clock_p2_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod continuation_instance_tests;
 /// MIK-8202 P2: the control-plane grant display on a clock before 1970.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod control_plane_grant_clock_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod cost_key_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_adr012_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_anonymous_continuation_tests;
 #[cfg(test)]
 mod direct_audit_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_cache_guard_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_capability_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_continuation_gate_tests;
 #[cfg(test)]
 mod direct_continuation_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_explicit_cancel_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_guards_effect_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_guards_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_idempotency_routes_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_lent_arms_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_list_scope_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_log_escape_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
 mod direct_nonce_witness_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_notification_credential_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_notification_refusal_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_notification_slot_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_notification_wire_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_request_checks_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_sole_operator_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod direct_tasks_owner_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mrtr_component_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod task_lifecycle_tests;
 
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod activity_secret_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
 #[cfg(test)]
 mod cli_binding_revocation_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod era_refusal_http_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod error_count_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod f13_text_a_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod firewall_publish_fixture;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// Identity-grant refusals through `/mcp`, read back as Activity rows.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod grant_refusal_rows_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
+#[cfg(tp1)]
 #[cfg(test)]
 mod hardened_elicitation_tests;
 /// GH1942.HARDEN.1 rows 8 and 16: hardened requires a per-caller identity.
+#[cfg(tp1)]
 #[cfg(test)]
 mod hardened_identity_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
 /// Slice B T10: only an API-key match records a key's last use.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod keys_last_used_callers_tests;
 /// K5 authorization fields on the next call; its fixture is the UI's.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod live_key_authz_tests;
 /// K5 identity fields seen in the audit record; its fixture is the UI's.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod live_key_identity_record_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod live_keys_tests;
 /// LOG.1: requests that log complete while stderr never drains.
+#[cfg(tp1)]
 #[cfg(test)]
 mod log_lossy_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mcp_nonce_tests;
 #[cfg(test)]
 mod mcp_nonce_witness_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mcp_refusal_kind_tests; // MIK-8353 3d-1: refusal kinds on the invoke path
+#[cfg(tp1)]
 #[cfg(test)]
 mod meta_fingerprint_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod metrics_scrape_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
+#[cfg(tp1)]
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod overview_sources_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
 /// A call refused in its own send releases its key on the direct route.
+#[cfg(tp1)]
 #[cfg(test)]
 mod presend_refusal_tests;
 /// A backend's protocol directives reach the client only where allowed.
+#[cfg(tp1)]
 #[cfg(test)]
 mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
+#[cfg(tp1)]
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod rule_keys_route_tests;
 /// Secret injection applies on the direct route as through gateway_invoke.
+#[cfg(tp1)]
 #[cfg(test)]
 mod secret_injection_direct_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod step_parent_key_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod transport_double_run_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod ui_access_matrix_rows_tests;
 /// Shared test-only reader for the UI access matrix fragments.
 #[cfg(test)]
 pub(in crate::gateway) mod ui_access_matrix_test_rows;
 /// The web UI API's access answers per path, method and caller, pinned.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;
 /// The web UI compressed by the router's one rule.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_compression_tests;
 /// U3: the UI live stream.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.
+#[cfg(tp1)]
 #[cfg(test)]
 mod canary_tests;
 /// The capability editor's audit record: the change, never the content.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
 /// A context-integrity rewrite is recorded as the gateway's rewrite.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod context_integrity_effect_tests;
 /// The decision fixture table's HTTP rows (direct route and the meta HTTP gate).
 #[cfg(all(test, feature = "firewall"))]
 mod decision_fixture_rows;
 /// A delivery record says what the gateway did to the answer.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
 /// The direct route's reach and its declared effect.
 #[cfg(test)]
 mod direct_effect_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
 /// A send refusal releases its call's key only when nothing was sent.
+#[cfg(tp1)]
 #[cfg(test)]
 mod lend_key_tests;
 /// A lent-only call carrying no credential records `refused`.
+#[cfg(tp1)]
 #[cfg(test)]
 mod lend_refusal_tests;
 /// A name budgeted by reload starts from the day's overflow total.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_estimate_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_members_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_queued_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_tests;
 /// ADR-023: the security flags apply on reload.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;
 /// ADR-023: a request keeps the generation it arrived with.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod live_policy_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;
 /// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod mik8154_rows_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mrtr9_lease_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod nonce_failure_class_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_capability_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_order_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_parity_fixture;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_parity_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_per_user_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_response_targets_tests;
 /// MIK-8406: a stored plan replay needs every plan account live.
+#[cfg(tp1)]
 #[cfg(test)]
 mod plan_replay_liveness_tests;
 /// MIK-8429: a busy custody on a playbook step ends the plan, retryable.
+#[cfg(tp1)]
 #[cfg(test)]
 mod playbook_busy_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
 /// The key-by-policy barrier: one request, one generation.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod policy_barrier_tests;
 /// Restart slice 8: the writes each route counts toward the recent-write
 /// sample.
+#[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_more_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
 #[cfg(all(test, feature = "firewall"))]
@@ -371,34 +478,47 @@ pub(super) mod route_matrix_driver_tests;
 pub(super) mod route_matrix_x14_nonce_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
 /// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
+#[cfg(tp1)]
 #[cfg(test)]
 mod session_capacity_degrade_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod session_capacity_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_quota_direct_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_read_account_excluded_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_read_account_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_read_capability_tests;
 /// MIK-8392.STORED.1 order twins: stored reads refuse in live-call order.
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_read_order_tests;
 /// MIK-8392 STORED.2: stored single-call results need a live account.
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_replay_liveness_tests;
 /// A UI write's admin record outlives a client cancel with its handler.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_audit_cancel_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_owner_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod withheld_listing_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod withheld_parity_tests;
 #[cfg(all(test, feature = "firewall"))]
@@ -406,64 +526,87 @@ pub(super) mod withheld_twin_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 /// MIK-8518 T2: the router's grant-subject builders admit only API keys.
+#[cfg(tp1)]
 #[cfg(test)]
 mod grant_key_builder_tests;
 /// MIK-8286 / MIK-8287: an identity that names nobody is refused.
+#[cfg(tp1)]
 #[cfg(test)]
 mod identity_collapse_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod log_level_admin_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod mcp_route_signature_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod meta_dispatch_edge_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
 mod r2_identity_keys_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod r2_input_keys_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod replay_policy_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod resource_prompt_scope_tests;
 /// A credential a backend's `env:` or `headers:` gave it is kept out of
 /// the client's answer when the backend echoes it.
+#[cfg(tp1)]
 #[cfg(test)]
 mod secret_echo_config_tests;
 /// An echoed injected secret is kept out of the idempotency cache, task
 /// answers and the task store.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod secret_echo_stored_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod secret_echo_tests;
 /// Answers kept before a value was marked secret are redacted when served.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod secret_marked_later_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;
 /// MIK-8356 C9: a managed caller's cold-slot 401 on `/mcp`.
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_verdict_g2_managed_http_tests;
 /// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_verdict_g3_http_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_verdict_http_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_verdict_http_variant_tests;
 /// MIK-8356 x MIK-8353: the caller verdict's effects reach the refund witness.
+#[cfg(tp1)]
 #[cfg(test)]
 mod slot_verdict_witness_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
+#[cfg(tp1)]
 #[cfg(test)]
 mod sso_admin_tests;
 /// MIK-8392.STORED.1 batch B: per-user stored reads, cold slots, touch-on-read.
+#[cfg(tp1)]
 #[cfg(test)]
 mod stored_read_slot_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod stream_kill_tests;
 /// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this
@@ -471,17 +614,23 @@ mod stream_kill_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 mod trace_span;
+#[cfg(tp1)]
 #[cfg(test)]
 mod trace_span_tests;
 /// T24 through the route: a capability reloaded as a write is not run.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_capability_reload_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_cell_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_gates_tests;
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod webhook_scope_tests;
 

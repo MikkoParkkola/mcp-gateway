@@ -93,6 +93,7 @@ pub(crate) mod comments;
 
 #[path = "config_persistence_atomic.rs"]
 mod atomic;
+pub(crate) use atomic::write_atomic_checked;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use atomic::write_atomic_observed_for_test;
 pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
@@ -146,10 +147,12 @@ pub(crate) mod commit;
 #[path = "config_persistence_crash_fs.rs"]
 pub(crate) mod crash_fs;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_crash_fs_tests.rs"]
 mod crash_fs_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_commit_tests.rs"]
 mod commit_tests;
@@ -209,7 +212,7 @@ pub(crate) fn recover_before_start(
 
 /// [`recover_before_start`] under the lock: `record` given the config the
 /// recovery leaves, then the recovery.
-fn recover_recorded(
+pub(crate) fn recover_recorded(
     locked: &lock::Locked,
     record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -702,17 +705,21 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_cli_recovery_tests.rs"]
 mod cli_recovery_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_edit_tests.rs"]
 mod edit_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "config_persistence_refused_tests.rs"]
 mod refused_tests;

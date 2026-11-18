@@ -751,6 +751,7 @@ pub(super) use gateway::{
 };
 
 // MIK-8356 L8: a managed caller's index entry against its current grant.
+#[cfg(tp2)]
 #[path = "slot_verdict_g2_managed_tests.rs"]
 mod slot_verdict_g2_managed_tests;
 
@@ -759,18 +760,22 @@ mod slot_verdict_g2_managed_tests;
 pub(crate) mod direct_bridge;
 
 // #1961: kept beside the fixture it drives; `meta_mcp/mod.rs` is at its size baseline.
+#[cfg(tp2)]
 #[path = "account_sole_operator_mcp_tests.rs"]
 mod sole_operator_mcp_tests;
 
 // #2231: the catalogue and forward reads, for the same principals as #1961.
+#[cfg(tp2)]
 #[path = "account_catalogue_sole_operator_tests.rs"]
 mod catalogue_sole_operator_tests;
 
 // #2326: tool discovery omits a required backend for a caller without identity.
+#[cfg(tp2)]
 #[path = "account_tool_discovery_required_tests.rs"]
 mod tool_discovery_required_tests;
 
 // MIK-8353 3a: a refresh before a spend refusal keeps the nonce spent.
+#[cfg(tp2)]
 #[cfg(feature = "cost-governance")]
 #[path = "account_signed_budget_tests.rs"]
 mod signed_budget_tests;

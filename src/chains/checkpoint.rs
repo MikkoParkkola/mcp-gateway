@@ -198,6 +198,7 @@ fn parse_jsonl(content: &str, chain_id: &str) -> Vec<ChainCheckpoint> {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     #![allow(

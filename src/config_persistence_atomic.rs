@@ -32,7 +32,22 @@ pub fn write_atomic(
     mode: FileMode,
     link: Symlink,
 ) -> std::io::Result<()> {
-    write_atomic_observed(path, bytes, mode, link, |_| {})
+    write_atomic_observed(path, bytes, mode, link, |_| {}, || Ok(()))
+}
+
+/// [`write_atomic`] with `check` run after the scratch is written, synced and
+/// closed, and before the rename: an `Err` from it removes the scratch and
+/// leaves `path` untouched. Config history's save checks there that its
+/// record is still the store's newest (design D-2), so a save past its
+/// deadline never renames over newer history.
+pub(crate) fn write_atomic_checked(
+    path: &Path,
+    bytes: &[u8],
+    mode: FileMode,
+    link: Symlink,
+    check: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    write_atomic_observed(path, bytes, mode, link, |_| {}, check)
 }
 
 /// [`write_atomic_observed`] for tests outside this module (lead ruling
@@ -47,17 +62,19 @@ pub(crate) fn write_atomic_observed_for_test(
     link: Symlink,
     observe: impl FnOnce(&std::fs::File),
 ) -> std::io::Result<()> {
-    write_atomic_observed(path, bytes, mode, link, observe)
+    write_atomic_observed(path, bytes, mode, link, observe, || Ok(()))
 }
 
 /// `write_atomic` with `observe` called on the open scratch after `sync_all` and
 /// before the mode step: the test seam that pins "private while the bytes are in it".
+/// `check` runs once the scratch is closed, just before the rename.
 fn write_atomic_observed(
     path: &Path,
     bytes: &[u8],
     mode: FileMode,
     link: Symlink,
     observe: impl FnOnce(&std::fs::File),
+    check: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     // The rename destination: through the link (MIK-8153) or onto it.
     let target: PathBuf = match link {
@@ -115,6 +132,10 @@ fn write_atomic_observed(
     }
     // Closed before the rename: Windows renames only a closed file.
     drop(file);
+    if let Err(e) = check() {
+        cleanup(&scratch);
+        return Err(e);
+    }
     if let Err(e) = super::rename_with_retry(&scratch, &target) {
         cleanup(&scratch);
         return Err(e);
@@ -398,21 +419,25 @@ fn acl_presence(_target: &std::fs::File, _scratch: &std::fs::File) -> AclPresenc
     AclPresence::PresentOrUnknown
 }
 
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_atomic_tests.rs"]
 mod atomic_tests;
 
 // Linux only: writes POSIX ACL xattrs, which only the Linux probe reads.
+#[cfg(tp3)]
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
 
 // Windows: an `Inherit` save keeps the target's access list on Windows.
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_tests.rs"]
 mod winacl_tests;
 
 // The same, through each runtime state caller.
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_callers_tests.rs"]
 mod winacl_callers_tests;

@@ -5,9 +5,12 @@
 //! These engine assertions are distinct from the still-required public routes.
 
 pub(crate) mod audit;
+#[cfg(tp4)]
 mod challenge;
+#[cfg(tp4)]
 mod excerpt;
 pub(crate) mod minted_value;
+#[cfg(tp4)]
 mod targets;
 
 use super::*;
@@ -81,6 +84,7 @@ fn assert_counts(firewall: &Firewall, inspections: usize, prompt_scans: usize, r
 
 /// MIK-7407.RESPONSE.3/.4; FWR-14. Actual public single-target API must
 /// delegate to the same v2 artifact audit contract as the new multi-target API.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_single_target_audit_has_the_response_contract() {
     let (firewall, _dir, path) = response_fixture(FirewallConfig {
@@ -117,6 +121,7 @@ fn firewall_response_single_target_audit_has_the_response_contract() {
 }
 
 /// MIK-7407.RESPONSE.4; FWR-09. Neither disabled mode inspects, mutates or audits.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_disabled_modes_preserve_payload_and_emit_no_event() {
     for (enabled, scan_responses) in [(false, true), (true, false), (false, false)] {
@@ -139,6 +144,7 @@ fn firewall_response_disabled_modes_preserve_payload_and_emit_no_event() {
 }
 
 /// MIK-7407.RESPONSE.4; FWR-10. Rules change a finding's action, not clean data.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_warn_allow_and_benign_block_rule_controls() {
     for action in [
@@ -182,6 +188,7 @@ fn firewall_response_warn_allow_and_benign_block_rule_controls() {
 
 /// MIK-7407.RESPONSE.4; FWR-11. Preserve real credential redaction in every
 /// nested result representation, regardless of explicit Warn/Allow override.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_credential_controls_redact_with_real_engine() {
     for action in [
@@ -223,6 +230,7 @@ fn firewall_response_credential_controls_redact_with_real_engine() {
 
 /// MIK-7407.RESPONSE.4; FWR-12/14. Adding response metadata must not change
 /// request audit schema or its existing injection refusal verdict.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_change_preserves_request_refusal_and_audit_shape() {
     let (firewall, _dir, path) = response_fixture(FirewallConfig::default());
@@ -251,6 +259,7 @@ fn firewall_response_change_preserves_request_refusal_and_audit_shape() {
 
 /// MIK-7407.RESPONSE.3/.4; FWR-08/14. Identical and concurrent response
 /// artifacts each have their own event; the engine must not globally dedupe.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_repeated_concurrent_calls_keep_distinct_events() {
     let untouched = Firewall::from_config(FirewallConfig::default(), None);
@@ -315,6 +324,7 @@ fn firewall_response_repeated_concurrent_calls_keep_distinct_events() {
 
 /// MIK-7407.RESPONSE.4; FWR-09/10/11. Disabling one detector does not disable
 /// the other, nor does its configured rule manufacture a finding.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_detector_switches_are_independent() {
     for (prompt_injection_detection, credential_redaction) in
@@ -365,6 +375,7 @@ fn firewall_response_detector_switches_are_independent() {
 
 /// MIK-7407.RESPONSE.3/.4; FWR-20. `InputRequired`'s opaque state and
 /// questions remain immutable; unrelated safe metadata may still be redacted.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_modern_input_required_protects_state_and_questions() {
     for protected_field in ["inputRequests", "requestState"] {
@@ -447,6 +458,7 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
 
 /// #2114: a credential only in an `inputRequests` map key (the key the client
 /// echoes) refuses the result; the same key in a plain result is renamed.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_credential_in_object_key() {
     let question = json!({"resultType":"input_required", "inputRequests":{ CANARY: {} }});
@@ -487,6 +499,7 @@ fn firewall_response_credential_in_object_key() {
 /// marker (in a key, or in a value where the 200-char quote cuts the token)
 /// must not reach the audit log through that finding. With redaction off the
 /// payload is untouched, the quote is withheld, and detection reads raw text.
+#[cfg(tp4)]
 #[test]
 fn firewall_response_injection_finding_masks_a_credential() {
     let straddle = format!("{INJECTION} {} {CANARY}", "x".repeat(160));

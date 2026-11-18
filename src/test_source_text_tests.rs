@@ -16,6 +16,18 @@ const CASES: &[(&str, &[&str], &[&str])] = &[
         &["fn product()"],
         &["fn t()"],
     ),
+    // The lib test split's part tag sits above the test cfg and goes with the
+    // test item, so a production scan never reads it.
+    (
+        "fn product() {}\n#[cfg(tp3)]\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn after() {}\n",
+        &["fn product()", "fn after()"],
+        &["tp3", "fn t()"],
+    ),
+    (
+        "#[derive(Debug)]\nstruct Live;\n#[cfg(tp1)]\n#[cfg(tp2)]\n#[cfg(all(test, unix))]\nmod x_tests;\n",
+        &["#[derive(Debug)]", "struct Live;"],
+        &["tp1", "tp2", "mod x_tests"],
+    ),
     (
         "#[cfg(test)]\n#[path = \"x_tests.rs\"]\nmod x;\nfn product() {}\n",
         &["fn product()"],
@@ -619,4 +631,27 @@ impl<'ast> syn::visit::Visit<'ast> for ProductionIdents {
             syn::visit::visit_expr(self, node);
         }
     }
+}
+
+/// The lib test split's part tag: the shared `test_only` reads a tagged test
+/// module as test-only and a tag alone as not, and `part_tag` matches `tpK`
+/// only.
+#[test]
+fn a_part_tag_neither_makes_nor_unmakes_test_only_code() {
+    use crate::test_source_text::part_tag;
+    let attrs = |text: &str| {
+        syn::parse_str::<syn::ItemMod>(&format!("{text}\nmod m;"))
+            .expect("a module declaration")
+            .attrs
+    };
+    assert!(crate::test_source_text::test_only(&attrs(
+        "#[cfg(tp2)]\n#[cfg(test)]"
+    )));
+    assert!(!crate::test_source_text::test_only(&attrs("#[cfg(tp2)]")));
+    let cases = ["tp2", "tp12", "test", "tp", "tpx", "not(tp2)"];
+    let tags: Vec<bool> = cases
+        .iter()
+        .map(|c| part_tag(&attrs(&format!("#[cfg({c})]"))[0]))
+        .collect();
+    assert_eq!(tags, [true, true, false, false, false, false]);
 }

@@ -71,6 +71,7 @@ pub(crate) async fn ui_save(
     base: FileRevision,
     edit: SaveEdit,
     secrets: Option<SecretTarget>,
+    who: &crate::security::audit::AuditWho,
     wait: Duration,
 ) -> Result<UiSaved, UiRefused> {
     // The preview's shape, the secret bytes held aside.
@@ -121,7 +122,17 @@ pub(crate) async fn ui_save(
         replaced: Replaced::Discard,
         secrets,
     };
-    let error = match replace_audited(Arc::clone(&ctx), replace, audit, wait).await {
+    let error = match replace_audited(
+        Arc::clone(&ctx),
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui {
+            who: who.account.clone(),
+        },
+        wait,
+    )
+    .await
+    {
         Ok(outcome) => {
             return Ok(UiSaved {
                 changed: outcome.revision.is_some(),
@@ -271,10 +282,12 @@ fn write_failed(variant: &'static str) -> UiRefused {
     UiRefused::Failed(FAILED.to_owned())
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_save_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ui_policy_fields_tests.rs"]
 mod policy_field_tests;

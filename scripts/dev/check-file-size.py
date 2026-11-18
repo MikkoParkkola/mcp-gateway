@@ -59,21 +59,27 @@ INERT_ATTRIBUTE = re.compile(
     r"^\s*#\[\s*(cfg|path|allow|expect|warn|deny|doc|deprecated|rustfmt::skip)"
     r"\b.*\]\s*$"
 )
+# A lib test part tag on its own line, nothing else: `#[cfg(tp3)]`.
+PART_TAG = re.compile(r"^\s*#\[cfg\(tp[0-9]+\)\]\s*$")
 
 
 def counted_lines(text: str) -> int:
-    """Newlines in `text`, less each module declaration and its inert attributes."""
+    """Newlines in `text`, less each module declaration and its inert attributes,
+    and less each lib test part tag: a line that is exactly `#[cfg(tpN)]`.
+    A tag selects which lib test part compiles the item below it and carries no
+    code, the same kind of build metadata as a declaration (lead decision on the
+    lib test split, 2026-11-16)."""
     lines = text.split("\n")
-    free = 0
+    free = {i for i, line in enumerate(lines) if PART_TAG.match(line)}
     for i, line in enumerate(lines):
         if not DECLARATION.match(line):
             continue
-        free += 1
+        free.add(i)
         above = i - 1
         while above >= 0 and INERT_ATTRIBUTE.match(lines[above]):
-            free += 1
+            free.add(above)
             above -= 1
-    return text.count("\n") - free
+    return text.count("\n") - len(free)
 
 
 def measure() -> dict[str, int]:

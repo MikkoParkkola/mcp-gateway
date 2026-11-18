@@ -41,10 +41,10 @@ impl Gateway {
                     .with_account_strategies(account_strategies)
                     .with_stop_deadline(self.backends.stop_deadline()),
             );
-            let cap_backend = Arc::new(CapabilityBackend::new(
-                &self.config.capabilities.name,
-                executor,
-            ));
+            let cap_backend = Arc::new(
+                CapabilityBackend::new(&self.config.capabilities.name, executor)
+                    .with_revision_key(meta_mcp.record_key().config_revision_key()),
+            );
             #[cfg(test)]
             cap_backend.scan_panics_after_first_dir.store(
                 self.test_seams
@@ -100,14 +100,25 @@ impl Gateway {
                 };
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
+                    // Not under the operation lock: the pause is not a catalogue
+                    // operation, and a reload must not wait out the pause.
                     CapabilityBackend::settle_before_initial_scan().await;
                 }
+                // Load, the post-rug-pull snapshot and the publish are one
+                // operation. The guard drops after the publish, before the logs.
+                let operation = cap_backend_for_load.lock_operation().await;
 
                 let mut total_caps = 0;
                 // Every capability the account admission gate refused during the
                 // INITIAL scan. A missing or unreadable optional directory is
                 // NOT collected here — that stays benign, exactly as before.
                 let mut refused: Vec<String> = Vec::new();
+                // Each directory's outcome, logged once the operation lock is
+                // released: a blocked log write must not hold up a reload.
+                let mut dir_logs: Vec<(String, std::result::Result<usize, String>)> = Vec::new();
+                // Before any directory is read: this scan's unreadable set
+                // starts empty and is the one its catalogue carries.
+                cap_backend_for_load.begin_incremental_coverage();
                 for dir in &capability_dirs {
                     match cap_backend_for_load
                         .load_from_directory_reporting(dir)
@@ -115,12 +126,16 @@ impl Gateway {
                     {
                         Ok(report) => {
                             total_caps += report.admitted;
-                            debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
+                            for path in &report.unreadable {
+                                cap_backend_for_load.note_unreadable(path);
+                            }
+                            dir_logs.push((dir.clone(), Ok(report.admitted)));
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
                             cap_backend_for_load.mark_initial_scan_failed(); // not fatal
-                            debug!(directory = %dir, error = %e, "Failed to load capabilities");
+                            cap_backend_for_load.note_unreadable(dir);
+                            dir_logs.push((dir.clone(), Err(e.to_string())));
                         }
                     }
                     #[cfg(test)]
@@ -139,6 +154,8 @@ impl Gateway {
                 // nothing it unloads keeps a route.
                 cap_backend_for_load.detect_rug_pulls().await;
 
+                // Before the publish, which can make the scan ready: a client
+                // that sees readiness finds every capability's webhook route.
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {
                         if !cap.webhooks.is_empty() {
@@ -147,9 +164,31 @@ impl Gateway {
                     }
                 }
 
+                // Under the catalogue write lock, after rug-pull removal: the
+                // seq and the part name the catalogue the scan is serving.
+                // The publish runs after that lock drops. The registry is left
+                // first, so an attach that completes a parked scan announces it.
+                let (seq, part) = cap_backend_for_load.take_served_revision();
+                cap_backend_for_load.announce_scan_through(Arc::clone(&registry_for_load));
+                let transitioned = cap_backend_for_load.publish_initial_scan(seq, part);
+
                 // Readiness waits on this (MIK-7268), and clients served during the
                 // scan hear of its catalogue; refusals are reported below.
-                cap_backend_for_load.finish_initial_scan(&registry_for_load);
+                // Attached, the publish marked ready and only the announcement
+                // is left. Unattached, the scan parked: it stays not ready
+                // until attach delivers its part, and attach announces it.
+                if transitioned {
+                    cap_backend_for_load.announce_scanned(&registry_for_load);
+                }
+                drop(operation);
+                for (dir, outcome) in &dir_logs {
+                    match outcome {
+                        Ok(count) => debug!(directory = %dir, count, "Loaded capabilities"),
+                        Err(error) => {
+                            debug!(directory = %dir, error = %error, "Failed to load capabilities");
+                        }
+                    }
+                }
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
@@ -367,7 +406,8 @@ impl Gateway {
 }
 
 /// Completes the startup capability scan when it ends without completing
-/// itself (a panic, or the scan dropped), marking it partial.
+/// itself (a panic, or the scan dropped), marking it partial. A scan that
+/// published is left to its publish or, parked, to attach.
 struct ScanEnds {
     backend: Arc<CapabilityBackend>,
     registry: Arc<crate::backend::BackendRegistry>,
@@ -375,13 +415,11 @@ struct ScanEnds {
 
 impl Drop for ScanEnds {
     fn drop(&mut self) {
-        if !self.backend.initial_scan_complete() {
-            self.backend.mark_initial_scan_failed();
-            self.backend.finish_initial_scan(&self.registry);
-        }
+        self.backend.end_failed(&self.registry);
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "run_steps_pin_tests.rs"]
 mod run_steps_pin_tests;

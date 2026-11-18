@@ -146,6 +146,7 @@ pub(crate) fn publish_new_file(
     sync_dir(dir)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "record_key_tests.rs"]
 mod tests;

@@ -11,29 +11,93 @@
 
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::net::UnixStream;
 use std::process::{Command, ExitCode};
 
 use rustix::process::{DumpableBehavior, WaitOptions, set_dumpable_behavior};
 
+use super::control_client::{self, HELPER_BOUNDS};
 use super::plan::{self, HostNamespaces, Plan};
 
 pub(super) fn run(plan: &Plan) -> ExitCode {
-    if let Err(step) = setup(plan) {
+    let control = match setup(plan) {
+        Ok(control) => control,
+        Err(step) => {
+            eprintln!("preview-sandbox: refused at {step}");
+            return ExitCode::from(super::REFUSED);
+        }
+    };
+    if let Some(mut control) = control {
+        let fetched = fetch(&mut control);
+        // Dropped before any child exists, so no preview process can inherit
+        // or reach the control connection.
+        drop(control);
+        if let Err(step) = fetched {
+            eprintln!("preview-sandbox: refused at {step}");
+            return ExitCode::from(super::REFUSED);
+        }
+    }
+    // Nothing the fetch step opened may reach the target.
+    if let Err(step) = check_descriptors() {
         eprintln!("preview-sandbox: refused at {step}");
         return ExitCode::from(super::REFUSED);
     }
     supervise(plan)
 }
 
-fn setup(plan: &Plan) -> Result<(), String> {
+fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
     check_namespaces(plan.host)?;
     check_descriptors()?;
+    // After the descriptor check, on the host path, before the new root
+    // hides it; std sockets are close-on-exec.
+    let control = plan
+        .fetch
+        .as_ref()
+        .map(|paths| {
+            UnixStream::connect(&paths.control)
+                .map_err(|e| format!("connecting the control socket ({e})"))
+        })
+        .transpose()?;
     // A capability-less process in the namespace then cannot read this
     // process's environ, fd table or memory through /proc/1.
     set_dumpable_behavior(DumpableBehavior::NotDumpable)
         .map_err(|e| format!("making the helper non-dumpable ({e})"))?;
-    super::mounts::build_root(plan)?;
-    super::mounts::enter_root()
+    // The CA snapshot, opened before staging covers host /tmp; it is bound
+    // from this descriptor, which is closed once bound, before any child.
+    let ca = plan
+        .fetch
+        .as_ref()
+        .map(|paths| open_snapshot(&paths.ca))
+        .transpose()?;
+    super::mounts::build_root(plan, ca.as_ref().map(|(fd, _)| fd))?;
+    if let Some((fd, identity)) = ca {
+        drop(fd);
+        super::mounts::check_preview_config(identity)?;
+    }
+    super::mounts::enter_root()?;
+    Ok(control)
+}
+
+/// The CA snapshot at `path`, opened `O_PATH` (no symlink followed) and
+/// checked to be a regular file; its device and inode for the check that
+/// `ca.pem` is this file once bound.
+fn open_snapshot(path: &str) -> Result<(rustix::fd::OwnedFd, (u64, u64)), String> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    let flags = OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let fd = rustix::fs::open(path, flags, Mode::empty())
+        .map_err(|e| format!("opening the CA snapshot ({e})"))?;
+    let stat = rustix::fs::fstat(&fd).map_err(|e| format!("checking the CA snapshot ({e})"))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+        return Err("checking the CA snapshot (not a regular file)".into());
+    }
+    Ok((fd, (stat.st_dev, stat.st_ino)))
+}
+
+/// The fetch step's handshake: the credential, then `fetch_done` and the wait
+/// for `expired`. The fetch command itself runs between them (the next part).
+fn fetch(control: &mut UnixStream) -> Result<(), String> {
+    let _issued = control_client::start_fetch(control, HELPER_BOUNDS)?;
+    control_client::finish_fetch(control, HELPER_BOUNDS)
 }
 
 /// Refuse unless every namespace differs from the gateway's.

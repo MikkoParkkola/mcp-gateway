@@ -172,6 +172,7 @@ fn print_top_tools(stats: &serde_json::Value) -> String {
     String::new()
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

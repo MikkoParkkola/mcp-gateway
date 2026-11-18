@@ -169,6 +169,7 @@ fn ascending(scope: &str) -> Vec<String> {
     scopes
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "migration_record_tests.rs"]
 mod migration_record_tests;

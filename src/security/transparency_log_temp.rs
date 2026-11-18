@@ -34,6 +34,7 @@ impl TempLog {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

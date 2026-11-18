@@ -519,6 +519,7 @@ pub(crate) fn note_restored(_stored: Option<&ReadAttribution>) {}
 
 // The history's rows reserve, which takes the judge's token, so they build
 // with the firewall that defines it.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "tenant_reads_tests.rs"]
 mod tests;

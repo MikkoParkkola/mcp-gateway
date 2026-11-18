@@ -47,12 +47,15 @@ HARNESS = ROOT / "src/gateway/server/tests/per_call_timing.rs"
 # STAGES rows that time their base row's functions with a larger argument:
 # no function is theirs alone, so no entry names them.
 VARIANTS = {"http_invoke_64k": "http_invoke_tiny"}
-# A `#[cfg(..)]` line above a module; the shared reader decides whether the
-# predicate compiles only under test (MIK-9387.TCFG.2).
+# A module and the run of attribute lines above it; the shared reader decides
+# whether each `#[cfg(..)]` in the run compiles only under test (MIK-9387.TCFG.2).
+# Every one is judged: the lib test split puts a separate `#[cfg(tpK)]` line
+# above `#[cfg(test)]`, so the first cfg in a run is not always the test one.
 CFG_MOD = re.compile(
-    r"^#\[cfg\((?P<expr>[^\n]*)\)\][ \t]*\n(?:#\[[^\n]*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+",
+    r"^(?P<attrs>(?:#\[[^\n]*\][ \t]*\n)+)\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+",
     re.M,
 )
+CFG_LINE = re.compile(r"^#\[cfg\((?P<expr>[^\n]*)\)\][ \t]*$", re.M)
 _spec = importlib.util.spec_from_file_location(
     "check_orphan_test_modules", ROOT / "scripts/dev/check-orphan-test-modules.py"
 )
@@ -105,7 +108,7 @@ def without_test_modules(source):
     nothing after a test module is dropped."""
     out, at = [], 0
     for m in CFG_MOD.finditer(source):
-        if not _orphan.cfg_is_test(m.group("expr")):
+        if not any(_orphan.cfg_is_test(c.group("expr")) for c in CFG_LINE.finditer(m.group("attrs"))):
             continue
         rest = source[m.end():]
         brace = len(rest) - len(rest.lstrip())

@@ -212,6 +212,7 @@ fn normalise_word(word: &str) -> String {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

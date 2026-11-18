@@ -719,29 +719,35 @@ use axum::response::IntoResponse;
 #[cfg(test)]
 use serde_json::json;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_session_ownership_tests.rs"]
 mod session_ownership_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_tests.rs"]
 mod tests;
 
 #[path = "streaming_ownership.rs"]
 mod ownership;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_request_scoped_tests.rs"]
 mod request_scoped_stream_tests;
 #[cfg(test)]
 #[path = "streaming_told_cf_grace_tests.rs"]
 mod told_cf_grace_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_told_exemption_tests.rs"]
 mod told_exemption_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_unframed_tests.rs"]
 mod unframed_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "streaming_receipt_commit_tests.rs"]
 mod receipt_commit_tests;

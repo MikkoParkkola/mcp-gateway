@@ -287,7 +287,10 @@ impl MetaMcp {
     }
 
     /// `gateway_reload_config` — trigger an immediate config reload from disk.
-    pub(in crate::gateway::meta_mcp) async fn reload_config(&self) -> Result<Value> {
+    pub(in crate::gateway::meta_mcp) async fn reload_config(
+        &self,
+        who: &crate::security::audit::AuditWho,
+    ) -> Result<Value> {
         let ctx = self.get_reload_context().ok_or_else(|| {
             Error::json_rpc(
                 INTERNAL_ERROR,
@@ -295,7 +298,12 @@ impl MetaMcp {
             )
         })?;
 
-        match ctx.manual_reload_outcome().await {
+        match ctx
+            .manual_reload_outcome(crate::config_reload::history::Source::Ui {
+                who: who.account.clone(),
+            })
+            .await
+        {
             Ok(outcome) => Ok(json!({
                 "status": "ok",
                 "changes": outcome.changes,
@@ -485,6 +493,7 @@ fn estimated_start(
         .into()
 }
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_section_tests {
     use super::cost_section;
@@ -542,12 +551,19 @@ mod cost_section_tests {
 /// MIK-8034: an admin capability reload reports the change on the feed the
 /// file watcher uses, so the drain refreshes the webhook routes and announces
 /// the new tool list, as after a file reload.
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "admin_reload_tests.rs"]
 mod reload_tests;
 
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "admin_publish_tests.rs"]
+mod publish_tests;
+
 /// `gateway_cost_report` refusing a non-admin caller an admin view is the
 /// gateway refusing the call: it records refused.
+#[cfg(tp4)]
 #[cfg(test)]
 mod cost_report_refusal_tests {
     use std::sync::Arc;

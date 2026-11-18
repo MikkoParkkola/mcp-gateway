@@ -1,0 +1,32 @@
+# The lib test split's view of CI (scripts/dev/test_parts_expect.py reads it). Tab-separated.
+# config <target triple> <cargo feature flags> <custom cfgs the job sets, comma-separated>: one CI build of the lib test
+#   code. X9 refuses a test that compiles in none of them. scripts/ci/test_feature_shards.py holds the feature sets
+#   equal to what the workflows pass (--all-features and every feature-combos entry, per target).
+# nowhere <test path> <reason>: a test written for platforms CI does not have; X9 lets it pass. Shrink-only.
+config	x86_64-unknown-linux-gnu	--all-features
+config	x86_64-unknown-linux-gnu	--features default
+config	x86_64-unknown-linux-gnu	--features spec-preview
+config	x86_64-unknown-linux-gnu	--features task-sdk-recovery
+config	x86_64-unknown-linux-gnu	--features runtime-substrate
+config	x86_64-unknown-linux-gnu	--no-default-features
+config	x86_64-unknown-linux-gnu	--no-default-features --features a2a
+config	x86_64-unknown-linux-gnu	--no-default-features --features config-export
+config	x86_64-unknown-linux-gnu	--no-default-features --features cost-governance
+config	x86_64-unknown-linux-gnu	--no-default-features --features discovery
+config	x86_64-unknown-linux-gnu	--no-default-features --features firewall
+config	x86_64-unknown-linux-gnu	--no-default-features --features metrics
+config	x86_64-unknown-linux-gnu	--no-default-features --features semantic-search
+config	x86_64-unknown-linux-gnu	--no-default-features --features spec-preview
+config	x86_64-unknown-linux-gnu	--no-default-features --features task-sdk-recovery
+config	x86_64-unknown-linux-gnu	--no-default-features --features tool-profiles
+config	x86_64-unknown-linux-gnu	--no-default-features --features runtime-substrate
+config	x86_64-unknown-linux-gnu	--no-default-features --features webui
+config	x86_64-pc-windows-gnu	--all-features
+config	x86_64-pc-windows-gnu	--no-default-features
+config	x86_64-pc-windows-msvc	--all-features
+config	aarch64-apple-darwin	--all-features
+config	x86_64-unknown-linux-gnu	--all-features	mutants
+config	x86_64-unknown-linux-gnu	--all-features	kani
+config	x86_64-unknown-linux-gnu	--all-features	coverage
+config	x86_64-unknown-linux-gnu	--all-features	reads_token_probe
+nowhere	personal_accounts::tests::s11_unsupported_platform_refuses_custody_without_creating_state	gated not(any(unix, windows)): written for platforms with neither, which CI does not have

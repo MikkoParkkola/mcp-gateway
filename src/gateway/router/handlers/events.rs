@@ -193,14 +193,17 @@ pub(super) async fn answer(
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "events_cov_tests.rs"]
 mod cov_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "events_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

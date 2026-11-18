@@ -105,5 +105,6 @@ impl super::MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;

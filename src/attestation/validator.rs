@@ -580,6 +580,7 @@ impl AttestationValidator {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "validator_tests.rs"]
 mod tests;

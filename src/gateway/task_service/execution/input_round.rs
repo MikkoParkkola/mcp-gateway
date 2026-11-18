@@ -663,14 +663,17 @@ impl TaskExecutor {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "input_round_deadline_tests.rs"]
 mod deadline_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "input_round_mapping_tests.rs"]
 mod mapping_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
