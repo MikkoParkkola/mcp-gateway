@@ -611,6 +611,31 @@ class Runner(unittest.TestCase):
         finally:
             g.close()
 
+    # A failed check's report names the WRONG row even when 25 `ok` rows follow it.
+    def test_load4_the_wrong_row_label_survives_the_output_tail(self):
+        f = Fixture(base={"scripts/ci/x.sh": "exit 0\n"},
+                    head={"scripts/ci/x.sh": "echo 'WRONG W7 planted label'; echo '      detail line'\n"
+                          "for i in $(seq 25); do echo \"ok    row $i\"; done; exit 1\n"})
+        try:
+            report = f.run([line("bash scripts/ci/x.sh")])
+            self.assertNotEqual(report.rc, 0)
+            self.assertIn("WRONG W7 planted label", report.text)
+            self.assertIn("detail line", report.text)
+            self.assertIn("ok    row 25", report.text)
+            self.assertNotIn("ok    row 1\n", report.text)
+        finally:
+            f.close()
+
+    def test_load4_the_cap_keeps_a_wrong_row_and_its_detail_together(self):
+        import run_prepush_ci_checks as r
+        rows = [x for i in range(15) for x in (f"WRONG row {i}", f"      detail {i}")] + [f"ok    tail {i}" for i in range(r.TAIL_LINES)]
+        view = r._failure_view("\n".join(rows))
+        head = view[: len(view) - r.TAIL_LINES]
+        self.assertEqual(len(head), r.TAIL_LINES + 1)
+        self.assertEqual(head[-1], "  ... 5 more WRONG rows: see the log")
+        self.assertTrue(all(h.startswith("WRONG") == (i % 2 == 0) for i, h in enumerate(head[:-1])), head)
+        self.assertEqual(view[-1], f"ok    tail {r.TAIL_LINES - 1}")
+
     def test_n3_a_failing_check_still_fails_and_is_compared(self):
         report = self.f.run([line(py("raise SystemExit(3)"))])
         self.assertNotEqual(report.rc, 0)
