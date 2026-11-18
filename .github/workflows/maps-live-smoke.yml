@@ -90,14 +90,16 @@ jobs:
       - name: Live gateway rows, one exact test per run, paced per host
         shell: bash
         run: |
-          set -uo pipefail
+          # The runner starts bash with -e: off, so one failing row cannot end
+          # the step before its output is shown and the remaining rows run.
+          set +e -uo pipefail
           # test name | seconds to wait before it (the previous call's host
           # interval plus a margin, so the gateway's own pacer never refuses).
           passed=0
           while IFS='|' read -r name gap; do
             sleep "$gap"
             scripts/ci/with-memory-log.sh cargo test --all-features --lib "capability::maps_live_tests::${name}" -- --ignored --exact > row.log 2>&1
-            tail -5 row.log
+            tail -30 row.log
             if grep -q '^test result: ok. 1 passed' row.log; then
               passed=$((passed + 1))
             else
