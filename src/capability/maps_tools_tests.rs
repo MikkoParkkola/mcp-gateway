@@ -450,6 +450,36 @@ fn p2_each_paced_provider_has_its_host_and_interval() {
     );
 }
 
+/// Overpass may queue a query for a free slot and then run it for up to the
+/// query's own `[timeout:N]`: the success run 44215521926 recorded took about
+/// 37 s against N = 25. The provider's request timeout leaves room for both,
+/// at least twice N, and stays under 60 s, the common MCP client default
+/// (the TypeScript SDK's), so a slow answer reaches the caller as the
+/// gateway's provider error before the client gives up on its own. The 30 s
+/// default cut two live attempts at 30.1 s.
+#[test]
+fn t_overpass_timeout_outlasts_its_query_and_beats_the_client() {
+    let capability = as_shipped("maps/overpass_nearby.yaml");
+    let provider = capability.providers.get("primary").expect("primary");
+    let query = provider.config.params.get("data").expect("the query");
+    let server_secs: u64 = query
+        .split_once("[timeout:")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .and_then(|(secs, _)| secs.parse().ok())
+        .expect("the query names its [timeout:N]");
+    assert!(
+        provider.timeout >= 2 * server_secs,
+        "a provider timeout of {} s is under twice the query's {server_secs} s",
+        provider.timeout
+    );
+    assert!(
+        provider.timeout < 60,
+        "a provider timeout of {} s does not answer before a 60 s client gives up",
+        provider.timeout
+    );
+    assert_eq!((server_secs, provider.timeout), (25, 55));
+}
+
 #[test]
 fn w1_weather_takes_coordinates_and_says_so() {
     let weather = as_shipped("knowledge/weather.yaml");
