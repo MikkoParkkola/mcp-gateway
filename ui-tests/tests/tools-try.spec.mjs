@@ -345,6 +345,11 @@ test('F7 object, array, $ref and oneOf are JSON fields', async ({ page }) => {
   await meta.fill('{"a":1}');
   await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments.meta).toEqual({ a: 1 });
+  // Invalid JSON as the only blocker: every other field is valid now, so a screen that
+  // marks the field but still sends its text fails here, not only one that skips the mark.
+  await meta.fill('{');
+  await sends(bag, 0, () => run.click({ timeout: 5000 }));
+  await expect(meta).toHaveAttribute('aria-invalid', 'true');
 });
 
 test('F7b a blank required text sends an empty string; a blank optional is left out', async ({ page }) => {
