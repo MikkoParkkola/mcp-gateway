@@ -190,6 +190,7 @@ pub struct ProviderConfig {
 #[non_exhaustive]
 pub struct RateLimit {
     /// Milliseconds between two requests, 1 to 600000.
+    #[serde(deserialize_with = "crate::duration_bound::millis")]
     pub interval_ms: u64,
 }
 
