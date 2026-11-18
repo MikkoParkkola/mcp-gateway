@@ -828,6 +828,7 @@ def parts_rows() -> None:
                         'if [ "$1" = --list ]; then shift; f="$1"\n'
                         f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
                         f'echo "p{k} $*" >> {log}\n'
+                        f'echo "${{MCP_GATEWAY_TEST_HOME_DIR:-none}}" > {log}.home\n'
                         + ('touch "$TMPDIR/leftover"\n' if residue else "")
                         + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n')
             os.chmod(exe, 0o755)
@@ -854,6 +855,10 @@ def parts_rows() -> None:
         assert run_one("--exact", "m3::t3", d, []) == 0
         runs = open(log).read().splitlines()
         assert runs == ["p3 m3::t3 --exact"], runs
+        # H1: the run gets a private gateway home of its own, removed after it.
+        home = open(log + ".home").read().strip()
+        assert os.path.basename(home).startswith("shard-home-"), ("run-one gives the binary a home", home)
+        assert not os.path.exists(home), ("run-one removes its home", home)
         fresh()
         import contextlib
         import io
@@ -1180,7 +1185,9 @@ def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
         return 1
     ((k, names),) = hits.items()
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
-    return subprocess.run([binaries[k], *names, "--exact", *extra], env=env, cwd=ROOT).returncode
+    # A private gateway home, as every other lib test run gets (H1).
+    with private_home(env, None) as home_env:
+        return subprocess.run([binaries[k], *names, "--exact", *extra], env=home_env, cwd=ROOT).returncode
 
 
 # Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
