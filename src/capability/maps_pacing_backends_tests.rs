@@ -128,7 +128,7 @@ async fn dispatch_effect(service: &str, url: &str) -> (bool, Option<serde_json::
     (outcome.is_err(), fields.get("response_effect").cloned())
 }
 
-/// RL15h: a GraphQL or JSON-RPC call refused at a paced host is the call's
+/// `RL15h`: a GraphQL or JSON-RPC call refused at a paced host is the call's
 /// answer, and its delivery records `refused`; the same call to an unpaced
 /// host reaches it and records no refusal.
 #[tokio::test]
