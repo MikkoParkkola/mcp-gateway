@@ -169,9 +169,16 @@ fn quoted_dep(name: &str) -> &str {
 /// `a-z 0-9 - . _ ~`, with one optional `@scope/` of the same characters.
 /// Only such names are quoted in a refusal: a package chooses its own and
 /// its dependencies' names, and a refusal reaches the operator.
-pub(crate) fn npm_name_ok(_name: &str) -> bool {
-    // RED: every name is quoted.
-    true
+pub(crate) fn npm_name_ok(name: &str) -> bool {
+    if name.len() > 214 {
+        return false;
+    }
+    match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, rest)| name_part(scope) && name_part(rest)),
+        None => name_part(name),
+    }
 }
 
 fn refuse(reason: &str) -> Refusal {
