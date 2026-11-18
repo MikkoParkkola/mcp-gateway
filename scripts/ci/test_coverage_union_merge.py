@@ -155,13 +155,13 @@ class MergeRow(unittest.TestCase):
                                "scripts/ci/lib_union.py"])
             write(leg, "scripts/dev/test-parts-build.rs", "const N: u32 = 5;\n")
             write(leg, "scripts/ci/compile-cgroup.sh", '#!/bin/sh\nexec "$@"\n', True)
-            # The fake run "builds" the lib test executable, as a real run writes it: the helper renames only a binary
-            # newer than the run's start.
+            # The fake run "builds" the lib test executable, as a real run writes it: the helper moves only a binary
+            # newer than the run's start, into deps/pK/ under its own name.
             write(leg, "fake-runner/python3",
                   "#!/bin/sh\ntouch target/llvm-cov-target/debug/deps/mcp_gateway-abc123\nexit 0\n", True)
             content = f"#!/bin/sh\n# distinct coverage executable for part {k}\nexit 0\n"
             write(leg, DEPS / "mcp_gateway-abc123", content, True)
-            contents[f"mcp_gateway-abc123-p{k}"] = content
+            contents[f"p{k}/mcp_gateway-abc123"] = content
             write(leg, "target/llvm-cov-target/fixture.profraw", f"profile {k}\n")
             write(leg, "run.log", f"part {k} passed\n")
             write(leg, "tests.tsv", f"unittests src/lib.rs\tpart{k}::tests::listed\tok\n")
@@ -184,12 +184,13 @@ class MergeRow(unittest.TestCase):
                 output = done.stdout + done.stderr
                 if rename:
                     self.assertEqual(done.returncode, 0,
-                                     "renamed lib parts must merge successfully:\n" + output)
-                    actual = {p.name: p.read_text() for p in (root / DEPS).iterdir()}
-                    self.assertEqual(actual, contents, "merge must preserve all five -pK executables")
+                                     "lib parts moved into deps/pK must merge successfully:\n" + output)
+                    actual = {str(p.relative_to(root / DEPS)): p.read_text()
+                              for p in (root / DEPS).rglob("*") if p.is_file()}
+                    self.assertEqual(actual, contents, "merge must preserve all five deps/pK executables")
                     self.assertEqual(len(list((root / "target/llvm-cov-target").glob("*.profraw"))), 5)
                 else:
-                    self.assertNotEqual(done.returncode, 0, "unrenamed colliding executables were accepted")
+                    self.assertNotEqual(done.returncode, 0, "unmoved colliding executables were accepted")
                     self.assertIn("mcp_gateway-abc123: coverage sections differ between shards", output)
 
 
