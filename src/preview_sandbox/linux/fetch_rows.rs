@@ -469,31 +469,38 @@ async fn l_canary_a_usr_local_install_shows_the_package_only_node_and_npm() {
     if usr_local_npm().is_none() {
         return;
     }
-    // The first entry with content in each directory, other than what the
-    // fetch shows (node and npm, and npm's aliases beside node).
-    let beside = |dir: &str, shown: &[&str]| {
-        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+    // One canary from EACH tree, so a whole-tree bind of either one is
+    // probed: a regular file with content, never a symlink (which could
+    // point out of the tree), other than what the fetch shows (node and npm,
+    // and npm's aliases beside node). In lib/node_modules the entries are
+    // package directories, so the canary is another package's package.json.
+    let regular = |p: &std::path::Path| {
+        std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file() && m.len() > 0)
+    };
+    let sorted = |dir: &str, shown: &[&str]| {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
             .filter(|e| !shown.iter().any(|s| e.file_name() == *s))
             .map(|e| e.path())
-            .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() > 0))
             .collect();
-        found.sort();
-        found.into_iter().next()
+        entries.sort();
+        entries
     };
-    let canaries: Vec<PathBuf> = [
-        beside("/usr/local/bin", &["node", "npm", "npx"]),
-        beside("/usr/local/lib/node_modules", &["npm"]),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    if canaries.is_empty() {
-        let _ = skip("nothing else sits beside node or npm under /usr/local");
+    let in_bin = sorted("/usr/local/bin", &["node", "npm", "npx"])
+        .into_iter()
+        .find(|p| regular(p));
+    let in_modules = sorted("/usr/local/lib/node_modules", &["npm"])
+        .into_iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir()))
+        .map(|p| p.join("package.json"))
+        .find(|p| regular(p));
+    let (Some(in_bin), Some(in_modules)) = (in_bin, in_modules) else {
+        let _ = skip("no in-tree regular file beside node, or beside npm, under /usr/local");
         return;
-    }
+    };
+    let canaries = [in_bin, in_modules];
     let Some(seen) = canary_run(&canaries.iter().collect::<Vec<_>>()).await else {
         return;
     };
