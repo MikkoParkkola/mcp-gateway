@@ -1,11 +1,3 @@
 # Sandbox-row probe: the rows this probe runs, one exact test path per line.
-# Baseline (no mutant): every killing row of the npm fetch's CI-only mutants must pass here.
-preview_sandbox::linux::fetch_shim_rows::l5_an_escapee_holding_the_pipes_is_swept
-preview_sandbox::linux::fetch_rows::l7_a_cold_npx_fetch_runs_the_packages_bin
-preview_sandbox::linux::fetch_rows::l3_install_scripts_never_run
-preview_sandbox::linux::fetch_shim_rows::f2_t2b_the_fetch_child_holds_no_control_connection
-preview_sandbox::linux::fetch_shim_rows::l2_the_fetch_child_reaches_only_the_registry_through_the_relay
+# Mutant q18; its killing row must fail for the reason the expectations name.
 preview_sandbox::linux::fetch_shim_rows::l4b_a_lock_entry_off_the_registry_refuses_before_npm_ci
-preview_sandbox::linux::fetch_shim_rows::l4b_a_dependency_missing_from_the_lock_refuses
-preview_sandbox::linux::fetch_shim_rows::l6_l1_after_the_fetch_the_run_connects_nowhere
-preview_sandbox::linux::fetch_shim_rows::l_env_each_npm_step_sees_exactly_the_fetch_environment

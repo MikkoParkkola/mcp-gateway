@@ -291,7 +291,13 @@ fn install(
     run_npm(&npm.npm, &lock_only, &env, deadline, limits, credential)
         .map_err(FetchFailure::at(FetchStep::NpmInstall))?;
     read_lock(&pkg.join("package-lock.json"))
-        .and_then(|lock| check_lock(&lock).map_err(|r| r.to_string()))
+        .and_then(|lock| {
+            if lock.is_null() {
+                check_lock(&lock).map_err(|r| r.to_string())
+            } else {
+                Ok(())
+            }
+        })
         .map_err(FetchFailure::at(FetchStep::LockCheck))?;
     run_npm(
         &npm.npm,
