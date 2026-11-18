@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -106,7 +107,8 @@ class UnionRows(unittest.TestCase):
         gate_python = ROOT / "scripts/gate-env/.venv/bin/python"
         python = root / "scripts/gate-env/.venv/bin/python"
         python.parent.mkdir(parents=True)
-        python.write_text(f'#!/bin/sh\nexec "{gate_python if gate_python.exists() else sys.executable}" "$@"\n')
+        target = gate_python if gate_python.exists() else Path(sys.executable)
+        python.write_text(f'#!/bin/sh\nexec {shlex.quote(str(target))} "$@"\n')
         python.chmod(0o755)
         return fixture_env(root)
 
