@@ -121,11 +121,14 @@ REST_CALL = re.compile(r"""cargo\s+test\b.*\s--test\s+'\*'""")
 SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
 PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
 # The packaged build's one assignment of n (one shell command each): read from the build script, nothing else.
-N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"$')
-# The bare word n: what every write of n names (n=, ((n=..)), let n, read n, for n, a case arm's n=), and what a read
-# does not ($n, ${n}) nor a flag (-n). A whitelist, not a list of ways to assign: the packaged block may name n
-# bare in one command only, the build script's read, so a write bash allows but no pattern lists is still refused.
-BARE_N = re.compile(r"(?<![\w${-])n(?!\w)")
+N_READ = ("n=\"$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+)"
+          "[[:space:]]*;.*/\\1/p' scripts/dev/test-parts-build.rs)\"")
+# Reads of n are an allow-list: $n, and ${n} with a non-assigning operator (:- - :+ + :? ?). READ_N blanks those; any
+# other mention of n left (n=, ((--n)), let n, read n, -n, an option cluster ending in n such as -vn, ${n:=1}) counts
+# as naming n, and the packaged block may name n in one command only: the canonical read below. A false count
+# refuses the block, the strict direction.
+READ_N = re.compile(r"\$n(?!\w)|\$\{n(?=\}|:?[-+?])")
+BARE_N = re.compile(r"(?<!\w)n(?!\w)|(?<![\w-])-[A-Za-z]+n(?!\w)")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -147,10 +150,10 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no non-lib test target")
     # Every part: the part builds sit inside a loop over 1..N, and the block names n bare exactly once, in the build
     # script's read (BARE_N), so a shortened loop, a rewritten n or a part built outside the loop cannot pass.
-    writes = [cmd for cmd in commands for _ in BARE_N.finditer(cmd)]
+    writes = [cmd for cmd in commands for _ in BARE_N.finditer(READ_N.sub("", cmd))]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
-    if (not loop or len(writes) != 1 or not N_FROM_BUILD.match(writes[0])
+    if (not loop or len(writes) != 1 or " ".join(writes[0].split()) != N_READ
             or any(PART_CALL.search(cmd) for cmd in run_commands(outside))):
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
                    "from scripts/dev/test-parts-build.rs")
@@ -428,7 +431,7 @@ def memlog_problems(file: str, name: str, job: dict) -> list[str]:
         if isinstance(limit, int):
             limit_total += limit
         run = str(step.get("run", ""))
-        if not builds_library("\n".join(l for l in run.split("\n") if not l.lstrip().startswith("#"))):
+        if not any(builds_library(cmd) for cmd in run_commands(run)):
             continue
         bare = [] if whole_step_wrapped(run) else unwrapped_builds(run)
         if bare:
