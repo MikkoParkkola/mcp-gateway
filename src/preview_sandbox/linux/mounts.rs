@@ -190,7 +190,7 @@ fn proxy_socket(proxy: &rustix::fd::OwnedFd) -> Step {
     use std::os::fd::AsRawFd as _;
     let target = staged(PROXY_SOCKET);
     fs::write(&target, b"").map_err(at("creating", &target))?;
-    let source = PathBuf::from(format!("/proc/self/fd/{}", proxy.as_raw_fd()));
+    let source = fs::read_link(format!("/proc/self/fd/{}", proxy.as_raw_fd())).unwrap_or_default();
     mount_bind(&source, &target)
         .map_err(io::Error::from)
         .map_err(at("binding the proxy socket on", &target))?;
