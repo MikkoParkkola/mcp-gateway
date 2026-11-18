@@ -78,6 +78,7 @@ EXPECTED = {
     ("ci.yml", "test-shards"),
     ("ci.yml", "test-throwaway-hosted"),
     ("coverage-probe.yml", "linux-part"),
+    ("maps-live-smoke.yml", "gateway"),
     ("mutants.yml", "linux-hosted"),
     ("packaged-suite.yml", "packaged-suite"),
     ("release.yml", "verify"),
@@ -136,6 +137,8 @@ LOG_ONLY = {
     ("ci.yml", "test-throwaway-hosted", "Run the tests"),
     ("packaged-suite.yml", "packaged-suite", "Run the tests from the packaged crate"),
     ("mutants.yml", "linux-hosted", "Run the linux rows"),
+    # Opt-in (dispatch or the live-smoke label): no healthy run measured yet.
+    ("maps-live-smoke.yml", "gateway", "Live gateway rows, one exact test per run, paced per host"),
     ("release.yml", "verify", "Test"),
 }
 # Minutes kept free of step limits in each job: setup, cache, swap and post steps measured at 3 min or less.
