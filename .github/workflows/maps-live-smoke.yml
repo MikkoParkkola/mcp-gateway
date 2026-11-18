@@ -77,12 +77,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The library test binary is one ~15 GB rustc: swap first (scripts/ci/check_swap_jobs.py).
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the lib tests
-        run: cargo test --all-features --lib --no-run
+        # The compile ci.yml's linux-lib-build measures at about 11 min; the same limit as there.
+        timeout-minutes: 25
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-run
       - name: Live gateway rows, one exact test per run, paced per host
         shell: bash
         run: |
@@ -92,9 +96,9 @@ jobs:
           passed=0
           while IFS='|' read -r name gap; do
             sleep "$gap"
-            out=$(cargo test --all-features --lib "capability::maps_live_tests::${name}" -- --ignored --exact 2>&1)
-            echo "$out" | tail -5
-            if echo "$out" | grep -q '^test result: ok. 1 passed'; then
+            scripts/ci/with-memory-log.sh cargo test --all-features --lib "capability::maps_live_tests::${name}" -- --ignored --exact > row.log 2>&1
+            tail -5 row.log
+            if grep -q '^test result: ok. 1 passed' row.log; then
               passed=$((passed + 1))
             else
               echo "FAILED: ${name}"
