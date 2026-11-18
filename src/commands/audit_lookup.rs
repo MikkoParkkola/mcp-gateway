@@ -364,28 +364,33 @@ pub(crate) async fn lookup_run(
     secrets.push(secret.clone());
     let both = [token.as_str(), secret.as_str()];
     let out = match lookup(&base, &tls, &token, &asked, &args).await {
-        Ok(mut answer) if !redact_answer(&mut answer, &token) => CliError::new(
-            CliExit::LocalFailure,
-            UNSAFE_BODY_MESSAGE,
-            UNSAFE_BODY_REMEDY,
-        )
-        .outcome(false, &both),
-        Ok(answer) => match render(&answer) {
-            // The email or cursor may be data in the answer; only the token is refused (design D6).
-            Ok(text) => CliOutcome::success(
-                format!("{text}\n").into_bytes(),
-                String::new(),
-                false,
-                &both,
-                StdoutRule::RefuseToken,
-            ),
-            Err(message) => CliError::new(
-                CliExit::LocalFailure,
-                message,
-                "Retry; report the failure if it repeats.",
-            )
-            .outcome(false, &both),
-        },
+        Ok(mut answer) => {
+            if redact_answer(&mut answer, &token) {
+                match render(&answer) {
+                    // The email or cursor may be data in the answer; only the token is refused (design D6).
+                    Ok(text) => CliOutcome::success(
+                        format!("{text}\n").into_bytes(),
+                        String::new(),
+                        false,
+                        &both,
+                        StdoutRule::RefuseToken,
+                    ),
+                    Err(message) => CliError::new(
+                        CliExit::LocalFailure,
+                        message,
+                        "Retry; report the failure if it repeats.",
+                    )
+                    .outcome(false, &both),
+                }
+            } else {
+                CliError::new(
+                    CliExit::LocalFailure,
+                    UNSAFE_BODY_MESSAGE,
+                    UNSAFE_BODY_REMEDY,
+                )
+                .outcome(false, &both)
+            }
+        }
         Err(error) => error.outcome(false, &both),
     };
     (out, secrets)
