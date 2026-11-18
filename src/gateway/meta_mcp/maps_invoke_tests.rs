@@ -420,7 +420,7 @@ async fn at11b_an_error_result_through_the_gateway_carries_no_credit() {
     assert_eq!(tool["isError"], true, "premise: an error result: {tool}");
     let diagnostic = tool["content"][0]["text"].as_str().unwrap_or_default();
     assert!(
-        diagnostic.contains('q') && diagnostic.contains("required"),
+        diagnostic.contains("Parameter 'q': required parameter is missing"),
         "premise: the input refusal names `q`: {diagnostic}"
     );
     assert!(!text.contains(OSM), "no credit on an error result: {text}");
