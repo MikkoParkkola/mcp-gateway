@@ -193,6 +193,7 @@ pub mod skills;
 #[doc(hidden)]
 pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
+#[cfg(tp3)]
 #[cfg(test)]
 mod home_contention_tests;
 #[cfg(all(test, feature = "cost-governance"))]

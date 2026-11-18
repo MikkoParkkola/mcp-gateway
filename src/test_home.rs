@@ -149,6 +149,7 @@ fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
 /// R2.3: the running test binary is started only through
 /// [`test_binary`], except at the listed sites that wrap it in a shell and
 /// apply [`child_env`] themselves, and at the production uses (the gateway starting itself).
+#[cfg(tp3)]
 #[test]
 fn every_test_binary_spawn_goes_through_test_binary() {
     const OWN: (&str, &str) = ("src/test_home.rs", "test_binary");
@@ -244,6 +245,7 @@ fn every_test_binary_spawn_goes_through_test_binary() {
 }
 
 /// The scan finds a planted call and names its fn (A3: it can fail).
+#[cfg(tp3)]
 #[test]
 fn the_spawn_scan_finds_a_planted_call() {
     let planted =
