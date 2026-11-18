@@ -560,23 +560,9 @@ impl CapabilityExecutor {
             if paced { 1 } else { MAX_SEND_ATTEMPTS },
         )
         .await?;
-        // The paced client follows no redirect: its 3xx is the call's answer,
-        // an error naming the host it pointed to. Only the host: a Location
-        // can carry a signed token or a credential in its path or query.
+        // The paced client follows no redirect: its 3xx is the call's answer.
         if paced && response.status().is_redirection() {
-            let target = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                // A relative Location names the request's own host.
-                .and_then(|loc| url::Url::parse(&url).ok()?.join(loc).ok())
-                .and_then(|target| crate::capability::pacing::host_key(target.as_str()))
-                .map_or_else(|| "another host".to_owned(), |k| k.host);
-            return Err(Error::Protocol(format!(
-                "a paced provider does not follow redirects; {} answered {} pointing to {target}",
-                crate::capability::pacing::host_key(&url).map_or_else(String::new, |k| k.host),
-                response.status().as_u16(),
-            )));
+            return Err(paced_redirect_error(&url, &response));
         }
 
         let body = self.handle_response(response, config).await?;
@@ -599,6 +585,25 @@ impl Default for CapabilityExecutor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A paced call's 3xx answer as an error naming the host it pointed to. Only
+/// the host: a Location can carry a signed token or a credential in its path
+/// or query.
+fn paced_redirect_error(request_url: &str, response: &reqwest::Response) -> Error {
+    let target = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        // A relative Location names the request's own host.
+        .and_then(|loc| url::Url::parse(request_url).ok()?.join(loc).ok())
+        .and_then(|target| crate::capability::pacing::host_key(target.as_str()))
+        .map_or_else(|| "another host".to_owned(), |k| k.host);
+    Error::Protocol(format!(
+        "a paced provider does not follow redirects; {} answered {} pointing to {target}",
+        crate::capability::pacing::host_key(request_url).map_or_else(String::new, |k| k.host),
+        response.status().as_u16(),
+    ))
 }
 
 #[cfg(test)]
