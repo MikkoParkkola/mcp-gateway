@@ -597,6 +597,15 @@ def self_test() -> int:
          {**allowed, ("ci.yml", "new"): {"steps": [
              helper_build, {"run": "scripts/ci/with-memory-log.sh cargo build --all-features 2>&1 --tests"},
              tripwire]}}, True, True),
+        # A test binary's own flags after `--` (--test-threads) do not make the build a single-target one.
+        ("a whole build with --test-threads after --, beside the helper",
+         {**allowed, ("ci.yml", "new"): {"steps": [
+             helper_build, {"run": "cargo test --all-features --lib 2>&1 -- --test-threads=1"}, tripwire]}}, True, True),
+        # bash ends a comment at the newline: a backslash at the end of a comment does not continue the line.
+        ("a whole build on the line after a comment ending in a backslash, beside the helper",
+         {**allowed, ("ci.yml", "new"): {"steps": [
+             helper_build, {"run": "# build the lib tests \\\ncargo test --all-features --lib --no-run"},
+             tripwire]}}, True, True),
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
@@ -655,6 +664,18 @@ def self_test() -> int:
          shape.format(part, rest).replace(n_line, n_line + "  export a=1 n=2\n"), True),
         ("n appended to", shape.format(part, rest).replace(n_line, n_line + "  n+=1\n"), True),
         ("n overridden through its first element", shape.format(part, rest).replace(n_line, n_line + "  n[0]=2\n"), True),
+        ("n as a for loop's variable", shape.format(part, rest).replace(n_line, n_line + "  for n in 2; do :; done\n"), True),
+        ("n as a select loop's variable",
+         shape.format(part, rest).replace(n_line, n_line + "  select n in 2; do break; done\n"), True),
+        ("n overridden in a case arm",
+         shape.format(part, rest).replace(n_line, n_line + '  case "$x" in y) n=2;; esac\n'), True),
+        ("n overridden in a case arm on its own line",
+         shape.format(part, rest).replace(n_line, n_line + '  case "$x" in\n    y) n=2 ;;\n  esac\n'), True),
+        # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
+        ("a whole build chained after the part call on its line",
+         shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
+        ("a cargo build of the tests in the build block",
+         shape.format(part, rest + "\n  cargo build --all-features --locked --tests"), True),
         ("a part built outside the loop", shape.format(part, rest + "\n  " + part), True),
     ]
     for label, text, want_bad in packaged_cases:
