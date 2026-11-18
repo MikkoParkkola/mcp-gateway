@@ -734,8 +734,9 @@ def self_test() -> int:
         ("n assigned by ${n=1}", shape.format(part, rest).replace(n_line, n_line + '  : "${n=1}"\n'), True),
         ("a -n flag names n too (strict)", shape.format(part, rest).replace(n_line, n_line + '  [ -n "$x" ] || true\n'),
          True),
+        # One mention of n, so only the canonical-read rule can refuse it.
         ("the read prints a constant", shape.format(part, rest).replace(
-            n_line, "  n=\"$(sed -n 's/.*/2/p;q' scripts/dev/test-parts-build.rs)\"\n"), True),
+            n_line, "  n=\"$(sed 's/.*/2/;q' scripts/dev/test-parts-build.rs)\"\n"), True),
         # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
         ("a whole build chained after the part call on its line",
          shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
