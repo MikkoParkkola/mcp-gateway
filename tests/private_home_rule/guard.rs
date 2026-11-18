@@ -7,7 +7,9 @@
 /// (binary, fn), from the per-test probe (51 tests) plus the
 /// probe fn, and the two CA rows the release line added later, which start a
 /// preview through the same `fetching()` path as the probed
-/// `r1_a_fetching_preview_runs_its_target_after_the_handshake`. It may only
+/// `r1_a_fetching_preview_runs_its_target_after_the_handshake`, and one webui
+/// row the bare probe rerun found once each test ran alone (its lookup runs on
+/// a tokio worker thread, which the first probe could not name). It may only
 /// grow: a test that newly resolves the home joins it.
 const WRAPPED: &[(&str, &str)] = &[
     (
@@ -188,6 +190,10 @@ const WRAPPED: &[(&str, &str)] = &[
     (
         "webui_management_tests",
         "a_selection_change_is_on_its_audit_record",
+    ),
+    (
+        "webui_management_tests",
+        "a_credential_edited_in_the_panel_is_stored_not_written",
     ),
     ("private_home_rule", "private_home_probe"),
 ];
