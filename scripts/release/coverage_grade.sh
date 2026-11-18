@@ -44,14 +44,13 @@ self_check() {
   mkdir -p "$tmp/src"
   xz -dc "$SELF_DIR/linux.lcov.xz" > "$tmp/linux.lcov"
   xz -dc "$SELF_DIR/windows.lcov.xz" > "$tmp/windows.lcov"
-  xz -dc "$SELF_DIR/cov.json.xz" > "$tmp/cov.json"
   rev="$(git rev-parse "$SELF_REV^{commit}")"
   git archive "$rev" src docs/release | tar -x -C "$tmp/src"
   functions=0; paths=0
   (cd "$tmp/src" && python3 "$HERE/critical_function_coverage.py" \
     --lcov "$tmp/linux.lcov" --lcov "$tmp/windows.lcov") \
     > "$tmp/functions.txt" || functions=$?
-  (cd "$tmp/src" && python3 "$HERE/critical_path_coverage.py" "$tmp/cov.json") \
+  (cd "$tmp/src" && python3 "$HERE/critical_path_coverage.py" "$tmp/linux.lcov") \
     > "$tmp/paths.txt" || paths=$?
   if [[ "$functions" != 0 || "$paths" != 0 ]] \
     || ! cmp -s "$tmp/functions.txt" "$SELF_DIR/functions.txt" \
@@ -115,6 +114,9 @@ case "${1:-}" in
     rev="$(git rev-parse "$1^{commit}")"
     tag="${2:-${rev:0:9}}"
     [[ "$tag" =~ ^[A-Za-z0-9-]+$ ]] || { echo "tag must match [A-Za-z0-9-]+" >&2; exit 2; }
+    # Only the workflow is overlaid; the revision must supply the scripts it runs.
+    git cat-file -e "$rev:scripts/ci/coverage_union.py" 2>/dev/null \
+      || { echo "cannot probe $rev: missing scripts/ci/coverage_union.py" >&2; exit 2; }
     index="$(mktemp)"; trap 'rm -f "$index"' EXIT
     GIT_INDEX_FILE="$index" git read-tree "$rev"
     blob="$(git hash-object -w "$PROBE_FILE")"
@@ -188,7 +190,7 @@ not_graded() {
   exit 5
 }
 missing=0
-for input in coverage-linux/linux.lcov coverage-windows/windows.lcov coverage-linux/cov.json; do
+for input in coverage-linux/linux.lcov coverage-windows/windows.lcov; do
   [[ -s "$out/art/$input" && -r "$out/art/$input" ]] || { echo "input missing: $out/art/$input"; missing=1; }
 done
 [[ $missing == 0 ]] || not_graded
@@ -196,7 +198,7 @@ status=0 functions=0 paths=0
 (cd "$out/src" && python3 scripts/release/critical_function_coverage.py \
   --lcov "$out/art/coverage-linux/linux.lcov" --lcov "$out/art/coverage-windows/windows.lcov") \
   > "$out/functions.txt" || functions=$?
-python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || paths=$?
+python3 "$paths_grader" "$out/art/coverage-linux/linux.lcov" > "$out/paths.txt" || paths=$?
 if [[ $functions == "$INPUT_MISSING" || $paths == "$INPUT_MISSING" ]]; then
   grep -h '^input missing:' "$out/functions.txt" "$out/paths.txt" || true
   not_graded
