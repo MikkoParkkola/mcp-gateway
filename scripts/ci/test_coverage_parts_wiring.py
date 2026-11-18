@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""C4, W1 and W2: coverage part wiring, checked against the live checkout."""
+"""C4 and W1-W4: coverage part wiring, checked against the live checkout."""
 from __future__ import annotations
 
 import ast
@@ -151,6 +151,55 @@ class CoveragePartsWiring(unittest.TestCase):
         self.assertEqual(sorted(modes), sorted(RUN_BY_PATH), "a script run by path is not tracked")
         self.assertEqual({path: mode for path, mode in modes.items() if mode != "100755"}, {},
                          "scripts run by path must be tracked executable (100755)")
+
+    def test_W4_one_coverage_part_per_job(self) -> None:
+        # lib-parts.sh's cov cleanup removes every deps/p<digits> folder on each run. Running a second part in
+        # the same job and target directory would delete the first part's executable before the coverage merge.
+        doc = yaml.safe_load((ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8"))
+        invocation = re.compile(r"scripts/ci/lib-parts\.sh\s+cov\b")
+        steps = [(name, step) for name, job in doc["jobs"].items() for step in job.get("steps", [])
+                 if invocation.search(step.get("run", ""))]
+        self.assertEqual([name for name, _ in steps], ["linux-part"],
+                         "exactly one step across all jobs may run lib-parts.sh cov, in linux-part")
+        step = steps[0][1]
+        matrix = doc["jobs"]["linux-part"].get("strategy", {}).get("matrix", {})
+        self.assertIsInstance(matrix, dict, "linux-part must declare a part matrix")
+        self.assertIn("part", matrix, "linux-part must declare a part matrix")
+        self.assertEqual(step.get("env", {}).get("PART"), "${{ matrix.part }}",
+                         "the coverage step must take PART directly from matrix.part")
+        self.assertEqual(set(re.findall(r"\bmatrix\.([\w-]+)", yaml.safe_dump(step))), {"part"},
+                         "part must be the only matrix key used by the coverage step")
+        run = step["run"].replace("\\\n", " ")
+        self.assertEqual(len(invocation.findall(run)), 1, "the step must invoke cov exactly once")
+        self.assertNotRegex(run, r"\b(?:for|while|until)\b", "coverage parts must not run in a loop")
+        command = re.search(r'scripts/ci/lib-parts\.sh\s+cov[^\n]*', run).group()
+        self.assertNotIn(",", command, "cov must receive one part, never a comma-separated list")
+        self.assertRegex(command, r'^scripts/ci/lib-parts\.sh\s+cov\s+\S+\s+"\$PART"\s*(?:[<>]|$)',
+                         'cov must receive "$PART" as its single part argument')
+
+    def test_W4_rejects_workflow_mutations(self) -> None:
+        workflow = ROOT / ".github/workflows/coverage-probe.yml"
+        read_text = Path.read_text
+        source = workflow.read_text(encoding="utf-8")
+        for case in ("second step", "another job", "fixed PART"):
+            with self.subTest(case=case):
+                doc = yaml.safe_load(source)
+                steps = doc["jobs"]["linux-part"]["steps"]
+                step = next(step for step in steps if "scripts/ci/lib-parts.sh cov" in step.get("run", ""))
+                if case == "second step":
+                    steps.append(dict(step))
+                elif case == "another job":
+                    doc["jobs"]["extra-part"] = {"runs-on": "ubuntu-24.04", "steps": [dict(step)]}
+                else:
+                    step["env"]["PART"] = "lib-1"
+                mutated = yaml.safe_dump(doc)
+
+                def with_mutation(path, *args, **kwargs):
+                    return mutated if path == workflow else read_text(path, *args, **kwargs)
+
+                with patch.object(Path, "read_text", with_mutation):
+                    with self.assertRaises(AssertionError):
+                        self.test_W4_one_coverage_part_per_job()
 
 
 RUN_BY_PATH = ("scripts/ci/with-memory-log.sh", "scripts/ci/lib-parts.sh", "scripts/ci/memory-tripwire.sh",
