@@ -21,6 +21,21 @@ const READ = tool('web.search', 'search', 'read', { type: 'object', properties: 
 const norm = (s) => s.replace(/\s+/g, ' ').trim();
 const panel = (page) => page.locator('section.tools-try');
 const runOf = (page, name) => panel(page).getByRole('button', { name: `Run ${name}`, exact: true });
+/** How long an absence waits for a send that would follow the action, before it is read. */
+const SETTLE_MS = 300;
+/**
+ * Run `action`, then hold until it has sent exactly `delta` more calls. A request
+ * reaches its route only after the action that sent it resolves, so a count read
+ * at once can miss a send: a "sent" check would then fail a right screen, and a
+ * "nothing sent" check would pass a wrong one. Absence waits SETTLE_MS first.
+ */
+async function sends(bag, delta, action) {
+  const before = bag.calls.length;
+  await action();
+  if (delta > 0) await expect.poll(() => bag.calls.length, { message: `${delta} more call(s) sent` }).toBe(before + delta);
+  else await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+  expect(bag.calls.length, delta > 0 ? 'calls sent' : 'no call sent').toBe(before + delta);
+}
 const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
 
 function ran({ text = 'done', error = false, receipt, latency = 212, content } = {}) {
@@ -179,7 +194,7 @@ test('F2 two servers with one tool name: the second sends its server', async ({ 
     'web.search bravo · reads only',
   ]);
   await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
-  await runOf(page, 'web.search').click();
+  await sends(bag, 1, () => runOf(page, 'web.search').click());
   expect(bag.calls).toHaveLength(1);
   expect(bag.calls[0].body).toEqual({
     server: 'bravo',
@@ -225,10 +240,10 @@ test('F4 a default is a placeholder and is sent only once typed', async ({ page 
   await expect(query.locator('..')).toContainText('default');
   await expect(query).toHaveValue('');
   const run = runOf(page, 'web.search');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls[0].body.arguments).toEqual({});
   await query.fill('tampere');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls[1].body.arguments).toEqual({ query: 'tampere' });
 });
 
@@ -250,20 +265,20 @@ test('F5 optional enum and optional boolean: default is left out', async ({ page
   const notify = page.getByLabel('notify');
   expect((await notify.locator('option').allTextContents()).map(norm)).toEqual(['default', 'true', 'false']);
   const run = runOf(page, 'web.search');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({});
   await mode.selectOption({ label: 'fast' });
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({ mode: 'fast' });
   await mode.selectOption({ label: 'default' });
   await notify.selectOption({ label: 'false' });
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({ notify: false });
   await notify.selectOption({ label: 'true' });
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({ notify: true });
   await notify.selectOption({ label: 'default' });
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({});
 });
 
@@ -279,7 +294,7 @@ test('F6 an empty required number blocks Run and names the field', async ({ page
   const count = page.getByLabel('count');
   await expect(count).toBeVisible();
   expect(await markedRequired(count)).toBe(true);
-  await runOf(page, 'web.search').click({ timeout: 5000 });
+  await sends(bag, 0, () => runOf(page, 'web.search').click({ timeout: 5000 }));
   expect(bag.calls).toHaveLength(0);
   await expect(count).toHaveAttribute('aria-invalid', 'true');
 });
@@ -308,27 +323,27 @@ test('F7 object, array, $ref and oneOf are JSON fields', async ({ page }) => {
   await expect(need).toBeVisible();
   const run = runOf(page, 'web.search');
   await meta.fill('{');
-  await run.click({ timeout: 5000 });
+  await sends(bag, 0, () => run.click({ timeout: 5000 }));
   expect(bag.calls).toHaveLength(0);
   await expect(meta).toHaveAttribute('aria-invalid', 'true');
   await meta.fill('');
-  await run.click({ timeout: 5000 });
+  await sends(bag, 0, () => run.click({ timeout: 5000 }));
   expect(bag.calls).toHaveLength(0);
   await expect(need).toHaveAttribute('aria-invalid', 'true');
   await need.fill('{"ok":true}');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments).toEqual({ need: { ok: true } });
   await page.getByLabel('tags').fill('[1,2]');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments.tags).toEqual([1, 2]);
   await page.getByLabel('refd').fill('{"r":1}');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments.refd).toEqual({ r: 1 });
   await page.getByLabel('choice').fill('"left"');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments.choice).toBe('left');
   await meta.fill('{"a":1}');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls.at(-1).body.arguments.meta).toEqual({ a: 1 });
 });
 
@@ -344,11 +359,11 @@ test('F7b a blank required text sends an empty string; a blank optional is left 
   const q = page.getByLabel('q');
   await expect(q).toBeVisible();
   const run = runOf(page, 'web.search');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls[0].body.arguments).toEqual({ q: '' });
   await q.fill('y');
   await page.getByLabel('note').fill('x');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   expect(bag.calls[1].body.arguments).toEqual({ q: 'y', note: 'x' });
 });
 
@@ -373,7 +388,7 @@ test('F3b an integer enum sends an integer, and an empty-string enum sends ""', 
   expect((await empty.locator('option').allTextContents()).map(norm)).toEqual(['', 'none']);
   await n.selectOption({ label: '2' });
   await empty.selectOption({ index: 0 });
-  await runOf(page, 'web.search').click();
+  await sends(bag, 1, () => runOf(page, 'web.search').click());
   expect(bag.calls[0].body.arguments).toEqual({ n: 2, empty: '' });
   expect(typeof bag.calls[0].body.arguments.n).toBe('number');
 });
@@ -434,23 +449,23 @@ test('F8 a root the form cannot model is one JSON field; none sends {}', async (
   const box = panel(page).getByRole('textbox');
   await expect(box).toBeVisible();
   await box.fill('{"q":1}');
-  await runOf(page, 'one.of').click();
+  await sends(bag, 1, () => runOf(page, 'one.of').click());
   expect(bag.calls.at(-1).body).toEqual({
     server: 's', tool: 'one.of', arguments: { q: 1 }, confirm_write: false,
   });
   await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
   await panel(page).getByRole('textbox').fill('{"z":true}');
-  await runOf(page, 'ref.tool').click();
+  await sends(bag, 1, () => runOf(page, 'ref.tool').click());
   expect(bag.calls.at(-1).body).toEqual({
     server: 's', tool: 'ref.tool', arguments: { z: true }, confirm_write: false,
   });
   await panel(page).getByRole('combobox').first().selectOption({ index: 2 });
   await expect(panel(page).getByRole('textbox')).toHaveCount(0);
-  await runOf(page, 'no.schema').click();
+  await sends(bag, 1, () => runOf(page, 'no.schema').click());
   expect(bag.calls.at(-1).body.arguments).toEqual({});
   await panel(page).getByRole('combobox').first().selectOption({ index: 3 });
   await expect(panel(page).getByRole('textbox')).toHaveCount(0);
-  await runOf(page, 'empty.schema').click();
+  await sends(bag, 1, () => runOf(page, 'empty.schema').click());
   expect(bag.calls.at(-1).body.arguments).toEqual({});
 });
 
@@ -467,7 +482,7 @@ test('R1 Run sends the exact body, typed', async ({ page }) => {
   await expect(run).toBeVisible();
   await page.getByLabel('limit').fill('5');
   await page.getByLabel('agree').check();
-  await run.click();
+  await sends(bag, 1, () => run.click());
   const body = bag.calls[0].body;
   expect(Object.keys(body).sort()).toEqual(['arguments', 'confirm_write', 'server', 'tool']);
   expect(body).toEqual({
@@ -656,7 +671,7 @@ test('W1 a write tool asks before it sends', async ({ page }) => {
   const bag = await open(page, cfg);
   const run = runOf(page, 'fs.write');
   await expect(run).toBeVisible();
-  await run.click();
+  await sends(bag, 0, () => run.click());
   await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
   expect(bag.calls).toHaveLength(0);
 });
@@ -672,16 +687,16 @@ test('W2 confirm sends confirm_write true; cancel sends nothing and keeps the fo
   const run = runOf(page, 'fs.write');
   await expect(run).toBeVisible();
   await page.getByLabel('path').fill('/tmp/kept');
-  await run.click();
+  await sends(bag, 0, () => run.click());
   await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
   expect(bag.calls).toHaveLength(0);
-  await page.keyboard.press('Enter');
+  await sends(bag, 1, () => page.keyboard.press('Enter'));
   expect(bag.calls).toHaveLength(1);
   expect(bag.calls[0].body.confirm_write).toBe(true);
   expect(bag.calls[0].body.arguments).toEqual({ path: '/tmp/kept' });
   await run.click();
   await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
+  await sends(bag, 0, () => page.keyboard.press('Escape'));
   expect(bag.calls).toHaveLength(1);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
 });
@@ -709,7 +724,7 @@ test('W3 a 409 asks again and confirm resends the same arguments', async ({ page
   await page.getByLabel('limit').fill('5');
   await run.click();
   await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toBeVisible();
-  await page.keyboard.press('Enter');
+  await sends(bag, 1, () => page.keyboard.press('Enter'));
   expect(bag.calls).toHaveLength(2);
   const [first, second] = bag.calls.map((c) => c.body);
   expect(first.confirm_write).toBe(false);
@@ -733,10 +748,10 @@ test('W4 cancel after a 409 sends nothing more and keeps the form', async ({ pag
   const run = runOf(page, 'web.search');
   await expect(run).toBeVisible();
   await page.getByLabel('query').fill('helsinki');
-  await run.click();
+  await sends(bag, 1, () => run.click());
   await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toBeVisible();
   expect(bag.calls).toHaveLength(1);
-  await page.keyboard.press('Escape');
+  await sends(bag, 0, () => page.keyboard.press('Escape'));
   expect(bag.calls).toHaveLength(1);
   await expect(page.getByLabel('query')).toHaveValue('helsinki');
 });
@@ -754,12 +769,12 @@ test('W5 Enter confirms and Esc cancels', async ({ page }) => {
   await page.getByLabel('path').fill('/tmp/kept');
   await run.click();
   await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
+  await sends(bag, 0, () => page.keyboard.press('Escape'));
   expect(bag.calls).toHaveLength(0);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
   await run.click();
   await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
-  await page.keyboard.press('Enter');
+  await sends(bag, 1, () => page.keyboard.press('Enter'));
   expect(bag.calls).toHaveLength(1);
   expect(bag.calls[0].body.confirm_write).toBe(true);
 });
