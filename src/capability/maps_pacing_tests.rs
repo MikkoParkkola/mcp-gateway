@@ -744,23 +744,28 @@ async fn rl7b_an_upper_case_spelling_shares_the_bucket() {
 #[tokio::test]
 async fn rl20_a_call_failing_before_the_send_takes_no_permit() {
     let stub = Stub::start(Reply::json("{}")).await;
-    let url = stub.url("rl20.test", "/s");
+    // A loopback literal: a credential may go over plain http only to a
+    // loopback host, so the call clears that rule and fails at its credential.
+    let url = stub.url("127.0.0.1", "/s");
     let needs_key = format!(
         "fulcrum: \"1.0\"\nname: rl20key\ndescription: d\nschema:\n  input:\n    type: object\n    \
          properties:\n      q:\n        type: string\nauth:\n  required: true\n  key: \
          env:MAPS_RL20_UNSET_KEY_FOR_TEST\n  param: key\nproviders:\n  primary:\n    service: rest\n    \
          rate_limit:\n      interval_ms: 30000\n    config:\n      endpoint: {url}\n      method: GET\n"
     );
-    let b = backend(
-        Names::default(),
-        vec![
-            crate::capability::parse_capability(&needs_key).expect("capability"),
-            cap("rl20open", &url, None, false),
-        ],
+    let b = CapabilityBackend::new(
+        "rl20",
+        Arc::new(executor(Names::default()).with_test_loopback_egress()),
     );
+    b.register_capability(crate::capability::parse_capability(&needs_key).expect("capability"))
+        .expect("registered");
+    b.register_capability(cap("rl20open", &url, None, false))
+        .expect("registered");
+    let err = call(&b, "rl20key", "a").await.expect_err("no key");
     assert!(
-        call(&b, "rl20key", "a").await.is_err(),
-        "premise: no key, so the call fails before the send"
+        err.to_string()
+            .contains("Environment variable 'MAPS_RL20_UNSET_KEY_FOR_TEST' not set or empty"),
+        "premise: the call fails at its credential step, not an earlier rule: {err}"
     );
     call(&b, "rl20open", "b")
         .await
