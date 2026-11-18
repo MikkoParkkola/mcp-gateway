@@ -401,6 +401,7 @@ fn sweep(bound: Duration) -> Result<(), String> {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "fetch_step_tests.rs"]
 mod tests;

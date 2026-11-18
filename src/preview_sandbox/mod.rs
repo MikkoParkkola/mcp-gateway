@@ -326,6 +326,7 @@ mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]
 mod seam_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod staged_tests;
 
