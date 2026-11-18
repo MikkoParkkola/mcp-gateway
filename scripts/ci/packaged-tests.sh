@@ -83,7 +83,9 @@ else
   # provisions what it needs. The wiring test holds those lists equal.
   # (mik_5843_ is no longer skipped: docs/SHADOW_SCAN.md and README.md ship in
   # the crate, and packaged-suite is the post-merge run of ci.yml `test`, MIK-8163.)
-  cargo test --all-features --locked --no-fail-fast -- \
+  # The lib test binary one part at a time, then the other targets, then the doctests, through the shared helper
+  # (the crate does not ship scripts/ci, so it runs from the checkout with the unpacked crate as its directory).
+  "$root/scripts/ci/lib-parts.sh" run --all-features --locked -- \
     --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result \
     --skip mik_7479_full_burst
 fi
