@@ -715,6 +715,18 @@ def self_test() -> int:
          shape.format(part, rest).replace(n_line, n_line + '  case "$x" in y) n=2;; esac\n'), True),
         ("n overridden in a case arm on its own line",
          shape.format(part, rest).replace(n_line, n_line + '  case "$x" in\n    y) n=2 ;;\n  esac\n'), True),
+        # The rule is a whitelist: the bare word n (not $n or ${n}) appears in one command only, the build script's
+        # read. So every other way bash has to write n is refused without being listed.
+        ("n written by arithmetic", shape.format(part, rest).replace(n_line, n_line + "  ((n=2))\n"), True),
+        ("n written by let", shape.format(part, rest).replace(n_line, n_line + "  let n=2\n"), True),
+        ("n written by read", shape.format(part, rest).replace(n_line, n_line + "  read -r n <<< 2\n"), True),
+        ("n overridden in a case arm after a command substitution head",
+         shape.format(part, rest).replace(n_line, n_line + '  case $(cat mode) in y) n=2;; esac\n'), True),
+        ("n overridden in a case arm with a bracket pattern",
+         shape.format(part, rest).replace(n_line, n_line + '  case "$mode" in buil[d\\(]) n=2;; esac\n'), True),
+        ("n read as ${n}, a [ -n ] test and a comment naming n",
+         shape.format(part, rest).replace(n_line, n_line + '  # n comes from the build script\n'
+                                                   '  [ -n "$n" ] || exit 1\n  echo "parts: ${n}"\n'), False),
         # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
         ("a whole build chained after the part call on its line",
          shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
