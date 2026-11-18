@@ -561,6 +561,11 @@ def self_test() -> int:
                                                    tripwire]}}, True, True),
         ("a helper job whose tripwire runs before the build",
          {**allowed, ("ci.yml", "new"): {"steps": [tripwire, helper_build]}}, True, True),
+        # Placement reads each command as the census does: a build named only in a comment is not a later build step.
+        ("a step after the tripwire that names a build only in a comment",
+         {**allowed, ("ci.yml", "new"): {"steps": [helper_build, tripwire,
+                                                   {"run": "echo done  # cargo test --all-features --lib --no-run"}]}},
+         False, True),
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
