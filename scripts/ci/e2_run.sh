@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-# E2 (throwaway only, never merged): e2_run.sh verify|packaged OUT. Builds today's single `cargo test --no-run` once
-# as the independent oracle and lists its lib binary, then builds each part and lists it right after its own build
-# (a later part may overwrite the binary), then the other targets; compares them (e2_parity.py), compares the doctest
-# lists, and finally runs the job's new split command end to end, logging every phase.
+# E2 (throwaway only, never merged): e2_run.sh verify|packaged OUT. The split side only: builds each part and lists
+# it right after its own build (a later part may overwrite the binary), then the other targets, lists the doctests,
+# and runs the job's new split command end to end, logging every phase. The unsplit oracle is built on Spark (the
+# whole lib test binary loses hosted runners); e2_parity.py compares the two afterwards.
 set -euo pipefail
 shape="$1"
 mkdir -p "$2"
@@ -37,11 +37,7 @@ n="$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:space:]]*=[[:
   scripts/dev/test-parts-build.rs)"
 echo "e2 $shape: N=$n in $(pwd)"
 
-cargo test "${flags[@]}" --no-run --message-format=json > "$out/unsplit.json"
-exe="$(lib_exe "$out/unsplit.json")"
-"$exe" --list > "$out/unsplit-lib.txt"
-sha256sum "$exe" > "$out/hashes.txt"
-cargo test "${flags[@]}" --doc -- --list > "$out/unsplit-doc.txt"
+: > "$out/hashes.txt"
 
 for k in $(seq 1 "$n"); do
   MCP_GATEWAY_TEST_PART="$k" cargo test "${flags[@]}" --no-run --lib --message-format=json > "$out/p$k.json"
@@ -54,8 +50,6 @@ env -u MCP_GATEWAY_TEST_PART cargo test "${flags[@]}" --no-run --bins --test '*'
 env -u MCP_GATEWAY_TEST_PART cargo test "${flags[@]}" --doc -- --list > "$out/split-doc.txt"
 
 status=0
-python3 "$root/scripts/ci/e2_parity.py" compare "$out" || status=1
-diff "$out/unsplit-doc.txt" "$out/split-doc.txt" > "$out/doc.diff" || { echo "::error::e2: doctest lists differ"; status=1; }
 
 if [ "$shape" = packaged ]; then
   "$root/scripts/ci/packaged-tests.sh" run 2>&1 | tee "$out/run.log" || status=1
@@ -65,7 +59,7 @@ fi
 python3 "$root/scripts/ci/e2_parity.py" counts "$out" "${skips[@]}" || status=1
 # The evidence lives in this log: each binary's hash and each list's size.
 cat "$out/hashes.txt"
-for f in "$out/unsplit-lib.txt" "$out"/p[0-9]*.txt "$out/unsplit-doc.txt"; do
+for f in "$out"/p[0-9]*.txt "$out/split-doc.txt"; do
   echo "e2 $shape: $(basename "$f"): $(grep -c ': test$' "$f" || true) tests"
 done
 echo "e2 $shape: status $status"

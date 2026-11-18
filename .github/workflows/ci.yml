@@ -1152,9 +1152,9 @@ jobs:
         if: always()
         run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
-  # THROWAWAY ONLY (never merged): E2 parity for the lib test split's run mode. Each job builds today's single
-  # `cargo test --no-run` once as the independent oracle, then each part and the other targets, compares them, and
-  # runs the job's new split command end to end (scripts/ci/e2_run.sh).
+  # THROWAWAY ONLY (never merged): E2 parity for the lib test split's run mode, the split side. Each job builds each
+  # part (listed right after its build) and the other targets, lists the doctests, and runs the job's new split
+  # command end to end (scripts/ci/e2_run.sh). The unsplit oracle is built on Spark and compared afterwards.
   e2:
     name: E2 ${{ matrix.shape }} shape (throwaway)
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'throwaway/')
