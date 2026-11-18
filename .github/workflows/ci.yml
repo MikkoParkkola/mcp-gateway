@@ -1399,7 +1399,7 @@ jobs:
       - if: runner.environment == 'github-hosted'
         uses: ./.github/actions/add-swap
       # Sandbox-row probe (this branch never merges): only the rows named in
-      # .probe-rows run, as the Linux lib shards run them, with user
+      # docs/probe-rows.txt run, as the Linux lib shards run them, with user
       # namespaces allowed, the gateway binary built here and the sandbox
       # required, so a row that cannot run fails instead of skipping.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -1423,8 +1423,8 @@ jobs:
           PREVIEW_SANDBOX_GATEWAY_BIN: ${{ github.workspace }}/target/debug/mcp-gateway
         run: |
           set -uo pipefail
-          mapfile -t rows < <(grep -v '^#' .probe-rows | grep .)
-          [ "${#rows[@]}" -gt 0 ] || { echo "::error::.probe-rows names no row"; exit 1; }
+          mapfile -t rows < <(grep -v '^#' docs/probe-rows.txt | grep .)
+          [ "${#rows[@]}" -gt 0 ] || { echo "::error::docs/probe-rows.txt names no row"; exit 1; }
           scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-fail-fast -- --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
           rc=${PIPESTATUS[0]}
           if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
@@ -1458,7 +1458,7 @@ jobs:
       - if: runner.environment == 'github-hosted'
         uses: ./.github/actions/add-swap
       # Sandbox-row probe (this branch never merges): only the rows named in
-      # .probe-rows run, as the Linux lib shards run them, with user
+      # docs/probe-rows.txt run, as the Linux lib shards run them, with user
       # namespaces allowed, the gateway binary built here and the sandbox
       # required, so a row that cannot run fails instead of skipping.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -1482,8 +1482,8 @@ jobs:
           PREVIEW_SANDBOX_GATEWAY_BIN: ${{ github.workspace }}/target/debug/mcp-gateway
         run: |
           set -uo pipefail
-          mapfile -t rows < <(grep -v '^#' .probe-rows | grep .)
-          [ "${#rows[@]}" -gt 0 ] || { echo "::error::.probe-rows names no row"; exit 1; }
+          mapfile -t rows < <(grep -v '^#' docs/probe-rows.txt | grep .)
+          [ "${#rows[@]}" -gt 0 ] || { echo "::error::docs/probe-rows.txt names no row"; exit 1; }
           scripts/ci/with-memory-log.sh cargo test --all-features --lib --no-fail-fast -- --exact "${rows[@]}" 2>&1 | tee "$RUNNER_TEMP/rows.log"
           rc=${PIPESTATUS[0]}
           if ! grep -Eq "^running ${#rows[@]} tests?$" "$RUNNER_TEMP/rows.log"; then
