@@ -27,6 +27,9 @@ ledger lacked, added 2026-09-29 on the lead's instruction under the operator's
 full-4.0-scope ruling, with MIK-7407's own acceptance criteria as the text;
 protocol requirements additionally use the pinned specifications linked below.
 
+The count includes MIK-9760.MAPS.11, added 2026-11-18 on the lead's instruction
+and awaiting the operator's ratification; the operator may strike it.
+
 | ID | Required outcome | Delivery package |
 |---|---|---|
 | GH462.CONFIG.1 | An admin edit of an invalid existing config refuses and preserves its original bytes; a missing file still supports first setup. | SAFETY |
