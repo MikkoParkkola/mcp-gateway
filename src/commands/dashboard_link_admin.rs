@@ -529,23 +529,26 @@ fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
     AdminFailureKind::Connect
 }
 
-/// Whether a rustls error sits anywhere among `first` and its causes. An `io::Error`'s `source()` skips the error
-/// it wraps (it returns that error's own source), so each `io::Error` is also opened through `get_ref`: a real
-/// handshake failure nests two (hyper's Connect error, then io::Error(Other), io::Error(InvalidData), rustls
-/// InvalidCertificate), which a `source()` walk alone never reaches.
+/// Whether a rustls error sits among `first` and its causes. An `io::Error`'s `source()` skips the error it wraps
+/// (it returns that error's own source), so the walk steps into an `io::Error` through `get_ref` and into anything
+/// else through `source()`: one path, each node once. A real handshake failure nests two io::Errors (hyper's
+/// Connect error, io::Error(Other), io::Error(InvalidData), rustls InvalidCertificate) that `source()` alone
+/// never reaches.
 fn tls_in_chain(first: Option<&(dyn std::error::Error + 'static)>) -> bool {
-    let mut pending: Vec<&(dyn std::error::Error + 'static)> = first.into_iter().collect();
-    while let Some(error) = pending.pop() {
+    // A step bound stops a chain whose source() loops; real chains are under ten deep.
+    const MAX_STEPS: usize = 128;
+    let mut cause = first;
+    for _ in 0..MAX_STEPS {
+        let Some(error) = cause else { return false };
         if error.is::<rustls::Error>() {
             return true;
         }
-        if let Some(wrapped) = error
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::get_ref)
-        {
-            pending.push(wrapped);
-        }
-        pending.extend(error.source());
+        cause = match error.downcast_ref::<std::io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|inner| inner as &(dyn std::error::Error + 'static)),
+            None => error.source(),
+        };
     }
     false
 }

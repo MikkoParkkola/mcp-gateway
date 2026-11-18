@@ -57,3 +57,32 @@ fn the_walk_finds_rustls_however_deep_the_io_errors_nest() {
         assert_eq!(tls_in_chain(chain), tls, "{case}");
     }
 }
+
+/// An error whose source is itself: a looping chain.
+#[derive(Debug)]
+struct Loop;
+
+impl std::fmt::Display for Loop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("loop")
+    }
+}
+
+impl std::error::Error for Loop {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self)
+    }
+}
+
+/// The walk is one path, each node once: forty alternating Connect and io::Error wrappers still reach rustls, and
+/// a chain whose source loops ends (false) instead of spinning.
+#[test]
+fn the_walk_is_linear_and_bounded() {
+    let mut deep: Box<dyn std::error::Error + Send + Sync> = Box::new(unknown_issuer());
+    for _ in 0..40 {
+        deep = Box::new(Connect(io(std::io::ErrorKind::Other, deep)));
+    }
+    let deep: &(dyn std::error::Error + 'static) = deep.as_ref();
+    assert!(tls_in_chain(Some(deep)), "forty wrappers deep");
+    assert!(!tls_in_chain(Some(&Loop)), "a looping chain");
+}

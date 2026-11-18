@@ -36,6 +36,34 @@ async fn remedies_name_only_the_gateway_origin() {
             case,
         );
     }
+    // The refusal's remedy too (Remedies::read): the request goes out, the 401 names only the origin.
+    let refused = gateway(json(401, r#"{"message":"denied"}"#)).await;
+    let port = refused.base.rsplit(':').next().expect("a port").to_string();
+    let dirty = format!("http://user:PW1@127.0.0.1:{port}/x?token=Q1");
+    let remedy = format!("{TOKEN_REMEDY_PREFIX}http://127.0.0.1:{port}, then retry.");
+    for (case, out) in [
+        (
+            "dashboard-link 401",
+            link(&["--url", &dirty], ok_token()).await,
+        ),
+        (
+            "events 401",
+            events(&["list", "--url", &dirty], ok_token()).await,
+        ),
+        (
+            "lookup 401",
+            lookup(&["--url", &dirty], EMAIL.as_bytes(), Some(TOKEN)).await,
+        ),
+    ] {
+        failed(
+            &out,
+            CliExit::AuthRefused,
+            "The gateway answered HTTP 401: denied",
+            &remedy,
+            case,
+        );
+    }
+    check_eq!(refused.requests().len(), 3, "each 401 request went out");
     finish();
 }
 
@@ -86,8 +114,11 @@ async fn replay_answers_over_the_limit_or_without_json_are_uncertain() {
     let uncertain_what = "The gateway may have applied this change.";
     let mut exact = br#"{"items":[]}"#.to_vec();
     exact.resize(MIB16, b' ');
+    // Valid JSON one byte past the limit: only the size limit makes it uncertain (without the limit it would print).
+    let mut over = exact.clone();
+    over.push(b' ');
     for (case, body, want_ok) in [
-        ("over 16 MiB", vec![b' '; MIB16 + 1], false),
+        ("over 16 MiB", over, false),
         ("2xx without JSON", b"not json".to_vec(), false),
         ("exactly 16 MiB", exact, true),
     ] {
@@ -128,28 +159,48 @@ async fn replay_answers_over_the_limit_or_without_json_are_uncertain() {
     finish();
 }
 
-/// A lookup answer echoing the token prints redacted (exit 0), as the other commands' answers do; a token holding a
-/// quote is redacted before JSON escaping, so neither its raw nor its escaped form reaches stdout.
+/// A lookup answer echoing the token prints redacted (exit 0), as the other commands' answers do, in every field
+/// redact_answer enumerates: each text field, a JSON value and a JSON key. A token holding a quote is redacted before
+/// JSON escaping, so neither its raw nor its escaped form reaches stdout. A redaction that would merge two JSON keys
+/// is refused, not printed short.
 #[tokio::test]
 async fn lookup_answers_are_redacted_before_printing() {
     for token in [TOKEN, "tok\"q"] {
+        let held = format!("held by {token}");
         let answer = serde_json::json!({
             "rows": [{
-                "timestamp": null, "token_jti": null, "subject": format!("held by {token}"),
-                "issuer": null, "backends": null, "tools": null, "segment": 0
+                "timestamp": held, "token_jti": held, "subject": held, "issuer": held,
+                "backends": [held], "tools": { (token): "a key" }, "segment": 0
             }],
-            "next_cursor": null, "scan_exhausted": true, "cursor_reset": false, "unreadable": 0, "scope": "all"
+            "next_cursor": held, "scan_exhausted": true, "cursor_reset": false, "unreadable": 0, "scope": held
         });
         let gw = gateway(json(200, &answer.to_string())).await;
         let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some(token)).await;
         let printed = String::from_utf8_lossy(out.stdout()).to_string();
-        let subject = serde_json::from_str::<serde_json::Value>(&printed)
-            .ok()
-            .and_then(|value| value["rows"][0]["subject"].as_str().map(str::to_string));
+        let value = serde_json::from_str::<serde_json::Value>(&printed).unwrap_or_default();
+        let fields: Vec<Option<&str>> = [
+            "/rows/0/timestamp",
+            "/rows/0/token_jti",
+            "/rows/0/subject",
+            "/rows/0/issuer",
+            "/rows/0/backends/0",
+            "/next_cursor",
+            "/scope",
+        ]
+        .iter()
+        .map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_str))
+        .collect();
         check_eq!(
-            (out.exit(), out.stderr(), subject.as_deref()),
-            (CliExit::Ok, "", Some("held by [redacted]")),
-            "{token:?}"
+            (out.exit(), out.stderr(), fields),
+            (CliExit::Ok, "", vec![Some("held by [redacted]"); 7]),
+            "{token:?}: every text field and the JSON value"
+        );
+        check_eq!(
+            value
+                .pointer("/rows/0/tools/[redacted]")
+                .and_then(serde_json::Value::as_str),
+            Some("a key"),
+            "{token:?}: the JSON key"
         );
         let escaped = token.replace('"', "\\\"");
         check!(
@@ -157,6 +208,23 @@ async fn lookup_answers_are_redacted_before_printing() {
             "{token:?}: the token reached stdout"
         );
     }
+    // `[redacted]` is the shared redactor's first marker: renaming the key `#` to it collides with the existing key.
+    let collision = serde_json::json!({
+        "rows": [{
+            "timestamp": null, "token_jti": null, "subject": null, "issuer": null,
+            "backends": null, "tools": { "#": "first", "[redacted]": "second" }, "segment": 0
+        }],
+        "next_cursor": null, "scan_exhausted": true, "cursor_reset": false, "unreadable": 0, "scope": "all"
+    });
+    let gw = gateway(json(200, &collision.to_string())).await;
+    let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some("#")).await;
+    failed(
+        &out,
+        CliExit::LocalFailure,
+        "The response could not be printed safely.",
+        "The response was received but could not be printed safely; inspect the gateway state before sending the request again.",
+        "a key collision",
+    );
     finish();
 }
 
@@ -189,6 +257,25 @@ async fn lookup_hands_every_secret_it_read_to_the_emitter() {
         (out.exit(), secrets),
         (CliExit::LocalFailure, vec![TOKEN.to_string()]),
         "stopped at stdin"
+    );
+    let Command::Audit(AuditCommand::LookupEmail(cursor_args)) =
+        parse(&["audit", "lookup-email", "--cursor-stdin", "--url", &gw.base])
+    else {
+        panic!("not lookup-email")
+    };
+    let (out, secrets) = super::super::audit_lookup::lookup_run(
+        cursor_args,
+        loaded,
+        None,
+        None,
+        CURSOR.as_bytes(),
+        token,
+    )
+    .await;
+    check_eq!(
+        (out.exit(), secrets),
+        (CliExit::Ok, vec![TOKEN.to_string(), CURSOR.to_string()]),
+        "a page-token run"
     );
     finish();
 }
