@@ -52,6 +52,7 @@ fn over(route: impl Fn() -> reqwest::ClientBuilder) -> CapabilityClient {
         // A paced call is exactly one request: no hop, which
         // would be a second request the pacer never admitted, and no
         // protocol-level resend.
+        // invariant: the normal client above built from the same route and settings.
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .build()

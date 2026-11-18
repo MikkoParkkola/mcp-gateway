@@ -80,6 +80,7 @@ pub(crate) fn pacers() -> &'static Mutex<HashMap<HostKey, Pacer>> {
 
 /// A bucket admitting one request per `interval_ms`.
 fn limiter(interval_ms: u64) -> Arc<RateLimiter<MonotonicClock>> {
+    // invariant: every interval here passed INTERVAL_MS (1..=600000), so it is never zero.
     let quota = Quota::with_period(Duration::from_millis(interval_ms))
         .expect("interval_ms is at least 1 (checked at load)")
         .allow_burst(NonZeroU32::MIN);
