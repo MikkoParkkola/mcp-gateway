@@ -59,7 +59,7 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
                 if !range.as_str().is_some_and(registry_range) {
                     return Err(not_registry(&format!("{dep} of {}", shown(key))));
                 }
-                if !reaches(packages, key, dep) {
+                if dep.is_empty() && !reaches(packages, key, dep) {
                     return Err(refuse(&format!(
                         "{dep}, needed by {}, has no entry in the lock",
                         shown(key)
