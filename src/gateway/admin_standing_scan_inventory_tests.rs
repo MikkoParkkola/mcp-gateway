@@ -288,7 +288,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "is_gateway_admin",
         "src/gateway/ui/session.rs",
         1,
-        "Gateway: the sign-in form's session mint (POST /ui/signin); N3d refuses an in-scope admin",
+        "Gateway: the sign-in form's session mint (POST /ui/signin); N3e refuses an in-scope admin",
     ),
     (
         "is_gateway_admin",

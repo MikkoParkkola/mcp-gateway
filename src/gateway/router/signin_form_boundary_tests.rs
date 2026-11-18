@@ -690,25 +690,38 @@ async fn n_router_wrong_content_type_is_415() {
     assert_no_cookie(&reply);
 }
 
-/// N3d: the sign-in reads Gateway admin standing. An admin key scoped to one
+/// N3e: the sign-in reads Gateway admin standing. An admin key scoped to one
 /// backend (`InScope` standing) is refused exactly as a standard key is; the
 /// same key at every backend (`Gateway`) mints. The two posts differ only in
-/// the key's backends.
+/// the key's backends, and each key is first shown to resolve with the
+/// standing named, so the admin check is the rule that decides.
 #[tokio::test]
-async fn n3d_an_admin_key_scoped_to_one_backend_is_refused() {
-    const SCOPED_NAME: &str = "n3d-scoped-admin";
-    const SCOPED_SECRET: &str = "n3d-scoped-admin-key";
+async fn n3e_an_admin_key_scoped_to_one_backend_is_refused() {
+    use crate::gateway::authz::AdminStanding;
+    const SCOPED_NAME: &str = "n3e-scoped-admin";
+    const SCOPED_SECRET: &str = "n3e-scoped-admin-key";
     let (state, _dir) = fixture().await;
     let origin = http_origin(&state, "127.0.0.1");
     let post = || post_signin(Some(&origin), &format!("key={SCOPED_SECRET}"), None, true);
+    let standing = |state: &AppState| {
+        let generation = state.live_config.generation();
+        generation
+            .auth()
+            .validate_token(SCOPED_SECRET)
+            .expect("the scoped admin key resolves")
+            .admin_standing()
+    };
     let mut scoped = named_key(SCOPED_NAME, SCOPED_SECRET, true);
     scoped.backends = vec!["alpha".to_string()];
     reload_keys(&state, vec![scoped]);
+    assert_eq!(standing(&state), AdminStanding::InScope, "premise");
     let refused = send(&state, post()).await;
     assert_eq!(refused.status, StatusCode::SEE_OTHER, "{}", refused.body);
     assert_eq!(refused.header(header::LOCATION).as_deref(), Some(REFUSED));
     assert_no_cookie(&refused);
+    assert_no_store(&refused);
 
     reload_keys(&state, vec![named_key(SCOPED_NAME, SCOPED_SECRET, true)]);
+    assert_eq!(standing(&state), AdminStanding::Gateway, "premise");
     assert_mint(&send(&state, post()).await);
 }
