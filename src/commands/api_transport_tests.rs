@@ -274,7 +274,10 @@ async fn the_raw_2xx_body_is_redacted() {
     .await;
     assert_eq!(out.exit().code(), 0);
     let expected = mcp_gateway::cli::redact::text("echo api-unit-credential", &[TOKEN.to_string()]);
-    assert_eq!(String::from_utf8(out.stdout().to_vec()).expect("text"), expected);
+    assert_eq!(
+        String::from_utf8(out.stdout().to_vec()).expect("text"),
+        expected
+    );
     assert!(!out.stderr().contains(TOKEN));
 }
 
