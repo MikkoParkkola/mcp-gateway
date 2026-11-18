@@ -48,7 +48,10 @@ CARGO_CONFIG = Path(".cargo/config.toml")
 # memory tripwire's limit, so they are not the build the lib test split removes.
 CARGO_RE = re.compile(r"\bcargo\s+(test|llvm-cov|bench)\b([^\n|;&]*)")
 BUILD_TESTS = re.compile(r"\bcargo\s+build\b[^\n|;&]*\s--(tests|all-targets|benches)\b")
-SINGLE_TARGET = re.compile(r"--(test|bin|doc|example|bench)\b")
+# A single-target selector among cargo's own arguments: a whole word, so --tests and a test binary's --test-threads
+# (after `--`) are not one.
+SINGLE_TARGET = re.compile(r"(?<!\S)--(test|bin|doc|example|bench)(?![\w-])")
+TEST_ARGS = re.compile(r"\s--(?:\s|$)")
 # The & of a redirection (2>&1, <&0, &>file): part of one command, not a separator, so the matchers above may cross it.
 REDIRECT_AMP = re.compile(r"(?<=[<>])&|&(?=>)")
 LLVM_COV_NO_COMPILE = re.compile(r"^\s*(clean|report)\b")
@@ -124,10 +127,14 @@ N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"
 # assignment words, or among a declaration builtin's names; `n+=` and `n[i]=` change $n too.
 _ASSIGN_WORD = r"""[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*"""
 N_ASSIGNED = re.compile(
-    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+)*"
+    # Words that may stand before a simple command, a case's head, and a case arm's pattern.
+    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+|case\s+.*?\s+in\s+|\(?[^()]*\)\s*)*"
+    # n as a for or select loop's variable,
+    r"(?:(?:for|select)\s+n(?![\w=])|"
+    # or assigned, after other assignment words or among a declaration builtin's names.
     rf"(?:{_ASSIGN_WORD}\s+)*"
     r"(?:(?:export|local|readonly|declare|typeset)\s+(?:\S+\s+)*)?"
-    r"n(?:\[[^\]]*\])?\+?=")
+    r"n(?:\[[^\]]*\])?\+?=)")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -138,7 +145,9 @@ def packaged_build_problems(text: str) -> list[str]:
     if start < 0:
         return ["packaged-tests.sh has no build mode"]
     block = text[start:].split("\nelse", 1)[0]
-    calls = [line.strip() for line in block.splitlines() if re.search(r"\bcargo\s+test\b", line)]
+    # Each shell command, not each line: a whole build chained after a part call, or a `cargo build --tests`, counts.
+    commands = run_commands(block)
+    calls = [cmd for cmd in commands if re.search(r"\bcargo\s+test\b", cmd) or builds_library(cmd)]
     out = [f"`{c}` is neither one part nor the other targets" for c in calls
            if not PART_CALL.search(c) and not (REST_CALL.search(c) and not SELECTS_LIB.search(c))]
     if not any(PART_CALL.search(c) for c in calls):
@@ -147,7 +156,6 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no non-lib test target")
     # Every part: the part builds sit inside a loop over 1..N, with n assigned once (in any command of the block), by
     # the build script's read, so a shortened loop or a part built outside it cannot pass.
-    commands = run_commands(block)
     assigns = [cmd for cmd in commands if N_ASSIGNED.match(cmd)]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
@@ -208,7 +216,44 @@ def shell_commands(line: str) -> list[str] | None:
 def run_lines(run: str) -> list[tuple[str, list[str] | None]]:
     """Each line of a `run:` script, continuations joined, with its shell commands (None when a quote is left open).
     The one place the census paths read a script into commands, so they cannot drift apart."""
-    return [(line, shell_commands(line)) for line in run.replace("\\\n", " ").splitlines()]
+    lines, cur = [], ""
+    for physical in run.split("\n"):
+        cur += physical
+        if continues(cur):
+            cur = cur[:-1] + " "
+            continue
+        lines.append(cur)
+        cur = ""
+    lines += [cur] if cur else []
+    return [(line, shell_commands(line)) for line in lines]
+
+
+def continues(line: str) -> bool:
+    """Whether the line goes on to the next one, as bash reads it: it ends in a backslash that is not itself escaped,
+    not inside single quotes and not inside a comment (bash ends a comment at the newline)."""
+    quote, word_start, i = "", True, 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if quote == '"' and c == "\\":
+                if i + 1 == len(line):
+                    return True
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c == "\\":
+            if i + 1 == len(line):
+                return True
+            i += 1
+            word_start = False
+        elif c in "'\"":
+            quote, word_start = c, False
+        elif c == "#" and word_start:
+            return False
+        else:
+            word_start = c.isspace() or c in ";&|"
+        i += 1
+    return False
 
 
 def run_commands(run: str) -> list[str]:
@@ -284,7 +329,7 @@ def builds_library(run: str, aliases: dict[str, str] | None = None) -> bool:
         sub, args = m.group(1), m.group(2)
         if sub == "llvm-cov" and LLVM_COV_NO_COMPILE.match(args):
             continue
-        if SINGLE_TARGET.search(args):
+        if SINGLE_TARGET.search(TEST_ARGS.split(args, 1)[0]):
             continue
         return True
     return any(w.search(run) for w in WRAPPERS)
