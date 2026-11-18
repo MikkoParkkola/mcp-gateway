@@ -154,43 +154,68 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn say(line: &str) {
-    use std::io::Write as _;
-    let _ = writeln!(std::io::stdout().lock(), "{line}");
+/// The verdict `audit verify --export` reached, before it is printed.
+enum ExportVerdict {
+    Valid(ExportReport),
+    /// The text after `INVALID `: a snake_case refusal, or the read failure's sentence.
+    Invalid(String),
 }
 
-/// Runs `audit verify --export`; prints `VALID ...` or `INVALID <reason>`.
-pub fn run_verify_export(file: &Path, jwk: Option<&Path>, config: Option<&Path>) -> ExitCode {
+/// What `audit verify --export` prints and exits with: `VALID ...` or `INVALID <reason>` as text, or one verdict
+/// document under `--json` (MIK-9764.JSONF.1, design D6: a failed verdict is still a document, exit 1). A trust
+/// set that does not load is not a verdict: its error goes to stderr, stdout stays empty.
+pub(crate) fn export_verdict(
+    file: &Path,
+    jwk: Option<&Path>,
+    config: Option<&Path>,
+    render: crate::cli::output::Render,
+) -> crate::cli::output::Printed {
+    use crate::cli::output::{Printed, Render};
     let trust = match trust_set(jwk, config) {
         Ok(t) => t,
         Err(why) => {
-            eprintln!("{why}");
-            return ExitCode::FAILURE;
+            return Printed {
+                stdout: String::new(),
+                stderr: format!("{why}\n"),
+                exit: 1,
+            };
         }
     };
-    let bytes = match read_bounded(file, MAX_EXPORT_BYTES) {
-        Ok(b) => b,
-        Err(why) => {
-            say(&format!("INVALID {why}"));
-            return ExitCode::FAILURE;
-        }
+    let verdict = match read_bounded(file, MAX_EXPORT_BYTES) {
+        Err(why) => ExportVerdict::Invalid(why),
+        Ok(bytes) => match verify_export(&bytes, &trust) {
+            Ok(report) => ExportVerdict::Valid(report),
+            Err(refusal) => ExportVerdict::Invalid(refusal.snake().to_owned()),
+        },
     };
-    match verify_export(&bytes, &trust) {
-        Ok(r) => {
-            say(&format!(
-                "VALID export: {} rows, truncated={}, integrity_failed={}, key {}",
-                r.rows, r.truncated, r.integrity_failed, r.kid
-            ));
-            say(
-                "Each row's own sig authenticates its original log entry and needs the gateway's secret; this check covers the bundle as exported.",
-            );
-            ExitCode::SUCCESS
-        }
-        Err(refusal) => {
-            say(&format!("INVALID {}", refusal.snake()));
-            ExitCode::FAILURE
-        }
+    let exit = match verdict {
+        ExportVerdict::Valid(_) => 0,
+        ExportVerdict::Invalid(_) => 1,
+    };
+    let stdout = match (render, &verdict) {
+        (Render::Text, ExportVerdict::Valid(r)) => format!(
+            "VALID export: {} rows, truncated={}, integrity_failed={}, key {}\nEach row's own sig authenticates \
+             its original log entry and needs the gateway's secret; this check covers the bundle as exported.\n",
+            r.rows, r.truncated, r.integrity_failed, r.kid
+        ),
+        (Render::Text, ExportVerdict::Invalid(why)) => format!("INVALID {why}\n"),
+        (Render::Json, _) => String::new(),
+    };
+    Printed {
+        stdout,
+        stderr: String::new(),
+        exit,
     }
+}
+
+/// Runs `audit verify --export`: [`export_verdict`], printed once.
+pub(crate) fn run_verify_export(
+    file: &Path,
+    jwk: Option<&Path>,
+    config: Option<&Path>,
+    render: crate::cli::output::Render,
+) -> ExitCode {
+    export_verdict(file, jwk, config, render).emit(crate::cli::output::OnWriteFailure::Ignore)
 }
 
 #[cfg(tp4)]

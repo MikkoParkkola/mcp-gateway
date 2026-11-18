@@ -11,6 +11,8 @@ use mcp_gateway::cli::AuditCommand;
 use mcp_gateway::cli_support::shown;
 use mcp_gateway::config::Config;
 
+use crate::cli::output::Render;
+
 /// Resolve the audit log path: use the provided `--path` flag, or fall back to
 /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
 fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
@@ -27,12 +29,14 @@ fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBu
     })
 }
 
-/// `audit verify`: every segment of the log, live or archive mode (D6).
+/// `audit verify`: every segment of the log, live or archive mode (D6). Under `--json` a verdict, pass or fail, is
+/// one document on stdout with the exit it has today; stderr is the same in both forms.
 fn run_audit_verify(
     log_path: &std::path::Path,
     archive: bool,
     anchor: Option<&std::path::Path>,
     config_path: Option<&std::path::Path>,
+    render: Render,
 ) -> ExitCode {
     use mcp_gateway::security::transparency_log::{FailedCheck, VerifyMode, verify_audit_log};
     let resolve_log_config = Config::audit_verify_config;
@@ -102,6 +106,9 @@ fn run_audit_verify(
             ExitCode::FAILURE
         }
         Ok(result) if result.ok => {
+            if render == Render::Json {
+                return print_verdict(&result, signed, verify_mode, ExitCode::SUCCESS);
+            }
             let mode = if signed {
                 "hash chain + per-entry HMAC"
             } else {
@@ -146,6 +153,81 @@ fn run_audit_verify(
                     "note: the log has signed entries but no shared secret is configured; their HMAC was not checked."
                 );
             }
+            if render == Render::Json {
+                return print_verdict(&result, signed, verify_mode, ExitCode::FAILURE);
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `audit verify --json`'s document (MIK-9764.JSONF.1, design 3a): every field always present; text read from the
+/// log goes through [`shown`], as on stderr.
+#[derive(serde::Serialize)]
+struct VerdictView {
+    ok: bool,
+    hmac_checked: bool,
+    signed_entry_seen: bool,
+    scope: &'static str,
+    entries_checked: usize,
+    segments_checked: usize,
+    segments_expired: usize,
+    failed_check: Option<&'static str>,
+    failed_at_counter: Option<u64>,
+    error: Option<String>,
+    warnings: Vec<String>,
+    notes: Vec<String>,
+}
+
+/// Print the verdict document of `result` on stdout (its stderr lines are already written) and return `exit`; a
+/// document that cannot be built is an error on stderr, exit 1.
+fn print_verdict(
+    result: &mcp_gateway::security::transparency_log::VerifyResult,
+    signed: bool,
+    mode: mcp_gateway::security::transparency_log::VerifyMode,
+    exit: ExitCode,
+) -> ExitCode {
+    use mcp_gateway::security::transparency_log::{FailedCheck, VerifyMode};
+    let view = VerdictView {
+        ok: result.ok,
+        hmac_checked: signed,
+        signed_entry_seen: result.signed_entry_seen,
+        scope: match mode {
+            VerifyMode::Live => "live",
+            VerifyMode::Archive => "archive",
+        },
+        entries_checked: result.entries_checked,
+        segments_checked: result.segments_checked,
+        segments_expired: result.segments_expired,
+        failed_check: (!result.ok).then(|| match result.failed_check() {
+            FailedCheck::Chain => "chain",
+            FailedCheck::Pairing => "pairing",
+        }),
+        failed_at_counter: if result.ok {
+            None
+        } else {
+            result.error_at_counter
+        },
+        error: (!result.ok)
+            .then(|| shown(result.error_message.as_deref().unwrap_or("unknown error")).to_string()),
+        warnings: result
+            .warnings
+            .iter()
+            .map(|w| shown(w).to_string())
+            .collect(),
+        notes: result
+            .notes()
+            .iter()
+            .map(|n| shown(n).to_string())
+            .collect(),
+    };
+    match crate::cli::output::document(&view) {
+        Ok(doc) => {
+            crate::cli::stdout::print!("{doc}");
+            exit
+        }
+        Err(why) => {
+            eprintln!("Error: could not print the verdict: {why}");
             ExitCode::FAILURE
         }
     }
@@ -177,10 +259,25 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
             anchor,
             export,
             jwk,
-        } => match export {
-            Some(file) => mcp_gateway::trust::run_verify_export(&file, jwk.as_deref(), config_path),
-            None => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
-        },
+            json,
+        } => {
+            let render = crate::cli::output::Render::from_json_flag(json);
+            match export {
+                Some(file) => mcp_gateway::trust::run_verify_export(
+                    &file,
+                    jwk.as_deref(),
+                    config_path,
+                    render,
+                ),
+                None => run_audit_verify(
+                    &resolve_path(path),
+                    archive,
+                    anchor.as_deref(),
+                    config_path,
+                    render,
+                ),
+            }
+        }
 
         // Dispatched before this function (it needs the async runtime and
         // the gateway's address), so it never arrives here.
@@ -203,19 +300,18 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
                     eprintln!("Error reading log: {e}");
                     ExitCode::FAILURE
                 }
-                Ok(entries) if entries.is_empty() => {
-                    println!("No entries found for session '{session}'.");
-                    ExitCode::SUCCESS
-                }
-                Ok(entries) => {
-                    for entry in &entries {
-                        match serde_json::to_string_pretty(entry) {
-                            Ok(pretty) => println!("{pretty}"),
-                            Err(e) => eprintln!("Serialisation error: {e}"),
-                        }
+                // One JSON array, `[]` when nothing matches (MIK-9764.JSONF.3, design D8): a script parses one
+                // document. The entries are the log's own records, passed through.
+                Ok(entries) => match serde_json::to_string_pretty(&entries) {
+                    Ok(array) => {
+                        println!("{array}");
+                        ExitCode::SUCCESS
                     }
-                    ExitCode::SUCCESS
-                }
+                    Err(e) => {
+                        eprintln!("Serialisation error: {e}");
+                        ExitCode::FAILURE
+                    }
+                },
             }
         }
     }
