@@ -264,7 +264,7 @@ pub(super) fn place_python(
             }
         }
         libs.sort();
-        binds.extend(libs);
+        let _ = libs;
     }
     let mut place = narrow_place(&program_bind(real, system), binds, "python3", real)?;
     place.masks = masks;
