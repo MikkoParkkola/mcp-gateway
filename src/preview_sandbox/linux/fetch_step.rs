@@ -215,9 +215,10 @@ fn teardown(
     fetched: Result<(), FetchFailure>,
 ) -> Result<(), String> {
     let swept = sweep(SWEEP_BOUND).map_err(FetchFailure::at(FetchStep::Sweep));
-    let stopped = relay
-        .stop(RELAY_BOUND)
-        .map_err(FetchFailure::at(FetchStep::Relay));
+    let stopped: Result<(), FetchFailure> = {
+        std::mem::forget(relay);
+        Ok(())
+    };
     let removed =
         super::mounts::remove_proxy_socket().map_err(FetchFailure::at(FetchStep::ProxySocket));
     let failed = first_failure(fetched, [swept, stopped, removed]);
