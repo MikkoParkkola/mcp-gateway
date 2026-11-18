@@ -184,6 +184,7 @@ pub(crate) fn undeclared_task(method: &str, result: &Value, declared: Declared) 
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "member_scope_tests.rs"]
 mod tests;

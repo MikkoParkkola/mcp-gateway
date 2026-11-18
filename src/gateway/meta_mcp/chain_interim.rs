@@ -502,6 +502,7 @@ pub fn malformed_interim_error(idx: usize, tool_ref: &str) -> Error {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "chain_step_binding_tests.rs"]
 mod step_binding_tests;

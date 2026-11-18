@@ -355,6 +355,7 @@ fn score_from_counts(total: u64, seen: u64, min_observations: u64) -> Observatio
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
 

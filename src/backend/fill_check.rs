@@ -444,6 +444,7 @@ pub(crate) fn text_absent(tool: &str) -> String {
     format!("the backend does not list a tool named `{tool}`")
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{LIST_FILL_COOLDOWN, LIST_MAX_PAGES};

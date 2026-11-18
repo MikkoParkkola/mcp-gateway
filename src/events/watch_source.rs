@@ -653,6 +653,7 @@ use hold::class_of_target;
 
 mod live;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "watch_source_tests.rs"]
 mod tests;

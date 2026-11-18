@@ -756,9 +756,11 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 #[path = "ops_secret_outbound.rs"]
 mod secret_outbound;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ops_presend_pin_tests.rs"]
 mod presend_pin_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;

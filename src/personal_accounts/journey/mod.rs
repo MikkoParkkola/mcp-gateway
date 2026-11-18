@@ -383,6 +383,7 @@ fn principal_digest_of(authority: &str, subject: &str) -> Result<String, Account
     Ok(crate::hashing::sha256_hex(&encoded))
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod digest_tests {
     /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the

@@ -515,18 +515,22 @@ mod rug_pull;
 mod status;
 pub use status::CapabilityBackendStatus;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_tests.rs"]
 mod tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_pin_tests.rs"]
 mod pin_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_output_root_tests.rs"]
 mod output_root_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "backend_snapshot_tests.rs"]
 mod snapshot_tests;

@@ -77,6 +77,7 @@ impl CostRegistry {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -397,6 +397,7 @@ pub struct KeyServerOidcConfig {
     pub token_age: crate::key_server::TokenAgeCap,
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +602,7 @@ mod cwe532_debug_redaction {
     const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
     // KeyServerConfig::Debug must never surface the admin revocation token.
+    #[cfg(tp5)]
     #[test]
     fn key_server_config_debug_redacts_admin_token() {
         let cfg = KeyServerConfig {

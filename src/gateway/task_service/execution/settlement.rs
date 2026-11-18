@@ -96,5 +96,6 @@ pub(super) fn strip_http_status(mut error: JsonRpcError) -> JsonRpcError {
     error
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;

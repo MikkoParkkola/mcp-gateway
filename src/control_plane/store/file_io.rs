@@ -124,6 +124,7 @@ pub(super) fn injected_fault() -> std::io::Error {
 }
 
 // Windows: the store writer's result is owner-only (the creation table).
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "file_io_winacl_tests.rs"]
 mod winacl_tests;

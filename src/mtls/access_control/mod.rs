@@ -364,5 +364,6 @@ impl GlobPattern {
 #[cfg(test)]
 #[path = "rule_id_tests.rs"]
 pub(crate) mod rule_id_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;

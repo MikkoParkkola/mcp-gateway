@@ -269,6 +269,7 @@ pub async fn jwks_handler(State(key_pair): State<Arc<GatewayKeyPair>>) -> impl I
     )
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

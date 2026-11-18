@@ -43,6 +43,7 @@ pub(super) fn line_of(receipt: &Value) -> String {
     receipt["answer"]["line"].as_str().unwrap().to_string()
 }
 
+#[cfg(tp5)]
 #[test]
 fn r10_receipt_says_the_effect_is_not_known() {
     let fx = Fixture::new(None);
@@ -53,6 +54,7 @@ fn r10_receipt_says_the_effect_is_not_known() {
     assert!(line_of(&r).starts_with("effect not known: the record states none"));
 }
 
+#[cfg(tp5)]
 #[test]
 fn r11_receipt_for_an_unvouched_refusal_says_no_findings_are_recorded() {
     let fx = Fixture::new(None);
@@ -67,6 +69,7 @@ fn r11_receipt_for_an_unvouched_refusal_says_no_findings_are_recorded() {
     assert!(!line.contains("did not produce"));
 }
 
+#[cfg(tp5)]
 #[test]
 fn r11b_receipt_for_an_echo_rewrite_makes_no_claim_about_the_producer() {
     let fx = Fixture::new(None);
@@ -81,6 +84,7 @@ fn r11b_receipt_for_an_echo_rewrite_makes_no_claim_about_the_producer() {
     assert!(!line.contains("did not produce"));
 }
 
+#[cfg(tp5)]
 #[test]
 fn r6_receipt_lists_both_records_of_a_duplicate() {
     let fx = Fixture::new(None);
@@ -93,6 +97,7 @@ fn r6_receipt_lists_both_records_of_a_duplicate() {
     assert!(line_of(&r).contains("more than one delivery record for this trace"));
 }
 
+#[cfg(tp5)]
 #[test]
 fn r20_receipt_caps_a_duplicate_list_at_two() {
     let fx = Fixture::new(None);
@@ -106,6 +111,7 @@ fn r20_receipt_caps_a_duplicate_list_at_two() {
     assert_eq!(r["answer"]["more"], 3);
 }
 
+#[cfg(tp5)]
 #[test]
 fn r33_receipt_says_this_gateway_cannot_vouch_without_a_secret() {
     let fx = Fixture::new(Some(SECRET));

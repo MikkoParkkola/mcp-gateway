@@ -21,6 +21,7 @@ fn identity() -> VerifiedIdentity {
     )
 }
 
+#[cfg(tp4)]
 #[test]
 fn cf_verdict_classifies_each_error() {
     use super::told::{CfVerdict, cf_verdict};
@@ -207,6 +208,7 @@ async fn assert_disconnect_premise(
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn two_transients_stay_open_third_closes() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -239,6 +241,7 @@ async fn two_transients_stay_open_third_closes() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn stale_last_good_fails_closed_on_first_transient() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -289,6 +292,7 @@ async fn stale_last_good_fails_closed_on_first_transient() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test]
 async fn good_between_failures_resets_the_count() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -336,6 +340,7 @@ async fn good_between_failures_resets_the_count() {
 /// failure, even though the last good verification is still well inside
 /// the JWKS TTL. The known mint at the held clock `t0` expires at
 /// `t0 + 300`; the outage decision is taken at `t0 + 361`.
+#[cfg(tp4)]
 #[tokio::test]
 async fn expired_held_assertion_fails_on_first_transient_even_within_jwks_ttl() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -479,6 +484,7 @@ fn gated_verifier(fixture: &GatedDisconnectJwks) -> OidcVerifier {
 /// time the fetch fails transiently must fail closed at that decision,
 /// on the first transient and inside the JWKS TTL. Current-thread, so
 /// the spawned task reads this thread's forced test clock.
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn assertion_expiring_during_jwks_fetch_fails_closed() {
     let harness = Harness::start(&config_yaml("[]", "")).await;

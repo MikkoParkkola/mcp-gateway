@@ -518,6 +518,7 @@ pub(super) fn process_budget() -> &'static PidfdBudget {
     BUDGET.get_or_init(|| PidfdBudget::new(fd_limit()))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_sweep_tests.rs"]
 mod tests;

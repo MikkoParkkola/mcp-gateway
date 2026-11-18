@@ -419,6 +419,7 @@ pub fn tools_list_changed() -> Value {
     })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

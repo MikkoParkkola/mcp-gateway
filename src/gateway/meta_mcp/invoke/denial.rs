@@ -52,6 +52,7 @@ pub(super) fn count_meta_denial(
     None
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -210,6 +210,7 @@ fn body(gateway: &Gateway, listing: &Listing, outdated: bool) -> serde_json::Val
 #[path = "discovery_adopt.rs"]
 mod adopt;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
 mod tests;

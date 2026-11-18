@@ -155,6 +155,7 @@ pub(crate) mod pause_points;
 mod read;
 mod write;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

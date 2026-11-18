@@ -38,6 +38,7 @@ pub(crate) mod needles;
 pub mod policy;
 pub(crate) mod posture;
 pub(crate) mod secret_redaction;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod tenant_read_corpus_tests;
 pub(crate) mod tenant_reads;

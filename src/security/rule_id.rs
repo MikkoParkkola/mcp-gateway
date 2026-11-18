@@ -49,6 +49,7 @@ impl RuleId {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "rule_id_tests.rs"]
 mod tests;

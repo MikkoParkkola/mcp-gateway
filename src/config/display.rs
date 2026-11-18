@@ -51,6 +51,7 @@ pub(crate) fn backend_secret_references(
     references
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::secret_slot;

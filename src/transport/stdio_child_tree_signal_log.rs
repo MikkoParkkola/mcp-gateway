@@ -458,6 +458,7 @@ pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str, rule: Rule) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_child_tree_signal_log_tests.rs"]
 mod tests;

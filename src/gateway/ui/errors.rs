@@ -99,6 +99,7 @@ pub(super) fn config_path_unavailable() -> (StatusCode, Json<Value>) {
     )
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

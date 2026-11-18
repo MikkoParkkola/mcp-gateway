@@ -329,6 +329,7 @@ fn origin(raw: &str) -> Option<String> {
     Some(crate::security::sanitize::redact_url_for_diagnostics(raw))
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "listing_tests.rs"]
 mod tests;

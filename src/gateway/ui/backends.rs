@@ -613,14 +613,17 @@ pub(super) use crate::config::backend_add::validate_backend_name;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "backends_audit_tests.rs"]
 mod audit_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "backends_secret_slot_tests.rs"]
 mod secret_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

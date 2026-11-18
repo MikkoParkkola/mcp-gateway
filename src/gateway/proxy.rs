@@ -610,6 +610,7 @@ impl ClientChannel for ProxyManager {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "proxy_tests.rs"]
 mod tests;

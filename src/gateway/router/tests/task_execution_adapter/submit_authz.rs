@@ -115,6 +115,7 @@ pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> 
 }
 
 /// 1a. `gateway_invoke`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn ungranted_invoke_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;
@@ -133,6 +134,7 @@ pub(crate) async fn matrix_ungranted_invoke_submit() {
 }
 
 /// 1b. The capability's surfaced name (the sync answer is the concealment).
+#[cfg(tp5)]
 #[tokio::test]
 async fn ungranted_surfaced_submit_is_refused_like_the_sync_call() {
     let row = ungranted(surfaced).await;
@@ -141,6 +143,7 @@ async fn ungranted_surfaced_submit_is_refused_like_the_sync_call() {
 }
 
 /// 1c. A keyed playbook whose step names the capability.
+#[cfg(tp5)]
 #[tokio::test]
 async fn ungranted_playbook_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;
@@ -149,6 +152,7 @@ async fn ungranted_playbook_submit_is_refused_like_the_sync_call() {
 }
 
 /// 1d. A keyed `gateway_execute` code plan calling the capability.
+#[cfg(tp5)]
 #[tokio::test]
 async fn ungranted_code_plan_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;
@@ -179,6 +183,7 @@ pub(super) fn alice() -> String {
 /// Row 3. The grant is revoked inside the task's commit, after the submit
 /// check and before the worker starts: the worker's own check still refuses.
 /// Read from the committed store and the log file, never `tasks/get`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_grant_revoked_after_submit_is_still_refused_by_the_worker() {
     use super::grant_audit_order::Terminal;
@@ -264,12 +269,14 @@ async fn resubmit_after_revoke(hold: bool) {
 }
 
 /// 6a. The task is still Working when the grant is revoked.
+#[cfg(tp5)]
 #[tokio::test]
 async fn resubmitting_a_working_task_after_revoke_is_refused() {
     resubmit_after_revoke(true).await;
 }
 
 /// 6b. The task completed before the grant was revoked.
+#[cfg(tp5)]
 #[tokio::test]
 async fn resubmitting_a_completed_task_after_revoke_is_refused() {
     resubmit_after_revoke(false).await;
@@ -325,6 +332,7 @@ fn webhook_invoke(id: i64) -> Value {
 /// 2. A non-admin task submit of an admin capability answers the sync
 /// refusal and creates no task. MIK-8361: that refusal is the undefined
 /// capability's (-32001 `Tool not found`), not 403 Forbidden.
+#[cfg(tp5)]
 #[tokio::test]
 async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;

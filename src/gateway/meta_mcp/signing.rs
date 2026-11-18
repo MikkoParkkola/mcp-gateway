@@ -763,20 +763,24 @@ impl super::MetaMcp {
 #[path = "signing_test_seams.rs"]
 mod test_seams;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "signing_prepared_allow_tests.rs"]
 mod prepared_allow_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "signing_delivery_tests.rs"]
 mod delivery_tests;
 
 // GH1942.HARDEN.1 row 7: the hardened signing scope.
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "signing_scope_tests.rs"]
 mod scope_tests;
 
 // SIGNING.5: the raw-nonce refusals decided here, before the nonce store.
+#[cfg(tp2)]
 #[cfg(all(test, feature = "metrics"))]
 #[path = "signing_nonce_metrics_tests.rs"]
 mod nonce_metrics_tests;
@@ -787,6 +791,7 @@ mod nonce_metrics_tests;
 mod test_access;
 
 // MIK-7698: a call refused before the tool acts leaves its nonce unspent.
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "signing_unspent_tests.rs"]
 mod unspent_tests;

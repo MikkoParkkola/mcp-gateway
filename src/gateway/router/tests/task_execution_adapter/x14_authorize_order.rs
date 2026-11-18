@@ -128,6 +128,7 @@ async fn non_admin_refusal(idem: &str) {
     refused_like_sync(&row, sync, as_task(task, idem)).await;
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_ungranted_surfaced_task_call_is_refused_before_x14() {
     ungranted_refusal("x14-ga-grant").await;
@@ -139,6 +140,7 @@ async fn an_ungranted_surfaced_task_call_is_refused_before_x14() {
 /// parked until the helper waits for it, a helper that counts at once reads 0
 /// records for a call that produced 1 (CI's x14 failures: `refusal audit
 /// records` left 1, right 0, when the late record fell into the next window).
+#[cfg(tp5)]
 #[tokio::test]
 async fn the_x14_count_waits_for_the_withheld_record_it_started() {
     use crate::gateway::meta_mcp::grant_audit::seams::{
@@ -170,6 +172,7 @@ async fn the_x14_count_waits_for_the_withheld_record_it_started() {
 /// and a write leaves it however it ends: a write that panics or is
 /// cancelled, polled on any worker thread, leaves nothing for the next count
 /// to wait on (a stuck count would turn into a 10 s failure of its own).
+#[cfg(tp5)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_write_that_panics_or_is_cancelled_still_leaves_the_count_at_zero() {
     use crate::gateway::meta_mcp::grant_audit::seams::{
@@ -201,6 +204,7 @@ async fn a_write_that_panics_or_is_cancelled_still_leaves_the_count_at_zero() {
     settled(&row.log).await;
 }
 
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_non_admin_surfaced_task_call_of_an_admin_capability_is_refused_before_x14() {
     non_admin_refusal("x14-ga-admin").await;

@@ -361,6 +361,7 @@ pub(crate) fn admit_stream_item(
     })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod emitted_document_tests {
     use std::cell::Cell;

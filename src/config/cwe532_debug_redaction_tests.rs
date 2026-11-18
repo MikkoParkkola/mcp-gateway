@@ -9,6 +9,7 @@ const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 // BackendConfig::Debug must never recurse into the credential-injection
 // rules, nor print `env`/`headers` values (Authorization bearers, API
 // keys); only counts are surfaced.
+#[cfg(tp3)]
 #[test]
 fn backend_config_debug_redacts_secret_rules() {
     let cfg = BackendConfig {
@@ -38,6 +39,7 @@ fn backend_config_debug_redacts_secret_rules() {
 }
 
 // OAuthConfig::Debug must never surface the fixed client secret.
+#[cfg(tp3)]
 #[test]
 fn oauth_config_debug_redacts_client_secret() {
     let cfg = OAuthConfig {

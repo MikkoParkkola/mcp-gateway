@@ -272,6 +272,7 @@ pub(super) fn parse(
     None
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "client_entry_tests.rs"]
 mod tests;

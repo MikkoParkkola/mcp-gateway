@@ -241,6 +241,7 @@ impl Settling<'_> {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "input_round_clock_tests.rs"]
 mod tests;

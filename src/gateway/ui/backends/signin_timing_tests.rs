@@ -65,6 +65,7 @@ fn secs(reply_body: &serde_json::Value) -> u64 {
 }
 
 // T1
+#[cfg(tp2)]
 #[tokio::test]
 async fn start_to_callback_ends_at_300s() {
     let gw = Gw::new().await;
@@ -88,6 +89,7 @@ async fn start_to_callback_ends_at_300s() {
 }
 
 // T2
+#[cfg(tp2)]
 #[tokio::test]
 async fn confirm_at_61s_after_the_callback_is_refused() {
     let gw = Gw::new().await;
@@ -108,6 +110,7 @@ async fn confirm_at_61s_after_the_callback_is_refused() {
 }
 
 // T2b: expiry alone, with no confirm sent, ends the flow and frees the gate.
+#[cfg(tp2)]
 #[tokio::test]
 async fn expiry_alone_discards_the_grant_and_releases_the_gate() {
     let gw = Gw::new().await;
@@ -133,6 +136,7 @@ async fn expiry_alone_discards_the_grant_and_releases_the_gate() {
 }
 
 // T3
+#[cfg(tp2)]
 #[tokio::test]
 async fn confirm_at_59s_after_the_callback_saves() {
     let gw = Gw::new().await;
@@ -148,6 +152,7 @@ async fn confirm_at_59s_after_the_callback_saves() {
 
 // T5: retry_after_secs, expires_at and the read's `until` agree exactly at
 // three points; a constant 60 fails the first and the third.
+#[cfg(tp2)]
 #[tokio::test]
 async fn retry_after_follows_the_confirm_window() {
     let gw = Gw::new().await;
@@ -180,6 +185,7 @@ async fn retry_after_follows_the_confirm_window() {
 }
 
 // T6: a CLI login holds the gate and reports its own deadline.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_cli_held_gate_reports_its_own_deadline() {
     use crate::oauth::client::authorize_tests::client;
@@ -232,6 +238,7 @@ async fn gated_flow() -> Gated {
 }
 
 // T7: one outcome wins, at most one save, and the gate is released once.
+#[cfg(tp2)]
 #[tokio::test]
 async fn confirm_cancel_and_expiry_race_on_one_attempt() {
     let flow = gated_flow().await;
@@ -277,6 +284,7 @@ async fn confirm_cancel_and_expiry_race_on_one_attempt() {
 
 // T2a: the expiry task is held at its pause point, so cleanup has not run when
 // the late confirm arrives; the window check itself must refuse it.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_late_confirm_is_refused_before_the_expiry_task_runs() {
     let gw = Gw::new().await;
@@ -297,6 +305,7 @@ async fn a_late_confirm_is_refused_before_the_expiry_task_runs() {
 // A command-line login holds the gate under its own short deadline, and the
 // 409 reports that deadline's remainder, not the gate's begin-plus-300 s.
 // Red today: the gate records `begin + 300 s` whatever deadline the stages use.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_cli_held_gate_reports_the_effective_deadline() {
     use crate::oauth::client::authorize_tests::client;

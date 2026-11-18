@@ -171,6 +171,7 @@ const fn sextet(c: u8) -> Option<u8> {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "probe_tests.rs"]
 mod tests;

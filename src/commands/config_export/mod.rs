@@ -30,10 +30,13 @@ use crate::cli::stdout::println;
 
 mod watch;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod mode_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests;
+#[cfg(tp1)]
 #[cfg(all(test, windows))]
 mod winacl_tests;
 

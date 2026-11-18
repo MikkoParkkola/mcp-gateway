@@ -438,6 +438,7 @@ impl AuditEnvelope {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "audit_tests.rs"]
 mod tests;

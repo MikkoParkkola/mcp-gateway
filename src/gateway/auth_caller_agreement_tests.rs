@@ -112,6 +112,7 @@ fn context_for(client: &AuthenticatedClient) -> crate::gateway::meta_mcp::MetaMc
 /// reachable here: client identity, context cost key and grant key all equal
 /// the oracle. The key-server, OIDC and stdio mints are pinned in their own
 /// modules against the same oracle.
+#[cfg(tp4)]
 #[test]
 fn t1a_gateway_mints_agree_on_api_key_identity() {
     for (label, client) in mints() {
@@ -137,6 +138,7 @@ fn t1a_gateway_mints_agree_on_api_key_identity() {
 /// MIK-8659 T1b (RED): an unauthenticated API-key pair gives no identity
 /// anywhere. `cost_key` does not check `authenticated` yet, so it reports
 /// `Some("k")` and this fails.
+#[cfg(tp4)]
 #[test]
 fn t1b_unauthenticated_api_key_gives_none_everywhere() {
     let (_, client) = mints()
@@ -156,6 +158,7 @@ fn t1b_unauthenticated_api_key_gives_none_everywhere() {
 
 /// MIK-8659 T3 (GREEN): the persisted owner prefix is pinned literally, so a
 /// change to the encoding fails here rather than drifting silently.
+#[cfg(tp4)]
 #[test]
 fn t3_credential_owner_prefix_is_pinned() {
     assert_eq!(super::CREDENTIAL_OWNER_PREFIX, "credential:");

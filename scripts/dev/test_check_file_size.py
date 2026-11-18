@@ -88,6 +88,19 @@ class FileSizeGate(unittest.TestCase):
         # `cfg_attr` can apply any attribute, a macro included, so it is not inert.
         self.assert_grew("#[cfg_attr(test, my_macro)]\nmod child;\n", {"src/child.rs": ""})
 
+    # The lib test split's part tag: only a line that is exactly `#[cfg(tpN)]` is free (lead, 2026-11-16).
+    def test_t3d_an_exact_part_tag_line_is_free(self):
+        self.assert_passes("#[cfg(tp3)]\n    #[cfg(tp12)]\n")
+
+    def test_t3e_a_compound_cfg_naming_a_part_counts(self):
+        self.assert_grew("#[cfg(all(test, tp1))]\n")
+
+    def test_t3f_a_part_tag_with_code_on_its_line_counts(self):
+        self.assert_grew("#[cfg(tp1)] fn x() {}\n")
+
+    def test_t3g_a_part_tag_above_code_frees_only_the_tag(self):
+        self.assert_grew("#[cfg(tp1)]\nfn x() {}\n")
+
     def test_t4_an_inline_module_is_code_not_a_declaration(self):
         self.assert_grew("mod x { fn a() {} }\n")
 

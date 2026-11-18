@@ -98,6 +98,7 @@ fn inspect(
         .expect("nonempty server-bound targets")
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_minted_continuation_with_a_token_shaped_run_is_delivered_unchanged() {
     let state = Arc::new(ContinuationState::new());
@@ -120,6 +121,7 @@ fn a_minted_continuation_with_a_token_shaped_run_is_delivered_unchanged() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_continuation_minted_by_another_keyring_is_still_redacted() {
     let state = Arc::new(ContinuationState::new());
@@ -131,6 +133,7 @@ fn a_continuation_minted_by_another_keyring_is_still_redacted() {
     assert_ne!(response["requestState"], foreign);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_tampered_continuation_is_still_redacted() {
     let state = Arc::new(ContinuationState::new());
@@ -145,6 +148,7 @@ fn a_tampered_continuation_is_still_redacted() {
     assert_ne!(response["requestState"], tampered);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_foreign_continuation_in_a_protected_field_is_refused() {
     let state = Arc::new(ContinuationState::new());
@@ -160,6 +164,7 @@ fn a_foreign_continuation_in_a_protected_field_is_refused() {
     assert_eq!(response["requestState"], foreign, "refusal restores it");
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_firewall_without_a_keyring_redacts_every_continuation() {
     let state = Arc::new(ContinuationState::new());
@@ -170,6 +175,7 @@ fn a_firewall_without_a_keyring_redacts_every_continuation() {
     assert!(!verdict.findings.is_empty());
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_expired_own_minted_continuation_is_still_redacted() {
     let state = Arc::new(ContinuationState::new());
@@ -181,6 +187,7 @@ fn an_expired_own_minted_continuation_is_still_redacted() {
     assert_ne!(response["requestState"], expired_token);
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_secret_glued_after_an_own_minted_continuation_is_redacted() {
     let state = Arc::new(ContinuationState::new());
@@ -193,6 +200,7 @@ fn a_secret_glued_after_an_own_minted_continuation_is_redacted() {
     assert!(!response["requestState"].as_str().unwrap().contains(SECRET));
 }
 
+#[cfg(tp4)]
 #[test]
 fn a_secret_after_a_space_following_an_own_minted_continuation_is_redacted() {
     let state = Arc::new(ContinuationState::new());
