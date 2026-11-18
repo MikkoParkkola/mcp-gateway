@@ -721,6 +721,9 @@ def self_test() -> int:
         ("a cargo build of the tests in the build block",
          shape.format(part, rest + "\n  cargo build --all-features --locked --tests"), True),
         ("a part built outside the loop", shape.format(part, rest + "\n  " + part), True),
+        ("a part built outside the loop, continued before --lib",
+         shape.format(part, rest + '\n  MCP_GATEWAY_TEST_PART="$k" cargo test --all-features --locked \\\n    --lib --no-run'),
+         True),
     ]
     for label, text, want_bad in packaged_cases:
         found = packaged_build_problems(text)
@@ -796,6 +799,11 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
          job(step(f"# {w}cargo test\ncargo test --all-features --lib --no-run")), True),
         ("C3b the wrapper only in a trailing comment", "ci.yml", "j",
          job(step(f"cargo test --all-features --lib --no-run # {w}")), True),
+        # The census's own line reading: bash ends a comment at the newline, and flags after `--` are the test binary's.
+        ("C3c a bare build on the line after a comment ending in a backslash", "ci.yml", "j",
+         job(step(f"# {w}\\\ncargo test --all-features --lib --no-run")), True),
+        ("C3d a bare build with --test-threads after --", "ci.yml", "j",
+         job(step("cargo test --all-features --lib -- --test-threads=1")), True),
         ("C4 limits + reserve under the job limit", "ci.yml", "j",
          job(step(w + "cargo test --lib", 25), step(w + "cargo test --lib", 5), step(w + "cargo test --lib", 5), limit=50), False),
         ("C4b limits + reserve equal to the job limit", "ci.yml", "j",
