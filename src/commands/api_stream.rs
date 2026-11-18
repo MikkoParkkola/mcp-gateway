@@ -755,7 +755,7 @@ impl Printing<'_> {
         // The pieces were printed as they arrived; only the note is left, redacted and gated by `success`.
         CliOutcome::success(
             Vec::new(),
-            note,
+            &note,
             self.json,
             &[self.token],
             super::StdoutRule::RedactedJsonBody,

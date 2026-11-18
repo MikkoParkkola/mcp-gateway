@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Test plan T9a (the secret gate, unit level) and T10 (the emitter). Every expected output is written
-//! out by hand from the redactor's rule (src/security/secret_redaction.rs:124: each covered run becomes
+//! out by hand from the redactor's rule (`src/security/secret_redaction.rs:124`: each covered run becomes
 //! `[redacted]`) and the gate's (redact each field; if the printed text still holds a secret, the fixed sentence;
 //! if that holds one too, nothing). No expected value is computed by the code under test.
 
@@ -168,7 +168,7 @@ fn the_success_note_is_redacted_per_secret() {
     for secret in corpus {
         for rule in [StdoutRule::RefuseToken, StdoutRule::RedactedJsonBody] {
             let note = format!("Note {secret} here.\n");
-            let out = CliOutcome::success(b"data\n".to_vec(), note, false, &[secret], rule);
+            let out = CliOutcome::success(b"data\n".to_vec(), &note, false, &[secret], rule);
             let got = (out.exit(), out.stdout(), out.stderr());
             if got != (CliExit::Ok, &b"data\n"[..], "Note [redacted] here.\n") {
                 misses.push(format!("{secret:?} {rule:?}: {got:?}"));
@@ -178,19 +178,13 @@ fn the_success_note_is_redacted_per_secret() {
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
 
-/// T9a, D6: RefuseToken refuses stdout still holding the token, in both forms; it does not refuse the email (data);
-/// RedactedJsonBody (api) prints its already-checked body as given.
+/// T9a, D6: `RefuseToken` refuses stdout still holding the token, in both forms; it does not refuse the email (data);
+/// `RedactedJsonBody` (api) prints its already-checked body as given.
 #[test]
 fn stdout_rules_refuse_only_the_token() {
     let mut misses = Vec::new();
     let held = b"{\"a\":\"tok-a\"}\n".to_vec();
-    let out = CliOutcome::success(
-        held.clone(),
-        String::new(),
-        false,
-        &["tok-a"],
-        StdoutRule::RefuseToken,
-    );
+    let out = CliOutcome::success(held.clone(), "", false, &["tok-a"], StdoutRule::RefuseToken);
     let human = format!("error: {UNSAFE_WHAT}\n{UNSAFE_REMEDY}\n");
     if (out.exit(), out.stdout(), out.stderr()) != (CliExit::LocalFailure, &b""[..], human.as_str())
     {
@@ -200,13 +194,7 @@ fn stdout_rules_refuse_only_the_token() {
             out.stderr()
         ));
     }
-    let out = CliOutcome::success(
-        held.clone(),
-        String::new(),
-        true,
-        &["tok-a"],
-        StdoutRule::RefuseToken,
-    );
+    let out = CliOutcome::success(held.clone(), "", true, &["tok-a"], StdoutRule::RefuseToken);
     let want = Want::Json(serde_json::json!({
         "schema_version": 1,
         "error": {
@@ -226,7 +214,7 @@ fn stdout_rules_refuse_only_the_token() {
     let email = b"{\"rows\":[\"person@corp.test\"]}\n".to_vec();
     let out = CliOutcome::success(
         email.clone(),
-        String::new(),
+        "",
         false,
         &["tok-a", "person@corp.test"],
         StdoutRule::RefuseToken,
@@ -240,7 +228,7 @@ fn stdout_rules_refuse_only_the_token() {
     }
     let out = CliOutcome::success(
         held.clone(),
-        String::new(),
+        "",
         false,
         &["tok-a"],
         StdoutRule::RedactedJsonBody,
@@ -272,7 +260,7 @@ impl std::io::Write for Failing {
 fn emitted_with_stdout(kind: std::io::ErrorKind, json: bool, token: &str) -> (CliExit, String) {
     let ok = CliOutcome::success(
         b"data\n".to_vec(),
-        String::new(),
+        "",
         json,
         &[token],
         StdoutRule::RefuseToken,
@@ -344,7 +332,7 @@ fn the_emitter_maps_write_failures() {
     // dashboard-link's note with the token "once", a word of it (its link holds no token): the note is redacted.
     let note = CliOutcome::success(
         b"https://gw.test/x\n".to_vec(),
-        "Opens once, from this machine only.\n".to_string(),
+        "Opens once, from this machine only.\n",
         false,
         &["once"],
         StdoutRule::RefuseToken,

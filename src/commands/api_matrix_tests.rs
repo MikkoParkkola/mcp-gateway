@@ -11,9 +11,9 @@ use super::*;
 const ORIGIN: &str = "http://127.0.0.1:1";
 /// The statuses D9 names.
 const STATUSES: [u16; 10] = [200, 401, 403, 404, 409, 422, 428, 429, 500, 503];
-/// Body dispositions: none, not_run, may_have_run.
+/// Body dispositions: none, `not_run`, `may_have_run`.
 const DISPOSITIONS: [Option<&str>; 3] = [None, Some("not_run"), Some("may_have_run")];
-/// Gateway codes: none, state_uncertain, may_have_run, unsupported_version.
+/// Gateway codes: none, `state_uncertain`, `may_have_run`, `unsupported_version`.
 const CODES: [Option<&str>; 4] = [
     None,
     Some("state_uncertain"),

@@ -305,6 +305,7 @@ pub(crate) async fn run_with(
 /// What `audit lookup-email` prints and exits with. Checks in order (design D4): resolve the gateway, the token,
 /// stdin, the window, the request. Every failure prints through `CliError::outcome` with every secret known at
 /// that point: the token, then the email or cursor too (design D5).
+#[cfg(test)]
 pub(crate) async fn lookup_outcome(
     args: LookupEmailArgs,
     load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
@@ -370,7 +371,7 @@ pub(crate) async fn lookup_run(
                     // The email or cursor may be data in the answer; only the token is refused (design D6).
                     Ok(text) => CliOutcome::success(
                         format!("{text}\n").into_bytes(),
-                        String::new(),
+                        "",
                         false,
                         &both,
                         StdoutRule::RefuseToken,

@@ -34,8 +34,10 @@ pub(crate) fn origin_of(base: &str) -> String {
         .ok()
         .map(|url| url.origin())
         .filter(url::Origin::is_tuple)
-        .map(|origin| origin.ascii_serialization())
-        .unwrap_or_else(|| "the configured gateway".to_string())
+        .map_or_else(
+            || "the configured gateway".to_string(),
+            |origin| origin.ascii_serialization(),
+        )
 }
 
 impl Remedies {
@@ -531,8 +533,8 @@ fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
 
 /// Whether a rustls error sits among `first` and its causes. An `io::Error`'s `source()` skips the error it wraps
 /// (it returns that error's own source), so the walk steps into an `io::Error` through `get_ref` and into anything
-/// else through `source()`: one path, each node once. A real handshake failure nests two io::Errors (hyper's
-/// Connect error, io::Error(Other), io::Error(InvalidData), rustls InvalidCertificate) that `source()` alone
+/// else through `source()`: one path, each node once. A real handshake failure nests two `io::Error`s (hyper's
+/// `Connect` error, `io::Error(Other)`, `io::Error(InvalidData)`, rustls `InvalidCertificate`) that `source()` alone
 /// never reaches.
 fn tls_in_chain(first: Option<&(dyn std::error::Error + 'static)>) -> bool {
     // A step bound stops a chain whose source() loops; real chains are under ten deep.

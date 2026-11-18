@@ -160,7 +160,7 @@ async fn replay_answers_over_the_limit_or_without_json_are_uncertain() {
 }
 
 /// A lookup answer echoing the token prints redacted (exit 0), as the other commands' answers do, in every field
-/// redact_answer enumerates: each text field, a JSON value and a JSON key. A token holding a quote is redacted before
+/// `redact_answer` enumerates: each text field, a JSON value and a JSON key. A token holding a quote is redacted before
 /// JSON escaping, so neither its raw nor its escaped form reaches stdout. A redaction that would merge two JSON keys
 /// is refused, not printed short.
 #[tokio::test]
@@ -276,6 +276,58 @@ async fn lookup_hands_every_secret_it_read_to_the_emitter() {
         (out.exit(), secrets),
         (CliExit::Ok, vec![TOKEN.to_string(), CURSOR.to_string()]),
         "a page-token run"
+    );
+    finish();
+}
+
+/// T6-T7, stdout safety, three fixtures each decided by its own rule: (a) a value equal to the token prints
+/// redacted; (b) a redaction that makes two keys collide is refused; (c) a token left in stdout after redaction is
+/// refused (dashboard-link's (c) is a unit row: its link is redacted before stdout is built). (c) uses "{": JSON syntax
+/// the redactor cannot mask, held by neither refusal sentence (":" is in the "error:" prefix, so it prints nothing).
+#[tokio::test]
+async fn stdout_safety_has_three_separate_outcomes() {
+    let unsafe_what = "The response could not be printed safely.";
+    let unsafe_remedy = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
+    let gw = gateway(json(200, &format!(r#"{{"items":["{TOKEN}"]}}"#))).await;
+    let out = events(&["list", "--url", &gw.base], ok_token()).await;
+    check_eq!(
+        out.exit(),
+        CliExit::Ok,
+        "(a) events: a redacted value still prints"
+    );
+    check!(
+        !String::from_utf8_lossy(out.stdout()).contains(TOKEN),
+        "(a) events: {:?}",
+        out.stdout()
+    );
+    // `[redacted]` is the shared redactor's first marker: renaming the key `#` to it collides (the fixture of
+    // dashboard_link_tests' entry-loss row).
+    let gw = gateway(json(200, r##"{"#":"first","[redacted]":"second"}"##)).await;
+    let out = events(&["list", "--url", &gw.base], Ok("#".to_string())).await;
+    failed(
+        &out,
+        CliExit::LocalFailure,
+        unsafe_what,
+        unsafe_remedy,
+        "(b) events entry loss",
+    );
+    let gw = gateway(json(200, r#"{"items":[]}"#)).await;
+    let out = events(&["list", "--url", &gw.base], Ok("{".to_string())).await;
+    failed(
+        &out,
+        CliExit::LocalFailure,
+        unsafe_what,
+        unsafe_remedy,
+        "(c) events residual token",
+    );
+    let gw = gateway(json(200, LOOKUP_ANSWER)).await;
+    let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some("{")).await;
+    failed(
+        &out,
+        CliExit::LocalFailure,
+        unsafe_what,
+        unsafe_remedy,
+        "(c) lookup residual token",
     );
     finish();
 }

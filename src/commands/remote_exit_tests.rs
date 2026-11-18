@@ -4,6 +4,7 @@
 //! dead-letters and audit lookup-email exits with its code from the shared table and prints `error: <what>` then
 //! what to do, with nothing on stdout; successes keep their stdout. Expected text is written out from design D4.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser as _;
@@ -124,7 +125,7 @@ async fn gateway(reply: Reply) -> Gateway {
                         body.len()
                     );
                     for (name, value) in headers {
-                        head.push_str(&format!("{name}: {value}\r\n"));
+                        let _ = write!(head, "{name}: {value}\r\n");
                     }
                     head.push_str("\r\n");
                     let _ = socket.write_all(head.as_bytes()).await;
@@ -184,30 +185,34 @@ fn parse(argv: &[&str]) -> Command {
         .expect("a command")
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the config loader parameter takes this type"
+)]
 fn loaded() -> Result<mcp_gateway::config::Config, String> {
     Ok(mcp_gateway::config::Config::default())
 }
 
-/// `dashboard-link` with `argv` after its name, through the rows' entry.
+/// `dashboard-link` with `flags` after its name, through the rows' entry.
 async fn link(
-    argv: &[&str],
+    flags: &[&str],
     token: Result<String, super::dashboard_link::TokenError>,
 ) -> CliOutcome {
     let mut full = vec!["dashboard-link"];
-    full.extend_from_slice(argv);
+    full.extend_from_slice(flags);
     let Command::DashboardLink(args) = parse(&full) else {
         panic!("not dashboard-link")
     };
     super::dashboard_link::dashboard_link_outcome(args, loaded, None, None, token).await
 }
 
-/// `events dead-letters` with `argv` after its name.
+/// `events dead-letters` with `flags` after its name.
 async fn events(
-    argv: &[&str],
+    flags: &[&str],
     token: Result<String, super::dashboard_link::TokenError>,
 ) -> CliOutcome {
     let mut full = vec!["events", "dead-letters"];
-    full.extend_from_slice(argv);
+    full.extend_from_slice(flags);
     let Command::Events(args) = parse(&full) else {
         panic!("not events")
     };
@@ -215,14 +220,14 @@ async fn events(
     super::dashboard_link::events_outcome(&args, loaded, None, None, token).await
 }
 
-/// `audit lookup-email` with `argv` after its name, `stdin` and the token variable's value. The source flag
-/// `--email-stdin` is added unless `argv` names `--cursor-stdin` (clap requires exactly one).
-async fn lookup(argv: &[&str], stdin: &[u8], token: Option<&str>) -> CliOutcome {
+/// `audit lookup-email` with `flags` after its name, `stdin` and the token variable's value. The source flag
+/// `--email-stdin` is added unless `flags` names `--cursor-stdin` (clap requires exactly one).
+async fn lookup(flags: &[&str], stdin: &[u8], token: Option<&str>) -> CliOutcome {
     let mut full = vec!["audit", "lookup-email"];
-    if !argv.contains(&"--cursor-stdin") {
+    if !flags.contains(&"--cursor-stdin") {
         full.push("--email-stdin");
     }
-    full.extend_from_slice(argv);
+    full.extend_from_slice(flags);
     let Command::Audit(AuditCommand::LookupEmail(args)) = parse(&full) else {
         panic!("not lookup-email")
     };
@@ -235,6 +240,10 @@ async fn lookup(argv: &[&str], stdin: &[u8], token: Option<&str>) -> CliOutcome 
     .await
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the token parameter takes this type"
+)]
 fn ok_token() -> Result<String, super::dashboard_link::TokenError> {
     Ok(TOKEN.to_string())
 }
@@ -434,15 +443,13 @@ async fn all_three(reply: Reply) -> (Gateway, Vec<(&'static str, CliOutcome)>) {
     (gw, outs)
 }
 
-/// T5-T7, refusals: each status and body maps through status_kind's order (design D1) to its code, with the
-/// HTTP number and reason in the message and D4's remedy; the request reached the gateway.
-#[tokio::test]
-async fn refusals_map_through_the_shared_order() {
+/// The refusal cases: each status and body, the exit `status_kind`'s order gives it, and the message tail.
+fn refusal_cases() -> Vec<(&'static str, Reply, CliExit, &'static str)> {
     let headers_30 = vec![
         ("content-type", "application/json".to_string()),
         ("retry-after", "30".to_string()),
     ];
-    let cases: Vec<(&str, Reply, CliExit, &str)> = vec![
+    vec![
         (
             "401",
             json(401, r#"{"message":"denied"}"#),
@@ -519,7 +526,14 @@ async fn refusals_map_through_the_shared_order() {
             CliExit::Gateway,
             "200: skipped",
         ),
-    ];
+    ]
+}
+
+/// T5-T7, refusals: each status and body maps through `status_kind`'s order (design D1) to its code, with the
+/// HTTP number and reason in the message and D4's remedy; the request reached the gateway.
+#[tokio::test]
+async fn refusals_map_through_the_shared_order() {
+    let cases = refusal_cases();
     for (case, reply, exit, tail) in cases {
         let (gw, outs) = all_three(reply).await;
         let remedy = match exit {
@@ -551,7 +565,7 @@ async fn refusals_map_through_the_shared_order() {
     finish();
 }
 
-/// T6, replay is a mutation: a 500 and a lost answer are 8; a 503 with not_run is 6; a 404 names the ID or the
+/// T6, replay is a mutation: a 500 and a lost answer are 8; a 503 with `not_run` is 6; a 404 names the ID or the
 /// subscription to check.
 #[tokio::test]
 async fn replay_uses_the_mutation_rules() {
@@ -732,58 +746,6 @@ async fn lost_oversized_and_unparsable_answers() {
             command,
         );
     }
-    finish();
-}
-
-/// T6-T7, stdout safety, three fixtures each decided by its own rule: (a) a value equal to the token prints
-/// redacted; (b) a redaction that makes two keys collide is refused; (c) a token left in stdout after redaction is
-/// refused (dashboard-link's (c) is a unit row: its link is redacted before stdout is built). (c) uses "{": JSON syntax
-/// the redactor cannot mask, held by neither refusal sentence (":" is in the "error:" prefix, so it prints nothing).
-#[tokio::test]
-async fn stdout_safety_has_three_separate_outcomes() {
-    let unsafe_what = "The response could not be printed safely.";
-    let unsafe_remedy = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
-    let gw = gateway(json(200, &format!(r#"{{"items":["{TOKEN}"]}}"#))).await;
-    let out = events(&["list", "--url", &gw.base], ok_token()).await;
-    check_eq!(
-        out.exit(),
-        CliExit::Ok,
-        "(a) events: a redacted value still prints"
-    );
-    check!(
-        !String::from_utf8_lossy(out.stdout()).contains(TOKEN),
-        "(a) events: {:?}",
-        out.stdout()
-    );
-    // `[redacted]` is the shared redactor's first marker: renaming the key `#` to it collides (the fixture of
-    // dashboard_link_tests' entry-loss row).
-    let gw = gateway(json(200, r##"{"#":"first","[redacted]":"second"}"##)).await;
-    let out = events(&["list", "--url", &gw.base], Ok("#".to_string())).await;
-    failed(
-        &out,
-        CliExit::LocalFailure,
-        unsafe_what,
-        unsafe_remedy,
-        "(b) events entry loss",
-    );
-    let gw = gateway(json(200, r#"{"items":[]}"#)).await;
-    let out = events(&["list", "--url", &gw.base], Ok("{".to_string())).await;
-    failed(
-        &out,
-        CliExit::LocalFailure,
-        unsafe_what,
-        unsafe_remedy,
-        "(c) events residual token",
-    );
-    let gw = gateway(json(200, LOOKUP_ANSWER)).await;
-    let out = lookup(&["--url", &gw.base], EMAIL.as_bytes(), Some("{")).await;
-    failed(
-        &out,
-        CliExit::LocalFailure,
-        unsafe_what,
-        unsafe_remedy,
-        "(c) lookup residual token",
-    );
     finish();
 }
 

@@ -293,7 +293,7 @@ pub(crate) async fn dashboard_link_outcome(
     match fetch_link(&base, &token, &tls).await {
         Ok(link) => CliOutcome::success(
             format!("{link}\n").into_bytes(),
-            "Opens once, from this machine only.\n".to_string(),
+            "Opens once, from this machine only.\n",
             false,
             &[&token],
             StdoutRule::RefuseToken,
@@ -359,7 +359,7 @@ pub(crate) async fn events_outcome(
                 serde_json::to_string_pretty(&body).unwrap_or_default()
             )
             .into_bytes(),
-            String::new(),
+            "",
             false,
             &[&token],
             StdoutRule::RefuseToken,

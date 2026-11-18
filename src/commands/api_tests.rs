@@ -181,7 +181,7 @@ fn assert_error(
     assert!(out.stdout().is_empty(), "errors must never reach stdout");
     if json_output {
         let printed: serde_json::Value =
-            serde_json::from_str(&out.stderr()).expect("one JSON error");
+            serde_json::from_str(out.stderr()).expect("one JSON error");
         assert_eq!(
             printed,
             json!({
@@ -559,7 +559,7 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
             assert!(!out.stderr().contains(TOKEN));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
+                    serde_json::from_str(out.stderr()).expect("valid JSON error");
                 assert_eq!(printed["error"]["remedy"], remedy);
                 assert_eq!(printed["error"]["http_status"], status.as_u16());
             } else {
@@ -593,7 +593,7 @@ async fn echoed_json_credentials_are_redacted_without_corrupting_json() {
         .await;
         assert_eq!(out.exit().code(), 0);
         assert!(out.stderr().is_empty());
-        let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
+        let printed: serde_json::Value = serde_json::from_slice(out.stdout()).expect("valid JSON");
         assert!(!printed["echo"].as_str().expect("string").contains(token));
         assert!(
             !printed["nested"][0]

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Test plan T6-T8, the input sites (split from remote_exit_tests for the file-size ceiling): events' action
+//! Test plan T6-T8, the input sites (split from `remote_exit_tests` for the file-size ceiling): events' action
 //! combinations, lookup's stdin and window, and the order of checks. Every case is a usage or local error that
 //! sends nothing, or the first failing check of a multi-fault run.
 
@@ -19,15 +19,15 @@ impl std::io::Read for Unreadable {
 }
 
 pub(super) async fn lookup_reading(
-    argv: &[&str],
+    flags: &[&str],
     stdin: impl std::io::Read,
     token: Option<&str>,
 ) -> CliOutcome {
     let mut full = vec!["audit", "lookup-email"];
-    if !argv.contains(&"--cursor-stdin") {
+    if !flags.contains(&"--cursor-stdin") {
         full.push("--email-stdin");
     }
-    full.extend_from_slice(argv);
+    full.extend_from_slice(flags);
     let Command::Audit(AuditCommand::LookupEmail(args)) = parse(&full) else {
         panic!("not lookup-email")
     };

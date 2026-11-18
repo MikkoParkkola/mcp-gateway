@@ -157,7 +157,7 @@ async fn the_token_is_absent_from_every_stream_whatever_the_redactor_says() {
         (StatusCode::BAD_REQUEST, true),
     ] {
         let out = answered(token, status, &echo, json_output).await;
-        assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
+        assert!(!String::from_utf8_lossy(out.stdout()).contains(token));
         assert!(!out.stderr().contains(token));
     }
 }
@@ -174,7 +174,7 @@ async fn dropped_entry_refusal_in_json_mode_is_one_local_failure_object() {
     )
     .await;
     assert!(out.stdout().is_empty(), "nothing printed on stdout");
-    let printed: serde_json::Value = serde_json::from_str(&out.stderr()).expect("one JSON error");
+    let printed: serde_json::Value = serde_json::from_str(out.stderr()).expect("one JSON error");
     assert_eq!(printed["error"]["kind"], "LocalFailure");
     assert_eq!(
         printed["error"]["message"],

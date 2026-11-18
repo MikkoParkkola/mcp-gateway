@@ -316,7 +316,7 @@ async fn non_stream_answers_take_the_buffered_path() {
     .await;
     assert_eq!(outcome.exit(), CliExit::Ok);
     assert!(
-        out.is_empty() && text(&outcome.stdout()).contains("\"ok\": true"),
+        out.is_empty() && text(outcome.stdout()).contains("\"ok\": true"),
         "rendered by the buffered path"
     );
     for (status, kind) in [

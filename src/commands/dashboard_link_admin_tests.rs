@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The TLS classifier's chain walk (design delta 5), on injected chains shaped like the real one: a Spark probe of a
-//! certificate from another CA (tls-probe-1.log) showed hyper's Connect error wrapping io::Error(Other) wrapping
-//! io::Error(InvalidData) wrapping rustls InvalidCertificate(UnknownIssuer).
+//! certificate from another CA (tls-probe-1.log) showed hyper's `Connect` error wrapping `io::Error(Other)` wrapping
+//! `io::Error(InvalidData)` wrapping rustls `InvalidCertificate(UnknownIssuer)`.
 
 use super::tls_in_chain;
 
-/// Stands in for hyper's Connect error: its source is the io::Error it carries.
+/// Stands in for hyper's `Connect` error: its source is the `io::Error` it carries.
 #[derive(Debug)]
 struct Connect(std::io::Error);
 
@@ -74,7 +74,7 @@ impl std::error::Error for Loop {
     }
 }
 
-/// The walk is one path, each node once: forty alternating Connect and io::Error wrappers still reach rustls, and
+/// The walk is one path, each node once: forty alternating `Connect` and `io::Error` wrappers still reach rustls, and
 /// a chain whose source loops ends (false) instead of spinning.
 #[test]
 fn the_walk_is_linear_and_bounded() {

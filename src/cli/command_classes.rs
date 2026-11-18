@@ -149,7 +149,7 @@ pub(crate) const PENDING_SHARED_ERRORS: &[&str] = &[
     "upgrade",                      // MIK-9765.LERR.2
     "validate",                     // MIK-9765.LERR.2
 ];
-/// JSON_CAPABLE leaves whose `format` is free text (no declared values): each is classed JSON-capable only because
+/// `JSON_CAPABLE` leaves whose `format` is free text (no declared values): each is classed JSON-capable only because
 /// a row runs it with `--format json` and parses its stdout (the lead, 2026-11-17: no inference).
 pub(crate) const FORMAT_RUN_PROVEN: &[&str] = &["cap discover"];
 
@@ -263,7 +263,7 @@ pub(crate) fn check(
                     "JSON_CAPABLE" if json => {}
                     "JSON_CAPABLE" => match format.map(clap::Arg::get_possible_values) {
                         None => {
-                            defects.push(format!("{list}: {path} has no json or format argument"))
+                            defects.push(format!("{list}: {path} has no json or format argument"));
                         }
                         Some(values) if values.is_empty() => {
                             if !format_run_proven.contains(&path.as_str()) {

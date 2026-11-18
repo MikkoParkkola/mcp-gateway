@@ -74,7 +74,7 @@ impl CliOutcome {
     /// redacted against every secret and gated as an error is.
     pub(crate) fn success(
         stdout: Vec<u8>,
-        note: String,
+        note: &str,
         json: bool,
         secrets: &[&str],
         rule: StdoutRule,
@@ -96,7 +96,7 @@ impl CliOutcome {
         let secrets = owned(secrets);
         Self {
             stdout,
-            stderr: gated(redact::text(&note, &secrets), &secrets),
+            stderr: gated(redact::text(note, &secrets), &secrets),
             exit: CliExit::Ok,
         }
     }

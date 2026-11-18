@@ -156,7 +156,7 @@ async fn unsupported_methods_redact_credentials_before_quoting() {
             assert!(!out.stderr().contains(token));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
+                    serde_json::from_str(out.stderr()).expect("valid JSON error");
                 assert!(
                     !printed["error"]["message"]
                         .as_str()
@@ -409,7 +409,7 @@ async fn if_match_controls_capability_delete() {
             if args.if_match.is_some() {
                 assert_eq!(out.exit().code(), 0);
                 assert_eq!(
-                    serde_json::from_slice::<serde_json::Value>(&out.stdout()).expect("JSON"),
+                    serde_json::from_slice::<serde_json::Value>(out.stdout()).expect("JSON"),
                     json!({"deleted":true})
                 );
             } else {
@@ -573,7 +573,7 @@ async fn lost_response_request_ids_use_safe_text() {
             assert!(!out.stderr().contains(TOKEN));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr()).expect("valid JSON error");
+                    serde_json::from_str(out.stderr()).expect("valid JSON error");
                 let id = &printed["error"]["request_id"];
                 if retained {
                     assert!(!id.as_str().expect("request id").contains(TOKEN));
@@ -620,8 +620,8 @@ async fn a_token_echoed_as_a_json_number_is_redacted() {
     let token = "1234567890123456";
     let out = echoed_body(token, br#"{"echo":1234567890123456}"#.to_vec()).await;
     assert_eq!(out.exit(), CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
-    serde_json::from_slice::<serde_json::Value>(&out.stdout()).expect("valid JSON");
+    assert!(!String::from_utf8_lossy(out.stdout()).contains(token));
+    serde_json::from_slice::<serde_json::Value>(out.stdout()).expect("valid JSON");
 }
 
 #[tokio::test]
@@ -630,8 +630,8 @@ async fn a_key_collision_keeps_every_field() {
     let body = json!({(TOKEN): "renamed", (marker.clone()): "original", "other": 42});
     let out = echoed_body(TOKEN, serde_json::to_vec(&body).expect("body")).await;
     assert_eq!(out.exit(), CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout()).contains(TOKEN));
-    let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
+    assert!(!String::from_utf8_lossy(out.stdout()).contains(TOKEN));
+    let printed: serde_json::Value = serde_json::from_slice(out.stdout()).expect("valid JSON");
     let fields = printed.as_object().expect("object");
     assert_eq!(fields.len(), 3);
     assert_eq!(printed[&marker], "original");
@@ -644,8 +644,8 @@ async fn a_token_inside_the_marker_is_not_copied_back() {
     let token = "redacted";
     let out = echoed_body(token, br#"{"echo":"redacted"}"#.to_vec()).await;
     assert_eq!(out.exit(), CliExit::Ok);
-    assert!(!String::from_utf8_lossy(&out.stdout()).contains(token));
-    let printed: serde_json::Value = serde_json::from_slice(&out.stdout()).expect("valid JSON");
+    assert!(!String::from_utf8_lossy(out.stdout()).contains(token));
+    let printed: serde_json::Value = serde_json::from_slice(out.stdout()).expect("valid JSON");
     // The facade's marker-rotation row checks this value with contains_marker.
     assert_eq!(
         printed["echo"],

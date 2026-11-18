@@ -517,7 +517,7 @@ fn render_response(
     // api's body already passed its entry-loss check above; the note is redacted and gated by `success`.
     CliOutcome::success(
         stdout,
-        note,
+        &note,
         json_output,
         &[token],
         StdoutRule::RedactedJsonBody,
