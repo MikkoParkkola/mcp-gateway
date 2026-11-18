@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Coverage helper rows H1-H10, with a fake Python runner and compile gate."""
+"""Coverage helper rows H1-H12, with a fake Python runner and compile gate."""
 
 from __future__ import annotations
 
@@ -20,7 +20,10 @@ FAKE_PYTHON = """#!/bin/sh
 echo "part=${MCP_GATEWAY_TEST_PART:-unset} argv=$*" >> "$FAKE_LOG"
 # Model a build refreshing its executables after the coverage command starts.
 while IFS= read -r executable; do
-  touch "$executable"
+  # Cleanup may have removed a previous part's directory before the runner starts.
+  if [ -f "$executable" ]; then
+    touch "$executable"
+  fi
 done < "$FAKE_FRESH"
 exit "${FAKE_RC:-0}"
 """
@@ -68,6 +71,7 @@ class Coverage(unittest.TestCase):
                              for name in (*candidates, *stale)}}
         for name, (content, executable) in files.items():
             path = deps / name
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
             path.chmod(0o755 if executable else 0o644)
             os.utime(path, (1, 1))
@@ -88,8 +92,8 @@ class Coverage(unittest.TestCase):
 
     @staticmethod
     def snapshot(deps):
-        return {path.name: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
-                for path in deps.iterdir() if path.is_file()}
+        return {str(path.relative_to(deps)): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                for path in deps.rglob("*") if path.is_file()}
 
     def assert_runner(self, root, log, part, value):
         self.assertEqual([line for line in log if line.startswith("part=")],
@@ -126,7 +130,7 @@ class Coverage(unittest.TestCase):
                     self.assertEqual(log, [], "neither gate nor runner may run before bounds validation")
                     self.assertEqual(self.snapshot(root / DEPS), before)
 
-    def test_h5_exactly_one_lib_executable_is_renamed(self):
+    def test_h5_exactly_one_lib_executable_is_moved(self):
         for candidates in (("mcp_gateway-abc123",), (),
                            ("mcp_gateway-abc123", "mcp_gateway-def456")):
             with self.subTest(candidates=candidates):
@@ -134,12 +138,12 @@ class Coverage(unittest.TestCase):
                 if len(candidates) == 1:
                     self.assertEqual(done.returncode, 0, done.stderr)
                     expected = dict(before)
-                    expected["mcp_gateway-abc123-p3"] = expected.pop("mcp_gateway-abc123")
+                    expected["p3/mcp_gateway-abc123"] = expected.pop("mcp_gateway-abc123")
                     self.assertEqual(self.snapshot(root / DEPS), expected,
-                                     "the sole lib executable must be renamed to -p3, preserving contents and mode")
+                                     "the sole lib executable must move into p3/, preserving its name, contents and mode")
                 else:
                     self.assertNotEqual(done.returncode, 0, "zero or two lib executables must fail")
-                    self.assertEqual(self.snapshot(root / DEPS), before, "ambiguous candidates must not be renamed")
+                    self.assertEqual(self.snapshot(root / DEPS), before, "ambiguous candidates must not be moved")
                 self.assert_runner(root, log, "lib-3", "3")
 
     def test_h6_failures_keep_exact_status_and_rename_nothing(self):
@@ -172,25 +176,49 @@ class Coverage(unittest.TestCase):
         self.assertTrue(log[0].startswith("gate "), "the gate must run before Python")
         self.assertEqual(done.returncode, 0, done.stderr)
 
-    def test_h9_an_already_renamed_binary_is_never_a_candidate(self):
-        # A target dir that still holds part 2's renamed binary (no `cargo llvm-cov clean` before the run): only
-        # the fresh binary may be renamed, and part 2's stays as it was.
-        done, root, _log, before = self.run_cov(candidates=("mcp_gateway-def456", "mcp_gateway-abc123-p2"))
+    def test_h9_lib_removes_previous_part_directories(self):
+        # Both previous bundles are in the fresh list: age filtering cannot remove them.
+        # Cleanup must discard even this part's old bundle before moving the new executable.
+        old_bundles = ("p2/mcp_gateway-abc123", "p3/mcp_gateway-0ld0ld")
+        done, root, _log, before = self.run_cov(candidates=(*old_bundles, "mcp_gateway-def456"))
         self.assertEqual(done.returncode, 0, done.stderr)
-        expected = dict(before)
-        expected["mcp_gateway-def456-p3"] = expected.pop("mcp_gateway-def456")
+        expected = {name: before[name] for name in DECOYS}
+        expected["p3/mcp_gateway-def456"] = before["mcp_gateway-def456"]
         self.assertEqual(self.snapshot(root / DEPS), expected,
-                         "only the fresh binary is renamed; an already-renamed -pK binary is left alone")
+                         "previous part bundles must be removed; p3/ must hold only this run's fresh executable")
+        self.assertFalse((root / DEPS / "p2").exists(), "the previous p2 directory must be removed")
 
     def test_h10_an_older_unrenamed_binary_is_never_a_candidate(self):
         done, root, _log, before = self.run_cov(stale=("mcp_gateway-deadbeef",))
         self.assertEqual(done.returncode, 0, done.stderr)
         expected = dict(before)
-        expected["mcp_gateway-abc123-p3"] = expected.pop("mcp_gateway-abc123")
+        expected["p3/mcp_gateway-abc123"] = expected.pop("mcp_gateway-abc123")
         self.assertEqual(self.snapshot(root / DEPS), expected,
-                         "only this run's fresh executable may be renamed")
+                         "only this run's fresh executable may move into p3/")
         self.assertEqual((root / DEPS / "mcp_gateway-deadbeef").stat().st_mtime, 1,
                          "the older unrenamed executable must stay untouched")
+
+    def test_h11_int_removes_previous_part_directories(self):
+        # Integration runs also clear old lib bundles, while preserving all other files.
+        old_bundles = ("p2/mcp_gateway-abc123", "p3/mcp_gateway-0ld0ld")
+        done, root, _log, before = self.run_cov("int-a", candidates=(*old_bundles, "mcp_gateway-def456"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        part_dirs = [path.name for path in (root / DEPS).iterdir()
+                     if path.is_dir() and path.name.startswith("p") and path.name[1:].isdigit()]
+        self.assertEqual(part_dirs, [], "int runs must remove every deps/p<digits> directory")
+        expected = {name: value for name, value in before.items() if name not in old_bundles}
+        self.assertEqual(self.snapshot(root / DEPS), expected,
+                         "int cleanup must leave every other file unchanged")
+
+    def test_h12_refused_part_preserves_previous_part_directories(self):
+        # Bounds validation must happen before cleanup, so refusal leaves prior bundles intact.
+        old_bundles = ("p2/mcp_gateway-abc123", "p3/mcp_gateway-0ld0ld")
+        done, root, log, before = self.run_cov("lib-9", n=5,
+                                               candidates=(*old_bundles, "mcp_gateway-def456"))
+        self.assertNotEqual(done.returncode, 0, "out-of-range lib part must be refused")
+        self.assertEqual(self.snapshot(root / DEPS), before,
+                         "a refused part must leave previous bundles and every other file unchanged")
+        self.assertEqual(log, [], "a refused part must not run the gate or runner")
 
 
 if __name__ == "__main__":
