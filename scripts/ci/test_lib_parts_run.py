@@ -129,5 +129,57 @@ class Run(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+PACKAGED = ROOT / "scripts" / "ci" / "packaged-tests.sh"
+SKIPS = ["--skip", "a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result", "--skip", "mik_7479_full_burst"]
+
+# The packaged script also asks cargo to package the crate and for its version: `package` writes a crate whose build
+# script declares N=2, `metadata` names its version; every `test` call is recorded and judged as FAKE_CARGO does.
+FAKE_PACKAGING_CARGO = FAKE_CARGO.replace('argv = sys.argv[1:]\n', '''argv = sys.argv[1:]
+if argv[:1] == ["package"]:
+    import io, tarfile
+    out = os.path.join(os.environ["CARGO_TARGET_DIR"], "package")
+    os.makedirs(out, exist_ok=True)
+    data = b"const N: u32 = 2;\\nfn main() {}\\n"
+    with tarfile.open(os.path.join(out, "mcp-gateway-1.2.3.crate"), "w:gz") as tar:
+        info = tarfile.TarInfo("mcp-gateway-1.2.3/scripts/dev/test-parts-build.rs")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    sys.exit(0)
+if argv[:1] == ["metadata"]:
+    print(json.dumps({"packages": [{"name": "mcp-gateway", "version": "1.2.3"}]}))
+    sys.exit(0)
+''')
+
+
+class PackagedRun(unittest.TestCase):
+    def run_packaged(self, fail: str = ""):
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        t = Path(tmp.name)
+        (t / "bin").mkdir()
+        cargo = t / "bin" / "cargo"
+        cargo.write_text(FAKE_PACKAGING_CARGO)
+        cargo.chmod(cargo.stat().st_mode | stat.S_IEXEC)
+        env = {**os.environ, "PATH": f"{t / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(t / "log"),
+               "FAKE_FAIL": fail, "CARGO_TARGET_DIR": str(t / "target")}
+        env.pop("MCP_GATEWAY_TEST_PART", None)
+        done = subprocess.run(["bash", str(PACKAGED), "run"], cwd=ROOT, env=env, capture_output=True, text=True)
+        calls = [json.loads(line) for line in (t / "log").read_text().splitlines()] if (t / "log").exists() else []
+        return done, [c for c in calls if c["argv"][:1] == ["test"]]
+
+    def test_r8_the_packaged_run_goes_through_the_helper_from_the_unpacked_crate(self):
+        done, calls = self.run_packaged()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([{"argv": c["argv"], "part": c["part"]} for c in calls],
+                         expected(2, ["--all-features", "--locked"], SKIPS))
+        self.assertTrue(all(c["cwd"].endswith("/mcp-gateway-1.2.3") for c in calls), [c["cwd"] for c in calls])
+
+    def test_r8b_a_failed_packaged_part_runs_every_later_phase_and_fails_the_job(self):
+        done, calls = self.run_packaged(fail="part:1")
+        self.assertNotEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([{"argv": c["argv"], "part": c["part"]} for c in calls],
+                         expected(2, ["--all-features", "--locked"], SKIPS))
+
+
 if __name__ == "__main__":
     unittest.main()
