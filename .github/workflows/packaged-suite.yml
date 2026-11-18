@@ -37,7 +37,8 @@ jobs:
   packaged-suite:
     name: Tests from the packaged crate
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # The suite by part took 69 and 84 min on two runners (2026-11-18, the same work); a slow runner needs the room.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
