@@ -1,13 +1,7 @@
 # Sandbox-row probe: the rows this probe runs, one exact test path per line.
-# Red proof: the shim rows (and the hostile-npmrc row) on the handshake-only npm fetch. Each must fail at its
-# recorded expectation (mik-8905/f2b2-red-record.md, "L batch 2"), read from its panic text.
-preview_sandbox::linux::fetch_shim_rows::l_env_each_npm_step_sees_exactly_the_fetch_environment
-preview_sandbox::linux::fetch_shim_rows::l5_an_escapee_holding_the_pipes_is_swept
-preview_sandbox::linux::fetch_shim_rows::l_deadline2_the_two_npm_steps_share_one_deadline
-preview_sandbox::linux::fetch_shim_rows::l4b_a_lock_entry_off_the_registry_refuses_before_npm_ci
-preview_sandbox::linux::fetch_shim_rows::l4b_a_dependency_missing_from_the_lock_refuses
-preview_sandbox::linux::fetch_shim_rows::l6_l1_after_the_fetch_the_run_connects_nowhere
-preview_sandbox::linux::fetch_shim_rows::f2_t2b_the_fetch_child_holds_no_control_connection
-preview_sandbox::linux::fetch_shim_rows::ca_files_are_read_only_from_the_fetch_child
-preview_sandbox::linux::fetch_shim_rows::l2_the_fetch_child_reaches_only_the_registry_through_the_relay
-preview_sandbox::linux::fetch_rows::l_tls2_a_hostile_npmrc_in_the_npm_tree_changes_nothing
+# Red proof: the uv shim rows at the step 4b red commit (the uv path still refused in planning). Each must fail
+# at expect("the fetch and the run succeeded") with Err(Step("the uv fetch is not built yet")) per
+# mik-8905/f2b3-red-record.md "Step 4b", read from its panic text (that refusal also proves the sandbox started).
+preview_sandbox::linux::fetch_uv_rows::u_env_the_install_sees_exactly_the_fetch_argv_and_environment
+preview_sandbox::linux::fetch_uv_rows::u_run_spawn_the_console_script_runs_with_its_arguments_offline
+preview_sandbox::linux::fetch_uv_rows::u_sweep_an_escapee_of_the_uv_install_is_swept
