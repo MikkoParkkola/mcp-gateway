@@ -523,19 +523,31 @@ fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
     if !error.is_connect() {
         return AdminFailureKind::ResponseLost;
     }
-    let mut cause = std::error::Error::source(error);
-    while let Some(inner) = cause {
-        let tls_error = inner.is::<rustls::Error>()
-            || inner
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rustls::Error>);
-        if tls_error {
-            return AdminFailureKind::Tls;
-        }
-        cause = inner.source();
+    if tls_in_chain(std::error::Error::source(error)) {
+        return AdminFailureKind::Tls;
     }
     AdminFailureKind::Connect
+}
+
+/// Whether a rustls error sits anywhere among `first` and its causes. An `io::Error`'s `source()` skips the error
+/// it wraps (it returns that error's own source), so each `io::Error` is also opened through `get_ref`: a real
+/// handshake failure nests two (hyper's Connect error, then io::Error(Other), io::Error(InvalidData), rustls
+/// InvalidCertificate), which a `source()` walk alone never reaches.
+fn tls_in_chain(first: Option<&(dyn std::error::Error + 'static)>) -> bool {
+    let mut pending: Vec<&(dyn std::error::Error + 'static)> = first.into_iter().collect();
+    while let Some(error) = pending.pop() {
+        if error.is::<rustls::Error>() {
+            return true;
+        }
+        if let Some(wrapped) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+        {
+            pending.push(wrapped);
+        }
+        pending.extend(error.source());
+    }
+    false
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, AdminCallError> {
@@ -623,3 +635,7 @@ fn missing_tls_flags(base: &str, tls: &LinkTls) -> Vec<&'static str> {
     }
     hints
 }
+
+#[cfg(test)]
+#[path = "dashboard_link_admin_tests.rs"]
+mod tests;

@@ -180,15 +180,28 @@ async fn a_private_ca_is_trusted_only_when_given() {
 }
 
 /// The given CA is the only trust anchor: a server certificate from another
-/// CA fails verification, reported as a certificate failure.
+/// CA fails verification, reported as a TLS failure (exit 5), not a refused connection.
 #[tokio::test]
 async fn a_server_certificate_from_another_ca_fails_verification() {
     let s = stand_in(true).await;
     let tls = with(Some(s.path("other-ca.crt")), Some(s.identity("client")));
-    let err = fetch_link(&s.base, "tok", &tls)
-        .await
-        .expect_err("the server does not chain to the given CA");
-    assert!(err.to_lowercase().contains("certificate"), "{err}");
+    // A real handshake (design delta 5): the walk must reach the rustls error under two io::Errors.
+    let error = match super::dashboard_link::fetch_link(&s.base, "tok", &tls).await {
+        Ok(link) => {
+            panic!("the server does not chain to the given CA, yet a link came back: {link}")
+        }
+        Err(error) => error,
+    };
+    let kind = error.kind;
+    let printed = error.outcome(false, &["tok"]);
+    assert_eq!(
+        (kind, printed.exit().code(), printed.stderr()),
+        (
+            super::cli_exit::CliExit::Network,
+            5,
+            "error: Gateway TLS verification failed.\nCheck the gateway hostname, CA and client identity files, then retry.\n"
+        )
+    );
     assert_eq!(s.hits(), 0);
 }
 
