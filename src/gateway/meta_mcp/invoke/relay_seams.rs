@@ -67,6 +67,7 @@ pub(super) use with_firewall::{add_seams, add_subset_seams, answer_parts};
 #[path = "relay_seams_record.rs"]
 mod with_firewall;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::super::{PLAN_STEP, plan_step};

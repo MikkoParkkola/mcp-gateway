@@ -237,6 +237,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

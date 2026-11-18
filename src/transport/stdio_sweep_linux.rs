@@ -278,6 +278,7 @@ impl ProcessTable for LinuxTable {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_sweep_linux_tests.rs"]
 mod tests;

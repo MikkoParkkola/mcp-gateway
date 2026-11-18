@@ -229,6 +229,7 @@ fn refused(body: &Value) -> bool {
 
 /// Design §D on the Meta-MCP route: alpha lists through `gateway_list_tools`,
 /// then its invented nested key is refused from that same slot.
+#[cfg(tp1)]
 #[tokio::test]
 async fn per_identity_meta_list_warms_the_slot_the_call_is_judged_against() {
     let gw = gateway().await;
@@ -260,6 +261,7 @@ async fn per_identity_meta_list_warms_the_slot_the_call_is_judged_against() {
 
 /// Design §D on the direct route: alpha's own `tools/list` warms the slot its
 /// `tools/call` is judged against.
+#[cfg(tp1)]
 #[tokio::test]
 async fn per_identity_direct_list_warms_the_slot_the_call_is_judged_against() {
     let gw = gateway().await;

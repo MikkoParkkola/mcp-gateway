@@ -101,6 +101,7 @@ impl NotificationMultiplexer {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_roster_tests.rs"]
 mod tests;

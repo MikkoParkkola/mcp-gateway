@@ -533,6 +533,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod service_tests;

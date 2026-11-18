@@ -38,6 +38,7 @@ pub(crate) fn has_required_array(schema: &Value) -> bool {
         .is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty()))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

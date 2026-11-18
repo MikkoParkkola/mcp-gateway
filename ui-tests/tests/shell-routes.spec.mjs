@@ -51,7 +51,7 @@ test('R2 /ui/tools/status asks for the Tools screen and renders it', async ({ pa
   await toolsApi(page);
   const asked = [];
   page.on('request', (r) => asked.push(new URL(r.url()).pathname));
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await expect(toolRows(page)).toHaveCount(1);
   expect(asked).toContain(asset('tools', 'js'));
   expect(asked).toContain(asset('tools', 'css'));
@@ -80,7 +80,7 @@ test('R4 a screen module that fails to load shows the error state, and Retry loa
   await expect(retry).toBeVisible();
   fail = false;
   await retry.click();
-  await expect(toolRows(page)).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toBeVisible();
   await expect(error).toHaveCount(0);
 });
 
@@ -88,7 +88,7 @@ test('R4b retrying a screen whose module failed keeps one copy of its loaded sty
   await toolsApi(page);
   let fail = true;
   await page.route(`**${asset('tools', 'js')}*`, (r) => (fail ? r.fulfill({ status: 500, body: '' }) : r.continue()));
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const error = page.locator('#content [data-state="error"]');
   await expect(error).toBeVisible();
   fail = false;
@@ -121,7 +121,7 @@ test('R6 a stylesheet that fails while its module loads shows Retry, and Retry l
   await toolsApi(page);
   let fail = true;
   await page.route(`**${asset('tools', 'css')}*`, (r) => (fail ? r.fulfill({ status: 500, body: '' }) : r.continue()));
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   const error = page.locator('#content [data-state="error"]');
   await expect(error).toBeVisible();
   fail = false;
@@ -137,7 +137,7 @@ test('R7 a screen is not drawn while its stylesheet is held, even after its modu
   await page.route(`**${asset('tools', 'css')}*`, async (r) => { await gate; return r.continue(); });
   const moduleIn = page.waitForResponse((r) => r.url().endsWith(asset('tools', 'js')));
   // The held stylesheet holds the load event, so wait for the document only.
-  await page.goto('/ui/tools/status', { waitUntil: 'domcontentloaded' });
+  await page.goto('/ui/tools/status?view=all', { waitUntil: 'domcontentloaded' });
   await moduleIn;
   await page.click('nav.route-nav a[data-page="overview"]');
   await expect(page.locator('.head .plate')).toHaveText('Overview');
@@ -145,9 +145,10 @@ test('R7 a screen is not drawn while its stylesheet is held, even after its modu
   await expect(page.locator('.head .plate')).toHaveText('Tools');
   // Held: the content is the unmarked loading body, never the screen.
   await expect(page.locator('#content [data-rendered]')).toHaveCount(0);
-  await expect(toolRows(page)).toHaveCount(0);
+  // The sidebar lands on the most-called panel, which only the bare route draws.
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toHaveCount(0);
   release();
-  await expect(toolRows(page)).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toHaveCount(1);
 });
 
 test('R8 a manifest entry outside /ui/assets/ is refused as a load error and never fetched', async ({ page, baseURL }) => {

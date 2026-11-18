@@ -187,6 +187,7 @@ pub fn emit(event: &AuditEvent) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     #![allow(

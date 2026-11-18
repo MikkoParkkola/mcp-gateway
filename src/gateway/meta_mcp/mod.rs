@@ -70,13 +70,16 @@ use confirmation::{GateOutcome, destructive_confirmation_gate};
 
 pub(crate) mod admission;
 mod audience;
+#[cfg(tp2)]
 #[cfg(test)]
 mod audit_record_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod callback_admin_denial_tests;
 mod caller_forward;
 mod catalogue_cache;
 mod chain_interim;
+#[cfg(tp2)]
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
@@ -87,6 +90,7 @@ mod warn_limit;
 // Read only by the `firewall` collusion rows.
 #[cfg(all(test, feature = "cost-governance", feature = "firewall"))]
 mod cost_test_support;
+#[cfg(tp2)]
 #[cfg(test)]
 mod declared_label_carry_tests;
 mod direct_route;
@@ -100,6 +104,7 @@ mod events_hook;
 mod first_fill;
 pub(crate) mod grant_audit;
 mod interim_promotion;
+#[cfg(tp2)]
 #[cfg(test)]
 mod interim_promotion_tests;
 pub(crate) mod invoke;
@@ -113,11 +118,13 @@ mod resources;
 pub(crate) mod response_security;
 pub(in crate::gateway) mod scoped_backends;
 pub(crate) use response_security::error_response_preserving_status;
+#[cfg(tp2)]
 #[cfg(test)]
 mod response_security_tests;
 pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_quota_release_tests;
 #[cfg(feature = "spec-preview")]
@@ -618,13 +625,16 @@ impl ResultShape {
 pub(crate) mod account_resolver_fixture;
 #[cfg(test)]
 mod account_resolver_gate;
+#[cfg(tp2)]
 #[cfg(test)]
 mod account_resolver_tests;
 #[cfg(test)]
 mod account_rest_fixture;
+#[cfg(tp2)]
 #[cfg(test)]
 mod account_rest_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -665,10 +675,12 @@ pub(crate) fn publish_identity_grants(
 // below now, and it discriminates: dropping the `fetch_add` in
 // `publish_identity_grants` reddens both cells. Registering this one explicitly
 // so the same cannot happen to these.
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "grant_reload_tests.rs"]
 mod grant_reload_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "grant_agent_key_tests.rs"]
 mod grant_agent_key_tests;
@@ -681,34 +693,42 @@ mod authz_tests;
 #[path = "search_disclosure_e2e.rs"]
 mod search_disclosure_e2e;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "chain_resume_live_tests.rs"]
 mod chain_resume_live_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "account_entry_point_authz_tests.rs"]
 mod account_entry_point_authz_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "search_login_gate_tests.rs"]
 mod search_login_gate_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "era_gate_tests.rs"]
 mod era_gate_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "outbound_log_tests.rs"]
 mod outbound_log_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "surface_compaction_tests.rs"]
 mod surface_compaction_tests;
@@ -721,10 +741,12 @@ mod catalogue_isolation_tests;
 #[path = "catalogue_per_caller_tests.rs"]
 mod catalogue_per_caller_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cost_key_caller_tests.rs"]
 mod cost_key_caller_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "grant_key_caller_tests.rs"]
 mod grant_key_caller_tests;
@@ -736,72 +758,96 @@ pub(super) use test_callers::{anonymous_caller, callback_capability, identified_
 
 #[cfg(test)]
 mod boundary_pins;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "firewall"))]
 mod capability_cache_scan_tests;
 #[cfg(test)]
 pub(super) mod grant_audit_fixture;
 /// A chain resume step refused before it dispatches.
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_chain_resume_tests;
 #[cfg(test)]
 mod grant_decision_audit_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_decision_slot_tests;
 /// The decision record's `server` and `invocation_recorded`.
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_marker_tests;
 /// The recovery read's premise: a capability task holds no upstream handle.
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_recovery_premise_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 /// A retry-routed withheld call's decision marker.
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_retry_marker_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
+#[cfg(tp2)]
 #[cfg(test)]
 mod grant_withheld_parity_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod guide_alloc_tests;
 /// A published pre-release's task row is refused, never stripped, when served.
+#[cfg(tp2)]
 #[cfg(test)]
 mod legacy_row_planted_tests;
 /// Pacing and attribution through `gateway_invoke`.
 #[cfg(test)]
 mod maps_invoke_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod oracle_audit_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod scoped_backends_view_tests;
 /// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_g3_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_g3_tip_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_index_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_listing_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_listing_variant_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod slot_verdict_tests;
 /// Each refused exit of a stored read names the check that refused it.
+#[cfg(tp2)]
 #[cfg(test)]
 mod stored_refusal_exit_tests;
 /// A withheld task notification names the check that refused its stored output.
+#[cfg(tp2)]
 #[cfg(test)]
 mod task_notify_refused_by_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.
+#[cfg(tp2)]
 #[cfg(test)]
 mod withheld_catalogue_tests;
 
@@ -812,10 +858,12 @@ mod session_end;
 /// MIK-8407 / MIK-8440: a stored result's recorded bindings, judged.
 pub(crate) mod stored_binding;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "session_bound_tests.rs"]
 mod session_bound_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "session_cleanup_tests.rs"]
 mod session_cleanup_tests;
@@ -824,6 +872,7 @@ mod session_cleanup_tests;
 #[path = "session_inflight_tests.rs"]
 pub(crate) mod session_inflight_tests;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "dispatch_reads_tests.rs"]
 mod dispatch_reads_tests;

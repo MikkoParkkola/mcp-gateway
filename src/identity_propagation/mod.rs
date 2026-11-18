@@ -55,6 +55,7 @@ pub use token_exchange::TokenExchangeStrategy;
 #[cfg(test)]
 #[path = "audit_fail_closed_tests.rs"]
 mod audit_fail_closed;
+#[cfg(tp5)]
 #[cfg(test)]
 mod token_exchange_live_tests;
 
@@ -676,12 +677,15 @@ pub(crate) async fn audit_identity_propagation(
         })
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod audience_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "observation_tests.rs"]
 mod observation_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests;

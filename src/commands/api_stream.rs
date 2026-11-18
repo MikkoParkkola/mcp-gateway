@@ -791,6 +791,7 @@ impl Printing<'_> {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "api_stream_tests.rs"]
 mod tests;

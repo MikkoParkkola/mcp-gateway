@@ -168,7 +168,7 @@ Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running
 
 #### Option B: add servers from the built-in registry
 
-35 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
+34 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
 
 ```bash
 mcp-gateway list --available                                 # browse the library: login, on/off

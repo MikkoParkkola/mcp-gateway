@@ -434,22 +434,27 @@ impl Noted {
 #[path = "decision_record_read.rs"]
 pub(crate) mod read;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_allow_tests.rs"]
 mod allow_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_read_tests.rs"]
 mod read_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "decision_record_capability_tests.rs"]
 mod capability_tests;

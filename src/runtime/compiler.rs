@@ -721,6 +721,7 @@ impl CompiledBundle {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "compiler_tests.rs"]
 mod tests;

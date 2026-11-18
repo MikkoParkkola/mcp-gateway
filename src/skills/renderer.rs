@@ -287,6 +287,7 @@ fn plural(n: usize) -> &'static str {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

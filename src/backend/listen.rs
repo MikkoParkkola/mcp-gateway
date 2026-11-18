@@ -251,6 +251,7 @@ impl Backend {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "listen_tests.rs"]
 mod tests;

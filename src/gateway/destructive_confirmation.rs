@@ -370,6 +370,7 @@ fn parse_elicitation_response(
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

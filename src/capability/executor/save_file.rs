@@ -242,6 +242,7 @@ pub async fn save(
         .map_err(refuse)?
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "save_file_tests.rs"]
 mod tests;

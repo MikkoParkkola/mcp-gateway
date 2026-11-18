@@ -484,6 +484,7 @@ impl CustodyFixture {
     }
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn a_polled_cf_stream_drops_all_raw_subject_owners_on_body_drop() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -499,6 +500,7 @@ async fn a_polled_cf_stream_drops_all_raw_subject_owners_on_body_drop() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn an_unpolled_cf_stream_drops_all_raw_subject_owners_on_body_drop() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -513,6 +515,7 @@ async fn an_unpolled_cf_stream_drops_all_raw_subject_owners_on_body_drop() {
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn an_ended_cf_stream_releases_custody_with_body_allocation_retained() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -536,6 +539,7 @@ async fn an_ended_cf_stream_releases_custody_with_body_allocation_retained() {
     drop(body);
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn same_key_cf_streams_keep_independent_custody_and_history() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -592,6 +596,7 @@ async fn same_key_cf_streams_keep_independent_custody_and_history() {
     fixture.assert_session_retained();
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn a_resumed_cf_stream_uses_only_its_new_receipt_and_grace() {
     let harness = Harness::start(&config_yaml("[]", "")).await;
@@ -687,8 +692,10 @@ async fn a_resumed_cf_stream_uses_only_its_new_receipt_and_grace() {
     fixture.assert_session_retained();
 }
 
+#[cfg(tp4)]
 #[path = "streaming_told_cold_history_tests.rs"]
 mod cold_history_tests;
 
+#[cfg(tp4)]
 #[path = "streaming_told_close_race_tests.rs"]
 mod close_race_tests;

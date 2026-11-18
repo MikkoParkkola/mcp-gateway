@@ -197,6 +197,7 @@ fn classify(error: &reqwest::Error) -> HttpError {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod embedded_userinfo_guard_tests {
     use super::*;

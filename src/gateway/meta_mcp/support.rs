@@ -656,22 +656,27 @@ pub(crate) use playbook_invoker::{
     STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS, step_not_permitted,
 };
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "support_tests.rs"]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "idempotency_caller_scope_tests.rs"]
 mod idempotency_caller_scope_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "retry_input_tests.rs"]
 mod retry_input_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cache_principal_tests.rs"]
 mod cache_principal_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "proven_owner_tests.rs"]
 mod proven_owner_tests;

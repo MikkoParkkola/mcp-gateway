@@ -68,6 +68,7 @@ async fn asserted_listen(w: &World, assertion: &str) -> super::audience_ear::Ear
 
 /// CF.2-rotation: after the signing key rotates, the held assertion no
 /// longer verifies, so the open stream is closed at its next decision.
+#[cfg(tp5)]
 #[tokio::test]
 async fn cf_2_rotation_an_open_stream_dies_when_its_signing_key_rotates() {
     let (w, harness) = cf_world().await;
@@ -95,6 +96,7 @@ async fn cf_2_rotation_an_open_stream_dies_when_its_signing_key_rotates() {
 
 /// CF.2-exp: once the assertion's `exp` (plus the verifier's leeway) has
 /// passed, the open stream is closed, never judged as the API-key subject.
+#[cfg(tp5)]
 #[tokio::test]
 async fn cf_2_exp_an_open_stream_dies_when_its_assertion_expires() {
     let (w, harness) = cf_world().await;
@@ -111,6 +113,7 @@ async fn cf_2_exp_an_open_stream_dies_when_its_assertion_expires() {
 }
 
 /// CF.2 counter: the rotation death is counted once as `reason="cf"`.
+#[cfg(tp5)]
 #[cfg(feature = "metrics")]
 #[test]
 fn cf_2_metric_a_rotation_death_is_counted_once_as_cf() {

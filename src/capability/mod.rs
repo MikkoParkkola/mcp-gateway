@@ -38,8 +38,10 @@ mod backend;
 pub(crate) mod op_gate;
 #[cfg(test)]
 pub(crate) use backend::listing_watches_started;
+#[cfg(tp1)]
 #[cfg(test)]
 mod cache_bound_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod cache_error_tests;
 pub mod definition;
@@ -52,8 +54,10 @@ pub(crate) mod file_writer;
 #[cfg(feature = "webui")]
 mod file_writer_headers;
 pub mod hash;
+#[cfg(tp1)]
 #[cfg(test)]
 mod linear_get_issue_tests;
+#[cfg(tp1)]
 #[cfg(test)]
 mod linear_write_tests;
 mod loader;
@@ -74,10 +78,12 @@ mod pacing_tests;
 mod parser;
 mod pin_file;
 mod read_only_call;
+#[cfg(tp1)]
 #[cfg(test)]
 mod schema_shape_load_tests;
 mod schema_validator;
 // The tenant guard it drives is part of the `firewall` feature.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod tenant_read_tests;
 pub mod validator;

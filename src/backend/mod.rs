@@ -609,30 +609,38 @@ pub(crate) struct CleanupState {
 }
 
 // The cells read counters from a local Prometheus render.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "blocked_names_tests.rs"]
 mod blocked_names_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "descriptor_withholding_tests.rs"]
 mod descriptor_withholding_tests;
+#[cfg(tp3)]
 #[cfg(all(test, feature = "metrics"))]
 mod f13_fill_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod list_paging_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod pool_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
 
 /// A backend's gateway-only members are gone at ingress.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "reserved_ingress_tests.rs"]
 mod reserved_ingress_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "silence_resend_tests.rs"]
 mod silence_resend_tests;
@@ -643,26 +651,32 @@ mod slot_eviction_tests;
 
 // MIK-9216.EFFECT.1: the slot a settled execution stores, and the exact
 // lookup its replay makes.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "slot_effect_tests.rs"]
 mod slot_effect_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "send_check_eviction_tests.rs"]
 mod send_check_eviction_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "caller_slots_g3_tests.rs"]
 mod caller_slots_g3_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]
 mod grant_reload_eviction_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "eviction_close_bound_tests.rs"]
 mod eviction_close_bound_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "eviction_close_cap_tests.rs"]
 mod eviction_close_cap_tests;
@@ -671,60 +685,75 @@ mod eviction_close_cap_tests;
 #[path = "identity_slot_probe_tests.rs"]
 mod identity_slot_probe_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "start_failure_slot_tests.rs"]
 mod start_failure_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_stale_probe_tests.rs"]
 mod era_stale_probe_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_retired_slot_tests.rs"]
 mod era_retired_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_start_own_probe_tests.rs"]
 mod era_start_own_probe_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_per_slot_tests.rs"]
 mod era_per_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "era_lent_reprobe_tests.rs"]
 mod era_lent_reprobe_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, feature = "a2a"))]
 #[path = "a2a_lent_slot_tests.rs"]
 mod a2a_lent_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
 
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "stop_deadline_tests.rs"]
 mod stop_deadline_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]
 mod websocket_backend_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod destination_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "publish_order_tests.rs"]
 mod publish_order_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "started_feed_tests.rs"]
 mod started_feed_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

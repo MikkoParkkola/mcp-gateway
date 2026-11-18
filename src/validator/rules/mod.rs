@@ -722,5 +722,6 @@ impl Rule for PaginationRule {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;

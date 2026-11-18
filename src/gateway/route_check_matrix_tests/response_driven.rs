@@ -284,6 +284,16 @@ fn is_test_fn(text: &str, needle: &str) -> bool {
     })
 }
 
+/// The lib test split's part tag is one more attribute line above a test
+/// function, so the walk up still reaches its `#[test]`.
+#[test]
+fn a_part_tagged_test_fn_is_still_a_test_fn() {
+    let text =
+        "#[cfg(tp5)]\n#[tokio::test]\nasync fn tagged_row() {}\n#[cfg(tp5)]\nfn not_a_row() {}\n";
+    assert!(is_test_fn(text, "fn tagged_row("));
+    assert!(!is_test_fn(text, "fn not_a_row("));
+}
+
 /// Every name the map cites is a test this tree defines: its last segment is
 /// a `#[test]`/`#[tokio::test]` `fn` (in `response_rows.rs` or `response_source_order.rs` for the
 /// matrix's own `rows::` and `source_order::` names), so a rename or a typo

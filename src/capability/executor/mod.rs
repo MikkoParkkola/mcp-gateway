@@ -606,19 +606,25 @@ fn paced_redirect_error(request_url: &str, response: &reqwest::Response) -> Erro
     ))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod redirect_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod proxy_ssrf_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod send_latency_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod ssrf_denial_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "gws_real_tests.rs"]
 mod gws_real_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;

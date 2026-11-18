@@ -168,6 +168,7 @@ impl NotificationMultiplexer {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_provisional_tests.rs"]
 mod tests;

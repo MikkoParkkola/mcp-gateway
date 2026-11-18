@@ -256,6 +256,7 @@ impl Snapshot {
 #[path = "upstream_ledger.rs"]
 pub(crate) mod ledger;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "upstream_need_tests.rs"]
 mod tests;

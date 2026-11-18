@@ -256,6 +256,7 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     Ok((inner, file.binary_version, cut))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "latency_persist_tests.rs"]
 mod latency_persist_tests;

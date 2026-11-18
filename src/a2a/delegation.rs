@@ -353,6 +353,7 @@ impl Drop for CancelGuard {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "delegation_tests.rs"]
 mod tests;

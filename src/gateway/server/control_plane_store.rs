@@ -216,6 +216,7 @@ fn open_store(config: &Config, base: &Path) -> std::result::Result<OpenedStore, 
 /// start does when that place cannot be written. Failures are forced with
 /// ENOTDIR (a regular file where a directory must be), never with chmod: CI
 /// runs as root, and root writes through a 0555 directory.
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

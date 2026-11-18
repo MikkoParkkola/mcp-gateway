@@ -29,6 +29,7 @@ use crate::gateway::meta_mcp::scoped_backends::Absence;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp};
 use crate::{Error, Result};
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "chokepoint_tests.rs"]
 mod chokepoint_tests;

@@ -292,6 +292,7 @@ fn clip_chars(text: &str, max: usize) -> String {
     buf
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "search_disclosure_tests.rs"]
 mod tests;

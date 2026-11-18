@@ -756,13 +756,16 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "egress_stored_targets_tests.rs"]
 mod stored_targets_tests;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "answer_generation_tests.rs"]
 mod answer_generation_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "egress_scope_tests.rs"]
 mod scope_tests;

@@ -158,6 +158,7 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "rate_limiter_tests.rs"]
 mod tests;

@@ -697,10 +697,12 @@ mod multiplexer;
 /// How many view records a session keeps before it drops the idle ones.
 const MAX_IDLE_RECORDS: usize = 16;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_told_bounds_tests.rs"]
 mod bounds_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_told_state_tests.rs"]
 mod state_tests;
@@ -709,6 +711,7 @@ mod state_tests;
 #[path = "streaming_told_decision_tests.rs"]
 mod decision_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "streaming_told_gap_tests.rs"]
 mod gap_tests;

@@ -11,6 +11,7 @@ use super::{Audit, FileRevision, Intent, ReplaceError, ReplaceOutcome, audit};
 use crate::config_reload::LiveConfig;
 use crate::gateway::auth::{digest_tag_of, presented_digest};
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "replace_receipt_tests.rs"]
 mod tests;

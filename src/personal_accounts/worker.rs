@@ -642,6 +642,7 @@ pub(crate) use journeys::{JourneyCreated, JourneyResult};
 mod callback;
 pub(crate) use callback::{CallbackOutcome, CallbackRequest};
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod worker_tests;

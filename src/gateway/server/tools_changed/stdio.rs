@@ -237,6 +237,7 @@ impl StdioAnnouncer {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;

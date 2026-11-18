@@ -392,6 +392,7 @@ async fn cap_registry_list(capabilities: std::path::PathBuf) -> ExitCode {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::cap_pin;

@@ -49,6 +49,7 @@ pub(super) fn missing_binary_remedy(bin: &str, in_container: bool) -> Option<Rem
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::missing_binary_remedy;

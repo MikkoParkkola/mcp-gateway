@@ -52,6 +52,7 @@ pub fn windsurf_path() -> PathBuf {
     home_path(".codeium/windsurf/mcp_config.json")
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

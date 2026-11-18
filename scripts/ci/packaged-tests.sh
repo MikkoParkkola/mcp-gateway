@@ -65,7 +65,19 @@ if [ "$mode" = install-unlocked ]; then
   UNLOCKED_INSTALL_LOG="$out/gateway.log" \
     bash "$root/scripts/ci/check-unlocked-install.sh" "$out/root/bin/mcp-gateway"
 elif [ "$mode" = build ]; then
-  cargo test --all-features --locked --no-run
+  # The lib test binary one part at a time, as the Linux part legs build it (the whole one swaps the 16 GB runner
+  # past its own step timeouts), N from the packaged build script; then every other test target, named by kind,
+  # since `--tests` would select the lib again (scripts/ci/check_swap_jobs.py holds this shape).
+  n="$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*;.*/\1/p' \
+    scripts/dev/test-parts-build.rs)"
+  if [ -z "$n" ]; then
+    echo "::error::the packaged crate's build script declares no const N: u32" >&2
+    exit 1
+  fi
+  for k in $(seq 1 "$n"); do
+    MCP_GATEWAY_TEST_PART="$k" cargo test --all-features --locked --lib --no-run
+  done
+  cargo test --all-features --locked --no-run --test '*' --bins --examples
 else
   # The first two skips are ci.yml `test`'s: each has a dedicated job that
   # provisions what it needs. The wiring test holds those lists equal.
