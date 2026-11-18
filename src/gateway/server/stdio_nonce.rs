@@ -51,6 +51,7 @@ impl StdioNonce {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::StdioNonce;

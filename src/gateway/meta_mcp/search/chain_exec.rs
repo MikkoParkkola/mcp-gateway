@@ -386,6 +386,7 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod member_tests {
     use serde_json::json;
@@ -453,6 +454,7 @@ mod member_tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "chain_step_origin_tests.rs"]
 mod chain_step_origin_tests;

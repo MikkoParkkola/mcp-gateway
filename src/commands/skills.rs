@@ -396,6 +396,7 @@ fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod redirect_tests {
     use super::*;
@@ -662,6 +663,7 @@ mod redirect_tests {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     /// MIK-8667: a description keeps at most `max` bytes, cut on a character

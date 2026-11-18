@@ -561,10 +561,10 @@ class Wiring(unittest.TestCase):
             step = ci[ci.index(name) :]
             return step[: step.index("\n      - ") if "\n      - " in step else len(step)]
 
-        # int-b runs the integration target; lib-b runs the lib target from the shared lib test binary.
+        # int-b runs the integration target; lib-b runs the lib module on the one part binary that holds it.
         for name, target in (
             ("UPGRADING checks on the assembled guide", "--test upgrading_summary_rows"),
-            ("UPGRADING lib checks on the assembled guide", 'lib-tests" upgrade_notice_tests'),
+            ("UPGRADING lib checks on the assembled guide", "run-one --module commands::upgrade::upgrade_notice_tests::"),
         ):
             step = step_named(name)
             for needle in ("upgrading_fragments.py assemble --dry-run", "UPGRADING_DOC=", target, "running [1-9]"):

@@ -322,6 +322,7 @@ fn rewrite(file: &Path, envelope: &Envelope) -> Result<(), String> {
     written.map_err(|e| format!("{}: cannot rewrite it: {e}", file.display()))
 }
 
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "email_hmac_store_tests.rs"]
 mod tests;

@@ -168,6 +168,7 @@ thread_local! {
     pub(super) static CATALOGUE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "catalogue_cache_tests.rs"]
 mod tests;

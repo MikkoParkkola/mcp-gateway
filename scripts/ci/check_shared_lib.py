@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""The lib test binary is built once per run, and a failed build must stay red.
+"""The lib test binary is built once per run in parts, and a failed build must stay red.
 
-One rustc of that binary peaks about 18.5 GB on a 16 GB runner. Job
-linux-lib-build builds it once and uploads the linux-lib-tests artifact; the
-lib shards, the gws dry-run and the keychain job run that binary instead of
-compiling. Five jobs used to build the same binary.
+The whole binary peaks near 15 GB on a 16 GB runner and swapped. Job
+linux-lib-build builds it as a matrix of parts, each uploading its
+linux-lib-tests-pK artifact; linux-lib-union checks every part's list against
+the source; the lib shards, the gws dry-run and the keychain job run the part
+binaries instead of compiling.
 
 Fail closed, so a failed or hung shared build turns every consumer red, never
 skipped, and no consumer quietly builds its own binary. A job that starts
@@ -26,17 +27,20 @@ from pathlib import Path
 import yaml
 
 BUILD_JOB = "linux-lib-build"
-ARTIFACT = "linux-lib-tests"
+ARTIFACT = "linux-lib-tests-p*"  # the consumers' download pattern
+UPLOAD_NAME = "linux-lib-tests-p${{ matrix.part }}"
+UNION = "linux-lib-union"
+TRIPWIRE = "scripts/ci/memory-tripwire.sh"
 CONSUMERS = ("test-shards-lib", "gws-dry-run", "linux-keychain")
 ROLLUP = "test"
 
 # The build step is this prefix and the export on the same line, adjacent.
 # `run ` keeps its trailing space so `run-prebuilt` is not a compile.
-PREFIX = "scripts/ci/with-memory-log.sh python3 "
-EXPORT = 'scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'
-UPLOAD_PATH = "${{ runner.temp }}/lib-bin/lib-tests"
+PREFIX = "scripts/ci/with-memory-log.sh "
+EXPORT = 'scripts/ci/lib-parts.sh export "$PART" "$RUNNER_TEMP/lib-bin"'
+UPLOAD_PATH = "${{ runner.temp }}/lib-bin"
 DOWNLOAD_PATH = "${{ runner.temp }}/lib-bin"
-BINARY = "$RUNNER_TEMP/lib-bin/lib-tests"
+BINARY = '"$RUNNER_TEMP/lib-bin"'  # the part binaries' folder, as the consumers' steps name it
 GATE_BUILD = "${{ needs.linux-lib-build.result }}"
 GATE_RUN = (
     '[ "$BUILD" = success ] || '
@@ -174,7 +178,7 @@ def check_upload(steps: list[dict], build_at: int | None) -> list[str]:
         if not uses_action(step, "actions/upload-artifact"):
             continue
         body = with_map(step)
-        if body.get("name") != ARTIFACT:
+        if body.get("name") != UPLOAD_NAME:
             continue
         found = True
         label = step_label(index, step)
@@ -187,7 +191,7 @@ def check_upload(steps: list[dict], build_at: int | None) -> list[str]:
         if build_at is not None and index <= build_at:
             problems.append(f"{BUILD_JOB} {label}: upload is not after the export-lib build step")
     if not found:
-        problems.append(f"{BUILD_JOB} job: no actions/upload-artifact step named {ARTIFACT}")
+        problems.append(f"{BUILD_JOB} job: no actions/upload-artifact step named {UPLOAD_NAME}")
     return problems
 
 
@@ -200,7 +204,8 @@ def check_build_fail_closed(job: dict, steps: list[dict], jobs: dict) -> list[st
         label = step_label(index, step)
         if "continue-on-error" in step:
             problems.append(f"{BUILD_JOB} {label}: carries continue-on-error")
-        if "if" in step:
+        # The one allowed: the memory tripwire runs after a failure too, so it can only add red.
+        if "if" in step and not (step.get("if") == "always()" and TRIPWIRE in run_text(step)):
             problems.append(f"{BUILD_JOB} {label}: carries if:")
     shards = jobs.get("test-shards")
     shards_if = shards.get("if") if isinstance(shards, dict) else None
@@ -257,8 +262,10 @@ def check_download(name: str, steps: list[dict]) -> list[str]:
         if not uses_action(step, "actions/download-artifact"):
             continue
         body = with_map(step)
-        if body.get("name") != ARTIFACT:
+        if body.get("pattern") != ARTIFACT:
             continue
+        if body.get("merge-multiple") is not False:
+            problems.append(f"{name} {step_label(index, step)}: merge-multiple is not false, so parts could overwrite")
         if body.get("path") != DOWNLOAD_PATH:
             problems.append(
                 f"{name} {step_label(index, step)}: path is {body.get('path')!r}, want {DOWNLOAD_PATH!r}"
@@ -270,7 +277,7 @@ def check_download(name: str, steps: list[dict]) -> list[str]:
         where = ""
         if binary:
             where = f"; {step_label(binary[0], steps[binary[0]])} runs {BINARY}"
-        problems.append(f"{name} job: no actions/download-artifact step named {ARTIFACT}{where}")
+        problems.append(f"{name} job: no actions/download-artifact step with pattern {ARTIFACT}{where}")
         return problems
     uncovered = [index for index in binary if not any(download < index for download in downloads)]
     if uncovered:
@@ -330,7 +337,7 @@ def check_consumer(name: str, job: object) -> list[str]:
 
 def downloads_artifact(job: dict) -> bool:
     for step in steps_of(job):
-        if uses_action(step, "actions/download-artifact") and with_map(step).get("name") == ARTIFACT:
+        if uses_action(step, "actions/download-artifact") and with_map(step).get("pattern") == ARTIFACT:
             return True
     return False
 
@@ -338,7 +345,7 @@ def downloads_artifact(job: dict) -> bool:
 def check_closed(jobs: dict) -> list[str]:
     """C7. A new user of the shared build is named here, and a downloader needs the build."""
     problems: list[str] = []
-    allowed = set(CONSUMERS) | {ROLLUP}
+    allowed = set(CONSUMERS) | {ROLLUP, UNION}
     for name, job in jobs.items():
         if not isinstance(job, dict) or name == BUILD_JOB:
             continue
@@ -358,7 +365,7 @@ def expects_both(job: dict) -> bool:
         if not isinstance(raw, str):
             continue
         named = raw.split()
-        if BUILD_JOB in named and LIB_SHARDS in named:
+        if BUILD_JOB in named and LIB_SHARDS in named and UNION in named:
             return True
     return False
 
@@ -374,8 +381,29 @@ def check_rollup(jobs: dict) -> list[str]:
         problems.append(f"{ROLLUP} job: needs does not contain {BUILD_JOB}")
     if LIB_SHARDS not in needs:
         problems.append(f"{ROLLUP} job: needs does not contain {LIB_SHARDS}")
+    if UNION not in needs:
+        problems.append(f"{ROLLUP} job: needs does not contain {UNION}")
     if not expects_both(job):
-        problems.append(f"{ROLLUP} job: no step env.ROLLUP_EXPECTS lists {BUILD_JOB} and {LIB_SHARDS}")
+        problems.append(f"{ROLLUP} job: no step env.ROLLUP_EXPECTS lists {BUILD_JOB}, {LIB_SHARDS} and {UNION}")
+    return problems
+
+
+def check_union(jobs: dict) -> list[str]:
+    """U1. The union job needs the parts, runs even when one failed, and compares every list with the source."""
+    job = jobs.get(UNION)
+    if not isinstance(job, dict):
+        return [f"{UNION} job: missing"]
+    problems: list[str] = []
+    if BUILD_JOB not in needs_of(job):
+        problems.append(f"{UNION} job: does not need {BUILD_JOB}")
+    if not str(job.get("if", "")).replace(" ", "").startswith(CANCELLED):
+        problems.append(f"{UNION} job: if: does not start with !cancelled(), so a failed part could skip it")
+    runs = "\n".join(run_text(step) for step in steps_of(job))
+    for needle in ("scripts/dev/test_parts.py expect", "scripts/ci/lib_union.py"):
+        if needle not in runs:
+            problems.append(f"{UNION} job: no step runs {needle}")
+    if "continue-on-error" in job or any("continue-on-error" in step for step in steps_of(job)):
+        problems.append(f"{UNION} job: carries continue-on-error")
     return problems
 
 
@@ -385,6 +413,7 @@ def check(jobs: dict) -> list[str]:
         problems += check_consumer(name, jobs.get(name))
     problems += check_closed(jobs)
     problems += check_rollup(jobs)
+    problems += check_union(jobs)
     # C3 and C6 can name the same gate step; one line per problem.
     unique: list[str] = []
     seen: set[str] = set()
@@ -407,7 +436,7 @@ def main() -> int:
 def _drop_download(job: dict) -> None:
     job["steps"] = [
         step for step in job["steps"]
-        if not (uses_action(step, "actions/download-artifact") and with_map(step).get("name") == ARTIFACT)
+        if not (uses_action(step, "actions/download-artifact") and with_map(step).get("pattern") == ARTIFACT)
     ]
 
 
@@ -454,7 +483,7 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
 
     warn_upload = fresh()
     for step in warn_upload[BUILD_JOB]["steps"]:
-        if uses_action(step, "actions/upload-artifact") and with_map(step).get("name") == ARTIFACT:
+        if uses_action(step, "actions/upload-artifact") and with_map(step).get("name") == UPLOAD_NAME:
             step["with"]["if-no-files-found"] = "warn"
 
     bare_build = fresh()
@@ -477,7 +506,7 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
     stray_download = fresh()
     stray_download["stray"] = {
         "runs-on": "ubuntu-latest",
-        "steps": [{"uses": "actions/download-artifact@x", "with": {"name": ARTIFACT, "path": DOWNLOAD_PATH}}],
+        "steps": [{"uses": "actions/download-artifact@x", "with": {"pattern": ARTIFACT, "path": DOWNLOAD_PATH, "merge-multiple": False}}],
     }
 
     rollup_needs = fresh()

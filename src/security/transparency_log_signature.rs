@@ -90,6 +90,7 @@ pub(crate) fn signature_state(entry: &Value, secret: Option<&[u8]>) -> Signature
     judge(entry, secret, || Placed::Legacy { unanchored: false }).state
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_signature_tests.rs"]
 mod tests;

@@ -362,6 +362,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_absolute() && candidate.is_file())
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keychain_linux_writer_tests.rs"]
 mod writer_tests;

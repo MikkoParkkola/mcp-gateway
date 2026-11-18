@@ -52,6 +52,7 @@ impl Config {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "remote_provenance_posture_tests.rs"]
 mod tests;

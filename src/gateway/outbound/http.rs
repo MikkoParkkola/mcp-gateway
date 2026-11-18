@@ -249,6 +249,7 @@ fn held_body(frame: OutboundFrame) -> axum::response::Response {
     response
 }
 
+#[cfg(tp5)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "http_commit_tests.rs"]
 mod commit_tests;

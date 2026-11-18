@@ -5,6 +5,7 @@ use super::*;
 const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
 // WebhookDefinition::Debug must never surface the HMAC verification secret.
+#[cfg(tp2)]
 #[test]
 fn webhook_definition_debug_redacts_secret() {
     let w = WebhookDefinition {

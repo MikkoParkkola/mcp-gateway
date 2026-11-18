@@ -584,9 +584,11 @@ pub(super) fn derive_prompt_cache_key(args: &Value, session_id: Option<&str>) ->
         })
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "pre_dispatch_effect_tests.rs"]
 mod effect_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "prompt_cache_key_tests.rs"]
 mod prompt_cache_key_tests;

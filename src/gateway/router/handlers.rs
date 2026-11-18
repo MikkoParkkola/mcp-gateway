@@ -25,6 +25,7 @@ use crate::gateway::outbound::{OutboundReply, judged_reply, stream_reply};
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod cacheable_field_tests;
 mod dispatch_intake;
@@ -772,14 +773,17 @@ pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "handlers_health_predicate_tests.rs"]
 mod health_predicate_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "handlers_session_tests.rs"]
 mod session_tests;
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "handlers_session_subject_tests.rs"]
 mod session_subject_tests;

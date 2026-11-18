@@ -36,21 +36,29 @@ use tower::ServiceExt;
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
 /// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
+#[cfg(tp1)]
 mod attestation_routes;
+#[cfg(tp1)]
 mod chain_direct;
 /// MIK-7962.COLD.1: admission reads the tool cache only.
+#[cfg(tp1)]
 mod cold_admission;
+#[cfg(tp1)]
 mod descriptor_withholding;
+#[cfg(tp1)]
 mod f24_resource_subscribe;
 /// MIK-7215.CONTROL.5 G4: arm and hints key on the caller.
 mod g4_caller_keyed;
 /// MIK-8162: a malformed modern request under hardened on `/mcp`.
+#[cfg(tp1)]
 mod mcp_malformed_hardened;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
 pub(super) mod meta_fixture;
 mod meta_state_fixtures;
+#[cfg(tp1)]
 mod order2_fsm;
 // pub(crate): the route-check matrix drives TaskSubmit x Authorize through
 // `submit_authz` (MIK-8315).
@@ -58,26 +66,42 @@ pub(crate) mod task_execution_adapter;
 
 mod issue_555_listing_scope;
 /// C7: `/metrics` behind a dedicated scrape token (MIK 7570 METRICS.1).
+#[cfg(tp1)]
 #[cfg(feature = "metrics")]
 mod metrics_scrape;
 
+#[cfg(tp1)]
 mod authz_and_sse;
+#[cfg(tp1)]
 mod code_mode_param;
+#[cfg(tp1)]
 mod direct_route_identity;
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 mod key_digest_read;
 /// `MIK-7642.PR.B` C2: a client disconnect cancels the backend call.
+#[cfg(tp1)]
 mod mik7642_disconnect;
+#[cfg(tp1)]
 mod origin_gate;
+#[cfg(tp1)]
 mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
+#[cfg(tp1)]
 mod prm_without_issuer;
+#[cfg(tp1)]
 mod quota_principal;
+#[cfg(tp1)]
 mod refusal_kind_private;
+#[cfg(tp1)]
 mod refusal_wire_pins;
+#[cfg(tp1)]
 mod request_parsing;
+#[cfg(tp1)]
 mod responses;
+#[cfg(tp1)]
 mod session_hold_direct;
+#[cfg(tp1)]
 mod session_routing;
 
 use meta_state_fixtures::{
@@ -566,6 +590,7 @@ impl Transport for RouterNotificationTestTransport {
 /// hand-maintained copies of one roster, and they disagreed the moment the
 /// roster changed. Three now read the constant; this makes the fourth fail
 /// loudly instead of quietly misleading an operator about what they can run.
+#[cfg(tp1)]
 #[test]
 fn deployment_guide_matches_the_admin_tool_set() {
     let guide = include_str!("../../../docs/DEPLOYMENT.md");
@@ -614,6 +639,7 @@ fn scoped_client(
 /// Reporting only the API-key name labels an agent-authenticated or
 /// certificate-authenticated caller as unauthenticated — precisely the
 /// refusals most worth attributing. Unwired from any assertion until now.
+#[cfg(tp1)]
 #[test]
 fn authz_refusal_principal_names_the_authenticated_identity() {
     use crate::gateway::oauth::OAuthAgentIdentity;
@@ -673,6 +699,7 @@ async fn modern_router_app_state() -> (Arc<AppState>, FixtureDir) {
     test_router_app_state_with(StreamingConfig::default(), config).await
 }
 
+#[cfg(tp1)]
 mod openwebui_adapter;
 
 /// C5 route parity (MIK-6746): agent-identity enforcement must not depend on
@@ -734,10 +761,13 @@ pub(crate) fn modern_meta() -> serde_json::Value {
     })
 }
 
+#[cfg(tp1)]
 #[path = "history_route_tests.rs"]
 mod history_route_tests;
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[path = "status_wire_values_tests.rs"]
 mod status_wire_values_tests;
+#[cfg(tp1)]
 #[path = "tool_counts_route_tests.rs"]
 mod tool_counts_route_tests;

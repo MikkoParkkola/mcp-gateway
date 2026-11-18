@@ -721,6 +721,7 @@ impl LiveConfig {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "live_config_capability_tests.rs"]
 mod capability_tests;

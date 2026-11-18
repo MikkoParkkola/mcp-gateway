@@ -498,6 +498,7 @@ pub(in super::super) fn external_cfg() -> IdentityPropagationConfig {
 ///
 /// FALSIFIER. A vendor `effective()` without the shared clear leaves
 /// `account` set on the running backend; actual dispatch is then refused.
+#[cfg(tp2)]
 #[tokio::test]
 async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody() {
     // The audit log, first so it drops after the gateway that writes to it.
@@ -582,5 +583,6 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
     );
 }
 
+#[cfg(tp2)]
 #[path = "account_raw_vault_tests.rs"]
 mod raw_vault;

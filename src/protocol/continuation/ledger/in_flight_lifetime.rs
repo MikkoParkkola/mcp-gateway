@@ -32,24 +32,28 @@ async fn held_until_t(capacity: usize) -> (InFlight, String) {
 
 // --- C1: no reader observes a record whose deadline is behind its `now`. ---
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_01_len_does_not_count_an_expired_entry() {
     let (table, _key) = held_until_t(4).await;
     assert_eq!(table.len(T + 1).await, 0);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_02_route_does_not_answer_here_for_an_expired_entry() {
     let (table, key) = held_until_t(4).await;
     assert_eq!(table.route(&key, T + 1).await, Routing::Gone);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_03_complete_does_not_report_completing_an_expired_entry() {
     let (table, key) = held_until_t(4).await;
     assert!(!table.complete(&key, T + 1).await);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_04_a_live_entry_survives_every_reader() {
     // Negative control: the reclaim must not eat live records. A count of 1
@@ -60,6 +64,7 @@ async fn row_04_a_live_entry_survives_every_reader() {
     assert!(table.complete(&key, T - 1).await);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_04a_an_entry_is_live_at_its_own_deadline() {
     // The boundary, and the only `now` at which `<` and `<=` differ: .01 and
@@ -71,6 +76,7 @@ async fn row_04a_an_entry_is_live_at_its_own_deadline() {
     assert!(table.complete(&key, T).await);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_07_a_now_that_never_moves_never_expires_an_entry() {
     // The contract's limit, stated: reclamation is driven by the supplied
@@ -82,6 +88,7 @@ async fn row_07_a_now_that_never_moves_never_expires_an_entry() {
 
 // --- C2: an abandoned hold leaves without anyone scheduling a reclaimer. ---
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_05_the_first_call_through_any_reader_reclaims() {
     // Nothing completes the exchange and no reaper exists. Each reader gets
@@ -117,6 +124,7 @@ async fn row_05_the_first_call_through_any_reader_reclaims() {
     );
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_06_an_expired_entry_stays_resident_until_the_first_reader() {
     // R2a's bargain, stated as a test: reclamation is lazy, so the record is
@@ -132,6 +140,7 @@ async fn row_06_an_expired_entry_stays_resident_until_the_first_reader() {
     assert_eq!(table.len(T + 1).await, 0, "gone at the first reader");
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_08_hold_at_capacity_admits_when_the_occupants_are_expired() {
     // Transferred from NFR.PERF.3. `hold` keeps only its refusal, so the
@@ -163,12 +172,14 @@ async fn row_08_hold_at_capacity_admits_when_the_occupants_are_expired() {
     );
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_08_capacity_is_the_documented_bound() {
     // The design's cost number, pinned. A test cannot see a walk length.
     assert_eq!(IN_FLIGHT_CAPACITY, 4_096);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_09_hold_at_capacity_still_refuses_when_the_occupants_are_live() {
     // The pair to .08: without it, .08 passes trivially if the capacity
@@ -217,6 +228,7 @@ async fn full_of_live_holds() -> InFlight {
     table
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_09_readers_of_a_table_with_nothing_expired_never_walk_it() {
     let table = full_of_live_holds().await;
@@ -233,6 +245,7 @@ async fn row_09_readers_of_a_table_with_nothing_expired_never_walk_it() {
     );
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
     // The tracked earliest deadline may go stale when its hold completes; it
@@ -265,6 +278,7 @@ async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
     );
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
     let table = InFlight::new("gw-1", 4);
@@ -284,6 +298,7 @@ async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
     assert_eq!(table.len(T + 31).await, 0);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
     let table = InFlight::new("gw-1", 4);
@@ -302,6 +317,7 @@ async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
     assert_eq!(walked, 0, "nothing can be expired at the earliest deadline");
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
     let table = InFlight::new("gw-1", 4);
@@ -336,6 +352,7 @@ async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
 /// is abandoned. Expiry is the abandonment path (a client that stops calling
 /// makes no call; a reload keeps the shared table). Asserted on the map itself,
 /// after a reader that is not `step_digest`, so only the reclaim can clear it.
+#[cfg(tp1)]
 #[tokio::test]
 async fn an_expired_hold_drops_its_step_digest() {
     let (table, key) = held_until_t(4).await;
@@ -355,6 +372,7 @@ async fn an_expired_hold_drops_its_step_digest() {
 /// `MIK-8060` x `MIK-8168`: with the reclaim walk skipped when nothing can be
 /// expired, a step recorded for an exchange no longer held (a bind that raced
 /// its hold's reclaim) must still not be returned.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_step_digest_is_returned_only_while_its_hold_exists() {
     let (table, key) = held_until_t(4).await;
@@ -382,6 +400,7 @@ async fn a_step_digest_is_returned_only_while_its_hold_exists() {
 /// With the map held on this thread, a release on another thread still frees
 /// the slot, inside a deadline; a blocking lock would miss it, not hang the
 /// test.
+#[cfg(tp1)]
 #[tokio::test]
 async fn try_complete_frees_the_slot_while_the_step_map_is_held() {
     let table = std::sync::Arc::new(InFlight::new("gw-1", IN_FLIGHT_CAPACITY));

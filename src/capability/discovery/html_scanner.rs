@@ -126,6 +126,7 @@ pub fn resolve_url(base: &str, href: &str) -> String {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

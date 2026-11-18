@@ -544,6 +544,7 @@ fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

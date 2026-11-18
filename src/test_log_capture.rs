@@ -351,6 +351,7 @@ impl Seen {
 
 /// A keeper named only in a line or doc comment does not count: the file is
 /// flagged.
+#[cfg(tp3)]
 #[test]
 fn a_keeper_named_only_in_a_comment_is_flagged() {
     let line = "fn t() {\n    // reaches crate::test_log_capture first\n    \
@@ -362,6 +363,7 @@ fn a_keeper_named_only_in_a_comment_is_flagged() {
 }
 
 /// A real keeper call passes.
+#[cfg(tp3)]
 #[test]
 fn a_real_keeper_call_passes() {
     let text = "fn t() {\n    crate::test_log_capture::keep_interest_open();\n    \
@@ -371,6 +373,7 @@ fn a_real_keeper_call_passes() {
 
 /// A keeper named only in a trailing or an inner-doc comment does not
 /// count either.
+#[cfg(tp3)]
 #[test]
 fn a_keeper_in_a_trailing_or_inner_doc_comment_is_flagged() {
     let trailing = "fn t() {\n    tracing::subscriber::with_default(s, || {}); \
@@ -389,6 +392,7 @@ fn a_keeper_in_a_trailing_or_inner_doc_comment_is_flagged() {
 
 /// A URL is code, not a comment: an install after one on the same line is
 /// seen, and so is a keeper.
+#[cfg(tp3)]
 #[test]
 fn a_url_on_the_line_hides_neither_install_nor_keeper() {
     let install = "fn t() {\n    let _g = (\"https://x\", \
@@ -405,6 +409,7 @@ fn a_url_on_the_line_hides_neither_install_nor_keeper() {
 
 /// A keeper named only in a block comment or a string literal does not
 /// count: neither is code.
+#[cfg(tp3)]
 #[test]
 fn a_keeper_in_a_block_comment_or_a_string_is_flagged() {
     let block = "fn t() {\n    /* test_log_capture */\n    \
@@ -420,6 +425,7 @@ fn a_keeper_in_a_block_comment_or_a_string_is_flagged() {
 
 /// An install imported from under `subscriber` and called bare is an
 /// install: directly, renamed, or by a glob. A keeper import satisfies it.
+#[cfg(tp3)]
 #[test]
 fn an_imported_install_is_an_install() {
     let direct = "use tracing::subscriber::with_default;\nfn t() {\n    \
@@ -444,6 +450,7 @@ fn an_imported_install_is_an_install() {
 
 /// A macro's body is code: an expression macro is visited as expressions,
 /// any other macro token by token, and a string inside either is not code.
+#[cfg(tp3)]
 #[test]
 fn a_macro_body_is_read_as_code_and_its_strings_are_not() {
     let expression = "fn t() {\n    assert!(tracing::subscriber::with_default(s, || true));\n}\n";
@@ -462,12 +469,14 @@ fn a_macro_body_is_read_as_code_and_its_strings_are_not() {
 }
 
 /// A file that does not parse is an error, not a pass.
+#[cfg(tp3)]
 #[test]
 fn unparseable_source_is_an_error() {
     assert!(parsed_misses_keeper("fn (").is_err());
 }
 
 /// An install that is only commented out is not an install.
+#[cfg(tp3)]
 #[test]
 fn a_commented_out_install_is_ignored() {
     let text = "fn t() {\n    // tracing::subscriber::with_default(s, || {});\n}\n";
@@ -482,6 +491,7 @@ fn a_commented_out_install_is_ignored() {
 /// flake back. Lexical by design: a file that names `subscriber::with_default`
 /// or `subscriber::set_default` must also reach the keeper (directly, or
 /// through `test_log_capture` or the shared `error_capture`).
+#[cfg(tp3)]
 #[test]
 fn every_scoped_log_capture_keeps_interest_open() {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

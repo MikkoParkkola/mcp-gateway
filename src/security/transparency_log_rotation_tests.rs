@@ -148,6 +148,7 @@ pub(super) fn strip_genesis_open(path: &Path) {
     std::fs::write(path, body).unwrap();
 }
 
+#[cfg(tp4)]
 #[test]
 fn rotates_at_max_segment_bytes() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -158,6 +159,7 @@ fn rotates_at_max_segment_bytes() {
     assert!(std::fs::metadata(&path).unwrap().len() < 4096);
 }
 
+#[cfg(tp4)]
 #[test]
 fn chain_continues_across_segments() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -182,6 +184,7 @@ fn chain_continues_across_segments() {
 }
 
 /// Null control: must stay green on the unmutated build.
+#[cfg(tp4)]
 #[test]
 fn verify_passes_multi_segment_log() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -194,6 +197,7 @@ fn verify_passes_multi_segment_log() {
     assert_eq!(r.segments_checked, 4);
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_fails_on_missing_middle_segment() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -206,6 +210,7 @@ fn verify_fails_on_missing_middle_segment() {
     assert!(r.error_message.unwrap().contains("segment 1"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_fails_on_hand_deleted_oldest() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -218,6 +223,7 @@ fn verify_fails_on_hand_deleted_oldest() {
     assert!(r.error_message.unwrap().contains("no expiry record"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_passes_after_retention_expiry() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -244,6 +250,7 @@ fn verify_passes_after_retention_expiry() {
     assert_eq!(r.segments_expired, 3);
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_fails_on_swapped_segment_names() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -268,6 +275,7 @@ fn verify_fails_on_swapped_segment_names() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_rejects_wrong_active_segment_seq() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -283,6 +291,7 @@ fn verify_rejects_wrong_active_segment_seq() {
     assert!(r.error_message.unwrap().contains("segment_seq"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn list_segments_ignores_non_segment_siblings() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -307,6 +316,7 @@ fn list_segments_ignores_non_segment_siblings() {
     assert_eq!(found, vec![5]);
 }
 
+#[cfg(tp4)]
 #[test]
 fn deleted_active_is_a_verify_gap() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -326,6 +336,7 @@ fn deleted_active_is_a_verify_gap() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn truncated_active_is_a_verify_gap() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -347,6 +358,7 @@ fn truncated_active_is_a_verify_gap() {
     assert!(r.error_message.unwrap().contains("at the tail"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn deleted_hwm_fails_verify() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -357,6 +369,7 @@ fn deleted_hwm_fails_verify() {
     assert!(!verify(&path, false).ok);
 }
 
+#[cfg(tp4)]
 #[test]
 fn forged_hwm_fails_signed_verify() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -394,6 +407,7 @@ fn forged_hwm_fails_signed_verify() {
     assert!(!verify(&path, true).ok);
 }
 
+#[cfg(tp4)]
 #[test]
 fn torn_hwm_counts_as_missing() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -409,6 +423,7 @@ fn torn_hwm_counts_as_missing() {
     assert!(archive.warnings.iter().any(|w| w.contains("archive mode")));
 }
 
+#[cfg(tp4)]
 #[test]
 fn archive_mode_accepts_copy_without_hwm() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -430,6 +445,7 @@ fn archive_mode_accepts_copy_without_hwm() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_runs_when_active_absent() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -445,6 +461,7 @@ fn verify_runs_when_active_absent() {
     assert!(r.error_message.unwrap().contains("missing"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn verify_with_live_appender_passes() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -464,6 +481,7 @@ fn verify_with_live_appender_passes() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn caller_cannot_append_segment_event() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -477,6 +495,7 @@ fn caller_cannot_append_segment_event() {
     assert!(l.append_event(f, &AuditEnvelope::gateway()).is_err());
 }
 
+#[cfg(tp4)]
 #[test]
 fn oversized_record_refused_without_degrading() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -493,6 +512,7 @@ fn oversized_record_refused_without_degrading() {
 
 /// Coordinator ruling: the oversized exemption is a marker type, not an
 /// `ErrorKind`, so a corrupt tail (`InvalidData`) on resync still degrades.
+#[cfg(tp4)]
 #[test]
 fn corrupt_tail_on_resync_still_degrades() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -511,6 +531,7 @@ fn corrupt_tail_on_resync_still_degrades() {
 
 /// #1528: identity comes from the open handle. A path and a handle on the same
 /// file agree, and two distinct files never do, whatever their timestamps.
+#[cfg(tp4)]
 #[test]
 fn mik_1528_two_distinct_files_have_distinct_identities() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -567,6 +588,7 @@ fn assert_nothing_dated_zero(path: &Path) {
 /// reads again an undated segment is not age-rotated however far the clock
 /// runs. Mutant M5a: an undated segment age-rotates. Mutant M5b: size
 /// rotation is skipped while the clock is dark (`rotate_n` finds no rotation).
+#[cfg(tp4)]
 #[test]
 fn a_log_opened_on_a_dark_clock_is_undated_and_still_rotates_by_size() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -607,6 +629,7 @@ fn a_log_opened_on_a_dark_clock_is_undated_and_still_rotates_by_size() {
 /// explicit null restores undated, and a reopen after the clock recovers
 /// leaves it undated, so it is not age-rotated (mutant M5a; it rotates by
 /// size only).
+#[cfg(tp4)]
 #[test]
 fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     let dated = crate::test_dir_keep::kept_tempdir();
@@ -640,5 +663,6 @@ fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     assert_nothing_dated_zero(&path);
 }
 
+#[cfg(tp4)]
 #[path = "transparency_log_rotation_signature_tests.rs"]
 mod signature_tests;

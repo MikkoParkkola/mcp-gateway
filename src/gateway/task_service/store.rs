@@ -43,9 +43,11 @@ mod expiry;
 pub(crate) mod floor;
 #[path = "store_gate.rs"]
 pub(crate) mod gate;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "store_gate_sites_tests.rs"]
 mod gate_sites_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "store_gate_tests.rs"]
 mod gate_tests;
@@ -53,6 +55,7 @@ mod gate_tests;
 mod holds;
 #[path = "store_input.rs"]
 pub(crate) mod input;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "store_lease_tests.rs"]
 mod lease_tests;

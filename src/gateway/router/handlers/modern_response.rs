@@ -104,6 +104,7 @@ pub(crate) fn shape_modern_response(
     GatewayStamps::Modern
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::{GatewayStamps, LIST_TTL_MS, shape_modern_response};

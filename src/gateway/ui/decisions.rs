@@ -533,6 +533,7 @@ fn retention_edge(path: &Path) -> Option<u64> {
     first.get("counter")?.as_u64()
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "decisions_tests.rs"]
 mod tests;

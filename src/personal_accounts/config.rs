@@ -714,6 +714,7 @@ pub(crate) trait SecretOverlay {
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String>;
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod config_tests;

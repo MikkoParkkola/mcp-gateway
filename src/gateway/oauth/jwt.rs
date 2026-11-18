@@ -312,6 +312,7 @@ fn check_audience_claim(aud: Option<&serde_json::Value>, expected: &str) -> Resu
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     #![allow(

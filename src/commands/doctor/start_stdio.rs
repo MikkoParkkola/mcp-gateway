@@ -123,6 +123,7 @@ pub(super) async fn start_stdio_backend(
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 mod tests {
     use std::collections::HashMap;

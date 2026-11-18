@@ -69,12 +69,37 @@ fn an_oauth_entry_is_written_with_an_enabled_oauth_stanza_over_streamable_http()
     }
 }
 
+/// No catalog entry is on the legacy handshake any more, so the mapping is
+/// checked on an entry built here: an SSE flavour must not be written as
+/// Streamable HTTP.
 #[test]
 fn an_sse_entry_keeps_the_legacy_handshake() {
-    match registry("asana", &[]).backend.transport {
+    use crate::registry::server_registry::{
+        Auth, CatalogTransport, HttpFlavor, Reach, ServerCatalogEntry, Setup,
+    };
+    let entry = ServerCatalogEntry {
+        name: "legacy",
+        description: "an /sse endpoint",
+        command: "",
+        required_env: &[],
+        optional_env: &[],
+        transport: CatalogTransport::Http {
+            default_url: "https://mcp.example.test/sse",
+            flavor: HttpFlavor::Sse,
+        },
+        category: "dev-tools",
+        homepage: "https://mcp.example.test",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
+    };
+    match registry_backend(&entry, None, HashMap::new())
+        .expect("an SSE entry resolves")
+        .transport
+    {
         TransportConfig::Http {
             streamable_http, ..
-        } => assert_eq!(streamable_http, Some(false), "asana is an /sse endpoint"),
+        } => assert_eq!(streamable_http, Some(false), "an /sse endpoint"),
         other => panic!("expected http, got {other:?}"),
     }
 }

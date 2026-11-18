@@ -108,6 +108,7 @@ pub(crate) fn canonical_json_sha256(value: &Value) -> String {
     sha256_hex(canonical.as_bytes())
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;

@@ -34,3 +34,16 @@
 #
 # Keep this list EMPTY unless a vuln genuinely has no fix. The right fix for a
 # fixable vuln is to bump the dependency, not to ignore it.
+
+# chrono and chrono-tz are marked unmaintained: informational notices with no
+# vulnerability and no patched release (upstream chronotope/chrono#1768). The
+# migration to jiff or time removes both entries.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-15
+reason = "informational unmaintained notice, no vulnerability; its one untrusted input, a client's timezone at src/events/schedule_source.rs:63-67, is getting a length bound; migration to jiff or time planned before this date"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0555"
+ignoreUntil = 2027-02-15
+reason = "informational unmaintained notice, no vulnerability; its one untrusted input, a client's timezone at src/events/schedule_source.rs:63-67, is getting a length bound; migration to jiff or time planned before this date"

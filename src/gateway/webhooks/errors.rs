@@ -65,6 +65,7 @@ pub(super) fn webhook_success(
     )
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

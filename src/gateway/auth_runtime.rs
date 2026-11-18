@@ -201,10 +201,12 @@ fn ns_since(anchor: Instant) -> u64 {
     u64::try_from(anchor.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_runtime_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "auth_bucket_tests.rs"]
 mod bucket_tests;

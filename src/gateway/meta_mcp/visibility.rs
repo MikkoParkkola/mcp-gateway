@@ -708,6 +708,7 @@ pub(super) mod before_grant_note {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "withheld_grant_once_tests.rs"]
 mod withheld_grant_once_tests;

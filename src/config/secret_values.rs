@@ -221,6 +221,7 @@ pub(crate) fn stores_discovered_value(header: bool, key: &str, value: &str) -> b
     by_rule || crate::config::is_reference(value)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

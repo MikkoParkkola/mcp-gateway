@@ -592,6 +592,7 @@ pub(crate) fn configured_signer(
 mod cli;
 pub use cli::run_provenance_command;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "provenance_public_kid_tests.rs"]
 mod kid_tests;

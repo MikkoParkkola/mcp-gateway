@@ -614,6 +614,7 @@ fn shell_quote(arg: &str) -> String {
     format!("'{escaped}'")
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "provider_tests.rs"]
 mod tests;

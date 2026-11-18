@@ -289,10 +289,12 @@ pub(super) fn normalize_tools_list_response(
 }
 
 // MIK-8399: an abandoned drain revokes what it read.
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "direct_list_abandon_tests.rs"]
 mod abandon_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::readable_page;

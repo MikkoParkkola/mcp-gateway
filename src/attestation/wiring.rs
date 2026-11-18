@@ -187,6 +187,7 @@ pub(crate) fn enforce_from_env_file(
     (validator, mode)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     #![allow(

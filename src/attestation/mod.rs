@@ -32,6 +32,7 @@
 //! `0` boots sandboxes without a token (still isolated, loses identity
 //! attribution); any other value — including unset — enforces fail-closed.
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod audience_tests;
 pub mod launcher;

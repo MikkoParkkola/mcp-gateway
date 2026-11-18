@@ -27,6 +27,7 @@ pub(crate) fn full_jitter(bound: Duration) -> Duration {
     Duration::from_nanos(drawn)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::full_jitter;

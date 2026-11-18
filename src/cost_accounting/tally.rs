@@ -202,6 +202,7 @@ fn usd(micro: u64) -> f64 {
     micro as f64 / 1_000_000.0
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "tally_tests.rs"]
 mod tests;

@@ -29,6 +29,7 @@ pub(crate) fn for_stdout(no_color_flag: bool) -> bool {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::{no_color_requested, wanted};

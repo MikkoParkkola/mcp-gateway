@@ -64,6 +64,7 @@ async fn same_utc_day_async_with<T, F: Future<Output = T>>(
     seen
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{same_utc_day_async_with, same_utc_day_with};

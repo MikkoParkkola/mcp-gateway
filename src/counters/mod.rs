@@ -668,25 +668,31 @@ impl CounterStore {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "pairs_tests.rs"]
 mod pairs_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "persist_tests.rs"]
 mod persist_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "sums_tests.rs"]
 mod sums_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;

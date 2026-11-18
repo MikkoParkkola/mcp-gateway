@@ -50,10 +50,13 @@ pub mod config;
 pub mod identity;
 mod san;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod ip_san_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod mode_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod windows_write_tests;
 
