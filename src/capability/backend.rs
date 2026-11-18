@@ -503,12 +503,13 @@ impl CapabilityBackend {
             self.executor.stop_mcp(&name);
         }
         drop(caps);
-        self.catalogue_changed();
         // A paced REST definition can put a GraphQL or JSON-RPC provider
-        // registered earlier on a paced host, as a directory load can.
+        // registered earlier on a paced host, as a directory load can. Swept
+        // before subscribers hear of the change, so none sees a doomed tool.
         if paces {
             self.unload_unpaced_protocols();
         }
+        self.catalogue_changed();
         Ok(())
     }
 
