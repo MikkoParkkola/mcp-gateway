@@ -54,7 +54,6 @@ pub(super) fn uv_env(credential: &str, port: u16, path: &str) -> Vec<(String, St
         ("UV_NO_BUILD", "1"),
         ("UV_NO_CONFIG", "1"),
         ("UV_PYTHON_DOWNLOADS", "never"),
-        ("UV_COMPILE_BYTECODE", "0"),
         ("UV_TOOL_DIR", tools.as_str()),
         ("UV_TOOL_BIN_DIR", tool_bin.as_str()),
         ("UV_CACHE_DIR", cache.as_str()),

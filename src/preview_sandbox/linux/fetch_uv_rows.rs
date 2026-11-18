@@ -213,7 +213,6 @@ fn design_6_env(python_dir: &Path, tools: &Path, credential: &str, port: &str) -
         "UV_NO_BUILD=1".to_owned(),
         "UV_NO_CONFIG=1".to_owned(),
         "UV_PYTHON_DOWNLOADS=never".to_owned(),
-        "UV_COMPILE_BYTECODE=0".to_owned(),
         "UV_TOOL_DIR=/preview-home/uv-tools".to_owned(),
         "UV_TOOL_BIN_DIR=/preview-home/uv-tools/bin".to_owned(),
         "UV_CACHE_DIR=/preview-home/uv-cache".to_owned(),
