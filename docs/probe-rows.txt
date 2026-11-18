@@ -1,13 +1,3 @@
-# Sandbox-row probe: the rows this probe runs, one exact test path per line.
-# Baseline (no mutant), uv 0.13.1 installed in the job: every real-uv row must run (its "real-uv row ran" line in
-# the log, checked by the job) and pass. Their first run on CI.
-preview_sandbox::linux::fetch_uv_real_rows::u_spawn_s_every_fetch_spawn_of_the_interpreter_has_site_off
-preview_sandbox::linux::fetch_uv_real_rows::u_hostpth_a_stdlib_sitecustomize_never_runs_during_the_fetch
+# Diagnostic probe 2: the helper's stderr is inherited; the two runtime-tree rows still failing at the uv install.
 preview_sandbox::linux::fetch_uv_real_rows::u_run_layout_the_narrow_binds_run_and_hide_the_tree
-preview_sandbox::linux::fetch_uv_real_rows::l7b_a_cold_wheel_fetch_runs_its_console_script_offline
-preview_sandbox::linux::fetch_uv_real_rows::l7c_sdist_an_sdist_only_project_is_never_built
-preview_sandbox::linux::fetch_uv_real_rows::l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check
-preview_sandbox::linux::fetch_uv_real_rows::l7c_pth_an_installed_pth_never_runs_during_the_fetch
-preview_sandbox::linux::fetch_uv_real_rows::l_name_a_dotted_mixed_case_name_runs_from_its_normalized_env
-preview_sandbox::linux::fetch_uv_real_rows::u_tls_only_the_bundles_ca_is_trusted
 preview_sandbox::linux::fetch_uv_real_rows::u_uv_runs_alone_a_uv_inside_a_runtime_tree_runs_bound_alone
