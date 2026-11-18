@@ -999,6 +999,35 @@ fn rl15f_registering_a_paced_rest_provider_unloads_a_graphql_one_on_its_host() {
     );
 }
 
+/// The directory-load sweep reads process-wide pacing: a GraphQL provider
+/// registered before another backend paced its host is unloaded at this
+/// backend's next directory load, though the directory paces nothing.
+#[tokio::test]
+async fn rl15g_a_directory_load_unloads_a_graphql_provider_another_backend_now_paces() {
+    let url = "http://rl15g.test:9/g";
+    let backend = CapabilityBackend::new("rl15g", Arc::new(executor(Names::default())));
+    let gql =
+        crate::capability::parse_capability(&rpc_yaml("rl15ggql", "graphql", url)).expect("cap");
+    backend
+        .register_capability(gql)
+        .expect("registers while unpaced");
+    let other = CapabilityBackend::new("rl15g-rest", Arc::new(executor(Names::default())));
+    other
+        .register_capability(cap("rl15grest", url, Some(30_000), false))
+        .expect("another backend paces the host");
+    assert!(backend.has_capability("rl15ggql"), "premise: still listed");
+    let empty = tempfile::TempDir::new().expect("dir");
+    backend
+        .load_from_directory(empty.path().to_str().expect("utf-8"))
+        .await
+        .expect("loaded");
+    assert!(
+        !backend.has_capability("rl15ggql"),
+        "unloaded at the directory load"
+    );
+    drop(other);
+}
+
 // ── LD8: direct registration obeys the loader's rules ────────────────
 
 #[test]
