@@ -513,6 +513,7 @@ mod resolve;
 #[path = "account_strategies_view.rs"]
 mod view;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "account_strategies_tests.rs"]
 mod lifetime_tests;

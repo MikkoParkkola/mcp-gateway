@@ -158,6 +158,7 @@ impl Reload {
 
 /// A graceful end of the current stream ends the session (so it reconnects);
 /// the end of a replacement still being opened ends nothing.
+#[cfg(tp5)]
 #[test]
 fn a_graceful_end_ends_only_the_current_stream() {
     let shared = shared();
@@ -168,6 +169,7 @@ fn a_graceful_end_ends_only_the_current_stream() {
 
 /// A watched URI the catalogue snapshot lacks is never emitted; once the
 /// snapshot lists it, it is.
+#[cfg(tp5)]
 #[tokio::test]
 async fn emission_waits_for_the_snapshot_to_list_the_uri() {
     let dir = tempfile::tempdir().expect("dir");
@@ -208,6 +210,7 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
 
 /// MIK-8202 E2: a listed change the clock cannot date (before 1970) is not
 /// emitted: it is counted as a clock drop.
+#[cfg(tp5)]
 #[tokio::test]
 async fn an_undatable_resource_change_is_dropped_and_counted() {
     let dir = tempfile::tempdir().expect("dir");
@@ -248,6 +251,7 @@ async fn an_undatable_resource_change_is_dropped_and_counted() {
 /// MIK-7894: a backend the live config makes ineligible after its listener
 /// started delivers nothing more, and its task is stopped. Control: the same
 /// listener emits while the backend is still eligible.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -339,6 +343,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
 
 /// MIK-7894: a listener whose backend is ineligible when it (re)connects ends
 /// at the head of its loop instead of connecting.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_listener_for_an_ineligible_backend_ends_at_the_loop_head() {
     let shared = shared_with(Arc::new(|| std::iter::once("b".to_owned()).collect()));
@@ -359,6 +364,7 @@ async fn a_listener_for_an_ineligible_backend_ends_at_the_loop_head() {
 /// makes a running listener's backend ineligible. The live predicate the
 /// gateway wires refuses authorization, the listener task ends on its own,
 /// nothing more reaches intake, and only the listener-only subscription goes.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     use crate::events::EventSource as _;
@@ -460,6 +466,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
 /// MIK-7969 H2: every arm of the tick decision. Only a live read of the SSE
 /// handshake that the shared predicate confirms ends the listener; the
 /// predicate is not read otherwise.
+#[cfg(tp5)]
 #[test]
 fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
     use super::{OnTick, on_tick};
@@ -481,6 +488,7 @@ fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
 /// MIK-7969 H2 + T11: a session recovery that switches the installed
 /// transport in place is seen by the next tick, through the backend's live
 /// read, with no notification on the stream.
+#[cfg(tp5)]
 #[test]
 fn a_tick_sees_an_in_place_switch_through_the_live_read() {
     use super::{OnTick, on_tick};
@@ -513,6 +521,7 @@ fn a_tick_sees_an_in_place_switch_through_the_live_read() {
 /// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
 /// re-reads at, is the 300 s the fixed interval was; a zero TTL re-reads at
 /// most once a second and a huge one at least daily, without overflow.
+#[cfg(tp5)]
 #[test]
 fn the_snapshot_interval_follows_the_cache_ttl_within_bounds() {
     let default = crate::config::MetaMcpConfig::default().cache_ttl;
@@ -529,6 +538,7 @@ fn the_snapshot_interval_follows_the_cache_ttl_within_bounds() {
 
 /// MIK-7951 REFILLFU.6: the session's end path, which a replaced transport
 /// takes, waits for a refill in flight and announces the tools change.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_refill_in_flight_at_the_session_end_is_announced() {
     let dir = tempfile::tempdir().expect("dir");
@@ -581,6 +591,7 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
 /// MIK-7950: a session that started with no URI watched, while the shared
 /// snapshot is known from an earlier session, reads the catalogue as soon as
 /// a URI is watched, not after a fixed 300 s.
+#[cfg(tp5)]
 #[tokio::test]
 async fn a_uri_watched_after_the_session_started_is_read_at_once() {
     let dir = tempfile::tempdir().expect("dir");
@@ -617,9 +628,11 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
     );
 }
 
+#[cfg(tp5)]
 #[path = "upstream_session_debt_tests.rs"]
 mod debt;
 
+#[cfg(tp5)]
 #[path = "upstream_session_notice_tests.rs"]
 mod notice;
 
@@ -627,11 +640,14 @@ fn changed(kind: NoteKind) -> UpstreamNote {
     UpstreamNote::Notice { kind, uri: None }
 }
 
+#[cfg(tp5)]
 #[path = "upstream_session_backoff_tests.rs"]
 mod backoff;
 
+#[cfg(tp5)]
 #[path = "snapshot_renewal_tests.rs"]
 mod snapshot_renewal;
 
+#[cfg(tp5)]
 #[path = "upstream_session_wake_tests.rs"]
 mod wake;

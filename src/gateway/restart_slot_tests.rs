@@ -202,6 +202,7 @@ fn accepted_rows<S: SlotUnderTest>(fresh: &dyn Fn() -> (S, Arc<RestartBoard>)) {
 }
 
 /// T7, T10, T13 (SLOT.1, SLOT.4): the real slot passes the contract.
+#[cfg(tp4)]
 #[test]
 fn the_real_slot_passes_the_slot_contract() {
     rows(RestartSlot::for_test);

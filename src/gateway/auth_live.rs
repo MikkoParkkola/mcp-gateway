@@ -393,6 +393,7 @@ pub(super) fn unpinned() -> axum::response::Response {
         .into_response()
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     #![allow(

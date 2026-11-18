@@ -413,6 +413,7 @@ impl DataFlowTracer {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;

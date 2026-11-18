@@ -551,6 +551,7 @@ impl CollusionDetector {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_seam_excuse_tests.rs"]
 mod tests;

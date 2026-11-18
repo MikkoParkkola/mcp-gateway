@@ -87,6 +87,7 @@ pub(super) async fn revoke_key(
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    let account = who.account.clone();
     let audit = match AuditPosture::of(
         Some(log),
         GatewayAuth::of(state.live_config.running().auth.enabled),
@@ -130,7 +131,14 @@ pub(super) async fn revoke_key(
             Ok(template)
         }),
     };
-    let result = replace_audited_revoke(context, replace, audit, RELOAD_LOCK_WAIT, check)
+    let result = replace_audited_revoke(
+        context,
+        replace,
+        audit,
+        crate::config_reload::history::Source::Ui { who: account },
+        RELOAD_LOCK_WAIT,
+        check,
+    )
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
     revoke_response(&target_name, result)
@@ -276,6 +284,7 @@ impl KeyIdentity<'_> {
 /// name still contributes its tag to S for reconciliation.
 /// Any S tag in another name's current/previous slot or the running static
 /// bearer refuses as `identity_in_use`, regardless of expiry or caller identity.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;

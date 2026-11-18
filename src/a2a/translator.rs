@@ -205,6 +205,7 @@ fn parts_to_result(owner: &str, parts: &[Part]) -> Value {
     result
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "translator_tests.rs"]
 mod tests;

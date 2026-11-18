@@ -383,13 +383,16 @@ pub(crate) fn run_before_first_fs_call() {
     }
 }
 
+#[cfg(tp3)]
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "test_dir_keep_registered_tests.rs"]
 mod registered_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

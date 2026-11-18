@@ -679,9 +679,11 @@ pub(crate) fn tool_result_payload(result: &Value) -> Option<Value> {
 // Tests
 // ============================================================================
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "messages_payload_tests.rs"]
 mod payload_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "messages_tests.rs"]
 mod tests;

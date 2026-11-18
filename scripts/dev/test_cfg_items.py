@@ -56,6 +56,9 @@ class Owner(unittest.TestCase):
         "comparison statement": ("fn p() {\n #[cfg(test)]\n if 1 < 2 { probe(); }\n product();\n}\n", [(2, 3)]),
         "comment inside the attribute": ("#[cfg /* why */ (test)]\nfn h() {\n}\nfn p() {}\n", [(1, 3)]),
         "compound cfg": ('#[cfg(all(test, feature = "x"))]\nmod t {\n}\nfn p() {}\n', [(1, 3)]),
+        # The lib test split's part tag above an unchanged cfg(test): the module is still test code, and a tag
+        # alone is not a test cfg.
+        "part tag above": ("#[cfg(tp3)]\n#[cfg(test)]\nmod t {\n  fn h() {}\n}\n#[cfg(tp3)]\nfn p() {}\n", [(2, 5)]),
     }
 
     def test_each_construct(self):

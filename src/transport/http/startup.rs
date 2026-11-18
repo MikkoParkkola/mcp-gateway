@@ -695,6 +695,7 @@ fn refused_as_wrong_transport(error: &Error) -> Option<u16> {
         .then_some(status)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod wrong_transport_tests {
     use super::*;
@@ -732,6 +733,7 @@ mod wrong_transport_tests {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod join_failure_tests {
     use super::*;

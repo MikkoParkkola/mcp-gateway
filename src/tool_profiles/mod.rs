@@ -301,9 +301,11 @@ pub mod persistence;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "clock_tests.rs"]
 mod clock_tests;

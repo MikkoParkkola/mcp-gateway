@@ -195,10 +195,12 @@ pub(crate) fn resolve_config(
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "home_dir_probe_tests.rs"]
 mod probe_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

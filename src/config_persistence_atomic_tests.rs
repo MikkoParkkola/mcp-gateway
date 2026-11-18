@@ -60,6 +60,7 @@ fn inherit_observes_a_private_scratch() {
             assert_eq!(mode, 0o600);
             seen.set(mode);
         },
+        || Ok(()),
     )
     .unwrap();
     assert_eq!(seen.get(), 0o600);

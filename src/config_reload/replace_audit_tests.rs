@@ -77,6 +77,7 @@ fn crashed_after_rename(path: &Path, bytes: &str) {
 
 /// W21: a crashed write is pending and the intent append fails: nothing is
 /// recovered, nothing reloaded, nothing written.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
     let (_dir, path, ctx) = setup();
@@ -91,6 +92,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -111,6 +113,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
 /// W22: a pending journal gets a recovery intent before it is recovered;
 /// the operation's own intent follows, computed against the recovered bytes
 /// and linked to the recovery's.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_owed_reload_runs_after_its_recovery_intent() {
     let (_dir, path, ctx) = setup();
@@ -125,6 +128,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -150,6 +154,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
 
 /// W22, the in-memory flag alone: a reload owed after a failed one is
 /// pending work the lock cannot see, and still gets its intent first.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
     let (_dir, path, ctx) = setup();
@@ -165,6 +170,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -181,6 +187,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
 
 /// W8: the operation's own intent fails: nothing is written, the running
 /// config is unchanged.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_intent_failure_writes_nothing() {
     let (_dir, path, ctx) = setup();
@@ -194,6 +201,7 @@ async fn an_intent_failure_writes_nothing() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -210,6 +218,7 @@ async fn an_intent_failure_writes_nothing() {
 /// W29 to W31: the file-watch reload, the API reload and the admin tool all
 /// reload through `reload_outcome`, the reader lock's one in-gateway holder.
 /// On an audited gateway a pending journal gets its recovery intent first.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_reload_appends_its_recovery_intent_first() {
     let (_dir, path, ctx) = setup();
@@ -230,6 +239,7 @@ async fn a_reload_appends_its_recovery_intent_first() {
 }
 
 /// The same paths with a failing intent: nothing is recovered or reloaded.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_reload_whose_recovery_intent_fails_changes_nothing() {
     let (_dir, path, ctx) = setup();
@@ -252,6 +262,7 @@ async fn a_reload_whose_recovery_intent_fails_changes_nothing() {
 /// the config lock until it finishes, and the recovery sink stays in its
 /// slot. The recovery is parked inside its task, so the drop lands at that
 /// await and nowhere else.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_reload_dropped_mid_recovery_keeps_the_lock_and_the_sink() {
     use crate::config_persistence::lock::{NotLocked, lock_config};
@@ -315,6 +326,7 @@ async fn a_reload_dropped_mid_recovery_keeps_the_lock_and_the_sink() {
 
 /// A crashed write whose config is gone: the recovery intent names the
 /// empty revision, and the recovery goes ahead.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_missing_config_is_recorded_as_the_empty_revision() {
     let (_dir, path, ctx) = setup();
@@ -337,6 +349,7 @@ async fn a_missing_config_is_recorded_as_the_empty_revision() {
 /// A crashed write whose config cannot be read (here a directory stands
 /// in its place, which the config guard refuses): no intent is appended and
 /// nothing is recovered.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
     let (_dir, path, ctx) = setup();
@@ -388,6 +401,7 @@ pub(super) fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) 
 /// through `ReloadContext::reload_outcome`, and nothing in the gateway takes
 /// the reader lock except that path, so a fourth reload path cannot skip
 /// the recovery intent unseen.
+#[cfg(tp3)]
 #[test]
 fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -432,19 +446,18 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         // A manual reload goes through the config gate's wrapper, which must itself
         // run the same transaction (asserted below).
         assert!(
-            text.contains(".reload_outcome().await")
-                || text.contains(".manual_reload_outcome().await"),
-            "{entry} no longer reloads through ReloadContext::reload_outcome"
+            text.contains(".reload_outcome().await") || text.contains(".manual_reload_outcome("),
+            "{entry} no longer reloads through reload_outcome or manual_reload_outcome"
         );
     }
     let wrapper = source_span(
         "config_reload/reload_context.rs",
-        "pub async fn manual_reload_outcome",
+        "pub(crate) async fn manual_reload_outcome",
         "\n    }\n",
     );
     assert!(
-        wrapper.contains("self.reload_outcome().await"),
-        "manual_reload_outcome no longer runs ReloadContext::reload_outcome"
+        wrapper.contains("self.reload_outcome_from("),
+        "manual_reload_outcome no longer runs the full reload path"
     );
 }
 
@@ -464,6 +477,7 @@ fn source_span(file: &str, from: &str, to: &str) -> String {
 
 /// The HTTP gateway's reload reporting carries the audit log, so its reload
 /// context audits its recoveries.
+#[cfg(tp3)]
 #[test]
 fn the_http_gateway_reporting_carries_the_audit_log() {
     let statement = source_span(
@@ -479,6 +493,7 @@ fn the_http_gateway_reporting_carries_the_audit_log() {
 
 /// Stdio's reload reporting carries the audit log, so its reload context
 /// audits its recoveries.
+#[cfg(tp3)]
 #[test]
 fn the_stdio_reporting_carries_the_audit_log() {
     let statement = source_span(
@@ -495,6 +510,7 @@ fn the_stdio_reporting_carries_the_audit_log() {
 /// The file watcher's reload context is built on the HTTP gateway's audited
 /// reporting: run.rs hands `reload_reporting` to the watcher, which passes
 /// it on and builds its context on that parameter, not on fresh reporting.
+#[cfg(tp3)]
 #[test]
 fn the_watcher_context_is_built_on_the_audited_reporting() {
     let spawn = source_span("gateway/server/run.rs", "self.start_config_watcher(", ";");
@@ -518,6 +534,7 @@ fn the_watcher_context_is_built_on_the_audited_reporting() {
 
 /// A context built the production way, on reporting that carries an audit
 /// log, records a recovery intent there before it recovers a crashed write.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_context_reporting_into_the_audit_log_records_its_recovery() {
     use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -555,6 +572,7 @@ const EXPOSED: &str = concat!(
 
 /// The operation's own intent follows the checks on the new bytes: an
 /// audited save the loader refuses is refused and records no intent.
+#[cfg(tp3)]
 #[tokio::test]
 async fn a_save_the_loader_refuses_records_no_intent() {
     let (_dir, path, ctx) = setup();
@@ -568,6 +586,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -587,6 +606,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
 /// A save whose bytes are already the file's still reloads, so an audited
 /// one appends its intent first, marked as an outside change (the running
 /// config may be behind the disk), and a refused append stops that reload.
+#[cfg(tp3)]
 #[tokio::test]
 async fn an_unchanged_save_appends_its_intent_before_its_reload() {
     let (_dir, path, ctx) = setup();
@@ -603,6 +623,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -630,6 +651,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await
@@ -650,6 +672,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
 /// A gateway.yaml other accounts can write is refused at the writer's read,
 /// before the operation's intent: nothing is recorded, written or reloaded,
 /// and the file is not rewritten owner-only.
+#[cfg(tp3)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_config_others_can_write_is_refused_before_its_intent() {
@@ -666,6 +689,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -684,6 +708,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
 /// A crashed write is pending on a gateway.yaml other accounts can write: the
 /// recovery's own read refuses it before the recovery intent, so nothing is
 /// recorded, recovered or written, and the journal stays for a later holder.
+#[cfg(tp3)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_intent() {
@@ -701,6 +726,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
             kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
+        crate::config_reload::history::Source::Ui { who: String::new() },
         WAIT,
     )
     .await;
@@ -719,5 +745,6 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
     );
 }
 
+#[cfg(tp3)]
 #[path = "replace_old_path_tests.rs"]
 mod old_path;

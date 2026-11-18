@@ -66,6 +66,7 @@ pub mod oauth;
 // Crate-internal on purpose: the adapter is wired by `router` and by nothing
 // else, so no caller outside the gateway can install it without the standard
 // auth layer that must run first.
+#[cfg(tp4)]
 #[cfg(test)]
 mod admin_standing_scan_tests;
 #[cfg(test)]
@@ -78,17 +79,21 @@ pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
 pub mod proxy;
+#[cfg(tp4)]
 #[cfg(test)]
 mod proxy_scope_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod proxy_session_tests;
 mod recent_writes;
 pub mod recovery;
 /// MIK-8747 / MIK-8748: a keyed replay is never served across protocol eras.
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 mod replay_era_tests;
 pub(crate) mod restart_config_floor;
 mod restart_floor;
+#[cfg(tp4)]
 #[cfg(test)]
 mod restart_floor_tests;
 mod restart_slot;
@@ -97,8 +102,10 @@ mod restart_status;
 mod route_check_matrix_tests;
 mod router;
 pub(crate) mod routes;
+#[cfg(tp4)]
 #[cfg(test)]
 mod routes_tests;
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 mod stable_ui_routes_tests;
 mod stop_budget;
@@ -129,6 +136,10 @@ pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::listener_mint_for_test;
 // MIK-8407: the capability executor answers a changed account choice with it.
 pub(crate) use meta_mcp::stored_binding::Refusal as StoredBindingRefusal;
+/// The router fixture, for history rows outside `gateway` (`router` is private).
+/// Exists for the configuration-history rows (`src/config_reload/history_*_tests.rs`).
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use router::tests::audience_state;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
 /// (`MIK-8201`), without `server` becoming crate-visible. The meter needs
@@ -197,6 +208,9 @@ pub(crate) fn is_tls_or_loopback(url: &url::Url) -> bool {
 #[doc(hidden)]
 pub mod test_helpers {
     pub use super::meta_mcp::prune_constant_signals;
+    #[cfg(test)]
+    /// Exists for the configuration-history rows (`src/config_reload/history_*_tests.rs`).
+    pub(crate) use super::meta_mcp::{Authentication, MetaMcpCallerContext};
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::meta_mcp::{InvokeScope, MetaMcp};
     pub use super::router::{AppState, CallerStanding, create_router};

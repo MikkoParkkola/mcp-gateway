@@ -640,14 +640,17 @@ impl BudgetEnforcer {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "enforcer_tests.rs"]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "enforcer_atomic_tests.rs"]
 mod atomic_tests;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "cost-governance"))]
 #[path = "enforcer_local_day_tests.rs"]
 mod local_day_tests;

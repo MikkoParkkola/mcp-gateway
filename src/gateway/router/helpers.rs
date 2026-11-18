@@ -629,6 +629,7 @@ pub(crate) fn parse_request_ref(
     Ok((id, method, params))
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "merge_client_meta_borrow_tests.rs"]
 mod merge_client_meta_borrow_tests;

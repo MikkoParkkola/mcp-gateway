@@ -88,6 +88,7 @@ fn strip_suffix(token: &str) -> &str {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

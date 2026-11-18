@@ -688,10 +688,12 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
     &text[start..]
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "kernel_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "kernel_memo_tests.rs"]
 mod memo_tests;

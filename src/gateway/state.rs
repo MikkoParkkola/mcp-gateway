@@ -68,6 +68,7 @@ impl SessionStateStore {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

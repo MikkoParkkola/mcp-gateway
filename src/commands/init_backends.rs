@@ -55,6 +55,7 @@ pub(super) fn starter_backends(launcher_present: impl Fn(&str) -> bool) -> (Stri
     (yaml, skipped)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::starter_backends;

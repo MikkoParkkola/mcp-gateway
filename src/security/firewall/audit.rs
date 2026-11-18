@@ -366,10 +366,12 @@ fn action_str(action: FirewallAction) -> &'static str {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "audit_content_tests.rs"]
 mod content_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::super::{FindingLocation, FirewallAction, ScanType};

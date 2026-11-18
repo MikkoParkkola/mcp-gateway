@@ -730,3 +730,26 @@ fn a_tilde_user_entry_stays_verbatim_and_is_not_a_tilde_entry() {
         "`~user/x` is not a home-relative entry"
     );
 }
+
+/// The deploy templates bind through `MCP_GATEWAY_SERVER__HOST` instead of the
+/// hidden host flag, which overrode the config file's `server.host`. The env
+/// overlay must do the same: the variable wins over the host the file sets.
+/// Mutant: the overlay merged before the file, so the file wins.
+#[test]
+fn the_host_variable_overrides_the_host_the_config_file_sets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_path = dir.path().join("host.env");
+    write_owner_only(&env_path, "MCP_GATEWAY_SERVER__HOST=0.0.0.0\n").expect("write env file");
+    let config_path = dir.path().join("config.yaml");
+    write_owner_only(
+        &config_path,
+        format!(
+            "env_files:\n  - '{}'\nserver:\n  host: 127.0.0.2\n",
+            env_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let config = Config::load(Some(&config_path)).expect("loads");
+    assert_eq!(config.server.host, "0.0.0.0");
+}

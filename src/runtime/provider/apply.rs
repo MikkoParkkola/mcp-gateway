@@ -265,6 +265,7 @@ fn first_nonempty_line(text: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "apply_truncate_tests.rs"]
 mod truncate_tests;

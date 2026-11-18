@@ -263,6 +263,7 @@ where
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod cause_tests {
     use super::{cause_index, failure_cause};

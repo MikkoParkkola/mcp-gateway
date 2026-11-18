@@ -275,6 +275,7 @@ pub(super) async fn gateway(multi_user: bool) -> MetaMcp {
 /// and it proves the fixture's tools are discoverable at all. A `required`
 /// backend has no identity-free view on any gateway (#2326): its tools reach
 /// only a caller whose fetch carries that caller's identity.
+#[cfg(tp2)]
 #[tokio::test]
 async fn single_user_gateway_serves_each_caller_what_its_fetch_may_carry() {
     let log = crate::security::transparency_log::temp::TempLog::new();
@@ -325,6 +326,7 @@ async fn single_user_gateway_serves_each_caller_what_its_fetch_may_carry() {
 ///
 /// Two-directional: the genuinely shared backend must NOT be refused, so a
 /// change that fails the gateway closed for everything also fails here.
+#[cfg(tp2)]
 #[tokio::test]
 async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
     let meta = gateway(true).await;
@@ -376,6 +378,7 @@ async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
 /// Two-directional. The inequality alone is satisfied by a key function that
 /// mixes in something random per call — which would also mean the cache never
 /// hits — so the same-caller-same-key half runs beside it.
+#[cfg(tp2)]
 #[test]
 fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
     use super::support::{
@@ -477,6 +480,7 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
 /// Two-directional: the genuinely shared backend MUST receive the forward, so a
 /// change that simply stops forwarding to everyone fails here instead of
 /// passing as though it had achieved isolation.
+#[cfg(tp2)]
 #[tokio::test]
 async fn shared_credential_routes_never_reach_an_identity_bound_backend() {
     let registry = Arc::new(BackendRegistry::new());

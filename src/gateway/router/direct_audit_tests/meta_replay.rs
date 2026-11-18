@@ -49,6 +49,7 @@ async fn post_modern_named(fx: &Fixture, name: &str, body: &str) -> (StatusCode,
 /// the backend, and still writes its own record: route `meta`, the same
 /// target and request hash as the first, and a response hash for the value
 /// delivered again.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_writes_an_invocation_record() {
     let fx = fixture(Setup {
@@ -89,6 +90,7 @@ async fn meta_replay_writes_an_invocation_record() {
 /// as the equivalent JSON string as one operation, so a retry that sends the
 /// string form is a replay. Its record carries the request hash the first
 /// execution hashed, not one over the retry as sent.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_of_a_string_arguments_retry_keeps_the_original_request_hash() {
     let fx = fixture(Setup {
@@ -116,6 +118,7 @@ async fn meta_replay_of_a_string_arguments_retry_keeps_the_original_request_hash
 /// A replayed failure is recorded as the failure it was: the delivered replay
 /// wraps the tool result in a successful envelope, so the record takes the
 /// first execution's own outcome, code and response hash, kept server-side.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_of_a_failure_keeps_its_outcome() {
     let fx = fixture(Setup {
@@ -145,6 +148,7 @@ async fn meta_replay_of_a_failure_keeps_its_outcome() {
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's: the first execution and its replay both
 /// record `error`, with the peer's code, never `denied`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_of_a_peer_refusal_code_is_an_error_not_a_denial() {
     for code in [-32001, -32004] {
@@ -172,6 +176,7 @@ async fn meta_replay_of_a_peer_refusal_code_is_an_error_not_a_denial() {
 /// MIK-7116.MIN.1 T31. A meta replay is a cached delivery: its record names
 /// the delivered value's tenants (hashed) and says no backend ran for it.
 /// Attribution reads the firewall's `arg_keys`, so the cell needs the feature.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn meta_replay_record_carries_delivered_tenants() {
@@ -213,6 +218,7 @@ async fn meta_replay_record_carries_delivered_tenants() {
 /// MIK-7718 (#2521): the first call's invocation record cannot be written
 /// under fail-closed, so its value is withheld. A replay of the same key must
 /// not record that never-delivered value as delivered `ok` with its hash.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_after_a_failed_record_is_not_ok() {
     let fx = fixture(Setup {
@@ -247,6 +253,7 @@ async fn meta_replay_after_a_failed_record_is_not_ok() {
 /// fail-closed, so its value is withheld and the stored delivery holds that
 /// refusal. A replay of the key answers the refusal; it must not deliver the
 /// value the first call never delivered.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_after_a_refused_delivery_record_stays_withheld() {
     let fx = fixture(Setup {
@@ -277,6 +284,7 @@ async fn meta_replay_after_a_refused_delivery_record_stays_withheld() {
 /// MIK-7645 AC1: a surfaced tool called by its own name replays through the
 /// same record as `gateway_invoke`: the re-issued key writes a record with
 /// the original's request hash, response hash and outcome.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_of_a_surfaced_tool_writes_an_invocation_record() {
     let fx = fixture(Setup {
@@ -316,6 +324,7 @@ async fn meta_replay_of_a_surfaced_tool_writes_an_invocation_record() {
 /// MIK-8929.EFFECT.4: a replayed answer's delivery record names the replaying
 /// request's own trace, so it joins that request's invocation record and not
 /// the first execution's.
+#[cfg(tp1)]
 #[tokio::test]
 async fn meta_replay_delivery_joins_the_replaying_invocation() {
     let fx = fixture(Setup {
@@ -354,6 +363,7 @@ async fn meta_replay_delivery_joins_the_replaying_invocation() {
 /// carries its trace, so the delivery joins it. (A surfaced name the caller
 /// cannot see is no target at all; its one record is the meta layer's grant
 /// decision.)
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_withheld_target_delivery_joins_its_denied_record() {
     let fx = fixture(Setup {
@@ -386,6 +396,7 @@ async fn a_withheld_target_delivery_joins_its_denied_record() {
 
 /// A backend tool called by its own (surfaced) name on `/mcp`: its delivery
 /// joins its one invocation record.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_surfaced_tool_delivery_joins_its_invocation() {
     let fx = fixture(Setup {
@@ -433,6 +444,7 @@ fn deliveries(fx: &Fixture) -> Vec<Value> {
 /// A hidden meta tool naming two targets, both withheld: one `denied` record
 /// per target and no single invocation, so the delivery joins none of them
 /// (read as "not linked to a single call", as a plan is).
+#[cfg(tp1)]
 #[tokio::test]
 async fn an_all_withheld_multi_target_delivery_joins_no_record() {
     let fx = fixture(Setup {

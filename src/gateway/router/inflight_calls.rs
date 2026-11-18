@@ -188,6 +188,7 @@ impl Drop for Registered {
     }
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "inflight_calls_tests.rs"]
 mod tests;

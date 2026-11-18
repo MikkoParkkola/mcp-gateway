@@ -788,14 +788,17 @@ fn bound_roots(config: &McpConfig, files: &crate::config::FileRoots) -> Vec<(Str
 mod rounds;
 use rounds::{after_dispatch, run_prepare};
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "mcp_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "mcp_principal_tests.rs"]
 mod principal_tests;
@@ -809,6 +812,7 @@ impl super::CapabilityExecutor {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "mcp_presend_tests.rs"]
 mod presend_tests;

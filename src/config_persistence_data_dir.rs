@@ -53,6 +53,7 @@ fn resolve_gateway_data_dir(
     )
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

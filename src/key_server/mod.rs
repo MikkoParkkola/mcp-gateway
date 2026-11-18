@@ -33,6 +33,7 @@
 
 pub mod audit;
 /// The per-identity token cap holds under concurrent mints.
+#[cfg(tp5)]
 #[cfg(test)]
 mod cap_race_tests;
 /// The installation key behind `email_hash`.
@@ -40,13 +41,16 @@ pub(crate) mod email_hash;
 /// Where the `email_hash` installation key lives.
 pub(crate) mod email_hmac_store;
 /// One WARN per provider whose subjects are email addresses.
+#[cfg(tp5)]
 #[cfg(test)]
 mod email_subject_tests;
 pub mod handler;
+#[cfg(tp5)]
 #[cfg(test)]
 mod identity_rules_tests;
 mod issuance;
 /// The row after an abrupt death, a rotation and a mark fault.
+#[cfg(tp5)]
 #[cfg(test)]
 mod issuance_restart_tests;
 /// The mint's issuance row under the failure policy.
@@ -57,12 +61,15 @@ pub mod oidc;
 #[path = "oidc_harness_tests.rs"]
 pub(crate) mod oidc_test_harness;
 /// The output-only doc tests fail for the reason they name.
+#[cfg(tp5)]
 #[cfg(test)]
 mod output_only_doc_tests;
 /// No raw email in key-server output, checked in a child process.
+#[cfg(tp5)]
 #[cfg(test)]
 mod piilog_capture_tests;
 /// The hashed audit email's docs rows.
+#[cfg(tp5)]
 #[cfg(test)]
 mod piilog_docs_tests;
 pub mod policy;
@@ -391,6 +398,7 @@ fn oidc_client_identity_key(identity: &VerifiedIdentity) -> String {
     identity.stable_actor_id()
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

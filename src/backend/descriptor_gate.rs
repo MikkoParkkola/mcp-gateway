@@ -577,6 +577,7 @@ impl PendingSink {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "allowed_tools_tests.rs"]
 mod allowed_tools_tests;

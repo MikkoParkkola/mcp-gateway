@@ -141,6 +141,7 @@ fn object_strings<'v>(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "collusion_key_path_tests.rs"]
 mod tests;

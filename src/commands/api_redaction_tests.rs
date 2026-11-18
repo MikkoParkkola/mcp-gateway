@@ -45,6 +45,7 @@ async fn tls_connect_timeout_is_network_even_for_a_mutation() {
                     // must fire; a slower firing under load still gives Network.
                     // timing: lower-bound
                     connect_timeout: std::time::Duration::from_millis(300),
+                    ..AdminClientOptions::default()
                 },
             )
             .await

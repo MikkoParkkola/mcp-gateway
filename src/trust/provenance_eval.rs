@@ -234,6 +234,7 @@ pub fn score_corpus(
     (replay(&cases, validator), mis_joined)
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -169,6 +169,7 @@ impl ClientChannel for StdioClientChannel {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

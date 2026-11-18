@@ -116,6 +116,7 @@ impl CallerCosts {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "caller_tests.rs"]
 mod tests;

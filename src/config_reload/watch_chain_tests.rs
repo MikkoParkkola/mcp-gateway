@@ -42,6 +42,7 @@ fn release_link(root: &Path, target: &Path) -> PathBuf {
 }
 
 // Linux and macOS (MIK-8181; see the module header).
+#[cfg(tp3)]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod real_watcher {
     use std::sync::Arc;
@@ -577,8 +578,10 @@ pub(crate) mod real_watcher {
     }
 }
 
+#[cfg(tp3)]
 #[path = "watch_chain_hop_tests.rs"]
 mod hops;
+#[cfg(tp3)]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "watch_chain_release_tests.rs"]
 mod release_links;

@@ -146,6 +146,7 @@ pub(crate) fn apply() -> Result<(), seccompiler::Error> {
     Ok(())
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

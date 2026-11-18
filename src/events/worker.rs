@@ -627,6 +627,7 @@ fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
     Some((value, crate::hashing::sha256_hex(&sent)))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod wire_tests {
     use super::wire_body;
@@ -773,6 +774,7 @@ mod fence;
 #[path = "worker_settle.rs"]
 mod settle;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;

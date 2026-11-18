@@ -693,6 +693,7 @@ fn write(
     )
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 #[path = "file_writer_tests.rs"]
 mod tests;

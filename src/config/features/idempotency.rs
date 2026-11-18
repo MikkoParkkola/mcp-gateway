@@ -43,6 +43,7 @@ impl IdempotencyConfig {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod idempotency_config_tests {
     use super::*;
