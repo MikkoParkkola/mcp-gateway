@@ -186,6 +186,20 @@ pub fn dispatch_helper(args: &[OsString]) -> Option<ExitCode> {
     os::dispatch(args)
 }
 
+/// The refusal every uvx command answers until the uv fetch is enabled.
+pub(crate) const UV_NOT_ENABLED: &str = "uvx previews are not enabled in this build";
+
+/// Whether the route may offer `target` a preview at all, before any token
+/// or start: the command plan's own refusals, and the uv gate.
+///
+/// # Errors
+///
+/// The plan's [`Refusal::Command`], or the uv gate's.
+pub(crate) fn check(_target: &Target) -> Result<(), Refusal> {
+    // RED: every command passes.
+    Ok(())
+}
+
 /// Start `target` in the sandbox. `protected` adds the gateway's own config
 /// paths (the loaded config file's directory) to those it hides itself.
 ///
@@ -323,6 +337,9 @@ pub async fn availability() -> &'static Result<(), Refusal> {
 }
 
 mod fetch_output;
+#[cfg(tp1)]
+#[cfg(test)]
+mod check_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod seam_tests;
