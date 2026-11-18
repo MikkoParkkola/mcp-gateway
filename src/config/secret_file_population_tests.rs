@@ -369,8 +369,8 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "test-only (cfg(test)): writes the fake npm tree into a scratch dir and reads the lock it wrote; no secret",
     ),
     (
-        "src/preview_sandbox/linux/probe.rs",
-        "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
+        "src/preview_sandbox/linux/fetch_uv_real_rows.rs",
+        "test-only (cfg(test)): copies the real uv and uvx into a fixture Python's scratch bin; no secret",
     ),
     (
         "src/preview_sandbox/mod.rs",
