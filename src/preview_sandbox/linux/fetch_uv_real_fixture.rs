@@ -311,6 +311,37 @@ fn plant_canaries(prefix: &Path, version: &str) -> Vec<PathBuf> {
     canaries
 }
 
+/// The runner's toolcache Python that links its libpython: its install tree
+/// and its `python3.Y` name. Premise asserted: the binary itself names its
+/// libpython (a linked build), so a missing libpython bind fails end to end.
+fn linked_toolcache() -> (PathBuf, String) {
+    let toolcache = Path::new("/opt/hostedtoolcache/Python");
+    let mut found = None;
+    for entry in std::fs::read_dir(toolcache).expect("the runner's Python toolcache") {
+        let tree = entry.expect("entry").path().join("x64");
+        let Ok(bins) = std::fs::read_dir(tree.join("bin")) else {
+            continue;
+        };
+        for bin in bins.flatten() {
+            let name = bin.file_name().to_string_lossy().into_owned();
+            let is_versioned = name
+                .strip_prefix("python3.")
+                .is_some_and(|y| y.parse::<u32>().is_ok());
+            if is_versioned && tree.join("lib").join(format!("lib{name}.so.1.0")).is_file() {
+                found = Some((tree.clone(), name));
+            }
+        }
+    }
+    let (tree, version) = found.expect("a linked Python in the runner's toolcache");
+    let binary = std::fs::read(tree.join("bin").join(&version)).expect("the toolcache binary");
+    let soname = format!("lib{version}.so");
+    assert!(
+        binary.windows(soname.len()).any(|w| w == soname.as_bytes()),
+        "the toolcache {version} links {soname}"
+    );
+    (tree, version)
+}
+
 impl Layout {
     /// The host's system interpreter and stdlib, copied under `under` (a
     /// directory name, spaces and quotes allowed): an interpreter that links
@@ -337,38 +368,16 @@ impl Layout {
     }
 
     /// A Python from the runner's hosted toolcache, linked to its libpython
-    /// (a premise asserted here), copied pyenv-shaped under `under`.
+    /// (a premise asserted here), copied pyenv-shaped under `under`. The
+    /// toolcache build finds libpython through a search path fixed to its own
+    /// install directory, so the copy is pointed at its new prefix's `lib`
+    /// (with patchelf), as a pyenv build is at its own.
     pub(super) fn pyenv(under: &str) -> Self {
-        let toolcache = Path::new("/opt/hostedtoolcache/Python");
-        let mut found = None;
-        for entry in std::fs::read_dir(toolcache).expect("the runner's Python toolcache") {
-            let tree = entry.expect("entry").path().join("x64");
-            let Ok(bins) = std::fs::read_dir(tree.join("bin")) else {
-                continue;
-            };
-            for bin in bins.flatten() {
-                let name = bin.file_name().to_string_lossy().into_owned();
-                let is_versioned = name
-                    .strip_prefix("python3.")
-                    .is_some_and(|y| y.parse::<u32>().is_ok());
-                if is_versioned && tree.join("lib").join(format!("lib{name}.so.1.0")).is_file() {
-                    found = Some((tree.clone(), name));
-                }
-            }
-        }
-        let (tree, version) = found.expect("a linked Python in the runner's toolcache");
-        // Premise: the binary itself names its libpython (a linked build), so
-        // the row's missing-libpython-bind mutant is killed end to end.
-        let binary = std::fs::read(tree.join("bin").join(&version)).expect("the toolcache binary");
-        let soname = format!("lib{version}.so");
-        assert!(
-            binary.windows(soname.len()).any(|w| w == soname.as_bytes()),
-            "the toolcache {version} links {soname}"
-        );
+        let (tree, version) = linked_toolcache();
         let scratch = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch");
         let prefix = scratch.path().join(under).join(".pyenv/versions/3.0.0");
         let lib = tree.join("lib").join(format!("lib{version}.so.1.0"));
-        Self::build(
+        let layout = Self::build(
             scratch,
             prefix,
             &version,
@@ -376,7 +385,33 @@ impl Layout {
             &tree.join("lib").join(&version),
             &[lib],
             Real::Binary,
-        )
+        );
+        let status = std::process::Command::new("patchelf")
+            .arg("--set-rpath")
+            .arg(layout.prefix.join("lib"))
+            .arg(layout.bin.join(&version))
+            .status()
+            .expect("patchelf runs (the pyenv rows need it on PATH)");
+        assert!(
+            status.success(),
+            "patchelf pointed the copy at its prefix's lib"
+        );
+        layout
+    }
+
+    /// The toolcache's linked Python where it is installed: no copy, no
+    /// canaries (the rows never write into a host install). Its libpython
+    /// sits in its own prefix's `lib`, which the sandbox shows only through
+    /// the interpreter's libpython bind.
+    pub(super) fn toolcache_in_place() -> Self {
+        let (tree, version) = linked_toolcache();
+        Self {
+            _scratch: tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("scratch"),
+            bin: tree.join("bin"),
+            prefix: tree,
+            version,
+            canaries: Vec::new(),
+        }
     }
 
     fn build(

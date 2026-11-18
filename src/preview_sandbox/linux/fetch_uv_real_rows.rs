@@ -230,28 +230,40 @@ async fn l7c_sdist_an_sdist_only_project_is_never_built() {
     );
 }
 
-/// L7c-url (design 7), kills m-direct-url end to end: uv installs a
-/// dependency named by URL from the allowed host, and the direct-URL check
-/// refuses the install.
+/// L7c-url (design 7, amended 2026-11-18 by the lead's ruling): a dependency
+/// named by URL is never fetched. uv 0.13.1 itself refuses a URL dependency
+/// that an index package declares ("URL dependencies must be expressed as
+/// direct requirements or constraints"), at the install, after reading the
+/// parent's metadata and before any request to the URL. Zero requests to the
+/// URL is the claim, read off the index's request log; the gateway's own
+/// direct-URL check stays as defence in depth for other uv versions, proven by
+/// its lib rows (an end-to-end m-direct-url kill is unreachable with this uv).
 #[cfg(tp4)]
 #[tokio::test]
-async fn l7c_url_a_dependency_by_url_refuses_at_the_direct_url_check() {
+async fn l7c_url_a_dependency_by_url_is_never_fetched_and_refuses_at_the_uv_install() {
     use super::fetch_rows::{Bundle, at_step};
     let Some(ready) = ready("l7c_url").await else {
         return;
     };
     let (out, index) = real_uvx(&ready, None, "probe-url", fixed(&[]), Bundle::Registry).await;
     let requests = index.requests();
+    // Positive control: uv resolved the parent and fetched its wheel, whose
+    // metadata names the URL dependency.
+    for wanted in [
+        "pypi.org /simple/probe-url/",
+        "files.pythonhosted.org /packages/probe_url-1.0-py3-none-any.whl",
+    ] {
+        assert!(
+            requests.contains(&wanted.to_owned()),
+            "{wanted}: {requests:?}"
+        );
+    }
     assert!(
-        requests
-            .contains(&"files.pythonhosted.org /direct/url_dep-1.0-py3-none-any.whl".to_owned()),
-        "uv fetched the URL dependency: {requests:?}"
+        !requests.iter().any(|r| r.contains("/direct/url_dep")),
+        "the URL dependency was requested: {requests:?}"
     );
     let refused = out.expect_err("a URL dependency refuses");
-    assert!(
-        at_step(&refused, "the fetch's direct-URL check"),
-        "{refused:?}"
-    );
+    assert!(at_step(&refused, "the fetch's uv install"), "{refused:?}");
 }
 
 /// L7c-pth (design 3 and 6), joint red with the no-compile switch and
@@ -391,4 +403,36 @@ async fn u_uv_runs_alone_a_uv_inside_a_runtime_tree_runs_bound_alone() {
             .map(|c| format!("denied {}", c.display())),
     );
     assert_eq!(lines(&out), want, "{out}");
+}
+
+/// U-toolcache (lead ruling 2026-11-18), kills m-no-libpython-bind end to
+/// end: a linked Python used where it is installed (the runner's toolcache,
+/// its libpython in its own prefix's `lib`, found through the search path
+/// its build fixed there) runs the fetch and the run. The sandbox shows that
+/// `lib` only through the interpreter's libpython bind; nothing is copied.
+#[cfg(tp4)]
+#[tokio::test]
+async fn u_toolcache_a_linked_python_in_place_runs_through_its_libpython_bind() {
+    use super::fetch_rows::Bundle;
+    let Some(ready) = ready("u_toolcache").await else {
+        return;
+    };
+    let layout = Layout::toolcache_in_place();
+    let (out, index) = real_uvx(
+        &ready,
+        Some(&layout),
+        "probe-cli",
+        fixed(&[]),
+        Bundle::Registry,
+    )
+    .await;
+    let out = out.expect("the fetch and the run succeeded with the toolcache python in place");
+    assert!(
+        index.requests().contains(
+            &"files.pythonhosted.org /packages/probe_cli-1.0-py3-none-any.whl".to_owned()
+        ),
+        "{:?}",
+        index.requests()
+    );
+    assert_eq!(lines(&out), ["cli-ran", "proxy unset"], "{out}");
 }
