@@ -28,7 +28,6 @@ import contextlib
 import io
 import os
 import re
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -119,7 +118,7 @@ SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
 PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
 # The packaged build's one assignment of n (one shell command each): read from the build script, nothing else.
 N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"$')
-N_ASSIGNED = re.compile(r"^(?:(?:export|local|readonly|declare|typeset)\s+(?:-\w+\s+)*)?n=")
+N_ASSIGNED = re.compile(r"^(?:(?:then|do|else|elif|\{|!)\s+)*(?:(?:export|local|readonly|declare|typeset)\s+(?:-\w+\s+)*)?n=")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -151,27 +150,57 @@ def packaged_build_problems(text: str) -> list[str]:
 
 
 def shell_commands(line: str) -> list[str] | None:
-    """The commands on one shell line (continuations already joined), split at `;`, `&`, `&&`, `||` and `|` outside
-    quotes, a word starting with `#` ending the line as bash's comments do; None when the line does not tokenize (an
-    unbalanced quote). A guard against a whole build coming back by accident, not a shell parser: command
-    substitution and eval are not looked into."""
-    lex = shlex.shlex(line, posix=False, punctuation_chars=";&|")
-    lex.whitespace_split = True
-    lex.commenters = ""
+    """The commands on one shell line (continuations already joined), each its original text, split at `;`, `&`,
+    `&&`, `||`, `|` and `|&` outside quotes, as bash reads them: single quotes take everything literally, double
+    quotes honour a backslash, an unquoted backslash escapes the next character, a quote glued to a word stays in
+    that word, and `#` starts a comment only at the start of a word. `&` in a redirection (`2>&1`, `&>file`) is not a
+    separator. None when a quote is left open. A guard against a whole build coming back by accident, not a shell
+    parser: command substitution and eval are not looked into."""
     out: list[str] = []
-    cur: list[str] = []
-    try:
-        for tok in lex:
-            if tok.startswith("#"):
-                break
-            if set(tok) <= set(";&|"):
-                out += [" ".join(cur)] if cur else []
-                cur = []
-            else:
-                cur.append(tok)
-    except ValueError:
+    buf: list[str] = []
+    quote = ""
+    word_start = True
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            buf.append(c)
+            if quote == '"' and c == "\\" and i + 1 < len(line):
+                buf.append(line[i + 1])
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c == "\\" and i + 1 < len(line):
+            buf += [c, line[i + 1]]
+            i += 1
+            word_start = False
+        elif c in "'\"":
+            quote = c
+            buf.append(c)
+            word_start = False
+        elif c == "#" and word_start:
+            break
+        elif c in ";&|" and not (c == "&" and ((i and line[i - 1] in "<>") or line[i + 1:i + 2] == ">")):
+            out += ["".join(buf).strip()] if "".join(buf).strip() else []
+            buf = []
+            while i + 1 < len(line) and line[i + 1] in ";&|":
+                i += 1
+            word_start = True
+        else:
+            buf.append(c)
+            word_start = c.isspace()
+        i += 1
+    if quote:
         return None
-    return out + ([" ".join(cur)] if cur else [])
+    return out + (["".join(buf).strip()] if "".join(buf).strip() else [])
+
+
+def step_builds(step: dict, aliases: dict[str, str] | None = None) -> bool:
+    """Whether a step builds the library tests, judged per shell command as builds_through does (a line that will not
+    tokenize is judged whole)."""
+    return any(builds_library(cmd, aliases)
+               for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()
+               for cmd in (shell_commands(line) or [line]))
 
 
 def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | None = None) -> bool:
@@ -206,7 +235,7 @@ def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
     # or timed-out step; one placed before the build would measure nothing.
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
-        last_build = max((i for i, s in enumerate(steps) if builds_library(str(s.get("run", "")))), default=-1)
+        last_build = max((i for i, s in enumerate(steps) if step_builds(s)), default=-1)
         if not any(TRIPWIRE in str(s.get("run", "")) and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
