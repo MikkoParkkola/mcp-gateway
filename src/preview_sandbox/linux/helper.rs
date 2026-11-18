@@ -157,9 +157,11 @@ fn check_namespaces(host: HostNamespaces) -> Result<(), String> {
 /// descriptor check refuses (D13: before the status, the helper's own control
 /// descriptor is exempt; after the close, nothing is).
 pub(super) fn extra_descriptors(open: &[u32], exempt: Option<u32>) -> Vec<u32> {
-    // RED: the exemption is ignored.
-    let _ = exempt;
-    let mut extra: Vec<u32> = open.iter().copied().filter(|fd| *fd > 2).collect();
+    let mut extra: Vec<u32> = open
+        .iter()
+        .copied()
+        .filter(|fd| *fd > 2 && Some(*fd) != exempt)
+        .collect();
     extra.sort_unstable();
     extra
 }
@@ -194,10 +196,10 @@ fn check_descriptors() -> Result<(), String> {
     if let Some(own) = own {
         extra.swap_remove(own);
     }
+    let extra = extra_descriptors(&extra, None);
     if extra.is_empty() {
         Ok(())
     } else {
-        extra.sort_unstable();
         Err(format!("checking descriptors (inherited: {extra:?})"))
     }
 }

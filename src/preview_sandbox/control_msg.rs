@@ -223,10 +223,20 @@ impl SetupStatus {
         line.unwrap_or_default()
     }
 
-    /// The status a control line holds, if it holds exactly one.
-    pub(crate) fn parse(_line: &str) -> Option<Self> {
-        // RED: no status parses yet.
-        None
+    /// The status a control line holds, if it holds exactly one. Every flag
+    /// must be `true`, and neither shape takes a key beyond its own.
+    pub(crate) fn parse(line: &str) -> Option<Self> {
+        if let Ok(SetupDoneLine { setup_done: true }) = serde_json::from_str(line) {
+            return Some(Self::Done);
+        }
+        match serde_json::from_str::<SetupRefusedLine>(line) {
+            Ok(SetupRefusedLine {
+                setup_refused: true,
+                step,
+                denied,
+            }) => Some(Self::Refused { step, denied }),
+            _ => None,
+        }
     }
 }
 
@@ -255,10 +265,26 @@ pub(crate) enum Ending {
 }
 
 /// The next state after `event`, or `None` when the event is out of order.
-/// `fetching` says whether the plan has a fetch phase.
-pub(crate) fn next(_fetching: bool, at: Seen, _event: ControlEvent) -> Option<Seen> {
-    // RED: every event is accepted and nothing advances.
-    Some(at)
+/// `fetching` says whether the plan has a fetch phase. A refusal may end the
+/// session before a fetch or after a successful one; a fetch failure reports
+/// through `fetch_done`, never a status; done needs the fetch done first.
+pub(crate) fn next(fetching: bool, at: Seen, event: ControlEvent) -> Option<Seen> {
+    use ControlEvent::{FetchDone, FetchStart, Status};
+    match (at, event) {
+        (Seen::Start, FetchStart) if fetching => Some(Seen::Fetching),
+        (Seen::Start, Status(SetupStatus::Done)) if !fetching => {
+            Some(Seen::Ended(Ending::Status(SetupStatus::Done)))
+        }
+        (Seen::Start | Seen::Fetched, Status(status @ SetupStatus::Refused { .. })) => {
+            Some(Seen::Ended(Ending::Status(status)))
+        }
+        (Seen::Fetching, FetchDone { refused: false }) => Some(Seen::Fetched),
+        (Seen::Fetching, FetchDone { refused: true }) => Some(Seen::Ended(Ending::FetchRefused)),
+        (Seen::Fetched, Status(SetupStatus::Done)) => {
+            Some(Seen::Ended(Ending::Status(SetupStatus::Done)))
+        }
+        _ => None,
+    }
 }
 
 /// The ending a whole session reached when the connection closed, or `None`
@@ -270,8 +296,7 @@ pub(crate) fn ending(fetching: bool, events: &[ControlEvent]) -> Option<Ending> 
     }
     match at {
         Seen::Ended(ending) => Some(ending),
-        // RED: a session that closed early still reads as done.
-        _ => Some(Ending::Status(SetupStatus::Done)),
+        _ => None,
     }
 }
 

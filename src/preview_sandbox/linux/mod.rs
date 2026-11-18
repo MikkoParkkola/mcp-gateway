@@ -818,9 +818,11 @@ pub(super) fn setup_refusal(
     denied: bool,
     apparmor_restricts: bool,
 ) -> Refusal {
-    // RED: the step alone, whatever the host and the error.
-    let _ = (denied, apparmor_restricts);
-    Refusal::Step(step.describe().to_owned())
+    if step.mounts() && denied && apparmor_restricts {
+        Refusal::AppArmorRestricted
+    } else {
+        Refusal::Step(step.describe().to_owned())
+    }
 }
 
 #[cfg(test)]
