@@ -107,6 +107,16 @@ fn ld1_a_non_integer_or_missing_interval_is_refused() {
     assert!(parse(&with("interval_ms: 1000", "{}")).is_err());
 }
 
+#[test]
+fn ld1_an_interval_past_the_duration_bound_is_refused_as_it_parses() {
+    // 100 years is 3155760000000 ms: one more passes no duration bound.
+    let refused = refusal(&with("interval_ms: 1000", "interval_ms: 3155760000001"));
+    assert!(
+        refused.contains("this duration is longer than 100 years, the most any duration may be"),
+        "the shared duration bound refuses it before the load rule: {refused}"
+    );
+}
+
 // ── LD2: strict keys name the nearest key ────────────────────────────
 
 #[test]

@@ -111,6 +111,63 @@ async fn rl15d_a_reload_that_paces_a_jsonrpc_host_refuses_it_at_load_and_dispatc
     rl15_reload_paces("jsonrpc", "rl15j.test").await;
 }
 
+/// The delivery record of one `service` call to `url`: whether it failed,
+/// and the effect the record names.
+async fn dispatch_effect(service: &str, url: &str) -> (bool, Option<serde_json::Value>) {
+    use crate::gateway::delivery_facts;
+    let executor = executor(Names::default());
+    let call =
+        crate::capability::parse_capability(&rpc_yaml("rl15hcall", service, url)).expect("cap");
+    let (outcome, facts) = Box::pin(delivery_facts::scope(async {
+        let outcome = executor.execute(&call, json!({})).await;
+        (outcome, delivery_facts::snapshot())
+    }))
+    .await;
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    (outcome.is_err(), fields.get("response_effect").cloned())
+}
+
+/// RL15h: a GraphQL or JSON-RPC call refused at a paced host is the call's
+/// answer, and its delivery records `refused`; the same call to an unpaced
+/// host reaches it and records no refusal.
+#[tokio::test]
+async fn rl15h_a_paced_host_refusal_records_refused_and_an_unpaced_call_does_not() {
+    for service in ["graphql", "jsonrpc"] {
+        let stub = Stub::start(Reply::json("{}")).await;
+        let paced = stub.url(&format!("rl15h-{service}.test"), "/g");
+        let open = stub.url(&format!("rl15h-open-{service}.test"), "/g");
+        let pacing = CapabilityBackend::new("rl15h", Arc::new(executor(Names::default())));
+        pacing
+            .register_capability(cap(
+                &format!("rl15hrest{service}"),
+                &paced,
+                Some(30_000),
+                false,
+            ))
+            .expect("premise: the host is paced");
+        let (failed, effect) = dispatch_effect(service, &paced).await;
+        assert!(failed, "{service}: refused at the paced host");
+        assert_eq!(
+            effect,
+            Some("refused".into()),
+            "{service}: recorded as refused"
+        );
+        assert_eq!(stub.count(), 0, "{service}: nothing reached the paced host");
+        let (_, effect) = dispatch_effect(service, &open).await;
+        assert_eq!(
+            stub.count(),
+            1,
+            "{service}: control: the unpaced call reached its host"
+        );
+        assert_ne!(
+            effect,
+            Some("refused".into()),
+            "{service}: control: no refusal recorded"
+        );
+    }
+}
+
 // ── RL18, RL19: base_url providers; the strictest backend wins ───────
 
 /// A paced provider configured as `base_url` plus `path` (as
