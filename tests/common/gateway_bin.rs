@@ -56,6 +56,19 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
     command
 }
 
+/// `command` with an empty environment plus the named variables the parent
+/// has, for a child that must see only them (the private-home rule's probe
+/// children). A pure addition: no existing caller changes.
+pub fn with_only_env(mut command: Command, names: &[&str]) -> Command {
+    command.env_clear();
+    for name in names {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
 /// Any `command` isolated as [`command`] isolates the gateway binary, with
 /// `home` as the test-home override and every platform-home variable (`HOME`,
 /// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) under a second directory,

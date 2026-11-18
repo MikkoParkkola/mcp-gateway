@@ -283,23 +283,19 @@ pub fn refuse(present: &[&str], absent: &[&str]) -> Expect {
 /// PATH, the temp dir variables, the platform home (so the child resolves the
 /// same real home as its parent), the coverage profile and the mutant switch.
 pub fn literal_env_command() -> Command {
-    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
-    command.env_clear();
-    for name in [
-        "PATH",
-        "SystemRoot",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "HOME",
-        "USERPROFILE",
-        "LLVM_PROFILE_FILE",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command
+    crate::gateway_bin::with_only_env(
+        Command::new(std::env::current_exe().expect("the test binary")),
+        &[
+            "PATH",
+            "SystemRoot",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "HOME",
+            "USERPROFILE",
+            "LLVM_PROFILE_FILE",
+        ],
+    )
 }
 
 /// Run `row` (a test path in this binary) in a child built from `command`,
