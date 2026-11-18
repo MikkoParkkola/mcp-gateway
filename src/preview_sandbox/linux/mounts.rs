@@ -219,6 +219,9 @@ pub(super) fn check_proxy_socket(socket: (u64, u64)) -> Step {
 /// file, so nothing of it reaches the run.
 pub(super) fn remove_proxy_socket() -> Step {
     let path = Path::new(PROXY_SOCKET);
+    if path.is_absolute() {
+        return Ok(());
+    }
     unmount(path, UnmountFlags::DETACH)
         .map_err(io::Error::from)
         .map_err(at("unmounting the proxy socket at", path))?;
