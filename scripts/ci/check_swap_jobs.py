@@ -125,8 +125,11 @@ N_READ = ("n=\"$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:s
           "[[:space:]]*;.*/\\1/p' scripts/dev/test-parts-build.rs)\"")
 # Reads of n are an allow-list: $n, and ${n} with a non-assigning operator (:- - :+ + :? ?). READ_N blanks those; any
 # other mention of n left (n=, ((--n)), let n, read n, -n, an option cluster ending in n such as -vn, ${n:=1}) counts
-# as naming n, and the packaged block may name n in one command only: the canonical read below. A false count
-# refuses the block, the strict direction.
+# as naming n, and the packaged block may name n in one command only: the canonical read below, placed before the
+# part loop. A false count refuses the block, the strict direction.
+# Non-goals: the census guards against accidental drift in reviewed workflows and scripts, not deliberate
+# obfuscation. Dynamically built variable names (printf -v with a computed name), eval, and command or function
+# shadowing are out of scope.
 READ_N = re.compile(r"\$n(?!\w)|\$\{n(?=\}|:?[-+?])")
 BARE_N = re.compile(r"(?<!\w)n(?!\w)|(?<![\w-])-[A-Za-z]+n(?!\w)")
 
@@ -153,7 +156,9 @@ def packaged_build_problems(text: str) -> list[str]:
     writes = [cmd for cmd in commands for _ in BARE_N.finditer(READ_N.sub("", cmd))]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
-    if (not loop or len(writes) != 1 or " ".join(writes[0].split()) != N_READ
+    # One command names n, and a canonical read sits before the loop, so that command is the read and runs first.
+    if (not loop or len(writes) != 1
+            or not any(" ".join(cmd.split()) == N_READ for cmd in run_commands(block[:loop.start()]))
             or any(PART_CALL.search(cmd) for cmd in run_commands(outside))):
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
                    "from scripts/dev/test-parts-build.rs")
