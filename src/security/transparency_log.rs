@@ -720,73 +720,94 @@ fn read_last_nonempty_line_raw(path: &Path) -> io::Result<Option<String>> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_anchor_tests.rs"]
 mod anchor_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_attributed_tests.rs"]
 mod attributed_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_errors_tests.rs"]
 mod errors_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_hwm_contradiction_tests.rs"]
 mod hwm_contradiction_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_hwm_missing_tests.rs"]
 mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_identity_tests.rs"]
 mod identity_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_issuance_tests.rs"]
 mod issuance_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_keep_scan_tests.rs"]
 mod keep_scan_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_kept_dir_tests.rs"]
 mod kept_dir_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_kill_tests.rs"]
 mod kill_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_lossy_tests.rs"]
 mod lossy_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_overflow_tests.rs"]
 mod overflow_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_predecessor_tests.rs"]
 mod predecessor_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_reader_tests.rs"]
 mod reader_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_recovery_tests.rs"]
 mod recovery_tests;
 #[cfg(test)]
 #[path = "transparency_log_rotation_tests.rs"]
 mod rotation_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_sigstart_tests.rs"]
 mod sigstart_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_tests.rs"]
 mod tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_writer_tests.rs"]
 mod writer_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_bounded_clock_compile_red_tests.rs"]
 mod bounded_clock_compile_red_tests;
@@ -795,10 +816,12 @@ mod bounded_clock_compile_red_tests;
 #[path = "transparency_log_settle_tests.rs"]
 mod settle_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_settle_bound_tests.rs"]
 mod settle_bound_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;

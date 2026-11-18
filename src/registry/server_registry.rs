@@ -196,6 +196,7 @@ pub fn all() -> &'static [ServerCatalogEntry] {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "server_registry_tests.rs"]
 mod tests;

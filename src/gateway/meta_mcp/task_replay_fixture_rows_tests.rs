@@ -19,6 +19,7 @@ use crate::security::decision_record::DecisionKind;
 
 /// T3: a replay whose target `allowed_tools` leaves out is refused without
 /// reading any catalogue, and notes `allowed_tools`, never a rule id.
+#[cfg(tp2)]
 #[tokio::test]
 async fn t3_task_replay_allowed_tools() {
     let registry = Arc::new(BackendRegistry::new());

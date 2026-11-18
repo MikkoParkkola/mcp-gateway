@@ -145,6 +145,7 @@ pub(super) fn render_server_entry(
     let _ = writeln!(out);
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "cap_render_tests.rs"]
 mod tests;

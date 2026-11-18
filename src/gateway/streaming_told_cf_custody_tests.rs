@@ -76,6 +76,7 @@ pub(in crate::gateway::streaming) async fn grace_history_challenge(
     );
 }
 
+#[cfg(tp4)]
 #[tokio::test(flavor = "current_thread")]
 async fn closing_a_cf_stream_cancels_an_inflight_jwks_verification() {
     let harness = Harness::start(&config_yaml("[]", "")).await;

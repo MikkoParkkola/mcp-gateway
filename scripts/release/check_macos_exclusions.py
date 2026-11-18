@@ -70,6 +70,9 @@ TRUE_FLAGS = {"test", "unix", "debug_assertions", "true"}
 # `mutants` is set only by the mutation build (`--cfg mutants`), never by
 # either CI configuration, so it is off on both.
 FALSE_FLAGS = {"windows", "false", "mutants"}
+# The lib test split's part tags (`tp1`..): a whole build sets every one, on every OS, and a part build sets
+# one part on every OS alike, so a part tag never keeps an item off macOS while keeping it on Linux.
+PART_TAG = re.compile(r"tp[0-9]+")
 UNDECIDED = None
 ATTR = re.compile(r"#!?\[(cfg|cfg_attr)\(")
 TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
@@ -138,6 +141,8 @@ def evaluate(tree, features: set[str], env: dict[str, set[str]]):
         return UNDECIDED if value is UNDECIDED else not value
     if kind == "flag":
         name = tree[1]
+        if PART_TAG.fullmatch(name):
+            return True
         return True if name in TRUE_FLAGS else False if name in FALSE_FLAGS else UNDECIDED
     _, key, value = tree
     if key == "feature":

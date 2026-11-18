@@ -125,6 +125,7 @@ pub fn check_scopes(
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

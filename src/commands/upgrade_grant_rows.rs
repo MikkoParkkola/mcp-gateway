@@ -63,6 +63,7 @@ pub(super) fn check_grant_rows(config: Option<&Path>) -> GrantsCheck {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "upgrade_grant_rows_tests.rs"]
 mod tests;

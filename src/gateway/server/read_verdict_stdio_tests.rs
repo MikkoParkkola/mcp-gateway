@@ -171,6 +171,7 @@ fn http_outcome(mode: CrossTenantReads) -> ([bool; 2], Vec<String>) {
 }
 
 /// Firewall on: stdio makes the HTTP verdict on the same A-then-B sequence.
+#[cfg(tp4)]
 #[tokio::test]
 async fn stdio_makes_the_http_verdict() {
     for mode in [
@@ -187,6 +188,7 @@ async fn stdio_makes_the_http_verdict() {
 }
 
 /// Firewall off: stdio still judges, with the same outcomes.
+#[cfg(tp4)]
 #[tokio::test]
 async fn stdio_judges_with_the_firewall_off() {
     for mode in [
@@ -205,6 +207,7 @@ async fn stdio_judges_with_the_firewall_off() {
 /// Attribution keeps running with the firewall off: a call whose answer
 /// names A writes its invocation record with A's hashed tenant. The request
 /// names another tenant, so A can come only from the answer's attribution.
+#[cfg(tp4)]
 #[tokio::test]
 async fn the_invocation_record_names_tenants_with_the_firewall_off() {
     let log_dir = crate::test_dir_keep::kept_tempdir();

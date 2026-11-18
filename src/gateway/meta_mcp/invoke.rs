@@ -314,6 +314,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod error_classification_tests;
 
@@ -321,69 +322,93 @@ mod error_classification_tests;
 // Tests — response_transform wiring
 // ============================================================================
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod context_integrity_note_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod response_transform_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod identity_propagation_enforcement_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod error_budget_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod circuit_open_hint_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod suggestion_authz_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod f13_bridge_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod bridge_round_recheck_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod captured_invoke_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod runtime_name_clash_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod cancel_settles_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod caller_cost_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod f13_hint_scope_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod caller_verdict_label_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod session_fp_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod response_cache_error_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod ask_expiry_budget_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod bridge_send_refusal_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod refusal_first_scan_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tracing_target_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod mcp_credential_principal_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod stage_boundary_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod plan_step_guard_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod presend_refusal_tests;

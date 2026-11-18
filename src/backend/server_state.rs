@@ -187,6 +187,7 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
     )
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "server_state_tests.rs"]
 mod tests;

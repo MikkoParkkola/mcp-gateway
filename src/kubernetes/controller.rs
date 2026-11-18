@@ -243,6 +243,7 @@ pub fn plan_controller_report(
     })
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

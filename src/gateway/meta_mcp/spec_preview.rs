@@ -386,10 +386,12 @@ fn tool_text_matches(tool: &Tool, query: &str) -> bool {
 
 // Declared here rather than in `mod.rs` only because both sit under the same
 // parent; the cases belong to this file's `tools/resolve` handler.
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "resolve_suggestion_authz_tests.rs"]
 mod resolve_suggestion_authz_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

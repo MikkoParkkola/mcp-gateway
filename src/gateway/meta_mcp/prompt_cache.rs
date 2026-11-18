@@ -294,6 +294,7 @@ pub fn extract_cached_tokens(response: &Value) -> u64 {
 // Tests
 // ============================================================================
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::*;

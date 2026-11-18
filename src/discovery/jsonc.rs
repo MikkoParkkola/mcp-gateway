@@ -82,6 +82,7 @@ fn drop_trailing_commas(text: &str) -> String {
     out
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use serde_json::Value;

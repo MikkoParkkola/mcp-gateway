@@ -267,10 +267,13 @@ pub(crate) fn random_suffix() -> Result<u64, StoreError> {
     Ok(u64::from_le_bytes(bytes))
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod choose_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod rollback_tests;

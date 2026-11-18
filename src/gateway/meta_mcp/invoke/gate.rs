@@ -547,14 +547,17 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "gate_fill_tests.rs"]
 mod fill_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "gate_refusal_kind_tests.rs"]
 mod refusal_kind_tests;

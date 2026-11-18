@@ -83,6 +83,7 @@ pub(crate) async fn load(dirs: &CapabilityDirs) -> Result<ToolCatalogue, String>
     ToolCatalogue::load(&refs).await.map_err(|e| e.to_string())
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::{CapabilityDirs, resolve};

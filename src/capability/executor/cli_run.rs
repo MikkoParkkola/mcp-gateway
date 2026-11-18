@@ -423,10 +423,12 @@ async fn read_capped<R: AsyncRead + Unpin>(
 #[path = "cli_run_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "cli_audit_tests.rs"]
 mod audit_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "cli_run_redaction_tests.rs"]
 mod redaction_tests;

@@ -54,6 +54,7 @@ pub(super) fn scan(fx: &Fixture, fold: bool) {
     read_page_joined(&fx.path, None, None, limits, Look::Carried(seen), keep).unwrap();
 }
 
+#[cfg(tp5)]
 #[test]
 #[ignore = "profiling, not an assertion"]
 fn m2_profile_phases_of_a_ten_thousand_row_export() {
@@ -95,6 +96,7 @@ fn m2_profile_phases_of_a_ten_thousand_row_export() {
 
 /// The passes of an export read as `collect` reads them, without building a
 /// row: per-pass cost, then `row()` and the size function over the rows.
+#[cfg(tp5)]
 #[test]
 #[ignore = "profiling, not an assertion"]
 fn m2_profile_passes_and_row_build() {
@@ -187,6 +189,7 @@ fn m2_profile_passes_and_row_build() {
 }
 
 /// What opening a log for one page costs on its own, before any window is read.
+#[cfg(tp5)]
 #[test]
 #[ignore = "profiling, not an assertion"]
 fn m2_profile_open_cost_of_one_page() {
@@ -204,6 +207,7 @@ fn m2_profile_open_cost_of_one_page() {
 
 /// M1's fixture, read as a list page: cumulative allocation and the bytes the
 /// page examined, for the ratchet rows.
+#[cfg(tp5)]
 #[test]
 #[ignore = "profiling, not an assertion"]
 fn m1_profile_one_list_page() {

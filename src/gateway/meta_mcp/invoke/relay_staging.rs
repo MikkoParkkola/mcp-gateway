@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 
+#[cfg(tp4)]
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_staging/surfaced_reload_tests.rs"]
 mod surfaced_reload_tests;

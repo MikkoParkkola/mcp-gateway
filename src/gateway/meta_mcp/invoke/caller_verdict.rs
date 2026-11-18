@@ -529,6 +529,7 @@ impl MetaMcp {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "caller_verdict_outcome_tests.rs"]
 mod outcome_tests;
@@ -574,9 +575,11 @@ mod dispatch_seam {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "not_found_race_tests.rs"]
 mod not_found_race_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "noview_cooldown_tests.rs"]
 mod noview_cooldown_tests;

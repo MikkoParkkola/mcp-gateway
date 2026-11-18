@@ -120,6 +120,7 @@ async fn send_in_scope(
     response
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests {
     use super::NonToolMethod;

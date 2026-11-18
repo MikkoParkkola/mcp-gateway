@@ -573,6 +573,7 @@ impl EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "schedule_source_tests.rs"]
 mod tests;

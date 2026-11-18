@@ -207,6 +207,7 @@ fn scan_repo<T>(
     Ok(found)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "mutant_scan_tests.rs"]
 mod tests;

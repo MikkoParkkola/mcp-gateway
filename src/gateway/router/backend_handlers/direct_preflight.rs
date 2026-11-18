@@ -617,6 +617,7 @@ fn a2a_round_binding(caller: &Caller) -> Option<String> {
     })
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod mik_8659_preflight_tests {
     use super::super::direct_caller::Caller;

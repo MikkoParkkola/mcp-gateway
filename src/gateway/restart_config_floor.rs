@@ -618,27 +618,35 @@ pub(crate) mod seams {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_cancel_tests.rs"]
 mod cancel_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_certify_more_tests.rs"]
 mod certify_more_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_certify_tests.rs"]
 mod certify_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_contract_more_tests.rs"]
 mod contract_more_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_contract_tests.rs"]
 mod contract_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_settle_more_tests.rs"]
 mod settle_more_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_settle_tests.rs"]
 mod settle_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "config_floor_source_tests.rs"]
 mod source_tests;

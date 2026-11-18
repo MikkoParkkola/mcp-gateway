@@ -593,6 +593,7 @@ impl FrozenRecord {
 #[path = "config_persistence_journal_v2_codec.rs"]
 mod codec;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_codec_tests.rs"]
 mod codec_tests;
@@ -602,6 +603,7 @@ mod fixtures;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_observe_tests.rs"]
 mod observe;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_state_tests.rs"]
 mod state_tests;

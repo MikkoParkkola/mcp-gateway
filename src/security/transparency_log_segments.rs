@@ -437,6 +437,7 @@ pub(crate) fn release_reserve(path: &Path) -> io::Result<bool> {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod hwm_mac_tests {
     use super::*;
@@ -511,6 +512,7 @@ mod hwm_mac_tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "transparency_log_first_line_tests.rs"]
 mod first_line_tests;

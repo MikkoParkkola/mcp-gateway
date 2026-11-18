@@ -381,42 +381,56 @@ pub(super) mod stdio;
 
 #[cfg(test)]
 mod audience_access;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_attach_tests;
 #[cfg(test)]
 mod audience_cf_tests;
 #[cfg(test)]
 mod audience_ear;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_expire_tests;
 #[cfg(test)]
 pub(in crate::gateway::server) mod audience_fixture;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_guard_8377_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_identity_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 /// A removed key or grant ends what a held stream delivers.
 mod audience_key_reload_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_l2_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_liveness_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_review_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_source_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_sse_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 /// L3b: a surfaced-only reload reaches both HTTP channels once.
 mod audience_surfaced_reload_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod audience_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 mod decision_tests;
 #[cfg(test)]
 mod drain_seam;
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -66,6 +66,7 @@ mod cwe532_debug_redaction {
 
     // The resolved in-memory TransparencyLogConfig::Debug must never surface
     // the HMAC shared secret.
+    #[cfg(tp4)]
     #[test]
     fn transparency_log_config_debug_redacts_shared_secret() {
         let cfg = TransparencyLogConfig {

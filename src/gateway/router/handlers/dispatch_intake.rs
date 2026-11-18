@@ -154,14 +154,17 @@ pub(super) fn mcp_cancel_key(
     crate::gateway::router::inflight_calls::CallKey::new("/mcp", Some(&owner), session, id)
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "dispatch_intake_cancel_key_tests.rs"]
 mod cancel_key_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "dispatch_intake_judgement_tests.rs"]
 mod judgement_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "dispatch_intake_presented_tests.rs"]
 mod presented_tests;

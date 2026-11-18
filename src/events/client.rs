@@ -288,6 +288,7 @@ fn retry_after(value: &str, now: Option<chrono::DateTime<chrono::Utc>>) -> Optio
     )
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;

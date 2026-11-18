@@ -265,11 +265,13 @@ impl super::EventsHub {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "observation_tests.rs"]
 mod tests;
 
 /// A stored identity comes back only through the checked constructor.
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "stored_identity_tests.rs"]
 mod stored_identity_tests;

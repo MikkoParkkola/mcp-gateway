@@ -305,6 +305,7 @@ pub(crate) fn same_owner(a: &str, b: &str) -> bool {
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,12 +443,15 @@ mod tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "record_principal_key_tests.rs"]
 mod key_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "record_principal_leak_tests.rs"]
 mod leak_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "record_principal_scan_tests.rs"]
 mod scan_tests;

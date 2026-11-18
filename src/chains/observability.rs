@@ -188,6 +188,7 @@ impl ChainObservability {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -75,6 +75,21 @@ pub(crate) fn test_only(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Whether `attr` is a lib test split part tag, `#[cfg(tpK)]`. It only picks
+/// the part that compiles the item; the unsplit build compiles every part.
+#[allow(
+    dead_code,
+    reason = "the binary's and integration tests' copies use only production_text"
+)]
+pub(crate) fn part_tag(attr: &syn::Attribute) -> bool {
+    attr.path().is_ident("cfg")
+        && attr.parse_args::<syn::Ident>().is_ok_and(|id| {
+            id.to_string()
+                .strip_prefix("tp")
+                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
 /// `text` with every item compiled only under test blanked: spaces in place
 /// of its bytes, newlines kept, so positions and line numbers still match
 /// `text` and literals outside test items survive. An item is test-only when
@@ -106,7 +121,7 @@ pub(crate) fn production_text(text: &str) -> String {
         }
         if !attr.inner {
             if let Some(end) = item_end(c, t, attr.end) {
-                blank(&mut out, at, end);
+                blank(&mut out, tag_run_start(c, at), end);
                 from = end;
             }
             continue;
@@ -126,6 +141,32 @@ pub(crate) fn production_text(text: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// Where a test item's blanked extent starts: `at`, or earlier when a run of
+/// `#[cfg(tpK)]` lines (the lib test split's part tags, each its own line)
+/// sits directly above the item's test cfg. The tag belongs to the test item,
+/// so a production scan never reads it as production code.
+fn tag_run_start(code: &[u8], at: usize) -> usize {
+    let mut start = at;
+    loop {
+        let mut i = start;
+        while i > 0 && code[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        let Some(open) = code[..i].iter().rposition(|b| *b == b'#') else {
+            return start;
+        };
+        let tag = &code[open..i];
+        let digits = tag
+            .strip_prefix(b"#[cfg(tp")
+            .and_then(|rest| rest.strip_suffix(b")]"));
+        if digits.is_some_and(|d| !d.is_empty() && d.iter().all(u8::is_ascii_digit)) {
+            start = open;
+        } else {
+            return start;
+        }
+    }
 }
 
 /// A `#[cfg(..)]` or `#![cfg(..)]` in sanitized code: whether it is inner,

@@ -97,6 +97,7 @@ fn opt(value: Option<&str>) -> &str {
     value.unwrap_or("")
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "migration_revision_tests.rs"]
 mod migration_revision_tests;

@@ -59,6 +59,7 @@ pub(super) fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscriptio
     }
 }
 
+#[cfg(tp5)]
 #[test]
 fn records_survive_reopen_and_secrets_stay_out_of_debug() {
     let dir = tempfile::tempdir().expect("dir");
@@ -82,6 +83,7 @@ fn records_survive_reopen_and_secrets_stay_out_of_debug() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
     let dir = tempfile::tempdir().expect("dir");
@@ -112,6 +114,7 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn a_live_subscriptions_verification_is_never_evicted() {
     let dir = tempfile::tempdir().expect("dir");
@@ -144,6 +147,7 @@ fn a_live_subscriptions_verification_is_never_evicted() {
     assert!(store.is_verified("p", "https://live/xyz", now, TAIL));
 }
 
+#[cfg(tp5)]
 #[test]
 fn caps_are_checked_with_the_commit_and_refresh_is_never_capped() {
     let dir = tempfile::tempdir().expect("dir");
@@ -181,6 +185,7 @@ fn caps_are_checked_with_the_commit_and_refresh_is_never_capped() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn expired_rows_are_swept_on_admission_and_free_their_slot() {
     let dir = tempfile::tempdir().expect("dir");
@@ -222,6 +227,7 @@ fn expired_rows_are_swept_on_admission_and_free_their_slot() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn rotation_keeps_the_stored_secret_as_previous() {
     let dir = tempfile::tempdir().expect("dir");
@@ -247,6 +253,7 @@ fn rotation_keeps_the_stored_secret_as_previous() {
 
 /// The rotation grace protects a live rotation only: an expired row's old
 /// secret ends with the row and is never dual-signed for its successor.
+#[cfg(tp5)]
 #[test]
 fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
     let dir = tempfile::tempdir().expect("dir");
@@ -271,6 +278,7 @@ fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
     assert_eq!(stored.previous_until, None);
 }
 
+#[cfg(tp5)]
 #[test]
 fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
     let dir = tempfile::tempdir().expect("dir");
@@ -293,6 +301,7 @@ fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
     );
 }
 
+#[cfg(tp5)]
 #[test]
 fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
@@ -312,6 +321,7 @@ fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
         .expect("a fresh opt-in commits");
 }
 
+#[cfg(tp5)]
 #[test]
 fn one_principals_churn_evicts_its_own_tail_before_anothers() {
     let dir = tempfile::tempdir().expect("dir");
@@ -342,6 +352,7 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
 }
 
 /// MIK-7805 AC2: the commit itself says whether it inserted or refreshed.
+#[cfg(tp5)]
 #[test]
 fn admit_reports_inserted_then_refreshed() {
     let dir = tempfile::tempdir().expect("dir");
@@ -362,6 +373,7 @@ fn admit_reports_inserted_then_refreshed() {
 
 /// MIK-7854.EVENTS.3: no build wrote a version 0 record, so one is skipped
 /// on load like any version this build does not know.
+#[cfg(tp5)]
 #[test]
 fn a_version_zero_record_is_not_loaded() {
     let dir = tempfile::tempdir().expect("dir");
@@ -385,6 +397,7 @@ fn a_version_zero_record_is_not_loaded() {
 /// A row file whose stored observed identity names nobody is read back on
 /// open through the checked constructor: it observes as no one. A sibling
 /// whose identity names someone observes as that person.
+#[cfg(tp5)]
 #[test]
 fn a_stored_identity_naming_nobody_observes_as_no_one_after_a_reopen() {
     let dir = tempfile::tempdir().expect("dir");
@@ -435,6 +448,7 @@ fn a_stored_identity_naming_nobody_observes_as_no_one_after_a_reopen() {
 
 /// MIK-7854.EVENTS.4: a verification tail over the cap in force is trimmed
 /// before an admission may reuse it, on the same open store.
+#[cfg(tp5)]
 #[test]
 fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
     let dir = tempfile::tempdir().expect("dir");
@@ -469,6 +483,7 @@ fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
 /// MIK-7854.EVENTS.4: subscriptions live at the request time but expired by
 /// the commit are swept at the commit instant, so their tails are capped
 /// before the opt-in is read.
+#[cfg(tp5)]
 #[test]
 fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
     let dir = tempfile::tempdir().expect("dir");
@@ -503,6 +518,7 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
 /// MIK-7854.EVENTS.1: the grant becomes a time at the commit instant, not at
 /// the request: a request stamped 2 h ago still commits a 1 h grant that is
 /// live now, standing in for any wait before the store lock.
+#[cfg(tp5)]
 #[test]
 fn the_grant_is_fixed_at_the_commit_instant() {
     let dir = tempfile::tempdir().expect("dir");
@@ -541,6 +557,7 @@ fn the_grant_is_fixed_at_the_commit_instant() {
 /// MIK-8122 (design D7): a held refresh never rewrites a watch row's class.
 /// The refresh carries no class of its own, and the committed row keeps the
 /// class it was admitted under.
+#[cfg(tp5)]
 #[test]
 fn a_held_refresh_keeps_the_rows_watch_class() {
     let dir = tempfile::tempdir().expect("dir");

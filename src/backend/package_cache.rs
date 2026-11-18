@@ -555,10 +555,12 @@ fn has_trailing_separator(dir: &Path) -> bool {
     text.ends_with('/') || text.ends_with(std::path::MAIN_SEPARATOR)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "package_cache_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "package_cache_retry_tests.rs"]
 mod retry_tests;

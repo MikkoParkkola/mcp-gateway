@@ -704,31 +704,39 @@ pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_channel;
 mod sse_decoder;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "sse_lent_reopen_tests.rs"]
 mod sse_lent_reopen_tests;
 mod sse_listen;
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "sse_send_tests.rs"]
 mod sse_send_tests;
 mod startup;
 mod transport_impl;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod sse_decoder_tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod private_redirect_tests;
 
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod serving_adopt_tests;
 
 #[cfg(all(test, feature = "webui"))]
 mod issuer_change_fixture;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod issuer_change_more_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod issuer_change_tests;

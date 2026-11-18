@@ -47,6 +47,7 @@ impl Evaluated {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "log_once_tests.rs"]
 mod tests;

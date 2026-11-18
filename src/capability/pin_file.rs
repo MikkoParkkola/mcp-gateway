@@ -58,6 +58,7 @@ fn pin_file_until(file: &Path, deadline: Instant) -> Result<String, String> {
     Ok(hash)
 }
 
+#[cfg(tp1)]
 #[cfg(all(test, unix))]
 mod tests {
     use std::time::{Duration, Instant};
