@@ -404,7 +404,7 @@ class CoverageUnionRows(unittest.TestCase):
             record = read_records(self.exports[obj])[str(self.union_path)]
             self.assertNotIn("single_only", record["functions"])
             self.assertEqual(record["lines"], self.single_records[str(self.union_path)]["lines"])
-        self.reject_union("gate (b)", self.union_name)
+        self.reject_union("gate (b)", "single_only")
 
     def test_U3b_lower_function_count_is_rejected(self):
         table = self.join_fixture(1, 2)

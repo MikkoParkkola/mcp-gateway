@@ -235,9 +235,12 @@ class CoveragePartsWiring(unittest.TestCase):
             self.assertFalse(missing, "W5 item 1 missing: " + "; ".join(missing))
 
         with self.subTest(item=2):
-            missing = [f"{consumer} reading linux.lcov" for consumer in ("objects", "canary")
-                       if not re.search(r"^python3 scripts/ci/coverage_shards\.py " + consumer
-                                        + r"\s+linux\.lcov(?:\s|$)", run, re.M)]
+            # The objects check reads the logged -object list (report-lcov.log); only the canary reads the joined lcov.
+            missing = []
+            if not re.search(r"^python3 scripts/ci/coverage_shards\.py objects\s+report-lcov\.log\s", run, re.M):
+                missing.append("objects reading report-lcov.log")
+            if not re.search(r"^python3 scripts/ci/coverage_shards\.py canary\s+linux\.lcov(?:\s|$)", run, re.M):
+                missing.append("canary reading linux.lcov")
             if any("--summary-only" in line and "--json" in line for line in run.splitlines()):
                 missing.append("removal of the --summary-only --json report")
             self.assertFalse(missing, "W5 item 2 missing: " + "; ".join(missing))
