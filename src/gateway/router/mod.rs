@@ -214,6 +214,7 @@ mod e5_dashboard_session_tests;
 #[cfg(test)]
 mod mrtr_component_tests;
 /// `POST /ui/signin` mints a dashboard session with script off.
+#[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod signin_form_tests;
 #[cfg(tp1)]

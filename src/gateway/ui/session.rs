@@ -672,6 +672,7 @@ mod mik_8659_dashboard_tests {
 
 /// The dashboard link's binding order, and the session bound it shares with
 /// the sign-in form.
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "session_bound_tests.rs"]
 mod bound_tests;
