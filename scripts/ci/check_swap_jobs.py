@@ -122,18 +122,10 @@ SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
 PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
 # The packaged build's one assignment of n (one shell command each): read from the build script, nothing else.
 N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"$')
-# An assignment of n in one shell command: after any words that may stand before a simple command, after other
-# assignment words, or among a declaration builtin's names; `n+=` and `n[i]=` change $n too.
-_ASSIGN_WORD = r"""[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*"""
-N_ASSIGNED = re.compile(
-    # Words that may stand before a simple command, and a case arm's pattern (with its case head, if on the line).
-    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+|\(?[^()]*\)\s*)*"
-    # n as a for or select loop's variable,
-    r"(?:(?:for|select)\s+n(?![\w=])|"
-    # or assigned, after other assignment words or among a declaration builtin's names.
-    rf"(?:{_ASSIGN_WORD}\s+)*"
-    r"(?:(?:export|local|readonly|declare|typeset)\s+(?:\S+\s+)*)?"
-    r"n(?:\[[^\]]*\])?\+?=)")
+# The bare word n: what every write of n names (n=, ((n=..)), let n, read n, for n, a case arm's n=), and what a read
+# does not ($n, ${n}) nor a flag (-n). A whitelist, not a list of ways to assign: the packaged block may name n
+# bare in one command only, the build script's read, so a write bash allows but no pattern lists is still refused.
+BARE_N = re.compile(r"(?<![\w${-])n(?!\w)")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -153,15 +145,15 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no part")
     if not any(REST_CALL.search(c) and not SELECTS_LIB.search(c) for c in calls):
         out.append("the build mode builds no non-lib test target")
-    # Every part: the part builds sit inside a loop over 1..N, with n assigned once (in any command of the block), by
-    # the build script's read, so a shortened loop or a part built outside it cannot pass.
-    assigns = [cmd for cmd in commands if N_ASSIGNED.match(cmd)]
+    # Every part: the part builds sit inside a loop over 1..N, and the block names n bare exactly once, in the build
+    # script's read (BARE_N), so a shortened loop, a rewritten n or a part built outside the loop cannot pass.
+    writes = [cmd for cmd in commands for _ in BARE_N.finditer(cmd)]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
-    if (not loop or len(assigns) != 1 or not N_FROM_BUILD.match(assigns[0])
-            or any(PART_CALL.search(line) for line in outside.splitlines())):
-        out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n assigned once, from '
-                   "scripts/dev/test-parts-build.rs")
+    if (not loop or len(writes) != 1 or not N_FROM_BUILD.match(writes[0])
+            or any(PART_CALL.search(cmd) for cmd in run_commands(outside))):
+        out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
+                   "from scripts/dev/test-parts-build.rs")
     return out
 
 
@@ -409,12 +401,12 @@ def unwrapped_builds(run: str) -> list[str]:
     backtick) to the build is exactly WRAPPED_PREFIX. Anything else counts as bare: a build on the line after a
     mention of the wrapper, after `VAR=`, inside `$( )` or backticks, or in an echo's text (so a phase line must
     not spell out `cargo test`)."""
-    text = "\n".join(l for l in run.replace("\\\n", " ").split("\n") if not l.lstrip().startswith("#"))
+    text = "\n".join(line for line, _ in run_lines(run) if not line.lstrip().startswith("#"))
     starts = []
     for m in CARGO_RE.finditer(text):
         if m.group(1) == "llvm-cov" and LLVM_COV_NO_COMPILE.match(m.group(2)):
             continue
-        if not SINGLE_TARGET.search(m.group(2)):
+        if not SINGLE_TARGET.search(TEST_ARGS.split(m.group(2), 1)[0]):
             starts.append(m.start())
     starts += [m.start() for w in WRAPPERS for m in w.finditer(text)]
     bare = []
