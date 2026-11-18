@@ -335,7 +335,21 @@ async fn t_overpass_success() {
         json!({ "latitude": 60.1699, "longitude": 24.9384, "category": "cafe", "radius": 500, "limit": 20 }),
     )
     .await;
-    assert_eq!(seen.path, "/api/interpreter");
+    // The request is the one Overpass answered 200: the record job's, as its
+    // MANIFEST wrote it down (a GET with no body, the same User-Agent).
+    let manifest =
+        std::fs::read_to_string(repo("tests/fixtures/maps").join(PR_RUN).join("MANIFEST"))
+            .expect("MANIFEST");
+    let line = manifest
+        .lines()
+        .find(|l| l.split(' ').next() == Some("overpass_nearby"))
+        .expect("overpass_nearby in MANIFEST");
+    let sent = url::Url::parse(line.rsplit(' ').next().expect("url")).expect("recorded URL");
+    assert_eq!(seen.method, "GET");
+    assert_eq!(seen.path, sent.path());
+    assert_eq!(query(&seen), sent.query_pairs().into_owned().collect());
+    assert!(seen.body.is_empty(), "no body: {:?}", seen.body);
+    assert_eq!(user_agent(&seen), UA);
     let out = structured(&result);
     let elements = out["elements"].as_array().expect("elements");
     assert_eq!(elements.len(), 20, "the recorded twenty: {out}");
