@@ -96,11 +96,15 @@ jobs:
           # test name | seconds to wait before it (the previous call's host
           # interval plus a margin, so the gateway's own pacer never refuses).
           passed=0
+          total=0
           while IFS='|' read -r name gap; do
+            total=$((total + 1))
             sleep "$gap"
             "$RUNNER_TEMP/lib-bin/p1/lib-tests-p1" "capability::maps_live_tests::${name}" --ignored --exact > row.log 2>&1
+            rc=$?
             tail -30 row.log
-            if grep -q '^test result: ok. 1 passed' row.log; then
+            # Both: the process exited 0 and its summary reports the one test passed.
+            if [ "$rc" -eq 0 ] && grep -q '^test result: ok. 1 passed' row.log; then
               passed=$((passed + 1))
             else
               echo "FAILED: ${name}"
@@ -115,8 +119,9 @@ jobs:
           maps_live_overpass|1.1
           maps_live_osrm|1.1
           ROWS
-          echo "live rows passed: ${passed} of 8"
-          test "$passed" -eq 8
+          # The threshold is the row list's own length, and the list may not be empty.
+          echo "live rows passed: ${passed} of ${total}"
+          test "$total" -gt 0 && test "$passed" -eq "$total"
       # As ci.yml's part builds end: a part writes nothing to swap; past 2 GiB a whole build came back.
       - name: Memory tripwire
         if: always()
