@@ -517,7 +517,8 @@ test('R3 the receipt lookup skips a decoy row', async ({ page }) => {
 
 test('S1 the receipt draws rule, decided, effect and the two counts', async ({ page }) => {
   const cfg = { callJson: ran({ receipt: 't-abc', content: three }) };
-  lookup(cfg, { receipt: receiptOf({ id: 'row-1', account: 'mikko', findingsListed: 1 }) });
+  // Two request findings, one caught in the answer: N, M and the request count all differ.
+  lookup(cfg, { receipt: receiptOf({ id: 'row-1', account: 'mikko', findings: ['quoted shell', 'path escape'], findingsListed: 1 }) });
   await open(page, cfg);
   const run = runOf(page, 'web.search');
   await expect(run).toBeVisible();
