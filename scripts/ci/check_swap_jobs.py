@@ -49,6 +49,8 @@ CARGO_CONFIG = Path(".cargo/config.toml")
 CARGO_RE = re.compile(r"\bcargo\s+(test|llvm-cov|bench)\b([^\n|;&]*)")
 BUILD_TESTS = re.compile(r"\bcargo\s+build\b[^\n|;&]*\s--(tests|all-targets|benches)\b")
 SINGLE_TARGET = re.compile(r"--(test|bin|doc|example|bench)\b")
+# The & of a redirection (2>&1, <&0, &>file): part of one command, not a separator, so the matchers above may cross it.
+REDIRECT_AMP = re.compile(r"(?<=[<>])&|&(?=>)")
 LLVM_COV_NO_COMPILE = re.compile(r"^\s*(clean|report)\b")
 WRAPPERS = (
     re.compile(r"scripts/ci/shard_tests\.py\s+run\s+linux\b"),
@@ -118,7 +120,14 @@ SELECTS_LIB = re.compile(r"\s--(lib|tests|all-targets|benches)\b")
 PART_LOOP = re.compile(r'\bfor\s+k\s+in\s+\$\(seq\s+1\s+"\$n"\)\s*;?\s*do\b(.*?)^\s*done\b', re.S | re.M)
 # The packaged build's one assignment of n (one shell command each): read from the build script, nothing else.
 N_FROM_BUILD = re.compile(r'^n="\$\(sed\b.*\sscripts/dev/test-parts-build\.rs\)"$')
-N_ASSIGNED = re.compile(r"^(?:(?:then|do|else|elif|\{|!)\s+)*(?:(?:export|local|readonly|declare|typeset)\s+(?:-\w+\s+)*)?n=")
+# An assignment of n in one shell command: after any words that may stand before a simple command, after other
+# assignment words, or among a declaration builtin's names; `n+=` and `n[i]=` change $n too.
+_ASSIGN_WORD = r"""[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*"""
+N_ASSIGNED = re.compile(
+    r"^(?:(?:then|do|else|elif|if|while|until|\{|!|time(?:\s+-p)?)\s+)*"
+    rf"(?:{_ASSIGN_WORD}\s+)*"
+    r"(?:(?:export|local|readonly|declare|typeset)\s+(?:\S+\s+)*)?"
+    r"n(?:\[[^\]]*\])?\+?=")
 
 
 def packaged_build_problems(text: str) -> list[str]:
@@ -138,7 +147,7 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append("the build mode builds no non-lib test target")
     # Every part: the part builds sit inside a loop over 1..N, with n assigned once (in any command of the block), by
     # the build script's read, so a shortened loop or a part built outside it cannot pass.
-    commands = [cmd for line in block.replace("\\\n", " ").splitlines() for cmd in (shell_commands(line) or [line])]
+    commands = run_commands(block)
     assigns = [cmd for cmd in commands if N_ASSIGNED.match(cmd)]
     loop = PART_LOOP.search(block)
     outside = block[:loop.start()] + block[loop.end():] if loop else block
@@ -160,6 +169,7 @@ def shell_commands(line: str) -> list[str] | None:
     buf: list[str] = []
     quote = ""
     word_start = True
+    redirect = False  # the last character was an unquoted, unescaped < or >, so a following & is part of it
     i = 0
     while i < len(line):
         c = line[i]
@@ -173,34 +183,43 @@ def shell_commands(line: str) -> list[str] | None:
         elif c == "\\" and i + 1 < len(line):
             buf += [c, line[i + 1]]
             i += 1
-            word_start = False
+            word_start = redirect = False
         elif c in "'\"":
             quote = c
             buf.append(c)
-            word_start = False
+            word_start = redirect = False
         elif c == "#" and word_start:
             break
-        elif c in ";&|" and not (c == "&" and ((i and line[i - 1] in "<>") or line[i + 1:i + 2] == ">")):
+        elif c in ";&|" and not (c == "&" and (redirect or line[i + 1:i + 2] == ">")):
             out += ["".join(buf).strip()] if "".join(buf).strip() else []
             buf = []
             while i + 1 < len(line) and line[i + 1] in ";&|":
                 i += 1
-            word_start = True
+            word_start, redirect = True, False
         else:
             buf.append(c)
-            word_start = c.isspace()
+            word_start, redirect = c.isspace(), c in "<>"
         i += 1
     if quote:
         return None
     return out + (["".join(buf).strip()] if "".join(buf).strip() else [])
 
 
+def run_lines(run: str) -> list[tuple[str, list[str] | None]]:
+    """Each line of a `run:` script, continuations joined, with its shell commands (None when a quote is left open).
+    The one place the census paths read a script into commands, so they cannot drift apart."""
+    return [(line, shell_commands(line)) for line in run.replace("\\\n", " ").splitlines()]
+
+
+def run_commands(run: str) -> list[str]:
+    """Every shell command of a `run:` script; a line with an open quote counts as one command, judged whole. A
+    comment-only line has no command."""
+    return [cmd for line, cmds in run_lines(run) for cmd in (cmds if cmds is not None else [line])]
+
+
 def step_builds(step: dict, aliases: dict[str, str] | None = None) -> bool:
-    """Whether a step builds the library tests, judged per shell command as builds_through does (a line that will not
-    tokenize is judged whole)."""
-    return any(builds_library(cmd, aliases)
-               for line in str(step.get("run", "")).replace("\\\n", " ").splitlines()
-               for cmd in (shell_commands(line) or [line]))
+    """Whether a step builds the library tests, judged per shell command as builds_through does."""
+    return any(builds_library(cmd, aliases) for cmd in run_commands(str(step.get("run", ""))))
 
 
 def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | None = None) -> bool:
@@ -211,8 +230,7 @@ def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | 
     for step in job.get("steps", []):
         if not isinstance(step, dict):
             continue
-        for line in str(step.get("run", "")).replace("\\\n", " ").splitlines():
-            commands = shell_commands(line)
+        for line, commands in run_lines(str(step.get("run", ""))):
             if commands is None:
                 if builds_library(line, aliases):
                     return False
@@ -259,6 +277,7 @@ def builds_library(run: str, aliases: dict[str, str] | None = None) -> bool:
     """Whether a `run:` script compiles the library's test binary. A repo alias is read as what it expands to."""
     for name, expansion in (repo_aliases() if aliases is None else aliases).items():
         run = re.sub(rf"\bcargo\s+{re.escape(name)}\b", lambda _, e=expansion: f"cargo {e}", run)
+    run = REDIRECT_AMP.sub("", run)
     if BUILD_TESTS.search(run):
         return True
     for m in CARGO_RE.finditer(run):
