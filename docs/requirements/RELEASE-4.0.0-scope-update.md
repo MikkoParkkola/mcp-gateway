@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 139
+Approved supplemental criteria: 140
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -61,6 +61,7 @@ protocol requirements additionally use the pinned specifications linked below.
 | NFR.RELEASEGATE.1 | Every automated 4.0.0 publishing path rejects unresolved baseline and supplemental criteria and decisions; plan consistency can still pass while work is pending. | VALIDATION |
 | NFR.DEMO.1 | Recorded demonstrations prove mixed-era interaction, reconnectable tasks, isolated personal accounts, useful large-catalogue discovery and error-budget diagnosis/recovery. | VALIDATION |
 | NFR.BUILD.1 | Pin supported reference client/backend versions and feature/build combinations under the existing license split; current critical-path coverage and mutation evidence grades the final integration revision. | VALIDATION |
+| MIK-9760.MAPS.11 | Key-free map tools: the maps-live-smoke workflow, run on the release-candidate commit, passes all eight live rows through the gateway, maps_live_overpass included; a provider error (5xx, at-capacity or timeout) gets one rerun after at least an hour. | VALIDATION |
 
 ### Enterprise multi-user and security scope (MIK-7570)
 
