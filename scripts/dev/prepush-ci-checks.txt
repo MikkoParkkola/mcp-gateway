@@ -40,7 +40,7 @@ python3 scripts/ci/test_lib_parts.py	1	closed
 python3 scripts/ci/test_lib_parts_cov.py	3	closed
 python3 scripts/ci/test_compile_cgroup.py	83	closed
 python3 scripts/ci/test_coverage_parts_wiring.py	2	closed
-scripts/gate-env/.venv/bin/python scripts/ci/test_coverage_union_merge.py	10	closed
+python3 scripts/ci/test_coverage_union_merge.py	10	closed
 python3 scripts/ci/test_memory_tripwire.py	0	closed
 python3 scripts/ci/test_lib_gates_wiring.py	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed

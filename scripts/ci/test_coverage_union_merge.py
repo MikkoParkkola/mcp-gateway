@@ -99,10 +99,15 @@ class UnionRows(unittest.TestCase):
             write(root, f"shards/cov-shard-{part}/tests.tsv",
                   "tests/x.rs\tintegration_only\tok\n"
                   "unittests src/lib.rs\tforeign_shard_test\tok\n")
-        # Accommodate the pinned interpreter path used by the existing Linux lib gate.
+        # The union step runs test_parts.py with the gates' pinned interpreter (tree-sitter) and everything else with
+        # python3, as this test runs (it needs yaml, which that environment lacks). A wrapper, not a symlink: a venv's
+        # python finds its packages only when called by its own path. Without the venv (a dev machine), this
+        # interpreter stands in and must have tree-sitter itself.
+        gate_python = ROOT / "scripts/gate-env/.venv/bin/python"
         python = root / "scripts/gate-env/.venv/bin/python"
         python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        python.write_text(f'#!/bin/sh\nexec "{gate_python if gate_python.exists() else sys.executable}" "$@"\n')
+        python.chmod(0o755)
         return fixture_env(root)
 
     def exercise(self, mutation=None):
