@@ -45,6 +45,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the macOS lib test binary",
     ("scripts/ci/lib-parts.sh", ("export", "$PART", "<TMP>/lib-bin")): "cargo: builds one part of the Linux lib test binary",
+    ("scripts/ci/lib-parts.sh", ("export", "1", "<TMP>/lib-bin")): "cargo: builds part 1 of the Linux lib test binary, the live map rows' part",
     ("scripts/ci/memory-tripwire.sh", ("2048", "<TMP>/memory-trend.txt")): "ci-env: reads this job's swap-out and cgroup memory.peak",
     ("scripts/ci/lib_union.py", ("<TMP>/lib-bin", "<TMP>/expected")): "artifact: compares the lists of the part binaries linux-lib-build built",
     ("scripts/dev/test_parts.py", ("expect", "x86_64-unknown-linux-gnu", "<TMP>/expected")): "artifact: writes the expected lists the union check compares with the part binaries'",
