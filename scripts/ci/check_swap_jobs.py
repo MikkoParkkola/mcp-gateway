@@ -659,7 +659,9 @@ def self_test() -> int:
         print(f"{'ok   ' if ok else 'WRONG'} census, {label}: problems {found}")
     part = 'MCP_GATEWAY_TEST_PART="$k" cargo test --all-features --locked --lib --no-run'
     rest = "cargo test --all-features --locked --no-run --test '*' --bins --examples"
-    n_line = '  n="$(sed -nE "s/x/y/p" scripts/dev/test-parts-build.rs)"\n'
+    # The canonical read, as packaged-tests.sh writes it (continued onto a second line).
+    n_line = ("  n=\"$(sed -nE 's/.*const[[:space:]]+N[[:space:]]*:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+)"
+              "[[:space:]]*;.*/\\1/p' \\\n    scripts/dev/test-parts-build.rs)\"\n")
     shape = ('elif [ "$mode" = build ]; then\n' + n_line + '  for k in $(seq 1 "$n"); do\n    {}\n  done\n  {}\nelse\n'
              '  cargo test --all-features\nfi\n')
     packaged_cases = [
@@ -716,9 +718,21 @@ def self_test() -> int:
          shape.format(part, rest).replace(n_line, n_line + '  case $(cat mode) in y) n=2;; esac\n'), True),
         ("n overridden in a case arm with a bracket pattern",
          shape.format(part, rest).replace(n_line, n_line + '  case "$mode" in buil[d\\(]) n=2;; esac\n'), True),
-        ("n read as ${n}, a [ -n ] test and a comment naming n",
+        ("n read as ${n}, ${n:-1} and named in a comment",
          shape.format(part, rest).replace(n_line, n_line + '  # n comes from the build script\n'
-                                                   '  [ -n "$n" ] || exit 1\n  echo "parts: ${n}"\n'), False),
+                                                   '  : "${n:-1}"\n  echo "parts: ${n}"\n'), False),
+        # Only $n and the non-assigning ${n...} forms are reads; anything else that names n counts, even a flag.
+        ("n decremented by arithmetic", shape.format(part, rest).replace(n_line, n_line + "  ((--n))\n"), True),
+        ("n written by printf -v glued to its option", shape.format(part, rest).replace(n_line, n_line + "  printf -vn 1\n"),
+         True),
+        ("n written by read -a glued to its option",
+         shape.format(part, rest).replace(n_line, n_line + "  read -an <<< 1\n"), True),
+        ("n assigned by ${n:=1}", shape.format(part, rest).replace(n_line, n_line + '  : "${n:=1}"\n'), True),
+        ("n assigned by ${n=1}", shape.format(part, rest).replace(n_line, n_line + '  : "${n=1}"\n'), True),
+        ("a -n flag names n too (strict)", shape.format(part, rest).replace(n_line, n_line + '  [ -n "$x" ] || true\n'),
+         True),
+        ("the read prints a constant", shape.format(part, rest).replace(
+            n_line, "  n=\"$(sed -n 's/.*/2/p;q' scripts/dev/test-parts-build.rs)\"\n"), True),
         # Each command is judged, not each line: a whole build chained after a part call, or a cargo build of the tests.
         ("a whole build chained after the part call on its line",
          shape.format(part + "; cargo test --all-features --locked --no-run", rest), True),
@@ -808,6 +822,8 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
          job(step(f"# {w}\\\ncargo test --all-features --lib --no-run")), True),
         ("C3d a bare build with --test-threads after --", "ci.yml", "j",
          job(step("cargo test --all-features --lib -- --test-threads=1")), True),
+        ("C3e a bare build continued after `cargo \\`", "ci.yml", "j",
+         job(step("cargo \\\n  test --all-features --lib --no-run")), True),
         ("C4 limits + reserve under the job limit", "ci.yml", "j",
          job(step(w + "cargo test --lib", 25), step(w + "cargo test --lib", 5), step(w + "cargo test --lib", 5), limit=50), False),
         ("C4b limits + reserve equal to the job limit", "ci.yml", "j",
