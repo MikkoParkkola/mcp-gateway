@@ -1,3 +1,3 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
-src/commands/audit_lookup.rs	lookup	refusal	1	no-record	audit lookup-email CLI client: maps the gateway's HTTP refusal to the shared exit table and error shape for the user; the gateway recorded its refusal where it decided it, and nothing is delivered from here
-src/commands/dashboard_link_admin.rs	admin_call	refusal	1	no-record	dashboard-link and events dead-letters CLI client: maps the gateway's HTTP refusal to the shared exit table and error shape for the user; the gateway recorded its refusal where it decided it, and nothing is delivered from here
+src/commands/audit_lookup.rs	lookup	refusal	1	no-record	audit lookup-email CLI client: answers the operator where no call delivery is recorded, with the exit and text of the shared exit table and error shape
+src/commands/dashboard_link_admin.rs	admin_call	refusal	1	no-record	dashboard-link and events dead-letters CLI client: answers the operator where no call delivery is recorded, with the exit and text of the shared exit table and error shape
