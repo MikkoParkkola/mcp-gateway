@@ -810,6 +810,19 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
 
+/// The refusal for a setup step the helper reported over the control
+/// connection (D13): `classify`'s `AppArmor` rule, applied to authenticated
+/// fields instead of stderr. `apparmor_restricts` is the host fact.
+pub(super) fn setup_refusal(
+    step: super::control_msg::SetupStep,
+    denied: bool,
+    apparmor_restricts: bool,
+) -> Refusal {
+    // RED: the step alone, whatever the host and the error.
+    let _ = (denied, apparmor_restricts);
+    Refusal::Step(step.describe().to_owned())
+}
+
 #[cfg(test)]
 mod elf_fixture;
 #[cfg(test)]

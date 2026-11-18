@@ -124,3 +124,158 @@ impl std::fmt::Debug for Issued {
 pub(crate) struct Expired {
     pub(crate) expired: bool,
 }
+
+/// A step of the helper's setup that can fail after it connected the control
+/// socket and before it forks the target. Only its name crosses the socket:
+/// no path, errno or other text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SetupStep {
+    Namespaces,
+    Descriptors,
+    Mounting,
+    Binding,
+    Masking,
+    Remounting,
+    Pivoting,
+    Loopback,
+    Limits,
+    TargetMissing,
+}
+
+impl SetupStep {
+    /// Every step, for the rows.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Namespaces,
+        Self::Descriptors,
+        Self::Mounting,
+        Self::Binding,
+        Self::Masking,
+        Self::Remounting,
+        Self::Pivoting,
+        Self::Loopback,
+        Self::Limits,
+        Self::TargetMissing,
+    ];
+
+    /// The gateway's fixed words for the step, read after "failed at" in the
+    /// caller's refusal.
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            Self::Namespaces => "namespaces",
+            Self::Descriptors => "descriptors",
+            Self::Mounting => "mounting",
+            Self::Binding => "binding",
+            Self::Masking => "masking",
+            Self::Remounting => "remounting",
+            Self::Pivoting => "pivoting",
+            Self::Loopback => "loopback",
+            Self::Limits => "limits",
+            Self::TargetMissing => "target_missing",
+        }
+    }
+
+    /// Whether the step mounts, the class an `AppArmor` restriction denies.
+    pub(crate) fn mounts(self) -> bool {
+        matches!(
+            self,
+            Self::Mounting | Self::Binding | Self::Masking | Self::Remounting | Self::Pivoting
+        )
+    }
+}
+
+/// The helper's one status before it forks the target:
+/// `{"setup_done":true}`, or
+/// `{"setup_refused":true,"step":"<step>","denied":<bool>}`, `denied` true
+/// when that step failed with EPERM or EACCES.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetupStatus {
+    Done,
+    Refused { step: SetupStep, denied: bool },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupDoneLine {
+    setup_done: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupRefusedLine {
+    setup_refused: bool,
+    step: SetupStep,
+    denied: bool,
+}
+
+impl SetupStatus {
+    /// The status as one control line, without its newline.
+    pub(crate) fn encode(self) -> String {
+        let line = match self {
+            Self::Done => serde_json::to_string(&SetupDoneLine { setup_done: true }),
+            Self::Refused { step, denied } => serde_json::to_string(&SetupRefusedLine {
+                setup_refused: true,
+                step,
+                denied,
+            }),
+        };
+        line.unwrap_or_default()
+    }
+
+    /// The status a control line holds, if it holds exactly one.
+    pub(crate) fn parse(_line: &str) -> Option<Self> {
+        // RED: no status parses yet.
+        None
+    }
+}
+
+/// One thing the gateway reads on the control connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlEvent {
+    FetchStart,
+    FetchDone { refused: bool },
+    Status(SetupStatus),
+}
+
+/// Where a control session stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Seen {
+    Start,
+    Fetching,
+    Fetched,
+    Ended(Ending),
+}
+
+/// How a well-formed control session ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ending {
+    Status(SetupStatus),
+    FetchRefused,
+}
+
+/// The next state after `event`, or `None` when the event is out of order.
+/// `fetching` says whether the plan has a fetch phase.
+pub(crate) fn next(_fetching: bool, at: Seen, _event: ControlEvent) -> Option<Seen> {
+    // RED: every event is accepted and nothing advances.
+    Some(at)
+}
+
+/// The ending a whole session reached when the connection closed, or `None`
+/// when it went out of order or closed before an ending.
+pub(crate) fn ending(fetching: bool, events: &[ControlEvent]) -> Option<Ending> {
+    let mut at = Seen::Start;
+    for event in events {
+        at = next(fetching, at, *event)?;
+    }
+    match at {
+        Seen::Ended(ending) => Some(ending),
+        // RED: a session that closed early still reads as done.
+        _ => Some(Ending::Status(SetupStatus::Done)),
+    }
+}
+
+#[cfg(tp1)]
+#[cfg(test)]
+#[path = "control_status_tests.rs"]
+mod status_tests;
