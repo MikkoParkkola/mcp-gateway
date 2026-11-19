@@ -75,6 +75,11 @@ fn short() -> Deadlines {
     }
 }
 
+/// The waits for the rows in this file, which are about what a run prints and how it exits, not about time.
+fn content() -> Deadlines {
+    short()
+}
+
 /// A scripted answer; `open` keeps the body pending after its chunks, as a
 /// live stream does.
 fn answer(status: u16, content_type: &str, chunks: Vec<Vec<u8>>, open: bool) -> AdminStream {
@@ -116,7 +121,7 @@ async fn run_as(
         &LinkTls::default(),
         |name: &str| (name == TOKEN_ENV).then(|| token.to_owned()),
         out.clone(),
-        &short(),
+        &content(),
         |_| {
             sends.fetch_add(1, Ordering::SeqCst);
             async move {
@@ -242,6 +247,52 @@ async fn a_download_masks_the_credential_at_every_cut() {
         assert_eq!(outcome.exit(), CliExit::Ok, "cut at {at}");
         assert_eq!(text(&out), expected, "cut at {at}");
     }
+}
+
+/// Load: a printing thread the scheduler leaves idle for 2 s, as on a starved test machine, must not fail a row about
+/// content. The sink stalls its first write; the run still prints every line and exits Ok under the waits every row
+/// in this file uses.
+#[tokio::test]
+async fn a_starved_printer_does_not_fail_a_content_row() {
+    struct Starved {
+        out: Shared,
+        stalled: bool,
+    }
+    impl Write for Starved {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self.stalled {
+                self.stalled = true;
+                std::thread::sleep(ms(2000));
+            }
+            self.out.write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let out = Shared::default();
+    let reply = answer(
+        200,
+        "application/x-ndjson",
+        vec![b"one\ntwo\n".to_vec()],
+        false,
+    );
+    let request = args(EXPORT, None, false);
+    let outcome = run_streamed_with(
+        &request,
+        BASE,
+        &LinkTls::default(),
+        credential,
+        Starved {
+            out: out.clone(),
+            stalled: false,
+        },
+        &content(),
+        |_| async { Ok(reply) },
+    )
+    .await;
+    assert_eq!(outcome.exit(), CliExit::Ok, "{}", outcome.stderr());
+    assert_eq!(text(&out.bytes()), "one\ntwo\n");
 }
 
 /// R6: in an event's data, id and name, in both output modes.
@@ -453,7 +504,7 @@ async fn write_failures_follow_the_buffered_rules() {
             &LinkTls::default(),
             credential,
             Failing(kind),
-            &short(),
+            &content(),
             |_| async { Ok(reply) },
         )
         .await;
