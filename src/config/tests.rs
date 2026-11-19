@@ -16,24 +16,20 @@ mod loading;
 mod pattern_grammar;
 mod validate_config;
 
-/// The child half of ENVFILE.19d. Computes its OWN `dirs::home_dir()` as the
-/// expected value rather than a passwd entry, which keeps the case honest on
-/// Windows, where the function reads a known folder and does not consult `HOME`
-/// at all.
+/// The child half of ENVFILE.19d: with `HOME` unset or empty, `~` still
+/// resolves against the routed home, never against "" or the working dir. A
+/// test build's routed home is its private test home, so the platform's own
+/// fallback (`dirs::home_dir()` when `HOME` is unset) is not observable here.
 #[test]
-#[ignore = "driven by envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback"]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "the oracle is the platform answer, independent of the routed lookup"
-)]
-fn envfile_19d_child_resolves_against_dirs_home_dir() {
+#[ignore = "driven by envfile_19d_home_unset_and_home_empty_both_resolve_to_the_routed_home"]
+fn envfile_19d_child_resolves_against_the_routed_home() {
     assert!(
         env::var_os("MCP_GW_TEST_ENVFILE19D_VARIANT").is_some(),
         "child must be launched by its parent, not run directly"
     );
 
     // GIVEN: a `~/...` entry, and this process's own idea of home
-    let expected_home = dirs::home_dir().expect("dirs must fall back when HOME is unset or empty");
+    let expected_home = crate::home_dir::home_dir().expect("a test process always has a home");
     let expected = expected_home.join("mcp-gw-test-envfile19d.env");
 
     let cfg_dir = tempfile::tempdir().unwrap();
@@ -49,11 +45,11 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
     // writing into the real home directory is not the test's business.
     let startup = Config::load_evaluated(Some(&cfg_path)).unwrap();
 
-    // THEN: it resolved against this process's own `dirs::home_dir()`
+    // THEN: it resolved against this process's routed home
     assert_eq!(
         startup.env_paths.as_paths(),
         std::slice::from_ref(&expected),
-        "startup must resolve `~` against dirs::home_dir()"
+        "startup must resolve `~` against the routed home"
     );
 
     // AND: a reload opens the same path, taking it from what startup recorded

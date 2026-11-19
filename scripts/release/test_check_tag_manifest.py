@@ -2400,6 +2400,26 @@ class WorkflowWiring(unittest.TestCase):
             "the packaged run must skip the Linux suite's list plus only the repo-only reads",
         )
 
+    def test_release_verify_runs_the_lib_tests_by_part_with_todays_flags(self):
+        # The whole lib test binary swaps a 16 GB runner past its limits, so verify runs it one part at a time through
+        # the shared helper, with today's flags (all features, no --locked, as before the split) and today's one skip.
+        # A memory tripwire step that runs after a failure follows it.
+        root = pathlib.Path(__file__).parents[2]
+        spec = importlib.util.spec_from_file_location("shard_tests", root / "scripts" / "ci" / "shard_tests.py")
+        st = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(st)
+        blocks = steps("release.yml", "verify")
+        test = [b for b in blocks if "- name: Test" in joined(b)]
+        self.assertEqual(len(test), 1, "release verify has one Test step")
+        want = f"run: scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh run --all-features -- --skip {st.SDK}"
+        self.assertEqual([c for c in joined(test[0]) if c.startswith("run:")], [want])
+        later = blocks[blocks.index(test[0]) + 1:]
+        self.assertTrue(
+            any(any("scripts/ci/memory-tripwire.sh" in c for c in joined(b)) and "if: always()" in joined(b)
+                for b in later),
+            "an `if: always()` memory tripwire step must follow verify's Test step",
+        )
+
     def test_release_tooling_unit_tests_block_on_every_ref(self):
         # release-criteria is report-only off a tag because its live-ledger
         # checks read documents edited mid-flight. The tooling's own unit tests

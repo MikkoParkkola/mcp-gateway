@@ -6,58 +6,95 @@
 
 use std::path::Path;
 
-use super::{LinkTls, UNSAFE_ANSWER, check_target, token_free};
+use super::super::cli_exit::{
+    CliError, CliExit, PROTOCOL_MESSAGE, PROTOCOL_REMEDY, Request, UNCERTAIN_MESSAGE,
+    UNCERTAIN_REMEDY, UNSAFE_BODY_MESSAGE, UNSAFE_BODY_REMEDY, status_kind, token_remedy,
+    transport_failure,
+};
+use super::{LinkTls, check_target};
 
-/// Ask the gateway at `base` for a fresh link.
+/// The remedy for a 404 to a command whose route the gateway may lack (design D4).
+pub(crate) const UNSUPPORTED_REMEDY: &str =
+    "Check that the gateway supports this command (update the gateway or the CLI), then retry.";
+
+/// The remedy lines that differ per command (design D4).
+pub(crate) struct Remedies {
+    /// The origin the token sentences name: scheme, host and port only (see [`origin_of`]).
+    pub(crate) origin: String,
+    /// The remedy for a 404.
+    pub(crate) not_found: String,
+    /// The remedy for an answer lost to a read.
+    pub(crate) lost_read: &'static str,
+}
+
+/// The origin of `base` as api names it in remedies, so userinfo, a path or a query token in `--url` never
+/// reaches stderr; a fixed phrase when `base` has no such origin.
+pub(crate) fn origin_of(base: &str) -> String {
+    reqwest::Url::parse(base)
+        .ok()
+        .map(|url| url.origin())
+        .filter(url::Origin::is_tuple)
+        .map_or_else(
+            || "the configured gateway".to_string(),
+            |origin| origin.ascii_serialization(),
+        )
+}
+
+impl Remedies {
+    /// A read's remedies for the gateway at `base`.
+    pub(crate) fn read(base: &str) -> Self {
+        Self {
+            origin: origin_of(base),
+            not_found: UNSUPPORTED_REMEDY.to_string(),
+            lost_read: "Repeat the read request.",
+        }
+    }
+}
+
+/// Ask the gateway at `base` for a fresh link. Not a mutation (design D3): a retry mints another link.
 ///
 /// # Errors
 ///
-/// A message carrying the gateway's status or the transport failure.
-pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+/// The failure on the shared table; an answer with no link is a protocol error (6).
+pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, CliError> {
+    let remedies = Remedies {
+        lost_read: "Repeat the request; each run mints a new one-time link.",
+        ..Remedies::read(base)
+    };
     let body = admin_call(
         reqwest::Method::POST,
         base,
         "/ui/api/dashboard-link",
         token,
         tls,
+        Request::Read,
+        &remedies,
     )
     .await?;
     body["link"]
         .as_str()
         .map(ToString::to_string)
-        .ok_or_else(|| token_free("the gateway's answer carried no link", token))
+        .ok_or_else(|| CliError::new(CliExit::Gateway, PROTOCOL_MESSAGE, PROTOCOL_REMEDY))
 }
 
-/// One admin request to the gateway at `base`; the JSON answer of a success,
-/// redacted.
+/// One admin request to the gateway at `base` (design D2): the JSON answer of a success, redacted.
 ///
 /// # Errors
 ///
-/// A message carrying the gateway's status and reason, or the transport
-/// failure, redacted as a whole (status text included: a token equal to
-/// "404" or "OK"), so no caller can print the token from it. The commands'
-/// output gate redacts each printed line again.
+/// The failure on the shared table: a transport failure with api's messages, a refusal with D4's, a success
+/// without a JSON body (api's protocol sentences, or the uncertain-outcome ones for a mutation), or a redaction
+/// that would lose an entry (api's unsafe-body sentences). Every one prints through `CliError::outcome`.
 pub(crate) async fn admin_call(
     method: reqwest::Method,
     base: &str,
     path: &str,
     token: &str,
     tls: &LinkTls,
-) -> Result<serde_json::Value, String> {
-    admin_call_raw(method, base, path, token, tls)
-        .await
-        .map_err(|message| token_free(&message, token))
-}
-
-async fn admin_call_raw(
-    method: reqwest::Method,
-    base: &str,
-    path: &str,
-    token: &str,
-    tls: &LinkTls,
-) -> Result<serde_json::Value, String> {
+    request: Request,
+    remedies: &Remedies,
+) -> Result<serde_json::Value, CliError> {
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
-    let response = send_admin_request(
+    let sent = send_admin_request(
         method,
         &endpoint,
         token,
@@ -66,29 +103,135 @@ async fn admin_call_raw(
         None,
         &AdminClientOptions::default(),
     )
-    .await
-    .map_err(|error| error.to_string())?;
-    let response = read_admin_response(response, &endpoint, tls)
-        .await
-        .map_err(|error| match error.kind {
-            AdminFailureKind::ResponseTooLarge => "the gateway answer exceeded 16 MiB".to_string(),
-            _ => error.to_string(),
-        })?;
-    let status = response.status;
+    .await;
+    let response = match sent {
+        Ok(response) => read_admin_response(response, &endpoint, tls).await,
+        Err(error) => Err(error),
+    }
+    .map_err(|error| transport(error, request, token, remedies, tls))?;
+    if let Some(refused) = refusal(&response, request, remedies) {
+        return Err(refused);
+    }
     let mut body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-    if !status.is_success() {
-        let reason = gateway_reason(&body).unwrap_or("no reason given");
-        return Err(format!("the gateway answered {status}: {reason}"));
-    }
     if body.is_null() {
-        return Err(format!("the gateway answered {status} with no JSON body"));
+        return Err(match request {
+            Request::Read => CliError::new(CliExit::Gateway, PROTOCOL_MESSAGE, PROTOCOL_REMEDY),
+            // A 2xx without a usable body cannot tell what the replay did.
+            Request::Mutation => CliError::new(
+                CliExit::UncertainOutcome,
+                UNCERTAIN_MESSAGE,
+                UNCERTAIN_REMEDY,
+            ),
+        });
     }
-    // The answer is redacted here, so every caller (the link included) reads
-    // the redacted body.
     if !redact_body(&mut body, token) {
-        return Err(UNSAFE_ANSWER.to_string());
+        return Err(CliError::new(
+            CliExit::LocalFailure,
+            UNSAFE_BODY_MESSAGE,
+            UNSAFE_BODY_REMEDY,
+        ));
     }
     Ok(body)
+}
+
+/// api's transport failure with D4's command differences: a lost answer to a read takes the command's remedy, an
+/// oversized answer to a mutation (which may have run) takes the uncertain-outcome sentences, and an https call
+/// names the TLS flags it did not pass.
+pub(crate) fn transport(
+    error: AdminCallError,
+    request: Request,
+    token: &str,
+    remedies: &Remedies,
+    tls: &LinkTls,
+) -> CliError {
+    let kind = error.kind;
+    let mut failure = transport_failure(error, request, token);
+    match (kind, request) {
+        (AdminFailureKind::ResponseLost, Request::Read) => {
+            failure.remedy = remedies.lost_read.to_string();
+        }
+        (AdminFailureKind::ResponseTooLarge, Request::Mutation) => {
+            failure.message = UNCERTAIN_MESSAGE.to_string();
+            failure.remedy = UNCERTAIN_REMEDY.to_string();
+        }
+        _ => {}
+    }
+    // The flags a failed https call did not pass, as the commands said before the shared shape (fixed text: the
+    // gate is unchanged). A settings failure prints its detail, which already carries them.
+    if matches!(
+        kind,
+        AdminFailureKind::Dns
+            | AdminFailureKind::Connect
+            | AdminFailureKind::Tls
+            | AdminFailureKind::ResponseLost
+    ) {
+        for hint in missing_tls_flags(&remedies.origin, tls) {
+            failure.remedy.push(' ');
+            failure.remedy.push_str(&hint[..1].to_uppercase());
+            failure.remedy.push_str(&hint[1..]);
+            failure.remedy.push('.');
+        }
+    }
+    failure
+}
+
+/// D4's refusal for an answer `status_kind` fails: "The gateway answered HTTP <number>: <reason>" plus the
+/// Retry-After part (the number only: a reason phrase could equal the token), with the remedy of its kind.
+/// `None` for a success.
+pub(crate) fn refusal(
+    response: &AdminResponse,
+    request: Request,
+    remedies: &Remedies,
+) -> Option<CliError> {
+    let parsed = serde_json::from_slice::<serde_json::Value>(&response.body);
+    let kind = status_kind(
+        response.status,
+        parsed.as_ref().unwrap_or(&serde_json::Value::Null),
+        request,
+    )?;
+    // api's safe_text bounds: a reason holding a control character (a newline, a terminal escape) or over 4 KiB
+    // is named, never printed; the token is redacted later, by the gate.
+    let reason = match &parsed {
+        Ok(body) => match gateway_reason(body) {
+            None | Some("") => "no reason given",
+            Some(reason) if reason.len() > 4096 || reason.chars().any(char::is_control) => {
+                "its reason cannot be printed"
+            }
+            Some(reason) => reason,
+        },
+        Err(_) => "its error body is not JSON",
+    };
+    let wait = match response.headers.get(reqwest::header::RETRY_AFTER) {
+        None => String::new(),
+        Some(value) => match value
+            .to_str()
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+        {
+            Some(secs) => format!("; retry after {secs} s"),
+            None => "; retry after: unreadable".to_owned(),
+        },
+    };
+    let origin = &remedies.origin;
+    let remedy = match kind {
+        CliExit::AuthRefused if response.status == reqwest::StatusCode::FORBIDDEN => {
+            format!("Use a token permitted to perform this operation for {origin}, then retry.")
+        }
+        CliExit::AuthRefused => token_remedy(origin),
+        CliExit::NotFound => remedies.not_found.clone(),
+        CliExit::UncertainOutcome => UNCERTAIN_REMEDY.to_string(),
+        _ => "Resolve the gateway error, then retry.".to_string(),
+    };
+    let mut failure = CliError::new(
+        kind,
+        format!(
+            "The gateway answered HTTP {}: {reason}{wait}",
+            response.status.as_u16()
+        ),
+        remedy,
+    );
+    failure.http_status = Some(response.status.as_u16());
+    Some(failure)
 }
 
 /// Redact the token out of `body` with the shared redactor. `false` when the
@@ -382,19 +525,34 @@ fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
     if !error.is_connect() {
         return AdminFailureKind::ResponseLost;
     }
-    let mut cause = std::error::Error::source(error);
-    while let Some(inner) = cause {
-        let tls_error = inner.is::<rustls::Error>()
-            || inner
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rustls::Error>);
-        if tls_error {
-            return AdminFailureKind::Tls;
-        }
-        cause = inner.source();
+    if tls_in_chain(std::error::Error::source(error)) {
+        return AdminFailureKind::Tls;
     }
     AdminFailureKind::Connect
+}
+
+/// Whether a rustls error sits among `first` and its causes. An `io::Error`'s `source()` skips the error it wraps
+/// (it returns that error's own source), so the walk steps into an `io::Error` through `get_ref` and into anything
+/// else through `source()`: one path, each node once. A real handshake failure nests two `io::Error`s (hyper's
+/// `Connect` error, `io::Error(Other)`, `io::Error(InvalidData)`, rustls `InvalidCertificate`) that `source()` alone
+/// never reaches.
+fn tls_in_chain(first: Option<&(dyn std::error::Error + 'static)>) -> bool {
+    // A step bound stops a chain whose source() loops; real chains are under ten deep.
+    const MAX_STEPS: usize = 128;
+    let mut cause = first;
+    for _ in 0..MAX_STEPS {
+        let Some(error) = cause else { return false };
+        if error.is::<rustls::Error>() {
+            return true;
+        }
+        cause = match error.downcast_ref::<std::io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|inner| inner as &(dyn std::error::Error + 'static)),
+            None => error.source(),
+        };
+    }
+    false
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, AdminCallError> {
@@ -455,19 +613,35 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
         let _ = write!(message, ": {inner}");
         cause = inner.source();
     }
+    for hint in missing_tls_flags(base, tls) {
+        message.push_str("; ");
+        message.push_str(hint);
+    }
+    message
+}
+
+/// On an `https` target, what to pass for the TLS material the run did not give: the hints a transport failure
+/// carries, in its detail and in the commands' remedy (design delta, the lead 2026-11-17).
+fn missing_tls_flags(base: &str, tls: &LinkTls) -> Vec<&'static str> {
+    let mut hints = Vec::new();
     if base
         .get(..8)
         .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
     {
         if tls.identity.is_none() {
-            message.push_str(
-                "; if the listener requires a client certificate \
+            hints.push(
+                "if the listener requires a client certificate \
                  (mtls.require_client_cert), pass --client-cert and --client-key",
             );
         }
         if tls.ca.is_none() {
-            message.push_str("; if its certificate comes from a private CA, pass --ca-cert");
+            hints.push("if its certificate comes from a private CA, pass --ca-cert");
         }
     }
-    message
+    hints
 }
+
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "dashboard_link_admin_tests.rs"]
+mod tests;

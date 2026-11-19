@@ -16,7 +16,7 @@ mod child {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("ran");
         let out = output_within(
-            std::process::Command::new(std::env::current_exe().unwrap())
+            crate::test_home::test_binary()
                 .args(["--exact", test_path, "--nocapture", "--test-threads=1"])
                 .env(CASE, case)
                 .env(MARKER, &marker),

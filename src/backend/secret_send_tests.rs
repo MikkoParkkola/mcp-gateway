@@ -178,7 +178,7 @@ const SCENARIO: &str = "backend::secret_send::tests::unstamped_resolver_scenario
 /// since setting one in-process needs `unsafe`.
 #[tokio::test]
 async fn a_backend_no_registry_stamped_refuses_rather_than_resolve_the_process_environment() {
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", SCENARIO, "--nocapture"])
         .env(SCENARIO_ENV, "1")

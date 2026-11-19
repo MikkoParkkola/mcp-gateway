@@ -31,7 +31,7 @@ pub(crate) fn on(id: &'static str) -> bool {
 /// assertions, so a child that never reached them cannot pass for one that did.
 #[cfg(test)]
 fn run_child(test: &str, switch: Option<&str>) -> String {
-    let mut cmd = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut cmd = crate::test_home::test_binary();
     cmd.args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env("MCP_GATEWAY_MUTANT_CHILD", "1");
     match switch {

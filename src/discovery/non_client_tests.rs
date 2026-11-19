@@ -22,7 +22,7 @@ fn the_radars_own_scan_finds_the_environment_and_no_client_file() {
         format!(r#"{{"mcpServers": {{"{FILE_FIND}": {{"command": "npx"}}}}}}"#),
     )
     .expect("write");
-    let out = std::process::Command::new(std::env::current_exe().expect("exe"))
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "discovery::non_client_tests::child",

@@ -58,16 +58,16 @@ async fn invalid_data_is_a_usage_error_before_sending() {
 #[test]
 fn exit_table_e_uses_the_approved_numeric_values() {
     for (exit, code) in [
-        (ApiExit::Ok, 0),
-        (ApiExit::LocalFailure, 1),
-        (ApiExit::Usage, 2),
-        (ApiExit::AuthRefused, 3),
-        (ApiExit::NotFound, 4),
-        (ApiExit::Network, 5),
-        (ApiExit::Gateway, 6),
-        (ApiExit::Declined, 7),
-        (ApiExit::UncertainOutcome, 8),
-        (ApiExit::Interrupted, 130),
+        (CliExit::Ok, 0),
+        (CliExit::LocalFailure, 1),
+        (CliExit::Usage, 2),
+        (CliExit::AuthRefused, 3),
+        (CliExit::NotFound, 4),
+        (CliExit::Network, 5),
+        (CliExit::Gateway, 6),
+        (CliExit::Declined, 7),
+        (CliExit::UncertainOutcome, 8),
+        (CliExit::Interrupted, 130),
     ] {
         assert_eq!(exit.code(), code);
     }
@@ -119,7 +119,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             3,
             "AuthRefused",
             "Invalid token",
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry. Gateway reason: -32000.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry. Gateway reason: -32000.",
         ),
         (
             StatusCode::UNAUTHORIZED,
@@ -127,7 +127,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             3,
             "AuthRefused",
             "The gateway rejected this credential.",
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
@@ -135,7 +135,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             3,
             "AuthRefused",
             "admin_required",
-            "Use an entitled credential; run mcp-gateway login --gateway http://127.0.0.1:1 with an account permitted to perform this operation, then retry.",
+            "Use a token permitted to perform this operation for http://127.0.0.1:1, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
@@ -143,7 +143,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             3,
             "AuthRefused",
             "This credential is not permitted to perform this operation.",
-            "Use an entitled credential; run mcp-gateway login --gateway http://127.0.0.1:1 with an account permitted to perform this operation, then retry.",
+            "Use a token permitted to perform this operation for http://127.0.0.1:1, then retry.",
         ),
         (
             StatusCode::NOT_FOUND,
@@ -310,7 +310,10 @@ async fn reason_reader_precedence_is_shared_with_admin_call() {
         .expect_err("admin refusal");
         assert_eq!(
             error,
-            format!("the gateway answered 403 Forbidden: {expected}")
+            format!(
+                "error: The gateway answered HTTP 403: {expected}\nUse a token permitted to perform this operation for {}, then retry.\n",
+                listener.base
+            )
         );
         for json_output in [false, true] {
             let mut args = args("/ui/api/keys");
@@ -325,7 +328,7 @@ async fn reason_reader_precedence_is_shared_with_admin_call() {
             )
             .await;
             let remedy = format!(
-                "Use an entitled credential; run mcp-gateway login --gateway {} with an account permitted to perform this operation, then retry.{suffix}",
+                "Use a token permitted to perform this operation for {}, then retry.{suffix}",
                 listener.base
             );
             assert_error(
@@ -709,14 +712,10 @@ fn output_io_is_local_failure_and_an_ordinary_broken_pipe_succeeds() {
             (io::ErrorKind::BrokenPipe, 0),
             (io::ErrorKind::PermissionDenied, 1),
         ] {
-            let out = ApiOutcome {
-                stdout: b"data\n".to_vec(),
-                stderr: String::new(),
-                exit: ApiExit::Ok,
-            };
+            let out = CliOutcome::raw(b"data\n".to_vec(), String::new(), CliExit::Ok);
             let mut stdout = FailedOutput::new(failure);
             let mut stderr = Vec::new();
-            let exit = write_outcome(&out, json_output, TOKEN, &mut stdout, &mut stderr);
+            let exit = emit_to(&out, json_output, &[TOKEN], &mut stdout, &mut stderr);
             assert!(
                 stdout.written.is_empty(),
                 "output errors never reach stdout"
@@ -725,11 +724,8 @@ fn output_io_is_local_failure_and_an_ordinary_broken_pipe_succeeds() {
             if code == 0 {
                 assert!(stderr.is_empty());
             } else {
-                let captured = ApiOutcome {
-                    stdout: Vec::new(),
-                    stderr: String::from_utf8(stderr).expect("stderr"),
-                    exit,
-                };
+                let captured =
+                    CliOutcome::raw(Vec::new(), String::from_utf8(stderr).expect("stderr"), exit);
                 assert_error(
                     &captured,
                     json_output,

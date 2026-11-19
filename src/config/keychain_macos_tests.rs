@@ -80,7 +80,7 @@ fn guard_child() {
 
 #[test]
 fn prompts_stay_off_after_every_backend_is_dropped() {
-    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "config::keychain_macos_tests::guard_child",
