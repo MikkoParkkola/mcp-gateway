@@ -38,6 +38,18 @@ case "${1:-}" in
     update_limit=${MINGW_UPDATE_SECONDS:-180}
     scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/mingw-apt.XXXXXX")
     mkdir -p "$scratch/partial" "$dir"
+    # Refresh and read only the Ubuntu archive's sources, where the mingw packages come from: with --error-on=any
+    # below, an unrelated source the runner image adds (packages.microsoft.com) would otherwise fail the attempt.
+    # Runner images keep the Ubuntu sources in sources.list.d/ubuntu.sources from 24.04, in sources.list before.
+    etc=$(apt-config shell ETC Dir::Etc/d | sed -n "s/^ETC='\(.*\)'\$/\1/p")
+    mkdir -p "$scratch/sources.list.d"
+    if [ -f "${etc%/}/sources.list.d/ubuntu.sources" ]; then
+      cp "${etc%/}/sources.list.d/ubuntu.sources" "$scratch/sources.list.d/"
+      apt_opts+=(-o Dir::Etc::SourceList=/dev/null)
+    else
+      apt_opts+=(-o "Dir::Etc::SourceList=${etc%/}/sources.list")
+    fi
+    apt_opts+=(-o "Dir::Etc::SourceParts=$scratch/sources.list.d")
     ok=""
     for attempt in 1 2; do
       # The index refresh is bounded too: a trickling mirror stalls it as easily as the download. --error-on=any

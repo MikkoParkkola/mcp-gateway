@@ -45,10 +45,21 @@ STUBS = {
         '    esac\n'
         '    echo "W: Failed to fetch http://mirror/ubuntu/dists/noble/InRelease  503  Service Unavailable" >&2\n'
         '    echo "W: Some index files failed to download. They have been ignored, or old ones used instead." >&2 ;;\n'
-        '  esac ;;\n'
+        '  esac\n'
+        # The source files this call reads: its Dir::Etc::SourceParts, else the apt directory apt-config names. A
+        # planted outage of the third-party source (STUB_THIRDPARTY_503) fails a strict refresh that reads it.
+        '  parts="$STUB_DIR/etc/apt/sources.list.d"\n'
+        '  for a in "$@"; do case "$a" in Dir::Etc::SourceParts=*) parts=${a#Dir::Etc::SourceParts=} ;; esac; done\n'
+        '  echo "parts: $(ls "$parts" | tr "\\n" " ")" >> "$STUB_DIR/calls"\n'
+        '  if [ -n "${STUB_THIRDPARTY_503:-}" ] && [ -e "$parts/microsoft-prod.list" ]; then\n'
+        '    case " $* " in *" --error-on=any "*)\n'
+        '      echo "E: Failed to fetch https://packages.microsoft.com/ubuntu/24.04/prod/dists/noble/InRelease  503" >&2; exit 100 ;;\n'
+        '    esac\n'
+        '  fi ;;\n'
         'esac\n'
         'exit 0\n'
     ),
+    "apt-config": '#!/usr/bin/env bash\necho "ETC=\'$STUB_DIR/etc/apt/\'"\n',
     "dpkg-deb": '#!/usr/bin/env bash\nexit 0\n',
     "x86_64-w64-mingw32-gcc": '#!/usr/bin/env bash\necho "x86_64-w64-mingw32-gcc 13"\n',
 }
@@ -65,6 +76,13 @@ def run(args, **env_extra):
         env = dict(os.environ, PATH=f"{stub}:{os.environ['PATH']}", STUB_DIR=t,
                    RUNNER_TEMP=t, ImageOS="ubuntu24", ImageVersion="20261101.1")
         env.update(env_extra)
+        # A runner image's apt sources: Ubuntu's in ubuntu.sources (24.04 on), a third-party repository beside it.
+        apt_etc = pathlib.Path(t) / "etc" / "apt"
+        (apt_etc / "sources.list.d").mkdir(parents=True)
+        (apt_etc / "sources.list").write_text("")
+        if not env.get("STUB_NO_UBUNTU_SOURCES"):
+            (apt_etc / "sources.list.d" / "ubuntu.sources").write_text("URIs: mirror+file:/etc/apt/apt-mirrors.txt\n")
+        (apt_etc / "sources.list.d" / "microsoft-prod.list").write_text("deb https://packages.microsoft.com/ubuntu/24.04/prod noble main\n")
         out_dir = pathlib.Path(t) / "debs"
         argv = [a.replace("<OUT>", str(out_dir)) for a in args]
         r = subprocess.run(["bash", str(SCRIPT), *argv], env=env, capture_output=True, text=True)
@@ -192,6 +210,38 @@ def two_failed_index_refreshes_never_download_from_a_stale_index():
     assert apt_steps(calls) == ["update", "update"], calls
     assert "::error::mingw packages: the Ubuntu mirror did not deliver them in 2 attempts" in out, out
     assert debs == [], debs
+
+
+# The strict refresh judges only the Ubuntu archive's sources, where the mingw packages come from: an outage of a
+# third-party source the runner image adds must not fail the attempt (noble apt 2.8.4 with a dead third-party
+# source: a strict refresh over every source exits 100, over ubuntu.sources alone 0).
+@row
+def only_the_ubuntu_sources_are_refreshed_and_read():
+    rc, out, calls, _ = run(["download", "<OUT>"])
+    assert rc == 0, out
+    apt_calls = [line for line in calls.splitlines() if line.startswith("apt-get")]
+    assert len(apt_calls) == 2, calls
+    for line in apt_calls:
+        assert "Dir::Etc::SourceList=/dev/null" in line and "/sources.list.d" in line, line
+    assert "parts: ubuntu.sources \n" in calls, calls
+
+
+@row
+def an_unrelated_source_failing_does_not_fail_the_attempt():
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_THIRDPARTY_503="1")
+    assert rc == 0, out
+    assert apt_steps(calls) == ["update", "download"], calls
+    assert "mingw attempt" not in out, out
+    assert debs == ["gcc-mingw-w64-x86-64_1.0_amd64.deb"], debs
+
+
+@row
+def before_24_04_the_sources_list_is_read():
+    rc, out, calls, _ = run(["download", "<OUT>"], STUB_NO_UBUNTU_SOURCES="1")
+    assert rc == 0, out
+    update = next(line for line in calls.splitlines() if line.startswith("apt-get") and " update" in line)
+    assert "/etc/apt/sources.list " in update and "Dir::Etc::SourceList=/dev/null" not in update, update
+    assert "parts: \n" in calls, calls
 
 
 def main():

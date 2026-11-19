@@ -834,24 +834,25 @@ class WorkflowWiring(unittest.TestCase):
         # The fill job (mingw-debs.yml) exists to ride out a slow Ubuntu mirror, so it may not inherit the windows
         # shard's 600 s download bound (scripts/ci/mingw-debs.sh): it sets its own, fixed in the workflow, and its
         # job timeout fits two attempts of that bound plus the script's 180 s index refresh each. The shard sets
-        # no bound and keeps the script's 600 s. A job-level env is the same setting as a step-level one.
-        def bound_of(workflow, job, step):
+        # no bound and keeps the script's 600 s. A workflow- or job-level env is the same setting as a step's.
+        def env_of(workflow, job, step, name):
             return str({**(workflow.get("env") or {}), **(job.get("env") or {}),
-                        **(step.get("env") or {})}.get("MINGW_DOWNLOAD_SECONDS", ""))
+                        **(step.get("env") or {})}.get(name, ""))
 
         fill_workflow = yaml.safe_load((WORKFLOWS / "mingw-debs.yml").read_text())
         fill = fill_workflow["jobs"]["fill"]
         downloads = [s for s in fill["steps"] if "mingw-debs.sh download" in (s.get("run") or "")]
         self.assertEqual(1, len(downloads), "the fill downloads in exactly one step")
-        self.assertEqual("2700", bound_of(fill_workflow, fill, downloads[0]))
-        self.assertEqual("", str((downloads[0].get("env") or {}).get("MINGW_UPDATE_SECONDS", "")))
-        self.assertGreaterEqual(int(fill["timeout-minutes"]) * 60, 2 * (2700 + 180))
+        self.assertEqual("3000", env_of(fill_workflow, fill, downloads[0], "MINGW_DOWNLOAD_SECONDS"))
+        self.assertEqual("", env_of(fill_workflow, fill, downloads[0], "MINGW_UPDATE_SECONDS"))
+        self.assertGreaterEqual(int(fill["timeout-minutes"]) * 60, 2 * (3000 + 180))
         shard_workflow = yaml.safe_load((WORKFLOWS / "feature-combos.yml").read_text())
         shard_downloads = [(job, s) for job in shard_workflow["jobs"].values() for s in job.get("steps") or []
                            if "mingw-debs.sh download" in (s.get("run") or "")]
         self.assertTrue(shard_downloads, "the windows shard downloads on a cache miss")
         for job, step in shard_downloads:
-            self.assertEqual("", bound_of(shard_workflow, job, step), "the shard keeps the script's 600 s")
+            self.assertEqual("", env_of(shard_workflow, job, step, "MINGW_DOWNLOAD_SECONDS"),
+                             "the shard keeps the script's 600 s")
 
     def test_every_reader_of_verify_outputs_needs_verify_directly(self):
         # `needs` exposes direct dependencies only. A job that reads

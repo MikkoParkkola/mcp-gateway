@@ -1189,22 +1189,29 @@ CASES = [
     (
         "mingw-fill-bound-deleted",
         "mingw-debs.yml",
-        '        env:\n          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        '        env:\n          MINGW_DOWNLOAD_SECONDS: "3000"\n',
         "",
         CAUGHT,
     ),
     (
         "mingw-fill-bound-back-to-the-shards",
         "mingw-debs.yml",
-        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
         '          MINGW_DOWNLOAD_SECONDS: "600"\n',
         CAUGHT,
     ),
     (
         "mingw-fill-timeout-too-short-for-two-attempts",
         "mingw-debs.yml",
-        "    timeout-minutes: 105\n",
-        "    timeout-minutes: 90\n",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 100\n",
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-index-refresh-bound-raised-at-job-level",
+        "mingw-debs.yml",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 115\n    env:\n      MINGW_UPDATE_SECONDS: \"1800\"\n",
         CAUGHT,
     ),
     (
@@ -1212,14 +1219,14 @@ CASES = [
         "feature-combos.yml",
         "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
         "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
-        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
         CAUGHT,
     ),
     (
         "mingw-fill-bound-unquoted",
         "mingw-debs.yml",
-        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
-        "          MINGW_DOWNLOAD_SECONDS: 2700\n",
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        "          MINGW_DOWNLOAD_SECONDS: 3000\n",
         TOLERATED,
     ),
 ]
