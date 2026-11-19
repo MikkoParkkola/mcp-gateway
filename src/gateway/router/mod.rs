@@ -523,11 +523,11 @@ mod withheld_listing_tests;
 mod withheld_parity_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod withheld_twin_tests;
-/// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
-pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 /// The trace of a written refusal record: the web UI tool call's receipt.
 #[cfg(feature = "webui")]
 pub(in crate::gateway) use helpers::refusal_record_trace;
+/// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
+pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 /// MIK-8518 T2: the router's grant-subject builders admit only API keys.
 #[cfg(tp1)]
 #[cfg(test)]
