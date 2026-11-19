@@ -63,7 +63,7 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 open("stopped", "w").close()
 import time
-time.sleep(60)
+time.sleep(15)
 "#;
 
 fn write_config(root: &Path) -> std::path::PathBuf {
@@ -281,8 +281,8 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
 type Exited = Result<std::io::Result<std::process::ExitStatus>, tokio::time::error::Elapsed>;
 
 /// Waits up to [`GRACE`] for the gateway to exit, noting whether the backend's
-/// mark appeared while the gateway was still running. The exit is polled
-/// first, so a mark written only once the gateway has exited never counts.
+/// mark appeared while the gateway was still running: a mark counts only when
+/// the gateway is confirmed still running right after it is seen.
 async fn wait_for_exit(child: &mut tokio::process::Child, mark: &Path) -> (Exited, bool) {
     let mut marked_while_running = false;
     let exited = tokio::time::timeout(GRACE, async {
@@ -291,7 +291,16 @@ async fn wait_for_exit(child: &mut tokio::process::Child, mark: &Path) -> (Exite
                 biased;
                 status = child.wait() => break status,
                 () = tokio::time::sleep(Duration::from_millis(20)) => {
-                    marked_while_running |= mark.exists();
+                    // A mark counts only if the gateway is still running after it
+                    // is seen: then it was written before the exit could close
+                    // the pipe. `try_wait` asks the OS, not the runtime's notice.
+                    if !marked_while_running && mark.exists() {
+                        match child.try_wait() {
+                            Ok(None) => marked_while_running = true,
+                            Ok(Some(status)) => break Ok(status),
+                            Err(e) => break Err(e),
+                        }
+                    }
                 }
             }
         }
@@ -329,7 +338,8 @@ fn assert_teardown(root: &Path, log_before: usize, marked_while_running: bool) {
         // usage save that wrote nothing it held fails. (A transition needs two
         // calls in a session, so transitions.json holds none here.)
         if file == "usage.json" {
-            let rows: Vec<Value> = serde_json::from_str(&text).expect("usage rows");
+            let rows: Vec<Value> = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{file} is not a list of rows: {e}: {text:?}"));
             assert!(
                 rows.iter().any(|row| row["server"] == BACKEND
                     && row["tool"] == TOOL
