@@ -411,7 +411,15 @@ pub(crate) fn base_builder() -> reqwest::ClientBuilder {
 /// certificate verification on. Shared so a row's trusting control differs
 /// from the release client only by one extra root.
 pub(crate) fn production_builder() -> reqwest::ClientBuilder {
-    base_builder().https_only(true)
+    let builder = base_builder().https_only(true);
+    // A row stands in for a build with no usable TLS backend: an unknown TLS
+    // config makes `build()` fail the same way, so the fallback after a failed
+    // build is what the row exercises.
+    #[cfg(test)]
+    if seam::release_client_broken() {
+        return builder.use_preconfigured_tls(());
+    }
+    builder
 }
 
 /// The release client, or `None` when it cannot be built (no TLS backend):
@@ -606,6 +614,32 @@ pub(crate) mod seam {
 
     pub(super) fn take_stall(dir: &Path) -> Option<Stall> {
         targets().get_mut(dir).and_then(|t| t.stall.take())
+    }
+
+    // Per thread: a `#[tokio::test]` runtime is single-threaded, so the task
+    // `start` spawns sees the flag of the row that set it, and no other row does.
+    thread_local! {
+        static NO_RELEASE_CLIENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// While this is held, the release client cannot be built on this thread.
+    pub(crate) struct ClientBroken;
+
+    impl Drop for ClientBroken {
+        fn drop(&mut self) {
+            NO_RELEASE_CLIENT.with(|flag| flag.set(false));
+        }
+    }
+
+    /// Make [`super::production_builder`]'s client fail to build on this
+    /// thread until the returned guard drops.
+    pub(crate) fn break_release_client() -> ClientBroken {
+        NO_RELEASE_CLIENT.with(|flag| flag.set(true));
+        ClientBroken
+    }
+
+    pub(super) fn release_client_broken() -> bool {
+        NO_RELEASE_CLIENT.with(std::cell::Cell::get)
     }
 }
 

@@ -267,3 +267,48 @@ async fn start_resolves_the_release_target_without_a_seam() {
         "a registration leaked to another dir"
     );
 }
+
+/// The heartbeat task for `dir` under the default posture, plus the sender
+/// that stops it. Keep the sender: a closed channel ends the task by itself.
+fn spawn_heartbeat(
+    dir: &std::path::Path,
+) -> (
+    tokio::sync::broadcast::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (stop, _) = tokio::sync::broadcast::channel(1);
+    let task = start(
+        SecurityPosture::Standard,
+        dir.to_path_buf(),
+        stop.subscribe(),
+    );
+    (stop, task)
+}
+
+/// F7. Without a release client (the case of a build with no TLS backend),
+/// the started task returns at once: it neither claims a day nor swaps in a
+/// client that lacks the release limits.
+#[tokio::test]
+async fn no_release_client_ends_the_task_without_a_check() {
+    let dir = tempfile::tempdir().expect("dir");
+    assert!(
+        resolve(dir.path()).is_some(),
+        "control: an unbroken release client resolves for this dir"
+    );
+    let _broken = seam::break_release_client();
+    assert!(
+        production_builder().build().is_err(),
+        "premise: the broken builder must fail as a missing backend does"
+    );
+    let (stop, task) = spawn_heartbeat(dir.path());
+    match tokio::time::timeout(std::time::Duration::from_secs(30), task).await {
+        Ok(Ok(())) => {}
+        other => panic!("the task kept going without a release client: {other:?}"),
+    }
+    assert!(
+        !dir.path().join("heartbeat").exists(),
+        "a day was claimed with no release client"
+    );
+    // Held open until here, so only a missing client can have ended the task.
+    drop(stop);
+}
