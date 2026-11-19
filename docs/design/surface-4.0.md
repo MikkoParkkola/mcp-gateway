@@ -1268,8 +1268,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tls init-ca --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls init-ca -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls init-ca --cn` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:628 |
-| `mcp-gateway tls init-ca --out` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:628 |
-| `mcp-gateway tls init-ca -o` | KEEP | short alias of `--out` | - | src/cli/subcommands.rs:628 |
+| `mcp-gateway tls init-ca --out` | KEEP | older spelling of `--output`, kept so existing scripts work; not shown in `--help` | - | src/cli/subcommands.rs:628 |
+| `mcp-gateway tls init-ca --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:628 |
+| `mcp-gateway tls init-ca -o` | KEEP | short alias of `--output` | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls init-ca --validity-days` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls issue-client` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-client --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:672 |
@@ -1278,8 +1279,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tls issue-client --ca-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-client --cn` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-client --ou` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
-| `mcp-gateway tls issue-client --out` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
-| `mcp-gateway tls issue-client -o` | KEEP | short alias of `--out` | - | src/cli/subcommands.rs:672 |
+| `mcp-gateway tls issue-client --out` | KEEP | older spelling of `--output`, kept so existing scripts work; not shown in `--help` | - | src/cli/subcommands.rs:672 |
+| `mcp-gateway tls issue-client --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
+| `mcp-gateway tls issue-client -o` | KEEP | short alias of `--output` | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-client --spiffe-uri` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-client --validity-days` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:672 |
 | `mcp-gateway tls issue-server` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
@@ -1288,8 +1290,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tls issue-server --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --ca-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --cn` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
-| `mcp-gateway tls issue-server --out` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
-| `mcp-gateway tls issue-server -o` | KEEP | short alias of `--out` | - | src/cli/subcommands.rs:644 |
+| `mcp-gateway tls issue-server --out` | KEEP | older spelling of `--output`, kept so existing scripts work; not shown in `--help` | - | src/cli/subcommands.rs:644 |
+| `mcp-gateway tls issue-server --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
+| `mcp-gateway tls issue-server -o` | KEEP | short alias of `--output` | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --san-dns` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --validity-days` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tool` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:359 |

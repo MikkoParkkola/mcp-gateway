@@ -87,6 +87,8 @@ class SignReleaseAssets(unittest.TestCase):
         self.assets.mkdir()
         for name in NAMES:
             (self.assets / name).write_bytes(os.urandom(64))
+        # Every full signing names its documents (--doc is required); the base cases carry the man page.
+        (self.assets / "mcp-gateway.1").write_text('.TH mcp-gateway 1  "mcp-gateway 4.0.0"\n.SH NAME\nx\n')
 
     def run_script(self, *, identity=IDENTITY, issuer=ISSUER, signer=IDENTITY, signer_issuer=ISSUER, env=None):
         environ = {
@@ -99,7 +101,7 @@ class SignReleaseAssets(unittest.TestCase):
             **(env or {}),
         }
         return subprocess.run(
-            ["bash", str(SCRIPT), str(self.assets), VERSION, *NAMES],
+            ["bash", str(SCRIPT), str(self.assets), VERSION, "--doc", "mcp-gateway.1", *NAMES],
             env=environ, capture_output=True, text=True,
         )
 

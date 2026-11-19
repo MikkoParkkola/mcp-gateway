@@ -365,16 +365,16 @@ pub fn run_tls_command(cmd: TlsCommand) -> ExitCode {
         TlsCommand::InitCa {
             cn,
             validity_days,
-            out,
-        } => tls_init_ca(&cn, validity_days, &out),
+            output,
+        } => tls_init_ca(&cn, validity_days, &output),
         TlsCommand::IssueServer {
             ca_cert,
             ca_key,
             cn,
             san_dns,
             validity_days,
-            out,
-        } => tls_issue_server(&ca_cert, &ca_key, &cn, &san_dns, validity_days, &out),
+            output,
+        } => tls_issue_server(&ca_cert, &ca_key, &cn, &san_dns, validity_days, &output),
         TlsCommand::IssueClient {
             ca_cert,
             ca_key,
@@ -382,7 +382,7 @@ pub fn run_tls_command(cmd: TlsCommand) -> ExitCode {
             ou,
             spiffe_uri,
             validity_days,
-            out,
+            output,
         } => tls_issue_client(
             &ca_cert,
             &ca_key,
@@ -390,7 +390,7 @@ pub fn run_tls_command(cmd: TlsCommand) -> ExitCode {
             ou.as_deref(),
             spiffe_uri,
             validity_days,
-            &out,
+            &output,
         ),
     }
 }

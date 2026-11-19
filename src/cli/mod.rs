@@ -32,7 +32,6 @@ pub mod audit_lookup;
 /// The leaf commands' output classes and error-conversion state, enforced by its rows.
 #[cfg(test)]
 mod command_classes;
-// Used by the man page example (through `#[path]`) and by its row; the binary never renders a page.
 pub mod completion;
 pub mod dashboard_link;
 pub(crate) mod entry;
@@ -48,7 +47,14 @@ pub mod events;
 mod guidelines_tests;
 pub mod identity;
 pub mod invoke;
+// The man page renderer: used by the release example (through `#[path]`) and by its row, never by the binary.
+#[cfg(tp1)]
 #[cfg(test)]
+#[cfg(all(
+    feature = "runtime-substrate",
+    feature = "config-export",
+    feature = "discovery"
+))]
 mod man_page_render;
 pub mod output;
 pub mod redact;
@@ -141,7 +147,11 @@ impl std::fmt::Display for InitProfile {
 /// Run without a subcommand to start the gateway server.
 #[derive(Parser, Debug)]
 #[command(name = "mcp-gateway")]
-#[command(version, about, long_about = None)]
+#[command(
+    version = concat!(env!("CARGO_PKG_VERSION"), " (UI API ", crate::ui_api_version::ui_api_version!(), ")"),
+    about,
+    long_about = None
+)]
 pub struct Cli {
     /// Path to the gateway configuration file (YAML)
     #[arg(short, long, env = "MCP_GATEWAY_CONFIG", global = true)]

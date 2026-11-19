@@ -92,6 +92,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
             "degraded_count": total - healthy,
             "uptime_secs": state.process.uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
+            "ui_api_version": crate::ui_api_version::UI_API_VERSION,
         });
         add_restart(&mut body, view, state.meta_mcp.restart_board().status());
         return body;
@@ -166,6 +167,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
         "tool_count": tool_count,
         "uptime_secs": state.process.uptime_secs(),
         "version": env!("CARGO_PKG_VERSION"),
+        "ui_api_version": crate::ui_api_version::UI_API_VERSION,
         "circuit_breakers": {
             "closed": cb_closed,
             "open": cb_open,

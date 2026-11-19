@@ -498,18 +498,18 @@ The gateway includes a built-in certificate manager:
 
 ```bash
 # Generate root CA
-mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out /etc/mcp-gateway/tls
+mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --output /etc/mcp-gateway/tls
 
 # Issue server certificate
 mcp-gateway tls issue-server \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
   --cn gateway.company.com --san-dns "gateway.company.com,localhost,127.0.0.1,::1" \
-  --out /etc/mcp-gateway/tls
+  --output /etc/mcp-gateway/tls
 
 # Issue client certificate (for mTLS)
 mcp-gateway tls issue-client \
   --ca-cert /etc/mcp-gateway/tls/ca.crt --ca-key /etc/mcp-gateway/tls/ca.key \
-  --cn "claude-code-agent" --out /etc/mcp-gateway/tls/clients
+  --cn "claude-code-agent" --output /etc/mcp-gateway/tls/clients
 ```
 
 An IP literal passed to `--san-dns` becomes an IP SAN, which is what a client dialling that

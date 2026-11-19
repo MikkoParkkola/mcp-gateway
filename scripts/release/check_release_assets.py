@@ -20,6 +20,7 @@ Exit 0 when complete, 1 with one line per problem otherwise.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -86,6 +87,43 @@ def sums_listed(path: Path) -> set[str]:
     return listed
 
 
+def sums_by_name(path: Path) -> dict[str, str]:
+    by_name = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            by_name[parts[1].lstrip("*")] = parts[0]
+    return by_name
+
+
+def page_title(version: str) -> str:
+    return f'.TH mcp-gateway 1  "mcp-gateway {version}"'
+
+
+def doc_problems(directory: Path, version: str, docs: list[str]) -> list[str]:
+    """Each document named by --doc: present and non-empty, signed, listed in SHA256SUMS.txt with its real hash; the
+    man page's .TH line names mcp-gateway and this release."""
+    found = []
+    sums = sums_by_name(directory / SUMS) if (directory / SUMS).is_file() else {}
+    for name in docs:
+        path = directory / name
+        if not path.is_file() or path.stat().st_size == 0:
+            found.append(f"{name}: missing")
+            continue
+        if not (directory / (name + BUNDLE)).is_file():
+            found.append(f"{name}: no {BUNDLE}")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if name not in sums:
+            found.append(f"{SUMS}: does not list {name}")
+        elif sums[name] != digest:
+            found.append(f"{SUMS}: the hash of {name} differs from the file")
+        if name == "mcp-gateway.1":
+            first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+            if first.rstrip() != page_title(version):
+                found.append(f"{name}: the .TH line is not `{page_title(version)}`")
+    return found
+
+
 def problems(directory: Path, version: str, expected: list[str], client_root: str = FULL_ROOT) -> list[str]:
     found = []
     present = {p.name for p in directory.iterdir() if p.is_file()}
@@ -135,7 +173,16 @@ def main(argv: list[str] | None = None) -> int:
         default=FULL_ROOT,
         help="the crate the client binaries' SBOMs must name (recorded per release)",
     )
+    parser.add_argument(
+        "--doc",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a document asset to check (signed, listed, hashed); required except with --sbom-only, repeatable",
+    )
     args = parser.parse_args(argv)
+    if not args.sbom_only and not args.doc:
+        parser.error("--doc NAME is required (name every document asset, for example --doc mcp-gateway.1)")
     if args.sbom_only:
         found = []
         for name in args.expected:
@@ -151,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.directory}: SBOM of each of {len(args.expected)} binaries lists its crates")
         return 1 if found else 0
     found = problems(args.directory, args.version, args.expected, args.client_root)
+    found.extend(doc_problems(args.directory, args.version, args.doc))
     for line in found:
         print(line)
     if found:

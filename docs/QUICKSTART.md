@@ -407,7 +407,7 @@ scripts/dev/service-template-smoke.sh  # repo checkout: systemd/launchd path + s
 
 # Team-shared gateway
 mcp-gateway doctor --format json
-mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out ./tls
+mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --output ./tls
 ```
 
 On Linux, the image runs as UID/GID 1001, so its bind-mounted deployment copy

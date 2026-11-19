@@ -14,7 +14,8 @@ macro_rules! ui_api_version {
 }
 pub(crate) use ui_api_version;
 
-/// The UI API version the server serves.
+/// The UI API version the server serves (the status route, which only the web UI build has).
+#[cfg(feature = "webui")]
 pub(crate) const UI_API_VERSION: u32 = ui_api_version!();
 
 #[cfg(tp1)]

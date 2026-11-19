@@ -65,14 +65,26 @@ class ReleaseAssets(unittest.TestCase):
     def drop(self, name):
         (self.dir / name).unlink()
 
+    def add_page(self):
+        """The man page every full check now names with --doc: signed and listed with its real hash."""
+        import hashlib
+
+        if (self.dir / "mcp-gateway.1").exists():
+            return
+        self.write("mcp-gateway.1", PAGE)
+        self.write("mcp-gateway.1.sigstore.json", "{}")
+        sums = (self.dir / "SHA256SUMS.txt").read_text()
+        self.write("SHA256SUMS.txt", sums + f"{hashlib.sha256(PAGE.encode()).hexdigest()}  mcp-gateway.1\n")
+
     def problems(self, expected=EXPECTED):
         return gate.problems(self.dir, VERSION, expected)
 
     def test_complete_release_passes(self):  # T1
         self.assertEqual(self.problems(), [])
+        self.add_page()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(gate.main([str(self.dir), "--version", VERSION, *EXPECTED]), 0)
+            self.assertEqual(gate.main([str(self.dir), "--version", VERSION, "--doc", "mcp-gateway.1", *EXPECTED]), 0)
 
     def test_binary_without_signature(self):  # T2
         self.drop("mcp-gateway-linux-x86_64.sigstore.json")
@@ -154,9 +166,10 @@ class ReleaseAssets(unittest.TestCase):
         self.drop("SHA256SUMS.txt.sigstore.json")
         self.write("mcp-gateway-darwin-arm64.spdx.json", spdx("pkg:generic/x@1"))
         self.assertEqual(len(self.problems()), 3)
+        self.add_page()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(gate.main([str(self.dir), "--version", VERSION, *EXPECTED]), 1)
+            self.assertEqual(gate.main([str(self.dir), "--version", VERSION, "--doc", "mcp-gateway.1", *EXPECTED]), 1)
         self.assertEqual(len(out.getvalue().splitlines()), 3)
 
     def test_sbom_only_mode_checks_just_the_crate_list(self):  # per-target rehearsal leg

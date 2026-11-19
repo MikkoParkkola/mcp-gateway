@@ -202,8 +202,8 @@ pub enum TlsCommand {
         validity_days: u32,
 
         /// Directory to write `ca.crt` and `ca.key` into
-        #[arg(short, long, default_value = "/etc/mcp-gateway/tls")]
-        out: PathBuf,
+        #[arg(short, long, alias = "out", default_value = "/etc/mcp-gateway/tls")]
+        output: PathBuf,
     },
 
     /// Issue a server certificate signed by the CA.
@@ -230,8 +230,8 @@ pub enum TlsCommand {
         validity_days: u32,
 
         /// Directory to write `server.crt` and `server.key`
-        #[arg(short, long, default_value = "/etc/mcp-gateway/tls")]
-        out: PathBuf,
+        #[arg(short, long, alias = "out", default_value = "/etc/mcp-gateway/tls")]
+        output: PathBuf,
     },
 
     /// Issue a client certificate for an agent, signed by the CA.
@@ -262,8 +262,8 @@ pub enum TlsCommand {
         validity_days: u32,
 
         /// Directory to write `<cn>.crt` and `<cn>.key`
-        #[arg(short, long, default_value = ".")]
-        out: PathBuf,
+        #[arg(short, long, alias = "out", default_value = ".")]
+        output: PathBuf,
     },
 }
 

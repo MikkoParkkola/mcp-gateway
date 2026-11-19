@@ -313,6 +313,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# Renders the man page in the release build's example and in its row; never linked into the binary.
+clap_mangen = "0.2"
 # `test-util` for `start_paused`: the list-drain budget cell (MIK 7570).
 tokio = { version = "1.52", features = ["test-util"] }
 tokio-test = "0.4"
