@@ -34,7 +34,10 @@ fn start_callers(files: &[(String, String)]) -> Vec<String> {
     files
         .iter()
         .filter(|(_, text)| {
-            crate::test_source_text::production_text(text).contains("heartbeat::start(")
+            // Code only: a string or comment naming the call is not a call (the
+            // scan's own matcher holds the text).
+            let code = crate::test_source_text::production_text(text);
+            crate::test_source_text::sanitize(&code).contains("heartbeat::start(")
         })
         .map(|(path, _)| path.clone())
         .collect()
@@ -75,78 +78,6 @@ fn start_is_called_only_from_the_two_servers() {
     assert!(start_callers(&planted).contains(&"src/commands/planted.rs".to_owned()));
 }
 
-/// The functions in `text` whose body builds a gateway command but never
-/// sets `DO_NOT_TRACK` (a lexical split at each `fn `: a nested fn ends the
-/// outer chunk early, which can only flag more, never less).
-fn helpers_without_dnt(text: &str) -> Vec<String> {
-    // Comments are not settings (tp-r2): drop each line's `//` tail first.
-    let code: String = text
-        .lines()
-        .map(|l| {
-            // A `//` after `:` is a URL, not a comment (tp-r3).
-            let cut = l
-                .match_indices("//")
-                .map(|(i, _)| i)
-                .find(|&i| i == 0 || &l[i - 1..i] != ":");
-            cut.map_or(l, |i| &l[..i])
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let starts: Vec<usize> = code
-        .match_indices("fn ")
-        .map(|(i, _)| i)
-        .filter(|&i| i == 0 || code[..i].ends_with(char::is_whitespace))
-        .collect();
-    let mut out = Vec::new();
-    for (k, &s) in starts.iter().enumerate() {
-        let chunk = &code[s..starts.get(k + 1).copied().unwrap_or(code.len())];
-        let name: String = chunk[3..]
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        let Some(built) = chunk.find("CARGO_BIN_EXE_mcp-gateway") else {
-            continue;
-        };
-        // The setting must come after the command is built, on its chain.
-        // On the gateway command's own chain: no other `Command::new` between
-        // the build and the setting (tp-r3).
-        let rest = &chunk[built..];
-        let next_command = rest.find("Command::new").unwrap_or(rest.len());
-        let set = rest[..next_command].contains(r#".env("DO_NOT_TRACK", "1")"#);
-        if !set {
-            out.push(name);
-        }
-    }
-    out
-}
-
-/// D11. Each test helper that builds a gateway command sets
-/// `DO_NOT_TRACK=1` on it; a planted helper without it fails by name.
-#[test]
-fn each_gateway_helper_sets_dnt() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut missing = Vec::new();
-    for (path, text) in rust_files(&root.join("tests/common")) {
-        for name in helpers_without_dnt(&text) {
-            missing.push(format!("{path}::{name}"));
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "gateway helpers without DO_NOT_TRACK: {missing:?}"
-    );
-    let planted = r#"fn planted() -> Command { Command::new(env!("CARGO_BIN_EXE_mcp-gateway")) }"#;
-    assert_eq!(helpers_without_dnt(planted), ["planted"]);
-    // A mention is not a setting (tp-r1): a comment or a removal still fails.
-    let mentioned = r#"fn mentioned() -> Command { // DO_NOT_TRACK
-        let mut c = Command::new(env!("CARGO_BIN_EXE_mcp-gateway")); c.env_remove("DO_NOT_TRACK"); c }"#;
-    assert_eq!(helpers_without_dnt(mentioned), ["mentioned"]);
-    let unrelated = r#"fn unrelated() -> Command {
-        let mut other = Command::new("true"); other.env("DO_NOT_TRACK", "1");
-        Command::new(env!("CARGO_BIN_EXE_mcp-gateway")) }"#;
-    assert_eq!(helpers_without_dnt(unrelated), ["unrelated"]);
-}
-
 /// The launch commands that start a container or pod.
 const LAUNCHERS: [&str; 8] = [
     "docker run",
@@ -176,19 +107,106 @@ fn launch_sets_dnt(launch: &str) -> bool {
     })
 }
 
-/// The launches in `text` (continued lines joined) that start the gateway
-/// image or chart without `DO_NOT_TRACK=1` on that launch.
-fn launches_without_dnt(text: &str) -> Vec<String> {
+/// Scripts whose gateway image arrives as their first argument (docker.yml
+/// passes the image it built), and the variable that holds it there.
+const ARG_IMAGE: [(&str, &str); 2] = [
+    ("scripts/ci/smoke-image.sh", "IMAGE"),
+    ("scripts/ci/smoke-full-image.sh", "IMAGE"),
+];
+
+/// Whether `s` names the gateway image (`mcp-gateway:` or `mcp-gateway@`) or
+/// its chart; a container or secret name such as `mcp-gateway-auth` does not.
+fn names_image(s: &str) -> bool {
+    s.contains("mcp-gateway:")
+        || s.contains("mcp-gateway@")
+        || s.contains("deploy/helm/mcp-gateway")
+}
+
+/// The shell variables in `text` (of the file at `path`) that hold the
+/// gateway image or chart: assigned a value naming it, or the file's
+/// argument image ([`ARG_IMAGE`]).
+fn image_vars(path: &str, text: &str) -> Vec<String> {
+    let mut vars: Vec<String> = ARG_IMAGE
+        .iter()
+        .filter(|(file, _)| *file == path)
+        .map(|(_, var)| (*var).to_owned())
+        .collect();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let t = ["export ", "local ", "readonly "]
+            .iter()
+            .find_map(|k| t.strip_prefix(k))
+            .unwrap_or(t);
+        if let Some((name, value)) = t.split_once('=')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && names_image(value)
+        {
+            vars.push(name.to_owned());
+        }
+    }
+    vars
+}
+
+/// Whether `line` expands the shell variable `var` (`$var` or `${var}`).
+fn expands(line: &str, var: &str) -> bool {
+    line.contains(&format!("${{{var}}}"))
+        || line.match_indices(&format!("${var}")).any(|(i, m)| {
+            !line[i + m.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
+/// `line` with a launcher program called through its variable (`"$HELM"`,
+/// `${KUBECTL}`) written as the program itself, so [`LAUNCHERS`] match it.
+fn programs_named(line: &str) -> String {
+    let mut out = line.to_owned();
+    for tool in ["docker", "podman", "kubectl", "helm"] {
+        let var = tool.to_ascii_uppercase();
+        for form in [
+            format!("\"${{{var}}}\""),
+            format!("\"${var}\""),
+            format!("${{{var}}}"),
+        ] {
+            out = out.replace(&form, tool);
+        }
+        // A bare `$HELM`, not `$HELM_HOME`.
+        let bare = format!("${var}");
+        loop {
+            // Found in its own statement, so the search's borrow ends before the edit.
+            let Some(i) = out.match_indices(&bare).map(|(i, _)| i).find(|&i| {
+                !out[i + bare.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            }) else {
+                break;
+            };
+            out.replace_range(i..i + bare.len(), tool);
+        }
+    }
+    out
+}
+
+/// The launches in `text`, the file at `path` (continued lines joined,
+/// comments dropped), that start the gateway image or chart.
+fn gateway_launches(path: &str, text: &str) -> Vec<String> {
+    let vars = image_vars(path, text);
     let joined = text.replace("\\\r\n", " ").replace("\\\n", " ");
     joined
         .lines()
-        // A `#` after whitespace starts a shell or YAML comment (tp-r3).
+        // A `#` at the start or after whitespace starts a shell or YAML comment (tp-r3).
+        .filter(|l| !l.trim_start().starts_with('#'))
         .map(|l| l.find(" #").map_or(l, |i| &l[..i]))
+        .map(programs_named)
         .filter(|l| LAUNCHERS.iter().any(|c| l.contains(c)))
         .filter(|l| !l.contains("docker compose up") && !l.contains("docker compose run"))
-        .filter(|l| l.contains("mcp-gateway"))
-        .filter(|l| !launch_sets_dnt(l))
+        .filter(|l| names_image(l) || vars.iter().any(|v| expands(l, v)))
         .map(|l| l.trim().to_owned())
+        .collect()
+}
+
+/// [`gateway_launches`] without `DO_NOT_TRACK=1` on the launch itself.
+fn launches_without_dnt(path: &str, text: &str) -> Vec<String> {
+    gateway_launches(path, text)
+        .into_iter()
+        .filter(|l| !launch_sets_dnt(l))
         .collect()
 }
 
@@ -298,14 +316,37 @@ fn launch_sources() -> Vec<(String, String)> {
     out
 }
 
+/// Every gateway launch in our scripts today, by file: the D12 floor.
+const KNOWN_LAUNCHES: [(&str, usize); 5] = [
+    ("scripts/ci/smoke-full-image.sh", 9),
+    ("scripts/ci/smoke-image.sh", 3),
+    ("scripts/dev/docker-smoke.sh", 2),
+    ("scripts/dev/helm-kind-lifecycle.sh", 2),
+    ("scripts/dev/helm-kind-real-image.sh", 2),
+];
+
 /// D12. Every launch of the gateway image or chart in our scripts and
 /// workflows passes `DO_NOT_TRACK=1` on that launch itself; one planted
 /// launch per form, without it, fails.
 #[test]
 fn every_image_launch_sets_dnt() {
+    // The floor (A3/A4): the finder sees each known gateway launch, by file,
+    // before anything is judged; a finder blind to an image form sees fewer.
+    let mut seen = std::collections::BTreeMap::new();
+    for (path, text) in launch_sources() {
+        let n = gateway_launches(&path, &text).len();
+        if n > 0 {
+            seen.insert(path.replace('\\', "/"), n);
+        }
+    }
+    let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
+        .iter()
+        .map(|(f, n)| ((*f).to_owned(), *n))
+        .collect();
+    assert_eq!(seen, known, "the gateway launches found, by file");
     let mut missing = Vec::new();
     for (path, text) in launch_sources() {
-        for launch in launches_without_dnt(&text) {
+        for launch in launches_without_dnt(&path, &text) {
             missing.push(format!("{path}: {launch}"));
         }
         let name = std::path::Path::new(&path)
@@ -333,27 +374,27 @@ fn every_image_launch_sets_dnt() {
         let commented =
             format!("{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # -e DO_NOT_TRACK=1\n");
         assert_eq!(
-            launches_without_dnt(&commented).len(),
+            launches_without_dnt("planted.sh", &commented).len(),
             1,
             "an opt-out in a comment passed for {launcher}"
         );
         let planted = format!("{launcher} \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
         assert_eq!(
-            launches_without_dnt(&planted).len(),
+            launches_without_dnt("planted.sh", &planted).len(),
             1,
             "planted {launcher} was not caught"
         );
         let kept =
             format!("{launcher} -e DO_NOT_TRACK=1 \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
         assert!(
-            launches_without_dnt(&kept).is_empty(),
+            launches_without_dnt("planted.sh", &kept).is_empty(),
             "{launcher} with the variable was refused"
         );
         let mentioned = format!(
             "{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # DO_NOT_TRACK=1 set elsewhere\n"
         );
         assert_eq!(
-            launches_without_dnt(&mentioned).len(),
+            launches_without_dnt("planted.sh", &mentioned).len(),
             1,
             "a mention passed for {launcher}"
         );
@@ -372,6 +413,29 @@ fn every_image_launch_sets_dnt() {
     assert!(
         compose_without_dnt(two),
         "another service's setting covered the gateway service"
+    );
+    // Images and programs through variables, as our scripts write them (red read).
+    let via_var =
+        "CHART=\"$ROOT/deploy/helm/mcp-gateway\"\n\"$HELM\" upgrade --install gw \"$CHART\"\n";
+    assert_eq!(
+        launches_without_dnt("planted.sh", via_var).len(),
+        1,
+        "a chart launch through variables was not caught"
+    );
+    let via_arg = "IMAGE=\"${1:?image}\"\ndocker run -d --name x \"${IMAGE}\"\n";
+    assert_eq!(
+        launches_without_dnt("scripts/ci/smoke-image.sh", via_arg).len(),
+        1,
+        "an argument image was not caught"
+    );
+    assert!(
+        launches_without_dnt("other.sh", via_arg).is_empty(),
+        "an image variable outside ARG_IMAGE counted"
+    );
+    let named = "kubectl create secret generic mcp-gateway-auth -o yaml | kubectl apply -f -\n";
+    assert!(
+        gateway_launches("planted.sh", named).is_empty(),
+        "a secret named mcp-gateway-* counted as a launch"
     );
 }
 

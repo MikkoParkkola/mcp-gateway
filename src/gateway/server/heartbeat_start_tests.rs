@@ -58,6 +58,11 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
         config.server.port = 0;
         config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
         config.security.posture = posture;
+        // Hardened forces message signing, which needs a secret.
+        if matches!(config.security.posture, SecurityPosture::Hardened) {
+            config.security.message_signing.shared_secret =
+                crate::security::posture::tests::SIGNING_SECRET.to_string();
+        }
         let mut gateway = super::super::Gateway::new(config)
             .await
             .expect("a gateway")
@@ -152,6 +157,11 @@ async fn start_stdio(dir: &std::path::Path, posture: SecurityPosture) -> Running
     let run = async {
         let mut config = crate::config::Config::default();
         config.security.posture = posture;
+        // Hardened forces message signing, which needs a secret.
+        if matches!(config.security.posture, SecurityPosture::Hardened) {
+            config.security.message_signing.shared_secret =
+                crate::security::posture::tests::SIGNING_SECRET.to_string();
+        }
         let gateway = super::super::Gateway::new(config)
             .await
             .expect("a gateway")

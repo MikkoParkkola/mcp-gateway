@@ -291,7 +291,11 @@ fn threads_share_one_send_per_day() {
                         &url,
                         nov19,
                     ));
-                    (out, read_id(path))
+                    // Read without panicking, so a missing id reaches the
+                    // row's own assertions below.
+                    let id = std::fs::read_to_string(path.join("heartbeat").join("install-id"))
+                        .unwrap_or_default();
+                    (out, id)
                 })
             })
             .collect();
