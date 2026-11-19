@@ -716,6 +716,7 @@ def self_test() -> int:
     parts_rows()
     with_home_rows()
     export_home_rows()
+    home_copies_rows()
     print("shard_tests self-test: ok")
     return 0
 
@@ -776,6 +777,32 @@ def export_home_rows() -> None:
         assert got["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), got
         if os.name != "nt":
             assert os.stat(home).st_mode & 0o777 == 0o700, "the exported home is not owner-only"
+
+
+def home_copies_rows() -> None:
+    """S3: the mutant runner keeps its own copy of make_home, because it is fetched alone from the release line and
+    must not import from the tree it tests. The two copies must make the same home: the same three variables, each
+    at the same place under the home, and the same mode. A deliberately drifted copy must read as different."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mutants", "run_mutants.py")
+    spec = importlib.util.spec_from_file_location("run_mutants_for_s3", path)
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+
+    def shape(values: dict[str, str]) -> dict:
+        home = values["MCP_GATEWAY_TEST_HOME_DIR"]
+        return {"keys": sorted(values), "mode": os.stat(home).st_mode & 0o777 if os.name != "nt" else None,
+                **{key: os.path.relpath(value, home) for key, value in values.items() if value != home}}
+
+    with tempfile.TemporaryDirectory() as parent:
+        ours = shape(make_home(parent))
+    with runner.gateway_home({}) as child:
+        theirs = shape(child)
+        drifted = shape({**child, "XDG_CONFIG_HOME": os.path.join(child["MCP_GATEWAY_TEST_HOME_DIR"], "config")})
+    assert drifted != theirs, "control: the shape comparison cannot see a moved config dir"
+    assert ours == theirs, f"the mutant runner's home drifted from make_home: {theirs} vs {ours}"
 
 
 def built_parts_rows() -> None:
