@@ -1,0 +1,115 @@
+name: Writer access rows
+
+# Rows for the shared atomic writer that ordinary CI cannot host: root with two
+# extra local users (Linux and macOS), and a kernel with SELinux enforcing (a
+# Fedora VM). Every such row is #[ignore]d elsewhere and checks its own
+# precondition first, so a run without the setup fails rather than passes.
+# The users, group and mount the rows expect come from the env block of each
+# job; a row reads them and fails when one is missing.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "src/config_persistence*"
+      - "src/config_persistence_access_tests/**"
+      - "src/macos_acl.rs"
+      - "tests/writer_refusals.rs"
+      - ".github/workflows/access-rows.yml"
+  workflow_dispatch:
+  # A push trigger as well: a dispatch needs this file on the default branch.
+  # No other workflow's push filter matches these branches.
+  push:
+    branches: ["throwaway/access-rows-*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  RUSTFLAGS: -Dwarnings
+  ACCESS_ROWS_UID_B: "4101"
+  ACCESS_ROWS_UID_C: "4102"
+  ACCESS_ROWS_GID_G: "4100"
+  ACCESS_ROWS_USER_B: mcpg-b
+  ACCESS_ROWS_USER_C: mcpg-c
+
+jobs:
+  # A Fedora cloud VM under KVM with SELinux enforcing. Probe stage: proves the
+  # runner can host it and prints the image's name and sha256 to pin.
+  selinux-vm:
+    name: SELinux enforcing rows (Fedora VM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: KVM is available
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::this runner has no /dev/kvm, so the Fedora VM cannot boot; the fallback is a Fedora VM on another host"
+            exit 1
+          fi
+          ls -l /dev/kvm
+          # The runner user may lack the kvm group; open the node to it for qemu.
+          sudo chmod 666 /dev/kvm
+          test -w /dev/kvm
+      - name: Install QEMU and the seed tool
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+      - name: Find the Fedora Cloud image (probe)
+        run: |
+          set -euo pipefail
+          for ver in 44 45; do
+            base="https://dl.fedoraproject.org/pub/fedora/linux/releases/${ver}/Cloud/x86_64/images/"
+            echo "== ${base}"
+            curl -fsSL "$base" | grep -oE 'href="[^"]+"' | sed -e 's/^href="//' -e 's/"$//' | grep -E 'qcow2|CHECKSUM' || true
+          done
+          base="https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/"
+          sum=$(curl -fsSL "$base" | grep -oE 'Fedora-Cloud-[^"]*CHECKSUM' | head -1)
+          curl -fsSL "${base}${sum}" -o CHECKSUM
+          cat CHECKSUM
+          image=$(grep -oE 'Fedora-Cloud-Base-Generic[^)]*x86_64\.qcow2' CHECKSUM | head -1)
+          curl -fsSL "${base}${image}" -o fedora.qcow2
+          echo "image ${image} sha256 $(sha256sum fedora.qcow2 | cut -d' ' -f1)"
+          grep -F "(${image})" CHECKSUM
+      - name: Boot the VM
+        run: |
+          set -euo pipefail
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          printf '#cloud-config\ndisable_root: false\nssh_authorized_keys:\n  - %s\n' "$(cat vm_key.pub)" > user-data
+          cloud-localds seed.img user-data
+          qemu-img resize fedora.qcow2 20G
+          qemu-system-x86_64 -accel kvm -cpu host -m 4096 -smp 2 \
+            -drive file=fedora.qcow2,if=virtio -drive file=seed.img,if=virtio,format=raw \
+            -nic user,hostfwd=tcp:127.0.0.1:2222-:22 \
+            -display none -serial file:serial.log -daemonize
+          for _ in $(seq 60); do
+            if ssh -i vm_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=5 root@127.0.0.1 true 2>/dev/null; then
+              echo "ssh up"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the VM did not answer on ssh in 5 min"
+          tail -50 serial.log
+          exit 1
+      - name: SELinux enforcing and the policy tools (probe)
+        run: |
+          set -euo pipefail
+          vm() { ssh -i vm_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1 "$@"; }
+          vm 'cat /etc/fedora-release; uname -r; rpm -q glibc checkpolicy policycoreutils selinux-policy-targeted || true'
+          vm 'command -v checkmodule semodule_package semodule || true'
+          echo "host glibc: $(ldd --version | head -1)"
+          test "$(vm getenforce)" = Enforcing
+      - name: Serial log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: selinux-vm-serial-${{ github.run_id }}
+          path: serial.log
+          retention-days: 3
+          if-no-files-found: ignore
