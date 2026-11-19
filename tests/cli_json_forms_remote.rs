@@ -112,7 +112,7 @@ fn stats_prints_one_document_and_keeps_its_text() {
     assert_eq!(json.stderr, "");
 }
 
-/// The null rule from both sides: a counter present gives its value, absent gives null; absent top_tools is `[]`.
+/// The null rule from both sides: a counter present gives its value, absent gives null; absent `top_tools` is `[]`.
 #[test]
 fn stats_omitted_fields_are_null() {
     let partial = stats_gateway(&json!({

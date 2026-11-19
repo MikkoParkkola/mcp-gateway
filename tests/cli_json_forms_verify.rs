@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! JSON forms of the verify commands and `audit show`, through the built binary. A verdict, pass or fail, is one
 //! document under `--json` with today's exit; an error before a verdict prints nothing on stdout. Fixtures are
-//! copied from tests/d6_audit_verify_cli.rs and tests/audit_verify_pairing_cli.rs (test plan r2, J13, S1).
+//! copied from `tests/d6_audit_verify_cli.rs` and `tests/audit_verify_pairing_cli.rs` (test plan r2, J13, S1).
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -526,6 +526,9 @@ fn provenance(
     (plain, run(home, &args))
 }
 
+/// One provenance verify case: receipt, result, extra flags, exit, text line, document.
+type VerifyCase<'a> = (&'a str, Option<&'a str>, &'a [&'a str], i32, &'a str, Value);
+
 fn verdict(status: &str, accepted: bool, kid: Option<&str>, reason: Option<&str>) -> Value {
     json!({"schema_version": 1, "status": status, "accepted": accepted, "kid": kid, "reason": reason})
 }
@@ -547,7 +550,7 @@ fn provenance_verify_prints_every_verdict() {
     let unbound_result = unbound_result.to_str().expect("utf-8");
     let kid = Some("prov-test-1");
 
-    let cases: [(&str, Option<&str>, &[&str], i32, &str, Value); 5] = [
+    let cases: [VerifyCase<'_>; 5] = [
         (
             &bound,
             Some(&result),
