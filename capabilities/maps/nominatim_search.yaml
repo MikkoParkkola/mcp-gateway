@@ -1,0 +1,63 @@
+sha256: fa791695c6f408a4c7b470b4871a06ced151e518bd8a1f7d7f914b777cb3819f
+fulcrum: "1.0"
+name: nominatim_search
+description: >-
+  Search OpenStreetMap for places, addresses and points of interest by text,
+  using the public Nominatim service (no API key). Paced at one request per
+  second per gateway process, the service's absolute maximum; results are
+  cached, as its usage policy requires.
+attribution: "© OpenStreetMap contributors"
+
+schema:
+  input:
+    type: object
+    properties:
+      q:
+        type: string
+        minLength: 1
+        maxLength: 300
+        description: Free-text query, e.g. "Helsinki Cathedral"
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 40
+        description: Most results to return (Nominatim's default when left out)
+    required: [q]
+  output:
+    type: object
+    properties:
+      results:
+        type: array
+        description: Matching places, as Nominatim's jsonv2 format sends them
+      attribution:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    rate_limit:
+      interval_ms: 1000
+    config:
+      endpoint: https://nominatim.openstreetmap.org/search
+      method: GET
+      headers:
+        User-Agent: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      params:
+        q: "{q}"
+        limit: "{limit}"
+      static_params:
+        format: jsonv2
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+
+metadata:
+  category: maps
+  tags: [maps, geocoding, search, places, openstreetmap, nominatim]
+  cost_category: free
+  execution_time: fast
+  read_only: true

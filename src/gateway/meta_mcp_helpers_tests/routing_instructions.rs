@@ -17,6 +17,7 @@ fn make_capability_def(
     use crate::transform::TransformConfig;
 
     crate::capability::CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: format!("{name} description"),

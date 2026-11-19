@@ -418,6 +418,34 @@ providers:
         format!("{code:?}") == format!("{:?}", ExitCode::SUCCESS)
     }
 
+    /// LD6: `cap validate` refuses a misspelt key with the loader's message
+    /// (the same `parse_capability_file` error `validate` prints) and fails.
+    #[tokio::test]
+    async fn ld6_cap_validate_refuses_a_misspelt_key() {
+        let dir = TempDir::new().expect("dir");
+        let path = dir.path().join("typo.yaml");
+        std::fs::write(
+            &path,
+            "name: typo\ndescription: d\nproviders:\n  primary:\n    service: rest\n    rate_lmit:\n      interval_ms: 1000\n    config:\n      base_url: https://typo.test\n      path: /x\n",
+        )
+        .expect("write");
+        let message = parse_capability_file(&path)
+            .await
+            .expect_err("refused")
+            .to_string();
+        assert_eq!(
+            message,
+            format!(
+                "Configuration error: {}: key `rate_lmit` is not a capability provider field. Did you mean: rate_limit?",
+                path.display()
+            )
+        );
+        assert!(
+            !is_success(super::cap_validate(path).await),
+            "cap validate fails"
+        );
+    }
+
     #[tokio::test]
     async fn cap_pin_writes_valid_hash_and_roundtrips_through_loader() {
         // GIVEN: a fresh, unpinned capability YAML on disk
