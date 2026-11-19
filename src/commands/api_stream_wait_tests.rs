@@ -7,6 +7,20 @@
 
 use super::*;
 
+/// The waits for a row here that ends at one of them: 400 ms each and 1.5 s overall, so such a row takes well
+/// under two seconds. A row here that only checks what is printed takes the parent's `content()` instead.
+fn short() -> Deadlines {
+    let (wait, total) = (ms(400), ms(1500));
+    Deadlines {
+        headers: wait,
+        stall: wait,
+        event: wait,
+        stream_total: total,
+        download_total: total,
+        fallback_total: wait,
+    }
+}
+
 /// R3, R12: a stream that only sends keep-alives, however fast, ends at the
 /// event wait; a body
 /// that stalls ends at the stall wait; no request is repeated.
@@ -17,16 +31,19 @@ async fn silent_answers_end_at_their_waits() {
         futures::stream::repeat_with(|| Ok(bytes::Bytes::from_static(b": keep-alive\n")));
     let mut reply = answer(200, "text/event-stream", Vec::new(), false);
     reply.body = keep_alive.boxed();
-    let (out, outcome, sends) = run(&args(STREAM, Some(1), false), Some(reply)).await;
+    let (out, outcome, sends) =
+        run_within(&args(STREAM, Some(1), false), Some(reply), TOKEN, &short()).await;
     assert_eq!((outcome.exit(), out.len(), sends), (CliExit::Network, 0, 1));
     assert!(
         outcome.stderr().contains("No event arrived"),
         "{}",
         outcome.stderr()
     );
-    let (_, outcome, sends) = run(
+    let (_, outcome, sends) = run_within(
         &args(EXPORT, None, false),
         Some(answer(200, "text/csv", vec![b"a\n".to_vec()], true)),
+        TOKEN,
+        &short(),
     )
     .await;
     assert_eq!((outcome.exit(), sends), (CliExit::Network, 1));
@@ -253,7 +270,7 @@ async fn a_download_prints_before_the_body_ends() {
     reply.body = body.boxed();
     let request = args(EXPORT, None, false);
     // Bound first: the streamed future is joined later, past this statement.
-    let (tls, deadlines) = (LinkTls::default(), short());
+    let (tls, deadlines) = (LinkTls::default(), content());
     let streamed = run_streamed_with(
         &request,
         BASE,
@@ -452,7 +469,9 @@ async fn an_always_ready_fallback_body_ends_at_its_total() {
     reply.body = futures::stream::repeat_with(|| Ok(bytes::Bytes::new())).boxed();
     // On a task of its own: without the deadline check the read loop never
     // yields, so only another worker can notice.
-    let task = tokio::spawn(async move { run(&args(EXPORT, None, false), Some(reply)).await });
+    let task = tokio::spawn(async move {
+        run_within(&args(EXPORT, None, false), Some(reply), TOKEN, &short()).await
+    });
     // A hang guard, far past the 400 ms fallback total under test.
     let (out, outcome, _) = tokio::time::timeout(Duration::from_secs(30), task)
         .await

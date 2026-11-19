@@ -112,6 +112,16 @@ async fn run_as(
     reply: Option<AdminStream>,
     token: &str,
 ) -> (Vec<u8>, CliOutcome, usize) {
+    run_within(request, reply, token, &content()).await
+}
+
+/// [`run_as`] under the given waits; a row that ends at a wait passes the short ones.
+async fn run_within(
+    request: &ApiArgs,
+    reply: Option<AdminStream>,
+    token: &str,
+    deadlines: &Deadlines,
+) -> (Vec<u8>, CliOutcome, usize) {
     let sends = AtomicUsize::new(0);
     let out = Shared::default();
     let outcome = run_streamed_with(
@@ -120,7 +130,7 @@ async fn run_as(
         &LinkTls::default(),
         |name: &str| (name == TOKEN_ENV).then(|| token.to_owned()),
         out.clone(),
-        &content(),
+        deadlines,
         |_| {
             sends.fetch_add(1, Ordering::SeqCst);
             async move {
