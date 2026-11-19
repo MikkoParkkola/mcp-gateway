@@ -59,7 +59,7 @@ WRAPPERS = (
     # The shared lib test binary: `export-lib` compiles it once for the run.
     re.compile(r"scripts/ci/shard_tests\.py\s+export-lib\b"),
     # The Linux lib test binary in parts: the helper compiles each part through export-lib.
-    re.compile(r"scripts/ci/lib-parts\.sh\s+export\b"),
+    re.compile(r"scripts/ci/lib-parts\.sh\s+(export|run)\b"),
     re.compile(r"scripts/ci/coverage_shards\.py\s+run\b"),
     re.compile(r"scripts/ci/packaged-tests\.sh\s+(build|run)\b"),
     # The mutant harness, run from the repo or from the copy mutants.yml takes
@@ -98,12 +98,10 @@ EXPECTED = {
 }
 
 # The lib test split (SPLIT.6): every in-scope job builds the library tests through scripts/ci/lib-parts.sh, so each
-# compile is one part, never the whole binary, or it is listed here with why. Shrink-only: the jobs PR's second half
-# converts the first four rows' jobs and deletes their rows; the stage B jobs keep the whole build until then.
+# compile is one part, never the whole binary, or it is listed here with why. Shrink-only: the stage B jobs keep the
+# whole build until stage B converts them.
 HELPER = "scripts/ci/lib-parts.sh"
 WHOLE_BUILD_ALLOWED = {
-    ("packaged-suite.yml", "packaged-suite"): "converted by the jobs PR's second half (post-merge packaged suite)",
-    ("release.yml", "verify"): "converted by the jobs PR's second half (release verify)",
     ("coverage-probe.yml", "linux-part"): "converted by the jobs PR's second half (llvm-cov Linux lib parts)",
     ("ci.yml", "test-throwaway-hosted"): "stage B: the throwaway full-test job",
     ("mutants.yml", "linux-hosted"): "stage B: mutant batches",
@@ -114,6 +112,10 @@ WHOLE_BUILD_ALLOWED = {
 # The packaged crate's build builds by part inside the unpacked crate, where the helper is not shipped: it counts as
 # through the helper while its script's build mode holds that shape (packaged_build_problems).
 PACKAGED_BUILD = "scripts/ci/packaged-tests.sh build"
+# Its run mode (the post-merge packaged suite) runs the suite through the helper from the unpacked crate: it counts as
+# through the helper while that mode holds one helper `run` call and no other build (packaged_run_problems).
+PACKAGED_RUN = "scripts/ci/packaged-tests.sh run"
+RUN_HELPER = re.compile(r'^"?\$root/scripts/ci/lib-parts\.sh"?\s+run\b')
 TRIPWIRE = "scripts/ci/memory-tripwire.sh"
 PACKAGED_SCRIPT = Path("scripts/ci/packaged-tests.sh")
 # Matched at the start of a command: a part call is the command itself, not text inside an echo or another command.
@@ -165,6 +167,20 @@ def packaged_build_problems(text: str) -> list[str]:
         out.append('the parts are not all built inside `for k in $(seq 1 "$n")` with n written only by its read '
                    "from scripts/dev/test-parts-build.rs")
     return out
+
+
+def packaged_run_problems(text: str) -> list[str]:
+    """Why the packaged crate's `run` mode does not run the suite through the helper, or nothing: judged per command,
+    it calls `lib-parts.sh run` exactly once and builds no test target any other way."""
+    start = text.find('elif [ "$mode" = build ]')
+    tail = text[start:].split("\nelse", 1) if start >= 0 else []
+    if len(tail) < 2:
+        return ["packaged-tests.sh has no run mode after its build mode"]
+    commands = run_commands(tail[1].split("\nfi", 1)[0])
+    helper = [cmd for cmd in commands if RUN_HELPER.match(cmd)]
+    out = [] if len(helper) == 1 else [f"the run mode calls the helper's run {len(helper)} times, not once"]
+    return out + [f"`{cmd}` builds tests outside the helper" for cmd in commands
+                  if not RUN_HELPER.match(cmd) and (re.search(r"\bcargo\s+test\b", cmd) or builds_library(cmd))]
 
 
 def shell_commands(line: str) -> list[str] | None:
@@ -285,11 +301,11 @@ def builds_through(job: dict, marks: tuple[str, ...], aliases: dict[str, str] | 
     return bool(builds) and all(any(m in cmd for m in marks) for cmd in builds)
 
 
-def census(jobs_in_scope: dict, packaged_by_part: bool) -> list[str]:
+def census(jobs_in_scope: dict, packaged_by_part: bool, packaged_run_by_part: bool = False) -> list[str]:
     """SPLIT.6: an in-scope job outside WHOLE_BUILD_ALLOWED builds through the helper (or is the packaged build while
     `packaged_by_part`); every allowance names a job still in scope that still does not."""
     problems = []
-    marks = (HELPER, PACKAGED_BUILD) if packaged_by_part else (HELPER,)
+    marks = (HELPER,) + ((PACKAGED_BUILD,) if packaged_by_part else ()) + ((PACKAGED_RUN,) if packaged_run_by_part else ())
     through = {key for key, job in jobs_in_scope.items() if builds_through(job, marks)}
     for key in sorted(set(jobs_in_scope) - through - set(WHOLE_BUILD_ALLOWED)):
         problems.append(f"{key[0]}:{key[1]} builds the library tests without {HELPER}, so the whole lib test binary")
@@ -483,7 +499,9 @@ def main(packaged_script: Path = PACKAGED_SCRIPT) -> int:
         s, p = check_workflow(path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or {}, seen)
         scope |= s
         problems += p
-    problems += census(seen, packaged_by_part=not packaged_build_problems(packaged_script.read_text(encoding="utf-8")))
+    text = packaged_script.read_text(encoding="utf-8")
+    problems += census(seen, packaged_by_part=not packaged_build_problems(text),
+                       packaged_run_by_part=not packaged_run_problems(text))
     for missing in sorted(EXPECTED - scope):
         problems.append(f"{missing[0]}:{missing[1]} is listed in EXPECTED but builds no library tests")
     for extra in sorted(scope - EXPECTED):
@@ -668,7 +686,7 @@ def self_test() -> int:
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
-         {**allowed, ("packaged-suite.yml", "packaged-suite"): helper_job}, True, True),
+         {**allowed, ("coverage-probe.yml", "linux-part"): helper_job}, True, True),
         ("the allowance as it stands", allowed, False, True),
         ("the packaged-crate build, its script building by part",
          {**allowed, ("ci.yml", "package-tests"): packaged_job}, False, True),
@@ -778,6 +796,47 @@ def self_test() -> int:
         ok = bool(found) == want_bad
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} packaged build, {label}: problems {found}")
+    # The packaged run mode (the post-merge packaged suite): one helper `run` call, judged per command, nothing else.
+    helper_run = '  "$root/scripts/ci/lib-parts.sh" run --all-features --locked -- \\\n    --skip a \\\n    --skip b\n'
+    run_shape = shape.format(part, rest).replace("else\n  cargo test --all-features\nfi\n", "else\n{}fi\n")
+    run_cases = [
+        ("today's whole cargo test", shape.format(part, rest), True),
+        ("the helper call and a stray cargo test", run_shape.format(helper_run + "  cargo test --all-features\n"), True),
+        ("a build chained on the helper call's line", run_shape.format(helper_run.replace("--skip b\n", "--skip b; cargo test\n")),
+         True),
+        ("the helper call only", run_shape.format(helper_run), False),
+        ("no helper call and no build", run_shape.format("  true\n"), True),
+        ("two helper calls", run_shape.format(helper_run + helper_run), True),
+        ("a build continued across lines beside the helper call",
+         run_shape.format(helper_run + "  cargo \\\n    test --all-features\n"), True),
+    ]
+    for label, text, want_bad in run_cases:
+        found = packaged_run_problems(text)
+        ok = bool(found) == want_bad
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} packaged run, {label}: problems {found}")
+    run_step = {"run": "scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh run --all-features -- --skip x"}
+    packaged_run_job = {"steps": [{"run": "scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh run"}, tripwire]}
+    placement = "no `if: always()` step running"
+    run_census = [
+        ("a job through the helper's run, tripwire after it", {("release.yml", "v"): {"steps": [run_step, tripwire]}}, True,
+         False, ""),
+        # The placement rows name their reason: without the run mode known as a build, these jobs fail for another one.
+        ("the tripwire before the run step", {("release.yml", "v"): {"steps": [tripwire, run_step]}}, True, True, placement),
+        ("the tripwire without if: always()",
+         {("release.yml", "v"): {"steps": [run_step, {**tripwire, "if": "success()"}]}}, True, True, placement),
+        ("the tripwire before a later run step",
+         {("release.yml", "v"): {"steps": [run_step, tripwire, run_step]}}, True, True, placement),
+        ("the packaged suite while its run mode goes through the helper", {("packaged-suite.yml", "p"): packaged_run_job},
+         True, False, ""),
+        ("the packaged suite while its run mode builds whole", {("packaged-suite.yml", "p"): packaged_run_job}, False, True,
+         "builds the library tests without"),
+    ]
+    for label, jobs, run_by_part, want_bad, reason in run_census:
+        found = census({**allowed, **jobs}, packaged_by_part=True, packaged_run_by_part=run_by_part)
+        ok = bool(found) == want_bad and (not reason or any(reason in p for p in found))
+        wrong += not ok
+        print(f"{'ok   ' if ok else 'WRONG'} census, run mode: {label}: problems {found}")
     # The scanner itself, as bash splits a line into commands.
     split_cases = [
         ("a; b", ["a", "b"]),
@@ -819,7 +878,7 @@ def self_test() -> int:
     ok = rc == 1 and "ci.yml:package-tests builds the library tests without" in out.getvalue()
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + len(split_cases) + 1 - wrong} ok, {wrong} wrong")
+    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + len(run_cases) + len(run_census) + len(split_cases) + 1 - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
