@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/preview_sandbox/linux/uv_probe.rs	python_real	refuse_script	1	no-record	sandbox preview: a python3 that is a script (a version manager's shim) refuses the preview before any sandbox starts; the refusal goes to the preview's caller, no call delivery exists
+src/preview_sandbox/linux/uv_probe.rs	uv_beside	refuse_script	1	no-record	sandbox preview: a uv that is a script refuses the preview before any sandbox starts; the refusal goes to the preview's caller, no call delivery exists
