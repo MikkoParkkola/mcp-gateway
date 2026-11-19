@@ -73,6 +73,10 @@ test('R5 faults: each broken report is refused with its own problem', () => {
       { url: 'http://127.0.0.1:4390/ui/shell/shell.ffffffffffff.js', statusCode: 200, resourceType: 'Script' }] } } } }), 'shell module shell.0123456789ab.js not loaded'],
     ['settings', report({ configSettings: { ...structuredClone(SETTINGS), throttlingMethod: 'simulate' } }), 'setting throttlingMethod is simulate, expected devtools'],
     ['lighthouse version', report({ lighthouseVersion: '13.6.0' }), 'Lighthouse 13.6.0, expected 13.5.0'],
+    ['chrome version', report({ environment: { ...report().environment, hostUserAgent: 'Mozilla/5.0 HeadlessChrome/141.0.7390.1 Safari/537.36' } }), 'Chrome 141.0.7390.1, expected 140.0.7339.16'],
+    ['zero index', report({ environment: { ...report().environment, benchmarkIndex: 0 } }), 'no benchmark index'],
+    ['missing index', report({ environment: { hostUserAgent: report().environment.hostUserAgent } }), 'no benchmark index'],
+    ['infinite index', report({ environment: { ...report().environment, benchmarkIndex: Infinity } }), 'no benchmark index'],
   ];
   for (const [name, r, problem] of cases) expect(checkRun(r, EXPECTED), name).toEqual({ ok: false, problem });
   expect(passComplete(Array.from({ length: 19 }, () => report()), EXPECTED)).toEqual({ ok: false, problem: '19 valid reports, expected 20' });
