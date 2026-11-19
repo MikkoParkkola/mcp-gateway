@@ -458,8 +458,10 @@ function makeField(name, prop, required, i) {
   }
   if (kind === 'checkbox') {
     const el = h('input', { type: 'checkbox', id, 'aria-required': 'true' });
+    // A required boolean starts at its default, shown beside it like the others.
+    if (prop && prop.default === true) el.checked = true;
     return {
-      wrap: wrapField(id, name, el), el, name,
+      wrap: wrapField(id, name, el, defaultShown(prop)), el, name,
       read() { return { present: true, value: el.checked }; },
     };
   }
