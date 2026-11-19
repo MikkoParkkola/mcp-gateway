@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Capability (`cap`) subcommand handlers for `mcp-gateway`.
 
-use crate::cli::stdout::println;
+use crate::cli::stdout::{print, println};
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -306,18 +306,22 @@ async fn cap_import(
 
 async fn cap_test(file: std::path::PathBuf, args: String, render: Render) -> ExitCode {
     let executor = CapabilityExecutor::new();
-    cap_test_with(&executor, &file, &args, render)
+    let mut print_banner = |banner: &str| print!("{banner}");
+    cap_test_with(&executor, &file, &args, render, &mut print_banner)
         .await
         .emit(crate::cli::output::OnWriteFailure::ExitOnBrokenPipe)
 }
 
-/// What `cap test` prints and exits with, the call made through `executor`. Under `--json` nothing is printed
-/// before the call, and only a successful call prints a document (MIK-9764.JSONF.1, design D2, D5).
+/// What `cap test` prints and exits with, the call made through `executor`. In text the banner goes to `banner_out`
+/// before the call, as it always has, so a slow call shows what it runs and an interrupt keeps the banner; the rest
+/// is returned. Under `--json` nothing goes out before the call, and only a successful call prints a document
+/// (MIK-9764.JSONF.1, design D2, D5).
 async fn cap_test_with(
     executor: &CapabilityExecutor,
     file: &std::path::Path,
     args: &str,
     render: Render,
+    banner_out: &mut dyn FnMut(&str),
 ) -> crate::cli::output::Printed {
     use crate::cli::output::Printed;
     let failed = |stdout: String, stderr: String| Printed {
@@ -347,19 +351,18 @@ async fn cap_test_with(
             format!("❌ {}\n", verdict.format_error(&cap.schema.input)),
         );
     }
-    let banner = match render {
-        Render::Text => format!(
+    if render == Render::Text {
+        banner_out(&format!(
             "Testing capability: {}\nArguments: {}\n\n",
             cap.name,
             serde_json::to_string_pretty(&params).unwrap_or_default()
-        ),
-        Render::Json => String::new(),
-    };
+        ));
+    }
     match executor.execute(&cap, params.clone()).await {
         Ok(result) => {
             let stdout = match render {
                 Render::Text => format!(
-                    "{banner}✅ Success:\n\n{}\n",
+                    "✅ Success:\n\n{}\n",
                     serde_json::to_string_pretty(&result).unwrap_or_default()
                 ),
                 Render::Json => match json::test(&cap.name, &params, &result) {
@@ -378,7 +381,7 @@ async fn cap_test_with(
                 exit: 0,
             }
         }
-        Err(e) => failed(banner, format!("❌ Execution failed: {e}\n")),
+        Err(e) => failed(String::new(), format!("❌ Execution failed: {e}\n")),
     }
 }
 
@@ -577,6 +580,114 @@ providers:
         }
     }
 
+    /// J11, the failures before the call (MIK-9764.JSONF.1): an unreadable capability file, arguments that are not
+    /// JSON and arguments the input schema refuses each leave stdout empty in both forms, exit 1, and name the
+    /// failure on stderr, the same in both forms.
+    #[tokio::test]
+    async fn cap_test_failures_before_the_call_print_nothing_on_stdout() {
+        use crate::cli::output::Render;
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("city_cap.yaml");
+        std::fs::write(
+            &file,
+            "name: city_cap\ndescription: City\nschema:\n  input:\n    type: object\n    properties:\n      \
+             city:\n        type: string\n    required: [city]\nproviders:\n  primary:\n    service: rest\n    \
+             config:\n      base_url: https://city.test\n      path: /now\n      method: GET\n",
+        )
+        .unwrap();
+        let missing = dir.path().join("missing.yaml");
+        let executor = mcp_gateway::capability::CapabilityExecutor::new();
+        // (file, arguments, the start of the stderr line, a word it must name)
+        let cases = [
+            (
+                &missing,
+                r#"{"city": "Oulu"}"#,
+                "❌ Failed to parse capability: ",
+                "missing.yaml",
+            ),
+            (&file, "{", "❌ Invalid JSON arguments: ", "EOF"),
+            (&file, r#"{"city": 5}"#, "❌ ", "city"),
+        ];
+        for (path, args, start, names) in cases {
+            for render in [Render::Text, Render::Json] {
+                let mut banner = String::new();
+                let printed = super::cap_test_with(&executor, path, args, render, &mut |b| {
+                    banner.push_str(b);
+                })
+                .await;
+                assert_eq!(
+                    banner, "",
+                    "no banner before a refused call: {args} {render:?}"
+                );
+                assert_eq!(
+                    (printed.stdout.as_str(), printed.exit),
+                    ("", 1),
+                    "{args} {render:?}"
+                );
+                assert!(
+                    printed.stderr.starts_with(start) && printed.stderr.contains(names),
+                    "{args} {render:?}: {}",
+                    printed.stderr
+                );
+            }
+        }
+    }
+
+    /// J11, order: in text the banner goes out before the call. The backend answers 200 only once the banner has
+    /// reached the test (it waits up to 10 s, then answers 500), so a banner held back until the call returns gets
+    /// the 500 and this row fails.
+    #[tokio::test]
+    async fn cap_test_text_banner_goes_out_before_the_call() {
+        use crate::cli::output::Render;
+        use std::io::Read as _;
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = vec![0_u8; 65536];
+            let _ = stream.read(&mut request);
+            let (status, body) = match seen_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(()) => ("200 OK", r#"{"ok":true}"#),
+                Err(_) => ("500 Banner Late", r#"{"ok":false}"#),
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        });
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("order_cap.yaml");
+        std::fs::write(
+            &file,
+            format!(
+                "name: order_cap\ndescription: Order\nschema:\n  input:\n    type: object\nproviders:\n  primary:\n    \
+                 service: rest\n    config:\n      base_url: http://127.0.0.1:{port}\n      path: /now\n      \
+                 method: GET\n"
+            ),
+        )
+        .unwrap();
+        let executor =
+            mcp_gateway::capability::CapabilityExecutor::new().with_test_loopback_egress();
+        let mut banner = String::new();
+        let printed = super::cap_test_with(&executor, &file, "{}", Render::Text, &mut |b| {
+            banner.push_str(b);
+            let _ = seen_tx.send(());
+        })
+        .await;
+        assert_eq!(banner, "Testing capability: order_cap\nArguments: {}\n\n");
+        assert_eq!(
+            (printed.exit, printed.stdout.as_str()),
+            (0, "✅ Success:\n\n{\n  \"ok\": true\n}\n"),
+            "{}",
+            printed.stderr
+        );
+    }
+
     /// J11 (MIK-9764.JSONF.1): a successful `cap test` through an executor that may reach loopback (the `cfg(test)`
     /// seam): under `--json` one document with the capability, the arguments and the result (with no response
     /// transform the result is the body); in text the banner, the arguments and the pretty result, as today.
@@ -615,7 +726,12 @@ providers:
             mcp_gateway::capability::CapabilityExecutor::new().with_test_loopback_egress();
         let args = r#"{"city": "Oulu"}"#;
 
-        let json = super::cap_test_with(&executor, &file, args, Render::Json).await;
+        let mut banner = String::new();
+        let json = super::cap_test_with(&executor, &file, args, Render::Json, &mut |b| {
+            banner.push_str(b);
+        })
+        .await;
+        assert_eq!(banner, "", "--json sends nothing out before the call");
         assert_eq!(
             json,
             Printed {
@@ -626,13 +742,18 @@ providers:
                 exit: 0,
             }
         );
-        let text = super::cap_test_with(&executor, &file, args, Render::Text).await;
+        let text = super::cap_test_with(&executor, &file, args, Render::Text, &mut |b| {
+            banner.push_str(b);
+        })
+        .await;
+        assert_eq!(
+            banner, "Testing capability: now_cap\nArguments: {\n  \"city\": \"Oulu\"\n}\n\n",
+            "text sends the banner out before the call"
+        );
         assert_eq!(
             text,
             Printed {
-                stdout: "Testing capability: now_cap\nArguments: {\n  \"city\": \"Oulu\"\n}\n\n✅ Success:\n\n{\n  \
-                         \"temp\": 21,\n  \"unit\": \"C\"\n}\n"
-                    .to_owned(),
+                stdout: "✅ Success:\n\n{\n  \"temp\": 21,\n  \"unit\": \"C\"\n}\n".to_owned(),
                 stderr: String::new(),
                 exit: 0,
             }
