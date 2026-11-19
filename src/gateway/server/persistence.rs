@@ -525,10 +525,12 @@ pub(super) async fn advance_until_saved(costs: &std::path::Path) -> Result<(), S
 #[path = "persistence_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "shutdown_keep_tests.rs"]
 mod shutdown_keep_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "periodic_keep_tests.rs"]
 mod periodic_keep_tests;

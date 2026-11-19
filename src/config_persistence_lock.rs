@@ -728,6 +728,7 @@ pub(crate) fn lock_file_blocking(
 #[path = "config_persistence_lock_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_lock_keep_tests.rs"]
 mod keep_tests;

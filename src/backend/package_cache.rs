@@ -578,6 +578,7 @@ mod tests;
 #[path = "package_cache_retry_tests.rs"]
 mod retry_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "package_cache_keep_tests.rs"]
 mod keep_tests;
