@@ -2165,9 +2165,13 @@ function boot() {
   });
 }
 
+/** How long the fallback below waits for a paint record before running `fn` anyway. */
+const PAINT_WAIT_MS = 1000;
+
 /**
- * Run `fn` once the first contentful paint is out. Without paint timing, or when
- * observing it throws, `fn` runs now, after the first render; either way it runs.
+ * Run `fn` once the first contentful paint is out. When a paint observer cannot be had,
+ * the timeline is read once a frame instead, and `fn` runs after the frame that shows the
+ * paint, or after PAINT_WAIT_MS where the browser records none; either way it runs.
  */
 function afterFirstPaint(fn) {
   try {
@@ -2178,7 +2182,13 @@ function afterFirstPaint(fn) {
       fn();
     }).observe({ type: 'paint', buffered: true });
   } catch {
-    fn();
+    const start = performance.now();
+    const check = () => {
+      const seen = performance.getEntriesByName?.('first-contentful-paint')?.length > 0;
+      if (seen || performance.now() - start > PAINT_WAIT_MS) setTimeout(fn);
+      else requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
   }
 }
 

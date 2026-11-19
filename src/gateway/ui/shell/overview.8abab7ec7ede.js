@@ -9,17 +9,7 @@
 // read. A field the API leaves out reads "Not available yet", never a zero.
 // Every value goes in with textContent. The other Overview panels (Needs you,
 // the flow map, the chart) are their own slices.
-import { register } from '/ui/assets/shell.7aa23f613042.js';
-
-/** One element: attributes set through setAttribute, children appended as nodes or text. */
-function h(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? '' : String(v));
-  }
-  node.append(...children);
-  return node;
-}
+import { register, go, el as h } from '/ui/assets/shell.07554ce59710.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const NOT_YET = 'Not available yet';
@@ -38,9 +28,15 @@ const COUNTER_FIELDS = ['kpi.calls_24h', 'kpi.blocks_24h', 'kpi.errors_24h', 'se
 const n = (v) => v.toLocaleString('en');
 const isCount = (v) => Number.isInteger(v) && v >= 0;
 const degraded = (data, field) => Array.isArray(data.degraded) && data.degraded.includes(field);
+/** Whether the overview carries the counter field `f` (one of COUNTER_FIELDS). */
+function carries(data, f) {
+  if (f.startsWith('kpi.')) return isCount(data.kpi?.[f.slice(4)]);
+  if (f === 'servers.calls_24h') return Array.isArray(data.servers?.rows) && data.servers.rows.some((r) => r && 'calls_24h' in r);
+  if (f === 'checklist.tool_tried') return Boolean(data.checklist) && 'tool_tried' in data.checklist;
+  return f in data;
+}
 /** No counter store: every counter field is absent and none is named in `degraded`. */
-const uncounted = (data) => !isCount(data.kpi?.calls_24h) && !isCount(data.kpi?.blocks_24h) && !('latency' in data)
-  && !COUNTER_FIELDS.some((f) => degraded(data, f));
+const uncounted = (data) => !COUNTER_FIELDS.some((f) => carries(data, f) || degraded(data, f));
 /** A counter field's words when it is absent. */
 const absent = (data, field) => (uncounted(data) ? UNCOUNTED : degraded(data, field) ? CLOCK : NOT_YET);
 
@@ -95,12 +91,23 @@ function spark(values) {
 function tileNode(id, label, value, context, href) {
   const head = [h('span', { class: 'ov-label' }, label), h('span', { class: 'ov-num num' })];
   const top = href ? h('a', { class: 'ov-go', href }, ...head) : h('div', { class: 'ov-go' }, ...head);
+  // The shell routes plain paths itself; a link with a query (the Firewall tile's filter) would
+  // otherwise reload the page and lose a key held only in memory, so it goes through go().
+  if (href?.includes('?')) {
+    top.addEventListener('click', (ev) => {
+      if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      go(href);
+      document.getElementById('content').focus({ preventScroll: true });
+    });
+  }
   const tile = h('div', { class: 'ov-tile', 'data-tile': id }, top, h('div', { class: 'ov-trend' }, h('span', { class: 'ov-ctx' })));
   setNum(tile, value);
   setCtx(tile, context);
   return tile;
 }
-const WORDS = /[A-Za-z]/;
+/** A sentence, not a value with a unit ("340 ms", "1.9 s"). */
+const WORDS = /[A-Za-z]{3,}/;
 /** A number reads in the large figure; a sentence in its place reads at text size. */
 function setNum(tile, text) {
   const num = tile.querySelector('.ov-num');
@@ -195,6 +202,8 @@ function fillTrend(tile, kpi, name, read) {
 }
 
 const METRICS = ['calls', 'blocks', 'cache_hits'];
+/** The breakpoint listener of the Overview drawn last. */
+let watching = null;
 const seriesPath = (m) => `/ui/api/metrics/series?metric=${m}&window=24h&compare=prev`;
 
 /** Phones: the first three tiles, then More numbers holding the rest; wider: all six in one strip. */
@@ -226,11 +235,10 @@ async function statusTab(body, ctx) {
     h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   body.append(h('div', { class: 'ov', 'data-overview-painted': '' }, section));
   arrange(strip, more, t, phone.matches);
-  const onChange = (e) => {
-    if (!section.isConnected) return phone.removeEventListener('change', onChange);
-    return arrange(strip, more, t, e.matches);
-  };
-  phone.addEventListener('change', onChange);
+  // One breakpoint listener at a time: a new render takes the last one's place.
+  watching?.mql.removeEventListener('change', watching.fn);
+  watching = { mql: phone, fn: (e) => arrange(strip, more, t, e.matches) };
+  phone.addEventListener('change', watching.fn);
 
   const [calls, blocks, hits] = reads;
   await Promise.all([

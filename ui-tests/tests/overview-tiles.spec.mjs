@@ -92,6 +92,9 @@ test('T1 each tile shows its value, context and link; only From cache and Spend 
     else await expect(link(page, id), id).toHaveCount(0);
   }
   await expect(page.locator('#content [data-tile] a.ov-go')).toHaveCount(4);
+  // A value with a unit is a figure, not a sentence: it keeps the large number style.
+  await expect(num(page, 'p95')).not.toHaveClass(/ov-words/);
+  await expect(num(page, 'spend')).toHaveClass(/ov-words/);
 });
 
 test('T1 with no slowest server named, the Slowest 5% tile has no link either', async ({ page }) => {
@@ -187,9 +190,27 @@ test('T5 at 1440 all six show and there is no disclosure; resizing keeps each ti
   await open(page);
   await expect(strip(page)).toHaveCount(6);
   await expect(page.locator('#content details.ov-more')).toHaveCount(0);
+  const ALL = ['calls', 'blocks', 'cache', 'p95', 'tools', 'spend'];
+  // The DOM's own check: it counts a tile inside a closed disclosure as not shown even when the tile
+  // still holds a box from an earlier layout (Playwright's box test would read that as visible).
+  const seen = (id) => tile(page, id).evaluate((el) => el.checkVisibility());
+  const shown = async (ids, hidden, why) => {
+    for (const id of ids) await expect.poll(() => seen(id), `${why} ${id}`).toBe(true);
+    for (const id of hidden) await expect.poll(() => seen(id), `${why} ${id}`).toBe(false);
+  };
   for (const [w, openIt] of [[390, true], [1440, false], [390, false], [1440, false]]) {
     await page.setViewportSize({ width: w, height: 900 });
-    if (openIt) await page.locator('#content details.ov-more > summary').click();
+    const summary = page.locator('#content details.ov-more > summary');
+    // Settled first: the regrouping follows the breakpoint's change event.
+    await expect(page.locator('#content details.ov-more'), `${w}`).toHaveCount(w === 390 ? 1 : 0);
+    if (w === 390 && !(await page.locator('#content details.ov-more[open]').count())) {
+      await shown(['calls', 'blocks', 'cache'], ['p95', 'tools', 'spend'], `${w} closed`);
+    }
+    if (openIt) {
+      await summary.click();
+      await shown(ALL, [], `${w} open`);
+    }
+    if (w === 1440) await shown(ALL, [], `${w}`);
     await expect(page.locator('#content [data-tile]'), `${w}`).toHaveCount(6);
     await expect(num(page, 'calls'), `${w}`).toHaveText('4,812');
     await expect(num(page, 'cache'), `${w}`).toHaveText('20%');
@@ -211,6 +232,13 @@ test('T6 absent, degraded and uncounted words on the counter tiles', async ({ pa
     await expect(num(page, id), words).toHaveText(words);
     await expect(ctx(page, id), words).toHaveText('');
   }
+  // Another counter field present (errors only) means a store exists: the missing ones are not yet, not uncounted.
+  const errorsOnly = overview({ kpi: { calls_24h: undefined, calls_prev_24h: undefined, blocks_24h: undefined, blocks_prev_24h: undefined } });
+  delete errorsOnly.latency;
+  await page.unrouteAll();
+  await serve(page, { body: errorsOnly });
+  await open(page);
+  await expect(num(page, 'calls'), 'errors only').toHaveText('Not available yet');
   const none = { calls_24h: undefined, calls_prev_24h: undefined, blocks_24h: undefined, blocks_prev_24h: undefined, errors_24h: undefined, errors_prev_24h: undefined, counting_since: undefined };
   const body = overview({ kpi: none });
   delete body.latency;
@@ -298,4 +326,18 @@ test('T9 the cache tile: one case per row of its table', async ({ page }) => {
   await serve(page);
   await open(page);
   expect(await plotted(page, 'cache')).toBe(2);
+  // A 0-call bucket between two runs splits the line: two lines, never one across the gap.
+  await page.unrouteAll();
+  await serve(page, { reads: { calls: series('calls', [100, 0, 200, 5]), cache_hits: series('cache_hits', [10, 0, 50, 1]) } });
+  await open(page);
+  await expect(tile(page, 'cache').locator('svg.ov-spark polyline')).toHaveCount(2);
+});
+
+test('T10 the Firewall tile opens Activity filtered to blocked calls without reloading the page', async ({ page }) => {
+  await serve(page);
+  await open(page);
+  await page.evaluate(() => { window.__sameDocument = true; });
+  await link(page, 'blocks').click();
+  await expect(page).toHaveURL(/\/ui\/activity\/status\?outcome=blocked$/);
+  expect(await page.evaluate(() => window.__sameDocument === true)).toBe(true);
 });

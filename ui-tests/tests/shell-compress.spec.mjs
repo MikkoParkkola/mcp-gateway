@@ -258,19 +258,26 @@ const RECORD_API = () => {
   };
 };
 
-// Holds the first paint: paint observers hear nothing until __releasePaint().
+// Holds the first paint: paint observers hear nothing until __releasePaint(). After it, an observer
+// that asks for buffered entries hears the paint at once, as a real browser's buffered observer would.
 const HOLD_PAINT = () => {
   const Real = window.PerformanceObserver;
   const held = [];
+  let released = null;
+  const listOf = (entry) => ({ getEntriesByName: (n) => (n === 'first-contentful-paint' ? [entry] : []), getEntries: () => [entry] });
   window.PerformanceObserver = class {
     constructor(cb) { this.cb = cb; this.off = false; }
-    observe(opts) { if (opts.type === 'paint') held.push(this); else new Real(this.cb).observe(opts); }
+    observe(opts) {
+      if (opts.type !== 'paint') return new Real(this.cb).observe(opts);
+      if (released && opts.buffered) return queueMicrotask(() => { if (!this.off) this.cb(listOf(released), this); });
+      return held.push(this);
+    }
     disconnect() { this.off = true; }
   };
   window.PerformanceObserver.supportedEntryTypes = Real.supportedEntryTypes;
   window.__releasePaint = () => {
-    const list = { getEntriesByName: (n) => (n === 'first-contentful-paint' ? [{ name: n, startTime: performance.now() }] : []), getEntries: () => [] };
-    for (const o of held) if (!o.off) o.cb(list, o);
+    released = { name: 'first-contentful-paint', startTime: performance.now() };
+    for (const o of held.splice(0)) if (!o.off) o.cb(listOf(released), o);
   };
 };
 
@@ -282,9 +289,12 @@ test.describe('boot reads after first paint', () => {
   test('Z7 with the first paint held, /ui/overview/status starts no /ui/api request; released, the boot reads start', async ({ page }) => {
     await page.addInitScript(RECORD_API);
     await page.addInitScript(HOLD_PAINT);
+    const screen = page.waitForResponse((r) => /\/ui\/assets\/overview\.[0-9a-f]{12}\.js$/.test(r.url()));
     await page.goto('/ui/overview/status');
     // The Overview's content follows the paint (it reads after it), so the frame is what shows: its plate.
     await expect(page.locator('.head .plate')).toHaveText('Overview');
+    // Its screen has loaded, so only the held paint keeps its reads back.
+    await screen;
     await page.evaluate(() => new Promise((ok) => setTimeout(ok, 300)));
     expect(await apiPaths(page)).toEqual([]);
     await page.evaluate(() => window.__releasePaint());
@@ -305,12 +315,16 @@ test.describe('boot reads after first paint', () => {
     ['without PerformanceObserver', () => { delete window.PerformanceObserver; }],
     ['when observing paint throws', () => { window.PerformanceObserver = class { observe() { throw new TypeError('no paint'); } disconnect() {} }; }],
   ]) {
-    test(`Z8 ${name}, the boot reads still start`, async ({ page }) => {
+    test(`Z8 ${name}, the boot reads still start, and none before first paint`, async ({ page }) => {
       await page.addInitScript(RECORD_API);
       await page.addInitScript(init);
       await page.goto('/ui/overview/status');
       await shellReady(page);
       await expect.poll(() => apiPaths(page)).toEqual(expect.arrayContaining(BOOT));
+      // The browser still records the paint; only the page's way of hearing about it is gone.
+      const { fcp, calls } = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime, calls: window.__api }));
+      expect(fcp).toBeGreaterThan(0);
+      for (const c of calls) expect(c.at, `${c.path} started before first paint`).toBeGreaterThanOrEqual(fcp);
     });
   }
 
@@ -346,13 +360,29 @@ test.describe('a screen reads when it renders, after the first paint', () => {
     await toolsApi(page);
     await page.addInitScript(RECORD_API);
     await page.addInitScript(HOLD_PAINT);
+    const screen = page.waitForResponse((r) => /\/ui\/assets\/tools\.[0-9a-f]{12}\.js$/.test(r.url()));
     await page.goto('/ui/tools/status?view=all');
     await expect(page.locator('.head .plate')).toHaveText('Tools');
+    await screen;
     await page.evaluate(() => new Promise((ok) => setTimeout(ok, 300)));
     expect(await apiPaths(page)).toEqual([]);
     await page.evaluate(() => window.__releasePaint());
     await expect(toolRows(page)).toHaveCount(1);
     expect((await apiPaths(page)).filter((p) => p.startsWith('/ui/api/tools'))).toHaveLength(1);
+  });
+
+  test('Z11 a screen that arrives after the paint is released still renders and reads', async ({ page }) => {
+    await toolsApi(page);
+    await page.addInitScript(RECORD_API);
+    await page.addInitScript(HOLD_PAINT);
+    let release;
+    const gate = new Promise((ok) => { release = ok; });
+    await page.route(/\/ui\/assets\/tools\.[0-9a-f]{12}\.js$/, async (r) => { await gate; return r.continue(); });
+    await page.goto('/ui/tools/status?view=all');
+    await expect(page.locator('.head .plate')).toHaveText('Tools');
+    await page.evaluate(() => window.__releasePaint());
+    release();
+    await expect(toolRows(page)).toHaveCount(1);
   });
 
   test('Z10 with the Tools screen already preloaded, going there reads its tools', async ({ page }) => {
