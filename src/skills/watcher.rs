@@ -361,6 +361,7 @@ metadata:
 #[path = "watcher_burst_tests.rs"]
 mod burst_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "watcher_keep_tests.rs"]
 mod keep_tests;

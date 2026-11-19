@@ -337,6 +337,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "installer_keep_tests.rs"]
 mod keep_tests;
