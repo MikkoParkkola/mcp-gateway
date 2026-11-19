@@ -4,8 +4,8 @@
 //! from outside the registry, and the run's argv comes from the installed
 //! package's own metadata, never from a listing of a bin directory.
 #![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Linux fetch step, a later part, calls these")
+    not(any(test, target_os = "linux")),
+    expect(dead_code, reason = "only the Linux fetch step calls these so far")
 )]
 
 use std::io::Read as _;
@@ -205,6 +205,72 @@ pub(crate) fn npm_bin(root: &Path, name: &str) -> Result<PathBuf, Refusal> {
         return Err(refuse("the package's entry point is outside the package"));
     }
     Ok(target)
+}
+
+/// The PEP 503-normalized name of a validated `PyPI` spec (`name` or
+/// `name==version`): the name of the package's uv tool environment and the
+/// name its metadata is looked up by.
+pub(crate) fn uv_name(spec: &str) -> String {
+    normalize(spec.split_once("==").map_or(spec, |(name, _)| name))
+}
+
+/// The uv tool environment `spec` installs into under the preview home `home`.
+pub(crate) fn uv_tool_env(home: &Path, spec: &str) -> PathBuf {
+    home.join("uv-tools").join(uv_name(spec))
+}
+
+/// The most directory entries the direct-URL check reads in a tool env's
+/// site-packages; more refuses.
+pub(crate) const MAX_SITE_ENTRIES: usize = 4096;
+
+/// Refuse a uv tool environment `env` holding any distribution installed
+/// from a direct URL (a `*.dist-info` with `direct_url.json`): the one
+/// `lib/python*/site-packages` is read, every `*.dist-info` checked, at most
+/// [`MAX_SITE_ENTRIES`] entries and only before `deadline`; any read or
+/// metadata error refuses. Returns the names checked, for the rows.
+pub(crate) fn check_direct_url(
+    env: &Path,
+    deadline: std::time::Instant,
+) -> Result<Vec<String>, Refusal> {
+    let unreadable = || refuse("the install's site-packages could not be read");
+    let site = site_packages(env)?;
+    let mut checked = Vec::new();
+    for (read, entry) in std::fs::read_dir(&site)
+        .map_err(|_| unreadable())?
+        .enumerate()
+    {
+        if read >= MAX_SITE_ENTRIES {
+            return Err(refuse(
+                "the install's site-packages holds over 4096 entries",
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(refuse("the direct-URL check passed the fetch's deadline"));
+        }
+        let entry = entry.map_err(|_| unreadable())?;
+        let name = entry.file_name();
+        // Matched on the name's bytes: a dist-info named in non-UTF-8 bytes is
+        // checked like any other, never skipped.
+        let Some(stem) = name.as_encoded_bytes().strip_suffix(b".dist-info") else {
+            continue;
+        };
+        // Only a directory, or a link read through below, can hold metadata.
+        // Anything else refuses by its kind, not by whichever error the
+        // platform gives for a path under a file (Linux: not a directory;
+        // Windows: not found, which would read as "no direct URL").
+        let kind = entry.file_type().map_err(|_| unreadable())?;
+        if !kind.is_dir() && !kind.is_symlink() {
+            return Err(unreadable());
+        }
+        match std::fs::symlink_metadata(entry.path().join("direct_url.json")) {
+            Ok(_) => return Err(refuse("the install holds a package from a direct URL")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                checked.push(String::from_utf8_lossy(stem).into_owned());
+            }
+            Err(_) => return Err(unreadable()),
+        }
+    }
+    Ok(checked)
 }
 
 /// The console script of `PyPI` package `name` in the uv tool environment

@@ -361,8 +361,10 @@ fn child_with_held_stderr(holder: &str) -> tokio::process::Child {
 
 /// Drains a held pipe with a short window, under a hang guard. Returns the
 /// tail and how long the drain took, and checks that the read loop is gone
-/// once the drain has returned.
-async fn drain_held(holder: &str) -> (String, std::time::Duration) {
+/// once the drain has returned. With a `premise`, the window opens only once
+/// the reader has read that text: the holder is then known to be writing,
+/// which a loaded host can delay past the whole window.
+async fn drain_held(holder: &str, premise: Option<&str>) -> (String, std::time::Duration) {
     let mut child = child_with_held_stderr(holder);
     let reader = super::super::early_exit::spawn_stderr_tail(
         child.stderr.take().expect("piped stderr"),
@@ -370,6 +372,20 @@ async fn drain_held(holder: &str) -> (String, std::time::Duration) {
     );
     let _ = child.wait().await;
     let tail = Arc::clone(&reader.tail);
+    if let Some(premise) = premise {
+        crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+            std::future::ready({
+                let seen = joined(&tail.lock());
+                if seen.contains(premise) {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(seen)
+                }
+            })
+        })
+        .await
+        .unwrap_or_else(|seen| panic!("the holder never wrote {premise:?}: {seen:?}"));
+    }
     let started = std::time::Instant::now();
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -406,7 +422,7 @@ fn assert_held(took: std::time::Duration) {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_held_pipe_ends_the_drain_and_the_reader_task() {
-    let (tail, took) = drain_held("sleep 5").await;
+    let (tail, took) = drain_held("sleep 5", None).await;
     assert!(
         tail.contains("EACCES"),
         "the line before the hold is kept: {tail:?}"
@@ -414,14 +430,15 @@ async fn a_held_pipe_ends_the_drain_and_the_reader_task() {
     assert_held(took);
 }
 
-/// A chatty holder never leaves the pipe empty for long: the window still
-/// bounds the drain, and the reader stops with it.
+/// A chatty holder never leaves the pipe empty for long: once it is writing,
+/// the window still bounds the drain, and the reader stops with it.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_chatty_held_pipe_still_ends_the_drain_at_its_window() {
-    let (tail, took) =
-        drain_held("i=0; while [ $i -lt 500 ]; do echo tick $i >&2; sleep 0.01; i=$((i+1)); done")
-            .await;
-    assert!(tail.contains("tick"), "{tail:?}");
+    let (_, took) = drain_held(
+        "i=0; while [ $i -lt 500 ]; do echo tick $i >&2; sleep 0.01; i=$((i+1)); done",
+        Some("tick"),
+    )
+    .await;
     assert_held(took);
 }
