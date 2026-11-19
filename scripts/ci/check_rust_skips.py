@@ -22,6 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EXEMPT = {
     "src/test_wait.rs": "defines the helper and prints its skip line",
+    "src/preview_sandbox/linux/fetch_uv_real_fixture.rs": (
+        "its real-uv rows need uv 0.13.1 on PATH, which no test shard installs yet; through the helper they would "
+        "fail every required shard, so they keep their printed skip until a shard installs that uv"
+    ),
     "tests/preview_sandbox_linux.rs": "keeps its own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "tests/common/preview_sandbox.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "tests/preview_sandbox_linux_fetch.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
