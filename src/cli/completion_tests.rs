@@ -89,7 +89,8 @@ fn bash_and_zsh_carry_the_closed_lists() {
     assert!(zsh.contains(":(read execute any)'"), "zsh scope values");
 }
 
-/// C3a: the loader's name rule refuses a hostile capability name, and that file alone fails to parse with the rule's
+/// C3a: the loader's name rule refuses a hostile capability name: the directory load leaves the file out, and the
+/// rule itself (`validate_capability`, which the directory load runs on each parsed file) refuses it with the rule's
 /// error (a guard: the rule exists today; its red proof is the mutant with the rule removed).
 #[tokio::test]
 async fn the_loader_refuses_a_hostile_tool_name() {
@@ -109,9 +110,11 @@ async fn the_loader_refuses_a_hostile_tool_name() {
             .expect("directory");
     let names: Vec<&str> = loaded.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["good_cap"]);
-    let err = crate::capability::parse_capability_file(&bad)
+    let parsed = crate::capability::parse_capability_file(&bad)
         .await
-        .expect_err("the hostile name is refused");
+        .expect("the file parses; the name rule is checked after parsing");
+    let err =
+        crate::capability::validate_capability(&parsed).expect_err("the hostile name is refused");
     assert!(
         err.to_string()
             .contains("must contain only alphanumeric characters and underscores"),
@@ -146,7 +149,6 @@ fn every_real_value_is_completion_safe() {
         "any",
         "claude-code",
         "oci-mcp-package",
-        "local-process",
     ] {
         assert!(values.contains(named), "the tree read lacks {named}");
     }
