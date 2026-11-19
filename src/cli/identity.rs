@@ -46,7 +46,7 @@ pub enum IdentityGrantsCommand {
     /// Append or replace one local grant row.
     #[command(
         about = "Add a local identity grant",
-        after_help = "Examples:\n  mcp-gateway identity grants grant --grant-id g1 --subject oidc:alice --capability weather --any-agent\n"
+        after_help = "Examples:\n  mcp-gateway identity grants grant --grant-id g1 --subject oidc:ann --capability weather --any-agent --reason demo\n"
     )]
     Grant {
         /// Local JSON or YAML grant file. Created when missing.
