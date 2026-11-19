@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { plantFromArgs, plantDoc, plantCsp } from '../perf/plant.mjs';
 import {
   stats, judge, checkRun, passComplete, drift, busy, controlCheck, exitCode, recalibrationFlag,
-  marginFromSpread, nightlyCheck, treeCheck, judgeJob, GATE_SCHEDULE, VERDICT_SCHEDULE,
+  marginFromSpread, nightlyCheck, treeCheck, judgeJob, GATE_SCHEDULE, VERDICT_SCHEDULE, passSettings,
 } from '../perf/first-paint-lib.mjs';
 
 const URL = 'http://127.0.0.1:4390/ui/overview/status';
@@ -277,4 +277,24 @@ test('R15 job: a UI12.9 verdict reads only the mobile gate and the drift runs', 
   const j = job({ schedule: VERDICT_SCHEDULE, reports: { gateMobile: runs(20, 720), unthrottled: runs(5, 300) } });
   expect(j.exit).toBe(0);
   expect(Object.keys(j.verdicts)).toEqual(['gateMobile']);
+});
+
+test('R16 pass settings: each pass carries the design table\'s settings, nothing more', () => {
+  const mScreen = { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false };
+  const dScreen = { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false };
+  const sim = { rttMs: 150, throughputKbps: 1638.4, requestLatencyMs: 562.5, downloadThroughputKbps: 1474.56, uploadThroughputKbps: 675, cpuSlowdownMultiplier: 4 };
+  const config = {
+    multiplier: 3.8,
+    mobileNetwork: { requestLatencyMs: 562.5, downloadThroughputKbps: 1474.56, uploadThroughputKbps: 675 },
+    desktopNetwork: { requestLatencyMs: 0, downloadThroughputKbps: 0, uploadThroughputKbps: 0 },
+    screens: { mobile: mScreen, desktop: dScreen },
+    simulateThrottling: sim,
+  };
+  const mobileGate = { throttlingMethod: 'devtools', throttling: { requestLatencyMs: 562.5, downloadThroughputKbps: 1474.56, uploadThroughputKbps: 675, cpuSlowdownMultiplier: 3.8 }, formFactor: 'mobile', screenEmulation: mScreen };
+  expect(passSettings('gateMobile', config)).toEqual(mobileGate);
+  expect(passSettings('control', config)).toEqual(mobileGate);
+  expect(passSettings('gateDesktop', config)).toEqual({ throttlingMethod: 'devtools', throttling: { requestLatencyMs: 0, downloadThroughputKbps: 0, uploadThroughputKbps: 0, cpuSlowdownMultiplier: 1 }, formFactor: 'desktop', screenEmulation: dScreen });
+  expect(passSettings('unthrottled', config)).toEqual({ throttlingMethod: 'provided', throttling: { rttMs: 0, throughputKbps: 0, requestLatencyMs: 0, downloadThroughputKbps: 0, uploadThroughputKbps: 0, cpuSlowdownMultiplier: 1 }, formFactor: 'mobile', screenEmulation: mScreen });
+  expect(passSettings('simulate', config)).toEqual({ throttlingMethod: 'simulate', throttling: sim, formFactor: 'mobile', screenEmulation: mScreen });
+  expect(() => passSettings('gateTablet', config)).toThrow('no settings for pass "gateTablet"');
 });

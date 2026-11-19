@@ -222,3 +222,27 @@ export function judgeJob({ mode, config, schedule, expected, reports, samples, t
   const failed = Object.values(out.verdicts).some((v) => v.verdict === 'fail');
   return { ...out, exit: exitCode({ fault: controlFault, drift: d.refuse, failed }) };
 }
+
+const NO_NETWORK = Object.freeze({ rttMs: 0, throughputKbps: 0, requestLatencyMs: 0, downloadThroughputKbps: 0, uploadThroughputKbps: 0 });
+
+/**
+ * The Lighthouse settings each pass runs with, and so the settings every report of that pass must carry (the
+ * design's section 3 table). Network values and screens come from the config, which copies them from the pinned
+ * Lighthouse's own constants at calibration; only the mobile multiplier is calibrated.
+ */
+export function passSettings(pass, config) {
+  const mobile = { formFactor: 'mobile', screenEmulation: config.screens.mobile };
+  switch (pass) {
+    case 'gateMobile':
+    case 'control':
+      return { throttlingMethod: 'devtools', throttling: { ...config.mobileNetwork, cpuSlowdownMultiplier: config.multiplier }, ...mobile };
+    case 'gateDesktop':
+      return { throttlingMethod: 'devtools', throttling: { ...config.desktopNetwork, cpuSlowdownMultiplier: 1 }, formFactor: 'desktop', screenEmulation: config.screens.desktop };
+    case 'unthrottled':
+      return { throttlingMethod: 'provided', throttling: { ...NO_NETWORK, cpuSlowdownMultiplier: 1 }, ...mobile };
+    case 'simulate':
+      return { throttlingMethod: 'simulate', throttling: config.simulateThrottling, ...mobile };
+    default:
+      throw new Error(`no settings for pass "${pass}"`);
+  }
+}
