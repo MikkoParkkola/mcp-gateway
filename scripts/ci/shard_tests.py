@@ -104,9 +104,9 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
 }
 # Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`).
 PARTS = {"macos": {"lib-b": (1, 2, 3, 4), "int-lib": (5,)}}
-# The macOS part counts the floors come from, with the run they were read from. Provisional: the Linux union
-# job's counts at 9b309c3058 (run 44152684905) until the macOS E1 run records its own (the floor is 2% under).
-MACOS_PART_COUNTS = {"run": "44152684905 (Linux union, provisional)", 1: 3699, 2: 3636, 3: 4518, 4: 5204, 5: 3623}
+# The macOS part counts the floors come from (each part's list less the macOS skips), with the run they were read
+# from: the E1 dispatch run at 0a3037aecd, both legs' per-part notices. Each leg's floor is its parts' sum, 2% under.
+MACOS_PART_COUNTS = {"run": "44460056220 (E1, macOS, 0a3037aecd)", 1: 3827, 2: 3700, 3: 4526, 4: 5157, 5: 3615}
 
 
 def part_count() -> int:
@@ -699,7 +699,8 @@ def built_parts_rows() -> None:
         fake = os.path.join(root, "lib-parts.sh")
         # The fake build: logs `build K`, refuses to build while a part binary is still on disk, and writes a binary
         # that lists `mK::a mK::b mK::<SDK>` and runs per BEHAVE_K (ok, short, extra, red, panic: b in libtest's
-        # should-panic form). FAIL_LIST_K=1 fails the export after the binary is written, before its list.
+        # should-panic form, child: b's result after a child's unfinished `test <child> ... ` on one line). FAIL_LIST_K=1
+        # fails the export after the binary is written, before its list.
         with open(fake, "w") as f:
             f.write('#!/bin/sh\nk=$2; d=$3; echo "build $k" >> "$LOG"\n'
                     'for b in "$d"/p*/lib-tests-p*; do [ -e "$b" ] && { echo "left $b" >> "$LOG"; exit 7; }; done\n'
@@ -707,6 +708,7 @@ def built_parts_rows() -> None:
                     'mkdir -p "$d/p$k"; printf "m$k::a: test\\nm$k::b: test\\nm$k::' + SDK + ': test\\n" > "$d/p$k/list.txt"\n'
                     'cat > "$d/p$k/lib-tests-p$k" <<EOF\n#!/bin/sh\nb=\\${BEHAVE_$k:-ok}\n'
                     'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
+                    ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
@@ -747,6 +749,8 @@ def built_parts_rows() -> None:
             assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
             # A #[should_panic] test's result line counts as run.
             assert leg_run("lib-b", 8, BEHAVE_2="panic")[0] == 0, "a should-panic result was not counted"
+            # A result after a child process's unfinished line, on the same line, counts as run.
+            assert leg_run("lib-b", 8, BEHAVE_2="child")[0] == 0, "a result after a child's partial line was not counted"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
@@ -1158,8 +1162,10 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
     return 1 if failed else 0
 
 
-# libtest's per-test result line; a #[should_panic] test reads `test <name> - should panic ... ok`.
-RESULT_LINE = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
+# libtest's per-test result; a #[should_panic] test reads `test <name> - should panic ... ok`. Not anchored to the line
+# start: a test that re-runs the binary as a child shares stdout, and the child's unfinished `test <child> ... ` can
+# precede the parent's result on the same line (E1, run 44460056220).
+RESULT_LINE = re.compile(r"(?<!\S)test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
 
 
 def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
@@ -1194,8 +1200,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
                 for raw in p.stdout:
                     sys.stdout.buffer.write(raw)
                     sys.stdout.buffer.flush()
-                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-                    if m:
+                    for m in RESULT_LINE.finditer(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n"))):
                         reported[m.group(1)] = m.group(2)
                 prc = p.wait()
         finally:
