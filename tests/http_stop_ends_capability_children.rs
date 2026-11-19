@@ -23,8 +23,9 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 const CAPS: &str = "caps";
 const CAPABILITY: &str = "stop_probe";
 const READY_BOUND: Duration = Duration::from_secs(60);
-/// The gateway's whole stop; the row waits a little longer for the exit.
-const STOP_TOTAL: Duration = Duration::from_secs(10);
+/// The gateway's whole stop, at the 13 s floor below which an HTTP start is
+/// refused; the row waits a little longer for the exit.
+const STOP_TOTAL: Duration = Duration::from_secs(13);
 const EXIT_BOUND: Duration = Duration::from_secs(30);
 
 fn fixture() -> String {
