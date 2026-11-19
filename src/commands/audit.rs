@@ -107,6 +107,7 @@ fn run_audit_verify(
         }
         Ok(result) if result.ok => {
             if render == Render::Json {
+                print_findings(&result);
                 return print_verdict(&result, signed, verify_mode, ExitCode::SUCCESS);
             }
             print_pass(&result, signed, verify_mode);

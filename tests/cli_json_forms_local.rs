@@ -22,7 +22,9 @@ struct Out {
 /// The binary with `args` in `home`, nothing inherited, `stdin` piped in.
 fn run<S: AsRef<std::ffi::OsStr>>(home: &Path, args: &[S], stdin: &[u8]) -> Out {
     let mut command = gateway_bin::command(home, gateway_bin::Inherit::Nothing);
+    // Info log lines carry timestamps, so two runs' stderr would never match; the rows compare command output.
     command
+        .env("MCP_GATEWAY_LOG_LEVEL", "warn")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -208,8 +210,9 @@ fn hash_key_prints_one_document_and_keeps_its_line() {
     assert_eq!(json.stderr, "");
 }
 
-/// X1: `--json` with `--verify` is a usage error naming both flags. At the base the exit is 2 too (the unknown
-/// flag), so the stderr literal is what fails there.
+/// X1: `--json` with `--verify` is a usage error. hash-key never repeats what was typed (argv may hold a mistyped
+/// key), so the redaction layer words the conflict without naming the flags; the literal is that wording. At the base
+/// the exit is 2 too, with clap's message for a flag it does not know.
 #[test]
 fn hash_key_json_refuses_verify() {
     let home = tempfile::tempdir().expect("home");
@@ -221,7 +224,7 @@ fn hash_key_json_refuses_verify() {
     assert_eq!((out.code, out.stdout.as_str()), (Some(2), ""));
     assert!(
         out.stderr
-            .contains("the argument '--json' cannot be used with '--verify <DIGEST>'"),
+            .contains("error: an argument cannot be used with one or more of the other specified arguments; what was typed is not repeated here."),
         "stderr: {}",
         out.stderr
     );
