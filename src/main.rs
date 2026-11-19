@@ -23,8 +23,10 @@ fn main() -> ExitCode {
     }
     on_main_stack(move || {
         // Parsing needs the main stack, especially on Windows debug builds.
-        let cli = Cli::try_parse_from(&args)
-            .unwrap_or_else(|error| parse_errors::quiet_for_secret_commands(&args, error).exit());
+        let cli = Cli::try_parse_from(&args).unwrap_or_else(|error| {
+            let error = parse_errors::without_hidden_suggestions(&args, error);
+            parse_errors::quiet_for_secret_commands(&args, error).exit()
+        });
         cli::run(cli)
     })
 }

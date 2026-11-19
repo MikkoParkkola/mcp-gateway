@@ -9,6 +9,9 @@
 //! data) or a live page token typed as an argument by mistake; quoted back, it
 //! reaches stderr and any log that captures it. Those commands get a fixed
 //! message instead. Every other command keeps the parser's own message.
+//!
+//! Before that, an unknown-subcommand error loses any hidden command from its suggestions: clap suggests hidden
+//! subcommands too, and a hidden command is never named to a user who did not type it.
 
 use std::ffi::OsString;
 
@@ -62,6 +65,50 @@ pub(crate) fn quiet_for_secret_commands(args: &[OsString], error: clap::Error) -
         error.kind(),
         format!("{what}; what was typed is not repeated here. {hint}; see --help.\n"),
     )
+}
+
+/// `error` with no hidden command among its suggestions (MIK-9681.CLIUX.18). clap suggests hidden subcommands too, and a
+/// hidden command is never named to a user who did not type it. Only an unknown-subcommand error with a hidden name
+/// in its suggestions changes: it is rebuilt with the same kind and context minus the hidden names, and with no
+/// suggestion at all when none is left.
+pub(crate) fn without_hidden_suggestions(args: &[OsString], error: clap::Error) -> clap::Error {
+    use clap::error::{ContextKind, ContextValue};
+    if error.kind() != ErrorKind::InvalidSubcommand {
+        return error;
+    }
+    let Some(ContextValue::Strings(suggested)) = error.get(ContextKind::SuggestedSubcommand) else {
+        return error;
+    };
+    // The command the typo was typed at: suggestions are its subcommands.
+    let tree = Cli::command();
+    let mut at = &tree;
+    for name in subcommand_path(args).unwrap_or_default() {
+        match at.find_subcommand(&name) {
+            Some(sub) => at = sub,
+            None => break,
+        }
+    }
+    let hidden = |name: &str| {
+        at.find_subcommand(name)
+            .is_some_and(clap::Command::is_hide_set)
+    };
+    let visible: Vec<String> = suggested
+        .iter()
+        .filter(|name| !hidden(name.as_str()))
+        .cloned()
+        .collect();
+    if visible.len() == suggested.len() {
+        return error;
+    }
+    let mut rebuilt = clap::Error::new(error.kind()).with_cmd(&tree);
+    for (kind, value) in error.context() {
+        if kind != ContextKind::SuggestedSubcommand {
+            rebuilt.insert(kind, value.clone());
+        } else if !visible.is_empty() {
+            rebuilt.insert(kind, ContextValue::Strings(visible.clone()));
+        }
+    }
+    rebuilt
 }
 
 /// Whether the command line names `secret`: the parse recorded exactly that
