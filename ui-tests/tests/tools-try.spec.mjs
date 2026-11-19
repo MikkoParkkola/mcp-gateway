@@ -286,13 +286,19 @@ test('F12 a boolean and an enum default show beside the control and are left out
   const cfg = {
     tools: [tool('web.search', 'search', 'read', {
       type: 'object',
+      required: ['must'],
       properties: {
         notify: { type: 'boolean', default: true },
         mode: { type: 'string', enum: ['fast', 'deep'], default: 'fast' },
+        must: { type: 'boolean', default: true },
       },
     })],
   };
   const bag = await open(page, cfg);
+  const must = panel(page).getByLabel('must', { exact: true });
+  // A required boolean is a checkbox: it starts at its default, and the default sits beside it.
+  await expect(must).toBeChecked();
+  await expect(must.locator('..').locator('span.muted')).toHaveText('true');
   const notify = panel(page).getByLabel('notify', { exact: true });
   const mode = panel(page).getByLabel('mode', { exact: true });
   await expect(notify).toBeVisible();
@@ -302,7 +308,7 @@ test('F12 a boolean and an enum default show beside the control and are left out
   await expect(notify.locator('option:checked')).toHaveText('default');
   await expect(mode.locator('option:checked')).toHaveText('default');
   await sends(bag, 1, () => runOf(page, 'web.search').click());
-  expect(bag.calls[0].body.arguments).toEqual({});
+  expect(bag.calls[0].body.arguments).toEqual({ must: true });
 });
 
 test('F6 an empty required number blocks Run and names the field', async ({ page }) => {
@@ -518,7 +524,10 @@ test('F8b a whole-arguments value that is not an object blocks Run, and an allOf
   const cfg = {
     tools: [
       tool('one.of', 's', 'read', { oneOf: [{ type: 'object' }] }),
+      // Root properties too, so only the allOf rule sends this root to the JSON field.
       tool('all.of', 's', 'read', {
+        type: 'object',
+        properties: { b: { type: 'string' } },
         allOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { required: ['a'] }],
       }),
     ],
@@ -536,6 +545,8 @@ test('F8b a whole-arguments value that is not an object blocks Run, and an allOf
   await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
   await expect(panel(page).getByRole('textbox')).toBeVisible();
   await expect(panel(page).getByLabel('a', { exact: true })).toHaveCount(0);
+  // The root's own property is not drawn as a field either: the whole root is one JSON field.
+  await expect(panel(page).getByLabel('b', { exact: true })).toHaveCount(0);
 });
 
 test('R1 Run sends the exact body, typed', async ({ page }) => {
