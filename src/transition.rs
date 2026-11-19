@@ -270,14 +270,16 @@ impl TransitionTracker {
     // Other hard links keep the old bytes. The writer's owner and macOS ACL
     // handling is a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let turn = self.write_turn.lock();
+        let spare = parking_lot::Mutex::new(());
+        let turn = mutant!("no-turn", spare.lock(), self.write_turn.lock());
         self.write(path, &turn)
     }
 
     /// The stop checkpoint's save: `None`, skipped, while another write of
     /// this file holds its turn, so writes stalled on a slow disk never pile up.
     pub(crate) fn save_unless_busy(&self, path: &Path) -> Option<std::io::Result<()>> {
-        let turn = self.write_turn.try_lock()?;
+        let spare = parking_lot::Mutex::new(());
+        let turn = mutant!("no-turn", spare.try_lock(), self.write_turn.try_lock())?;
         Some(self.write(path, &turn))
     }
 

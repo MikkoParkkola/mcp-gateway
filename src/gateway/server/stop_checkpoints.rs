@@ -96,11 +96,15 @@ impl Checkpoints {
 /// writes: each runs on its own detached thread, so a write stalled on one file
 /// makes later passes skip that class only.
 async fn passes(classes: Arc<[Class]>) {
-    let mut every = tokio::time::interval(EVERY);
+    let mut every = tokio::time::interval(mutant!("interval", Duration::from_secs(5), EVERY));
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
     for pass in 1_u64.. {
         every.tick().await;
+        if mutant!("no-loop", pass >= 2, false) {
+            std::future::pending::<()>().await;
+        }
         info!("stop checkpoint pass={pass} started");
+        let mut writes = Vec::new();
         for class in classes.iter() {
             let (name, save) = (class.name, Arc::clone(&class.checkpoint));
             let spawned = std::thread::Builder::new()
@@ -110,8 +114,16 @@ async fn passes(classes: Arc<[Class]>) {
                         info!("stop checkpoint saved class={name} pass={pass}");
                     }
                 });
-            if let Err(error) = spawned {
-                warn!(%error, class = name, "stop checkpoint could not start a thread; skipped");
+            match spawned {
+                Ok(write) => writes.push(write),
+                Err(error) => {
+                    warn!(%error, class = name, "stop checkpoint could not start a thread; skipped");
+                }
+            }
+        }
+        if mutant!("await-batch", true, false) {
+            for write in writes {
+                let _ = tokio::task::spawn_blocking(move || write.join()).await;
             }
         }
     }
@@ -133,7 +145,11 @@ pub(super) fn drain_window(budget: &StopBudget, now: Instant) -> Duration {
 
 /// Where the last pass ends: Dp, where the backend stage starts at the latest.
 pub(super) fn last_deadline(budget: &StopBudget) -> Instant {
-    budget.post_listener_end()
+    mutant!(
+        "last-from-reserve",
+        budget.post_listener_end() + Duration::from_millis(22),
+        budget.post_listener_end()
+    )
 }
 
 /// Whether a save landed; a failed one is logged and the last landed file

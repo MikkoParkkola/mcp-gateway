@@ -79,13 +79,15 @@ pub(crate) fn create_sse_response_with_view(
             // The stop first: once it is set, nothing more is written.
             let next = tokio::select! {
                 biased;
-                Ok(_) = stopped.wait_for(|stop| *stop) => None,
+                Ok(_) = stopped.wait_for(|stop| *stop && mutant!("no-sse-end", false, true)) => None,
                 next = rx.recv() => Some(next),
             };
             let Some(next) = next else {
                 // What is still queued is settled unwritten, so no request's
                 // waiter waits for a copy this stream will never write.
-                settle_stranded(&mut rx);
+                if mutant!("no-settle", false, true) {
+                    settle_stranded(&mut rx);
+                }
                 break;
             };
             match next {

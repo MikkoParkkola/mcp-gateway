@@ -147,7 +147,7 @@ impl Listener {
     pub(crate) async fn recv(&mut self) -> Result<Published, broadcast::error::RecvError> {
         tokio::select! {
             biased;
-            Ok(_) = self.stopped.wait_for(|stop| *stop) => Err(broadcast::error::RecvError::Closed),
+            Ok(_) = self.stopped.wait_for(|stop| *stop && mutant!("no-sse-end", false, true)) => Err(broadcast::error::RecvError::Closed),
             next = self.receiver.recv() => next,
         }
     }

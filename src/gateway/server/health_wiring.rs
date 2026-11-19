@@ -243,7 +243,20 @@ impl Health {
         };
         super::stop_checkpoints::Class {
             name: "health",
-            checkpoint: save(file::Wait::SkipIfBusy),
+            checkpoint: mutant!(
+                "health-stop",
+                {
+                    let (history, path) = (Arc::clone(&self.history), self.path.clone());
+                    let stop: super::stop_checkpoints::Save = Arc::new(move || {
+                        let now = crate::clock::unix_secs().unwrap_or_default();
+                        history.stop(now);
+                        path.as_ref()
+                            .is_some_and(|path| file::save(&history, path, now, file::Wait::Block))
+                    });
+                    stop
+                },
+                save(file::Wait::SkipIfBusy)
+            ),
             last: save(file::Wait::Block),
         }
     }
