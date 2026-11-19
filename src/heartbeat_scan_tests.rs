@@ -316,11 +316,13 @@ fn launch_sources() -> Vec<(String, String)> {
                     .is_some_and(|e| e == "sh" || e == "yml" || e == "yaml")
             {
                 if let Ok(text) = std::fs::read_to_string(&p) {
+                    // Forward slashes on every OS, so the file tables
+                    // (ARG_IMAGE, KNOWN_LAUNCHES) match on Windows too.
                     out.push((
                         p.strip_prefix(root)
                             .expect("under the crate")
                             .to_string_lossy()
-                            .into_owned(),
+                            .replace('\\', "/"),
                         text,
                     ));
                 }
@@ -350,7 +352,7 @@ fn every_image_launch_sets_dnt() {
     for (path, text) in launch_sources() {
         let n = gateway_launches(&path, &text).len();
         if n > 0 {
-            seen.insert(path.replace('\\', "/"), n);
+            seen.insert(path, n);
         }
     }
     let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
