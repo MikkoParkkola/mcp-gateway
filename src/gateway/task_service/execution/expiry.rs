@@ -257,6 +257,7 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     outcome
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "expiry_gate_tests.rs"]
 mod gate_tests;

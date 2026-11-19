@@ -5,7 +5,7 @@
 // served per test through page.route, so each test controls what the module
 // loads; triggers come from the module's own tip() on a fixture page.
 import { test, expect } from './base.mjs';
-import { shellReady, shellModuleUrl, withFixturePages, tooltipCoversNothing, tooltipModuleUrl, tooltipCssUrl } from './shell.mjs';
+import { shellReady, shellModuleUrl, withFixturePages, tooltipCoversNothing, tooltipModuleUrl, tooltipCssUrl, pauseClock } from './shell.mjs';
 
 const COPY = {
   _pending: {},
@@ -67,12 +67,6 @@ async function ready(page) {
 }
 
 const tipOf = (page, id) => page.locator(`.has-tip[data-tip="${id}"] .tip`);
-// clock.install() leaves virtual time running with the wall clock, so a slow
-// step between hover() and runFor() can fire a timer early. Pausing makes
-// runFor() the only thing that moves time. The pause lands 5 s ahead because
-// the clock still runs between reading it and pausing; it is called right
-// after mount, before anything arms a timer, so the jump fires nothing.
-const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
 
 test.describe('component', () => {
   test('T1 a text entry: a button named from the title, described by one tooltip', async ({ page }) => {
@@ -662,7 +656,7 @@ const TOOLS = [
 
 async function toolsScreen(page) {
   await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
-  await page.goto('/ui/tools/status');
+  await page.goto('/ui/tools/status?view=all');
   await shellReady(page);
 }
 

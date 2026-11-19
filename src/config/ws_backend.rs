@@ -85,6 +85,7 @@ impl Config {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "ws_backend_tests.rs"]
 mod tests;

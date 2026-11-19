@@ -543,22 +543,24 @@ DOC_MENTIONS_ALLOWED: dict[tuple[str, str], str] = {
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_SMOKE"): _TEST_SCRIPT,
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_IMAGE"): _TEST_SCRIPT,
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE"): _TEST_SCRIPT,
-    # A bare name in prose can belong to another schema; these two do.
+    # A bare name in prose can belong to another schema; these do.
     ("docs/control_plane.md", "schema_version"): "a field of the control-plane API response, not a gateway config key",
+    ("docs/CLI.md", "schema_version"): "a field of the JSON error document the CLI prints (src/commands/cli_exit.rs, CliError::outcome), not a gateway config key",
     ("docs/runtime/descriptor_spec.md", "max_entries"): "a field of the Hebb sandbox descriptor schema, not gateway config",
 }
 
 
-def doc_set() -> list:
+def doc_set(root: Path = ROOT) -> list:
     """Every user-facing file the check reads: the user docs the env surface
     already counts as published (ENV_DOC_GLOBS, deploy/ aside: the chart is
     checked through values.yaml and its renders), minus UPGRADING, release
-    notes and CHANGELOG, which must name hidden and removed keys."""
+    notes and CHANGELOG, which must name hidden and removed keys. `root` lets
+    surface_shipped.py select the same files in another tree."""
     out = set()
     for glob in inv.ENV_DOC_GLOBS:
         if glob.startswith("deploy/"):
             continue
-        for path in ROOT.glob(glob):
+        for path in root.glob(glob):
             if not path.is_file() or inv.ENV_DOC_SKIP.search(path.name):
                 continue
             if path.suffix == ".md" or (path.suffix in (".yaml", ".yml") and path.name not in NOT_GATEWAY_CONFIGS):

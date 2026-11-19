@@ -75,6 +75,20 @@ fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// The lib test split's part tag is a separate attribute beside the test
+/// cfg: a tagged module is still test-only, and a tag alone is not.
+#[test]
+fn a_part_tag_beside_the_test_cfg_is_still_test_only() {
+    let module = |text: &str| syn::parse_str::<syn::ItemMod>(text).expect("a module item");
+    assert!(is_cfg_test(
+        &module("#[cfg(tp1)]\n#[cfg(test)]\nmod t {}").attrs
+    ));
+    assert!(is_cfg_test(
+        &module("#[cfg(tp1)]\n#[cfg(all(test, unix))]\nmod t {}").attrs
+    ));
+    assert!(!is_cfg_test(&module("#[cfg(tp1)]\nmod t {}").attrs));
+}
+
 /// A macro body's tokens with the whitespace `to_string` puts between them
 /// removed, so `request . send ()` reads `request.send()`.
 fn macro_text(mac: &syn::Macro) -> String {

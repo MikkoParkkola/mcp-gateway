@@ -19,6 +19,9 @@ mod audit_lookup;
 mod backend_url_keys;
 mod cap;
 mod capability_dirs;
+/// The shared exit table and error shape; used by the webui-only remote commands until `MIK-9765.LERR.2`.
+#[cfg(feature = "webui")]
+mod cli_exit;
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -545,20 +548,29 @@ fn read_ca_files(
         })?;
     Ok((cert, key))
 }
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "api_parity_tests.rs"]
 mod api_parity_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "api_tests.rs"]
 mod api_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
+#[cfg(tp2)]
+#[cfg(all(test, feature = "webui"))]
+#[path = "remote_exit_tests.rs"]
+mod remote_exit_tests;
+#[cfg(tp2)]
 #[cfg(test)]
 mod tls_ca_key_tests;
 // Windows owner-only fixtures for the binary's `Inherit` callers.
 #[cfg(all(test, windows))]
 mod winacl_test_support;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config};
@@ -677,5 +689,6 @@ pub(crate) fn load_for_serve(
     mcp_gateway::config::Config::load_evaluated(path)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod serve_load_tests;

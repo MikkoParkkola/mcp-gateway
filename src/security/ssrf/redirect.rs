@@ -82,6 +82,7 @@ mod redirect_policy_scan;
 // MIK-8660 T1e: reqwest's `previous()` already holds the first URL, so the
 // budget check must be `>`: a `>=` follows one redirect fewer than
 // MAX_REDIRECT_HOPS, which is what every site did before.
+#[cfg(tp4)]
 #[cfg(test)]
 mod hop_budget_tests {
     use std::sync::Arc;

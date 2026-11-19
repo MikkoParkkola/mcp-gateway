@@ -138,6 +138,20 @@ pub(crate) fn kept_tempdir_prefixed(prefix: &str) -> Arc<tempfile::TempDir> {
     )
 }
 
+/// [`kept_tempdir_prefixed`], owner-only on unix. tempfile creates a dir with
+/// mode 0o777 minus the umask unless told otherwise, which on a shared host
+/// lets other users read it.
+pub(crate) fn kept_private_tempdir_prefixed(prefix: &str) -> Arc<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    register(builder.tempdir().expect("a temp dir"))
+}
+
 /// [`kept_tempdir`], created inside `parent`.
 pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir_in(parent).expect("a temp dir"))
@@ -396,13 +410,16 @@ pub(crate) async fn held_then_gone(dir: &Path, release: impl FnOnce()) {
     );
 }
 
+#[cfg(tp3)]
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "test_dir_keep_registered_tests.rs"]
 mod registered_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

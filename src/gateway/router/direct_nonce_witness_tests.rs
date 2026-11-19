@@ -72,6 +72,7 @@ fn refused_as_replay(body: &Value) -> bool {
 /// Site A, KEEP (twin of K-spend-mint): the refused call minted a credential,
 /// then the spend budget refused it. The mint is an effect, so the nonce stays
 /// spent. Red on base: the direct route refunded unconditionally.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_a_mint_keeps_the_nonce() {
@@ -110,6 +111,7 @@ async fn a_direct_spend_refusal_after_a_mint_keeps_the_nonce() {
 /// mints, then fails at `redeem_retry` before any consume. The mint is an
 /// effect: the honest retry under the same nonce is a replay. `k-std` has no
 /// budget. Red on base.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_refused_retry_after_a_mint_keeps_the_nonce() {
     for backend in BACKENDS {
@@ -150,6 +152,7 @@ async fn a_direct_refused_retry_after_a_mint_keeps_the_nonce() {
 /// the first on `alpha-pt`, so its schema check fills `tools/list` before the
 /// nonce is even admitted, then the budget refuses it. The fill is an effect:
 /// the witness is never minted, and the re-send is a replay. Red on base.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_a_cold_schema_fill_keeps_the_nonce() {
@@ -189,6 +192,7 @@ async fn a_direct_spend_refusal_after_a_cold_schema_fill_keeps_the_nonce() {
 /// not parse, falls back to the static credential; the attempt counts as an
 /// effect, so the witness is never minted and the spend refusal keeps the
 /// nonce. Both backends.
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
@@ -265,6 +269,7 @@ impl crate::transport::Transport for HeldList {
 /// observed and B has not returned. The join is an effect (r4 §70): the
 /// witness is never minted and the re-send is a replay. Red on base: a join
 /// never moves `list_fills`. Mutant: mW (backend/metadata.rs:414).
+#[cfg(tp1)]
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_joining_a_fill_keeps_the_nonce() {

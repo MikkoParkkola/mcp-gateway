@@ -1,0 +1,3 @@
+# file	function	kind	count	class	reason
+src/preview_sandbox/linux/ca_bundle.rs	snapshot	open-create	1	no-secret	the preview fetch's CA bundle snapshot (public certificates), created exclusive and 0444 in the preview proxy's owner-only directory; Linux only
+src/preview_sandbox/linux/mounts.rs	preview_config	fs-write	2	no-secret	empty ca.pem mount point and empty.npmrc inside the preview sandbox's own tmpfs; Linux only; holds no content

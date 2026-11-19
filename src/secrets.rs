@@ -295,6 +295,7 @@ pub(crate) mod lookup_probe {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +428,7 @@ mod tests {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod c4_tests {
     use super::*;

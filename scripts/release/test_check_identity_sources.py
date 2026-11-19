@@ -122,6 +122,18 @@ class TestDetection(unittest.TestCase):
                     "mod a;\n")
         self.assertEqual(cis.violations(root), [])
 
+    # The lib test split puts a separate `#[cfg(tpK)]` line above the test cfg.
+    def test_a_part_tagged_path_module_is_test_code(self):
+        root = tree({"src/a.rs": "#[cfg(tp2)]\n#[cfg(test)]\n#[path = \"a_tests.rs\"]\nmod tests;\n",
+                     "src/a_tests.rs": self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    def test_a_part_tagged_inline_module_is_test_code_and_what_follows_is_not(self):
+        body = "#[cfg(tp2)]\n#[cfg(test)]\nmod t {\n" + self.LIT + "}\n" + self.LIT.replace("mint", "mint2")
+        found = cis.violations(tree({"src/a.rs": body}, "mod a;\n"))
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("mint2", found[0])
+
     def test_a_production_module_named_tests_is_still_inspected(self):
         root = tree({"src/foo_tests.rs": self.LIT}, "mod foo_tests;\n")
         self.assertEqual(len(cis.violations(root)), 1)

@@ -747,6 +747,7 @@ pub fn classify_and_observe(
     shape
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_declared_capabilities_tests.rs"]
 mod declared_capabilities_tests;
@@ -757,10 +758,12 @@ mod declared_capabilities_tests;
 /// here: a component test cannot distinguish "dropped at parse" from "ignored
 /// at comparison", and those two implementations differ exactly where the
 /// security argument is.
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_declared_parse_boundary_tests.rs"]
 mod declared_parse_boundary_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "meta_declared_extensions_tests.rs"]
 mod declared_extensions_tests;

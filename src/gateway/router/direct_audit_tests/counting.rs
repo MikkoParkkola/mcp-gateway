@@ -67,6 +67,7 @@ pub(super) async fn keyed_meta_invoke(fx: &Fixture, id: u32) -> StatusCode {
 }
 
 /// T22: one admitted meta call moves calls on every dimension it names.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t22_a_meta_call_counts_once_on_every_dimension() {
     let fx = fixture(Setup {
@@ -96,6 +97,7 @@ async fn t22_a_meta_call_counts_once_on_every_dimension() {
 }
 
 /// T18 row of T20: a direct call counts once.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t20_a_direct_call_counts_once() {
     let fx = fixture(Setup::default()).await;
@@ -108,6 +110,7 @@ async fn t20_a_direct_call_counts_once() {
 
 /// T20 rows: a scope refusal is a call and a block, on either route; on
 /// `/mcp` it is refused by the router before the meta layer.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t20_scope_refusals_count_as_blocks_on_both_routes() {
     let fx = fixture(Setup {
@@ -135,6 +138,7 @@ async fn t20_scope_refusals_count_as_blocks_on_both_routes() {
 
 /// T27: a target the caller may not see is refused at the route and
 /// answered as absent: one call, one block, not two.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t27_a_withheld_target_counts_once() {
     let fx = fixture(Setup {
@@ -156,6 +160,7 @@ async fn t27_a_withheld_target_counts_once() {
 
 /// T25: a request-firewall refusal is a call, a block and a firewall catch,
 /// exactly once, on either route; never an error.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn t25_request_firewall_refusals_count_as_firewall_catches() {
@@ -183,6 +188,7 @@ async fn t25_request_firewall_refusals_count_as_firewall_catches() {
 }
 
 /// T24: an idempotent replay delivers an answer already counted.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t24_a_meta_replay_counts_nothing() {
     let fx = fixture(Setup {
@@ -198,6 +204,7 @@ async fn t24_a_meta_replay_counts_nothing() {
 }
 
 /// T24, direct route: the guard's replay counts nothing either.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t24_a_direct_replay_counts_nothing() {
     let fx = fixture(Setup {
@@ -222,6 +229,7 @@ async fn t24_a_direct_replay_counts_nothing() {
 
 /// T11 at the site: a tool the catalogue does not list adds to the tool
 /// overflow and is stored as no label.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t11_an_uncatalogued_tool_counts_in_overflow() {
     let fx = fixture(Setup::default()).await;
@@ -247,6 +255,7 @@ async fn t11_an_uncatalogued_tool_counts_in_overflow() {
 }
 
 /// T21: a gateway with no transparency log counts the same calls.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t21_counting_needs_no_audit_log() {
     let fx = fixture(Setup {
@@ -277,6 +286,7 @@ async fn t21_counting_needs_no_audit_log() {
 /// T20a: while the audit log fails closed, a meta `tools/call` refused at
 /// admission is a call and an error; the direct route, refused before its
 /// body is read, counts nothing (the stated gap), `tools/list` included.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t20a_admission_refusals_count_on_the_meta_route_only() {
     let fx = fixture(Setup {
@@ -318,6 +328,7 @@ async fn t20a_admission_refusals_count_on_the_meta_route_only() {
 /// T20, the invariant: over a mixed workload each case moves its own
 /// expected delta, and in total the calls equal the invocation records
 /// minus the replays.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t20_calls_equal_records_minus_replays() {
     let fx = fixture(Setup {
@@ -376,6 +387,7 @@ async fn t20_calls_equal_records_minus_replays() {
 
 /// T24, direct route, idempotency cache off: a keyed modern retry replays
 /// from the execution store and counts nothing.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t24_a_direct_execution_store_replay_counts_nothing() {
     let fx = fixture(Setup::default()).await;
@@ -396,6 +408,7 @@ async fn t24_a_direct_execution_store_replay_counts_nothing() {
 
 /// T25 at the send: when only the dispatch layer's rescan refuses an
 /// argument, the call still counts as a firewall catch, on both routes.
+#[cfg(tp1)]
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn t25_a_dispatch_rescan_refusal_counts_as_a_firewall_catch() {
@@ -436,6 +449,7 @@ async fn t25_a_dispatch_rescan_refusal_counts_as_a_firewall_catch() {
 /// secret. Neither the name nor the secret reaches the reads, the saved
 /// file or the logs; the secret never reaches the audit log either, which
 /// keeps the caller's target name on purpose (T11).
+#[cfg(tp1)]
 #[test]
 fn t42_real_calls_and_a_kill_store_no_secret_and_no_caller_chosen_name() {
     const SENTINEL: &str = "sk-live-SENTINEL-8854-e2e";
@@ -521,6 +535,7 @@ fn t42_real_calls_and_a_kill_store_no_secret_and_no_caller_chosen_name() {
 
 /// T11 for a per-user backend: a tool listed only in a caller's own
 /// catalogue slot keeps its label; the shared slot holds nothing.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t11_a_tool_in_a_per_user_catalogue_keeps_its_label() {
     let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(

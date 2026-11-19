@@ -132,6 +132,7 @@ impl Gateway {
                 ),
             )
             .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_history(self.history_hook(&data_dir))
             .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));

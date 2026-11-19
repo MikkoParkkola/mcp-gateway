@@ -549,8 +549,10 @@ fn count_as_metric(value: usize) -> f64 {
     f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod tests;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod usage_file_tests;

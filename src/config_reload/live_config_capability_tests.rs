@@ -152,6 +152,7 @@ fn r2x_yaml_reload_then_first_capability_publish() {
                 ..RawInputs::default()
             },
             &[],
+            crate::config_reload::history::Source::File,
         );
         step.set_capabilities(1, published_part);
     });

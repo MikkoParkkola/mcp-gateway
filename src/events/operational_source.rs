@@ -377,6 +377,7 @@ impl OperationalSource {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "operational_source_tests.rs"]
 mod tests;

@@ -32,6 +32,7 @@ fn gated_on_4_0_0(installed: &str) -> usize {
         .count()
 }
 
+#[cfg(tp2)]
 #[test]
 fn upgrading_a_3x_install_stamps_the_full_binary_version() {
     let dir = TempDir::new().unwrap();
@@ -44,6 +45,7 @@ fn upgrading_a_3x_install_stamps_the_full_binary_version() {
     );
 }
 
+#[cfg(tp2)]
 #[test]
 fn a_4_0_0_migration_reaches_a_beta_install_and_not_a_final_one() {
     assert_eq!(
@@ -59,6 +61,7 @@ fn a_4_0_0_migration_reaches_a_beta_install_and_not_a_final_one() {
     );
 }
 
+#[cfg(tp2)]
 #[test]
 fn a_stamp_at_this_build_is_neither_unknown_nor_newer() {
     let current = SemVer::parse(env!("CARGO_PKG_VERSION")).expect("own version parses");

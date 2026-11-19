@@ -80,6 +80,7 @@ fn decode_with(key: &[u8], token: &str) -> Option<(Cursor, Option<String>)> {
     (wire.v == 1).then_some((wire.cursor, wire.bind))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::super::reader::LogPos;

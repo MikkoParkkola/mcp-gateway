@@ -521,7 +521,7 @@ fn b19_a_second_process_meets_the_vault_lock() {
     use std::io::BufRead as _;
     let dir = tempfile::tempdir().expect("tempdir");
     let lock = dir.path().join("vault.lock");
-    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let mut child = crate::test_home::test_binary()
         .args([
             "--exact",
             "secret_store::tests::vault_lock_child",
@@ -576,4 +576,26 @@ fn b15_a_collision_is_not_retried_and_the_foreign_entry_is_never_offered() {
     assert!(live.is_empty(), "{live:?}");
     let unused = unused_entries(&vault, &[&store], &BTreeSet::new()).expect("listing");
     assert!(unused.is_empty(), "a foreign entry was listed: {unused:?}");
+}
+
+/// Set in the child [`r3b_witness_child`] runs in.
+const R3B_WITNESS: &str = "MCP_GW_TEST_R3B_WITNESS";
+
+/// R3b's witness: spawned with the same environment as each
+/// contention variant's suite children, it prints the home they resolve and
+/// the vault lock they would take. The suite children print neither.
+#[test]
+#[ignore = "run by the R3b rows in home_contention_tests"]
+fn r3b_witness_child() {
+    if std::env::var_os(R3B_WITNESS).is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("config dir");
+    let vault = Vault::for_config_dir(dir.path()).expect("home");
+    println!(
+        "PROBE HOME={}",
+        crate::home_dir::home_dir().expect("home").display()
+    );
+    println!("PROBE LOCK={}", vault.lock_path().display());
+    println!("r3b witness child ok");
 }

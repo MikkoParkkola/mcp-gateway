@@ -31,9 +31,11 @@ from __future__ import annotations
 
 import contextlib
 import io
+import glob
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -280,6 +282,34 @@ def contents(path: str, most: int | None = 3) -> str:
     return shown + (f", +{len(found) - most} more" if len(found) > most else "")
 
 
+@contextlib.contextmanager
+def private_home(base: dict[str, str] | None, tmp: str | None):
+    """A gateway home of the shard's own for its test binaries, on every OS: without one, every
+    shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
+    (not inside it, so the leftover check never reads it) and removed after the shard, also when a
+    step fails. The config and data dirs the lib resolves are set beneath it."""
+    home = os.path.join(
+        os.path.dirname(tmp) if tmp else tempfile.gettempdir(), f"shard-home-{secrets.token_hex(8)}"
+    )
+    # Owner-only on POSIX. Not on Windows: there a 0o700 mkdir (what mkdtemp does) writes a
+    # protected DACL that also grants OWNER RIGHTS (S-1-3-4), and the gateway refuses a lock dir
+    # that any SID but the user, SYSTEM and Administrators may write, so every auth-on start under
+    # this home failed. A plain mkdir inherits the account's own temp-dir ACL instead.
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    env = dict(os.environ if base is None else base)
+    env["MCP_GATEWAY_TEST_HOME_DIR"] = home
+    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    try:
+        yield env
+    finally:
+        try:
+            shutil.rmtree(home)
+        except OSError as error:
+            # Not a shard failure, but never silent: a kept home is state the next run must not see.
+            print(f"::warning::could not remove the shard's gateway home {home}: {error}")
+
+
 def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     failed = run_steps(os_kind, shard, program)
     for f in failed:
@@ -320,27 +350,27 @@ def runner_config(path: str) -> list[str]:
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
-    env = {**os.environ, "TMPDIR": tmp} if tmp else None
     runner = runner_config(write_runner(tmp)) if tmp else []
-    for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
-        rc, lines = cargo(
-            [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-            program,
-            env,
-        )
-        n = selected(lines)
-        results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
-        print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
-              f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
-              f"ignored {sum(r[2] for r in results)}, rc {rc}")
-        if rc != 0:
-            failed.append(f"{step}: cargo exited {rc}")
-        if n < floor:
-            failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
-    if EXAMPLES.get(os_kind) == shard:
-        rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
-        if rc != 0:
-            failed.append(f"examples: cargo build exited {rc}")
+    with private_home({**os.environ, "TMPDIR": tmp} if tmp else None, tmp) as env:
+        for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
+            rc, lines = cargo(
+                [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                program,
+                env,
+            )
+            n = selected(lines)
+            results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
+            print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
+                  f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
+                  f"ignored {sum(r[2] for r in results)}, rc {rc}")
+            if rc != 0:
+                failed.append(f"{step}: cargo exited {rc}")
+            if n < floor:
+                failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+        if EXAMPLES.get(os_kind) == shard:
+            rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
+            if rc != 0:
+                failed.append(f"examples: cargo build exited {rc}")
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return failed
@@ -564,6 +594,87 @@ def self_test() -> int:
     per_binary_rows()
     prebuilt_rows()
     unkept_rows()
+    # H1: every shard, on every OS, gives cargo and a prebuilt lib
+    # binary a private gateway home beside its TMPDIR, and removes it after the
+    # shard, also when cargo fails (R6.1, R6.4, R6.5). The recorder stands in
+    # for cargo and writes down what it was given.
+    record_dir = tempfile.mkdtemp(prefix="shard-record-")
+    record = os.path.join(record_dir, "env.json")
+    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR")
+    recorder_src = (
+        "import json, os, sys\n"
+        f"keys = {keys!r}\n"
+        "if '--list' in sys.argv:\n"
+        "    sys.exit(0)\n"
+        "seen = {k: os.environ.get(k) for k in keys}\n"
+        "seen['mode'] = os.stat(seen['MCP_GATEWAY_TEST_HOME_DIR']).st_mode & 0o777\n"
+        "json.dump(seen, open(os.environ['RECORD_ENV'], 'w'))\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "sys.exit(int(os.environ.get('RECORD_RC', '0')))\n"
+    )
+    recorder = (sys.executable, "-c", recorder_src)
+
+    def home_given(os_kind: str) -> str:
+        seen = json.load(open(record, encoding="utf-8"))
+        home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
+        assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
+        assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
+        assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        if os.name != "nt":
+            assert seen["mode"] == 0o700, ("the home is owner-only", os_kind, oct(seen["mode"]))
+        if os_kind in TMP_GUARDED:
+            # A prebuilt binary gets its BY_BINARY folder; the shard's own TMPDIR is above it.
+            shard_tmp = seen["TMPDIR"]
+            while shard_tmp and not os.path.basename(shard_tmp).startswith("shard-tmp-"):
+                shard_tmp = os.path.dirname(shard_tmp) if os.path.dirname(shard_tmp) != shard_tmp else ""
+            assert shard_tmp and os.path.dirname(home) == os.path.dirname(shard_tmp), (os_kind, seen)
+            assert not os.path.commonpath([home, shard_tmp]) == shard_tmp, "beside, not inside, TMPDIR"
+        return home
+
+    os.environ["RECORD_ENV"] = record
+    try:
+        for os_kind in sorted(SHARDS):
+            shard = sorted(SHARDS[os_kind])[0]
+            assert run_steps(os_kind, shard, recorder) == [], (os_kind, shard)
+            assert not os.path.exists(home_given(os_kind)), (os_kind, "the shard removes its home")
+        os.environ["RECORD_RC"] = "1"
+        try:
+            failed = run_steps("linux", "lib-a", recorder)
+        finally:
+            del os.environ["RECORD_RC"]
+        assert any("cargo exited 1" in f for f in failed), failed
+        assert not os.path.exists(home_given("linux")), "a failed shard removes its home too"
+        if os.name == "posix":
+            binary = os.path.join(record_dir, "fake-lib")
+            with open(binary, "w", encoding="utf-8") as f:
+                f.write(f"#!{sys.executable}\n{recorder_src}")
+            single = next(name for name, steps in SHARDS["linux"].items() if len(steps) == 1)
+            assert run_prebuilt("linux", single, binary) == 0, "the prebuilt control run"
+            assert not os.path.exists(home_given("linux")), "a prebuilt shard removes its home"
+    finally:
+        del os.environ["RECORD_ENV"]
+        shutil.rmtree(record_dir, ignore_errors=True)
+    # R5.2: a forgotten harness. A test binary given no home builds its
+    # fallback in TMPDIR, and the leftover check names it. Given the shard's
+    # home it builds none, and the shard stays green.
+    forgetful = (sys.executable, "-c", (
+        "import os, tempfile\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "if os.environ.get('PLANT_FORGOTTEN') or not os.environ.get('MCP_GATEWAY_TEST_HOME_DIR'):\n"
+        "    tempfile.mkdtemp(prefix='mcp-gateway-test-home-')\n"
+    ))
+    os.environ["PLANT_FORGOTTEN"] = "1"
+    try:
+        forgot = run_steps("linux", "lib-a", forgetful)
+    finally:
+        del os.environ["PLANT_FORGOTTEN"]
+    assert len(forgot) == 1 and forgot[0].startswith("left in TMPDIR: mcp-gateway-test-home-"), forgot
+    assert run_steps("linux", "lib-a", forgetful) == [], "given the shard's home, no fallback is built"
+    parts_rows()
     print("shard_tests self-test: ok")
     return 0
 
@@ -751,6 +862,123 @@ def prebuilt_rows() -> None:
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
+def parts_rows() -> None:
+    """S1 and S2: the shard and single-test consumers on five part binaries (fake ones that record each run)."""
+    n = 5
+    with tempfile.TemporaryDirectory() as d:
+        log = os.path.join(d, "runs")
+
+        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False,
+                 rc: int = 0) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            body = " ".join(names)
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; f="$1"\n'
+                        f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
+                        f'echo "p{k} $*" >> {log}\n'
+                        'h="${MCP_GATEWAY_TEST_HOME_DIR:-none}"; [ -d "$h" ] && there=exists || there=missing\n'
+                        f'echo "$h|${{XDG_CONFIG_HOME:-none}}|${{MCP_GATEWAY_CONFIG_DIR:-none}}|$there" > {log}.home\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n'
+                        + f'exit {rc}\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write("".join(f"{t}: test\n" for t in (names if listed is None else listed)))
+
+        def fresh(names_by_part=None):
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                part(k, (names_by_part or {}).get(k, [f"m{k}::upgrade_x{k}", f"m{k}::t{k}"]))
+
+        fresh()
+        assert part_binaries(d)[1] == [], part_binaries(d)[1]
+        shutil.rmtree(os.path.join(d, "linux-lib-tests-p3"))
+        assert part_binaries(d)[1], "a missing part passed"
+        fresh()
+        part(2, ["m2::t2"], listed=["m2::t2", "m2::other"])
+        assert part_binaries(d)[1], "a binary differing from its list.txt passed"
+        fresh({1: ["m1::t1", "shared::x"], 2: ["shared::x"]})
+        assert part_binaries(d)[1], "two parts sharing a test passed"
+        # run-one, exact: exactly one test over all parts, run once on its binary.
+        fresh()
+        assert run_one("--exact", "m3::t3", d, []) == 0
+        runs = open(log).read().splitlines()
+        assert runs == ["p3 m3::t3 --exact"], runs
+        # H1: the run gets a private gateway home of its own, present while it runs, with the config and data
+        # dirs beneath it, and removed after it.
+        def run_home() -> str:
+            home, xdg, cfg, there = open(log + ".home").read().strip().split("|")
+            assert os.path.basename(home).startswith("shard-home-"), ("run-one gives the binary a home", home)
+            assert (xdg, cfg) == (os.path.join(home, ".config"), os.path.join(home, ".mcp-gateway")), (xdg, cfg)
+            assert there == "exists", ("the home exists while the binary runs", home)
+            assert not os.path.exists(home), ("run-one removes its home", home)
+            return home
+        run_home()
+        # A failing binary: its exit code is run-one's, and the home is still removed.
+        fresh()
+        part(3, ["m3::upgrade_x3", "m3::t3"], rc=3)
+        assert run_one("--exact", "m3::t3", d, []) == 3, "run-one passes the binary's exit code on"
+        run_home()
+        fresh()
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert which_one("m4::t4", d, []) == 0
+        assert buf.getvalue().strip().endswith("lib-tests-p4"), buf.getvalue()
+        assert which_one("m9::none", d, []) == 1, "which found a test that is not there"
+        fresh()
+        assert run_one("--exact", "m9::none", d, []) == 1, "zero selected passed"
+        fresh({1: ["a::dup", "b::dup"]})
+        assert run_one("--exact", "dup", d, []) == 1, "an exact name matching nothing exactly passed"
+        # run-one, module: at least one, all on one part, by exact names. The prefix is anchored: libtest's filter
+        # also lists part 2's name, which holds the prefix only in the middle.
+        fresh({4: ["upgrade_notice_tests::a", "upgrade_notice_tests::b", "m4::t4"], 2: ["m2::upgrade_notice_tests::c"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 0
+        assert open(log).read().split() == ["p4", "upgrade_notice_tests::a", "upgrade_notice_tests::b", "--exact"]
+        fresh({1: ["upgrade_notice_tests::a"], 2: ["upgrade_notice_tests::b"]})
+        assert run_one("--module", "upgrade_notice_tests::", d, []) == 1, "a module split over parts passed"
+        fresh()
+        assert run_one("--module", "nothing_tests::", d, []) == 1, "an empty module selection passed"
+        # S1, run-prebuilt-parts: each binary runs its half under today's guards; the floor is on the sum.
+        def shard_part(k: int, count: int, residue: bool = False) -> None:
+            folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
+            os.makedirs(folder, exist_ok=True)
+            exe = os.path.join(folder, f"lib-tests-p{k}")
+            names = f"gateway::g{k} other::o{k}"
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift; [ "$1" = --format ] && shift 2\n'
+                        '  case "$1 $2" in\n'
+                        f'    "gateway:: "*) for t in {names}; do case $t in gateway::*) echo "$t: test";; esac; done;;\n'
+                        f'    "--skip gateway::") for t in {names}; do case $t in gateway::*) ;; *) echo "$t: test";; esac; done;;\n'
+                        f'    *) for t in {names}; do echo "$t: test"; done;;\n'
+                        '  esac; exit 0; fi\n'
+                        + ('touch "$TMPDIR/leftover"\n' if residue else "")
+                        + f'echo "running {count} tests"; echo "test result: ok. {count} passed; 0 failed; 0 ignored"\n')
+            os.chmod(exe, 0o755)
+            with open(os.path.join(folder, "list.txt"), "w") as f:
+                f.write(f"gateway::g{k}: test\nother::o{k}: test\n")
+
+        def shards(count: int, residue_part: int | None = None) -> None:
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            for k in range(1, n + 1):
+                shard_part(k, count, residue=k == residue_part)
+
+        big = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
+        shards(big // n + 1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 0
+        shards(1)
+        assert run_prebuilt_parts("linux", "lib-a", d) == 1, "a sum under the floor passed"
+        shards(big // n + 1, residue_part=3)
+        assert run_prebuilt_parts("linux", "lib-b", d) == 1, "a leftover from the middle part passed"
+
+
 def per_binary_rows() -> None:
     """Each test binary gets its own TMPDIR under BY_BINARY, so a leftover names the binary that left it."""
     # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to
@@ -881,11 +1109,12 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
     return out
 
 
-def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
-    """Run a PREBUILT or SHARED_BUILD shard from an exported lib test binary, as `cargo test` would run it:
-    from the package root with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run`
-    applies (the binary's own BY_BINARY folder as TMPDIR, a leftover fails the shard). Same floor and report."""
-    ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
+def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
+    """Run SHARD's selection on one exported lib test binary, as `cargo test` would run it: from the package root
+    with CARGO_MANIFEST_DIR set, and on a TMP_GUARDED OS with the TMPDIR guard `run` applies (the binary's own
+    BY_BINARY folder as TMPDIR, a leftover fails the shard). (Tests selected, problems), the halves' partition of
+    this binary's list included; the floor is the caller's."""
+    ((step, _args, test_args, _floor),) = SHARDS[os_kind][shard]
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
@@ -895,26 +1124,134 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
         # What the cargo runner gives this binary: its own folder, so a leftover is reported under it.
         env["TMPDIR"] = os.path.join(tmp, BY_BINARY, LIB_TARGET)
         os.makedirs(env["TMPDIR"])
-    p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
     lines = []
-    assert p.stdout is not None
-    for raw in p.stdout:
-        sys.stdout.buffer.write(raw)
-        sys.stdout.buffer.flush()
-        lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-    rc = p.wait()
+    with private_home(env, tmp) as home_env:
+        p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=home_env, cwd=ROOT)
+        assert p.stdout is not None
+        for raw in p.stdout:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.flush()
+            lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+        rc = p.wait()
     # The binary prints no cargo `Running` header: arm the count as cargo's would.
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
-    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")
-    failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
-    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
+    failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
+    return n, failed
+
+
+def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
+    """Run a PREBUILT or SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    n, failed = _run_binary(os_kind, shard, binary)
+    print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
+    failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
+
+
+def part_binaries(directory: str) -> tuple[dict[int, str], list[str]]:
+    """The lib test part binaries under DIRECTORY (`*/pK/lib-tests-pK`, one artifact folder each) and the problems
+    that stop a run before any test: parts other than exactly 1..N, a binary whose `--list` differs from the
+    `list.txt` the union job checked, or two parts listing the same test."""
+    n = int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
+                      open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    found: dict[int, str] = {}
+    out: list[str] = []
+    for path in sorted(glob.glob(os.path.join(directory, "*", "p*", "lib-tests-p*"))):
+        m = re.fullmatch(r"lib-tests-p(\d+)", os.path.basename(path))
+        if m is None or os.path.basename(os.path.dirname(path)) != f"p{m.group(1)}":
+            continue
+        k = int(m.group(1))
+        if k in found:
+            out.append(f"part {k} appears twice")
+        found[k] = path
+    if sorted(found) != list(range(1, n + 1)):
+        out.append(f"part binaries {sorted(found)}, not exactly 1..{n}")
+    owner: dict[str, int] = {}
+    for k, path in sorted(found.items()):
+        os.chmod(path, 0o755)
+        listed_now = subprocess.run([path, "--list"], capture_output=True, text=True, cwd=ROOT).stdout
+        names = {x[: -len(": test")] for x in listed_now.splitlines() if x.endswith(": test")}
+        recorded = os.path.join(os.path.dirname(path), "list.txt")
+        if not os.path.isfile(recorded) or names != {x[: -len(": test")] for x in open(recorded).read().splitlines()
+                                                     if x.endswith(": test")}:
+            out.append(f"part {k}'s binary does not list what its list.txt recorded")
+        for name in names:
+            if name in owner:
+                out.append(f"{name} is listed by parts {owner[name]} and {k}")
+            owner.setdefault(name, k)
+    return found, out
+
+
+def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
+    """Run a SHARED_BUILD shard across the lib test part binaries: the parts are checked first, then each binary
+    runs the shard's half under today's guards, and the floor applies to the sum."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    binaries, failed = part_binaries(directory)
+    total = 0
+    if not failed:
+        for k, path in sorted(binaries.items()):
+            n, problems = _run_binary(os_kind, shard, path)
+            total += n
+            failed += [f"part {k}: {x}" for x in problems]
+    print(f"::notice::{os_kind} {shard} {step} (parts): selected {total} (floor {floor})")
+    failed += [f"{step}: selected {total} tests over the parts, below the floor of {floor}"] * (total < floor)
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def which_one(name: str, directory: str, extra: list[str]) -> int:
+    """Print the one part binary that holds exactly-named test NAME (a step that must run the binary itself, as the
+    keychain steps inside their D-Bus session do). Fails unless exactly one test over the parts matches."""
+    binaries, failed = part_binaries(directory)
+    hits = []
+    for k, path in sorted(binaries.items()):
+        out = subprocess.run([path, "--list", name, "--exact", *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        hits += [path for x in out.splitlines() if x.endswith(": test")]
+    if len(hits) != 1:
+        failed.append(f"{name}: {len(hits)} tests selected over the parts, not exactly one")
+    for f in failed:
+        print(f"::error::which {f}", file=sys.stderr)
+    if failed:
+        return 1
+    print(hits[0])
+    return 0
+
+
+def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
+    """List PATTERN on every part binary first, then run it once. `--exact`: exactly one test in total (libtest
+    `--exact`). `--module`: names under the anchored path prefix PATTERN, at least one, all on one binary, run there
+    by exact name. EXTRA passes through (for example `--ignored`)."""
+    binaries, failed = part_binaries(directory)
+    hits: dict[int, list[str]] = {}
+    for k, path in sorted(binaries.items()):
+        args = [pattern, "--exact"] if mode == "--exact" else [pattern]
+        out = subprocess.run([path, "--list", *args, *extra], capture_output=True, text=True, cwd=ROOT).stdout
+        names = [x[: -len(": test")] for x in out.splitlines() if x.endswith(": test")]
+        if mode == "--module":
+            names = [x for x in names if x.startswith(pattern)]
+        if names:
+            hits[k] = names
+    count = sum(len(v) for v in hits.values())
+    if mode == "--exact" and count != 1:
+        failed.append(f"{pattern}: {count} tests selected over the parts, not exactly one")
+    if mode == "--module" and (not count or len(hits) != 1):
+        failed.append(f"{pattern}: {count} tests on {len(hits)} parts; a module filter needs one part")
+    for f in failed:
+        print(f"::error::run-one {f}")
+    if failed:
+        return 1
+    ((k, names),) = hits.items()
+    env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    # A private gateway home, as every other lib test run gets (H1).
+    with private_home(env, None) as home_env:
+        return subprocess.run([binaries[k], *names, "--exact", *extra], env=home_env, cwd=ROOT).returncode
 
 
 # Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
@@ -1004,6 +1341,13 @@ def main(argv: list[str]) -> int:
         return export_lib(argv[2])
     if len(argv) == 4 and argv[1] == "wait-lib":
         return wait_lib(argv[2], argv[3])
+    if len(argv) == 5 and argv[1] == "run-prebuilt-parts" and argv[3] in SHARED_BUILD.get(argv[2], ()):
+        return run_prebuilt_parts(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == "which":
+        return which_one(argv[2], argv[3], argv[5:] if len(argv) > 4 and argv[4] == "--" else [])
+    if len(argv) >= 5 and argv[1] == "run-one" and argv[2] in ("--exact", "--module"):
+        extra = argv[6:] if len(argv) > 5 and argv[5] == "--" else []
+        return run_one(argv[2], argv[3], argv[4], extra)
     if (len(argv) == 5 and argv[1] == "run-prebuilt"
             and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
         return run_prebuilt(argv[2], argv[3], argv[4])

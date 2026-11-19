@@ -749,6 +749,7 @@ fn authorization_value(credentials: &ReleasedCredentials) -> String {
 #[path = "vault_send.rs"]
 mod send;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "vault_tests.rs"]
 mod vault_tests;

@@ -58,6 +58,7 @@ fn keyless_config(dir: &Path) -> PathBuf {
 
 /// The log is unsigned when checked, and signed records land before the
 /// verifying pass reads it: the run is refused, not passed hash-only.
+#[cfg(tp2)]
 #[test]
 fn a_signed_record_written_between_the_passes_refuses_the_run() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -77,6 +78,7 @@ fn a_signed_record_written_between_the_passes_refuses_the_run() {
 }
 
 /// The control: an unsigned log verifies without a key, as before.
+#[cfg(tp2)]
 #[test]
 fn an_unsigned_log_verifies_without_a_key() {
     let dir = crate::test_dir_keep::kept_tempdir();

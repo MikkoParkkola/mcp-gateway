@@ -454,18 +454,22 @@ pub use principal::{
     ProofSource, ProvenAgentId, ProvenPrincipal,
 };
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "agent_identity_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "agent_identity_falsifier_tests.rs"]
 mod falsifier_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "agent_identity_load_tests.rs"]
 mod load_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "agent_identity_audit_tests.rs"]
 mod audit_tests;

@@ -101,6 +101,7 @@ pub fn negotiate_version(client_version: &str) -> &'static str {
     PROTOCOL_VERSION
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::SUPPORTED_VERSIONS;

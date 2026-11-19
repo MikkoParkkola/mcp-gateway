@@ -328,6 +328,7 @@ fn settle_bridged(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "legacy_bridge_settle_tests.rs"]
 mod settle_tests;

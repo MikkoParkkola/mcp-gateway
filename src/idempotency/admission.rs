@@ -541,6 +541,7 @@ impl Drop for Lease {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "admission_tests.rs"]
 mod tests;
@@ -556,14 +557,17 @@ pub(crate) use tasks::{
     TaskPublication,
 };
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "task_admission_tests.rs"]
 mod task_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "task_qualification_tests.rs"]
 mod task_qualification_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "task_service_import_tests.rs"]
 mod task_service_import_tests;

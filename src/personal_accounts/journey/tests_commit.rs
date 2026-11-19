@@ -53,6 +53,7 @@ fn consumed(store: &PersonalAccountStore, now: u64) -> Consumed {
     consumed
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c03d_admit_then_consume_is_durable_so_a_replay_after_restart_is_refused() {
     // GIVEN: admitted and consumed, then a crash before the exchange.
@@ -80,6 +81,7 @@ fn t_c03d_admit_then_consume_is_durable_so_a_replay_after_restart_is_refused() {
     assert_eq!(record.replay_refusals, 2);
 }
 
+#[cfg(tp1)]
 #[test]
 fn a_consumed_journey_commits_its_grant_and_ends_connected_without_its_owner() {
     // GIVEN
@@ -106,6 +108,7 @@ fn a_consumed_journey_commits_its_grant_and_ends_connected_without_its_owner() {
     assert!(record.owner_authority.is_none() && record.owner_subject.is_none());
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_c05b_a_stale_journey_is_fenced_by_a_newer_generation_and_does_not_overwrite() {
     // GIVEN: an older journey consumed against `Absent`, then a newer grant.
@@ -135,6 +138,7 @@ fn t_c05b_a_stale_journey_is_fenced_by_a_newer_generation_and_does_not_overwrite
     );
 }
 
+#[cfg(tp1)]
 #[test]
 fn a_journey_swept_or_owned_by_another_is_gone_and_commits_nothing() {
     // GIVEN: one journey expired by the sweep, one committed by a stranger.
@@ -170,6 +174,7 @@ fn a_journey_swept_or_owned_by_another_is_gone_and_commits_nothing() {
     assert_eq!(on_disk.status, JourneyStatus::Expired, "never resurrected");
 }
 
+#[cfg(tp1)]
 #[test]
 fn t_r2_1_a_journeys_write_failure_after_the_grant_poisons_only_the_journey_slot() {
     use crate::personal_accounts::faults::{Boundary, arm};

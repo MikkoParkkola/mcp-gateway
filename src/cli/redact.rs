@@ -19,6 +19,7 @@ pub fn json(value: &mut serde_json::Value, secrets: &[String]) -> bool {
     crate::security::secret_redaction::redact_value(value, secrets)
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     #[test]

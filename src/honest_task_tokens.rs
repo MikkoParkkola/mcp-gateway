@@ -139,6 +139,7 @@ pub fn task_token_matrix(host_context_tokens_per_request: u64) -> [TaskTokenRow;
     TOOL_COUNTS.map(|n| task_tokens(n, DEFAULT_EXTRA_TURNS, host_context_tokens_per_request))
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;

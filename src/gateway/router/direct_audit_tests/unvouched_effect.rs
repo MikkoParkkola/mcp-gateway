@@ -31,6 +31,7 @@ fn assert_first_vouched_replay_not(fx: &Fixture) {
 }
 
 /// A direct idempotent replay (7a) serves the first run's answer.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_idempotent_replay_states_no_effect() {
     let fx = fixture(Setup {
@@ -49,6 +50,7 @@ async fn a_direct_idempotent_replay_states_no_effect() {
 
 /// A keyed direct call whose backend failed replays the stored failure: the
 /// replay states no effect either.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_cached_failure_replay_states_no_effect() {
     let fx = fixture(Setup {
@@ -74,6 +76,7 @@ async fn a_direct_cached_failure_replay_states_no_effect() {
 }
 
 /// A meta admission replay serves the first run's answer.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_meta_admission_replay_states_no_effect() {
     let fx = fixture(Setup {
@@ -92,6 +95,7 @@ async fn a_meta_admission_replay_states_no_effect() {
 /// A1: a keyed call whose grant slot write failed was answered -32005 before
 /// its record, so its execution stores that refusal. The replay serves the
 /// refusal, never the answer the slot refused.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_replay_after_a_slot_refusal_serves_the_refusal() {
     use crate::gateway::meta_mcp::grant_audit::seams;
@@ -152,6 +156,7 @@ fn assert_last_states_nothing(fx: &Fixture) {
 /// A playbook carrying on past a step the gateway refused still delivers
 /// its report: the step's refusal stays in the step's own cell and never
 /// marks the composite `refused`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_past_a_refused_step_states_no_effect() {
     let fx = fixture(Setup {
@@ -173,6 +178,7 @@ async fn a_playbook_past_a_refused_step_states_no_effect() {
 
 /// A playbook whose only step its condition skips runs no step, and still
 /// states nothing: a composite is unvouched at its arm.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_playbook_that_runs_no_step_states_no_effect() {
     let fx = fixture(Setup::default()).await;
@@ -189,6 +195,7 @@ async fn a_playbook_that_runs_no_step_states_no_effect() {
 }
 
 /// A chain delivers a composite: no one step's facts describe it.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_composite_states_no_effect() {
     let fx = fixture(Setup {
@@ -239,6 +246,7 @@ fn tasks_meta() -> Value {
 
 /// A task read on `/mcp` serves the stored answer, not one this request
 /// produced.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_meta_task_read_states_no_effect() {
     let fx = fixture(Setup {

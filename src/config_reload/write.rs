@@ -277,6 +277,7 @@ where
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::{CommentLoss, load_failure, reload_failure};

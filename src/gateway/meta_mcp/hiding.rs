@@ -88,6 +88,7 @@ pub(crate) fn hidden(server: &str) -> bool {
     caller.hides(server)
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "hiding_tests.rs"]
 mod tests;

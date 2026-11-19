@@ -1,0 +1,21 @@
+# file	function	class	reason
+# One row per function under src/transport, src/a2a or src/backend that makes a one-argument channel send and is not
+# an egress row in notification_egress.rs: why what it sends is not a backend notification on its way to a client.
+src/backend/cached_metadata.rs	drop	internal	a unit wake-up signal to the cache's own task
+src/backend/mod.rs	announce_started	internal	the backend's name on the start feed
+src/backend/registry.rs	catalogue_hook	internal	a catalogue nudge naming a backend, never its text
+src/backend/registry.rs	nudge_catalogue	internal	a catalogue nudge naming a backend, never its text
+src/backend/registry.rs	nudge_catalogue_scanned	internal	a catalogue nudge naming a backend, never its text
+src/backend/registry.rs	nudge_surfaced	internal	a surfaced-tools nudge with no payload
+src/backend/tools_nudge.rs	nudge_revoked	internal	a revocation nudge naming a binding prefix
+src/backend/tools_nudge.rs	nudge_tools	internal	a tools nudge naming a backend and instance
+src/backend/tools_nudge.rs	send_coalesced	internal	a coalesced tools nudge naming a backend and instance
+src/transport/notification_sink.rs	send_or_count	sink-out	the sink's own delivery to the caller's stream after admitted(); every way in is publish or deliver, both pinned
+src/transport/stdio.rs	handle_response	answer	a response to its waiting call, which scrubs it on its own task
+src/transport/stdio_reaper.rs	hand_over	internal	the reaper's job queue and exit status
+src/transport/stdio_reaper.rs	step	internal	the reaper's exit status
+src/transport/upstream_tap.rs	response	listen-end	a listen's acknowledgement or end, built from the listen's own request (lead ruling G9)
+src/transport/websocket.rs	dispatch_inbound	answer	a response to its waiting call, which scrubs it on its own task
+src/transport/websocket.rs	enqueue	outbound	a frame queued for the backend
+src/transport/websocket_cancel.rs	drop	outbound	a cancel frame queued for the backend
+src/transport/websocket_io.rs	run_io_loop	outbound	frames written to the backend's socket

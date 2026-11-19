@@ -345,7 +345,7 @@ test.describe('a screen read is not a boot read', () => {
     await toolsApi(page);
     await page.addInitScript(RECORD_API);
     await page.addInitScript(HOLD_PAINT);
-    await page.goto('/ui/tools/status');
+    await page.goto('/ui/tools/status?view=all');
     await expect(toolRows(page)).toHaveCount(1);
     expect((await apiPaths(page)).filter((p) => p.startsWith('/ui/api/tools'))).toHaveLength(1);
   });
@@ -361,7 +361,8 @@ test.describe('a screen read is not a boot read', () => {
     const tools = async () => (await apiPaths(page)).filter((p) => p.startsWith('/ui/api/tools'));
     expect(await tools()).toEqual([]);
     await page.locator('nav.route-nav a[href="/ui/tools"]').click();
-    await expect(toolRows(page)).toHaveCount(1);
+    // The sidebar lands on the most-called panel, which only the bare route draws.
+    await expect(page.getByRole('region', { name: 'Most called, last hour', exact: true })).toBeVisible();
     expect(await tools()).toHaveLength(1);
   });
 });

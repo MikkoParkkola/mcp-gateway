@@ -710,18 +710,22 @@ mod redirect;
 use redirect::remote_hop_allowed;
 use redirect::remote_redirect_policy;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "oidc_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "oidc_claims_debug_tests.rs"]
 mod claims_debug_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "oidc_fallback_tests.rs"]
 mod fallback_tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "oidc_jwks_cooldown_tests.rs"]
 mod cooldown_tests;

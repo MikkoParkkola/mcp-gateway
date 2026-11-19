@@ -94,6 +94,7 @@ fn file_name(route: &str) -> String {
     format!("{}.json", crate::hashing::sha256_hex(route.as_bytes()))
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     #![allow(

@@ -428,18 +428,22 @@ impl TaskExecutor {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "pending_cancel_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "pending_cancel_edge_tests.rs"]
 mod edge_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "pending_cancel_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "pending_cancel_clock_compile_red_tests.rs"]
 mod clock_compile_red_tests;

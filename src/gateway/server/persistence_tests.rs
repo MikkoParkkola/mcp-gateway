@@ -7,15 +7,20 @@
 use super::*;
 use std::cell::Cell;
 
+/// R9: in a test build the operator's data-dir variable counts only
+/// under the test-home override; otherwise the data dir sits in the test home.
+/// The inherited-variable case, with no override, is R1a's sentinel, run in a
+/// child.
 #[test]
 fn standard_data_dir_uses_gateway_subdir() {
-    match std::env::var("MCP_GATEWAY_CONFIG_DIR") {
-        Ok(path) => assert_eq!(standard_data_dir(), PathBuf::from(path)),
-        Err(_) => assert_eq!(
-            standard_data_dir()
-                .file_name()
-                .and_then(|name| name.to_str()),
-            Some(".mcp-gateway")
+    let override_set = std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR").is_some();
+    match std::env::var_os("MCP_GATEWAY_CONFIG_DIR") {
+        Some(path) if override_set => assert_eq!(standard_data_dir(), PathBuf::from(path)),
+        _ => assert_eq!(
+            standard_data_dir(),
+            crate::home_dir::home_dir()
+                .expect("a home")
+                .join(".mcp-gateway")
         ),
     }
 }

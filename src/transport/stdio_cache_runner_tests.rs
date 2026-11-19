@@ -47,7 +47,7 @@ async fn run_nested(
     cwd: &std::path::Path,
 ) {
     let filter = format!("{MODULE}{scenario}");
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", &filter, "--nocapture"])
         .env(SCENARIO_ENV, scenario)

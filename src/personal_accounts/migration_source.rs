@@ -197,6 +197,7 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "migration_source_tests.rs"]
 mod migration_source_tests;

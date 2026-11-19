@@ -138,6 +138,7 @@ impl<V: Clone> TextMemo<V> {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "text_memo_tests.rs"]
 mod tests;

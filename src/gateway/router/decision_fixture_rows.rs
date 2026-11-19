@@ -129,6 +129,7 @@ const NOT_FOUND: Refusal = Refusal {
 /// N4: a scoped key names a backend in its grant that is not registered; the
 /// scoped view's absence notes `not_found` (`direct_caller.rs:345`, via
 /// `note_absent`, `:257`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn n4_direct_not_found_in_a_scoped_view() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -151,6 +152,7 @@ async fn n4_direct_not_found_in_a_scoped_view() {
 
 /// N5: an unscoped key names a backend that matches nothing; `backend_for`
 /// finds none (`direct_caller.rs:487`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn n5_direct_not_found_by_lookup() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -175,6 +177,7 @@ async fn n5_direct_not_found_by_lookup() {
 /// grant that is not registered: the gate answers the absent step
 /// (`gate.rs:544` in `absent_answer`, from `gate_answer`, `gate.rs:584`). The
 /// in-process `invoke_tool` skips this gate (it reaches N2's site instead).
+#[cfg(tp1)]
 #[tokio::test]
 async fn n1_meta_not_found_at_the_gate() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -207,6 +210,7 @@ async fn n1_meta_not_found_at_the_gate() {
 
 /// T2: the backend's `allowed_tools` leaves `read` out; the direct preflight
 /// withholds it (`direct_preflight.rs:60`, via `blocked_tool_kind`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn t2_direct_allowed_tools() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -246,6 +250,7 @@ async fn t2_direct_allowed_tools() {
 
 /// C2: a disabled capability, met at the direct admission
 /// (`dispatch_guards.rs:319` in `admit_target`, via `direct_guards.rs:36`).
+#[cfg(tp1)]
 #[tokio::test]
 async fn c2_direct_capability_disabled() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -290,6 +295,7 @@ async fn c2_direct_capability_disabled() {
 /// `direct_guards.rs:36`), runs after it on the same profile, so it refuses
 /// only when the profile changes between the two (a reload guard); that site
 /// is pinned by the unit row `p4_admission_routing_profile`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn p3_direct_routing_profile_preflight() {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
@@ -391,12 +397,14 @@ const PER_USER_ABSENT: (StatusCode, Form, i64) = (StatusCode::OK, Form::RpcError
 /// T2b: T2 on a per-user backend (found while coding: the per-user and the
 /// shared catalogue answer a withheld name at different sites), with
 /// propagation required: answered at `direct_gate.rs:95-109`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t2b_direct_allowed_tools_per_user() {
     allowed_tools_per_user("t2b_direct_allowed_tools_per_user", Propagation::Required).await;
 }
 
 /// T2c: T2b with propagation optional: answered from `key_check.rs:84-86`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn t2c_direct_allowed_tools_per_user_optional() {
     allowed_tools_per_user(
@@ -459,6 +467,7 @@ async fn allowed_tools_per_user(row: &'static str, propagation: Propagation) {
 
 /// P3b: P3 on a per-user backend (found while coding, with T2b), with
 /// propagation required: answered at `direct_gate.rs:95-109`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn p3b_direct_routing_profile_preflight_per_user() {
     routing_profile_per_user(
@@ -469,6 +478,7 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
 }
 
 /// P3c: P3b with propagation optional: answered from `key_check.rs:84-86`.
+#[cfg(tp1)]
 #[tokio::test]
 async fn p3c_direct_routing_profile_preflight_per_user_optional() {
     routing_profile_per_user(
@@ -545,6 +555,7 @@ async fn routing_profile_per_user(row: &'static str, propagation: Propagation) {
 /// tool list denies `read`, is refused. Coupling: that refusal is answered
 /// through the shared catalogue's absent answer (`key_check.rs:147-170`), so a
 /// mutant there fails this row's control as well as T2 and P3.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a6b_direct_no_rule() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -606,6 +617,7 @@ async fn a6b_direct_no_rule() {
 /// and the operator's `grant_id` (flipped by allow attribution). The effect is the capability's own definition,
 /// `read_only: true` (`pre_dispatch.rs:77-86`). Control: without the grant,
 /// the same call is refused and the upstream is not hit.
+#[cfg(tp1)]
 #[tokio::test]
 async fn a3_grant_match() {
     use super::direct_effect_tests::{CAPS, PROBE, call, owned_capability};
@@ -698,5 +710,6 @@ async fn a3_grant_match() {
     );
 }
 
+#[cfg(tp1)]
 #[path = "decision_fixture_mtls_rows.rs"]
 mod mtls;

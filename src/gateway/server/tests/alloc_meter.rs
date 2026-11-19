@@ -241,8 +241,7 @@ pub(crate) fn isolate(test_path: &str) -> bool {
     if std::env::var_os(CHILD_ENV).is_some() {
         return false;
     }
-    let exe = std::env::current_exe().expect("the running test binary must be locatable");
-    let output = std::process::Command::new(exe)
+    let output = crate::test_home::test_binary()
         .args([test_path, "--exact", "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, "1")
         .output()
@@ -339,6 +338,7 @@ where
 /// MIK-8412: the process-wide mode is off unless an isolated child arms it.
 /// In this (parent) process nothing arms it, so an allocation lands in no
 /// process-wide counter.
+#[cfg(tp5)]
 #[test]
 fn the_process_wide_mode_is_off_by_default() {
     assert!(
@@ -355,6 +355,7 @@ fn the_process_wide_mode_is_off_by_default() {
 }
 
 /// Outside an isolated child the process-wide meter refuses to start.
+#[cfg(tp5)]
 #[test]
 #[should_panic(expected = "process-wide metering runs only in an isolated child")]
 fn the_process_wide_meter_refuses_outside_a_child() {
@@ -366,6 +367,7 @@ fn the_process_wide_meter_refuses_outside_a_child() {
 
 /// only lines that start with the tag are forwarded, in
 /// order; libtest's own lines and an untagged print stay in the child.
+#[cfg(tp5)]
 #[test]
 fn only_tagged_child_lines_are_forwarded() {
     let stdout = "running 1 test\n\

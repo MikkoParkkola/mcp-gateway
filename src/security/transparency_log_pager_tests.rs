@@ -401,6 +401,20 @@ fn production_text(text: &str) -> String {
     out
 }
 
+/// The lib test split's part tag sits above the unchanged test cfg: the
+/// tagged module's block is still removed, and the code after it kept.
+#[test]
+fn production_text_removes_a_part_tagged_test_module() {
+    let text = production_text(
+        "fn live() {}\n#[cfg(tp1)]\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn after() {}\n",
+    );
+    assert!(
+        text.contains("fn live()") && text.contains("fn after()"),
+        "{text}"
+    );
+    assert!(!text.contains("fn t()"), "{text}");
+}
+
 /// Files allowed to open or measure log files by name, each for one reason.
 const OPENERS: &[(&str, &str)] = &[
     (

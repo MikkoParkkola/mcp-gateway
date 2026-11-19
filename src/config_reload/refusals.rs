@@ -529,10 +529,12 @@ impl super::ReloadContext {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "refusals_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "refusals_file_line_tests.rs"]
 mod file_line_tests;

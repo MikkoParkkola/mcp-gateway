@@ -386,6 +386,7 @@ pub(crate) fn lock_attempts(lock_path: &Path) -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,6 +611,7 @@ mod tests {
 #[path = "fs_lock_windows.rs"]
 mod windows;
 
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "fs_lock_windows_tests.rs"]
 mod windows_tests;

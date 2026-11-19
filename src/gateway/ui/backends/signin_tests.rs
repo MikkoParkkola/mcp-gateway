@@ -35,6 +35,7 @@ async fn approved(gw: &Gw, who: &Who) -> String {
 }
 
 // R1
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_non_admin_gets_the_same_refusal_for_any_name() {
     let gw = Gw::new().await;
@@ -49,6 +50,7 @@ async fn a_non_admin_gets_the_same_refusal_for_any_name() {
 }
 
 // R2a: a valid bearer with no dashboard handle is an admin without a session.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_bearer_admin_without_a_dashboard_session_is_refused() {
     let gw = Gw::new().await;
@@ -67,6 +69,7 @@ async fn a_bearer_admin_without_a_dashboard_session_is_refused() {
 
 // R2b: an expired or revoked handle never reaches the handler: the auth layer
 // answers 401, and no flow starts.
+#[cfg(tp2)]
 #[tokio::test]
 async fn an_expired_or_revoked_dashboard_session_is_unauthenticated() {
     let gw = Gw::new().await;
@@ -87,6 +90,7 @@ async fn an_expired_or_revoked_dashboard_session_is_unauthenticated() {
 }
 
 // R3
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_form_post_is_refused() {
     let gw = Gw::new().await;
@@ -114,6 +118,7 @@ async fn a_form_post_is_refused() {
 // snapshot go out only once a snapshot is published (`stream/conn.rs:167-170`).
 // The row waits for the real watcher to publish one, so the stream is proven
 // live before the flow starts, then asserts the link never reaches it.
+#[cfg(tp2)]
 #[tokio::test]
 async fn start_returns_the_link_once_with_no_store() {
     let gw = Gw::new().await;
@@ -161,6 +166,7 @@ async fn start_returns_the_link_once_with_no_store() {
 }
 
 // R5: another session and the same session both get the in-progress answer.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_second_start_gets_in_progress_without_a_link() {
     let gw = Gw::new().await;
@@ -184,6 +190,7 @@ async fn a_second_start_gets_in_progress_without_a_link() {
 }
 
 // R6: no early Cancelled: the flow holds the gate through callback and exchange.
+#[cfg(tp2)]
 #[tokio::test]
 async fn the_flow_keeps_the_login_gate_after_the_route_returns() {
     let gw = Gw::new().await;
@@ -196,6 +203,7 @@ async fn the_flow_keeps_the_login_gate_after_the_route_returns() {
 
 // R7: the client's cached token is not reachable from here; the store and the
 // status stand in for it.
+#[cfg(tp2)]
 #[tokio::test]
 async fn nothing_is_saved_before_confirm() {
     let gw = Gw::new().await;
@@ -215,6 +223,7 @@ async fn nothing_is_saved_before_confirm() {
 }
 
 // R8
+#[cfg(tp2)]
 #[tokio::test]
 async fn owner_confirm_saves_and_clears_its_wait() {
     let gw = Gw::new().await;
@@ -234,6 +243,7 @@ async fn owner_confirm_saves_and_clears_its_wait() {
 }
 
 // R9: a wait recorded after the callback outlives the confirm.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_newer_wait_survives_confirm() {
     let gw = Gw::new().await;
@@ -250,6 +260,7 @@ async fn a_newer_wait_survives_confirm() {
 
 // R10: the other session presents the owner's real attempt id, so only the
 // owner compare can refuse it.
+#[cfg(tp2)]
 #[tokio::test]
 async fn another_session_cannot_confirm_or_cancel() {
     let gw = Gw::new().await;
@@ -272,6 +283,7 @@ async fn another_session_cannot_confirm_or_cancel() {
 }
 
 // R11: a cancelled attempt's id cannot approve a later login.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_stale_attempt_id_cannot_confirm() {
     let gw = Gw::new().await;
@@ -288,6 +300,7 @@ async fn a_stale_attempt_id_cannot_confirm() {
 }
 
 // R12
+#[cfg(tp2)]
 #[tokio::test]
 async fn confirm_before_the_callback_is_not_ready() {
     let gw = Gw::new().await;
@@ -301,6 +314,7 @@ async fn confirm_before_the_callback_is_not_ready() {
 }
 
 // R13
+#[cfg(tp2)]
 #[tokio::test]
 async fn owner_cancel_discards_the_pending_token() {
     let gw = Gw::new().await;
@@ -321,6 +335,7 @@ async fn owner_cancel_discards_the_pending_token() {
 }
 
 // R14: a store that refuses the write. Unix only: it removes write access.
+#[cfg(tp2)]
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_save_discards_the_pending_token() {
@@ -349,6 +364,7 @@ async fn a_failed_save_discards_the_pending_token() {
 // issuer and token store. It has no flow, the store holds no token file, and
 // the old attempt gets 404. Red if the grant were written at the callback,
 // since the file would be there. Expected green on the current code.
+#[cfg(tp2)]
 #[tokio::test]
 async fn restart_drops_the_pending_token() {
     let first = Gw::new().await;
@@ -380,6 +396,7 @@ async fn restart_drops_the_pending_token() {
 }
 
 // R16: green on the base and it stays green: no sink, so the exchange saves.
+#[cfg(tp2)]
 #[tokio::test]
 async fn cli_and_startup_flows_still_save_on_exchange() {
     use crate::oauth::client::authorize_tests::{approve, client, token_endpoint};
@@ -395,6 +412,7 @@ async fn cli_and_startup_flows_still_save_on_exchange() {
 
 // Guard order: a caller with no dashboard session learns nothing about which
 // backends exist, so a missing one gets the session refusal, not a 404.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_bearer_admin_probing_a_missing_backend_gets_the_session_refusal() {
     let gw = Gw::new().await;
@@ -407,6 +425,7 @@ async fn a_bearer_admin_probing_a_missing_backend_gets_the_session_refusal() {
 // A4, mutant M19: the wait's compare and its clear share one lock. A failure
 // that lands while the clear is parked inside it must wait, and so land after
 // the clear and survive it. Check-then-clear with no shared lock erases it.
+#[cfg(tp2)]
 #[tokio::test]
 async fn a_failure_landing_between_check_and_clear_survives() {
     let gw = Gw::new().await;

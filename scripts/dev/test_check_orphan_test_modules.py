@@ -60,6 +60,19 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, ["src/a/x_tests.rs"])
 
+    def test_a_part_tag_beside_a_cfg_test_mount_keeps_it_test_only(self):
+        # The lib test split's tag picks a part; it is not a test predicate,
+        # and it neither adds nor removes the cfg(test) beside it.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n#[cfg(tp4)]\nmod p;\n",
+                "src/a/mod.rs": '#[cfg(tp2)]\n#[cfg(test)]\n#[path = "x_tests.rs"]\nmod x;\n',
+                "src/a/x_tests.rs": "",
+                "src/p.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/x_tests.rs"])
+
     def test_a_commented_path_attribute_mounts_nothing(self):
         # #3860 review HIGH 1: `// #[path = ..]` above a cfg(test) mod must not
         # point that mod at the commented file.

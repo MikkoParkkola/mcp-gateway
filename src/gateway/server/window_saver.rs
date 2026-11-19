@@ -483,10 +483,12 @@ fn checkpoint_detached(
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "window_saver_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "window_saver_keep_tests.rs"]
 mod keep_tests;

@@ -18,6 +18,7 @@ pub(crate) mod login_gate;
 mod metadata;
 mod storage;
 mod token_file;
+#[cfg(tp5)]
 #[cfg(test)]
 mod upgrade_path_tests;
 

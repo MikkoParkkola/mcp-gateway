@@ -436,6 +436,7 @@ fn reach(step: Step) {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "handoff_tests.rs"]
 mod handoff_tests;

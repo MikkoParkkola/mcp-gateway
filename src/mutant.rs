@@ -31,7 +31,7 @@ pub(crate) fn on(id: &'static str) -> bool {
 /// assertions, so a child that never reached them cannot pass for one that did.
 #[cfg(test)]
 fn run_child(test: &str, switch: Option<&str>) -> String {
-    let mut cmd = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut cmd = crate::test_home::test_binary();
     cmd.args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env("MCP_GATEWAY_MUTANT_CHILD", "1");
     match switch {
@@ -51,6 +51,7 @@ fn is_child() -> bool {
 #[cfg(all(test, not(mutants)))]
 mod normal_build {
     /// SCH.2: without the cfg the macro is the original expression.
+    #[cfg(tp3)]
     #[test]
     fn a_normal_build_takes_the_original() {
         assert_eq!(mutant!("T1", 1, 2), 2);
@@ -58,6 +59,7 @@ mod normal_build {
 
     /// SCH.2: a normal build never runs mutated code: a mutated arm that
     /// would panic is never reached.
+    #[cfg(tp3)]
     #[test]
     fn a_normal_build_never_runs_the_mutated_arm() {
         let original: u8 = mutant!("T3", unreachable!("a normal build ran the mutated arm"), 3);
@@ -69,6 +71,7 @@ mod normal_build {
     /// expansion is `$original` alone, so the mutated tokens never reach the
     /// compiler. Read from the source: the macro is crate-private, so no
     /// doctest can name it.
+    #[cfg(tp3)]
     #[test]
     fn a_normal_build_drops_the_mutated_tokens() {
         use proc_macro2::{Delimiter, TokenTree};
@@ -130,6 +133,7 @@ mod normal_build {
 
     /// SCH.2: a normal build reads no switch: with the switch set to this
     /// site's ID, a fresh process still takes the original.
+    #[cfg(tp3)]
     #[test]
     fn a_normal_build_ignores_the_switch_env() {
         let out = super::run_child(
@@ -139,6 +143,7 @@ mod normal_build {
         assert!(out.contains("MUTANT-CHILD-DONE T2"), "child output: {out}");
     }
 
+    #[cfg(tp3)]
     #[test]
     fn child_takes_the_original_with_the_switch_set() {
         if !super::is_child() {
@@ -149,6 +154,7 @@ mod normal_build {
     }
 
     /// SCH.2: the switch function exists only under `cfg(mutants)`.
+    #[cfg(tp3)]
     #[test]
     fn a_normal_build_has_no_switch_function() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mutant.rs");
@@ -177,6 +183,7 @@ mod mutants_build {
 
     /// Only the site whose ID is switched on takes its mutated arm; an ID no
     /// site carries, or no switch, leaves every site original.
+    #[cfg(tp3)]
     #[test]
     fn only_the_named_site_switches_on() {
         for (switch, want) in [
@@ -193,6 +200,7 @@ mod mutants_build {
         }
     }
 
+    #[cfg(tp3)]
     #[test]
     fn child_reports_its_sites() {
         if !super::is_child() {

@@ -288,6 +288,7 @@ pub fn extract_text_from_result(value: &serde_json::Value) -> String {
     text
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     use super::*;

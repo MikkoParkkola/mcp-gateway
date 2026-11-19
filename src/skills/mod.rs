@@ -105,6 +105,7 @@ fn effective_category(cap: &CapabilityDefinition) -> String {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -304,10 +304,12 @@ impl EmailHashKey {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "email_hash_tests.rs"]
 mod tests;
 
+#[cfg(tp5)]
 #[cfg(test)]
 #[path = "email_hash_gen_tests.rs"]
 mod gen_tests;

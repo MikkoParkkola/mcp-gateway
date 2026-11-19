@@ -227,6 +227,7 @@ fn view_outcome(view: &ViewBinding, slot_refuses: impl FnOnce(&String) -> bool) 
     }
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "account_outcome_tests.rs"]
 mod tests;

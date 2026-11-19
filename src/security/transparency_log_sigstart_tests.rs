@@ -446,7 +446,7 @@ const SIG_MARKER: &str = "killed";
 /// there (a marker, and no clean exit).
 fn open_killed_at(fx: &Fixture, at: super::kill::At) {
     let dir = fx.path.parent().unwrap();
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "security::transparency_log::sigstart_tests::sigstart_child",

@@ -66,10 +66,10 @@ fn probe_record_lookup(
     root: &std::path::Path,
 ) -> Result<String, std::sync::mpsc::RecvTimeoutError> {
     use std::io::BufRead as _;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Duration;
 
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let mut command = crate::test_home::test_binary();
     command
         .args([
             "--exact",
@@ -79,6 +79,8 @@ fn probe_record_lookup(
             "--test-threads=1",
         ])
         .env_clear()
+        // The clear drops the parent's home too: give it back, before the row's own values.
+        .envs(crate::test_home::child_env())
         .env(RECORD_CHILD_ROOT, root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

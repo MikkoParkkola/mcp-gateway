@@ -11,14 +11,16 @@
 //! The answer is decoded strictly and printed as the typed answer; any HTTP,
 //! authentication, read or decode failure is a nonzero exit.
 
-use crate::cli::stdout::println;
-
 use std::process::ExitCode;
 
 use mcp_gateway::cli::audit_lookup::LookupEmailArgs;
 use serde::{Deserialize, Serialize};
 
-use super::dashboard_link::LinkTls;
+use super::cli_exit::{
+    CliError, CliExit, CliOutcome, PROTOCOL_MESSAGE, PROTOCOL_REMEDY, Request, StdoutRule,
+    UNSAFE_BODY_MESSAGE, UNSAFE_BODY_REMEDY, emit,
+};
+use super::dashboard_link::{LinkTls, Remedies, refusal, transport};
 
 /// The most bytes read from stdin: an email is at most 320 bytes.
 pub(crate) const MAX_EMAIL_INPUT: usize = 1024;
@@ -62,7 +64,7 @@ pub(crate) fn read_cursor(input: impl std::io::Read) -> Result<String, String> {
     input
         .take(line_bound as u64 + 1)
         .read_to_end(&mut raw)
-        .map_err(|_| "could not read the page token from stdin".to_string())?;
+        .map_err(|_| UNREADABLE_CURSOR.to_string())?;
     if raw.len() > line_bound {
         return Err(TOO_LONG.to_string());
     }
@@ -109,6 +111,10 @@ pub(crate) struct LookupAnswer {
     pub(crate) scope: String,
 }
 
+/// Stdin could not be read (exit 1); every other input refusal is a usage error (2, design D4).
+const UNREADABLE_EMAIL: &str = "could not read the email from stdin";
+const UNREADABLE_CURSOR: &str = "could not read the page token from stdin";
+
 /// The longest email accepted, as the gateway's own limit (RFC 5321).
 const MAX_EMAIL: usize = 320;
 
@@ -125,7 +131,7 @@ pub(crate) fn read_email(input: impl std::io::Read) -> Result<String, String> {
     input
         .take(MAX_EMAIL_INPUT as u64 + 1)
         .read_to_end(&mut raw)
-        .map_err(|_| "could not read the email from stdin".to_string())?;
+        .map_err(|_| UNREADABLE_EMAIL.to_string())?;
     if raw.len() > MAX_EMAIL_INPUT {
         return Err("the email on stdin is too long".to_string());
     }
@@ -202,27 +208,38 @@ pub(crate) fn render(answer: &LookupAnswer) -> Result<String, String> {
 
 /// Ask the gateway at `base` and decode its answer strictly. The shared
 /// admin client refuses a cleartext non-loopback target before it connects.
+/// It stays on `admin_call_url`, which carries the email or cursor body, and
+/// shares the transport and refusal mapping with the other commands (design D2).
 ///
 /// # Errors
 ///
-/// A message naming the status or the failure, never the email or the token.
+/// The failure on the shared table; the caller prints it through
+/// `CliError::outcome` with the token and the email or cursor as secrets.
 pub(crate) async fn lookup(
     base: &str,
     tls: &LinkTls,
     token: &str,
     input: &LookupInput,
     args: &LookupEmailArgs,
-) -> Result<LookupAnswer, String> {
+) -> Result<LookupAnswer, CliError> {
     const PATH: &str = "/ui/api/key-server/audit/lookup-email";
-    let secret = match input {
-        LookupInput::Email(text) | LookupInput::Cursor(text) => text.clone(),
-    };
-    let hide =
-        |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string(), secret.clone()]);
-    let endpoint = reqwest::Url::parse(&format!("{}{PATH}", base.trim_end_matches('/')))
-        .map_err(|_| "the gateway URL is not valid".to_string())?;
-    check_window(args)?;
+    let endpoint =
+        reqwest::Url::parse(&format!("{}{PATH}", base.trim_end_matches('/'))).map_err(|_| {
+            CliError::new(
+                CliExit::Usage,
+                "the gateway URL is not valid",
+                "Check the gateway settings, then retry.",
+            )
+        })?;
+    check_window(args).map_err(|message| {
+        CliError::new(
+            CliExit::Usage,
+            message,
+            "Use RFC 3339 times with --from not after --to.",
+        )
+    })?;
     let body = request_body(input, args);
+    let remedies = Remedies::read(base);
     let response = super::dashboard_link::admin_call_url(
         reqwest::Method::POST,
         endpoint,
@@ -232,34 +249,41 @@ pub(crate) async fn lookup(
         None,
     )
     .await
-    .map_err(|error| hide(&error.to_string()))?;
-    if !response.status.is_success() {
-        // Each part of the message is named when it cannot be read, never
-        // turned into empty text.
-        let parsed = serde_json::from_slice::<serde_json::Value>(&response.body);
-        let reason = match &parsed {
-            Ok(body) => super::dashboard_link::gateway_reason(body).unwrap_or("no reason given"),
-            Err(_) => "its error body is not JSON",
-        };
-        let wait = match response.headers.get(reqwest::header::RETRY_AFTER) {
-            None => String::new(),
-            Some(value) => match value
-                .to_str()
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
-            {
-                Some(secs) => format!(" (retry after {secs} s)"),
-                None => " (retry after: unreadable)".to_owned(),
-            },
-        };
-        return Err(format!(
-            "the gateway answered {}: {}{wait}",
-            response.status,
-            hide(reason)
-        ));
+    .map_err(|error| transport(error, Request::Read, token, &remedies, tls))?;
+    if let Some(refused) = refusal(&response, Request::Read, &remedies) {
+        return Err(refused);
     }
     serde_json::from_slice::<LookupAnswer>(&response.body)
-        .map_err(|_| "the gateway's answer is not a lookup answer".to_string())
+        .map_err(|_| CliError::new(CliExit::Gateway, PROTOCOL_MESSAGE, PROTOCOL_REMEDY))
+}
+
+/// The token redacted from every text and JSON field of `answer`, in place, as the other commands redact a success
+/// body (design D2); `false` when a JSON field lost an entry to it. The email or cursor stays: it may be data.
+fn redact_answer(answer: &mut LookupAnswer, token: &str) -> bool {
+    let secrets = [token.to_string()];
+    let text = |value: &mut String| *value = mcp_gateway::cli::redact::text(value, &secrets);
+    let mut kept = true;
+    for row in &mut answer.rows {
+        for field in [
+            &mut row.timestamp,
+            &mut row.token_jti,
+            &mut row.subject,
+            &mut row.issuer,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            text(field);
+        }
+        for value in [&mut row.backends, &mut row.tools].into_iter().flatten() {
+            kept &= super::dashboard_link::redact_body(value, token);
+        }
+    }
+    if let Some(cursor) = &mut answer.next_cursor {
+        text(cursor);
+    }
+    text(&mut answer.scope);
+    kept
 }
 
 /// Resolve the gateway, read the credential and the email, look up, print.
@@ -271,23 +295,52 @@ pub(crate) async fn run_with(
     input: impl std::io::Read,
     token: impl Fn(&str) -> Option<String>,
 ) -> ExitCode {
-    let fail = |message: String| {
-        eprintln!("audit lookup-email: {message}");
-        ExitCode::FAILURE
-    };
-    let token = match super::dashboard_link::read_token(token) {
-        Ok(token) => token,
-        Err(error) => return fail(error.to_string()),
-    };
-    let (base, tls) = match super::dashboard_link::dashboard_link_base(
+    let (outcome, secrets) =
+        lookup_run(args, load, port_override, host_override, input, token).await;
+    // emit's own write-failure report is gated on every secret the run read (design D5).
+    let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
+    emit(&outcome, false, &secrets)
+}
+
+/// What `audit lookup-email` prints and exits with. Checks in order (design D4): resolve the gateway, the token,
+/// stdin, the window, the request. Every failure prints through `CliError::outcome` with every secret known at
+/// that point: the token, then the email or cursor too (design D5).
+// Rows only: production enters through `lookup_run`, which also returns the run's secrets for `emit`.
+#[cfg(test)]
+pub(crate) async fn lookup_outcome(
+    args: LookupEmailArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    input: impl std::io::Read,
+    token: impl Fn(&str) -> Option<String>,
+) -> CliOutcome {
+    lookup_run(args, load, port_override, host_override, input, token)
+        .await
+        .0
+}
+
+/// [`lookup_outcome`] with every secret the run read: the token once read, then the email or cursor.
+pub(crate) async fn lookup_run(
+    args: LookupEmailArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    input: impl std::io::Read,
+    token: impl Fn(&str) -> Option<String>,
+) -> (CliOutcome, Vec<String>) {
+    let token = super::dashboard_link::read_token(token);
+    let mut secrets: Vec<String> = token.iter().cloned().collect();
+    let (base, tls, token) = match super::dashboard_link::resolved(
         args.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
+        token,
     ) {
         Ok(resolved) => resolved,
-        Err(message) => return fail(message),
+        Err(out) => return (out, secrets),
     };
     let asked = if args.cursor_stdin {
         read_cursor(input).map(LookupInput::Cursor)
@@ -296,18 +349,53 @@ pub(crate) async fn run_with(
     };
     let asked = match asked {
         Ok(asked) => asked,
-        Err(message) => return fail(message),
+        Err(message) => {
+            let failure = if message == UNREADABLE_EMAIL || message == UNREADABLE_CURSOR {
+                CliError::new(CliExit::LocalFailure, message, "Check stdin and retry.")
+            } else {
+                CliError::new(
+                    CliExit::Usage,
+                    message,
+                    "Pass one email (or the page token from the previous page) on stdin.",
+                )
+            };
+            return (failure.outcome(false, &[&token]), secrets);
+        }
     };
-    match lookup(&base, &tls, &token, &asked, &args).await {
-        Ok(answer) => match render(&answer) {
-            Ok(text) => {
-                println!("{text}");
-                ExitCode::SUCCESS
+    let (LookupInput::Email(secret) | LookupInput::Cursor(secret)) = &asked;
+    secrets.push(secret.clone());
+    let both = [token.as_str(), secret.as_str()];
+    let out = match lookup(&base, &tls, &token, &asked, &args).await {
+        Ok(mut answer) => {
+            if redact_answer(&mut answer, &token) {
+                match render(&answer) {
+                    // The email or cursor may be data in the answer; only the token is refused (design D6).
+                    Ok(text) => CliOutcome::success(
+                        format!("{text}\n").into_bytes(),
+                        "",
+                        false,
+                        &both,
+                        StdoutRule::RefuseToken,
+                    ),
+                    Err(message) => CliError::new(
+                        CliExit::LocalFailure,
+                        message,
+                        "Retry; report the failure if it repeats.",
+                    )
+                    .outcome(false, &both),
+                }
+            } else {
+                CliError::new(
+                    CliExit::LocalFailure,
+                    UNSAFE_BODY_MESSAGE,
+                    UNSAFE_BODY_REMEDY,
+                )
+                .outcome(false, &both)
             }
-            Err(message) => fail(message),
-        },
-        Err(message) => fail(message),
-    }
+        }
+        Err(error) => error.outcome(false, &both),
+    };
+    (out, secrets)
 }
 
 /// `mcp-gateway audit lookup-email`.
@@ -328,6 +416,7 @@ pub async fn run_audit_lookup_command(
     .await
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "audit_lookup_tests.rs"]
 mod tests;

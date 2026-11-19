@@ -479,6 +479,7 @@ fn truncate(value: &str, width: usize) -> String {
     )
 }
 
+#[cfg(tp2)]
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod tests;

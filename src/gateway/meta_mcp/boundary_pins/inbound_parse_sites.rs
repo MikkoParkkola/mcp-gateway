@@ -44,7 +44,7 @@ const ROOTS: [&str; 1] = ["src/lib.rs"];
 const SCOPES: [&str; 3] = ["src/transport/", "src/a2a/", "src/backend/"];
 
 /// The calls that remove a backend's injected values.
-const SCRUB_CALLS: [&str; 8] = [
+pub(super) const SCRUB_CALLS: [&str; 8] = [
     "scrub_note",
     "ingress_scrub",
     "scrub_frame",
@@ -62,7 +62,7 @@ type Counts = BTreeMap<(String, String, String), usize>;
 type Func = (String, String);
 
 /// The calls that hand a frame on: a scrub must come before the first.
-const SINK_CALLS: [&str; 4] = ["publish", "send", "try_send", "deliver"];
+pub(super) const SINK_CALLS: [&str; 4] = ["publish", "send", "try_send", "deliver"];
 
 /// Where a function's scrub stands against its first hand-off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

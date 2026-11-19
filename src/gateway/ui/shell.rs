@@ -41,36 +41,36 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.a15765357c1f.js",
-        include_bytes!("shell/gateway.a15765357c1f.js"),
+        "gateway.9828963b2981.js",
+        include_bytes!("shell/gateway.9828963b2981.js"),
+    ),
+    (
+        "shell.2f0fa8846ded.js",
+        include_bytes!("shell/shell.2f0fa8846ded.js"),
     ),
     (
         "shell.8a1ede0f5317.css",
         include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "shell.b410045c062e.js",
-        include_bytes!("shell/shell.b410045c062e.js"),
+        "tips.e6787e40c917.json",
+        include_bytes!("shell/tips.e6787e40c917.json"),
     ),
     (
-        "tips.93dac071a1b5.json",
-        include_bytes!("shell/tips.93dac071a1b5.json"),
+        "tools.5cacef0c94f9.css",
+        include_bytes!("shell/tools.5cacef0c94f9.css"),
     ),
     (
-        "tools.24f226efcd24.css",
-        include_bytes!("shell/tools.24f226efcd24.css"),
-    ),
-    (
-        "tools.3ec2d575eff3.js",
-        include_bytes!("shell/tools.3ec2d575eff3.js"),
+        "tools.f8320a6ed8a4.js",
+        include_bytes!("shell/tools.f8320a6ed8a4.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.d82a4a9834d8.js",
-        include_bytes!("shell/tooltip.d82a4a9834d8.js"),
+        "tooltip.c4528509befc.js",
+        include_bytes!("shell/tooltip.c4528509befc.js"),
     ),
 ];
 
@@ -162,10 +162,12 @@ pub(super) async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "shell_budget_tests.rs"]
 mod budget_tests;

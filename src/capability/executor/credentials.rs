@@ -585,10 +585,12 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -766,10 +768,12 @@ mod tests {
     }
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "c4_credential_tests.rs"]
 mod c4_credential_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "credentials_tilde_tests.rs"]
 mod credentials_tilde_tests;

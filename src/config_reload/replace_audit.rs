@@ -238,7 +238,14 @@ pub(crate) async fn replace_detached(
     replace: Replace,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
-    replace_audited(ctx, replace, Audit::Off, wait).await
+    replace_audited(
+        ctx,
+        replace,
+        Audit::Off,
+        crate::config_reload::history::Source::Ui { who: String::new() },
+        wait,
+    )
+    .await
 }
 
 /// The only way to run the byte writer. Invariant (ADR-024): a save's
@@ -250,9 +257,10 @@ pub(crate) async fn replace_audited(
     ctx: Arc<ReloadContext>,
     replace: Replace,
     audit: Audit,
+    source: crate::config_reload::history::Source,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
-    super::spawn_locked(ctx, replace, audit, wait, None)
+    super::spawn_locked(ctx, replace, audit, source, wait, None)
         .await
         .map(|(outcome, _)| outcome)
 }
@@ -262,6 +270,7 @@ pub(crate) async fn replace_audited_revoke(
     ctx: Arc<ReloadContext>,
     replace: Replace,
     audit: Audit,
+    source: crate::config_reload::history::Source,
     wait: Duration,
     check: super::receipt::RevokeCheck,
 ) -> Result<super::receipt::RevokeReceipt, ReplaceError> {
@@ -276,7 +285,7 @@ pub(crate) async fn replace_audited_revoke(
             "revoke requires its audit intent".into(),
         ));
     }
-    let (_, receipt) = super::spawn_locked(ctx, replace, audit, wait, Some(check)).await?;
+    let (_, receipt) = super::spawn_locked(ctx, replace, audit, source, wait, Some(check)).await?;
     receipt.ok_or_else(|| ReplaceError::Failed("missing revoke receipt".into()))
 }
 

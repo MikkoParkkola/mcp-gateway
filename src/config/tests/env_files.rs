@@ -86,12 +86,12 @@ fn envfile_19_the_overlay_opens_the_tilde_path_startup_recorded() {
 /// (`dirs-sys-0.5.0/src/lib.rs:33-37`) — testing only the unset spelling lets an
 /// implementation that special-cases one and not the other pass.
 #[test]
-fn envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback() {
+fn envfile_19d_home_unset_and_home_empty_both_resolve_to_the_routed_home() {
     for variant in ["unset", "empty"] {
-        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        let mut cmd = crate::test_home::test_binary();
         cmd.args([
             "--exact",
-            "config::tests::envfile_19d_child_resolves_against_dirs_home_dir",
+            "config::tests::envfile_19d_child_resolves_against_the_routed_home",
             "--ignored",
             "--nocapture",
         ]);
@@ -729,4 +729,27 @@ fn a_tilde_user_entry_stays_verbatim_and_is_not_a_tilde_entry() {
         !startup.env_paths.has_tilde_entry(),
         "`~user/x` is not a home-relative entry"
     );
+}
+
+/// The deploy templates bind through `MCP_GATEWAY_SERVER__HOST` instead of the
+/// hidden host flag, which overrode the config file's `server.host`. The env
+/// overlay must do the same: the variable wins over the host the file sets.
+/// Mutant: the overlay merged before the file, so the file wins.
+#[test]
+fn the_host_variable_overrides_the_host_the_config_file_sets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_path = dir.path().join("host.env");
+    write_owner_only(&env_path, "MCP_GATEWAY_SERVER__HOST=0.0.0.0\n").expect("write env file");
+    let config_path = dir.path().join("config.yaml");
+    write_owner_only(
+        &config_path,
+        format!(
+            "env_files:\n  - '{}'\nserver:\n  host: 127.0.0.2\n",
+            env_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let config = Config::load(Some(&config_path)).expect("loads");
+    assert_eq!(config.server.host, "0.0.0.0");
 }

@@ -9,10 +9,13 @@ pub(crate) mod memory;
 #[cfg(feature = "metrics")]
 pub(crate) mod process;
 
+#[cfg(tp2)]
 #[cfg(test)]
 mod classify_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "metrics"))]
 mod latency_tests;
+#[cfg(tp2)]
 #[cfg(all(test, feature = "metrics"))]
 mod process_tests;
 

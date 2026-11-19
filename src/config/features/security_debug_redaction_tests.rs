@@ -7,6 +7,7 @@ use super::*;
 const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
 // TransparencyLogConfig::Debug must never surface the HMAC shared secret.
+#[cfg(tp5)]
 #[test]
 fn transparency_log_config_debug_redacts_shared_secret() {
     let cfg = TransparencyLogConfig {
@@ -23,6 +24,7 @@ fn transparency_log_config_debug_redacts_shared_secret() {
 
 // MessageSigningConfig::Debug must redact both the current and previous
 // rotation secrets.
+#[cfg(tp5)]
 #[test]
 fn message_signing_config_debug_redacts_both_secrets() {
     let cfg = MessageSigningConfig {

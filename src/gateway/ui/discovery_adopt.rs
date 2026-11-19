@@ -406,16 +406,23 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
+    let who = super::super::admin_audit::caller_who(
+        &state,
+        guard.client.as_ref(),
+        guard.identity.as_ref(),
+    );
     answer(
         &name,
-        super::super::write_audited(&state, context, replace, IntentKind::Adopt).await,
+        super::super::write_audited(&state, context, replace, IntentKind::Adopt, &who).await,
     )
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "discovery_adopt_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "discovery_adopt_route_tests.rs"]
 mod route_tests;

@@ -314,6 +314,7 @@ fn provider_entries_of(text: &str, doc: &crate::yaml::Value) -> Vec<(String, cra
         .collect()
 }
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

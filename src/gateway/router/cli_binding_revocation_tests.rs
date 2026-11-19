@@ -80,6 +80,7 @@ pub(super) async fn remove_root(
     reload(state, dir, &keys[1..]).await;
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn child_previous_secret_is_refused_after_root_removal() {
     let (state, _store, dir, keys) = fixture().await;
@@ -88,6 +89,7 @@ async fn child_previous_secret_is_refused_after_root_removal() {
     assert_eq!(status(&state, "/mcp", OLD).await, StatusCode::UNAUTHORIZED);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_held_watch_of_the_child_ends_at_its_next_poll() {
     let (state, _store, dir, keys) = fixture().await;
@@ -108,6 +110,7 @@ async fn a_held_watch_of_the_child_ends_at_its_next_poll() {
     assert!(poll().is_none(), "next watch poll must refuse");
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn a_queued_task_of_the_child_does_not_run() {
     let (state, _store, dir, keys) = fixture().await;
@@ -124,6 +127,7 @@ async fn a_queued_task_of_the_child_does_not_run() {
     assert!(live::current_client(&auth, held.as_ref()).await.is_none());
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn event_admission_and_admin_standing_end_with_the_root() {
     use crate::events::{EventSource, EventsHub, LiveCredentials};
@@ -170,6 +174,7 @@ async fn event_admission_and_admin_standing_end_with_the_root() {
     );
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn an_unrelated_root_stays_usable() {
     let (state, _store, dir, keys) = fixture().await;
@@ -182,6 +187,7 @@ async fn an_unrelated_root_stays_usable() {
     assert_eq!(status(&state, "/mcp", OTHER).await, StatusCode::OK);
 }
 
+#[cfg(tp1)]
 #[tokio::test]
 async fn removal_survives_a_clock_rolled_back() {
     let _clock = crate::clock::test_clock::at_secs(1_900_000_000);
@@ -219,6 +225,7 @@ async fn enable_key_creation(state: &mut Arc<super::AppState>, dir: &std::path::
     state.meta_mcp.set_reload_context(Arc::new(context));
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
@@ -264,6 +271,7 @@ async fn a_cli_keys_dashboard_session_cannot_create_a_key() {
     );
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_cli_keys_dashboard_session_cannot_mint_a_link_or_a_handoff() {
@@ -289,6 +297,7 @@ async fn a_cli_keys_dashboard_session_cannot_mint_a_link_or_a_handoff() {
     );
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_link_minted_by_the_child_is_refused_after_root_removal() {
@@ -305,6 +314,7 @@ async fn a_link_minted_by_the_child_is_refused_after_root_removal() {
     assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_session_minted_by_the_child_ends_with_the_root() {
@@ -325,6 +335,7 @@ async fn a_session_minted_by_the_child_ends_with_the_root() {
     assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
 }
 
+#[cfg(tp1)]
 #[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_handoff_minted_by_the_child_is_refused_after_root_removal() {

@@ -57,6 +57,7 @@ impl Config {
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "per_user_headers_posture_tests.rs"]
 mod tests;

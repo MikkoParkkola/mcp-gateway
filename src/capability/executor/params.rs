@@ -705,13 +705,16 @@ fn url_templates<'a>(
     templates
 }
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "params_secret_tests.rs"]
 mod secret_tests;
 
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "params_catalogue_tests.rs"]
 mod catalogue_tests;
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "params_cloudflare_tests.rs"]
 mod cloudflare_catalogue_tests;

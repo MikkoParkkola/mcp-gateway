@@ -139,6 +139,7 @@ fn normalise_query(query: &str) -> String {
 // Tests
 // ============================================================================
 
+#[cfg(tp1)]
 #[cfg(test)]
 mod tests {
     use super::*;

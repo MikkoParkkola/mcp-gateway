@@ -5,8 +5,9 @@
 # Run:    docker run -p 127.0.0.1:39400:39400 \
 #           -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
 #           -e MCP_GATEWAY_SERVER__CLEARTEXT_HTTP=host_local_publish \
+#           -e MCP_GATEWAY_SERVER__HOST=0.0.0.0 \
 #           -v ./gateway.yaml:/config.yaml:ro mcp-gateway:latest \
-#           --config /config.yaml --host 0.0.0.0
+#           --config /config.yaml
 #         The container must bind 0.0.0.0 or the published port reaches nothing;
 #         publishing to 127.0.0.1 keeps that off-host. See docs/DEPLOYMENT.md.
 # =============================================================================
@@ -28,7 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy manifests first for dependency layer caching.
 # A dummy src/main.rs lets `cargo build` download and compile dependencies
 # without invalidating the cache when only source code changes.
+# Cargo.toml's `build` key names the test-part build script, so it comes with
+# the manifests (it reads only an environment variable, nothing else).
 COPY Cargo.toml Cargo.lock ./
+COPY scripts/dev/test-parts-build.rs ./scripts/dev/test-parts-build.rs
 COPY crates ./crates
 RUN mkdir src && echo 'fn main() {}' > src/main.rs
 RUN cargo build --release 2>/dev/null || true

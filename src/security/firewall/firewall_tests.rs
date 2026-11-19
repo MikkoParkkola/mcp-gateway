@@ -27,6 +27,7 @@ fn default_firewall() -> Firewall {
 
 // ── FirewallConfig defaults ───────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn disabled_firewall_allows_everything() {
     let cfg = FirewallConfig {
@@ -41,6 +42,7 @@ fn disabled_firewall_allows_everything() {
     assert!(verdict.findings.is_empty());
 }
 
+#[cfg(tp4)]
 #[test]
 fn scan_requests_disabled_allows_injection() {
     let cfg = FirewallConfig {
@@ -53,6 +55,7 @@ fn scan_requests_disabled_allows_injection() {
     assert!(verdict.allowed);
 }
 
+#[cfg(tp4)]
 #[test]
 fn scan_requests_disabled_still_enforces_the_budget() {
     let cfg = FirewallConfig {
@@ -78,6 +81,7 @@ fn scan_requests_disabled_still_enforces_the_budget() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn scan_requests_disabled_still_enforces_tenant_isolation() {
     let cfg = FirewallConfig {
@@ -101,6 +105,7 @@ fn scan_requests_disabled_still_enforces_tenant_isolation() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn scan_responses_disabled_skips_response_scan() {
     let cfg = FirewallConfig {
@@ -116,6 +121,7 @@ fn scan_responses_disabled_skips_response_scan() {
 
 // ── Severity → action mapping ─────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn high_severity_finding_blocks() {
     let fw = default_firewall();
@@ -126,6 +132,7 @@ fn high_severity_finding_blocks() {
     assert_eq!(verdict.action, FirewallAction::Block);
 }
 
+#[cfg(tp4)]
 #[test]
 fn medium_severity_finding_warns() {
     let fw = default_firewall();
@@ -136,6 +143,7 @@ fn medium_severity_finding_warns() {
     assert_eq!(verdict.action, FirewallAction::Warn);
 }
 
+#[cfg(tp4)]
 #[test]
 fn clean_args_produce_allow_verdict() {
     let fw = default_firewall();
@@ -148,6 +156,7 @@ fn clean_args_produce_allow_verdict() {
 
 // ── Rule override ─────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn rule_overrides_default_action_to_block() {
     let cfg = FirewallConfig {
@@ -165,6 +174,7 @@ fn rule_overrides_default_action_to_block() {
     assert_eq!(verdict.action, FirewallAction::Block);
 }
 
+#[cfg(tp4)]
 #[test]
 fn rule_overrides_default_action_to_warn() {
     let cfg = FirewallConfig {
@@ -179,6 +189,7 @@ fn rule_overrides_default_action_to_warn() {
     assert_eq!(verdict.action, FirewallAction::Warn);
 }
 
+#[cfg(tp4)]
 #[test]
 fn glob_rule_matches_prefix() {
     let cfg = FirewallConfig {
@@ -191,6 +202,7 @@ fn glob_rule_matches_prefix() {
     assert!(!rule_matches(&fw.startup.rules[0], "list_tools"));
 }
 
+#[cfg(tp4)]
 #[test]
 fn wildcard_rule_matches_all_tools() {
     let cfg = FirewallConfig {
@@ -205,6 +217,7 @@ fn wildcard_rule_matches_all_tools() {
     assert_eq!(verdict.action, FirewallAction::Allow);
 }
 
+#[cfg(tp4)]
 #[test]
 fn first_matching_rule_wins() {
     let cfg = FirewallConfig {
@@ -227,6 +240,7 @@ fn first_matching_rule_wins() {
     assert_eq!(verdict.action, FirewallAction::Warn);
 }
 
+#[cfg(tp4)]
 #[test]
 fn clean_args_ignore_matching_rules() {
     let cfg = FirewallConfig {
@@ -245,6 +259,7 @@ fn clean_args_ignore_matching_rules() {
 
 // ── Response scan ─────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn verdict_contains_all_findings() {
     let fw = default_firewall();
@@ -256,6 +271,7 @@ fn verdict_contains_all_findings() {
     assert!(verdict.findings.len() >= 2);
 }
 
+#[cfg(tp4)]
 #[test]
 fn response_scan_detects_credential() {
     let fw = default_firewall();
@@ -271,6 +287,7 @@ fn response_scan_detects_credential() {
 
 // ── on_session_end ────────────────────────────────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn session_end_is_noop_without_anomaly_detector() {
     let fw = default_firewall();
@@ -279,6 +296,7 @@ fn session_end_is_noop_without_anomaly_detector() {
 
 // ── OWASP ASI06: memory-poisoning integration ─────────────────────────────
 
+#[cfg(tp4)]
 #[test]
 fn memory_write_with_control_token_is_blocked() {
     // GIVEN: default firewall (memory_poisoning enabled by default)
@@ -302,6 +320,7 @@ fn memory_write_with_control_token_is_blocked() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn memory_write_with_role_confusion_is_blocked() {
     // GIVEN: default firewall
@@ -321,6 +340,7 @@ fn memory_write_with_role_confusion_is_blocked() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn memory_write_oversized_entry_warns() {
     // GIVEN: default firewall
@@ -342,6 +362,7 @@ fn memory_write_oversized_entry_warns() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn non_memory_tool_not_scanned_for_memory_poisoning() {
     // GIVEN: default firewall
@@ -361,6 +382,7 @@ fn non_memory_tool_not_scanned_for_memory_poisoning() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn memory_poisoning_disabled_skips_all_checks() {
     // GIVEN: firewall with memory_poisoning.enabled = false
@@ -386,6 +408,7 @@ fn memory_poisoning_disabled_skips_all_checks() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn clean_memory_write_produces_allow_verdict() {
     // GIVEN: default firewall
@@ -427,6 +450,7 @@ fn budget_firewall(limit: usize) -> Firewall {
     Firewall::from_config(cfg, None)
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_budget_disabled_by_default_never_blocks() {
     // Off by default: an operator who never configured a limit must not
@@ -445,6 +469,7 @@ fn ac_control_2_budget_disabled_by_default_never_blocks() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_a_principal_over_budget_is_blocked() {
     let fw = budget_firewall(2);
@@ -465,6 +490,7 @@ fn ac_control_2_a_principal_over_budget_is_blocked() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_a_session_keyed_budget_would_never_bind_but_this_one_does() {
     // The regression this control exists to prevent: under statelessness
@@ -484,6 +510,7 @@ fn ac_control_2_a_session_keyed_budget_would_never_bind_but_this_one_does() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_two_principals_do_not_share_one_budget() {
     let fw = budget_firewall(1);
@@ -498,6 +525,7 @@ fn ac_control_2_two_principals_do_not_share_one_budget() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_an_unattributed_call_is_refused_not_allowed() {
     // The dangerous near-miss: an empty caller pools every anonymous
@@ -521,6 +549,7 @@ fn ac_control_2_an_unattributed_call_is_refused_not_allowed() {
     );
 }
 
+#[cfg(tp4)]
 #[test]
 fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
     let cfg = FirewallConfig {
@@ -543,6 +572,7 @@ fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
     );
 }
 
+#[cfg(tp4)]
 #[path = "firewall_anomaly_tests.rs"]
 mod anomaly;
 
@@ -567,6 +597,7 @@ fn poisoning_found(fw: &Firewall, tool: &str) -> bool {
         .any(|f| f.scan_type == ScanType::MemoryPoisoning)
 }
 
+#[cfg(tp4)]
 #[test]
 fn an_entry_with_an_uppercase_letter_scans() {
     // The documented match is case-insensitive on both sides.
@@ -576,6 +607,7 @@ fn an_entry_with_an_uppercase_letter_scans() {
     }
 }
 
+#[cfg(tp4)]
 #[test]
 fn lowercase_lists_match_exactly_the_tools_they_matched_before() {
     // Written out by hand from the substring rule as it stood: any change in

@@ -9,6 +9,7 @@
 //! patch release. Use the `mcp-gateway` binary, its configuration and its
 //! HTTP and MCP interfaces instead (see the README).
 
+#![cfg_attr(tp_partial, allow(unused, unfulfilled_lint_expectations))]
 #![deny(unsafe_code)]
 // In stdio mode stdout is the JSON-RPC stream to the client, so library code
 // never prints to it: a stray line breaks the client's framing. Diagnostics go
@@ -71,6 +72,7 @@ pub(crate) mod debug_trust_roots;
 mod health_history;
 pub(crate) mod ids;
 pub(crate) mod random_secret;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]
 mod random_secret_tests;
@@ -193,12 +195,17 @@ pub(crate) mod spawn_keep;
 #[doc(hidden)]
 pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
+#[cfg(tp3)]
+#[cfg(test)]
+mod home_contention_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
 #[cfg(test)]
 mod test_dir_keep;
 #[cfg(test)]
 pub(crate) mod test_fixture_host;
+#[cfg(test)]
+pub(crate) mod test_home;
 #[cfg(test)]
 pub(crate) mod test_late_write;
 #[cfg(test)]
@@ -207,6 +214,7 @@ mod test_pause;
 mod test_ports;
 #[cfg(test)]
 pub(crate) mod test_source_text;
+#[cfg(tp3)]
 #[cfg(test)]
 mod test_source_text_tests;
 #[cfg(test)]
@@ -228,6 +236,7 @@ pub(crate) mod transport_key;
 pub(crate) mod truncate;
 #[doc(hidden)]
 pub mod trust;
+#[cfg(tp3)]
 #[cfg(test)]
 mod unsafe_allowlist_tests;
 /// The 4.0.0 upgrade-notice data. Crate-internal API for the CLI binary, not
@@ -244,6 +253,7 @@ mod private_fs;
 mod win_acl;
 #[cfg(windows)]
 mod win_cred;
+#[cfg(tp3)]
 #[cfg(all(test, windows))]
 mod win_cred_tests;
 mod wiped_bytes;
@@ -357,15 +367,18 @@ where
     }
 }
 
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
 
 /// LOG.2: no tracing line is written while a lock guard is held.
+#[cfg(tp3)]
 #[cfg(test)]
 mod log_under_lock_scan_tests;
 
 // Unix-only: asserts POSIX mode bits under a child's umask.
+#[cfg(tp3)]
 #[cfg(all(test, unix))]
 mod file_mode_inherit_tests;
 

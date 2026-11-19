@@ -24,6 +24,7 @@ fn open_logger() -> (TempLog, Arc<TransparencyLogger>) {
 // `logger = None` (transparency log disabled) is a no-op success, not
 // a failure — the mint path must not be blocked when the operator has
 // not configured a transparency log at all.
+#[cfg(tp5)]
 #[tokio::test]
 async fn logger_disabled_is_ok_noop() {
     let result = audit_identity_propagation(
@@ -39,6 +40,7 @@ async fn logger_disabled_is_ok_noop() {
 }
 
 // A durable write succeeds and reports `Ok(())`.
+#[cfg(tp5)]
 #[tokio::test]
 async fn mint_write_success_is_ok() {
     let (_file, logger) = open_logger();
@@ -57,6 +59,7 @@ async fn mint_write_success_is_ok() {
 // F20 T6: the mint audit goes through the bounded append, so a
 // stalled disk refuses the mint while the write is still held (no durable
 // record, no credential) instead of pinning a runtime worker.
+#[cfg(tp5)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
     let (_file, logger) = open_logger();
@@ -98,6 +101,7 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
 // branch run the actual assertion and report its outcome over
 // stdout — no `unsafe` code, no new dependency, isolated to the
 // child only. Unix-only (the technique is POSIX shell + rlimit).
+#[cfg(tp5)]
 #[cfg(unix)]
 #[tokio::test]
 async fn mint_write_failure_is_fail_closed() {
@@ -160,6 +164,7 @@ async fn mint_write_failure_is_fail_closed() {
         .arg("-c")
         .arg(script)
         .arg(&exe)
+        .envs(crate::test_home::child_env())
         .env(ENV_VAR, &path)
         // Under a zero file-size limit the child's coverage profile is written
         // empty and corrupts the measured set (#2573); give it a private file.
