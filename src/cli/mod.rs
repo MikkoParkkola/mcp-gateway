@@ -66,7 +66,7 @@ pub mod subcommands;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use clap_complete::Shell;
+use completion::CompletionShell;
 
 use crate::cli::output::OutputFormat;
 
@@ -874,7 +874,7 @@ pub enum ToolCommand {
     Completions {
         /// Target shell
         #[arg(required = true, value_enum)]
-        shell: Shell,
+        shell: CompletionShell,
 
         /// Directory containing capability YAML definitions
         #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]

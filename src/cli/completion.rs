@@ -1,318 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Shell completion script generation for the `mcp-gateway` CLI.
-// String-building from iterators via format! is the clearest approach here.
-#![allow(clippy::format_collect)]
+//! Shell completions from the visible CLI tree and locally loaded capability names.
 //!
-//! Generates tab-completion scripts for bash, zsh, and fish from the static
-//! command structure and the live capability registry.
+//! Bash and Zsh use `clap_complete` unchanged; Fish and PowerShell use the tables
+//! and argument walkers here. Tool names are captured when the script is generated.
 //!
-//! # Usage
+//! # Installation
 //!
-//! ```bash
-//! # Install zsh completions
-//! mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
-//!
-//! # Install bash completions
+//! ```text
 //! mcp-gateway tool completions bash >> ~/.bashrc
-//!
-//! # Install fish completions
+//! mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
 //! mcp-gateway tool completions fish > ~/.config/fish/completions/mcp-gateway.fish
 //! ```
+//!
+//! In PowerShell, add this line to `$PROFILE`:
+//! ```powershell
+//! mcp-gateway tool completions powershell | Out-String | Invoke-Expression
+//! ```
 
-use clap_complete::Shell;
+use clap::{Arg, Command, builder::PossibleValuesParser};
 
-/// Static subcommands exposed by `mcp-gateway tool`.
-const TOOL_SUBCOMMANDS: &[(&str, &str)] = &[
-    ("invoke", "Call a tool by name with JSON arguments"),
-    (
-        "list",
-        "List all available tools from the capability registry",
-    ),
-    ("inspect", "Show the input schema for a specific tool"),
-    ("completions", "Generate shell completion scripts"),
-];
-
-/// Static top-level subcommands.
-const TOP_COMMANDS: &[(&str, &str)] = &[
-    ("serve", "Start the gateway server"),
-    ("cap", "Capability management commands"),
-    ("tls", "Certificate lifecycle management"),
-    ("init", "Create a new gateway configuration file"),
-    (
-        "stats",
-        "Show observed invocation counts and cache behavior",
-    ),
-    ("validate", "Validate capability definitions"),
-    ("tool", "Invoke gateway tools directly from the CLI"),
-];
-
-/// Generate a completion script for the requested shell.
-///
-/// `tool_names` are the capability names discovered at runtime; they are
-/// injected into the completion as valid values for the `invoke` and
-/// `inspect` subcommands.
-///
-/// # Examples
-///
-/// ```rust
-/// use mcp_gateway::cli::completion::{generate_completion, ShellTarget};
-///
-/// let script = generate_completion(ShellTarget::Zsh, &["weather_current".to_string()]);
-/// assert!(script.contains("_mcp_gateway"));
-/// ```
-pub fn generate_completion(shell: ShellTarget, tool_names: &[String]) -> String {
-    match shell {
-        ShellTarget::Bash => generate_bash(tool_names),
-        ShellTarget::Zsh => generate_zsh(tool_names),
-        ShellTarget::Fish => generate_fish(tool_names),
-    }
-}
-
-/// Target shell for completion generation.
-///
-/// Maps from the clap [`Shell`] enum for ergonomic use in tests without
-/// requiring `clap_complete` in test code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellTarget {
-    /// Bourne-again shell (bash)
-    Bash,
-    /// Z shell (zsh)
-    Zsh,
-    /// Friendly interactive shell (fish)
-    Fish,
-}
-
-impl ShellTarget {
-    /// Convert from the [`clap_complete`] `Shell` enum.
-    #[must_use]
-    pub fn from_shell(s: Shell) -> Option<Self> {
-        match s {
-            Shell::Bash => Some(Self::Bash),
-            Shell::Zsh => Some(Self::Zsh),
-            Shell::Fish => Some(Self::Fish),
-            _ => None,
-        }
-    }
-}
-
-// ── bash ──────────────────────────────────────────────────────────────────────
-
-fn generate_bash(tool_names: &[String]) -> String {
-    let tools_list = tool_names.join(" ");
-    let top_cmds: String = TOP_COMMANDS
-        .iter()
-        .map(|(n, _)| *n)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let tool_subcmds: String = TOOL_SUBCOMMANDS
-        .iter()
-        .map(|(n, _)| *n)
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    format!(
-        r#"# mcp-gateway bash completion
-# Source this file or add to ~/.bashrc
-
-_mcp_gateway_completions() {{
-    local cur prev words cword
-    _init_completion || return
-
-    local top_commands="{top_cmds}"
-    local tool_names="{tools_list}"
-    local tool_subcommands="{tool_subcmds}"
-
-    case "${{words[1]}}" in
-        tool)
-            case "${{words[2]}}" in
-                invoke|inspect)
-                    COMPREPLY=($(compgen -W "$tool_names" -- "$cur"))
-                    return
-                    ;;
-                completions)
-                    COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
-                    return
-                    ;;
-                *)
-                    COMPREPLY=($(compgen -W "$tool_subcommands" -- "$cur"))
-                    return
-                    ;;
-            esac
-            ;;
-        cap)
-            COMPREPLY=($(compgen -W "validate list import test discover install search registry-list" -- "$cur"))
-            return
-            ;;
-        tls)
-            COMPREPLY=($(compgen -W "init-ca issue-server issue-client" -- "$cur"))
-            return
-            ;;
-        *)
-            COMPREPLY=($(compgen -W "$top_commands" -- "$cur"))
-            ;;
-    esac
-}}
-
-complete -F _mcp_gateway_completions mcp-gateway
-"#
-    )
-}
-
-// ── zsh ───────────────────────────────────────────────────────────────────────
-
-fn generate_zsh(tool_names: &[String]) -> String {
-    let tool_entries: String = tool_names
-        .iter()
-        .map(|n| format!("        '{n}' \\\n"))
-        .collect();
-
-    let top_desc: String = TOP_COMMANDS
-        .iter()
-        .map(|(n, d)| format!("        '{n}:{d}' \\\n"))
-        .collect();
-
-    let tool_sub_desc: String = TOOL_SUBCOMMANDS
-        .iter()
-        .map(|(n, d)| format!("        '{n}:{d}' \\\n"))
-        .collect();
-
-    format!(
-        r"#compdef mcp-gateway
-# mcp-gateway zsh completion
-# Place in a directory in $fpath (e.g. ~/.zsh/completions/_mcp-gateway)
-
-_mcp_gateway() {{
-    local context state line
-    typeset -A opt_args
-
-    _arguments \
-        '(-c --config)'{{-c,--config}}'[Path to configuration file]:file:_files' \
-        '(-p --port)'{{-p,--port}}'[Port to listen on]:port:' \
-        '--host[Host to bind to]:host:' \
-        '--log-level[Log level (trace|debug|info|warn|error)]:level:(trace debug info warn error)' \
-        '--log-format[Log format (text|json)]:format:(text json)' \
-        '--no-meta-mcp[Disable Meta-MCP mode]' \
-        '1:command:->command' \
-        '*::args:->args'
-
-    case $state in
-        command)
-            local -a commands
-            commands=(
-{top_desc}            )
-            _describe 'command' commands
-            ;;
-        args)
-            case $words[1] in
-                tool)
-                    _mcp_gateway_tool
-                    ;;
-                cap)
-                    _mcp_gateway_cap
-                    ;;
-                tls)
-                    _mcp_gateway_tls
-                    ;;
-            esac
-            ;;
-    esac
-}}
-
-_mcp_gateway_tool() {{
-    local state
-    _arguments '1:subcommand:->sub' '*::args:->args'
-    case $state in
-        sub)
-            local -a subs
-            subs=(
-{tool_sub_desc}            )
-            _describe 'tool subcommand' subs
-            ;;
-        args)
-            case $words[1] in
-                invoke|inspect)
-                    local -a tools
-                    tools=(
-{tool_entries}                    )
-                    _describe 'tool name' tools
-                    ;;
-                completions)
-                    _arguments '1:shell:(bash zsh fish)'
-                    ;;
-            esac
-            ;;
-    esac
-}}
-
-_mcp_gateway_cap() {{
-    _arguments '1:subcommand:(validate list import test discover install search registry-list)'
-}}
-
-_mcp_gateway_tls() {{
-    _arguments '1:subcommand:(init-ca issue-server issue-client)'
-}}
-
-_mcp_gateway
-"
-    )
-}
-
-// ── fish ──────────────────────────────────────────────────────────────────────
-
-fn generate_fish(tool_names: &[String]) -> String {
-    let tool_completions: String = tool_names
-        .iter()
-        .map(|n| {
-            format!(
-                "complete -c mcp-gateway -n '__fish_seen_subcommand_from invoke inspect' -a '{n}'\n"
-            )
-        })
-        .collect();
-
-    let top_completions: String = TOP_COMMANDS
-        .iter()
-        .map(|(n, d)| {
-            format!("complete -c mcp-gateway -n '__fish_use_subcommand' -a '{n}' -d '{d}'\n")
-        })
-        .collect();
-
-    let tool_sub_completions: String = TOOL_SUBCOMMANDS
-        .iter()
-        .map(|(n, d)| {
-            format!(
-                "complete -c mcp-gateway -n '__fish_seen_subcommand_from tool' -a '{n}' -d '{d}'\n"
-            )
-        })
-        .collect();
-
-    format!(
-        r"# mcp-gateway fish completion
-# Place in ~/.config/fish/completions/mcp-gateway.fish
-
-{top_completions}
-{tool_sub_completions}
-{tool_completions}
-complete -c mcp-gateway -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish'
-complete -c mcp-gateway -s c -l config -d 'Path to configuration file' -r
-complete -c mcp-gateway -s p -l port -d 'Port to listen on'
-complete -c mcp-gateway -l host -d 'Host to bind to'
-complete -c mcp-gateway -l log-level -a 'trace debug info warn error' -d 'Log level'
-complete -c mcp-gateway -l log-format -a 'text json' -d 'Log format'
-complete -c mcp-gateway -l no-meta-mcp -d 'Disable Meta-MCP mode'
-"
-    )
-}
-
-// ── tests ─────────────────────────────────────────────────────────────────────
-
-/// The shells `tool completions` writes for. bash and zsh come from clap_complete as it is; fish and PowerShell come
-/// from this module's own generator.
+/// The four supported shells, in the order offered by `tool completions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum CompletionShell {
-    /// bash, by clap_complete.
+    /// bash, by `clap_complete`.
     Bash,
-    /// zsh, by clap_complete.
+    /// zsh, by `clap_complete`.
     Zsh,
     /// fish, by the generator here.
     Fish,
@@ -320,51 +33,509 @@ pub enum CompletionShell {
     Powershell,
 }
 
-/// A generated script and the values left out of it because `completion_safe` refused them.
+/// A generated script and the values refused by `completion_safe`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Generated {
     /// The script, as `tool completions` prints it.
     pub script: String,
-    /// The refused values, in the order met; the command names each on stderr.
+    /// Refused values in encounter order, reported only at generation time.
     pub left_out: Vec<String>,
 }
 
-/// Whether fish and PowerShell may offer `value`: non-empty, first character a letter, a digit or `_`, the rest
-/// letters, digits, `_`, `.` or `-` (letters and digits of any script).
+/// Whether a value is a single inert completion word in Fish and PowerShell.
 #[must_use]
 pub fn completion_safe(value: &str) -> bool {
-    let _ = value;
-    false
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
-/// The completion copy of the real command tree: hidden commands and arguments removed, the closed value lists
-/// added (the log-level values, the shell names, `tool_names` for `tool invoke` and `tool inspect`), and a file hint
-/// on `--config`.
+/// A visible copy of the real CLI with closed lists and the configuration file hint.
 #[must_use]
-pub fn completion_tree(tool_names: &[String]) -> clap::Command {
-    let _ = tool_names;
-    <crate::cli::Cli as clap::CommandFactory>::command()
+pub fn completion_tree(tool_names: &[String]) -> Command {
+    let root = <crate::cli::Cli as clap::CommandFactory>::command();
+    visible_command(&root, "", tool_names)
 }
 
-/// The script for `shell` from `tree`.
+// This CLI invocation generates one script and exits. Clap without its `string`
+// feature requires static names; keep these copies for that process lifetime.
+fn completion_name(value: &str) -> &'static str {
+    Box::leak(value.to_owned().into_boxed_str())
+}
+
+fn visible_command(source: &Command, path: &str, tools: &[String]) -> Command {
+    let mut command = Command::new(completion_name(source.get_name()));
+    if let Some(about) = source.get_about() {
+        command = command.about(about.clone());
+    }
+    if let Some(version) = source.get_version().filter(|_| path.is_empty()) {
+        command = command.version(completion_name(version));
+    }
+    for arg in source.get_arguments().filter(|arg| !arg.is_hide_set()) {
+        // Parsing relations and aliases are irrelevant to completion, and relations
+        // may refer to hidden arguments or to groups omitted from this copy.
+        let mut arg = arg
+            .clone()
+            .group(None)
+            .requires(None)
+            .conflicts_with(None)
+            .overrides_with(None)
+            .required_unless_present(None)
+            .alias(None)
+            .short_alias(None);
+        if arg.get_long() == Some("config") {
+            arg = arg.value_hint(clap::ValueHint::FilePath);
+        } else if arg.get_long() == Some("log-level") {
+            arg = arg.value_parser(["trace", "debug", "info", "warn", "error"]);
+        } else if matches!(path, "tool invoke" | "tool inspect") && arg.get_id() == "tool" {
+            arg = arg.value_parser(PossibleValuesParser::new(
+                tools.iter().map(|name| completion_name(name)),
+            ));
+        }
+        command = command.arg(arg);
+    }
+    for sub in source.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+        command = command.subcommand(visible_command(
+            sub,
+            &child_path(path, sub.get_name()),
+            tools,
+        ));
+    }
+    command
+}
+
+fn child_path(path: &str, name: &str) -> String {
+    if path.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{path} {name}")
+    }
+}
+
+/// Generate a script, leaving refused Fish/PowerShell values out of its text.
 #[must_use]
-pub fn generate(shell: CompletionShell, tree: clap::Command) -> Generated {
-    let _ = (shell, tree);
-    Generated::default()
+pub fn generate(shell: CompletionShell, mut tree: Command) -> Generated {
+    match shell {
+        CompletionShell::Bash | CompletionShell::Zsh => {
+            let shell = if shell == CompletionShell::Bash {
+                clap_complete::Shell::Bash
+            } else {
+                clap_complete::Shell::Zsh
+            };
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut tree, "mcp-gateway", &mut script);
+            Generated {
+                script: String::from_utf8(script).expect("clap emits UTF-8"),
+                left_out: Vec::new(),
+            }
+        }
+        CompletionShell::Fish => {
+            tree.build();
+            generate_fish(&tree)
+        }
+        CompletionShell::Powershell => {
+            tree.build();
+            generate_powershell(&tree)
+        }
+    }
 }
 
-/// `tool completions`' print step: the script on stdout, each left-out value named on stderr in Rust's `{:?}` form.
+fn value_kind(arg: &Arg) -> &'static str {
+    if !arg.get_action().takes_values() {
+        "switch"
+    } else if arg.get_num_args().is_some_and(|n| n.min_values() == 0) {
+        "optional"
+    } else {
+        "required"
+    }
+}
+
+// Help is offered as a subcommand, but its generated descendants describe help
+// topics rather than another invocation of the corresponding real command.
+fn visit_commands(command: &Command, path: &str, visit: &mut impl FnMut(&Command, &str)) {
+    visit(command, path);
+    for sub in command
+        .get_subcommands()
+        .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
+    {
+        visit_commands(sub, &child_path(path, sub.get_name()), visit);
+    }
+}
+
+fn value_key(arg: &Arg) -> Option<String> {
+    arg.get_long()
+        .map(|long| format!("--{long}"))
+        .or_else(|| arg.get_index().map(|index| (index - 1).to_string()))
+}
+
+fn fish_display(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn generate_fish(tree: &Command) -> Generated {
+    let mut generated = Generated::default();
+    let mut table = String::from("function __fish_mcp_gateway_table\n    printf '%s\\n'");
+    let mut lines = String::from("complete -c mcp-gateway -e\n");
+    let mut printer = String::from(
+        "function __fish_mcp_gateway_values\n    set -l values (begin\n        switch (string join ' ' -- $argv)\n",
+    );
+    visit_commands(tree, "", &mut |command, path| {
+        fish_commands(command, path, &mut table, &mut lines);
+        for arg in command.get_arguments().filter(|arg| !arg.is_hide_set()) {
+            let mut values = Vec::new();
+            for value in arg
+                .get_possible_values()
+                .iter()
+                .filter(|v| !v.is_hide_set())
+            {
+                if completion_safe(value.get_name()) {
+                    values.push(value.get_name().to_owned());
+                } else {
+                    generated.left_out.push(value.get_name().to_owned());
+                }
+            }
+            fish_argument(arg, path, &values, &mut table, &mut lines);
+            if let Some(key) = value_key(arg).filter(|_| !values.is_empty()) {
+                let at = child_path(path, &key);
+                printer.push_str(&format!(
+                    "            case '{at}'\n                printf '%s\\n'"
+                ));
+                for value in values {
+                    printer.push_str(&format!(" '{value}'"));
+                }
+                printer.push('\n');
+            }
+        }
+    });
+    table.push_str("\nend\n\n");
+    printer.push_str(FISH_PRINTER_END);
+    generated.script = format!("{table}{FISH_WALKER}{FISH_PREDICATE}{printer}{lines}");
+    generated
+}
+
+fn fish_commands(command: &Command, path: &str, table: &mut String, lines: &mut String) {
+    for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+        let name = sub.get_name();
+        table.push_str(&format!(" \\\n        '{path}|sub|{name}|'"));
+        let at = child_path(path, "0");
+        let about = fish_display(
+            &sub.get_about()
+                .map_or_else(String::new, ToString::to_string),
+        );
+        lines.push_str(&format!("complete -c mcp-gateway -f -n \"__fish_mcp_gateway_at {at}\" -a '{name}' -d '{about}'\n"));
+    }
+}
+
+fn fish_argument(arg: &Arg, path: &str, values: &[String], table: &mut String, lines: &mut String) {
+    let Some(key) = value_key(arg) else {
+        return;
+    };
+    let at = child_path(path, &key);
+    if let Some(long) = arg.get_long() {
+        let kind = value_kind(arg);
+        table.push_str(&format!(" \\\n        '{path}|flag|--{long}|{kind}'"));
+        let short = arg.get_short().map_or_else(String::new, |short| {
+            table.push_str(&format!(" \\\n        '{path}|short|-{short}|--{long}'"));
+            format!(" -s {short}")
+        });
+        let help = fish_display(&arg.get_help().map_or_else(String::new, ToString::to_string));
+        let condition = child_path("__fish_mcp_gateway_at", path);
+        lines.push_str(&format!(
+            "complete -c mcp-gateway -n \"{condition}\"{short} -l {long} -d '{help}'"
+        ));
+        if kind == "required" {
+            lines.push_str(" -r");
+        }
+        if !values.is_empty() {
+            lines.push_str(&format!(" -f -a '(__fish_mcp_gateway_values {at})'"));
+        } else if arg.get_value_hint() == clap::ValueHint::FilePath && long == "config" {
+            lines.push_str(" -F");
+        }
+        lines.push('\n');
+    } else if !values.is_empty() {
+        lines.push_str(&format!("complete -c mcp-gateway -f -n \"__fish_mcp_gateway_at {at}\" -a '(__fish_mcp_gateway_values {at})'\n"));
+    }
+}
+
+const FISH_WALKER: &str = r#"function __fish_mcp_gateway_walk
+    set -g __fish_mcp_gateway_path ''
+    set -g __fish_mcp_gateway_waiting ''
+    set -g __fish_mcp_gateway_index 0
+    set -l table (__fish_mcp_gateway_table)
+    set -l words (commandline -opc)
+    for word in $words[2..-1]
+        if test -n "$__fish_mcp_gateway_waiting"
+            set -g __fish_mcp_gateway_waiting ''
+            continue
+        end
+        set -l path "$__fish_mcp_gateway_path"
+        if test $__fish_mcp_gateway_index -eq 0; and contains -- "$path|sub|$word|" $table
+            set -g __fish_mcp_gateway_path (string trim -- "$path $word")
+            continue
+        end
+        if string match -q -- '-*' "$word"
+            if string match -rq '^--[^=]+=' -- "$word"
+                continue
+            end
+            set -l option "$word"
+            if test (string length -- "$word") -eq 2
+                for entry in $table
+                    set -l fields (string split '|' -- "$entry")
+                    if test "$fields[1]" = "$path"; and test "$fields[2]" = short; and test "$fields[3]" = "$word"
+                        set option "$fields[4]"
+                        break
+                    end
+                end
+            end
+            if contains -- "$path|flag|$option|required" $table
+                set -g __fish_mcp_gateway_waiting "$option"
+            end
+            continue
+        end
+        set -g __fish_mcp_gateway_index (math $__fish_mcp_gateway_index + 1)
+    end
+end
+
+"#;
+
+const FISH_PREDICATE: &str = r#"function __fish_mcp_gateway_at
+    __fish_mcp_gateway_walk
+    set -l index ''
+    if test (count $argv) -gt 0; and string match -rq '^[0-9]+$' -- "$argv[-1]"
+        set index "$argv[-1]"
+        set -e argv[-1]
+    end
+    set -l path ''
+    if test (count $argv) -gt 0
+        set path (string join ' ' -- $argv)
+    end
+    test "$path" = "$__fish_mcp_gateway_path"; or return 1
+    set -l word (commandline -ct)
+    set -l first (string sub -l 1 -- "$word")
+    if contains -- "$first" "'" '"'
+        return 1
+    end
+    if test -n "$index"
+        test -z "$__fish_mcp_gateway_waiting"; or return 1
+        string match -q -- '-*' "$word"; and return 1
+        test "$index" -eq $__fish_mcp_gateway_index
+    else
+        test -n "$__fish_mcp_gateway_waiting"; or string match -q -- '-*' "$word"
+    end
+end
+
+"#;
+
+const FISH_PRINTER_END: &str = r#"        end
+    end)
+    set -l prefix (commandline -ct)
+    set prefix (string replace -r '^--[^=]*=' '' -- "$prefix")
+    set -l length (string length -- "$prefix")
+    for value in $values
+        if test "$length" -eq 0; or test (string sub -l "$length" -- "$value") = "$prefix"
+            printf '%s\n' "$value"
+        end
+    end
+end
+
+"#;
+
+fn powershell_literal(value: &str) -> String {
+    let escaped: String = value
+        .chars()
+        .flat_map(|c| {
+            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
+            std::iter::once(c).chain(quote.then_some(c))
+        })
+        .collect();
+    format!("'{escaped}'")
+}
+
+fn powershell_row(table: &mut String, fields: [&str; 5]) {
+    let fields = fields.map(powershell_literal).join(", ");
+    // Unary comma preserves the row as an array instead of pipeline-unrolling
+    // its fields. The inner literal stays on its own line for table readers.
+    table.push_str(&format!(
+        "        ,@(\n            @({fields})\n        )\n"
+    ));
+}
+
+fn generate_powershell(tree: &Command) -> Generated {
+    let mut generated = Generated::default();
+    let mut table = String::from(
+        "using namespace System.Management.Automation\n\nRegister-ArgumentCompleter -Native -CommandName 'mcp-gateway' -ScriptBlock {\n    param($wordToComplete, $commandAst, $cursorPosition)\n    $table = @(\n",
+    );
+    visit_commands(tree, "", &mut |command, path| {
+        let path = if path.is_empty() {
+            "mcp-gateway".to_owned()
+        } else {
+            format!("mcp-gateway;{}", path.replace(' ', ";"))
+        };
+        for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let about = sub
+                .get_about()
+                .map_or_else(String::new, ToString::to_string);
+            powershell_row(&mut table, [&path, "sub", sub.get_name(), &about, ""]);
+        }
+        for arg in command.get_arguments().filter(|arg| !arg.is_hide_set()) {
+            powershell_argument(arg, &path, &mut table, &mut generated.left_out);
+        }
+    });
+    table.push_str("    )\n");
+    generated.script =
+        format!("{table}{POWERSHELL_HELPERS}{POWERSHELL_WALKER}{POWERSHELL_RESULTS}}}\n");
+    generated
+}
+
+fn powershell_argument(arg: &Arg, path: &str, table: &mut String, left_out: &mut Vec<String>) {
+    let Some(key) = value_key(arg) else {
+        return;
+    };
+    if arg.get_long().is_some() {
+        let short = arg
+            .get_short()
+            .map_or_else(String::new, |c| format!("-{c}"));
+        let help = arg.get_help().map_or_else(String::new, ToString::to_string);
+        powershell_row(table, [path, "flag", &key, &short, value_kind(arg)]);
+        powershell_row(table, [path, "help", &key, &help, ""]);
+    }
+    for value in arg
+        .get_possible_values()
+        .iter()
+        .filter(|v| !v.is_hide_set())
+    {
+        let value = value.get_name();
+        if !completion_safe(value) {
+            left_out.push(value.to_owned());
+            continue;
+        }
+        let text = if value.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("'{value}'")
+        } else {
+            value.to_owned()
+        };
+        let kind = if arg.get_long().is_some() {
+            "val"
+        } else {
+            "pos"
+        };
+        powershell_row(table, [path, kind, &key, value, &text]);
+    }
+}
+
+const POWERSHELL_HELPERS: &str = r#"    function Equal-Ordinal($left, $right) {
+        [string]::Equals($left, $right, [StringComparison]::Ordinal)
+    }
+    function Flag-At($path, $word) {
+        foreach ($row in $table) {
+            if ((Equal-Ordinal $row[0] $path) -and (Equal-Ordinal $row[1] 'flag')) {
+                if ((Equal-Ordinal $row[2] $word) -or
+                    ($word.Length -eq 2 -and (Equal-Ordinal $row[3] $word))) {
+                    return ,$row
+                }
+            }
+        }
+    }
+    function Help-At($path, $flag) {
+        foreach ($row in $table) {
+            if ((Equal-Ordinal $row[0] $path) -and (Equal-Ordinal $row[1] 'help') -and
+                (Equal-Ordinal $row[2] $flag)) {
+                if ($row[3].Length -gt 0) { return $row[3] }
+            }
+        }
+        return $flag
+    }
+    function Offer($text, $list, $type, $tip) {
+        if ($list.StartsWith($wordToComplete, [StringComparison]::Ordinal)) {
+            if ([string]::IsNullOrEmpty($tip)) { $tip = $list }
+            [CompletionResult]::new($text, $list, $type, $tip)
+        }
+    }
+"#;
+
+const POWERSHELL_WALKER: &str = r#"    $path = 'mcp-gateway'
+    $waiting = ''
+    $index = 0
+    $start = $cursorPosition - $wordToComplete.Length
+    foreach ($element in $commandAst.CommandElements | Select-Object -Skip 1) {
+        if ($element.Extent.EndOffset -gt $start) { break }
+        $word = $element.Extent.Text
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $word = $element.Value
+        }
+        if ($waiting.Length -gt 0) { $waiting = ''; continue }
+        $subcommand = $false
+        if ($index -eq 0) {
+            foreach ($row in $table) {
+                if ((Equal-Ordinal $row[0] $path) -and (Equal-Ordinal $row[1] 'sub') -and
+                    (Equal-Ordinal $row[2] $word)) {
+                    $subcommand = $true
+                    break
+                }
+            }
+        }
+        if ($subcommand) { $path += ';' + $word; continue }
+        if ($word.StartsWith('-', [StringComparison]::Ordinal)) {
+            if ($word.StartsWith('--', [StringComparison]::Ordinal) -and $word.Contains('=')) { continue }
+            $flag = Flag-At $path $word
+            if ($null -ne $flag -and (Equal-Ordinal $flag[4] 'required')) { $waiting = $flag[2] }
+            continue
+        }
+        $index++
+    }
+"#;
+
+const POWERSHELL_RESULTS: &str = r#"    $attached = ''
+    $option = $waiting
+    if ($option.Length -eq 0 -and $wordToComplete.StartsWith('--', [StringComparison]::Ordinal)) {
+        $equals = $wordToComplete.IndexOf('=')
+        if ($equals -ge 0) {
+            $option = $wordToComplete.Substring(0, $equals)
+            $attached = $option + '='
+        }
+    }
+    if ($option.Length -gt 0) {
+        foreach ($row in $table) {
+            if ((Equal-Ordinal $row[0] $path) -and (Equal-Ordinal $row[1] 'val') -and
+                (Equal-Ordinal $row[2] $option)) {
+                Offer ($attached + $row[4]) ($attached + $row[3]) 'ParameterValue' (Help-At $path $option)
+            }
+        }
+        return
+    }
+    $flags = $wordToComplete.StartsWith('-', [StringComparison]::Ordinal)
+    foreach ($row in $table) {
+        if (-not (Equal-Ordinal $row[0] $path)) { continue }
+        if ($flags) {
+            if (Equal-Ordinal $row[1] 'flag') {
+                $tip = Help-At $path $row[2]
+                Offer $row[2] $row[2] 'ParameterName' $tip
+                if ($row[3].Length -gt 0) { Offer $row[3] $row[3] 'ParameterName' $tip }
+            }
+        } elseif ($index -eq 0 -and (Equal-Ordinal $row[1] 'sub')) {
+            Offer $row[2] $row[2] 'Command' $row[3]
+        } elseif ((Equal-Ordinal $row[1] 'pos') -and (Equal-Ordinal $row[2] ([string]$index))) {
+            Offer $row[4] $row[3] 'ParameterValue' $row[3]
+        }
+    }
+"#;
+
+/// Write the script, then name each refused value using Rust's escaped debug form.
 ///
 /// # Errors
-///
-/// A failed write.
+/// Returns the first stdout or stderr write error.
 pub(crate) fn write_completions(
     generated: &Generated,
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
 ) -> std::io::Result<()> {
-    let _ = stderr;
-    stdout.write_all(generated.script.as_bytes())
+    stdout.write_all(generated.script.as_bytes())?;
+    for value in &generated.left_out {
+        writeln!(stderr, "left out of the completion script: {value:?}")?;
+    }
+    Ok(())
 }
 
 #[cfg(tp1)]
@@ -376,87 +547,3 @@ pub(crate) fn write_completions(
 ))]
 #[path = "completion_tests.rs"]
 mod completion_tests;
-
-#[cfg(tp1)]
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_tools() -> Vec<String> {
-        vec![
-            "weather_current".to_string(),
-            "yahoo_stock_quote".to_string(),
-            "brave_search".to_string(),
-        ]
-    }
-
-    #[test]
-    fn bash_completion_contains_tool_names() {
-        let script = generate_completion(ShellTarget::Bash, &sample_tools());
-        assert!(script.contains("weather_current"));
-        assert!(script.contains("yahoo_stock_quote"));
-        assert!(script.contains("brave_search"));
-    }
-
-    #[test]
-    fn bash_completion_contains_top_level_commands() {
-        let script = generate_completion(ShellTarget::Bash, &[]);
-        for (cmd, _) in TOP_COMMANDS {
-            assert!(
-                script.contains(cmd),
-                "bash completion missing command: {cmd}"
-            );
-        }
-    }
-
-    #[test]
-    fn zsh_completion_contains_tool_names() {
-        let script = generate_completion(ShellTarget::Zsh, &sample_tools());
-        assert!(script.contains("weather_current"));
-        assert!(script.contains("yahoo_stock_quote"));
-    }
-
-    #[test]
-    fn zsh_completion_contains_compdef_header() {
-        let script = generate_completion(ShellTarget::Zsh, &[]);
-        assert!(script.starts_with("#compdef mcp-gateway"));
-    }
-
-    #[test]
-    fn fish_completion_contains_tool_names() {
-        let script = generate_completion(ShellTarget::Fish, &sample_tools());
-        assert!(script.contains("weather_current"));
-        assert!(script.contains("brave_search"));
-    }
-
-    #[test]
-    fn fish_completion_contains_top_level_commands() {
-        let script = generate_completion(ShellTarget::Fish, &[]);
-        for (cmd, _) in TOP_COMMANDS {
-            assert!(script.contains(cmd), "fish completion missing: {cmd}");
-        }
-    }
-
-    #[test]
-    fn shell_target_from_clap_shell_maps_known_shells() {
-        assert_eq!(
-            ShellTarget::from_shell(Shell::Bash),
-            Some(ShellTarget::Bash)
-        );
-        assert_eq!(ShellTarget::from_shell(Shell::Zsh), Some(ShellTarget::Zsh));
-        assert_eq!(
-            ShellTarget::from_shell(Shell::Fish),
-            Some(ShellTarget::Fish)
-        );
-    }
-
-    #[test]
-    fn empty_tool_list_generates_valid_scripts() {
-        // GIVEN: no tools registered
-        // THEN: all shells produce a non-empty, non-panicking script
-        for shell in [ShellTarget::Bash, ShellTarget::Zsh, ShellTarget::Fish] {
-            let script = generate_completion(shell, &[]);
-            assert!(!script.is_empty());
-        }
-    }
-}

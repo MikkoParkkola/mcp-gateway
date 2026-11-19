@@ -6,14 +6,12 @@
 //! `capabilities.directories`, unless `-C` or `MCP_GATEWAY_CAPABILITIES`
 //! names a directory (MIK-8044, `super::capability_dirs`).
 
-use crate::cli::stdout::print;
-
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use mcp_gateway::cli::{
     ToolCommand,
-    completion::{ShellTarget, generate_completion},
+    completion::{CompletionShell, completion_tree, generate, write_completions},
     invoke::{ToolCatalogue, execute_tool, resolve_args},
     output::{OutputFormat, print_tool_inspect, print_tool_list, print_tool_result},
 };
@@ -157,7 +155,7 @@ async fn tool_invoke(
 }
 
 async fn tool_completions(
-    shell: clap_complete::Shell,
+    shell: CompletionShell,
     capabilities: Option<PathBuf>,
     config: Option<&Path>,
 ) -> ExitCode {
@@ -175,8 +173,17 @@ async fn tool_completions(
         Ok(cat) => cat.all().iter().map(|c| c.name.clone()).collect(),
         Err(_) => Vec::new(),
     };
-    let target = ShellTarget::from_shell(shell).unwrap_or(ShellTarget::Bash);
-    let script = generate_completion(target, &tool_names);
-    print!("{script}");
-    ExitCode::SUCCESS
+    let generated = generate(shell, completion_tree(&tool_names));
+    match write_completions(
+        &generated,
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error writing completions: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
