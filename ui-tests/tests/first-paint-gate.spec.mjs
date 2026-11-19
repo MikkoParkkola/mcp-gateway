@@ -5,6 +5,11 @@
 // reports: no Lighthouse runs here. The live runs happen only on Spark.
 // Every expected value is written out in the row.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { plantFromArgs, plantDoc, plantCsp } from '../perf/plant.mjs';
 import {
   stats, judge, checkRun, passComplete, drift, busy, controlCheck, exitCode, recalibrationFlag,
   marginFromSpread, nightlyCheck, treeCheck,
@@ -161,4 +166,51 @@ test('R14 nightly record at READY: missed blocks, failed only banners', () => {
   expect(nightlyCheck(rec('2026-11-19T03:59:59Z', 0), now)).toEqual({ ok: false, problem: 'nightly missed: last run 2026-11-19T03:59:59Z' });
   expect(nightlyCheck(null, now)).toEqual({ ok: false, problem: 'nightly missed: no record' });
   expect(nightlyCheck(rec('2026-11-20T03:31:00Z', 1), now)).toEqual({ ok: true, banner: `NIGHTLY FAILED: exit 1 at 2026-11-20T03:31:00Z on ${'c'.repeat(40)}` });
+});
+
+// R10: the plant. The expected hash is computed here from the script text found in the
+// planted page, never from the module's own helper.
+const SHELL_HTML = readFileSync(new globalThis.URL('../../src/gateway/ui/shell/index.html', import.meta.url), 'utf8');
+const sha = (s) => `'sha256-${createHash('sha256').update(s, 'utf8').digest('base64')}'`;
+const BASE_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'sha256-x'; img-src 'self' data:";
+
+test('R10 plant flag: refused without --perf-gate; a positive whole number only', () => {
+  expect(plantFromArgs([])).toBe(null);
+  expect(() => plantFromArgs(['--plant-first-paint-delay-ms=300'])).toThrow('--plant-first-paint-delay-ms is refused without --perf-gate');
+  expect(plantFromArgs(['--perf-gate', '--plant-first-paint-delay-ms=300'])).toBe(300);
+  expect(() => plantFromArgs(['--perf-gate', '--plant-first-paint-delay-ms=0'])).toThrow('got "0"');
+  expect(() => plantFromArgs(['--perf-gate', '--plant-first-paint-delay-ms=30.5'])).toThrow('got "30.5"');
+});
+
+test('R10 plant: the spin is the head\'s first element, and only its hash joins script-src', () => {
+  const doc = plantDoc(SHELL_HTML, 300);
+  const head = doc.slice(doc.indexOf('<head>\n') + '<head>\n'.length);
+  const m = head.match(/^<script>(.*?)<\/script>\n/);
+  expect(m).not.toBe(null);
+  expect(m[1]).toContain('300');
+  expect(head.indexOf('<script>')).toBeLessThan(head.indexOf('<style id="frame">'));
+  expect(doc.replace(m[0], '')).toBe(SHELL_HTML);
+  expect(plantCsp(BASE_CSP, 300)).toBe(BASE_CSP.replace("script-src 'self';", `script-src 'self' ${sha(m[1])};`));
+});
+
+test('R10 server.mjs: refuses the flag alone; with --perf-gate serves the planted page and policy', async () => {
+  const server = fileURLToPath(new globalThis.URL('../server.mjs', import.meta.url));
+  const alone = spawnSync(process.execPath, [server, '--plant-first-paint-delay-ms=300'], { env: { ...process.env, PORT: '0' }, encoding: 'utf8', timeout: 10000 });
+  expect(alone.status).toBe(2);
+  expect(alone.stderr).toContain('--plant-first-paint-delay-ms is refused without --perf-gate');
+  const child = spawn(process.execPath, [server, '--perf-gate', '--plant-first-paint-delay-ms=300'], { env: { ...process.env, PORT: '0' } });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      child.stdout.on('data', (d) => { const p = /fixture server on http:\/\/127\.0\.0\.1:(\d+)/.exec(String(d)); if (p) resolve(Number(p[1])); });
+      child.on('exit', (c) => reject(new Error(`server exited ${c}`)));
+    });
+    expect(port).toBeGreaterThan(0);
+    const res = await fetch(`http://127.0.0.1:${port}/ui/overview/status`);
+    const body = await res.text();
+    const m = body.match(/<head>\n<script>(.*?)<\/script>\n/);
+    expect(m).not.toBe(null);
+    expect(res.headers.get('content-security-policy')).toContain(`script-src 'self' ${sha(m[1])};`);
+  } finally {
+    child.kill();
+  }
 });

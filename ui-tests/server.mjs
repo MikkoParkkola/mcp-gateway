@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
+import { plantFromArgs, plantDoc, plantCsp } from './perf/plant.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(HERE, '..', 'src', 'gateway', 'ui');
@@ -60,7 +61,16 @@ function parseReferrerPolicy(src) {
   return found[0];
 }
 
-const CSP = buildCsp();
+// The first-paint gate's planted slowdown (perf/plant.mjs, UI12.10): off unless the
+// gate starts this server with --perf-gate and --plant-first-paint-delay-ms.
+let PLANT_MS = null;
+try {
+  PLANT_MS = plantFromArgs(process.argv.slice(2));
+} catch (e) {
+  console.error(e.message);
+  process.exit(2);
+}
+const CSP = PLANT_MS ? plantCsp(buildCsp(), PLANT_MS) : buildCsp();
 const ASSETS = parseAssets(SHELL_RS);
 const REFERRER_POLICY = parseReferrerPolicy(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
@@ -112,7 +122,8 @@ function gzips(req, type, len) {
 
 /** The shell document, plus the fixture pages when the test asked for them. */
 function shellDocument(req) {
-  const doc = readFileSync(join(SHELL_DIR, 'index.html'), 'utf8');
+  const file = readFileSync(join(SHELL_DIR, 'index.html'), 'utf8');
+  const doc = PLANT_MS ? plantDoc(file, PLANT_MS) : file;
   if (!/(?:^|;\s*)fixture-pages=1(?:;|$)/.test(req.headers.cookie ?? '')) return doc;
   return doc.replace('</head>', '<script type="module" src="/ui/assets/fixture-pages.mjs"></script>\n</head>');
 }
@@ -298,6 +309,7 @@ function handle(req, res) {
 }
 
 const port = Number(process.env.PORT ?? 4173);
-createServer(handle).listen(port, '127.0.0.1', () => {
-  console.log(`fixture server on http://127.0.0.1:${port}`);
+// PORT=0 takes a free port; the ready line names the one bound (the first-paint gate reads it).
+const server = createServer(handle).listen(port, '127.0.0.1', () => {
+  console.log(`fixture server on http://127.0.0.1:${server.address().port}`);
 });
