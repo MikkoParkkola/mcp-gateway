@@ -138,11 +138,12 @@ fn export_verdicts_print_one_document_and_keep_their_text() {
                "integrity_failed": 0, "kid": "cli-test-1"})
     );
 
-    // A refusal and a read failure: the reason is the text after `INVALID `, the four report fields null.
+    // A refusal and a read failure: the reason is the text after `INVALID `, written out here (A8), the four report
+    // fields null.
     let truncated = dir.path().join("truncated.ndjson");
     std::fs::write(&truncated, &good[..good.len() - 3]).unwrap();
     let missing = dir.path().join("missing.ndjson");
-    for input in [&truncated, &missing] {
+    for (input, pinned) in [(&truncated, "torn"), (&missing, "unreadable_input")] {
         let text = export_verdict(input, Some(&jwk), None, Render::Text);
         let reason = text
             .stdout
@@ -150,6 +151,7 @@ fn export_verdicts_print_one_document_and_keep_their_text() {
             .and_then(|r| r.strip_suffix('\n'))
             .unwrap_or_else(|| panic!("not an INVALID line: {:?}", text.stdout))
             .to_owned();
+        assert_eq!(reason, pinned);
         assert_eq!((text.exit, text.stderr.as_str()), (1, ""));
         let json = export_verdict(input, Some(&jwk), None, Render::Json);
         assert_eq!((json.exit, json.stderr.as_str()), (1, ""));

@@ -348,15 +348,20 @@ fn audit_verify_warnings_and_notes_are_in_the_document() {
         &verify_args(&config, log_s, &["--archive", "--json"]),
     );
     let doc = document(&json, 0);
-    let warnings: Vec<&str> = plain
-        .stderr
-        .lines()
-        .filter_map(|l| l.strip_prefix("warning: "))
-        .collect();
-    assert_eq!(warnings.len(), 1, "one warning: {}", plain.stderr);
-    assert!(warnings[0].contains("interrupted"), "{}", plain.stderr);
-    assert_eq!(doc["warnings"], json!(warnings));
-    assert_escaped_once(warnings[0], "warning");
+    // Written out (A8); the counter is the fixture's, read from the log it wrote.
+    let at = records(&log)
+        .iter()
+        .find(|r| r["event"] == "config_save_intent")
+        .and_then(|r| r["counter"].as_u64())
+        .expect("the intent's counter");
+    let warning = format!("intent interrupted at counter {at} (token w\\u{{202e}}1)");
+    assert_eq!(
+        plain.stderr,
+        format!("warning: {warning}\n"),
+        "plain stderr"
+    );
+    assert_eq!(doc["warnings"], json!([warning]));
+    assert_escaped_once(&warning, "warning");
     assert_eq!(json.stderr, plain.stderr);
 
     // An outcome naming an expired intent: a note on a passing chain.
@@ -375,17 +380,21 @@ fn audit_verify_warnings_and_notes_are_in_the_document() {
     let plain = run(dir.path(), &verify_args(&config, log_s, &[]));
     let json = run(dir.path(), &verify_args(&config, log_s, &["--json"]));
     let doc = document(&json, 0);
+    // Written out (A8); the outcome's counter is the fixture's, read from the log it wrote.
+    let at = records(&log)
+        .last()
+        .and_then(|r| r["counter"].as_u64())
+        .expect("the outcome's counter");
+    let note = format!(
+        "intent expired: config_write_outcome at counter {at} names counter 1 (token w\\u{{7}}1)"
+    );
     let notes: Vec<&str> = plain
         .stderr
         .lines()
         .filter_map(|l| l.strip_prefix("info: "))
         .collect();
-    assert!(
-        notes.iter().any(|n| n.starts_with("intent expired")),
-        "{}",
-        plain.stderr
-    );
-    assert_eq!(doc["notes"], json!(notes));
+    assert_eq!(notes, [note.as_str()], "{}", plain.stderr);
+    assert_eq!(doc["notes"], json!([note]));
     assert!(
         !json.stdout.contains('\u{7}'),
         "raw control character: {:?}",
@@ -408,18 +417,37 @@ fn audit_verify_errors_before_a_verdict_print_no_document() {
     small_log(&small, None);
     let signed = dir.path().join("signed.jsonl");
     small_log(&signed, Some(LOG_KEY));
+    let missing_s = missing.to_str().expect("utf-8").to_owned();
+    let signed_s = signed.to_str().expect("utf-8").to_owned();
+    // Each case's error, written out (A8): an empty or wrong stderr fails here, not only a mismatch between forms.
     let cases = [
-        (config.clone(), missing.to_str().expect("utf-8").to_owned()),
+        (
+            config.clone(),
+            missing_s.clone(),
+            format!("Error: transparency log not found at {missing_s}\n"),
+        ),
         (
             broken.to_str().expect("utf-8").to_owned(),
             small.to_str().expect("utf-8").to_owned(),
+            "Error: could not load gateway config for signed verification: ".to_owned(),
         ),
-        (config, signed.to_str().expect("utf-8").to_owned()),
+        (
+            config,
+            signed_s.clone(),
+            format!(
+                "Error: log at {signed_s} has signed entries but no shared secret is configured"
+            ),
+        ),
     ];
-    for (config, log) in &cases {
+    for (config, log, error) in &cases {
         let plain = run(dir.path(), &verify_args(config, log, &[]));
         let json = run(dir.path(), &verify_args(config, log, &["--json"]));
         assert_eq!(plain.code, Some(1), "{log}: {}", plain.stderr);
+        assert!(
+            plain.stderr.starts_with(error.as_str()),
+            "{log}: {}",
+            plain.stderr
+        );
         assert_eq!(
             (json.code, json.stdout.as_str(), json.stderr.as_str()),
             (plain.code, "", plain.stderr.as_str()),
@@ -621,14 +649,14 @@ fn provenance_verify_invalid_inputs_are_verdicts() {
         .expect("file");
     let duplicated = duplicated.to_str().expect("utf-8").to_owned();
 
-    // (trust, receipt, result, the reason when it is pinned here)
-    let cases: [(&str, &str, Option<&str>, Option<&str>); 6] = [
-        (&missing, &receipt, None, Some("unreadable_input")),
-        (&garbled, &receipt, None, None),
-        (&trust, &missing, None, Some("unreadable_input")),
-        (&trust, &duplicated, None, Some("duplicate_member")),
-        (&trust, &receipt, Some(&missing), None),
-        (&unknown_kid, &receipt, Some(&result), None),
+    // (trust, receipt, result, the reason, written out: A8)
+    let cases: [(&str, &str, Option<&str>, &str); 6] = [
+        (&missing, &receipt, None, "unreadable_input"),
+        (&garbled, &receipt, None, "trust_malformed"),
+        (&trust, &missing, None, "unreadable_input"),
+        (&trust, &duplicated, None, "duplicate_member"),
+        (&trust, &receipt, Some(&missing), "unreadable_input"),
+        (&unknown_kid, &receipt, Some(&result), "unknown_kid"),
     ];
     for (trust, receipt, result, pinned) in cases {
         let (plain, json) = provenance(h, trust, receipt, result, &[]);
@@ -637,9 +665,7 @@ fn provenance_verify_invalid_inputs_are_verdicts() {
             .strip_prefix("INVALID ")
             .and_then(|r| r.strip_suffix('\n'))
             .unwrap_or_else(|| panic!("not an INVALID line: {:?}", plain.stdout));
-        if let Some(pinned) = pinned {
-            assert_eq!(reason, pinned);
-        }
+        assert_eq!(reason, pinned, "{trust} {receipt} {result:?}");
         assert_eq!(plain.code, Some(1));
         assert_eq!(
             document(&json, 1),

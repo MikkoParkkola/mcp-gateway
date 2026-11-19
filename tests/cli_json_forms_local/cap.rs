@@ -279,13 +279,13 @@ fn cap_validate_prints_provider_auth_and_warnings() {
     let warned = warned.to_str().expect("utf-8");
     let plain = run(root.path(), &["cap", "validate", warned], b"");
     let json = run(root.path(), &["cap", "validate", warned, "--json"], b"");
-    let warning = plain.stderr.trim_end_matches('\n');
-    assert!(
-        warning.contains("CAP-012")
-            && warning.contains("providers.primary.config.methd")
-            && !warning.contains('\n'),
-        "one CAP-012 line on stderr: {}",
-        plain.stderr
+    // Written out (A8): the validator's line for the unread key.
+    let warning = "[WARN] CAP-012 (providers): providers.primary.config.methd is not read by this gateway version \
+                   and is ignored";
+    assert_eq!(
+        plain.stderr,
+        format!("{warning}\n"),
+        "one CAP-012 line on stderr"
     );
     let doc = document(&json);
     assert_eq!(doc["auth"], Value::Null);
