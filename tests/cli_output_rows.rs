@@ -310,25 +310,26 @@ fn a_typo_suggests_only_the_visible_command() {
     names_no_hidden_command(&stderr);
 }
 
-/// H3b: `kubernets` is close only to the hidden `kubernetes`, so no suggestion tip is printed at all.
+/// H3b: `rankng` is close only to the hidden `ranking` (clap's own list is exactly that), so no suggestion tip is
+/// printed at all.
 #[test]
 fn a_typo_close_only_to_a_hidden_command_gets_no_tip() {
-    assert_eq!(clap_suggests(&["mcp-gateway", "kubernets"]), ["kubernetes"]);
-    let (code, stdout, stderr) = run(&["kubernets"], None, b"");
+    assert_eq!(clap_suggests(&["mcp-gateway", "rankng"]), ["ranking"]);
+    let (code, stdout, stderr) = run(&["rankng"], None, b"");
     assert_eq!(code, Some(2), "{stderr}");
     assert_eq!(stdout, "");
     assert!(
-        stderr.contains("unrecognized subcommand 'kubernets'"),
+        stderr.contains("unrecognized subcommand 'rankng'"),
         "{stderr}"
     );
     assert!(!stderr.contains("similar subcommand"), "{stderr}");
     names_no_hidden_command(&stderr);
 }
 
-/// H3c: a typo at a nested level gets that level's visible suggestion.
+/// H3c: a typo at a nested level gets that level's visible suggestion (`listt` is close only to `list`).
 #[test]
 fn a_nested_typo_suggests_the_visible_command_there() {
-    let (code, stdout, stderr) = run(&["cap", "lsit"], None, b"");
+    let (code, stdout, stderr) = run(&["cap", "listt"], None, b"");
     assert_eq!(code, Some(2), "{stderr}");
     assert_eq!(stdout, "");
     assert!(
