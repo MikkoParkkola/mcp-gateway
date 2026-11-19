@@ -86,7 +86,8 @@ def macos_train(part: int) -> str:
 
 
 def macos_solo(part: int) -> str:
-    return "macos-lib-lists-lib-b"
+    # One matching artifact: download-artifact unpacks it into the lists folder itself, with no folder of its name.
+    return ""
 
 
 class MacosLayout(unittest.TestCase):
@@ -113,6 +114,15 @@ class MacosLayout(unittest.TestCase):
     def test_a_name_its_expected_set_lacks(self):
         found = problems({**EXPECT, 3: ["c::t4", "c::stray"]}, artifact=macos_train)
         self.assertTrue(any("c::stray" in p for p in found), found)
+
+    def test_a_part_with_two_lists(self):
+        with TemporaryDirectory() as tmp:
+            args = fixture(Path(tmp), EXPECT, artifact=macos_train)
+            extra = Path(tmp) / "lists" / "macos-lib-lists-int" / "p1"
+            extra.mkdir(parents=True)
+            (extra / "list.txt").write_text("a::t1: test\na::t2: test\n")
+            found = U.problems(*map(Path, args))
+        self.assertTrue(any("part 1 has 2 lists" in p for p in found), found)
 
 
 if __name__ == "__main__":

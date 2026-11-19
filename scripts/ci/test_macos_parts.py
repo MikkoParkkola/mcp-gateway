@@ -14,7 +14,8 @@ Static checks on every workflow and on scripts/ci/shard_tests.py, read as data:
   and macos-shards' own guard with no train skip, and runs exactly the expect and lib_union steps,
   nothing able to turn their failure green; macos-check needs it.
 - T4: each macOS leg uploads its part lists under `if: !cancelled()` with `overwrite: true`; the union
-  job downloads every leg's lists, one folder per leg (lib_union.py reads <artifact>/pK/list.txt).
+  job downloads every leg's lists, one folder per leg, so a part listed by two legs stays visible (lib_union.py reads
+  pK/list.txt at any depth: a lone matching artifact is unpacked without its folder).
 - T5: limits: the job 180, lib-b's lib step 150, int's suite 110 and part step 50.
 - T6: the handoff is gone: no `rehearse_macos_lib_fallback` input, no MACOS_LIB_REHEARSE_FALLBACK,
   no `macos-lib-tests` artifact, no macOS PREBUILT entry.
@@ -151,7 +152,7 @@ def union_problems(jobs: dict) -> list[str]:
     if gates and any("run" in s for s in steps[max(gates) + 1:]):
         out.append(f"T3: {UNION_JOB} runs a step after its gate")
     downloads = [s for s in steps if "download-artifact" in str(s.get("uses", ""))]
-    # One folder per leg's artifact: lib_union.py reads <artifact>/pK/list.txt.
+    # One folder per leg's artifact, so a part two legs both list stays two lists (lib_union.py refuses that).
     if not any(str((s.get("with") or {}).get("pattern", "")) == LISTS + "*" and not (s.get("with") or {}).get("merge-multiple")
                for s in downloads):
         out.append(f"T4: {UNION_JOB} does not download every leg's `{LISTS}*` lists, one folder per leg")
