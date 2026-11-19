@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Model the first-object mapping observed in probe run 44240619213.
 
 FAKE_LLVM_COV_TABLE names a JSON document with objects -> function lists and

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Red rows for the per-part export command and its real downstream checks."""
 
 from collections import Counter
