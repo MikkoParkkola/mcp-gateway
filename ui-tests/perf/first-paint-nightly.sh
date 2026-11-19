@@ -2,17 +2,17 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #
-# The nightly first-paint gate. launchd (com.claude.mcp-gateway.first-paint-nightly, 03:30) runs an
-# installed copy of this file, so moving the worktree cannot change the script under it:
-#   first-paint-nightly.sh <dedicated worktree> <branch to measure>
+# The nightly first-paint gate, run by hand until the operator approves a launchd agent
+# (com.claude.mcp-gateway.first-paint-nightly, 03:30, which would run an installed copy of this file):
+#   first-paint-nightly.sh <dedicated worktree> [branch to measure, default the release line]
+# Run it from a copy outside the dedicated worktree: moving that worktree must not change the script under it.
 # Fetches the branch into a private ref (refs/first-paint/nightly; nobody's origin/* refs move), checks the
 # worktree out detached there, runs the gate in nightly mode under the first-paint slot owner, and records
 # timestamp, branch, SHA and exit in ~/.claude/data/first-paint/nightly.json whatever happened, so READY can
-# tell a missed nightly from a failed one. Start it by hand with:
-#   launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway.first-paint-nightly
+# tell a missed nightly from a failed one.
 {
 	set -uo pipefail
-	wt=${1:?worktree} branch=${2:?branch}
+	wt=${1:?worktree} branch=${2:-docs/ranking-1-release-line}
 	dir=~/.claude/data/first-paint
 	mkdir -p "$dir"
 	sha=none rc=2

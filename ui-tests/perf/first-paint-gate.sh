@@ -32,7 +32,7 @@ console.log(r ? 'last nightly: ' + r.timestamp + ' on ' + r.ref + ' ' + r.sha + 
 	verdict=$(sed -n 1p <<<"$check")
 	if [ "${verdict#MISSED }" != "$verdict" ]; then
 		echo "${verdict#MISSED }"
-		echo "start the nightly by hand: launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway.first-paint-nightly"
+		echo "run the nightly by hand: ui-tests/perf/first-paint-nightly.sh <dedicated worktree> [branch]"
 		echo "exit 2: fault"
 		exit 2
 	fi
