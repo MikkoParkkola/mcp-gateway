@@ -157,10 +157,10 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
 /// is killed.
 #[tokio::test]
 async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
-    require_private_home!();
     use std::future::Future as _;
     use std::task::Poll;
     const MARKER: &str = "r6b-dropped-start";
+    require_private_home!();
     let target = shell(&format!("sleep 30 # {MARKER}"));
     let mut start = Box::pin(start_fetching_with_helper(
         Path::new(gateway_bin::path()),
@@ -188,8 +188,8 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
 /// the spawned `unshare`; its only child is the helper.
 #[tokio::test]
 async fn f2_t1_the_unshares_only_child_is_the_helper() {
-    require_private_home!();
     use tokio::io::AsyncBufReadExt as _;
+    require_private_home!();
     let Some(Started { mut child, .. }) =
         fetching("(sleep 30 &); (sleep 30 &); echo up; sleep 30").await
     else {
