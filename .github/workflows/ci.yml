@@ -256,6 +256,8 @@ jobs:
           python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
           python3 scripts/ci/test_os_label_routing.py
+          python3 scripts/ci/test_macos_parts.py
+          python3 scripts/ci/test_macos_parts.py --self-test
       # The rule that lets the sharded coverage grade replace the single job
       # (MIK-9252.SHARD.7): its rows run here, not only where it was written.
       - name: Validate the sharded-coverage comparison against planted runs
@@ -936,9 +938,10 @@ jobs:
         if: matrix.shard == 'int'
         timeout-minutes: 110
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
-      # int: part 5, after its own suite, in the same job.
+      # int: part 5, after its own suite, in the same job; it runs when the
+      # suite failed too, so part 5's tests still report.
       - name: Lib test part 5, built and run
-        if: matrix.shard == 'int'
+        if: matrix.shard == 'int' && !cancelled()
         timeout-minutes: 50
         run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos int-lib --build "$RUNNER_TEMP/parts"
       # The union gate (macos-lib-union) reads every leg's part lists, also

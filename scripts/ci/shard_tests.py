@@ -23,6 +23,8 @@ were deleted is lowered in the same diff, where review sees it.
   shard_tests.py export-lib <dir>    build the lib test binary and copy it to <dir>
   shard_tests.py run-prebuilt <os> <shard> <binary>
                                      run a SHARED_BUILD shard from that binary
+  shard_tests.py run-prebuilt-parts <os> <leg> --build <dir>
+                                     build and run a PARTS leg's lib test parts one at a time
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
@@ -38,6 +40,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lib_union  # noqa: E402  the one parser of the part count N
 
 SDK = "a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result"
 BURST = "mik_7479_full_burst"
@@ -104,9 +110,8 @@ MACOS_PART_COUNTS = {"run": "44152684905 (Linux union, provisional)", 1: 3699, 2
 
 
 def part_count() -> int:
-    """N, from the build script that declares it."""
-    return int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
-                         open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    """N, from the build script that declares it (lib_union.py's parser)."""
+    return lib_union.part_count(Path(ROOT, lib_union.BUILD_SCRIPT))
 
 
 def leg_parts(os_kind: str, leg: str, solo: bool = False) -> tuple[int, ...]:
@@ -693,15 +698,18 @@ def built_parts_rows() -> None:
         log = os.path.join(root, "log")
         fake = os.path.join(root, "lib-parts.sh")
         # The fake build: logs `build K`, refuses to build while a part binary is still on disk, and writes a binary
-        # that lists `mK::a mK::b mK::<SDK>` and runs per BEHAVE_K (ok, short, extra, red).
+        # that lists `mK::a mK::b mK::<SDK>` and runs per BEHAVE_K (ok, short, extra, red, panic: b in libtest's
+        # should-panic form). FAIL_LIST_K=1 fails the export after the binary is written, before its list.
         with open(fake, "w") as f:
             f.write('#!/bin/sh\nk=$2; d=$3; echo "build $k" >> "$LOG"\n'
                     'for b in "$d"/p*/lib-tests-p*; do [ -e "$b" ] && { echo "left $b" >> "$LOG"; exit 7; }; done\n'
                     '[ "$(eval echo \\${FAIL_BUILD_$k:-})" = 1 ] && exit 5\n'
                     'mkdir -p "$d/p$k"; printf "m$k::a: test\\nm$k::b: test\\nm$k::' + SDK + ': test\\n" > "$d/p$k/list.txt"\n'
                     'cat > "$d/p$k/lib-tests-p$k" <<EOF\n#!/bin/sh\nb=\\${BEHAVE_$k:-ok}\n'
-                    'echo "test m$k::a ... ok"\n[ "\\$b" = short ] || echo "test m$k::b ... ok"\n'
-                    '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n')
+                    'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
+                    ' *) echo "test m$k::b ... ok" ;; esac\n'
+                    '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
+                    '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
         os.chmod(fake, 0o755)
 
         def leg_run(leg: str, floor: int, **env: str) -> tuple[int, list[str]]:
@@ -733,6 +741,12 @@ def built_parts_rows() -> None:
             assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
             rc, steps = leg_run("lib-b", 8, BEHAVE_2="red")
             assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
+            # An export that failed after writing its binary: the binary is gone before part 3 builds (the fake build
+            # logs `left` and refuses while one is on disk), and the leg fails.
+            rc, steps = leg_run("lib-b", 6, FAIL_LIST_2="1")
+            assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
+            # A #[should_panic] test's result line counts as run.
+            assert leg_run("lib-b", 8, BEHAVE_2="panic")[0] == 0, "a should-panic result was not counted"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
@@ -1097,8 +1111,7 @@ def part_binaries(directory: str) -> tuple[dict[int, str], list[str]]:
     """The lib test part binaries under DIRECTORY (`*/pK/lib-tests-pK`, one artifact folder each) and the problems
     that stop a run before any test: parts other than exactly 1..N, a binary whose `--list` differs from the
     `list.txt` the union job checked, or two parts listing the same test."""
-    n = int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
-                      open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    n = part_count()
     found: dict[int, str] = {}
     out: list[str] = []
     for path in sorted(glob.glob(os.path.join(directory, "*", "p*", "lib-tests-p*"))):
@@ -1145,7 +1158,8 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
     return 1 if failed else 0
 
 
-RESULT_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored)\b")
+# libtest's per-test result line; a #[should_panic] test reads `test <name> - should panic ... ok`.
+RESULT_LINE = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
 
 
 def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
@@ -1162,31 +1176,35 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
     total = 0
     for k in leg_parts(os_kind, leg, solo):
         print(f"::group::{os_kind} {leg}: part {k}", flush=True)
-        rc = subprocess.run([*script, "export", str(k), directory], cwd=ROOT).returncode
         binary = os.path.join(directory, f"p{k}", f"lib-tests-p{k}")
         recorded = os.path.join(directory, f"p{k}", "list.txt")
-        if rc != 0 or not os.path.isfile(binary) or not os.path.isfile(recorded):
-            failed.append(f"part {k}: its build failed (lib-parts.sh exited {rc})")
+        try:
+            rc = subprocess.run([*script, "export", str(k), directory], cwd=ROOT).returncode
+            if rc != 0 or not os.path.isfile(binary) or not os.path.isfile(recorded):
+                failed.append(f"part {k}: its build failed (lib-parts.sh exited {rc})")
+                continue
+            listed_names = {x[: -len(": test")] for x in open(recorded).read().splitlines() if x.endswith(": test")}
+            want = {n for n in listed_names if not any(p in n for p in patterns)}
+            os.chmod(binary, 0o755)
+            reported: dict[str, str] = {}
+            with private_home(env, None) as home_env:
+                p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     env=home_env, cwd=ROOT)
+                assert p.stdout is not None
+                for raw in p.stdout:
+                    sys.stdout.buffer.write(raw)
+                    sys.stdout.buffer.flush()
+                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    if m:
+                        reported[m.group(1)] = m.group(2)
+                prc = p.wait()
+        finally:
+            # The binary goes before the next part builds, also when an export or a run failed part way.
+            if os.path.lexists(binary):
+                os.remove(binary)
             print("::endgroup::", flush=True)
-            continue
-        listed_names = {x[: -len(": test")] for x in open(recorded).read().splitlines() if x.endswith(": test")}
-        want = {n for n in listed_names if not any(p in n for p in patterns)}
-        os.chmod(binary, 0o755)
-        reported: dict[str, str] = {}
-        with private_home(env, None) as home_env:
-            p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 env=home_env, cwd=ROOT)
-            assert p.stdout is not None
-            for raw in p.stdout:
-                sys.stdout.buffer.write(raw)
-                sys.stdout.buffer.flush()
-                m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-                if m:
-                    reported[m.group(1)] = m.group(2)
-            prc = p.wait()
-        os.remove(binary)
-        print("::endgroup::", flush=True)
         total += len(reported)
+        print(f"::notice::{os_kind} {leg} part {k}: ran {len(reported)}, its list less the skips {len(want)}")
         if prc != 0:
             failed.append(f"part {k}: test binary exited {prc}")
         if set(reported) != want:
