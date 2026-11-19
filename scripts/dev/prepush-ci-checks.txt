@@ -99,11 +99,13 @@ python3 scripts/release/test_c6_killer_drift.py	2	closed
 python3 scripts/release/test_c6_mutation_sample.py	1	closed
 python3 scripts/release/test_c6_resolve.py	26	closed
 python3 scripts/release/test_changelog_fragments.py	2	closed
+python3 scripts/release/test_check_formula.py	0	closed
 python3 scripts/release/test_check_identity_sources.py	73	closed
 "$GATE_PY" scripts/release/test_check_inventory_rows.py	21	closed
 python3 scripts/release/test_check_keyless_read_only.py	1	closed
 python3 scripts/release/test_check_known_issues.py	1	closed
 python3 scripts/release/test_check_macos_exclusions.py	4	closed
+python3 scripts/release/test_check_man_page.py	0	closed
 python3 scripts/release/test_check_nfr_demo_1_recordings.py	1	closed
 python3 scripts/release/test_check_release_assets.py	1	closed
 python3 scripts/release/test_check_release_assets_client.py	1	closed

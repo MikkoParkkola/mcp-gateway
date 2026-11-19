@@ -316,11 +316,24 @@ jobs:
             chmod +x ${{ matrix.artifact }}
           fi
 
+      # One man page, from the linux x86_64 build: same target, profile and
+      # features as the shipped binary, and checked against that binary's own
+      # --help and --version before it leaves the leg.
+      - name: Write and check the man page
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          set -euo pipefail
+          cargo run --release --target ${{ matrix.target }} --example man_page > mcp-gateway.1
+          python3 scripts/release/check_man_page.py mcp-gateway.1 "./${{ matrix.artifact }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}${{ matrix.suffix }}
+          # mcp-gateway.1 exists on the linux x86_64 leg only.
+          path: |
+            ${{ matrix.artifact }}${{ matrix.suffix }}
+            mcp-gateway.1
           # These binaries are a handoff to the `release` job below, which
           # downloads them and attaches them to the GitHub release. Once they
           # expire, re-running a failed `release` job publishes a release with
@@ -366,7 +379,19 @@ jobs:
           # Bundle license/notice text with every published binary (counsel #7:
           # each artifact must carry its own license, not just the repo).
           cp LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md COMMERCIAL.md release/
+          # The man page is not an mcp-gateway-* file: copied by name, and
+          # required.
+          cp artifacts/mcp-gateway-linux-x86_64/mcp-gateway.1 release/
+          test -s release/mcp-gateway.1
           ls -la release/
+
+      # The collected page against the collected linux x86_64 binary, so a page
+      # from another build is caught before it is signed. Artifacts lose the
+      # executable bit in transit.
+      - name: Check the man page against the collected binary
+        run: |
+          chmod +x release/mcp-gateway-linux-x86_64
+          python3 scripts/release/check_man_page.py release/mcp-gateway.1 release/mcp-gateway-linux-x86_64
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -376,15 +401,15 @@ jobs:
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
-      # SBOM per binary, SHA256SUMS.txt over binaries and SBOMs, a signature
-      # bundle for each, all verified before any release exists.
+      # SBOM per binary, SHA256SUMS.txt over binaries, SBOMs and the man page, a
+      # signature bundle for each, all verified before any release exists.
       - name: Sign the binaries and write their SBOMs
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # BINARIES is a word list by design
-          scripts/release/sign-release-assets.sh release "$VERSION" $BINARIES
+          scripts/release/sign-release-assets.sh release "$VERSION" --doc mcp-gateway.1 $BINARIES
 
       # Draft first: nothing is public until what the release actually serves
       # has been verified below. The release action keeps an existing
@@ -425,8 +450,9 @@ jobs:
             ```
 
             ## Verify signatures
-            Every binary, its SBOM (`<binary>.spdx.json`) and `SHA256SUMS.txt` carry a
-            keyless cosign bundle (`<file>.sigstore.json`). Use cosign 2.6.5 or later:
+            Every binary, its SBOM (`<binary>.spdx.json`), the man page (`mcp-gateway.1`) and
+            `SHA256SUMS.txt` carry a keyless cosign bundle (`<file>.sigstore.json`). Use cosign
+            2.6.5 or later:
             ```bash
             cosign verify-blob \
               --bundle mcp-gateway-linux-x86_64.sigstore.json \
@@ -467,7 +493,7 @@ jobs:
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published
           # shellcheck disable=SC2086 # BINARIES is a word list by design
-          scripts/release/verify-release-assets.sh published "$VERSION" $BINARIES
+          scripts/release/verify-release-assets.sh published "$VERSION" --doc mcp-gateway.1 $BINARIES
 
       - name: Publish the release
         env:
@@ -487,7 +513,7 @@ jobs:
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-final
           # shellcheck disable=SC2086 # BINARIES is a word list by design
-          scripts/release/verify-release-assets.sh published-final "$VERSION" $BINARIES
+          scripts/release/verify-release-assets.sh published-final "$VERSION" --doc mcp-gateway.1 $BINARIES
 
   publish:
     needs: [release, verify]
@@ -606,6 +632,7 @@ jobs:
             echo "sha_darwin_x86_64=$(extract_sha mcp-gateway-darwin-x86_64)"
             echo "sha_linux_aarch64=$(extract_sha mcp-gateway-linux-aarch64)"
             echo "sha_linux_x86_64=$(extract_sha mcp-gateway-linux-x86_64)"
+            echo "sha_man_page=$(extract_sha mcp-gateway.1)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout homebrew-tap
@@ -623,8 +650,9 @@ jobs:
           SHA_DARWIN_X86_64: ${{ steps.meta.outputs.sha_darwin_x86_64 }}
           SHA_LINUX_AARCH64: ${{ steps.meta.outputs.sha_linux_aarch64 }}
           SHA_LINUX_X86_64: ${{ steps.meta.outputs.sha_linux_x86_64 }}
+          SHA_MAN_PAGE: ${{ steps.meta.outputs.sha_man_page }}
         run: |
-          for sha in "$SHA_DARWIN_ARM64" "$SHA_DARWIN_X86_64" "$SHA_LINUX_AARCH64" "$SHA_LINUX_X86_64"; do
+          for sha in "$SHA_DARWIN_ARM64" "$SHA_DARWIN_X86_64" "$SHA_LINUX_AARCH64" "$SHA_LINUX_X86_64" "$SHA_MAN_PAGE"; do
             if [ -z "$sha" ]; then
               echo "Missing SHA256 for one of the release assets" >&2
               exit 1
@@ -663,6 +691,11 @@ jobs:
               end
             end
 
+            resource "man-page" do
+              url "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/mcp-gateway.1"
+              sha256 "${SHA_MAN_PAGE}"
+            end
+
             def install
               if OS.mac?
                 if Hardware::CPU.arm?
@@ -677,6 +710,7 @@ jobs:
                   bin.install "mcp-gateway-linux-x86_64" => "mcp-gateway"
                 end
               end
+              resource("man-page").stage { man1.install "mcp-gateway.1" }
             end
 
             def caveats
@@ -694,6 +728,19 @@ jobs:
 
           echo "--- Updated formula ---"
           cat homebrew-tap/Formula/mcp-gateway.rb
+
+      # The written formula installs this release's man page: the exact asset
+      # url and the page's line in SHA256SUMS.txt, or nothing is pushed. The
+      # check script comes from this repository, checked out beside the tap.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+
+      - name: Check the formula installs the man page
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: python3 source/scripts/release/check_formula.py homebrew-tap/Formula/mcp-gateway.rb "$VERSION" "$GITHUB_REPOSITORY" SHA256SUMS.txt
 
       - name: Commit and push formula bump
         working-directory: homebrew-tap

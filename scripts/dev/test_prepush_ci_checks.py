@@ -81,6 +81,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/dev/check-registry-packages.py", ("--start", "scripts/dev/testdata/registry-integrity.rs", "--integrity", "scripts/dev/testdata/registry-integrity.integrity.json")): "network: real npm pack in Docker, CI expects exit 1 (MIK-8513 served-bytes step)",
     ("scripts/dev/check-registry-packages.py", ("--start", "scripts/dev/testdata/registry-wont-start.rs", "--integrity", "scripts/dev/testdata/registry-wont-start.integrity.json")): "network: starts packages in Docker, CI expects exit 1 (MIK-8513 won't-start step)",
     ("scripts/release/check_known_issues.py", ("--release",)): "release: tag-time form",
+    ("scripts/release/check_man_page.py", ("release/mcp-gateway.1", "release/$NAME")): "binary: needs a built release binary (the signing rehearsal)",
     ("scripts/release/check_release_assets.py", ("sbom", "--version", "$version", "--sbom-only", "${{matrix.artifact}}${{matrix.suffix}}")): "binary: needs a built release binary and syft",
     ("scripts/release/check_scope_acceptance.py", ("--publish-check",)): "release: publish-time form",
     ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
@@ -145,8 +146,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ('scripts/release/grep_no_test_hook.sh', ('image-mcp-gateway',)): 'artifact: inspects the built image or release binary',
     ('scripts/release/grep_no_test_hook.sh', ('target/release/mcp-gateway',)): 'artifact: inspects the built image or release binary',
     ('scripts/release/nfr_upgrade_1_rehearsal.sh', ()): 'binary: runs a built target/debug/mcp-gateway (upgrade rehearsal)',
-    ('scripts/release/sign-release-assets.sh', ('release', '$version', '$NAME')): 'release: signs release assets',
-    ('scripts/release/verify-release-assets.sh', ('published', '$VERSION', '$NAME')): 'release: verifies published release assets',
+    ('scripts/release/sign-release-assets.sh', ('release', '$version', '--doc', 'mcp-gateway.1', '$NAME')): 'release: signs release assets',
+    ('scripts/release/verify-release-assets.sh', ('published', '$VERSION', '--doc', 'mcp-gateway.1', '$NAME')): 'release: verifies published release assets',
     ('scripts/test-task-sdk-recovery.sh', ()): 'cargo: builds and runs the task SDK recovery test under docker',
 }
 
@@ -215,7 +216,7 @@ def _steps(root, path, seen):
 # Lines that name a .sh in a non-canonical form and stay so, each CI-only with a reason
 # (workflow file, the line with its whitespace collapsed). Every other such line fails closed.
 CI_ONLY_LINES: dict[tuple[str, str], str] = {
-    ("ci.yml", 'if scripts/release/verify-release-assets.sh tampered "$VERSION" "$NAME"; then'):
+    ("ci.yml", 'if scripts/release/verify-release-assets.sh tampered "$VERSION" --doc mcp-gateway.1 "$NAME"; then'):
         "release: the tag release job's tampered-copy check, against a draft release",
     ("ci.yml", 'TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER" '
                'CHART_NOTES="$RUNNER_TEMP/chart-notes.md" scripts/release/publish_pinned_chart.sh "$image" "$repo" '

@@ -1618,9 +1618,10 @@ jobs:
         run: python3 scripts/release/test_publish_pinned_chart.py
 
   # The release.yml signing path, rehearsed without a tag: one binary built
-  # with cargo auditable, signed keylessly as this workflow, uploaded to a
-  # draft release (a draft creates no git tag and is visible to maintainers
-  # only), verified as served, checked to refuse a tampered copy, and deleted.
+  # with cargo auditable and its man page, signed keylessly as this workflow,
+  # uploaded to a draft release (a draft creates no git tag and is visible to
+  # maintainers only), verified as served, checked to refuse a tampered copy,
+  # and deleted.
   binary-signing-rehearsal:
     name: Binary signing rehearsal (draft release)
     if: github.event_name == 'workflow_dispatch' && (inputs.rehearse_binary_signing == true || inputs.rehearse_binary_signing == 'true')
@@ -1654,9 +1655,11 @@ jobs:
           cargo auditable build --release
           mkdir -p release
           cp target/release/mcp-gateway "release/$NAME"
+          cargo run --release --example man_page > release/mcp-gateway.1
+          python3 scripts/release/check_man_page.py release/mcp-gateway.1 "release/$NAME"
           version="$(cargo metadata --format-version 1 --no-deps --locked | jq -r '.packages[] | select(.name == "mcp-gateway") | .version')"
           echo "VERSION=$version" >> "$GITHUB_ENV"
-          scripts/release/sign-release-assets.sh release "$version" "$NAME"
+          scripts/release/sign-release-assets.sh release "$version" --doc mcp-gateway.1 "$NAME"
       - name: Upload to a draft release and verify what it serves
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1665,13 +1668,13 @@ jobs:
           gh release create "$DRAFT" release/* --draft --target "$GITHUB_SHA" \
             --title "$DRAFT" --notes "Rehearsal of release signing; deleted by the same run."
           gh release download "$DRAFT" --dir published
-          scripts/release/verify-release-assets.sh published "$VERSION" "$NAME"
+          scripts/release/verify-release-assets.sh published "$VERSION" --doc mcp-gateway.1 "$NAME"
       - name: A tampered copy is refused
         run: |
           set -euo pipefail
           cp -r published tampered
           printf 'x' >> "tampered/$NAME"
-          if scripts/release/verify-release-assets.sh tampered "$VERSION" "$NAME"; then
+          if scripts/release/verify-release-assets.sh tampered "$VERSION" --doc mcp-gateway.1 "$NAME"; then
             echo "::error::a tampered binary verified"
             exit 1
           fi
