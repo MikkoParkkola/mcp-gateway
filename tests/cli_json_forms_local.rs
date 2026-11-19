@@ -518,24 +518,51 @@ fn cap_list_prints_one_document_and_keeps_its_text() {
         caps.to_str().expect("utf-8"),
     );
 
+    // The loader lists in directory-read order, which differs between filesystems: lines and items are compared as
+    // sets, and the document must keep the text form's order.
     let plain = run(root.path(), &["--config", config, "cap", "list", caps], b"");
+    assert_eq!(plain.code, Some(0), "{}", plain.stderr);
+    let header = format!("Found 3 capabilities in {caps}:\n\n");
+    let listed = plain
+        .stdout
+        .strip_prefix(header.as_str())
+        .unwrap_or_else(|| panic!("header: {:?}", plain.stdout));
+    let mut lines: Vec<&str> = listed.lines().collect();
+    let text_order: Vec<String> = lines
+        .iter()
+        .map(|l| l.trim_start().split(' ').next().unwrap_or("").to_owned())
+        .collect();
+    lines.sort_unstable();
     assert_eq!(
-        (plain.code, plain.stdout.as_str()),
-        (
-            Some(0),
-            &*format!(
-                "Found 3 capabilities in {caps}:\n\n  alpha_cap - Alpha [bearer] off: needs ALPHA_CAP_KEY\n  \
-                 beta_cap - Beta\n  gamma_cap - Gamma [bearer]\n"
-            )
-        )
+        lines,
+        [
+            "  alpha_cap - Alpha [bearer] off: needs ALPHA_CAP_KEY",
+            "  beta_cap - Beta",
+            "  gamma_cap - Gamma [bearer]",
+        ]
     );
     let json = run(
         root.path(),
         &["--config", config, "cap", "list", caps, "--json"],
         b"",
     );
+    let mut doc = document(&json);
+    let json_order: Vec<String> = doc["capabilities"]
+        .as_array()
+        .expect("capabilities")
+        .iter()
+        .map(|c| c["name"].as_str().unwrap_or("").to_owned())
+        .collect();
     assert_eq!(
-        document(&json),
+        json_order, text_order,
+        "the document keeps the text form's order"
+    );
+    doc["capabilities"]
+        .as_array_mut()
+        .expect("capabilities")
+        .sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    assert_eq!(
+        doc,
         json!({"schema_version": 1, "directory": caps, "capabilities": [
             list_cap("alpha_cap", "Alpha", Some("bearer"), Some("ALPHA_CAP_KEY")),
             list_cap("beta_cap", "Beta", None, None),
@@ -613,19 +640,35 @@ fn cap_search_and_registry_list_print_one_document() {
         &["cap", "registry-list", "-C", caps, "--json"],
         b"",
     );
+    // The index may follow directory-read order: entries compared as a set, and the text form checked per entry.
+    let mut doc = document(&all);
+    doc["capabilities"]
+        .as_array_mut()
+        .expect("capabilities")
+        .sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     assert_eq!(
-        document(&all),
+        doc,
         json!({"schema_version": 1, "capabilities": [stock, weather]})
     );
     let plain = run(root.path(), &["cap", "registry-list", "-C", caps], b"");
-    assert_eq!(
-        (plain.code, plain.stdout.as_str()),
-        (
-            Some(0),
-            "Available capabilities (2):\n\n  stock_quote - Quotes a stock 🔑\n    Tags: finance\n\n  \
-             weather_now - Current conditions\n    Tags: weather, free\n\n\
-             All capabilities are available in the capabilities directory.\n"
-        )
+    assert_eq!(plain.code, Some(0), "{}", plain.stderr);
+    for part in [
+        "Available capabilities (2):\n\n",
+        "  stock_quote - Quotes a stock 🔑\n    Tags: finance\n\n",
+        "  weather_now - Current conditions\n    Tags: weather, free\n\n",
+    ] {
+        assert!(
+            plain.stdout.contains(part),
+            "{part:?} in {:?}",
+            plain.stdout
+        );
+    }
+    assert!(
+        plain
+            .stdout
+            .ends_with("\nAll capabilities are available in the capabilities directory.\n"),
+        "{:?}",
+        plain.stdout
     );
 
     let empty = root.path().join("empty");

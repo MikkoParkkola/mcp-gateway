@@ -180,28 +180,27 @@ fn dashboard_link_prints_one_document_and_keeps_its_text() {
     assert_eq!(json.stderr, NOTE);
 }
 
-const UNSAFE_MESSAGE: &str = "The response could not be printed safely.";
-const UNSAFE_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state \
-                             before sending the request again.";
-
-/// T1: a token holding `"` or `\`, planted in the link the gateway returns, is refused in both forms. Under
-/// `--json` the escaped token is not in the encoded bytes, so only the decoded scan can refuse it.
+/// T1: a token holding `"` or `\`, planted in the link the gateway returns, never reaches stdout in either form:
+/// the command redacts it in the link (the text form prints `[redacted]` today), and the document carries the same
+/// redacted link. The token appears neither raw nor JSON-escaped.
 #[test]
-fn dashboard_link_refuses_a_link_holding_the_token() {
-    for token in [
-        "tok\"quoted-0123456789abcdef",
-        "tok\\slashed-0123456789abcdef",
+fn dashboard_link_never_prints_a_token_planted_in_the_link() {
+    for (token, escaped) in [
+        (
+            "tok\"quoted-0123456789abcdef",
+            "tok\\\"quoted-0123456789abcdef",
+        ),
+        (
+            "tok\\slashed-0123456789abcdef",
+            "tok\\\\slashed-0123456789abcdef",
+        ),
     ] {
         let link = format!("https://gw.example.test/ui/#k={token}");
         let gateway = stand_in(200, json!({"link": link}).to_string());
         let plain = run(&["dashboard-link", "--url", &gateway], Some(token));
         assert_eq!(
             (plain.code, plain.stdout.as_str(), plain.stderr.as_str()),
-            (
-                Some(1),
-                "",
-                &*format!("error: {UNSAFE_MESSAGE}\n{UNSAFE_REMEDY}\n")
-            ),
+            (Some(0), "https://gw.example.test/ui/#k=[redacted]\n", NOTE),
             "{token}"
         );
         let json = run(
@@ -209,20 +208,18 @@ fn dashboard_link_refuses_a_link_holding_the_token() {
             Some(token),
         );
         assert_eq!(
-            (json.code, json.stdout.as_str()),
-            (Some(1), ""),
-            "{token}: {}",
-            json.stderr
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(json.stderr.trim_end()).expect("JSON error"),
-            json!({"schema_version": 1, "error": {
-                "kind": "LocalFailure", "message": UNSAFE_MESSAGE, "remedy": UNSAFE_REMEDY,
-                "http_status": null, "request_id": null
-            }}),
+            document(&json),
+            json!({"schema_version": 1, "url": "https://gw.example.test/ui/#k=[redacted]"}),
             "{token}"
         );
-        assert!(!json.stderr.contains(token), "{token}: {}", json.stderr);
+        for out in [&plain, &json] {
+            assert!(
+                !out.stdout.contains(token) && !out.stdout.contains(escaped),
+                "{token}: {}",
+                out.stdout
+            );
+            assert!(!out.stderr.contains(token), "{token}: {}", out.stderr);
+        }
     }
 }
 
