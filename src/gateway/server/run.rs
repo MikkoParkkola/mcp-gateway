@@ -497,7 +497,7 @@ impl Gateway {
         // the shutdown signal.
         let _heartbeat = crate::heartbeat::start(
             self.config.security.posture,
-            data_dir.to_path_buf(),
+            data_dir.clone(),
             shutdown_tx.subscribe(),
         );
 

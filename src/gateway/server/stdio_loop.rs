@@ -200,7 +200,7 @@ impl Gateway {
         // awaited; stdout stays the protocol's alone (it logs at debug only).
         let _heartbeat = crate::heartbeat::start(
             self.config.security.posture,
-            data_dir.to_path_buf(),
+            data_dir.clone(),
             heartbeat_stop,
         );
 

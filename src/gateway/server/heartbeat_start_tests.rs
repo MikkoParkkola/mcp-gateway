@@ -91,11 +91,10 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
             .get(format!("http://127.0.0.1:{port}/livez"))
             .send()
             .await
-            .map(|r| r.status().as_u16())
-            .unwrap_or(0);
+            .map_or(0, |r| r.status().as_u16());
         (trigger, server, status)
     };
-    let (trigger, server, status) = tokio::time::timeout(Duration::from_secs(30), run)
+    let (trigger, server, status) = tokio::time::timeout(Duration::from_secs(30), Box::pin(run))
         .await
         .expect("constructed, bound and answered /livez within 30 s");
     RunningHttp {
@@ -128,7 +127,7 @@ async fn http_start_hardened_sends_nothing() {
     let rx = Listener::start(Answer::NoContent).await;
     let dir = crate::test_dir_keep::kept_tempdir();
     let _guard = seam::register(dir.path(), target_for(&rx));
-    let hardened = start_http(dir.path(), SecurityPosture::Hardened).await;
+    let hardened = Box::pin(start_http(dir.path(), SecurityPosture::Hardened)).await;
     assert_eq!(hardened.status, 200);
     // The task's first check has finished (an event, not a wait): it
     // skipped for the posture.
@@ -148,7 +147,7 @@ async fn http_start_hardened_sends_nothing() {
     let hang = Listener::start(Answer::Never).await;
     let control = crate::test_dir_keep::kept_tempdir();
     let _control_guard = seam::register(control.path(), slow_target_for(&hang));
-    let standard = start_http(control.path(), SecurityPosture::Standard).await;
+    let standard = Box::pin(start_http(control.path(), SecurityPosture::Standard)).await;
     assert_eq!(standard.status, 200);
     assert!(
         standard.took < Duration::from_secs(30),
@@ -209,7 +208,7 @@ async fn start_stdio(dir: &std::path::Path, posture: SecurityPosture) -> Running
             answered,
         }
     };
-    tokio::time::timeout(Duration::from_secs(30), run)
+    tokio::time::timeout(Duration::from_secs(30), Box::pin(run))
         .await
         .expect("constructed and answered ping within 30 s")
 }

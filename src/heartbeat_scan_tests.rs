@@ -131,7 +131,7 @@ fn launch_sets_dnt(launch: &str) -> bool {
             *w == "--env=DO_NOT_TRACK=1"
                 || ["--set=", "--set-string="]
                     .iter()
-                    .any(|f| w.strip_prefix(f).is_some_and(|v| helm_value(v)))
+                    .any(|f| w.strip_prefix(f).is_some_and(helm_value))
         })
 }
 
@@ -184,6 +184,14 @@ fn expands(line: &str, var: &str) -> bool {
         })
 }
 
+/// Where `bare` (`$HELM`) first stands alone in `line`, not as the start of
+/// a longer name (`$HELM_HOME`). Returns no borrow, so the caller can edit.
+fn bare_at(line: &str, bare: &str) -> Option<usize> {
+    line.match_indices(bare).map(|(i, _)| i).find(|&i| {
+        !line[i + bare.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// `line` with a launcher program called through its variable (`"$HELM"`,
 /// `${KUBECTL}`) written as the program itself, so [`LAUNCHERS`] match it.
 fn programs_named(line: &str) -> String {
@@ -199,13 +207,7 @@ fn programs_named(line: &str) -> String {
         }
         // A bare `$HELM`, not `$HELM_HOME`.
         let bare = format!("${var}");
-        loop {
-            // Found in its own statement, so the search's borrow ends before the edit.
-            let Some(i) = out.match_indices(&bare).map(|(i, _)| i).find(|&i| {
-                !out[i + bare.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-            }) else {
-                break;
-            };
+        while let Some(i) = bare_at(&out, &bare) {
             out.replace_range(i..i + bare.len(), tool);
         }
     }
@@ -325,21 +327,20 @@ fn launch_sources() -> Vec<(String, String)> {
                 .unwrap_or_default();
             if p.is_dir() {
                 todo.push(p);
-            } else if name == "Makefile"
+            } else if (name == "Makefile"
                 || p.extension()
-                    .is_some_and(|e| e == "sh" || e == "yml" || e == "yaml")
+                    .is_some_and(|e| e == "sh" || e == "yml" || e == "yaml"))
+                && let Ok(text) = std::fs::read_to_string(&p)
             {
-                if let Ok(text) = std::fs::read_to_string(&p) {
-                    // Forward slashes on every OS, so the file tables
-                    // (ARG_IMAGE, KNOWN_LAUNCHES) match on Windows too.
-                    out.push((
-                        p.strip_prefix(root)
-                            .expect("under the crate")
-                            .to_string_lossy()
-                            .replace('\\', "/"),
-                        text,
-                    ));
-                }
+                // Forward slashes on every OS, so the file tables
+                // (ARG_IMAGE, KNOWN_LAUNCHES) match on Windows too.
+                out.push((
+                    p.strip_prefix(root)
+                        .expect("under the crate")
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    text,
+                ));
             }
         }
     }
@@ -355,76 +356,9 @@ const KNOWN_LAUNCHES: [(&str, usize); 5] = [
     ("scripts/dev/helm-kind-real-image.sh", 2),
 ];
 
-/// D12. Every launch of the gateway image or chart in our scripts and
-/// workflows passes `DO_NOT_TRACK=1` on that launch itself; one planted
-/// launch per form, without it, fails.
-#[test]
-fn every_image_launch_sets_dnt() {
-    // The floor (A3/A4): the finder sees each known gateway launch, by file,
-    // before anything is judged; a finder blind to an image form sees fewer.
-    let mut seen = std::collections::BTreeMap::new();
-    for (path, text) in launch_sources() {
-        let n = gateway_launches(&path, &text).len();
-        if n > 0 {
-            seen.insert(path, n);
-        }
-    }
-    let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
-        .iter()
-        .map(|(f, n)| ((*f).to_owned(), *n))
-        .collect();
-    assert_eq!(seen, known, "the gateway launches found, by file");
-    let mut missing = Vec::new();
-    for (path, text) in launch_sources() {
-        for launch in launches_without_dnt(&path, &text) {
-            missing.push(format!("{path}: {launch}"));
-        }
-        let name = std::path::Path::new(&path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if (name.starts_with("docker-compose") || name.starts_with("compose"))
-            && compose_without_dnt(&text)
-        {
-            missing.push(format!(
-                "{path}: a compose service runs the gateway image without DO_NOT_TRACK=1"
-            ));
-        }
-    }
-    for launcher in LAUNCHERS {
-        // Compose launches take service names; their environment is checked
-        // per service in the compose file (compose_without_dnt below).
-        if launcher.starts_with("docker compose") {
-            continue;
-        }
-        let commented =
-            format!("{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # -e DO_NOT_TRACK=1\n");
-        assert_eq!(
-            launches_without_dnt("planted.sh", &commented).len(),
-            1,
-            "an opt-out in a comment passed for {launcher}"
-        );
-        let planted = format!("{launcher} \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
-        assert_eq!(
-            launches_without_dnt("planted.sh", &planted).len(),
-            1,
-            "planted {launcher} was not caught"
-        );
-        let kept =
-            format!("{launcher} -e DO_NOT_TRACK=1 \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
-        assert!(
-            launches_without_dnt("planted.sh", &kept).is_empty(),
-            "{launcher} with the variable was refused"
-        );
-        let mentioned = format!(
-            "{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # DO_NOT_TRACK=1 set elsewhere\n"
-        );
-        assert_eq!(
-            launches_without_dnt("planted.sh", &mentioned).len(),
-            1,
-            "a mention passed for {launcher}"
-        );
-    }
+/// D12's planted compose services, chart and image variables, the chart's
+/// list form and a quoted value, each both ways.
+fn assert_planted_compose_and_variable_forms() {
     let compose = "services:\n  gw:\n    image: ghcr.io/mikkoparkkola/mcp-gateway:test\n";
     assert!(
         compose_without_dnt(compose),
@@ -489,6 +423,86 @@ fn every_image_launch_sets_dnt() {
         launches_without_dnt("planted.sh", quoted).is_empty(),
         "a quoted setting was refused"
     );
+}
+
+/// D12's planted launches, both ways: each launcher with an opt-out in a
+/// comment, a continued line, a kept setting and a mere mention; then the
+/// compose and variable forms.
+fn assert_planted_launch_forms() {
+    for launcher in LAUNCHERS {
+        // Compose launches take service names; their environment is checked
+        // per service in the compose file (compose_without_dnt below).
+        if launcher.starts_with("docker compose") {
+            continue;
+        }
+        let commented =
+            format!("{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # -e DO_NOT_TRACK=1\n");
+        assert_eq!(
+            launches_without_dnt("planted.sh", &commented).len(),
+            1,
+            "an opt-out in a comment passed for {launcher}"
+        );
+        let planted = format!("{launcher} \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
+        assert_eq!(
+            launches_without_dnt("planted.sh", &planted).len(),
+            1,
+            "planted {launcher} was not caught"
+        );
+        let kept =
+            format!("{launcher} -e DO_NOT_TRACK=1 \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
+        assert!(
+            launches_without_dnt("planted.sh", &kept).is_empty(),
+            "{launcher} with the variable was refused"
+        );
+        let mentioned = format!(
+            "{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # DO_NOT_TRACK=1 set elsewhere\n"
+        );
+        assert_eq!(
+            launches_without_dnt("planted.sh", &mentioned).len(),
+            1,
+            "a mention passed for {launcher}"
+        );
+    }
+    assert_planted_compose_and_variable_forms();
+}
+
+/// D12. Every launch of the gateway image or chart in our scripts and
+/// workflows passes `DO_NOT_TRACK=1` on that launch itself; one planted
+/// launch per form, without it, fails.
+#[test]
+fn every_image_launch_sets_dnt() {
+    // The floor (A3/A4): the finder sees each known gateway launch, by file,
+    // before anything is judged; a finder blind to an image form sees fewer.
+    let mut seen = std::collections::BTreeMap::new();
+    for (path, text) in launch_sources() {
+        let n = gateway_launches(&path, &text).len();
+        if n > 0 {
+            seen.insert(path, n);
+        }
+    }
+    let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
+        .iter()
+        .map(|(f, n)| ((*f).to_owned(), *n))
+        .collect();
+    assert_eq!(seen, known, "the gateway launches found, by file");
+    let mut missing = Vec::new();
+    for (path, text) in launch_sources() {
+        for launch in launches_without_dnt(&path, &text) {
+            missing.push(format!("{path}: {launch}"));
+        }
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if (name.starts_with("docker-compose") || name.starts_with("compose"))
+            && compose_without_dnt(&text)
+        {
+            missing.push(format!(
+                "{path}: a compose service runs the gateway image without DO_NOT_TRACK=1"
+            ));
+        }
+    }
+    assert_planted_launch_forms();
     // The judgement last, so a red run proves every control above first.
     assert!(
         missing.is_empty(),

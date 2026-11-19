@@ -110,13 +110,11 @@ async fn a_clock_before_the_epoch_sends_nothing() {
     .await;
     assert_eq!(out, Outcome::NoDate);
     assert_eq!(rx.connections(), 0);
-    let claims = std::fs::read_dir(dir.path().join("heartbeat"))
-        .map(|d| {
-            d.flatten()
-                .filter(|e| e.file_name().to_string_lossy().starts_with("day-"))
-                .count()
-        })
-        .unwrap_or(0);
+    let claims = std::fs::read_dir(dir.path().join("heartbeat")).map_or(0, |d| {
+        d.flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("day-"))
+            .count()
+    });
     assert_eq!(claims, 0, "a day was claimed without a date");
     let control = tempfile::tempdir().expect("dir");
     assert_eq!(
