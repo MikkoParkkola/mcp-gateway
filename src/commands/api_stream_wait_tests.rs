@@ -157,7 +157,7 @@ async fn a_live_stream_stops_at_the_limit_and_hangs_up() {
         &LinkTls::default(),
         credential,
         out.clone(),
-        &Deadlines::default(),
+        &content(),
         send,
     )
     .await;
@@ -204,7 +204,7 @@ async fn a_streamed_request_has_no_total_limit() {
     let request = args(STREAM, Some(2), false);
     let out = Shared::default();
     // Bound first: the streamed future is joined later, past this statement.
-    let (tls, deadlines) = (LinkTls::default(), Deadlines::default());
+    let (tls, deadlines) = (LinkTls::default(), content());
     let streamed = run_streamed_with(
         &request,
         &gateway.base,

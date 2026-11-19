@@ -63,10 +63,11 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-/// The waits for the rows in this file, which are about what a run prints and how it exits, not about time: one
-/// named test limit, a 10 s wait and 30 s overall, far above any starvation the suite produces (a run that is slow to
-/// be scheduled cannot fail a content row) and still short enough that a real hang fails in seconds, not minutes. The
-/// rows about the waits themselves, with short waits, are in `api_stream_wait_tests.rs`.
+/// The one named test limit for every row that checks what a run prints and how it exits rather than a wait: 10 s
+/// per wait and 30 s overall. That leaves wide room for the stalls a loaded runner causes (the starved-printer row
+/// below holds its printer for 2 s and still passes), yet a real hang still fails in seconds. A longer stall can
+/// still pass these limits; they are finite on purpose. Rows that end at a wait use the short limits in
+/// `api_stream_wait_tests.rs`.
 fn content() -> Deadlines {
     let (wait, total) = (Duration::from_secs(10), Duration::from_secs(30));
     Deadlines {
