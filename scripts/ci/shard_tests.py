@@ -290,6 +290,9 @@ def private_home(base: dict[str, str] | None, tmp: str | None):
     env["MCP_GATEWAY_TEST_HOME_DIR"] = home
     env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
     env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    # A test that skips for a missing tool or right fails here: a feature's only check must not pass by not running.
+    # Every shard runs through this home; the packaged-crate suite does not, and skips what its crate lacks.
+    env.setdefault("TESTS_REQUIRE_ALL", "1")
     try:
         yield env
     finally:
@@ -589,7 +592,7 @@ def self_test() -> int:
     # for cargo and writes down what it was given.
     record_dir = tempfile.mkdtemp(prefix="shard-record-")
     record = os.path.join(record_dir, "env.json")
-    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR")
+    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR", "TESTS_REQUIRE_ALL")
     recorder_src = (
         "import json, os, sys\n"
         f"keys = {keys!r}\n"
@@ -611,6 +614,7 @@ def self_test() -> int:
         assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
         assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
         assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        assert seen["TESTS_REQUIRE_ALL"] == "1", ("a skip for a missing tool or right fails in a shard", os_kind, seen)
         if os.name != "nt":
             assert seen["mode"] == 0o700, ("the home is owner-only", os_kind, oct(seen["mode"]))
         if os_kind in TMP_GUARDED:

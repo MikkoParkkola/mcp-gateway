@@ -34,7 +34,7 @@ pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<Str
     match std::fs::read_to_string(root.join(rel)) {
         Ok(text) => Some(text),
         Err(e) if packaged && e.kind() == ErrorKind::NotFound => {
-            eprintln!("skipped: {rel} is not in the packaged crate");
+            crate::gateway::test_helpers::skip_or_fail(&format!("{rel} in the crate under test (a checkout has it; the packaged crate does not)"));
             None
         }
         Err(e) => panic!("{rel} could not be read (packaged: {packaged}): {e}"),

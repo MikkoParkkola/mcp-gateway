@@ -25,6 +25,11 @@ START = 'W="$W" FREEZE_SHA='
 CHECK_MARK = "# VERIFY.8: the frozen worktree is unchanged"
 
 
+# A test that skips for a missing tool proves nothing: where TESTS_REQUIRE_ALL is set (CI) the file refuses to load.
+NEEDS_TOOLS = bool(shutil.which("git") and shutil.which("bash"))
+if not NEEDS_TOOLS and os.environ.get("TESTS_REQUIRE_ALL"):
+    raise SystemExit("required here but unavailable: git and bash")
+
 def block_lines() -> list[str]:
     """The block, from its `W="$W" FREEZE_SHA=` line to `VERIFY`, as the sheet extracts it."""
     lines = PROCEDURE.read_text(encoding="utf-8").splitlines()
@@ -88,7 +93,7 @@ def git(repo: Path, *args: str) -> str:
                           text=True, env=env).stdout.strip()
 
 
-@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
+@unittest.skipUnless(NEEDS_TOOLS, "needs git and bash")
 class Build1TreeCheckTests(unittest.TestCase):
     def setUp(self) -> None:
         self.w = Path(tempfile.mkdtemp())
@@ -149,7 +154,7 @@ def gates_check() -> str:
     return "\n".join(lines[add + 1 : end])
 
 
-@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
+@unittest.skipUnless(NEEDS_TOOLS, "needs git and bash")
 class ReleaseGatesTreeCheckTests(Build1TreeCheckTests):
     """The release gates' worktree check stops on a dirty tree instead of only printing it."""
 

@@ -34,6 +34,7 @@ class GateEnvPython(unittest.TestCase):
 
     def test_a_project_that_is_not_synced_is_refused_and_left_alone(self):
         if shutil.which("uv") is None:
+            self.assertFalse(os.environ.get("TESTS_REQUIRE_ALL"), "required here but unavailable: uv")
             self.skipTest("uv is not installed: the --check path cannot be exercised here")
         with tempfile.TemporaryDirectory() as td:
             project = Path(td)
@@ -48,6 +49,7 @@ class GateEnvPython(unittest.TestCase):
     def test_a_synced_environment_names_its_own_interpreter(self):
         env = SCRIPT.parent.parent / "gate-env"
         if not (env / ".venv/bin/python").exists():
+            self.assertFalse(os.environ.get("TESTS_REQUIRE_ALL"), "required here but unavailable: the synced gate environment")
             self.skipTest("the gate environment is not synced here")
         done = run({})
         self.assertEqual(done.returncode, 0, done)

@@ -204,6 +204,11 @@ jobs:
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # A Python test skip that is not listed with its reason reads as a pass where the tool or right is missing.
+      - name: Every Python test skip is listed with why
+        run: |
+          python3 scripts/ci/check_python_skips.py --self-test
+          python3 scripts/ci/check_python_skips.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier

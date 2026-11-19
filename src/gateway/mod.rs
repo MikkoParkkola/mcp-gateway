@@ -224,6 +224,22 @@ pub mod test_helpers {
     /// Lib tests reach it as `crate::test_wait::HANG_BOUND`.
     pub const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
+    /// The one way a test skips because the host lacks something it needs (a user right, a
+    /// loopback family, a tool). Where `TESTS_REQUIRE_ALL` is set (CI's test shards) the skip is
+    /// a failure that names the requirement, so a feature's only check cannot pass by not
+    /// running; elsewhere it prints the skip line. The caller returns right after it.
+    ///
+    /// # Panics
+    ///
+    /// When `TESTS_REQUIRE_ALL` is set in the environment.
+    pub fn skip_or_fail(requirement: &str) {
+        assert!(
+            std::env::var_os("TESTS_REQUIRE_ALL").is_none(),
+            "required here but unavailable on this host: {requirement}"
+        );
+        eprintln!("skipped: {requirement}");
+    }
+
     /// Bind `meta` to the HTTP server's change feed, as `serve` does (F24), so
     /// an in-process fixture advertises what the HTTP server advertises.
     pub fn bind_http_change_feed(meta: &MetaMcp) {

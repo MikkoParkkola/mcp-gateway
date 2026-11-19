@@ -1,0 +1,9 @@
+# Every Python test skip, with why it is by design (scripts/ci/check_python_skips.py).
+# path<TAB>reason text, exactly as in the skip call<TAB>why
+scripts/dev/test_gate_env_python.py	uv is not installed: the --check path cannot be exercised here	a missing tool: fails where TESTS_REQUIRE_ALL is set (CI installs uv before this test)
+scripts/dev/test_gate_env_python.py	the gate environment is not synced here	a missing environment: fails where TESTS_REQUIRE_ALL is set (CI syncs it before this test)
+scripts/dev/test_mcp_events_failfast.py	POSIX permission bits	by design: Windows has no POSIX permission bits to check
+scripts/dev/test_test_parts.py	the pinned grammar parses this form; the gap row has nothing to pin	by design: a row about a gap the pinned grammar no longer has
+scripts/release/test_build1_block.py	needs git and bash	a missing tool: the file refuses to load where TESTS_REQUIRE_ALL is set
+scripts/release/test_build1_block.py	the gates step checks the tree only; its scripts check the commit	by design: an inherited row that does not apply to this subclass
+scripts/release/test_refuse_published_release.py	jq is required	a missing tool: never skips where CI is set (the condition is `jq or CI`)

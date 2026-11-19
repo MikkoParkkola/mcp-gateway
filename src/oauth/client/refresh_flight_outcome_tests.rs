@@ -157,7 +157,7 @@ async fn a_rotated_token_that_cannot_be_saved_is_not_resent() {
         .expect("the refresh reached its save");
     *flight.save_gate.lock() = None;
     if !set_mode(dir.path(), 0o500) {
-        eprintln!("skipped: the storage directory stays writable (privileged runner)");
+        crate::gateway::test_helpers::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
         set_mode(dir.path(), 0o700);
         gate.release.notify_one();
         return;
@@ -194,7 +194,7 @@ async fn a_refresh_that_cannot_mark_its_token_sends_nothing() {
     expire(&owned);
 
     if !set_mode(dir.path(), 0o500) {
-        eprintln!("skipped: the storage directory stays writable (privileged runner)");
+        crate::gateway::test_helpers::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
         set_mode(dir.path(), 0o700);
         return;
     }
@@ -294,7 +294,7 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
         .unwrap();
 
     if !set_mode(dir.path(), 0o500) {
-        eprintln!("skipped: the storage directory stays writable (privileged runner)");
+        crate::gateway::test_helpers::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
         set_mode(dir.path(), 0o700);
         return;
     }
