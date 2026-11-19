@@ -348,6 +348,7 @@ fn selection_in(value: &Value) -> Option<&Value> {
 #[tokio::test]
 async fn a_selection_change_is_on_its_audit_record() {
     use mcp_gateway::security::{TransparencyLogConfig, TransparencyLogger};
+    require_private_home!();
     let url = stub(Arc::default()).await;
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("gateway.yaml");
