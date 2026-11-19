@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A periodic saver keeps the temp dir a test registered while each tick's
 //! save runs, and reports a plain one once, at start (family
-//! test-temp-sidecar-leak, rows K8, K8p, K11 and K11b).
+//! test-temp-sidecar-leak, rows K8, K8b, K8p, K11 and K11b).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -76,6 +76,49 @@ async fn a_periodic_save_keeps_its_dir_until_the_ticks_save_returns() {
         runs.load(Ordering::SeqCst),
         1,
         "the tick's save ran other than once"
+    );
+}
+
+/// K8b. Between ticks the saver keeps its dir: the test drops its share while
+/// the saver lives and no tick runs, the dir is still there, the next tick's
+/// save lands in it, and the dir goes once the saver ends.
+/// Mutant: `spawn_periodic_save` without the keep it holds for its life (each
+/// tick looking the dir up again).
+#[tokio::test(start_paused = true)]
+async fn a_periodic_saver_keeps_its_dir_between_ticks() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let file = root.join("saved.json");
+    let seams = periodic_seams(&file);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let saver = spawn_periodic_save("k8b save", EVERY, None, Some(file.clone()), {
+        let (runs, file) = (Arc::clone(&runs), file.clone());
+        // Counted after the write, so a counted save has landed or failed.
+        move || {
+            let _ = std::fs::write(&file, b"{}");
+            runs.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    crate::test_pause::within("the saver's loop started", seams.loop_started.notified()).await;
+    drop(dir);
+    assert!(
+        root.exists(),
+        "the dir was removed between ticks while its saver lives"
+    );
+    tokio::time::advance(EVERY).await;
+    let ran = crate::test_wait::wait_real_time(BOUND, || runs.load(Ordering::SeqCst) >= 1).await;
+    assert!(ran.is_ok(), "the next tick did not run its save");
+    assert!(
+        file.exists(),
+        "the tick's save did not land in the kept dir"
+    );
+    saver.abort();
+    let _ = saver.await;
+    let gone = crate::test_wait::wait_real_time(BOUND, || !root.exists()).await;
+    assert!(
+        gone.is_ok(),
+        "the dir stayed after the saver ended; left: {:?}",
+        crate::test_dir_keep::listing(&root)
     );
 }
 
