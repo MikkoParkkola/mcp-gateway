@@ -438,7 +438,7 @@ async fn b4_the_admin_reads_the_call_back() {
 }
 
 /// B5: deadline before any dispatch carries no receipt; a call dispatched
-/// before the deadline carries disposition may_have_run and its receipt.
+/// before the deadline carries disposition `may_have_run` and its receipt.
 #[tokio::test]
 async fn b5_the_deadline_both_orders() {
     let fx = fixture().await;
@@ -506,7 +506,7 @@ async fn b5_the_deadline_both_orders() {
     assert_eq!(late["receipt"].as_str(), Some(trace.as_str()), "{late}");
 }
 
-/// B6: a 409 confirm_write_required carries "receipt" equal to that call's
+/// B6: a 409 `confirm_write_required` carries "receipt" equal to that call's
 /// trace. The trace is noted before the confirm gate, so the refusal has one.
 #[tokio::test]
 async fn b6_a_confirm_refusal_carries_its_trace() {
@@ -693,7 +693,7 @@ async fn b9_failed_open_write_no_receipt() {
 
 /// B11: under the fail-closed policy with every append failing, the U12
 /// route's own admin record fails too (it shares the log), so the admin layer
-/// answers its flat 503 in place of the handler's answer (admin_audit.rs). No
+/// answers its flat 503 in place of the handler's answer (`admin_audit.rs`). No
 /// receipt reaches the caller on that path. The refusal write's own
 /// fail-closed answer is never what U12 returns here; this row pins what is.
 #[cfg(feature = "firewall")]
