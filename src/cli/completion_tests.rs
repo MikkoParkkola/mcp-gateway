@@ -104,7 +104,19 @@ fn bash_and_zsh_carry_the_closed_lists() {
             && config.contains(":_files'"),
         "zsh file hint: {config}"
     );
-    assert!(zsh.contains(":(read execute any)'"), "zsh scope values");
+    // Values that carry their own help come out in clap_complete's described form: `((value\:"help"` with one value
+    // per line up to `))'` (zsh.rs value_completion), not the plain `(a b c)` list.
+    let scope = zsh
+        .split("'--scope=[")
+        .nth(1)
+        .and_then(|rest| rest.split("))'").next())
+        .expect("no zsh spec for --scope");
+    for value in ["read", "execute", "any"] {
+        assert!(
+            scope.contains(&format!("{value}\\:\"")),
+            "zsh scope value {value}: {scope}"
+        );
+    }
 }
 
 /// C3a: the loader's name rule refuses a hostile capability name: the directory load leaves the file out, and the
