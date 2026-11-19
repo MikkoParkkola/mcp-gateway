@@ -65,6 +65,41 @@ fn completion_name(value: &str) -> &'static str {
     Box::leak(value.to_owned().into_boxed_str())
 }
 
+/// A fresh copy of `source` holding only what completion reads: names, help, how it takes values, its value list
+/// and hint, and the shape flags clap checks when it builds the tree. Relations (`requires`, `conflicts_with`,
+/// groups) and aliases are left out: completion never uses them, and a relation may name a hidden argument this
+/// copy removes. clap cannot clear a relation on a cloned argument, hence the rebuild.
+fn completion_arg(source: &Arg) -> Arg {
+    let mut arg = Arg::new(completion_name(source.get_id().as_str()))
+        .action(source.get_action().clone())
+        .value_parser(source.get_value_parser().clone())
+        .value_hint(source.get_value_hint())
+        .required(source.is_required_set())
+        .global(source.is_global_set())
+        .trailing_var_arg(source.is_trailing_var_arg_set())
+        .last(source.is_last_set())
+        .allow_hyphen_values(source.is_allow_hyphen_values_set());
+    if let Some(long) = source.get_long() {
+        arg = arg.long(completion_name(long));
+    }
+    if let Some(short) = source.get_short() {
+        arg = arg.short(short);
+    }
+    if let Some(help) = source.get_help() {
+        arg = arg.help(help.clone());
+    }
+    if let Some(range) = source.get_num_args() {
+        arg = arg.num_args(range);
+    }
+    if let Some(names) = source.get_value_names() {
+        arg = arg.value_names(names.iter().map(|name| completion_name(name.as_str())));
+    }
+    if let Some(index) = source.get_index() {
+        arg = arg.index(index);
+    }
+    arg
+}
+
 fn visible_command(source: &Command, path: &str, tools: &[String]) -> Command {
     let mut command = Command::new(completion_name(source.get_name()));
     if let Some(about) = source.get_about() {
@@ -74,17 +109,7 @@ fn visible_command(source: &Command, path: &str, tools: &[String]) -> Command {
         command = command.version(completion_name(version));
     }
     for arg in source.get_arguments().filter(|arg| !arg.is_hide_set()) {
-        // Parsing relations and aliases are irrelevant to completion, and relations
-        // may refer to hidden arguments or to groups omitted from this copy.
-        let mut arg = arg
-            .clone()
-            .group(None)
-            .requires(None)
-            .conflicts_with(None)
-            .overrides_with(None)
-            .required_unless_present(None)
-            .alias(None)
-            .short_alias(None);
+        let mut arg = completion_arg(arg);
         if arg.get_long() == Some("config") {
             arg = arg.value_hint(clap::ValueHint::FilePath);
         } else if arg.get_long() == Some("log-level") {
