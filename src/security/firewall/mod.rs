@@ -427,6 +427,12 @@ impl Firewall {
         }
     }
 
+    /// Whether a request scan looks at anything: switched off, every scan
+    /// answers a blank allow, which a record must not read as a clean scan.
+    pub(crate) const fn scans(&self) -> bool {
+        self.config.enabled
+    }
+
     /// [`Self::check_request_keyed`], with the rule that decided the verdict
     /// when a configured rule did; for the decision record only.
     #[expect(

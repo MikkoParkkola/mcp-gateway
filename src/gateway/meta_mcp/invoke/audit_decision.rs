@@ -72,11 +72,18 @@ pub(crate) fn note_declared_effect(
 
 /// What one request scan of this call's own arguments raised (possibly
 /// nothing): into the dispatch notes inside a dispatch, else the route
-/// stage's, which only that stage's own refusal record reads.
+/// stage's, which only that stage's own refusal record reads. A switched-off
+/// `firewall` scanned nothing, so it notes nothing: the record then says the
+/// check did not run, never that it ran clean.
 #[cfg(feature = "firewall")]
-pub(crate) fn note_request_findings(found: &[crate::security::firewall::Finding]) {
+pub(crate) fn note_request_findings(
+    firewall: &crate::security::firewall::Firewall,
+    found: &[crate::security::firewall::Finding],
+) {
     use crate::security::decision_record::DecisionFinding;
-    note_decision(|noted| noted.note_request_findings(found.iter().map(DecisionFinding::from)));
+    if firewall.scans() {
+        note_decision(|noted| noted.note_request_findings(found.iter().map(DecisionFinding::from)));
+    }
 }
 
 /// Note the check that allowed this call, rank-merged with any allow noted

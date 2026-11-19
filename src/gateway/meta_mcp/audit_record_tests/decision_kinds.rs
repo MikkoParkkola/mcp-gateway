@@ -233,3 +233,34 @@ async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let record = all.remove(0);
     assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
 }
+
+/// A switched-off firewall answers every scan with a blank allow, so it
+/// notes nothing and the record says the scan did not run; one that is on
+/// and found nothing notes a clean scan.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn only_a_firewall_that_scans_notes_findings() {
+    use crate::gateway::meta_mcp::invoke::audit::{
+        note_request_findings, take_route_noted, with_route_scope,
+    };
+    use crate::security::decision_record::{Decided, Noted, Refused};
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    let on = Firewall::from_config(FirewallConfig::default(), None);
+    let mut off_config = FirewallConfig::default();
+    off_config.enabled = false;
+    let off = Firewall::from_config(off_config, None);
+    let (from_off, from_on) = with_route_scope(async {
+        note_request_findings(&off, &[]);
+        let quiet = take_route_noted();
+        note_request_findings(&on, &[]);
+        (quiet, take_route_noted())
+    })
+    .await;
+    let written = |n: &Noted| {
+        n.decision(Decided::Fresh, Refused::No, None)
+            .request_findings
+    };
+    assert!(on.scans() && !off.scans(), "premise");
+    assert_eq!(written(&from_off), None, "switched off: not run");
+    assert_eq!(written(&from_on), Some(Vec::new()), "on and clean");
+}
