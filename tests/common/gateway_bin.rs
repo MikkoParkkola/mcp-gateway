@@ -108,6 +108,9 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         // real keychain. A test that wants another setting passes it through
         // `checked_env`, which is applied after this.
         .env("MCP_GATEWAY_SECRETS__STORE", "files")
+        // A release-profile test run spawns a binary that is not a dev build:
+        // it must never send the daily heartbeat (docs/PRIVACY.md).
+        .env("DO_NOT_TRACK", "1")
         .env("APPDATA", home.join("AppData").join("Roaming"))
         .env("LOCALAPPDATA", home.join("AppData").join("Local"))
         .env("XDG_CONFIG_HOME", home.join(".config"))

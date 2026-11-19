@@ -149,6 +149,9 @@ impl Gateway {
         // then the final telemetry save. Without this a signal killed stdio
         // outright and the counts since the last save were lost.
         let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        // The heartbeat ends on the signal, or when the sender drops with
+        // this function (end of input).
+        let heartbeat_stop = signal_tx.subscribe();
         #[cfg(test)]
         let stop_signal = super::test_seams::shutdown_signal_or_trigger(
             signal_tx,
@@ -192,6 +195,14 @@ impl Gateway {
             &self.config.meta_mcp.warm_start,
             false,
         ));
+
+        // The daily heartbeat (docs/PRIVACY.md, "Daily heartbeat"): never
+        // awaited; stdout stays the protocol's alone (it logs at debug only).
+        let _heartbeat = crate::heartbeat::start(
+            self.config.security.posture,
+            data_dir.to_path_buf(),
+            heartbeat_stop,
+        );
 
         // Reap what warm-start and lazy starts spawn, and probe backends so a
         // dead one recovers. Both were HTTP-only or EOF-only before: stdio has
