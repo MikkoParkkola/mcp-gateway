@@ -59,11 +59,13 @@ fn the_locked_tokio_runs_each_wrapped_fs_call_as_one_blocking_step() {
     let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))
         .expect("Cargo.lock beside the manifest");
     assert_eq!(tokio_lock_check(&lock), Ok(()));
-    assert!(
-        !cfg!(tokio_unstable),
-        "tokio_unstable is set for this build: tokio may write through io-uring, which the \
+    const {
+        assert!(
+            !cfg!(tokio_unstable),
+            "tokio_unstable is set for this build: tokio may write through io-uring, which the \
          install path's no-delta claim did not review"
-    );
+        );
+    };
 
     let registry = "registry+https://github.com/rust-lang/crates.io-index";
     let one = |version: &str, source: &str| {
@@ -86,7 +88,7 @@ fn the_locked_tokio_runs_each_wrapped_fs_call_as_one_blocking_step() {
     assert!(patched.contains("not the crates.io registry"), "{patched}");
 }
 
-/// Module path ("crate::skills::installer") to its source text. The real
+/// Module path ("`crate::skills::installer`") to its source text. The real
 /// tree is read lazily; a row plants extra or replacement modules here.
 type Planted = std::collections::BTreeMap<String, String>;
 
@@ -181,7 +183,6 @@ fn absolute(module: &str, segments: &[String]) -> Vec<String> {
     let mut base: Vec<String> = module.split("::").map(str::to_owned).collect();
     let mut rest = segments;
     match rest.first().map(String::as_str) {
-        Some("crate") => return segments.to_vec(),
         Some("self") => rest = &rest[1..],
         Some("super") => {
             while rest.first().map(String::as_str) == Some("super") {
@@ -207,7 +208,7 @@ const FS_PREFIXES: [&str; 4] = [
 const KEPT_BLOCKING: &str = "crate::skills::installer::kept_blocking";
 
 /// What a scan found: filesystem paths reached inside a kept closure, and
-/// those reached outside one, each as "<module>::<fn>: <path>".
+/// those reached outside one, each as "`<module>::<fn>: <path>`".
 #[derive(Default)]
 struct Found {
     kept: std::collections::BTreeSet<String>,
@@ -333,8 +334,8 @@ impl<'ast> syn::visit::Visit<'ast> for Walker<'_, '_> {
 }
 
 /// Scan the install path from its async entry points with `planted`
-/// modules. copy_dir_recursive is no root: it is a blocking helper reached
-/// only from inside link_or_copy's kept closure, and walked from there.
+/// modules. `copy_dir_recursive` is no root: it is a blocking helper reached
+/// only from inside `link_or_copy`'s kept closure, and walked from there.
 fn scan_install_path(planted: &Planted) -> Found {
     let mut scan = Scan {
         planted,
@@ -367,7 +368,7 @@ fn installer_with(head: &str, planted: &str) -> String {
 }
 
 /// K12. Every filesystem call the install path reaches, through any helper
-/// in any module, lies inside a kept_blocking closure; and the scan sees
+/// in any module, lies inside a `kept_blocking` closure; and the scan sees
 /// the kept writes it should (so an empty scan is not a pass).
 #[test]
 fn no_install_path_filesystem_call_bypasses_kept_blocking() {

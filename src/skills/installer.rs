@@ -83,7 +83,7 @@ pub async fn install_bundle(
 }
 
 /// What every write on the install path holds while it runs: the temp dirs a
-/// test kept (crate::spawn_keep), and a row's seams.
+/// test kept (`crate::spawn_keep`), and a row's seams.
 #[derive(Clone, Default)]
 pub(crate) struct InstallKeep {
     kept: crate::spawn_keep::Kept,
@@ -151,13 +151,10 @@ async fn kept_blocking<T: Send + 'static>(
     write: impl FnOnce() -> std::io::Result<T> + Send + 'static,
 ) -> Result<T> {
     let kept = keep.kept.clone();
-    tokio::task::spawn_blocking(move || {
-        let _kept = kept;
-        write()
-    })
-    .await
-    .map_err(|error| crate::Error::Io(std::io::Error::other(error)))?
-    .map_err(crate::Error::Io)
+    tokio::task::spawn_blocking(move || crate::spawn_keep::holding(kept, write))
+        .await
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error)))?
+        .map_err(crate::Error::Io)
 }
 
 /// [`install_bundle`] with the keep its writes hold.

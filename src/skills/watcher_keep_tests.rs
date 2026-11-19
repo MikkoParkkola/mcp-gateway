@@ -53,7 +53,9 @@ async fn abort_and_await(task: tokio::task::JoinHandle<()>) {
     task.abort();
     let ended = task.await;
     assert!(
-        ended.as_ref().is_err_and(|error| error.is_cancelled()),
+        ended
+            .as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled),
         "the regen task was not cancelled: {ended:?}"
     );
 }
@@ -63,7 +65,7 @@ async fn abort_and_await(task: tokio::task::JoinHandle<()>) {
 /// awaited: at its second seam crust.json has landed in the original dir,
 /// which goes only once that write's closure returns.
 /// Mutants: the keep held by the task only; a write made without
-/// kept_blocking, or a helper that does not move its keep into the closure.
+/// `kept_blocking`, or a helper that does not move its keep into the closure.
 #[tokio::test]
 async fn a_crust_write_keeps_its_dir_after_the_regen_task_is_gone() {
     let dir = kept_tempdir();
@@ -99,7 +101,7 @@ async fn a_crust_write_keeps_its_dir_after_the_regen_task_is_gone() {
 
 /// K5. A regen loop on a plain temp dir is recorded once, at spawn, with its
 /// kind, its output dir and this test. No pass runs, so nothing is written.
-/// Mutant: kept_at_spawn keeps but does not report.
+/// Mutant: `kept_at_spawn` keeps but does not report.
 #[tokio::test]
 async fn a_regen_loop_on_a_plain_temp_dir_is_recorded_with_its_kind() {
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -172,7 +174,7 @@ fn gone_within(dir: &Path) -> bool {
 /// (current-thread, on its own plain thread) is dropped, the regen task's
 /// future is gone, and the test drops its share; the dir survives on the
 /// write's own keep, crust.json lands, and the dir goes only after that.
-/// Mutant: the keep held by the task only, writes back on tokio::fs.
+/// Mutant: the keep held by the task only, writes back on `tokio::fs`.
 #[test]
 fn a_crust_write_keeps_its_dir_through_runtime_teardown() {
     let dir = kept_tempdir();
@@ -261,8 +263,8 @@ fn a_crust_write_keeps_its_dir_through_runtime_teardown() {
 #[tokio::test]
 async fn an_agent_link_keeps_its_dir_after_the_regen_task_is_gone() {
     let (dir, agents) = (kept_tempdir(), kept_tempdir());
-    let (root, agents_root) = (dir.path().to_path_buf(), agents.path().to_path_buf());
-    let (out, agent_root) = (root.join("skills"), agents_root.join("skills"));
+    let (root, agents_dir) = (dir.path().to_path_buf(), agents.path().to_path_buf());
+    let (out, agent_root) = (root.join("skills"), agents_dir.join("skills"));
     let seams = Arc::new(Seams::default());
     let (before_reached, before) = seams.link_before.arm();
     let (after_reached, after) = seams.link_after.arm();
@@ -286,7 +288,7 @@ async fn an_agent_link_keeps_its_dir_after_the_regen_task_is_gone() {
         Some(bundle_dir(&out)),
         "the link did not land pointing at the bundle"
     );
-    held_then_gone(&agents_root, || after.now()).await;
+    held_then_gone(&agents_dir, || after.now()).await;
     let out_gone =
         crate::test_wait::wait_real_time(std::time::Duration::from_secs(30), || !root.exists())
             .await;
@@ -325,8 +327,8 @@ fn tree(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 #[tokio::test]
 async fn an_agent_copy_finishes_whole_in_its_kept_dirs() {
     let (dir, agents) = (kept_tempdir(), kept_tempdir());
-    let (root, agents_root) = (dir.path().to_path_buf(), agents.path().to_path_buf());
-    let (out, agent_root) = (root.join("skills"), agents_root.join("skills"));
+    let (root, agents_dir) = (dir.path().to_path_buf(), agents.path().to_path_buf());
+    let (out, agent_root) = (root.join("skills"), agents_dir.join("skills"));
     let seams = Arc::new(Seams::default());
     let (mid_reached, mid) = seams.copy_mid.arm();
     let (done_reached, done) = seams.copy_done.arm();
@@ -349,7 +351,7 @@ async fn an_agent_copy_finishes_whole_in_its_kept_dirs() {
         source,
         "the copy is not the bundle, file for file"
     );
-    held_then_gone(&agents_root, || done.now()).await;
+    held_then_gone(&agents_dir, || done.now()).await;
     let out_gone =
         crate::test_wait::wait_real_time(std::time::Duration::from_secs(30), || !root.exists())
             .await;
