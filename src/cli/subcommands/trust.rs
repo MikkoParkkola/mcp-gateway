@@ -212,7 +212,9 @@ pub enum TlsCommand {
         after_help = "Examples:\n  mcp-gateway tls init-ca --output ./tls\n"
     )]
     InitCa {
-        /// Common Name for the CA certificate (e.g. "MCP Gateway Root CA")
+        /// Common Name of the certificate
+        ///
+        /// For example "MCP Gateway Root CA".
         #[arg(long, default_value = "MCP Gateway Root CA")]
         cn: String,
 
@@ -239,7 +241,9 @@ pub enum TlsCommand {
         #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.key")]
         ca_key: PathBuf,
 
-        /// Common Name (e.g. "gateway.company.com")
+        /// Common Name of the certificate
+        ///
+        /// For example "gateway.company.com".
         #[arg(long)]
         cn: String,
 
@@ -270,7 +274,9 @@ pub enum TlsCommand {
         #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.key")]
         ca_key: PathBuf,
 
-        /// Common Name for the client (e.g. "claude-code-agent")
+        /// Common Name of the certificate
+        ///
+        /// For example "claude-code-agent".
         #[arg(long)]
         cn: String,
 
@@ -282,7 +288,7 @@ pub enum TlsCommand {
         #[arg(long)]
         spiffe_uri: Option<String>,
 
-        /// Validity period in days (default 1 day for short-lived certs)
+        /// Validity period in days
         #[arg(long, default_value_t = 1)]
         validity_days: u32,
 

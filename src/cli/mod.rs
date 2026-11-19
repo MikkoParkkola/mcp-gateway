@@ -450,7 +450,9 @@ pub(crate) enum Command {
         #[arg(hide = true, short, long, default_value = "info", value_enum)]
         severity: crate::validator::SeverityFilter,
 
-        /// Auto-fix issues where possible (rewrites YAML in place)
+        /// Fix the issues found, where possible
+        ///
+        /// Rewrites the YAML in place.
         #[arg(long)]
         fix: bool,
 
@@ -561,8 +563,10 @@ pub(crate) enum Command {
         #[arg(hide = true, long = "keep-as-text", value_name = "KEY")]
         keep_as_text: Vec<String>,
 
-        /// Rewrite the whole file when the change cannot be made in place
-        /// (comments and layout are lost); without it such a write is refused
+        /// Overwrite what is already there
+        ///
+        /// Rewrites the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused.
         #[arg(long)]
         force: bool,
 
@@ -580,8 +584,10 @@ pub(crate) enum Command {
         /// Name of the backend to remove
         name: String,
 
-        /// Rewrite the whole file when the change cannot be made in place
-        /// (comments and layout are lost); without it such a write is refused
+        /// Overwrite what is already there
+        ///
+        /// Rewrites the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused.
         #[arg(long)]
         force: bool,
     },
@@ -638,7 +644,9 @@ pub(crate) enum Command {
         after_help = "Examples:\n  mcp-gateway doctor\n"
     )]
     Doctor {
-        /// Attempt to auto-fix issues where possible (e.g. create missing dirs)
+        /// Fix the issues found, where possible
+        ///
+        /// For example, creates missing directories.
         #[arg(long)]
         fix: bool,
 
@@ -646,7 +654,7 @@ pub(crate) enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
 
-        /// Output format for health checks
+        /// Output format
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,
 
@@ -708,7 +716,7 @@ pub(crate) enum Command {
         after_help = "Examples:\n  mcp-gateway upgrade --dry-run\n"
     )]
     Upgrade {
-        /// Show what would change without writing any files
+        /// Show what would change without writing anything
         #[arg(long)]
         dry_run: bool,
 

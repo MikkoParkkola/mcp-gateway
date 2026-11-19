@@ -49,11 +49,13 @@ pub enum IdentityGrantsCommand {
         after_help = "Examples:\n  mcp-gateway identity grants grant --grant-id g1 --subject oidc:ann --capability weather --any-agent --reason demo\n"
     )]
     Grant {
-        /// Local JSON or YAML grant file. Created when missing.
+        /// Local JSON or YAML grant file.
+        ///
+        /// Created when missing.
         #[arg(long, default_value = "~/.mcp-gateway/identity-grants.yaml")]
         file: PathBuf,
 
-        /// Stable grant id.
+        /// The grant id.
         #[arg(long)]
         grant_id: String,
 
@@ -129,7 +131,7 @@ pub enum IdentityGrantsCommand {
         #[arg(long, default_value = "~/.mcp-gateway/identity-grants.yaml")]
         file: PathBuf,
 
-        /// Grant id to revoke.
+        /// The grant id.
         #[arg(long)]
         grant_id: String,
 

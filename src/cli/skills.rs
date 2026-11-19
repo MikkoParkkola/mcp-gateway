@@ -70,7 +70,7 @@ pub enum SkillsCommand {
         #[arg(long)]
         install: bool,
 
-        /// Print what would be generated without writing any files
+        /// Show what would change without writing anything
         #[arg(long)]
         dry_run: bool,
     },

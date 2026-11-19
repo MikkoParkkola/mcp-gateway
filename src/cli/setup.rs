@@ -35,8 +35,10 @@ pub enum SetupCommand {
         #[arg(long)]
         configure_client: bool,
 
-        /// Rewrite the whole file when the change cannot be made in place
-        /// (comments and layout are lost); without it such a write is refused
+        /// Overwrite what is already there
+        ///
+        /// Rewrites the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused.
         #[arg(long)]
         force: bool,
     },
@@ -81,7 +83,7 @@ pub enum SetupCommand {
         #[arg(hide = true, short, long)]
         watch: bool,
 
-        /// Show what would be written without actually writing anything
+        /// Show what would change without writing anything
         #[arg(long)]
         dry_run: bool,
 

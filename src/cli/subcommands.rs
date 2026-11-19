@@ -136,8 +136,10 @@ pub enum CapCommand {
         #[arg(long)]
         gateway_config: Option<PathBuf>,
 
-        /// Rewrite the whole file when the change cannot be made in place
-        /// (comments and layout are lost); without it such a write is refused
+        /// Overwrite what is already there
+        ///
+        /// Rewrites the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused.
         #[arg(long)]
         force: bool,
     },
@@ -227,7 +229,7 @@ pub enum CapCommand {
         #[arg(long, default_value_t = 50)]
         max_endpoints: usize,
 
-        /// Print what would be generated without writing any files
+        /// Show what would change without writing anything
         #[arg(long)]
         dry_run: bool,
 
@@ -297,7 +299,9 @@ pub enum ProtocolImportCommand {
         #[arg(long, default_value = "imported_tool_baseline")]
         context_integrity_profile: String,
 
-        /// Overwrite existing draft files and manifest.
+        /// Overwrite what is already there
+        ///
+        /// Replaces existing draft files and the manifest.
         #[arg(long)]
         force: bool,
     },
