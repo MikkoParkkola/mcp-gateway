@@ -404,7 +404,10 @@ mod tests {
     async fn add_duplicate_returns_failure() {
         // GIVEN: a config that already has "tavily"
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        assert_eq!(
+            run_add_command("tavily", None, None, None, &[], &path).await,
+            ExitCode::SUCCESS
+        );
 
         // WHEN: adding again
         let code = run_add_command("tavily", None, None, None, &[], &path).await;
@@ -455,7 +458,10 @@ mod tests {
     #[tokio::test]
     async fn get_existing_backend_returns_success() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        assert_eq!(
+            run_add_command("tavily", None, None, None, &[], &path).await,
+            ExitCode::SUCCESS
+        );
         let code = run_get_command("tavily", &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -479,7 +485,10 @@ mod tests {
     #[tokio::test]
     async fn list_json_returns_success_with_backends() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        assert_eq!(
+            run_add_command("tavily", None, None, None, &[], &path).await,
+            ExitCode::SUCCESS
+        );
         let code = run_list_command(true, &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -489,7 +498,10 @@ mod tests {
     #[tokio::test]
     async fn update_existing_backend_succeeds() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        assert_eq!(
+            run_add_command("tavily", None, None, None, &[], &path).await,
+            ExitCode::SUCCESS
+        );
 
         let result = run_update_backend(
             "tavily",
