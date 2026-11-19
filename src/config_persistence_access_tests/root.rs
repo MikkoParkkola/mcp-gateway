@@ -286,3 +286,30 @@ fn o_own_file_saves() {
         assert_saved_as(&fx, ids.c, 0o600, &row);
     }
 }
+
+/// O-text: the owner refusal's whole message, spelled out here so a change
+/// to the product's wording shows up as a failing row. macOS uses the 0640
+/// target, because its 0620 case stops earlier with `acl-not-kept`.
+#[test]
+#[ignore = "access-rows root job"]
+fn o_text_is_exact() {
+    let ids = ids();
+    let mode = if cfg!(target_os = "macos") {
+        0o640
+    } else {
+        0o620
+    };
+    let fx = fixture(ids.b, ids.g, 0o770, mode);
+    let (owner, me, path) = (ids.b, ids.c, fx.target.display());
+    let expected = format!(
+        "foreign-owner: refused to replace {path}: the file belongs to uid {owner}, \
+         but this gateway runs as uid {me}. Nothing was written. To save it, run the \
+         gateway as uid {owner}, or hand the file to uid {me} (chown {me} {path})."
+    );
+    let refused = Outcome::Refused {
+        kind: "PermissionDenied".to_owned(),
+        text: expected,
+    };
+    assert_eq!(save_as_c(&ids, &fx.target, "inherit"), refused, "O-text");
+    assert_untouched(&fx, (ids.b, ids.g, mode), "O-text");
+}
