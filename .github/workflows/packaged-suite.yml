@@ -37,7 +37,8 @@ jobs:
   packaged-suite:
     name: Tests from the packaged crate
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # The suite by part took 69 and 84 min on two runners (2026-11-18, the same work); a slow runner needs the room.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,5 +50,9 @@ jobs:
       # No build cache: the release calls this, and a restored cache is input
       # nobody reviewed at the tag.
       - name: Run the tests from the packaged crate
+        # The lib test binary one part at a time through scripts/ci/lib-parts.sh (packaged-tests.sh run).
         # Memory every 30 s (scripts/ci/with-memory-log.sh); log-only until its duration is measured.
         run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh run
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"

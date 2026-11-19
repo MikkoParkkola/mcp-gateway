@@ -68,8 +68,7 @@ fn lease_t11_child() {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn lease_t11_linux_guard_is_observable() {
-    let exe = std::env::current_exe().expect("test binary");
-    let out = std::process::Command::new(exe)
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "security::dump_guard::tests::lease_t11_child",

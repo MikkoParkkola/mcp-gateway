@@ -25,7 +25,7 @@ fn declared_output_id(schema: &Value) -> String {
 
 /// Object-shaped: `type: "object"`, or no `type` but `properties`, which
 /// `validate_output` already refuses for anything but an object.
-fn output_root_is_wrapped(schema: &Value) -> bool {
+pub(crate) fn output_root_is_wrapped(schema: &Value) -> bool {
     !schema.is_null()
         && match schema.get("type") {
             Some(ty) => ty != "object",

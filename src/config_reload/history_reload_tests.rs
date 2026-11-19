@@ -324,7 +324,7 @@ async fn h6_no_consumed_value_reaches_the_history() {
     let p1 = crate::random_secret::random_secret("p1-");
     let p2 = crate::random_secret::random_secret("p2-");
     let p3 = crate::random_secret::random_secret("p3-");
-    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut nested = tokio::process::Command::from(crate::test_home::test_binary());
     nested
         .args(["--exact", H6_SCENARIO, "--nocapture"])
         .env(H6_FLAG, "1")

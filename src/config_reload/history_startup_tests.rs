@@ -244,7 +244,7 @@ fn c9_startup_with_the_sidecar_held_elsewhere_ends_within_the_deadline() {
     let dir = first_start_in(crate::test_dir_keep::kept_tempdir());
     let path = dir.path().to_path_buf();
     let before = bytes_of(&path);
-    let mut holder = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let mut holder = crate::test_home::test_binary()
         .args(["--exact", C9_SCENARIO, "--nocapture"])
         .env(C9_DIR, &path)
         .stdout(std::process::Stdio::null())
@@ -325,7 +325,7 @@ async fn c12_a_save_in_another_process_waits_for_the_sidecar_and_never_writes() 
     tokio::time::timeout(Duration::from_secs(30), gate.arrival())
         .await
         .expect("the save reached its check");
-    let mut child = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    let mut child = tokio::process::Command::from(crate::test_home::test_binary());
     child
         .args(["--exact", C12_SCENARIO, "--nocapture"])
         .env(C12_DIR, &path)

@@ -146,6 +146,7 @@ pub(crate) fn redeem_handoff(
             bearer_unauthorized_response(
                 "The code is wrong, used or expired. Run `mcp-gateway dashboard-link` for a new link.",
             ),
+            super::bootstrap::REFUSED_SIGN_IN_TARGET,
         ));
     };
     // Always `Secure`: a code exists only because this origin is HTTPS, and a

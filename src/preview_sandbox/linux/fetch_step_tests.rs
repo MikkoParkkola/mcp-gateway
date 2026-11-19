@@ -1,0 +1,175 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Rows for the helper's npm fetch step (R-env, R-lock-cap).
+
+use super::{LOCK_CAP, fetch_deadline, npm_env, read_lock};
+
+/// Kills "a variable is added, dropped or changed": the npm environment is
+/// exactly this list, the credential and relay port substituted.
+#[test]
+fn the_npm_environment_is_exactly_the_designed_list() {
+    let mut got = npm_env("c0ffee", 41_234, "/usr/lib/node/bin:/usr/lib/npm/bin");
+    got.sort();
+    let proxy = "http://x:c0ffee@127.0.0.1:41234";
+    let ca = "/etc/mcp-gateway-preview/ca.pem";
+    let user = "/etc/mcp-gateway-preview/empty-user.npmrc";
+    let global = "/etc/mcp-gateway-preview/empty-global.npmrc";
+    let mut want: Vec<(String, String)> = [
+        ("PATH", "/usr/lib/node/bin:/usr/lib/npm/bin"),
+        ("HOME", "/preview-home"),
+        ("TMPDIR", "/preview-home"),
+        ("HTTPS_PROXY", proxy),
+        ("HTTP_PROXY", proxy),
+        ("npm_config_https_proxy", proxy),
+        ("npm_config_proxy", proxy),
+        ("NO_PROXY", ""),
+        ("npm_config_ignore_scripts", "true"),
+        ("npm_config_registry", "https://registry.npmjs.org/"),
+        ("npm_config_git", "/nonexistent/git"),
+        ("npm_config_audit", "false"),
+        ("npm_config_fund", "false"),
+        ("npm_config_update_notifier", "false"),
+        ("npm_config_cafile", ca),
+        ("npm_config_strict_ssl", "true"),
+        ("npm_config_userconfig", user),
+        ("npm_config_globalconfig", global),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+    .collect();
+    want.sort();
+    assert_eq!(got, want);
+}
+
+/// Kills "the pipes are drained one after the other": the child fills
+/// stderr first, so a drain that waits on stdout first deadlocks with it.
+/// Both tails come back (lines, so the tail keeps whole lines just under the
+/// 64 KiB cap) and the child exits.
+#[test]
+fn both_pipes_drain_at_once() {
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    let mut child = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "yes 0123456789abcdef | head -c 1048576 >&2; yes 0123456789abcdef | head -c 1048576",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let drains = super::drain(
+        child.stdout.take().expect("stdout"),
+        child.stderr.take().expect("stderr"),
+    );
+    let pid = child.id();
+    let (sent, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sent.send((child.wait(), drains.join())));
+    let Ok((status, (out, err))) = done.recv_timeout(Duration::from_secs(30)) else {
+        // Unstick the deadlocked child so the row fails instead of hanging.
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        panic!("the drains deadlocked with the child");
+    };
+    assert!(status.expect("wait").success());
+    let cap = crate::preview_sandbox::fetch_output::TAIL_BYTES;
+    // Each tail starts at a line boundary: within one 17-byte line of the cap.
+    for tail in [&out, &err] {
+        assert!(tail.len() <= cap && tail.len() > cap - 17, "{}", tail.len());
+    }
+}
+
+/// Kills "the run keeps the plan's program or PATH" and "the spec's version
+/// stays in the package name": a scoped, version-pinned spec runs the bin
+/// named after the package, with the server's arguments, and PATH is node's
+/// directory then the install's `.bin`, exactly.
+#[test]
+fn the_run_after_a_fetch_is_the_packages_bin() {
+    let home = tempfile::tempdir().expect("home");
+    let package = home.path().join("pkg/node_modules/@s/pkg");
+    std::fs::create_dir_all(package.join("bin")).expect("dirs");
+    std::fs::write(
+        package.join("package.json"),
+        br#"{"name":"@s/pkg","bin":{"pkg":"bin/cli.js","other":"bin/o.js"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(package.join("bin/cli.js"), b"#!/usr/bin/env node\n").expect("bin");
+    std::fs::write(package.join("bin/o.js"), b"#!/usr/bin/env node\n").expect("other");
+    let run = super::npm_run(
+        home.path(),
+        "@s/pkg@1.2.3",
+        &["--flag".into()],
+        "/opt/node/bin",
+    )
+    .expect("run");
+    let bin = package
+        .join("bin/cli.js")
+        .canonicalize()
+        .expect("canonical");
+    let bin = bin.to_str().expect("utf-8").to_owned();
+    let dot_bin = home.path().join("pkg/node_modules/.bin");
+    assert_eq!(
+        run,
+        super::Run {
+            program: bin.clone(),
+            argv: vec![bin, "--flag".into()],
+            path: format!("/opt/node/bin:{}", dot_bin.display()),
+        }
+    );
+}
+
+/// R-lock-cap, kills "the lock is read whole" and an off-by-one cap: a lock
+/// of exactly 4 MiB is read, one byte more refuses without parsing.
+#[test]
+fn a_lock_over_four_mib_refuses() {
+    let dir = tempfile::tempdir().expect("dir");
+    let lock = |len: u64| {
+        let head = r#"{"packages":{},"pad":""#;
+        let pad = usize::try_from(len).expect("len") - head.len() - 2;
+        let path = dir.path().join(format!("lock-{len}.json"));
+        std::fs::write(&path, format!("{head}{}\"}}", "x".repeat(pad))).expect("lock");
+        path
+    };
+    read_lock(&lock(LOCK_CAP)).expect("a 4 MiB lock is read");
+    let refused = read_lock(&lock(LOCK_CAP + 1)).expect_err("a lock past 4 MiB refuses");
+    assert_eq!(refused, "reading the lock (over 4 MiB)");
+}
+
+/// Kills "an out-of-range deadline is taken": a deadline past what the
+/// fetch can count in milliseconds gives no deadline (the fetch refuses and
+/// tears down), and an ordinary one lies ahead.
+#[test]
+fn an_oversized_fetch_deadline_gives_none() {
+    assert_eq!(fetch_deadline(u128::MAX), None);
+    let now = std::time::Instant::now();
+    assert!(fetch_deadline(1_500).is_some_and(|d| d > now));
+}
+
+/// RF5 (NPM.8, precedence), kills "a teardown failure is reported over the
+/// fetch's own": the fetch's failure wins, then the first failed teardown
+/// step in order; all Ok is Ok.
+#[test]
+fn rf5_the_first_failure_is_reported() {
+    use super::{FetchFailure, first_failure};
+    use crate::preview_sandbox::control_msg::FetchStep;
+    let fail = |step: FetchStep| -> Result<(), FetchFailure> {
+        Err(FetchFailure {
+            step,
+            detail: format!("{step:?}"),
+        })
+    };
+    let reported = |r: Result<(), FetchFailure>| r.err().map(|f| f.step);
+    let fetch_first = first_failure(
+        fail(FetchStep::NpmCi),
+        [fail(FetchStep::Sweep), Ok(()), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(fetch_first), Some(FetchStep::NpmCi));
+    let in_order = first_failure(
+        Ok(()),
+        [Ok(()), fail(FetchStep::Relay), fail(FetchStep::ProxySocket)],
+    );
+    assert_eq!(reported(in_order), Some(FetchStep::Relay));
+    assert_eq!(
+        reported(first_failure(Ok(()), [Ok(()), Ok(()), Ok(())])),
+        None
+    );
+}

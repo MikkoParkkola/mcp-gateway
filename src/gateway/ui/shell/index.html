@@ -615,7 +615,7 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
   <div class="head"><h1><span class="plate"></span></h1><p class="sub muted" hidden></p></div>
   <nav class="tabs" aria-label="Tabs"></nav>
   <main id="content" tabindex="-1">
-    <noscript><p>This page needs JavaScript. <a href="/ui/classic">Open the classic page</a>.</p></noscript>
+    <noscript><p>Signing in works without JavaScript. The rest of the gateway's pages need it. <a href="/ui/classic">Open the classic page</a>.</p></noscript>
   </main>
 </div>
 <section id="signin" class="signin" hidden aria-labelledby="signin-title">
@@ -623,20 +623,23 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
     <h2 id="signin-title" class="signin-name">mcp-gateway</h2>
     <p class="signin-host muted"></p>
     <p>Open the sign-in link the terminal printed when the gateway started, or paste an API key.</p>
-    <form id="signin-form" novalidate>
+    <form id="signin-form" method="post" action="/ui/signin" novalidate>
       <label for="signin-key">API key</label>
-      <input id="signin-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="mcpg_…">
+      <input id="signin-key" name="key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="mcpg_…">
       <p class="signin-error" id="signin-error" hidden></p>
       <p class="signin-notice" hidden></p>
       <button class="btn primary" type="submit">Sign in</button>
     </form>
+    <p id="signin-refused">That key was not accepted.</p>
     <p class="signin-note muted">No key? Run <code>mcp-gateway serve</code> on this machine; it prints a one-time link. From another device, enter the code it shows at <a class="lnk" href="/dashboard/handoff">/dashboard/handoff</a>.</p>
-    <p class="signin-note muted">A key stays in this tab only; a reload asks for it again.</p>
+    <p class="signin-note signin-note-nojs muted">Without JavaScript, signing in sets a session cookie in this browser and opens the dashboard page.</p>
+    <p class="signin-note signin-note-tab muted">A key stays in this tab only; a reload asks for it again.</p>
     <i class="c1" aria-hidden="true"></i><i class="c2" aria-hidden="true"></i>
   </div>
 </section>
 <!-- The one live region (UI1.18): every announcement is an entry appended here. -->
 <div id="announcer" class="sr-only" role="status" aria-atomic="false"></div>
-<link rel="stylesheet" href="/ui/assets/shell.8a1ede0f5317.css">
+<link rel="stylesheet" href="/ui/assets/shell.c460caebf770.css">
+<noscript><link rel="stylesheet" href="/ui/assets/shell.nojs.4e34f233c1ba.css"></noscript>
 </body>
 </html>

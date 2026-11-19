@@ -107,6 +107,7 @@ impl ProtocolExecutor for RestExecutor<'_> {
         // on CapabilityExecutor. The ProviderConfig is reconstructed
         // minimally for the call.
         let provider = crate::capability::ProviderConfig {
+            rate_limit: None,
             service: "rest".to_string(),
             cost_per_call: 0.0,
             timeout: ctx.timeout_secs,

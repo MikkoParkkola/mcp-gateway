@@ -3,12 +3,14 @@
 use super::*;
 
 mod descriptions;
+mod maps_keys;
 mod protocol_configs;
 mod repo_capabilities;
 mod transforms;
 
 fn make_capability(name: &str, description: &str, tags: Vec<&str>) -> CapabilityDefinition {
     CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: description.to_string(),

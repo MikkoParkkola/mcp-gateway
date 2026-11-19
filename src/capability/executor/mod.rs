@@ -59,7 +59,7 @@ use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
-use client::send_with_retry;
+use client::{MAX_SEND_ATTEMPTS, send_attempts, send_with_retry};
 
 /// The capability response cache's bound: the Meta-MCP cache's default
 /// (`cache.max_entries`), which does not govern this cache yet (MIK-8740).
@@ -480,22 +480,26 @@ impl CapabilityExecutor {
             Error::Config(format!("Invalid HTTP method '{}': {}", config.method, e))
         })?;
 
-        let mut request = self.client.request(method, &url);
-
         // Add headers; skip Authorization when auth.param is set (credential
         // goes as a query param instead of a header).
         let headers = self
             .build_headers(config, &capability.auth, params, context)
             .await?;
-        request = request.headers(headers);
-
         // Inject auth credential as a query parameter when auth.param is specified
         // (e.g., Spoonacular uses ?apiKey=..., Google Maps uses ?key=...)
-        if let Some(ref param_name) = capability.auth.param
-            && capability.auth.required
-        {
-            let credential = self.fetch_credential(&capability.auth, context).await?;
-            request = request.query(&[(param_name.as_str(), credential.as_str())]);
+        let query_credential = match capability.auth.param {
+            Some(ref param_name) if capability.auth.required => Some((
+                param_name.as_str(),
+                self.fetch_credential(&capability.auth, context).await?,
+            )),
+            _ => None,
+        };
+
+        // The whole request is assembled, and every fallible step taken, on
+        // the normal client first, so a call that fails here spends no permit.
+        let mut request = self.client.http.request(method, &url).headers(headers);
+        if let Some((param_name, credential)) = &query_credential {
+            request = request.query(&[(*param_name, credential.as_str())]);
         }
 
         // Add query parameters (from config.params with substitution)
@@ -528,17 +532,38 @@ impl CapabilityExecutor {
         }
 
         let timeout = Duration::from_secs(provider.timeout);
+        let request = request.timeout(timeout).build().map_err(|e| {
+            Error::Protocol(format!(
+                "Request: could not be built: {}",
+                client::redact_url(e)
+            ))
+        })?;
+
+        // Per-host pacing: one lookup decides admission, the client (no
+        // redirects, no protocol retries) and the attempts together, taken
+        // immediately before the send: nothing between can fail or wait.
+        let paced = crate::capability::pacing::admit(&url)?;
+        let client = if paced {
+            &self.client.paced
+        } else {
+            &self.client.http
+        };
         // Retry timeouts only for idempotent HTTP methods; a timeout on a
         // mutating method may have already been processed upstream.
         let idempotent = matches!(method_upper.as_str(), "GET" | "HEAD" | "OPTIONS" | "TRACE");
-        let response = send_with_retry(
-            request.timeout(timeout),
+        let response = send_attempts(
+            reqwest::RequestBuilder::from_parts(client.clone(), request),
             &self.client.redirects,
             "Request",
             idempotent,
             &self.health,
+            if paced { 1 } else { MAX_SEND_ATTEMPTS },
         )
         .await?;
+        // The paced client follows no redirect: its 3xx is the call's answer.
+        if paced && response.status().is_redirection() {
+            return Err(paced_redirect_error(&url, &response));
+        }
 
         let body = self.handle_response(response, config).await?;
         match &config.save_file {
@@ -560,6 +585,25 @@ impl Default for CapabilityExecutor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A paced call's 3xx answer as an error naming the host it pointed to. Only
+/// the host: a Location can carry a signed token or a credential in its path
+/// or query.
+fn paced_redirect_error(request_url: &str, response: &reqwest::Response) -> Error {
+    let target = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        // A relative Location names the request's own host.
+        .and_then(|loc| url::Url::parse(request_url).ok()?.join(loc).ok())
+        .and_then(|target| crate::capability::pacing::host_key(target.as_str()))
+        .map_or_else(|| "another host".to_owned(), |k| k.host);
+    Error::Protocol(format!(
+        "a paced provider does not follow redirects; {} answered {} pointing to {target}",
+        crate::capability::pacing::host_key(request_url).map_or_else(String::new, |k| k.host),
+        response.status().as_u16(),
+    ))
 }
 
 #[cfg(tp4)]

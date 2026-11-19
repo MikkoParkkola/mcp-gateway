@@ -293,7 +293,7 @@ pub(super) fn killed(failures: &mut Vec<String>, row: &str, at: At) {
 
 #[cfg(unix)]
 fn subprocess(row: &str, dir: &Path, recover: bool) -> std::process::ExitStatus {
-    let mut command = std::process::Command::new(std::env::current_exe().expect(row));
+    let mut command = crate::test_home::test_binary();
     command
         .arg("--exact")
         .arg(format!(

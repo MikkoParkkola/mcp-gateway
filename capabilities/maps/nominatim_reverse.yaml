@@ -1,0 +1,77 @@
+sha256: b8e47332bf4d8cbb8da80fb8724de7e30ad9c6a716d135f4128b472bee343f7e
+fulcrum: "1.0"
+name: nominatim_reverse
+description: >-
+  Turn a latitude and longitude into the nearest address or place in
+  OpenStreetMap, using the public Nominatim service (no API key). Paced at
+  one request per second per gateway process, the service's absolute
+  maximum; results are cached, as its usage policy requires.
+attribution: "© OpenStreetMap contributors"
+
+schema:
+  input:
+    type: object
+    properties:
+      latitude:
+        type: number
+        minimum: -90
+        maximum: 90
+        description: Latitude, e.g. 60.1699
+      longitude:
+        type: number
+        minimum: -180
+        maximum: 180
+        description: Longitude, e.g. 24.9384
+      zoom:
+        type: integer
+        minimum: 0
+        maximum: 18
+        description: Detail level, 3 (country) to 18 (building); Nominatim's default when left out
+    required: [latitude, longitude]
+  output:
+    type: object
+    additionalProperties: true
+    properties:
+      place_id:
+        type: integer
+      display_name:
+        type: string
+      lat:
+        type: string
+      lon:
+        type: string
+      address:
+        type: object
+      attribution:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    rate_limit:
+      interval_ms: 1000
+    config:
+      endpoint: https://nominatim.openstreetmap.org/reverse
+      method: GET
+      headers:
+        User-Agent: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      params:
+        lat: "{latitude}"
+        lon: "{longitude}"
+        zoom: "{zoom}"
+      static_params:
+        format: jsonv2
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+
+metadata:
+  category: maps
+  tags: [maps, reverse-geocoding, address, openstreetmap, nominatim]
+  cost_category: free
+  execution_time: fast
+  read_only: true

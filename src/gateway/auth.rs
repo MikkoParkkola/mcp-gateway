@@ -55,7 +55,7 @@ mod bootstrap;
 mod handoff;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 #[cfg(feature = "webui")]
-pub(crate) use bootstrap::Navigation;
+pub(crate) use bootstrap::{Navigation, refused_sign_in, signed_in};
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 #[cfg(feature = "webui")]
 pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handoff};

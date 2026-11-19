@@ -349,6 +349,22 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
     ),
     (
+        "src/preview_sandbox/linux/fetch_step.rs",
+        "the npm fetch inside the sandbox: the package-lock.json npm wrote (capped at 4 MiB) and /proc's pid list for the sweep; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_rows.rs",
+        "test-only (cfg(test)): writes the fetch rows' CA bundle and a copy of the host's npm with hostile npmrc files into scratch dirs, and canary files under /usr/local (two new files, and a planted token line in npm's builtin npmrc) that it removes or restores; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_shim_rows.rs",
+        "test-only (cfg(test)): writes the fake npm tree into a scratch dir and reads the lock it wrote; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/probe.rs",
+        "the npm fetch's probe: whether npm, node and ip exist and where their real files are, and npm --version's stdout capped at 256 bytes; no secret",
+    ),
+    (
         "src/preview_sandbox/mod.rs",
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),

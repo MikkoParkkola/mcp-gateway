@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::{HELPER_BOUNDS, HelperBounds, finish_fetch, parse, read_line, start_fetch};
-use crate::preview_sandbox::control_msg::{Expired, Issued, MAX_LINE};
+use crate::preview_sandbox::control_msg::{Expired, FetchStep, Issued, MAX_LINE};
 
 /// A hang guard for rows that block: generous, so only a real hang trips it.
 const GUARD: Duration = Duration::from_secs(30);
@@ -178,13 +178,18 @@ fn r4b_finish_fetch_returns_only_after_expired() {
         (&gateway)
             .write_all(b"{\"expired\":true}\n")
             .expect("expired");
-        line
+        let mut ack = String::new();
+        reader.read_line(&mut ack).expect("read");
+        (line, ack)
     });
     let returned = within_guard(move || {
-        let done = finish_fetch(&mut helper, HELPER_BOUNDS);
+        let done = finish_fetch(&mut helper, HELPER_BOUNDS, None);
         (done, expired_sent.load(Ordering::SeqCst))
     });
-    assert_eq!(fake.join().expect("gateway"), "{\"fetch_done\":true}\n");
+    let (done, ack) = fake.join().expect("gateway");
+    assert_eq!(done, "{\"fetch_done\":true}\n");
+    // G1: the run's acknowledgement follows `expired`.
+    assert_eq!(ack, "{\"run\":true}\n");
     assert_eq!(returned, (Ok(()), true));
 }
 
@@ -198,13 +203,13 @@ fn r4b_a_withheld_or_false_expired_refuses() {
     };
     let (mut helper, gateway) = UnixStream::pair().expect("pair");
     let seen = gateway_once(gateway.try_clone().expect("clone"), None);
-    let got = within_guard(move || finish_fetch(&mut helper, bounds));
+    let got = within_guard(move || finish_fetch(&mut helper, bounds, None));
     seen.join().expect("gateway");
     drop(gateway);
     assert!(got.is_err());
     let (mut helper, gateway) = UnixStream::pair().expect("pair");
     let seen = gateway_once(gateway, Some("{\"expired\":false}\n".into()));
-    let got = within_guard(move || finish_fetch(&mut helper, bounds));
+    let got = within_guard(move || finish_fetch(&mut helper, bounds, None));
     seen.join().expect("gateway");
     assert!(got.is_err());
 }
@@ -229,4 +234,18 @@ fn r2_a_debug_print_never_shows_the_credential() {
         deadline_ms: 1,
     };
     assert!(!format!("{issued:?}").contains(SECRET));
+}
+
+/// RF5 (NPM.8, helper side), kills "a failed fetch waits for `expired`" and
+/// "the step is not reported": a refused fetch writes `fetch_done` with its
+/// step and returns without reading, though the gateway never answers.
+#[test]
+fn rf5_a_refused_fetch_reports_its_step_and_waits_for_nothing() {
+    let (mut helper, gateway) = UnixStream::pair().expect("pair");
+    let returned =
+        within_guard(move || finish_fetch(&mut helper, HELPER_BOUNDS, Some(FetchStep::NpmCi)));
+    let mut line = String::new();
+    BufReader::new(&gateway).read_line(&mut line).expect("read");
+    assert_eq!(line, "{\"fetch_done\":true,\"refused\":\"npm-ci\"}\n");
+    assert_eq!(returned, Ok(()));
 }

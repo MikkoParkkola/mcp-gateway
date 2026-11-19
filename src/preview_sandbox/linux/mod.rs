@@ -7,9 +7,12 @@
 mod ca_bundle;
 mod control_client;
 mod drop;
+mod fetch_step;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
+mod probe;
+mod relay;
 pub(crate) mod seccomp;
 
 use std::ffi::{OsStr, OsString};
@@ -149,20 +152,58 @@ pub(super) async fn start_fetching(
     ca_bundle: Option<OsString>,
     runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
+    use super::proxy::System;
+    use std::sync::Arc;
+    let ambient = Ambient {
+        ca_bundle,
+        runtime_dir,
+        path: std::env::var_os("PATH"),
+    };
+    start_fetching_with(
+        helper,
+        target,
+        protected,
+        deadline,
+        ambient,
+        Arc::new(System),
+        Arc::new(System),
+    )
+    .await
+}
+
+/// What `start_fetching` reads from the gateway's environment, passed in so
+/// the rows never change the process environment.
+struct Ambient {
+    ca_bundle: Option<OsString>,
+    runtime_dir: Option<OsString>,
+    path: Option<OsString>,
+}
+
+/// [`start_fetching`] with the proxy's resolver and dialer given: production
+/// passes `System` for both; only the rows' `cfg(test)` fakes pass others.
+async fn start_fetching_with(
+    helper: &Path,
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+    ambient: Ambient,
+    resolve: std::sync::Arc<dyn super::proxy::Resolve>,
+    connect: std::sync::Arc<dyn super::proxy::Connect>,
+) -> Result<Started, Refusal> {
     use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
     use super::proxy::{AllowlistProxy, System};
     use std::sync::Arc;
 
+    let Ambient {
+        ca_bundle,
+        runtime_dir,
+        path,
+    } = ambient;
     let begun = tokio::time::Instant::now();
     let unshare = find_unshare()?;
-    let mut plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let proxy = AllowlistProxy::bind(
-        runtime_dir,
-        Arc::new(System),
-        Arc::new(System),
-        Arc::new(System),
-    )
-    .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
+    let mut plan = build_plan(target, protected, path.as_deref())?;
+    let proxy = AllowlistProxy::bind(runtime_dir, resolve, connect, Arc::new(System))
+        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
     // Beside the proxy socket, in the proxy's owner-only directory, removed
     // with it when the proxy drops.
     let control = proxy.unix_path().with_file_name("control.sock");
@@ -179,9 +220,11 @@ pub(super) async fn start_fetching(
                 bundle.source.display()
             ))
         })?;
+    let npm = npm_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
         ca: utf8(&ca)?,
+        npm,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {
@@ -199,7 +242,7 @@ pub(super) async fn start_fetching(
             };
             match ended_first {
                 Some(served) => served,
-                None => Err(helper_ended(&mut child).await),
+                None => Err(helper_ended(&mut child, proxy.fetches_begun() > 0).await),
             }
         }
     };
@@ -225,20 +268,69 @@ pub(super) async fn start_fetching(
 /// How long a refused start waits for its killed `unshare` to be reaped.
 const REAP_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Why the sandbox ended before its fetch step finished, from what the
-/// helper (or `unshare`) printed.
-async fn helper_ended(child: &mut tokio::process::Child) -> Refusal {
+/// Why the sandbox ended before its fetch step finished. Once the credential
+/// is out its stderr may hold npm output, URLs or paths, so it is never read.
+async fn helper_ended(child: &mut tokio::process::Child, credential_issued: bool) -> Refusal {
     use tokio::io::AsyncReadExt as _;
     let mut text = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
+    if let (false, Some(mut stderr)) = (credential_issued, child.stderr.take()) {
         let read = stderr.read_to_string(&mut text);
         let _ = tokio::time::timeout(std::time::Duration::from_secs(1), read).await;
     }
-    if text.trim().is_empty() {
+    ended_refusal(credential_issued, &text)
+}
+
+/// The refusal for a sandbox that ended first: fixed words once the
+/// credential was out, else the helper's own refusal from its stderr.
+fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
+    if credential_issued {
+        Refusal::Step("the fetch (the sandbox ended before it finished)".into())
+    } else if stderr.trim().is_empty() {
         Refusal::Step("the sandbox helper ended before its fetch step".into())
     } else {
-        classify(&text)
+        classify(stderr)
     }
+}
+
+/// The npm fetch a target needs, or `None` when it names no package (the
+/// handshake alone). npm and node are the ones beside the target's `npx`, its
+/// version floor checked; `ip` and both must lie in the plan's bound trees,
+/// where the root shows them at the same paths. uv is refused here until its
+/// fetch is built.
+fn npm_fetch(
+    target: &Target,
+    plan: &mut Plan,
+    path: Option<&OsStr>,
+    proxy: &Path,
+) -> Result<Option<plan::NpmFetch>, Refusal> {
+    use super::fetch::Fetch;
+    let phases = super::fetch::plan(target)?;
+    let spec = match phases.fetch {
+        None => return Ok(None),
+        Some(Fetch::Uv(_)) => return Err(Refusal::Step("the uv fetch is not built yet".into())),
+        Some(Fetch::Npm(spec)) => spec,
+    };
+    let requested = target.program.to_str().unwrap_or("npx");
+    let npx = resolve_command(requested, path, None)
+        .map_err(|e| Refusal::Step(format!("finding {requested} ({e})")))?;
+    let (npm, node_dir) = probe::npm_beside(&npx)?;
+    probe::check_npm(&npm, &node_dir)?;
+    let (npm, node_dir) = place_npm(plan, &npx, &npm, &node_dir.join("node"))?;
+    let ip = probe::find_ip(&probe::IP_CANDIDATES, &|p: &Path| placed(p, plan))?;
+    let run_args = phases
+        .run_args
+        .iter()
+        .map(|a| a.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| Refusal::Step("reading an argument (not UTF-8)".to_owned()))?;
+    Ok(Some(plan::NpmFetch {
+        spec,
+        run_args,
+        npm: utf8(&npm)?,
+        node_dir: utf8(&node_dir)?,
+        ip,
+        proxy: utf8(proxy)?,
+    }))
 }
 
 /// A step refusal with the time it came after the fetch step began.
@@ -360,6 +452,122 @@ fn build_plan(
         target: argv,
         fetch: None,
     })
+}
+
+/// Make npm and node shown inside the root and return the path npm is
+/// executed by there and the directory that holds `node` there (for PATH);
+/// refuses by name when either is not shown.
+///
+/// In every layout the root shows the fetch only node's real file and npm's
+/// package (`.../node_modules/npm`, which holds npm's own modules), never
+/// the trees around them: an npx preview's run phase executes downloaded
+/// code, and a whole tree shows every globally installed package and the
+/// tree's own config. What was bound for npx as the program goes first, as
+/// the fetch never runs npx. Under the masked `/usr/local` the two are bound
+/// back; in a known runtime tree (NVM) they are bound read-only; a system
+/// root already shows them. Anywhere else, or under a masked secret path or
+/// a hidden one, refuses by name. npm's builtin `npmrc` is covered by an
+/// empty file either way.
+fn place_npm(
+    plan: &mut Plan,
+    npx: &Path,
+    npm: &Path,
+    node: &Path,
+) -> Result<(PathBuf, PathBuf), Refusal> {
+    let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let (program_real, npm_real, node_real) = (real(npx), real(npm), real(node));
+    if node_real.is_dir() {
+        return Err(Refusal::Step(format!(
+            "placing node ({} is a directory)",
+            node.display()
+        )));
+    }
+    // npx's program bind: bind-backs under /usr/local, its runtime tree, or
+    // its lone real file.
+    plan.bound_back.clear();
+    let program_tree = runtime_tree(&program_real);
+    plan.read_only
+        .retain(|r| Path::new(r) != program_real && program_tree.as_deref() != Some(Path::new(r)));
+    // npm's cli is `<package>/bin/npm-cli.js`.
+    let package = npm_real
+        .parent()
+        .and_then(Path::parent)
+        .filter(|p| p.ends_with("node_modules/npm"))
+        .map(Path::to_path_buf);
+    for (file, bind) in [
+        (&node_real, Some(node_real.clone())),
+        (&npm_real, package.clone()),
+    ] {
+        // What must be shown: node's file, npm's whole package (its cli
+        // can be shown while npm's own modules are not).
+        let Some(bind) = bind.filter(|b| !placed(b, plan)) else {
+            continue;
+        };
+        match program_bind(file, &plan.read_only) {
+            ProgramBind::UsrLocal(_) => plan.bound_back.push(utf8(&bind)?),
+            ProgramBind::Runtime(_) => plan.read_only.push(utf8(&bind)?),
+            // Outside the known trees a directory named `node_modules/npm`
+            // proves nothing about what it holds: refused by name below.
+            ProgramBind::File(_) | ProgramBind::System | ProgramBind::Refused => {}
+        }
+    }
+    let npm_needs = package.as_deref().unwrap_or(&npm_real);
+    for (what, file) in [("npm", npm_needs), ("node", node_real.as_path())] {
+        if !placed(file, plan) {
+            return Err(Refusal::Step(format!(
+                "placing {what} ({} is not shown inside the root)",
+                file.display()
+            )));
+        }
+    }
+    // npm's builtin config may hold a registry token someone stored there;
+    // the pinned environment outranks it, and the downloaded code never
+    // reads it: an empty file covers it, whatever npm's directory is called
+    // (Debian's `/usr/share/nodejs/npm`). Covering only ever hides.
+    if let Some(root) = npm_real.parent().and_then(Path::parent) {
+        plan.masked.push(utf8(&root.join("npmrc"))?);
+    }
+    // The alias npx sat beside (`<bin>/npm`) may be hidden now; each literal
+    // step it takes must be shown, as for the program.
+    let shown = |p: &Path| {
+        shown_inside(
+            p,
+            &plan.read_only,
+            &plan.bound_back,
+            &plan.masked,
+            &plan.hidden,
+        )
+    };
+    let exec = reachable_inside(npm, &shown).unwrap_or(npm_real);
+    // `env node` searches PATH by name: the alias's own directory when the
+    // root shows the alias, else the real file's, which only works when the
+    // real file is itself called `node`.
+    let node_dir = if reachable_inside(node, &shown).is_some() {
+        node.parent()
+    } else if node_real.file_name() == Some(std::ffi::OsStr::new("node")) {
+        node_real.parent()
+    } else {
+        None
+    };
+    let node_dir = node_dir.ok_or_else(|| {
+        Refusal::Step(format!(
+            "placing node ({} is reached through a link the root does not show)",
+            node.display()
+        ))
+    })?;
+    Ok((exec, node_dir.to_path_buf()))
+}
+
+/// Whether `plan`'s root shows `file`, its links followed first.
+fn placed(file: &Path, plan: &Plan) -> bool {
+    let real = fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+    shown_inside(
+        &real,
+        &plan.read_only,
+        &plan.bound_back,
+        &plan.masked,
+        &plan.hidden,
+    )
 }
 
 /// Whether the new root shows `p`: a hidden path never, a bind-back always,
@@ -599,6 +807,12 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
     Refusal::Step(format!("starting the namespaces ({})", stderr.trim()))
 }
 
+#[cfg(test)]
+mod fetch_registry;
+#[cfg(test)]
+mod fetch_rows;
+#[cfg(test)]
+mod fetch_shim_rows;
 #[cfg(tp4)]
 #[cfg(test)]
 mod tests;

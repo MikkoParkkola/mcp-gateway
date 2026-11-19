@@ -57,8 +57,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.04dcfe66fe5b.js"),
     ),
     (
-        "shell.8a1ede0f5317.css",
-        include_bytes!("shell/shell.8a1ede0f5317.css"),
+        "shell.c460caebf770.css",
+        include_bytes!("shell/shell.c460caebf770.css"),
+    ),
+    (
+        "shell.nojs.4e34f233c1ba.css",
+        include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
         "tips.9279e31274d7.json",
@@ -128,7 +132,9 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::REFERRER_POLICY, "no-referrer"),
+            // A no-referrer document posts Origin null, which the origin gate refuses.
+            // same-origin still sends no Referer off this origin.
+            (header::REFERRER_POLICY, "same-origin"),
         ],
         Html(DOCUMENT),
     )

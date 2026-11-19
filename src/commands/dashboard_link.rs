@@ -6,8 +6,6 @@
 //! The admin credential comes from the environment only. An argument would
 //! land in shell history and in every process listing on the machine.
 
-use crate::cli::stdout::print;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -161,15 +159,14 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 #[path = "dashboard_link_admin.rs"]
 mod admin;
 
+use super::cli_exit::{CliError, CliExit, CliOutcome, Request, StdoutRule, emit, resolve_token};
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
 pub(crate) use admin::{
-    AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, admin_call,
-    admin_call_url, admin_stream_url, fetch_link, gateway_reason, redact_body,
+    AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, Remedies,
+    UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link, gateway_reason,
+    origin_of, redact_body, refusal, transport,
 };
-
-/// Printed instead of an answer the redactor cannot make safe.
-const UNSAFE_ANSWER: &str = "the gateway's answer could not be printed safely";
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
 ///
@@ -223,27 +220,9 @@ pub async fn run_dashboard_link_args(
     host_override: Option<&str>,
 ) -> ExitCode {
     let token = read_token(|name| std::env::var(name).ok());
-    emit(&dashboard_link_args_output(args, load, port_override, host_override, token).await)
-}
-
-/// What `dashboard-link` prints for `token`. A resolution error comes before a
-/// token error, as before; with a token set it passes the output gate too,
-/// because a config error can quote the config, which can hold the token.
-async fn dashboard_link_args_output(
-    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
-    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
-    port_override: Option<u16>,
-    host_override: Option<&str>,
-    token: Result<String, TokenError>,
-) -> Printed {
-    const PREFIX: &str = "dashboard-link";
-    let base = dashboard_link_base(args.url, args.tls, load, port_override, host_override);
-    match (base, token) {
-        (Ok((base, tls)), Ok(token)) => dashboard_link_output(&base, &tls, &token).await,
-        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
-        (Err(message), Err(_)) => unmasked(PREFIX, &message),
-        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
-    }
+    let secret = token.as_deref().unwrap_or_default().to_owned();
+    let out = dashboard_link_outcome(args, load, port_override, host_override, token).await;
+    emit(&out, false, &[&secret])
 }
 
 /// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
@@ -256,133 +235,137 @@ pub async fn run_events_command(
 ) -> ExitCode {
     let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
     let token = read_token(|name| std::env::var(name).ok());
-    emit(&events_args_output(&args, load, port_override, host_override, token).await)
+    let secret = token.as_deref().unwrap_or_default().to_owned();
+    let out = events_outcome(&args, load, port_override, host_override, token).await;
+    emit(&out, false, &[&secret])
 }
 
-/// What `events dead-letters` prints for `token`, resolving like
-/// [`dashboard_link_args_output`].
-async fn events_args_output(
+/// The first two checks of every remote command (design D4): resolve the gateway (2), then the token (unset 3,
+/// empty 2, a control character 2). A resolution error is gated on the token when one is set: a config error can
+/// quote the config, which can hold it.
+///
+/// # Errors
+///
+/// The outcome to print when either check fails.
+pub(crate) fn resolved(
+    url: Option<String>,
+    tls: DashboardLinkTls,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> Result<(String, LinkTls, String), CliOutcome> {
+    let secret = token.as_deref().unwrap_or_default().to_owned();
+    let (base, tls) =
+        dashboard_link_base(url, tls, load, port_override, host_override).map_err(|message| {
+            CliError::new(
+                CliExit::Usage,
+                message,
+                "Check the gateway settings, then retry.",
+            )
+            .outcome(false, &[&secret])
+        })?;
+    let token = resolve_token(token, &origin_of(&base))
+        .map_err(|error| error.outcome(false, &[&secret]))?;
+    Ok((base, tls, token))
+}
+
+/// What `dashboard-link` prints and exits with for `token`: the link on stdout, the note on stderr, or the
+/// failure on the shared table.
+pub(crate) async fn dashboard_link_outcome(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+) -> CliOutcome {
+    let (base, tls, token) = match resolved(
+        args.url,
+        args.tls,
+        load,
+        port_override,
+        host_override,
+        token,
+    ) {
+        Ok(resolved) => resolved,
+        Err(out) => return out,
+    };
+    match fetch_link(&base, &token, &tls).await {
+        Ok(link) => CliOutcome::success(
+            format!("{link}\n").into_bytes(),
+            "Opens once, from this machine only.\n",
+            false,
+            &[&token],
+            StdoutRule::RefuseToken,
+        ),
+        Err(error) => error.outcome(false, &[&token]),
+    }
+}
+
+/// What `events dead-letters` prints and exits with for `token`: the gateway's answer on stdout, or the failure
+/// on the shared table. A replay is a mutation (design D3).
+pub(crate) async fn events_outcome(
     args: &mcp_gateway::cli::events::DeadLettersArgs,
     load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
     port_override: Option<u16>,
     host_override: Option<&str>,
     token: Result<String, TokenError>,
-) -> Printed {
-    const PREFIX: &str = "events dead-letters";
-    let base = dashboard_link_base(
+) -> CliOutcome {
+    use mcp_gateway::cli::events::DeadLetterAction;
+    let (base, tls, token) = match resolved(
         args.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
-    );
-    match (base, token) {
-        (Ok((base, tls)), Ok(token)) => dead_letters_output(&base, &tls, args, &token).await,
-        (Err(message), Ok(token)) => gate(PREFIX, &token, Err(message)),
-        (Err(message), Err(_)) => unmasked(PREFIX, &message),
-        (Ok(_), Err(error)) => unmasked(PREFIX, &error.to_string()),
-    }
-}
-
-/// A failure printed when no token is set, so there is nothing to mask.
-fn unmasked(prefix: &str, message: &str) -> Printed {
-    Printed {
-        stdout: String::new(),
-        stderr: format!("{prefix}: {message}\n"),
-        ok: false,
-    }
-}
-
-/// What `events dead-letters` prints, through the output gate.
-async fn dead_letters_output(
-    base: &str,
-    tls: &LinkTls,
-    args: &mcp_gateway::cli::events::DeadLettersArgs,
-    token: &str,
-) -> Printed {
-    let result = match dead_letters_request(args) {
-        Ok((method, path)) => admin_call(method, base, &path, token, tls).await,
-        Err(message) => Err(message),
+        token,
+    ) {
+        Ok(resolved) => resolved,
+        Err(out) => return out,
     };
-    let result = result.map(|body| {
-        let json = serde_json::to_string_pretty(&body).unwrap_or_default();
-        (format!("{json}\n"), "")
-    });
-    gate("events dead-letters", token, result)
-}
-
-/// What one `dashboard-link` or `events` run prints once the token is read,
-/// and whether it succeeded.
-#[derive(Debug)]
-struct Printed {
-    stdout: String,
-    stderr: String,
-    ok: bool,
-}
-
-/// The one output gate once the token is read. Stdout still holding the token
-/// (JSON syntax, which the JSON redactor cannot mask) is refused, and the
-/// whole stderr text passes the shared redactor as the last step, so no
-/// prefix, status, note or transport detail is printed unredacted.
-fn gate(prefix: &str, token: &str, result: Result<(String, &str), String>) -> Printed {
-    let result = result.and_then(|(stdout, note)| {
-        if stdout.contains(token) {
-            Err(UNSAFE_ANSWER.to_string())
-        } else {
-            Ok((stdout, note))
+    let (method, path) = match dead_letters_request(args) {
+        Ok(request) => request,
+        Err(message) => {
+            return CliError::new(
+                CliExit::Usage,
+                message,
+                "Use list, replay ID, or replay --all --subscription S.",
+            )
+            .outcome(false, &[&token]);
         }
-    });
-    let (stdout, line, ok) = match result {
-        Ok((stdout, note)) => (stdout, note.to_string(), true),
-        Err(message) => (String::new(), format!("{prefix}: {message}"), false),
     };
-    // Checked as printed, newline included: a token ending in a newline
-    // would otherwise form only after the check.
-    let stderr = if line.is_empty() {
-        line
-    } else {
-        token_free(&format!("{line}\n"), token)
+    let (request, not_found) = match (args.action, args.all) {
+        (DeadLetterAction::List, _) => (Request::Read, UNSUPPORTED_REMEDY.to_string()),
+        (DeadLetterAction::Replay, false) => (
+            Request::Mutation,
+            "Check the dead-letter ID with events dead-letters list, then retry.".to_string(),
+        ),
+        (DeadLetterAction::Replay, true) => (
+            Request::Mutation,
+            format!(
+                "Check the subscription with events dead-letters list --subscription {}, then retry.",
+                args.subscription.as_deref().unwrap_or_default()
+            ),
+        ),
     };
-    Printed { stdout, stderr, ok }
-}
-
-/// `text` through the shared redactor, which keeps the first marker whose
-/// output holds no token and fails closed to empty output when none does.
-/// If the token is still there whatever the redactor did, one fixed sentence
-/// instead, or nothing if even that holds the token (the api command's rule).
-fn token_free(text: &str, token: &str) -> String {
-    let newline = if text.ends_with('\n') { "\n" } else { "" };
-    let text = mcp_gateway::cli::redact::text(text, &[token.to_string()]);
-    if !text.contains(token) {
-        return text;
+    let remedies = Remedies {
+        not_found,
+        ..Remedies::read(&base)
+    };
+    match admin_call(method, &base, &path, &token, &tls, request, &remedies).await {
+        Ok(body) => CliOutcome::success(
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            )
+            .into_bytes(),
+            "",
+            false,
+            &[&token],
+            StdoutRule::RefuseToken,
+        ),
+        Err(error) => error.outcome(false, &[&token]),
     }
-    let sentence =
-        format!("A message could not be printed without exposing the credential.{newline}");
-    if sentence.contains(token) {
-        String::new()
-    } else {
-        sentence
-    }
-}
-
-/// Write a run's output: stdout through the CLI's `print!`, which ends the
-/// process cleanly when the reader has gone.
-fn emit(out: &Printed) -> ExitCode {
-    print!("{}", out.stdout);
-    eprint!("{}", out.stderr);
-    if out.ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
-}
-
-/// What `dashboard-link` prints, through the output gate.
-async fn dashboard_link_output(base: &str, tls: &LinkTls, token: &str) -> Printed {
-    let result = fetch_link(base, token, tls)
-        .await
-        .map(|link| (format!("{link}\n"), "Opens once, from this machine only."));
-    gate("dashboard-link", token, result)
 }
 
 #[cfg(tp2)]

@@ -241,8 +241,7 @@ pub(crate) fn isolate(test_path: &str) -> bool {
     if std::env::var_os(CHILD_ENV).is_some() {
         return false;
     }
-    let exe = std::env::current_exe().expect("the running test binary must be locatable");
-    let output = std::process::Command::new(exe)
+    let output = crate::test_home::test_binary()
         .args([test_path, "--exact", "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, "1")
         .output()
