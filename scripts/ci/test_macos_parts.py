@@ -14,7 +14,7 @@ Static checks on every workflow and on scripts/ci/shard_tests.py, read as data:
   and macos-shards' own guard with no train skip, and runs exactly the expect and lib_union steps,
   nothing able to turn their failure green; macos-check needs it.
 - T4: each macOS leg uploads its part lists under `if: !cancelled()` with `overwrite: true`; the union
-  job downloads every leg's lists.
+  job downloads every leg's lists, one folder per leg (lib_union.py reads <artifact>/pK/list.txt).
 - T5: limits: the job 180, lib-b's lib step 150, int's suite 110 and part step 50.
 - T6: the handoff is gone: no `rehearse_macos_lib_fallback` input, no MACOS_LIB_REHEARSE_FALLBACK,
   no `macos-lib-tests` artifact, no macOS PREBUILT entry.
@@ -39,7 +39,7 @@ SHARD_JOB, CHECK_JOB, UNION_JOB, UNION_NAME = "macos-shards", "macos-check", "ma
 TRAIN_SKIP_MARK = "startsWith(github.head_ref, 'train/')"
 LIB_STEP = re.compile(r'^python3 scripts/ci/shard_tests\.py run-prebuilt-parts macos (\S+) --build "\$RUNNER_TEMP/parts"$')
 FORBIDDEN = ("cargo test --lib", "shard_tests.py export-lib", "shard_tests.py wait-lib", "shard_tests.py run macos lib-a")
-EXPECT = "python3 scripts/dev/test_parts.py expect aarch64-apple-darwin"
+EXPECT = "scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect aarch64-apple-darwin"
 UNION = "python3 scripts/ci/lib_union.py"
 LIMITS = {"job": 180, "lib-b": 150, "int-suite": 110, "int-lib": 50}
 LISTS = "macos-lib-lists-"
@@ -131,7 +131,9 @@ def union_problems(jobs: dict) -> list[str]:
     if SHARD_JOB not in ([needs] if isinstance(needs, str) else needs):
         out.append(f"T3: {UNION_JOB} does not need {SHARD_JOB}")
     want_if = "${{ !cancelled() && " + bare_guard(shard) + " }}"
-    if str(union.get("if", "")).replace(" ", "") != want_if.replace(" ", "") or TRAIN_SKIP_MARK in str(union.get("if", "")):
+    # Exact equality: an added train skip (or any other clause) breaks it. The shards' own guard names train/
+    # branches as an inclusion, so the phrase alone proves nothing.
+    if str(union.get("if", "")).replace(" ", "") != want_if.replace(" ", ""):
         out.append(f"T3: {UNION_JOB}'s if must be !cancelled() and {SHARD_JOB}'s guard, exactly, with no train skip")
     check_needs = check.get("needs") or []
     if UNION_JOB not in ([check_needs] if isinstance(check_needs, str) else check_needs):
@@ -149,9 +151,10 @@ def union_problems(jobs: dict) -> list[str]:
     if gates and any("run" in s for s in steps[max(gates) + 1:]):
         out.append(f"T3: {UNION_JOB} runs a step after its gate")
     downloads = [s for s in steps if "download-artifact" in str(s.get("uses", ""))]
-    if not any(str((s.get("with") or {}).get("pattern", "")) == LISTS + "*" and (s.get("with") or {}).get("merge-multiple") is True
+    # One folder per leg's artifact: lib_union.py reads <artifact>/pK/list.txt.
+    if not any(str((s.get("with") or {}).get("pattern", "")) == LISTS + "*" and not (s.get("with") or {}).get("merge-multiple")
                for s in downloads):
-        out.append(f"T4: {UNION_JOB} does not download every leg's `{LISTS}*` lists into one folder")
+        out.append(f"T4: {UNION_JOB} does not download every leg's `{LISTS}*` lists, one folder per leg")
     return out
 
 
@@ -213,7 +216,7 @@ def fixture():
         CHECK_JOB: {"needs": [SHARD_JOB, UNION_JOB]},
         UNION_JOB: {"name": UNION_NAME, "needs": SHARD_JOB, "runs-on": "ubuntu-24.04",
                     "if": "${{ !cancelled() && " + GUARD + " }}", "steps": [
-            {"uses": "actions/download-artifact@x", "with": {"pattern": LISTS + "*", "merge-multiple": True}},
+            {"uses": "actions/download-artifact@x", "with": {"pattern": LISTS + "*", "path": "lists"}},
             {"name": "expect", "run": EXPECT + ' "$RUNNER_TEMP/expected"'},
             {"name": "union", "run": UNION + ' "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"'}]},
     }
@@ -269,7 +272,7 @@ def mutants():
         ("T4", "the upload's if: !cancelled() dropped", lambda w, s: step(w, SHARD_JOB, "lists").pop("if")),
         ("T4", "the upload's overwrite dropped", lambda w, s: step(w, SHARD_JOB, "lists")["with"].pop("overwrite")),
         ("T4", "the download's pattern narrowed", lambda w, s: j(w)[UNION_JOB]["steps"][0]["with"].update({"pattern": LISTS + "lib-b"})),
-        ("T4", "the download not merged", lambda w, s: j(w)[UNION_JOB]["steps"][0]["with"].pop("merge-multiple")),
+        ("T4", "the download merged into one folder", lambda w, s: j(w)[UNION_JOB]["steps"][0]["with"].update({"merge-multiple": True})),
         ("T5", "the job limit at 190", lambda w, s: j(w)[SHARD_JOB].update({"timeout-minutes": 190})),
         ("T5", "lib-b's lib step at 165", lambda w, s: step(w, SHARD_JOB, "lib-b").update({"timeout-minutes": 165})),
         ("T5", "int's suite at 120", lambda w, s: step(w, SHARD_JOB, "suite").update({"timeout-minutes": 120})),
