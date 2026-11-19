@@ -257,8 +257,9 @@ impl StdioSession {
     /// Order matters: stdin closes first and the child is killed only after it
     /// has logged `EOF_LINE` (or `EOF_WAIT` passes), because a kill that lands
     /// before the child reads EOF suppresses the one line that proves the
-    /// capture works. The drain is then joined through EOF, so no count read
-    /// from the result races a line still in the pipe.
+    /// capture works. The drain is then joined through EOF, for at most
+    /// `EOF_WAIT`, so no count read from the result races a line still in the
+    /// pipe.
     pub async fn finish_capturing(mut self, captured: CapturedStderr) -> Vec<String> {
         // A row that never read still gets its start covered here, not by
         // the EOF waits below.
@@ -274,7 +275,9 @@ impl StdioSession {
         // is given the same bound to exit on its own before the kill.
         let _ = timeout(EOF_WAIT, self.child.wait()).await;
         let _ = self.child.kill().await;
-        let _ = captured.drain.await;
+        // Bounded, outcome ignored: a grandchild that inherited stderr keeps
+        // the pipe open after the kill, and the row judges what arrived anyway.
+        let _ = timeout(EOF_WAIT, captured.drain).await;
         std::mem::take(&mut *captured.lines.lock().expect("stderr sink poisoned"))
     }
 }

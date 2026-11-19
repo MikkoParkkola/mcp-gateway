@@ -251,14 +251,33 @@ async fn an_exit_before_ready_ends_the_wait_while_a_grandchild_holds_stderr() {
 }
 
 /// The line the session waits for is the one the gateway logs, at info, from
-/// the module whose target `gateway_bin` keeps visible: a changed wording fails
-/// here by name, not as every stdio row's 120 s "never became ready".
+/// the module whose target `gateway_bin` keeps visible: a changed wording or a
+/// moved module fails here by name, not as every stdio row's 120 s "never
+/// became ready".
 #[test]
 fn the_ready_line_is_the_one_the_gateway_logs() {
-    let source = include_str!("../src/gateway/server/stdio_loop.rs");
+    // One literal for both checks: `include_str!` takes no runtime string.
+    macro_rules! ready_source {
+        () => {
+            "src/gateway/server/stdio_loop.rs"
+        };
+    }
+    let source = include_str!(concat!("../", ready_source!()));
     let logged = format!("info!(\"{}\")", stdio_session::READY_LINE);
     assert!(
         source.contains(&logged),
-        "src/gateway/server/stdio_loop.rs no longer logs {logged}"
+        "{} no longer logs {logged}",
+        ready_source!()
+    );
+    // A plain `info!` logs under its module path.
+    let module = ready_source!()
+        .strip_prefix("src/")
+        .and_then(|path| path.strip_suffix(".rs"))
+        .expect("a src/*.rs path")
+        .replace('/', "::");
+    assert_eq!(
+        gateway_bin::STDIO_READY_TARGET,
+        format!("mcp_gateway::{module}"),
+        "gateway_bin keeps a target visible that does not log the ready line"
     );
 }

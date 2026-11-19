@@ -150,8 +150,9 @@ where
 /// The module that logs the `Listening` banner [`logged_port`] reads.
 const BANNER_TARGET: &str = "mcp_gateway::gateway::server::support";
 
-/// The module that logs the ready line `stdio_session` waits for.
-const STDIO_READY_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
+/// The module that logs the ready line `stdio_session` waits for; a row
+/// derives it from the source file that logs the line.
+pub const STDIO_READY_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
 
 /// `server.port: 0` (or `-p 0`): the child binds an OS-chosen port and logs
 /// the one it got, so no port is picked here and dropped before the child
