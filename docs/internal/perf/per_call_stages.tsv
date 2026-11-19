@@ -91,6 +91,7 @@ src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the in
 src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	http_invoke_tiny	on the HTTP gateway_invoke path: note_declared_effect calls it on every dispatch
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path: every dispatch notes its declared effect
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_request_findings	http_invoke_tiny	on the HTTP gateway_invoke path: a dispatch's send rescan notes what its arguments raised, when a firewall scans
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	noted	-	on-path, untimed: refusals only (a refused check's note); the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untimed: failed sends only; the timed rows are allowed calls
