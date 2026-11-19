@@ -93,6 +93,8 @@ pub use fs_lock::lock_directory_finding;
 #[doc(hidden)]
 pub mod gateway;
 mod hashing;
+// The daily anonymous heartbeat (docs/PRIVACY.md, "Daily heartbeat").
+mod heartbeat;
 pub(crate) mod home_dir;
 #[doc(hidden)]
 pub mod honest_task_tokens;
@@ -215,6 +217,8 @@ pub(crate) mod test_source_text;
 #[cfg(tp3)]
 #[cfg(test)]
 mod test_source_text_tests;
+#[cfg(test)]
+mod test_tls;
 #[cfg(test)]
 mod test_wait;
 #[cfg(feature = "tool-profiles")]
