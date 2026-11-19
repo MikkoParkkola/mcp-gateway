@@ -2152,6 +2152,9 @@ impl Gateway {
         // series used to let a stop take three times the setting.
         let total = self.config.server.shutdown_timeout;
         let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
+        // Kept for a listener that fails before any signal: the background
+        // tasks still need the broadcast before the teardown runs.
+        let on_listener_error = shutdown_tx.clone();
         let shutdown = {
             let fired = Arc::clone(&fired);
             async move {
@@ -2167,10 +2170,15 @@ impl Gateway {
         let std_listener = listener.into_std()?;
         // Plain HTTP or mTLS: both stop the same way, open requests getting
         // `grace` and then dropped (support.rs, `serve_plain`/`serve_tls`).
-        if self.config.mtls.enabled {
-            serve_tls(app, std_listener, addr, &self.config.mtls, grace, shutdown).await?;
+        // A listener that fails still gets the teardown below; its error is
+        // returned after it.
+        let served = if self.config.mtls.enabled {
+            serve_tls(app, std_listener, addr, &self.config.mtls, grace, shutdown).await
         } else {
-            serve_plain(app, std_listener, grace, shutdown).await?;
+            serve_plain(app, std_listener, grace, shutdown).await
+        };
+        if served.is_err() && fired.get().is_none() {
+            let _ = on_listener_error.send(());
         }
         let deadline = fired
             .get()
@@ -2285,7 +2293,7 @@ impl Gateway {
         info!("Shutting down backends...");
         self.backends.stop_all().await;
 
-        Ok(())
+        served
     }
 
     /// Run the gateway in stdio mode.
