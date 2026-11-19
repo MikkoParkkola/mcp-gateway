@@ -1542,6 +1542,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/tools/call` | INTERNAL | private JSON API of the bundled web UI | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run | src/gateway/routes.rs:UI_TOOLS_CALL |
 | `/ui/assets/{file}` | INTERNAL | content-hashed static files of the bundled web UI (MIK-8870) | none: the UI's own files, not an integration surface | src/gateway/routes.rs:UI_ASSET |
 | `/ui/classic` | INTERNAL | transitional page kept one release | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_CLASSIC |
+| `/ui/signin` | INTERNAL | UI plumbing, no scripted use | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_SIGNIN |
 | `/ui/{*path}` | INTERNAL | deep-link fallback, UI detail | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_SHELL |
 | `dynamic &route (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:323 |
 | `dynamic callback_path (src/oauth/callback.rs)` | KEEP | backend OAuth redirect on its own short-lived loopback listener | - | src/oauth/callback.rs:309 |

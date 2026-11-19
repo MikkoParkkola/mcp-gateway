@@ -51,6 +51,7 @@ async fn test_webhook_registry_registration() {
     );
 
     let capability = CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: "linear".to_string(),
         description: "Linear integration".to_string(),
@@ -100,6 +101,7 @@ async fn test_webhook_routes_creation() {
     );
 
     let capability = CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: "test_service".to_string(),
         description: "Test service".to_string(),

@@ -1,0 +1,9 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/capability/backend.rs	register_capability	unpaced_protocol_refusal	1	no-record	a direct registration of a GraphQL or JSON-RPC provider on a paced host is refused before the catalogue changes; no call delivery
+src/capability/backend_loading.rs	drop_unpaced_protocols	unpaced_protocol_refusal	1	no-record	a reload refuses a GraphQL or JSON-RPC file on a paced host at load; no call delivery
+src/capability/backend_loading.rs	load_from_directory_reporting	unpaced_protocol_refusal	1	no-record	a directory load refuses a GraphQL or JSON-RPC file on a paced host; no call delivery
+src/capability/backend_loading.rs	unload_unpaced_protocols	unpaced_protocol_refusal	1	no-record	the sweep unloads a GraphQL or JSON-RPC provider on a newly paced host, logged at WARN; no call delivery
+src/capability/executor/client.rs	send_attempts	note_redirect_refusal	1	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched; the caller still receives the transport error
+src/capability/executor/client.rs	send_attempts	ssrf_refusal	1	recorded	a capability HTTP call the SSRF guard refuses: the send raises refused while vouched
+src/capability/executor/graphql.rs	execute	refuse_unpaced_protocol	1	recorded	a GraphQL call to a paced host: execute raises refused while vouched
+src/capability/executor/jsonrpc.rs	execute	refuse_unpaced_protocol	1	recorded	a JSON-RPC call to a paced host: execute raises refused while vouched

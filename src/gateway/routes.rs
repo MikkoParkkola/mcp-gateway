@@ -41,6 +41,8 @@ owned_routes! {
     DASHBOARD = "/dashboard",
     DASHBOARD_HANDOFF = "/dashboard/handoff",
     DASHBOARD_LOGOUT = "/dashboard/logout",
+    /// The no-JavaScript sign-in form.
+    UI_SIGNIN = "/ui/signin",
     UI_STATUS = "/ui/api/status",
     UI_TOOLS = "/ui/api/tools",
     UI_TOOLS_CALL = "/ui/api/tools/call",

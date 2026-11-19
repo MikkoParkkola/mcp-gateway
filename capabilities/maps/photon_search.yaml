@@ -1,0 +1,63 @@
+sha256: 73c0bcefc4b048c8f9ee01f4363bf24b2fb3d6864d29a3288fed5b614b96d4ab
+fulcrum: "1.0"
+name: photon_search
+description: >-
+  Search OpenStreetMap places by text with Photon, a search-as-you-type
+  geocoder (no API key). Paced at one request per second per gateway process;
+  Photon's public service throttles or bans heavy use.
+attribution: "© OpenStreetMap contributors"
+
+schema:
+  input:
+    type: object
+    properties:
+      q:
+        type: string
+        minLength: 1
+        maxLength: 300
+        description: Free-text query, e.g. "Helsinki Cathedral"
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 50
+        description: Most results to return (Photon's default when left out)
+    required: [q]
+  output:
+    type: object
+    additionalProperties: true
+    properties:
+      type:
+        type: string
+      features:
+        type: array
+        description: GeoJSON features, one per match
+      attribution:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    rate_limit:
+      interval_ms: 1000
+    config:
+      endpoint: https://photon.komoot.io/api/
+      method: GET
+      headers:
+        User-Agent: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      params:
+        q: "{q}"
+        limit: "{limit}"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+
+metadata:
+  category: maps
+  tags: [maps, geocoding, search, places, openstreetmap, photon]
+  cost_category: free
+  execution_time: fast
+  read_only: true

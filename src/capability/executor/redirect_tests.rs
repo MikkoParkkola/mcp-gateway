@@ -523,14 +523,14 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
     );
     let port = serve(app).await;
     let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let client = super::client::build_over(
+    let client = super::client::build_over(|| {
         reqwest::Client::builder().no_proxy().dns_resolver(
             crate::security::ssrf::PinningResolver::new(PrivateAnswer(std::sync::Arc::clone(
                 &lookups,
             )))
             .with_policy(crate::security::ssrf::DestinationPolicy::Public),
-        ),
-    );
+        )
+    });
     // A server answered the first hop, so the refused hop is one Failed
     // send: only the client's own redirect count tells it from an unsent one.
     let send = std::time::Duration::from_millis(7);

@@ -359,6 +359,20 @@ impl MetaMcp {
                 response = apply_validated_output(&response, transformed);
             }
 
+            // The licence credit, on every successful call to a capability
+            // that declares one, with or without a transform and with or
+            // without `_full`: a projection cannot strip it. Read and written
+            // back the way `response_transform` is; idempotent where the
+            // backend's exit already set it.
+            if cap_def.attribution.is_some()
+                && response.get("isError") != Some(&serde_json::Value::Bool(true))
+            {
+                let inner = crate::protocol::tool_result_payload(&response)
+                    .unwrap_or_else(|| response.clone());
+                let attributed = crate::capability::apply_attribution(&cap_def, inner);
+                response = apply_validated_output(&response, attributed);
+            }
+
             let output_schema =
                 (!cap_def.schema.output.is_null()).then(|| cap_def.schema.output.clone());
 

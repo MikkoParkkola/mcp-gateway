@@ -47,7 +47,11 @@ def stubs(tmp: Path, with_free: bool = True, with_proc: bool = True) -> dict[str
     return env
 
 
-def run(cmd: str, env: dict[str, str], timeout: float = 20) -> tuple[int, str, str, float]:
+# No row asserts "finished within N s" for a success: the machine's load decides how long a start-up takes (a train was refused
+# at load 26 by exactly such a bound). A row separates its outcomes by what the wrapper did (a status, a line, a signal that
+# arrived) and, where the failure is a wait on a timer or a hang, by a timeout set well under that timer: the wrapper must
+# end before it, and a load stretch cannot bring a correct run near it. A hang is rc -1 from run().
+def run(cmd: str, env: dict[str, str], timeout: float = 60) -> tuple[int, str, str, float]:
     start = time.monotonic()
     try:
         p = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
@@ -63,11 +67,12 @@ def rows() -> list[tuple[str, bool, str]]:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
         env = stubs(tmp)
-        # W1: start line, >= 2 samples, end line. 8 s and a loose time bound: under heavy load one sample took
-        # about 2 s, and a 3 s command then ended before its second sample. W7 is the no-trailing-sampler check.
+        # W1: start line, >= 2 samples, end line. 8 s: under heavy load one sample took about 2 s, and a 3 s command then
+        # ended before its second sample. A wrapper that never ends is the hang (rc -1 at the run timeout). W7 is the
+        # no-trailing-sampler check.
         rc, so, se, t = run(f"{w} sleep 8", env)
         lines = [l for l in se.splitlines() if l.startswith("memory ")]
-        ok = (rc == 0 and len(lines) >= 4 and "start" in lines[0] and "end, exit 0:" in lines[-1] and t < 11
+        ok = (rc == 0 and len(lines) >= 4 and "start" in lines[0] and "end, exit 0:" in lines[-1]
               and "Mem total 15983 used 1502 available 14200" in lines[0] and "Swap total 11263 used 12" in lines[0]
               and "pressure mem some 1.50 full 0.75" in lines[0] and "io some 2.25" in lines[0]
               and "load 3.99" in lines[0] and "cgroup MB 9216 oom_kill 2" in lines[0])
@@ -79,15 +84,18 @@ def rows() -> list[tuple[str, bool, str]]:
         rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env)
         out.append(("W3 SIGKILL: exit 137, no 'limit' wording", rc == 137 and "end, exit 137" in se and "limit" not in se, se[-200:]))
         # W4: TERM, INT and HUP sent to the wrapper reach the command as TERM; it cleans up its child and exits 42.
-        # `set -m` gives the backgrounded wrapper a normal INT (without job control, & ignores INT).
+        # `set -m` gives the backgrounded wrapper a normal INT (without job control, & ignores INT). The command sets its
+        # trap, then writes its marker; the signal is sent when the marker exists (the command's own "ready" event, not a
+        # sleep that load can overtake). A signal that is not forwarded leaves the command in its 120 s wait: a hang at the
+        # 60 s timeout, far from a correct run's seconds. The trap waits for the child, so "child gone" holds at exit.
         for sig in ("TERM", "INT", "HUP"):
             marker = tmp / f"child-{sig}"
-            cmd = (f"set -m; {w} bash -c 'sleep 30 & c=$!; echo $c > {marker}; "
-                   f"trap \"kill $c; exit 42\" TERM; wait $c' & wp=$!; sleep 1.5; kill -{sig} $wp; wait $wp")
+            cmd = (f"set -m; {w} bash -c 'sleep 120 & c=$!; trap \"kill $c; wait $c; exit 42\" TERM; echo $c > {marker}; wait $c' "
+                   f"& wp=$!; while [ ! -s {marker} ]; do kill -0 $wp 2>/dev/null || break; sleep 0.1; done; kill -{sig} $wp; wait $wp")
             rc, so, se, t = run(cmd, env)
             child = marker.read_text().strip() if marker.exists() else ""
             gone = bool(child) and subprocess.run(["kill", "-0", child], capture_output=True).returncode != 0
-            out.append((f"W4 {sig} reaches the command as TERM: exit 42 within 2 s, child gone", rc == 42 and t < 4 and gone, se[-200:]))
+            out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone, se[-200:]))
         # W11: a command that ignores the forwarded TERM keeps running and its own later status is the result.
         cmd = (f"set -m; {w} bash -c 'trap \"\" TERM; sleep 2; exit 7' & wp=$!; sleep 0.5; kill -TERM $wp; wait $wp")
         rc, so, se, t = run(cmd, env)
@@ -100,10 +108,15 @@ def rows() -> list[tuple[str, bool, str]]:
         # W6: the command's arguments never reach the wrapper's own output.
         rc, so, se, t = run(f"{w} true sk-SECRET-not-printed", env)
         out.append(("W6 no argv in the wrapper's output", "SECRET" not in se and "SECRET" not in so, se[-200:]))
-        # W7: nothing holds the pipe after the command ends, even with a long interval.
+        # W7: nothing holds the pipe after the command ends, even with a long interval. A sampler left behind holds the
+        # pipe for its 60 s interval: the row must end at half of that. The command ends only once the wrapper's sampler
+        # nap exists (a `sleep` whose parent is the wrapper, found with ps), so the nap is running when the command ends
+        # however slowly the wrapper got there; a command that ends at once never gets a nap started and proves nothing.
         env60 = dict(env, MEM_LOG_EVERY="60")
-        rc, so, se, t = run(f"{w} true 2>&1 | cat", env60)
-        out.append(("W7 returns within 3 s with a 60 s interval (no sampler left)", rc == 0 and t < 3, f"{t:.1f}s"))
+        waiter = tmp / "w7-waiter.sh"
+        waiter.write_text("until ps -A -o ppid=,comm= | awk -v p=$PPID '$1 == p && $2 ~ /sleep$/ { f = 1 } END { exit !f }'; do sleep 0.1; done\n")
+        rc, so, se, t = run(f"{w} bash {waiter} 2>&1 | cat", env60, timeout=30)
+        out.append(("W7 returns before the 60 s interval ends (no sampler left)", rc == 0, f"rc {rc}, {t:.1f}s"))
         # W8, W9: the caller shapes keep the failure status.
         rc, so, se, t = run(f"set -o pipefail; {w} false 2>&1 | tee {tmp}/x.log >/dev/null", env)
         out.append(("W8 tee pipeline under pipefail keeps rc 1", rc == 1, ""))
@@ -121,12 +134,12 @@ def rows() -> list[tuple[str, bool, str]]:
         env = stubs(Path(d))
         # W13: a command a signal kills before the wrapper first waits (here, while a slow `free` takes the start
         # sample). bash 5.1 and 5.2 drop such a job from the job table, so `wait -n` never names it; the wrapper must
-        # still end promptly with 137, not loop on its sampling timer until the step limit. (bash 5.3 keeps the job,
-        # so this row turns red on the old wrapper only under bash 5.1 or 5.2.)
+        # still end with 137, not loop on its sampling timer until the step limit (a hang: rc -1 at the timeout). (bash 5.3
+        # keeps the job, so this row turns red on the old wrapper only under bash 5.1 or 5.2.)
         (Path(d) / "bin" / "free").write_text("#!/bin/sh\nsleep 1\n" + FREE.split("\n", 1)[1])
-        rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env, timeout=15)
-        out.append(("W13 a command killed before the first wait: exit 137 within 10 s",
-                    rc == 137 and "end, exit 137" in se and t < 10, f"rc {rc}, {t:.1f}s, {se[-200:]!r}"))
+        rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env, timeout=60)
+        out.append(("W13 a command killed before the first wait: exit 137, no hang",
+                    rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]!r}"))
     return out
 
 

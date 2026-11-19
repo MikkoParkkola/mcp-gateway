@@ -20,7 +20,8 @@ test('a deep link answers the shell document with the gateway CSP', async ({ req
   expect(csp).not.toContain('\\');
   expect(reply.headers()['cache-control']).toContain('no-store');
   expect(reply.headers()['x-content-type-options']).toBe('nosniff');
-  expect(reply.headers()['referrer-policy']).toBe('no-referrer');
+  // same-origin, so the no-JavaScript sign-in form posts a real Origin.
+  expect(reply.headers()['referrer-policy']).toBe('same-origin');
 });
 
 test('a fixture under fixtures/api answers as JSON', async ({ request }) => {

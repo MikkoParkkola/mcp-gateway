@@ -325,6 +325,9 @@ pub async fn availability() -> &'static Result<(), Refusal> {
 mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]
+mod seam_tests;
+#[cfg(tp1)]
+#[cfg(test)]
 mod staged_tests;
 
 /// Off Linux a fetching preview is refused as unsupported, like every other
