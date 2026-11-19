@@ -731,6 +731,9 @@ mod listen_graceful;
 #[path = "streaming_tests/credential_at_write.rs"]
 mod credential_at_write;
 
+#[path = "streaming_tests/stop_streams.rs"]
+mod stop_streams;
+
 /// MIK-8288: session expiry follows the runtime's clock, the same clock the
 /// reaper's ticker runs on, so a test can drive a TTL on a paused clock
 /// instead of racing it on wall time. Red while expiry read the std clock:

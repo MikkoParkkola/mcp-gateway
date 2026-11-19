@@ -382,6 +382,9 @@ mod file_mode_inherit_tests;
 #[cfg(tp3)]
 #[cfg(all(test, unix))]
 mod state_save_atomic_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+mod state_save_turn_tests;
 
 #[cfg(test)]
 pub(crate) mod test_classification_count;

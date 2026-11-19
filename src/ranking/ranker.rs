@@ -15,6 +15,7 @@ impl SearchRanker {
     pub fn new() -> Self {
         Self {
             usage_counts: DashMap::new(),
+            write_turn: parking_lot::Mutex::new(()),
         }
     }
 
@@ -146,6 +147,26 @@ impl SearchRanker {
     // Other hard links keep the old bytes. The writer's owner and macOS ACL
     // handling is a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        let turn = self.write_turn.lock();
+        self.write(path, &turn)
+    }
+
+    /// The stop checkpoint's save: `None`, skipped, while another write of
+    /// this file holds its turn, so writes stalled on a slow disk never pile up.
+    pub(crate) fn save_unless_busy(&self, path: &Path) -> Option<std::io::Result<()>> {
+        let turn = self.write_turn.try_lock()?;
+        Some(self.write(path, &turn))
+    }
+
+    /// Hold the write turn, as a write does: a row's stand-in for a write in
+    /// flight.
+    #[cfg(test)]
+    pub(crate) fn hold_write_turn(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.write_turn.lock()
+    }
+
+    /// The write itself, snapshot through rename, under the caller's turn.
+    fn write(&self, path: &Path, _turn: &parking_lot::MutexGuard<'_, ()>) -> std::io::Result<()> {
         // The same row and key split as the stats snapshot, so a tool name
         // with a colon is saved whole.
         let counts: Vec<TopTool> = self

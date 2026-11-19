@@ -63,6 +63,7 @@ pub(crate) fn create_sse_response_with_view(
     }
 
     let mut rx = session.subscribe();
+    let mut stopped = multiplexer.stopped.subscribe();
     // Held for its credential slot, which a resume may replace: each copy is
     // judged against the credential the session holds when it is written.
     let session = Arc::clone(session);
@@ -75,7 +76,19 @@ pub(crate) fn create_sse_response_with_view(
         yield Ok(connected_event(&session_id_owned));
 
         loop {
-            match rx.recv().await {
+            // The stop first: once it is set, nothing more is written.
+            let next = tokio::select! {
+                biased;
+                Ok(_) = stopped.wait_for(|stop| *stop) => None,
+                next = rx.recv() => Some(next),
+            };
+            let Some(next) = next else {
+                // What is still queued is settled unwritten, so no request's
+                // waiter waits for a copy this stream will never write.
+                settle_stranded(&mut rx);
+                break;
+            };
+            match next {
                 Ok(item) => {
                     #[cfg(test)]
                     multiplexer.before_write_check.pause().await;

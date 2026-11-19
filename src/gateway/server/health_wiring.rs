@@ -119,10 +119,27 @@ pub(super) fn saver_closure(
     path: Option<PathBuf>,
     clock: Clock,
 ) -> impl Fn() + Send + Sync + 'static {
+    let save = gated_save(gate, history, path, clock, file::Wait::SkipIfBusy);
     move || {
-        if let (Some(path), Ok(now)) = (&path, clock()) {
-            file::save_gated(&history, path, now, &gate, file::Wait::SkipIfBusy);
+        save();
+    }
+}
+
+/// A save behind the gate that never records a stop, returning whether it
+/// wrote: the periodic save (`SkipIfBusy`), and the stop checkpoints' health
+/// entry, which skips like it and waits (`Block`) in the last pass.
+pub(super) fn gated_save(
+    gate: Arc<HealthGate>,
+    history: Arc<HealthHistory>,
+    path: Option<PathBuf>,
+    clock: Clock,
+    wait: file::Wait,
+) -> impl Fn() -> bool + Send + Sync + 'static {
+    move || match (&path, clock()) {
+        (Some(path), Ok(now)) => {
+            file::save_gated(&history, path, now, &gate, wait) == file::SaveOutcome::Saved
         }
+        _ => false,
     }
 }
 
@@ -210,6 +227,25 @@ impl Health {
             Arc::clone(&self.sample_inputs),
             clock,
         )
+    }
+
+    /// The stop checkpoints' health entry: the periodic save, which never
+    /// records a stop, skipping while a save runs; in the last pass it waits.
+    pub(super) fn checkpoint_class(&self) -> super::stop_checkpoints::Class {
+        let save = |wait| -> super::stop_checkpoints::Save {
+            Arc::new(gated_save(
+                Arc::clone(&self.gate),
+                Arc::clone(&self.history),
+                self.path.clone(),
+                crate::clock::unix_secs,
+                wait,
+            ))
+        };
+        super::stop_checkpoints::Class {
+            name: "health",
+            checkpoint: save(file::Wait::SkipIfBusy),
+            last: save(file::Wait::Block),
+        }
     }
 
     /// The shutdown step: a clean stop, then the save.
