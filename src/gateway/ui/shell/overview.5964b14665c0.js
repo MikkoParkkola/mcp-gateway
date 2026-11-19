@@ -237,7 +237,16 @@ async function statusTab(body, ctx) {
   arrange(strip, more, t, phone.matches);
   // One breakpoint listener at a time: a new render takes the last one's place.
   watching?.mql.removeEventListener('change', watching.fn);
-  watching = { mql: phone, fn: (e) => arrange(strip, more, t, e.matches) };
+  const fn = (e) => {
+    // A page that has moved on lets go of its tiles at the next breakpoint change.
+    if (!section.isConnected) {
+      phone.removeEventListener('change', fn);
+      if (watching?.fn === fn) watching = null;
+      return;
+    }
+    arrange(strip, more, t, e.matches);
+  };
+  watching = { mql: phone, fn };
   phone.addEventListener('change', watching.fn);
 
   const [calls, blocks, hits] = reads;

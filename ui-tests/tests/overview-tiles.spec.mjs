@@ -340,4 +340,5 @@ test('T10 the Firewall tile opens Activity filtered to blocked calls without rel
   await link(page, 'blocks').click();
   await expect(page).toHaveURL(/\/ui\/activity\/status\?outcome=blocked$/);
   expect(await page.evaluate(() => window.__sameDocument === true)).toBe(true);
+  await expect(page.locator('#content')).toBeFocused();
 });

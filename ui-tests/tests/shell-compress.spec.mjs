@@ -314,6 +314,13 @@ test.describe('boot reads after first paint', () => {
   for (const [name, init] of [
     ['without PerformanceObserver', () => { delete window.PerformanceObserver; }],
     ['when observing paint throws', () => { window.PerformanceObserver = class { observe() { throw new TypeError('no paint'); } disconnect() {} }; }],
+    // Neither an observer nor a paint record: the 1 s bound lets the reads start anyway.
+    ['without an observer or a paint record', () => {
+      delete window.PerformanceObserver;
+      const real = performance.getEntriesByName.bind(performance);
+      window.__paintEntries = real;
+      performance.getEntriesByName = (n, t) => (n === 'first-contentful-paint' ? [] : real(n, t));
+    }],
   ]) {
     test(`Z8 ${name}, the boot reads still start, and none before first paint`, async ({ page }) => {
       await page.addInitScript(RECORD_API);
@@ -322,7 +329,7 @@ test.describe('boot reads after first paint', () => {
       await shellReady(page);
       await expect.poll(() => apiPaths(page)).toEqual(expect.arrayContaining(BOOT));
       // The browser still records the paint; only the page's way of hearing about it is gone.
-      const { fcp, calls } = await page.evaluate(() => ({ fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime, calls: window.__api }));
+      const { fcp, calls } = await page.evaluate(() => ({ fcp: (window.__paintEntries ?? performance.getEntriesByName.bind(performance))('first-contentful-paint')[0]?.startTime, calls: window.__api }));
       expect(fcp).toBeGreaterThan(0);
       for (const c of calls) expect(c.at, `${c.path} started before first paint`).toBeGreaterThanOrEqual(fcp);
     });
