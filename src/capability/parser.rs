@@ -124,10 +124,10 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
     }
 
     // Name must be valid identifier
-    if !capability
+    if mutant!("c3a", false, !capability
         .name
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
+        .all(|c| c.is_alphanumeric() || c == '_'))
     {
         return Err(Error::Config(format!(
             "Capability name '{}' must contain only alphanumeric characters and underscores",

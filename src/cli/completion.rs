@@ -46,10 +46,10 @@ pub struct Generated {
 #[must_use]
 pub fn completion_safe(value: &str) -> bool {
     let mut chars = value.chars();
-    chars
+    mutant!("c7", false, chars
         .next()
         .is_some_and(|c| c.is_alphanumeric() || c == '_')
-        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-')))
 }
 
 /// A visible copy of the real CLI with closed lists and the configuration file hint.

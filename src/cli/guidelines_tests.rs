@@ -84,7 +84,7 @@ fn surface_paths() -> std::collections::BTreeSet<String> {
 fn help_problems(path: &str, cmd: &clap::Command) -> Vec<String> {
     let mut problems = Vec::new();
     let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
-    if about.trim().is_empty() {
+    if mutant!("h1b", false, about.trim().is_empty()) {
         problems.push(format!("`{path}`: no about text"));
     }
     let short = cmd.clone().render_help().to_string();
@@ -128,7 +128,7 @@ fn example_lines(long: &str) -> Vec<String> {
     {
         if line.starts_with("mcp-gateway ") {
             examples.push(line.to_owned());
-        } else if let Some(open) = examples.last_mut() {
+        } else if let Some(open) = mutant!("h2w", None, examples.last_mut()) {
             open.push(' ');
             open.push_str(line);
         }
@@ -143,11 +143,11 @@ fn example_problems(root: &clap::Command, path: &str, long: &str) -> Vec<String>
     let mut actionable = false;
     for line in example_lines(long) {
         let Some(words) = shlex::split(&line) else {
-            problems.push(format!("`{path}`: cannot split `{line}`"));
+            mutant!("h2s", (), problems.push(format!("`{path}`: cannot split `{line}`")));
             continue;
         };
         let rest = &words[1..];
-        if matches!(rest, [one] if one == "--help" || one == "-h" || one == "--version") {
+        if mutant!("h2h", false, matches!(rest, [one] if one == "--help" || one == "-h" || one == "--version")) {
             continue;
         }
         let Ok(matches) = root.clone().try_get_matches_from(&words) else {
@@ -164,7 +164,7 @@ fn example_problems(root: &clap::Command, path: &str, long: &str) -> Vec<String>
         } else {
             path.split(' ').collect()
         };
-        if matched.len() >= visited.len() && matched.iter().zip(&visited).all(|(m, v)| m == v) {
+        if mutant!("h2p", true, matched.len() >= visited.len() && matched.iter().zip(&visited).all(|(m, v)| m == v)) {
             actionable = true;
         }
     }
@@ -357,7 +357,7 @@ fn flag_problems(
         }
     }
     for (c, longs) in &shorts {
-        if longs.len() > 1 {
+        if mutant!("n4", false, longs.len() > 1) {
             problems.push(format!("-{c}: one short letter for {longs:?}"));
         }
     }
@@ -388,11 +388,11 @@ fn flag_problems(
                 continue;
             }
             let Some(rule) = rule else {
-                problems.push(format!("{flag}: no entry (leaves {leaves:?})"));
+                mutant!("n3", (), problems.push(format!("{flag}: no entry (leaves {leaves:?})")));
                 break;
             };
             let expected = (rule.signature)();
-            if *sig != expected {
+            if mutant!("n2", false, *sig != expected) {
                 problems.push(format!(
                     "{flag} on `{leaf}`: signature {sig:?}, ruled {expected:?}"
                 ));
