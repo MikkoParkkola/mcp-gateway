@@ -437,7 +437,9 @@ fn skills_json_failures_print_no_document() {
 }
 
 /// D4: a registry path that is not UTF-8 is printed lossily, as the text form prints it, instead of failing.
-#[cfg(unix)]
+/// Skipped on macOS: APFS rejects a directory name with invalid UTF-8 bytes (errno 92, EILSEQ), so the
+/// directory this row needs can never be created there. Linux still runs it.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn skills_list_prints_a_non_utf8_path_lossily() {
     use std::os::unix::ffi::OsStrExt as _;
