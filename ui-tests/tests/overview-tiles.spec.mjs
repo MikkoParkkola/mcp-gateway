@@ -342,3 +342,15 @@ test('T10 the Firewall tile opens Activity filtered to blocked calls without rel
   expect(await page.evaluate(() => window.__sameDocument === true)).toBe(true);
   await expect(page.locator('#content')).toBeFocused();
 });
+
+// The rows above find sparklines by tag name, which an element in the wrong namespace also matches
+// while drawing nothing; this one checks the namespace the script computes at load.
+test('T11 a sparkline and its lines are SVG elements, so they draw', async ({ page }) => {
+  await serve(page);
+  await open(page);
+  const spark = tile(page, 'calls').locator('svg.ov-spark');
+  await expect(spark).toHaveCount(1);
+  const spaces = await spark.evaluate((s) => [s, ...s.querySelectorAll('polyline')].map((e) => e.namespaceURI));
+  expect(spaces.length).toBeGreaterThan(1);
+  expect(new Set(spaces)).toEqual(new Set(['http://www.w3.org/2000/svg']));
+});
