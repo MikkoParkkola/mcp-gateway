@@ -74,10 +74,15 @@ fn bash_and_zsh_carry_the_closed_lists() {
         "no file hint in bash"
     );
     let zsh = script(CompletionShell::Zsh);
-    assert!(
-        zsh.contains("':tool:(good_cap other_cap)'"),
-        "zsh tool values"
-    );
+    // clap_complete's zsh positional spec is `'<cardinality>:<id> -- <help>:<values>'`.
+    for leaf in ["invoke", "inspect"] {
+        assert!(
+            zsh.contains(&format!(
+                "':tool -- Tool name to {leaf}:(good_cap other_cap)'"
+            )),
+            "zsh tool values for {leaf}"
+        );
+    }
     assert!(
         zsh.contains("'--log-level=[Minimum log level\\: trace, debug, info, warn, or error]: :(trace debug info warn error)'"),
         "zsh log-level values"
@@ -500,9 +505,10 @@ fn no_hidden_item_reaches_a_script() {
             "pwsh {long}"
         );
     }
+    // The visible counterpart (A1): `cap search` has its own visible `--capabilities`, which stays.
     assert!(
         fish.iter()
-            .any(|e| e.0 == "cap list" && e.1 == "flag" && e.2 == "--capabilities"),
+            .any(|e| e.0 == "cap search" && e.1 == "flag" && e.2 == "--capabilities"),
         "visible --capabilities"
     );
     let bash = script(CompletionShell::Bash);
@@ -573,7 +579,7 @@ async fn the_tool_values_are_exactly_the_directory_names() {
     assert!(
         generate(CompletionShell::Zsh, tree())
             .script
-            .contains("':tool:(good_cap other_cap)'")
+            .contains("':tool -- Tool name to invoke:(good_cap other_cap)'")
     );
     assert!(
         generate(CompletionShell::Fish, tree())

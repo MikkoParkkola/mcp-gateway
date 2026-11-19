@@ -71,9 +71,15 @@ fn help_problems(path: &str, cmd: &clap::Command) -> Vec<String> {
     }
     let short = cmd.clone().render_help().to_string();
     let long = cmd.clone().render_long_help().to_string();
-    for (name, text) in [("-h", &short), ("--help", &long)] {
-        if !about.trim().is_empty() && !text.lines().any(|l| l.trim() == about.trim()) {
-            problems.push(format!("`{path}` {name}: the about text is not a line"));
+    // clap wraps a description at the help width and shows `long_about`, when a command has one, in `--help`: compare
+    // with runs of whitespace collapsed, against the description each render shows.
+    let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let long_about = cmd
+        .get_long_about()
+        .map_or_else(|| about.clone(), ToString::to_string);
+    for (name, text, description) in [("-h", &short, &about), ("--help", &long, &long_about)] {
+        if !description.trim().is_empty() && !flat(text).contains(&flat(description)) {
+            problems.push(format!("`{path}` {name}: the description is not shown"));
         }
         if !text.lines().any(|l| l.starts_with("Usage: ")) {
             problems.push(format!("`{path}` {name}: no `Usage: ` line"));
@@ -92,14 +98,24 @@ fn help_problems(path: &str, cmd: &clap::Command) -> Vec<String> {
 
 /// The `mcp-gateway ...` lines under `Examples:` in a long render.
 fn example_lines(long: &str) -> Vec<String> {
-    long.lines()
+    // clap wraps the examples at the help width: a line in the section that does not start a new `mcp-gateway`
+    // command continues the one before it.
+    let mut examples: Vec<String> = Vec::new();
+    for line in long
+        .lines()
         .skip_while(|l| l.trim() != "Examples:")
         .skip(1)
         .take_while(|l| !l.trim().is_empty())
         .map(str::trim)
-        .filter(|l| l.starts_with("mcp-gateway "))
-        .map(str::to_owned)
-        .collect()
+    {
+        if line.starts_with("mcp-gateway ") {
+            examples.push(line.to_owned());
+        } else if let Some(open) = examples.last_mut() {
+            open.push(' ');
+            open.push_str(line);
+        }
+    }
+    examples
 }
 
 /// H2 on one command: every example splits; at least one is actionable (not `--help`, `-h` or `--version` alone) and
@@ -207,6 +223,8 @@ fn the_example_checker_names_each_fault() {
             "`a`: no actionable example parses to it"
         ]
     );
+    // An example clap wrapped onto a second line is read whole: alone, the first line is the case above.
+    assert_eq!(check("mcp-gateway a 'open\nend'"), Vec::<String>::new());
 }
 
 // H3 (a typo suggests only visible commands) runs against the real binary: tests/cli_output_rows.rs.
@@ -576,7 +594,12 @@ fn tls_output_keeps_out_as_a_hidden_alias() {
             .get_arguments()
             .find(|a| a.get_long() == Some("output"))
             .expect("--output");
-        assert_eq!(arg.get_visible_aliases(), None, "{leaf:?}");
+        // clap answers Some([]) when every alias is hidden; the rule is that none is visible.
+        assert_eq!(
+            arg.get_visible_aliases().unwrap_or_default(),
+            Vec::<&str>::new(),
+            "{leaf:?}"
+        );
         let help = node.clone().render_long_help().to_string();
         let tokens: Vec<&str> = help
             .split(|c: char| c.is_whitespace() || c == ',')
@@ -643,9 +666,10 @@ fn the_man_page_lists_the_top_level_commands() {
         "the written list and the tree's visible top-level commands differ"
     );
     let page = super::man_page_render::render(crate::cli::Cli::command());
+    // clap_mangen ends the `.TH` line with a space (an empty trailing field).
     assert!(
         page.lines()
-            .any(|l| l == format!(".TH mcp-gateway 1  \"mcp-gateway {version}\"")),
+            .any(|l| l.trim_end() == format!(".TH mcp-gateway 1  \"mcp-gateway {version}\"")),
         "{page}"
     );
     assert!(
