@@ -1,0 +1,24 @@
+head_sha	fdae797cdd9ed6645dd4c526ed31a653f7e1ec9d
+#mutant last-from-reserve
+mcp_gateway	gateway::server::stop_checkpoints::tests::l_budget_the_drains_leave_the_last_pass_its_slice	src/gateway/server/stop_checkpoints_tests.rs:210
+#mutant interval
+mcp_gateway	gateway::server::stop_checkpoints::tests::l_interval_a_pass_runs_every_second	src/gateway/server/stop_checkpoints_tests.rs:70
+#mutant no-loop
+mcp_gateway	gateway::server::stop_checkpoints::tests::l_interval_a_pass_runs_every_second	src/gateway/server/stop_checkpoints_tests.rs:70
+stop_saves	k_post_a_request_completing_during_the_stop_is_saved	tests/stop_saves.rs:502
+#mutant await-batch
+mcp_gateway	gateway::server::stop_checkpoints::tests::l_stall_a_stalled_write_holds_back_no_other_class	src/gateway/server/stop_checkpoints_tests.rs:70
+#mutant health-stop
+mcp_gateway	gateway::server::stop_checkpoints::tests::l_classes_the_real_pass_set	src/gateway/server/stop_checkpoints_tests.rs:273
+#mutant no-turn multi=4
+mcp_gateway	state_save_turn_tests::t_turn_usage	src/state_save_turn_tests.rs:84
+mcp_gateway	state_save_turn_tests::t_turn_transitions	src/state_save_turn_tests.rs:84
+mcp_gateway	state_save_turn_tests::t_order_usage	src/state_save_turn_tests.rs:120
+mcp_gateway	state_save_turn_tests::t_order_transitions	src/state_save_turn_tests.rs:120
+#mutant no-sse-end multi=2
+stop_saves	s_sse_a_session_stream_ends_at_the_signal	tests/stop_saves.rs:592
+mcp_gateway	gateway::streaming::tests::listen_graceful::s_sub_ends_the_stop_ends_a_listen_stream_gracefully	src/gateway/streaming_tests/listen_graceful.rs:135
+mcp_gateway	gateway::streaming::tests::stop_streams::s_late_a_stream_opened_after_the_stop_ends_after_connecting	src/gateway/streaming_tests/stop_streams.rs:56
+mcp_gateway	gateway::streaming::tests::stop_streams::s_resume_the_stop_settles_what_a_resumed_stream_holds	src/gateway/streaming_tests/stop_streams.rs:102
+#mutant no-settle
+mcp_gateway	gateway::streaming::tests::stop_streams::s_resume_the_stop_settles_what_a_resumed_stream_holds	src/gateway/streaming_tests/stop_streams.rs:110
