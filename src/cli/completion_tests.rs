@@ -83,13 +83,26 @@ fn bash_and_zsh_carry_the_closed_lists() {
             "zsh tool values for {leaf}"
         );
     }
+    // The option spec is `'--long=[help]:<value name>:<values>'`; the value name is clap's, the values are the rule.
+    let spec = |long: &str| -> String {
+        zsh.lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(&format!("'--{long}=[")))
+            .unwrap_or_else(|| panic!("no zsh spec for --{long}"))
+            .to_owned()
+    };
+    let log_level = spec("log-level");
     assert!(
-        zsh.contains("'--log-level=[Minimum log level\\: trace, debug, info, warn, or error]: :(trace debug info warn error)'"),
-        "zsh log-level values"
+        log_level
+            .starts_with("'--log-level=[Minimum log level\\: trace, debug, info, warn, or error]:")
+            && log_level.contains(":(trace debug info warn error)'"),
+        "zsh log-level values: {log_level}"
     );
+    let config = spec("config");
     assert!(
-        zsh.contains("'--config=[Path to the gateway configuration file (YAML)]: :_files'"),
-        "zsh file hint"
+        config.starts_with("'--config=[Path to the gateway configuration file (YAML)]:")
+            && config.contains(":_files'"),
+        "zsh file hint: {config}"
     );
     assert!(zsh.contains(":(read execute any)'"), "zsh scope values");
 }
