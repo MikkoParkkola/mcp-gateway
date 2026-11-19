@@ -25,8 +25,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.81ecea31a916.js",
-        include_bytes!("shell/activity.81ecea31a916.js"),
+        "activity.f198a470159a.js",
+        include_bytes!("shell/activity.f198a470159a.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,20 +49,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.a4f05c75fdd3.js",
-        include_bytes!("shell/gateway.a4f05c75fdd3.js"),
+        "gateway.88d4fb4c3b93.js",
+        include_bytes!("shell/gateway.88d4fb4c3b93.js"),
     ),
     (
-        "overview.1a1d50309393.js",
-        include_bytes!("shell/overview.1a1d50309393.js"),
+        "overview.21ae12327fb8.js",
+        include_bytes!("shell/overview.21ae12327fb8.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "shell.3f97984cfbf6.js",
-        include_bytes!("shell/shell.3f97984cfbf6.js"),
+        "shell.5eea2ad6bf49.js",
+        include_bytes!("shell/shell.5eea2ad6bf49.js"),
     ),
     (
         "shell.c460caebf770.css",
@@ -73,12 +73,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
-        "tips.9279e31274d7.json",
-        include_bytes!("shell/tips.9279e31274d7.json"),
+        "tips.f57cf211af5a.json",
+        include_bytes!("shell/tips.f57cf211af5a.json"),
     ),
     (
-        "tools.2161032d488e.js",
-        include_bytes!("shell/tools.2161032d488e.js"),
+        "tools.49c455c2de72.js",
+        include_bytes!("shell/tools.49c455c2de72.js"),
     ),
     (
         "tools.5cacef0c94f9.css",
@@ -89,8 +89,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.dca2f4f2ff5a.js",
-        include_bytes!("shell/tooltip.dca2f4f2ff5a.js"),
+        "tooltip.ae498e0a3672.js",
+        include_bytes!("shell/tooltip.ae498e0a3672.js"),
     ),
 ];
 

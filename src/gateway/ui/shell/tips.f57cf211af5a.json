@@ -43,20 +43,6 @@
    "gateway.status.memory-now",
    "gateway.status.reloaded-at-10-31-after"
   ],
-  "overview": [
-   "overview.status.answering-grouped-by-the-gateway",
-   "overview.status.calls-per-30-min",
-   "overview.status.caught-last-hour",
-   "overview.status.environment",
-   "overview.status.from-cache-last-hour",
-   "overview.status.live-11-of-6-920",
-   "overview.status.live-traffic",
-   "overview.status.optional-view",
-   "overview.status.slowest-5-last-hour",
-   "overview.status.tools-agents-load",
-   "overview.status.traffic",
-   "overview.status.updates-stopped-at-14-31"
-  ],
   "policies": [
    "policies.settings.applies-to",
    "policies.settings.exceptions",
@@ -128,7 +114,19 @@
   "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
   "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
   "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
-  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client"
+  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client",
+  "overview.status.answering-grouped-by-the-gateway": "Overview › Status: the flow map",
+  "overview.status.calls-per-30-min": "Overview › Status: the 24 h chart",
+  "overview.status.caught-last-hour": "Overview › Status: the KPI tiles' info tips",
+  "overview.status.environment": "Overview › Status: the environment line",
+  "overview.status.from-cache-last-hour": "Overview › Status: the KPI tiles' info tips",
+  "overview.status.live-11-of-6-920": "Overview › Status: the flow map",
+  "overview.status.live-traffic": "Overview › Status: the flow map",
+  "overview.status.optional-view": "Overview › Status: the flow map",
+  "overview.status.slowest-5-last-hour": "Overview › Status: the KPI tiles' info tips",
+  "overview.status.tools-agents-load": "Overview › Status: the KPI tiles' info tips",
+  "overview.status.traffic": "Overview › Status: the flow map",
+  "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state"
  },
  "_pending_rows": [
   "access.actions.keys",

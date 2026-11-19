@@ -9,7 +9,7 @@
 // read. A field the API leaves out reads "Not available yet", never a zero.
 // Every value goes in with textContent. The other Overview panels (Needs you,
 // the flow map, the chart) are their own slices.
-import { register, go, el as h } from '/ui/assets/shell.3f97984cfbf6.js';
+import { register, go, el as h } from '/ui/assets/shell.5eea2ad6bf49.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const NOT_YET = 'Not available yet';
