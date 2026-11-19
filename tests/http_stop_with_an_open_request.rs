@@ -39,7 +39,10 @@ const SAVE_FILES: [&str; 2] = ["usage.json", "transitions.json"];
 
 /// A stdio MCP server in Python that never answers `tools/call`: it marks the
 /// call started and goes on reading. Its stdin closing is the gateway's
-/// backend stage reaching it; it then writes `stopped` and exits.
+/// backend stage reaching it; it then writes `stopped` and lingers, so only a
+/// stage that waits for it (and then ends it) sees the mark while the gateway
+/// still runs. A gateway that exits without the stage closes the pipe only by
+/// exiting, so the mark would come after.
 const BACKEND_SCRIPT: &str = r#"import json, sys
 for line in sys.stdin:
     msg = json.loads(line)
@@ -59,6 +62,8 @@ for line in sys.stdin:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 open("stopped", "w").close()
+import time
+time.sleep(60)
 "#;
 
 fn write_config(root: &Path) -> std::path::PathBuf {
@@ -257,7 +262,8 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
         .status()
         .expect("kill runs");
     assert!(signalled.success(), "the signal was delivered");
-    let exited = tokio::time::timeout(GRACE, gateway.child_mut().wait()).await;
+    let (exited, marked_while_running) =
+        wait_for_exit(gateway.child_mut(), &root.join("stopped")).await;
     if exited.is_err() {
         let _ = std::process::Command::new("kill")
             .args(["-KILL", &pid.to_string()])
@@ -269,17 +275,38 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
          (total {STOP_TOTAL:?}): {exited:?}\n{}",
         logs(root)
     );
-    assert_teardown(root, log_before);
+    assert_teardown(root, log_before, marked_while_running);
+}
+
+type Exited = Result<std::io::Result<std::process::ExitStatus>, tokio::time::error::Elapsed>;
+
+/// Waits up to [`GRACE`] for the gateway to exit, noting whether the backend's
+/// mark appeared while the gateway was still running. The exit is polled
+/// first, so a mark written only once the gateway has exited never counts.
+async fn wait_for_exit(child: &mut tokio::process::Child, mark: &Path) -> (Exited, bool) {
+    let mut marked_while_running = false;
+    let exited = tokio::time::timeout(GRACE, async {
+        loop {
+            tokio::select! {
+                biased;
+                status = child.wait() => break status,
+                () = tokio::time::sleep(Duration::from_millis(20)) => {
+                    marked_while_running |= mark.exists();
+                }
+            }
+        }
+    })
+    .await;
+    (exited, marked_while_running)
 }
 
 /// What the stop must have done by the time the gateway has exited.
-fn assert_teardown(root: &Path, log_before: usize) {
-    // The backend's mark: the backend stage closes its stdin and waits for it
-    // to exit before the gateway goes on, so the mark is there now. A gateway
-    // that skipped the stage would close the pipe only by exiting, after this.
+fn assert_teardown(root: &Path, log_before: usize, marked_while_running: bool) {
+    // The backend's mark, seen while the gateway still ran: only its backend
+    // stage closes the backend's stdin before the gateway exits.
     assert!(
-        root.join("stopped").exists(),
-        "the backend's stdin was not closed by the backend stage before the gateway exited\n{}",
+        marked_while_running,
+        "the backend's stdin was not closed by the backend stage while the gateway ran\n{}",
         logs(root)
     );
     // Only what the stop logged: lines from before the signal do not count.
@@ -302,9 +329,12 @@ fn assert_teardown(root: &Path, log_before: usize) {
         // usage save that wrote nothing it held fails. (A transition needs two
         // calls in a session, so transitions.json holds none here.)
         if file == "usage.json" {
+            let rows: Vec<Value> = serde_json::from_str(&text).expect("usage rows");
             assert!(
-                text.contains(TOOL),
-                "{file} does not hold the held call's tool {TOOL}: {text:?}"
+                rows.iter().any(|row| row["server"] == BACKEND
+                    && row["tool"] == TOOL
+                    && row["count"].as_u64() >= Some(1)),
+                "{file} holds no use of {BACKEND}:{TOOL}: {text:?}"
             );
         }
     }
