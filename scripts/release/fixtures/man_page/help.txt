@@ -1,0 +1,42 @@
+MCP gateway and Model Context Protocol proxy: connect unlimited MCP servers, tools and REST APIs to
+an AI client at a fixed context cost, with on-demand tool discovery and MCP revision bridging
+
+Usage: mcp-gateway [OPTIONS] [COMMAND]
+
+Commands:
+  serve           Start the gateway server
+  cap             Capability management commands
+  import          Preview safe imports from API and MCP package sources
+  tls             Certificate lifecycle management (init-ca, issue-server, issue-client)
+  provenance      Export and verify public provenance keys
+  identity        Identity and local grant administration
+  accounts        Personal account store administration (offline)
+  hash-key        Digest an API key read from stdin (offline)
+  init            Create a new gateway configuration file
+  stats           Show observed invocation counts and cache behavior
+  dashboard-link  Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`
+  events          Administer MCP Events: list and replay dead-lettered deliveries
+  api             Send one request to a running gateway's admin API (`/ui/api/...`) and print its
+                  JSON; reads `MCP_GATEWAY_TOKEN`
+  validate        Validate capability definitions against agent-UX rules
+  tool            Invoke gateway tools directly from the CLI
+  skills          Generate agent skill bundles
+  setup           Setup wizard and config export
+  add             Add an MCP backend to gateway.yaml (or the `--config` file)
+  remove          Remove an MCP backend from gateway.yaml (or the `--config` file)
+  list            List the backends configured in gateway.yaml (or the `--config` file)
+  get             Show details of a backend configured in gateway.yaml (or the `--config` file)
+  doctor          Check gateway configuration and backend health
+  upgrade         Apply post-upgrade migrations and update version stamp
+  audit           Transparency log audit commands
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+  -c, --config <CONFIG>        Path to the gateway configuration file (YAML) [env:
+                               MCP_GATEWAY_CONFIG=]
+  -p, --port <PORT>            Port the gateway listens on (overrides config file) [env:
+                               MCP_GATEWAY_PORT=]
+      --log-level <LOG_LEVEL>  Minimum log level: trace, debug, info, warn, or error [env:
+                               MCP_GATEWAY_LOG_LEVEL=] [default: info]
+  -h, --help                   Print help
+  -V, --version                Print version
