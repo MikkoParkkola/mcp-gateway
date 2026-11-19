@@ -20,17 +20,24 @@ runs:
             sudo groupadd --gid "$G" mcpg-g
             sudo useradd --no-create-home --user-group --uid "$B" mcpg-b
             sudo useradd --no-create-home --user-group --uid "$C" --groups mcpg-g mcpg-c
-            img="$RUNNER_TEMP/mcpg-noacl.ext4"
+            # ramfs keeps owners and modes but has no extended attributes, so POSIX ACLs are unsupported there;
+            # ext4 on this kernel rejects the noacl mount option outright.
             mnt=/mnt/mcpg-noacl
-            truncate --size=16M "$img"
-            mkfs.ext4 -q "$img"
             sudo mkdir -p "$mnt"
-            sudo mount -o loop,noacl "$img" "$mnt"
+            sudo mount -t ramfs ramfs "$mnt"
             sudo chmod 1777 "$mnt"
-            # Proof the option took: the kernel's own view of the mount.
-            opts="$(findmnt --noheadings --output OPTIONS "$mnt")"
-            echo "$mnt mounted with: $opts"
-            case ",$opts," in *,noacl,*) ;; *) echo "::error::$mnt kept ACL support"; exit 1 ;; esac
+            # Proved by use: the rows need an ACL write and an ACL read there to fail as unsupported.
+            probe="$mnt/.acl-probe"
+            touch "$probe"
+            if err="$(setfacl -m u:nobody:r "$probe" 2>&1)"; then echo "::error::$mnt took an ACL"; exit 1; fi
+            case "$err" in *"Operation not supported"*) ;; *) echo "::error::setfacl in $mnt: $err"; exit 1 ;; esac
+            # `if 1:` opens a block, so the lines below may keep this script's indent.
+            python3 -I -c 'if 1:
+            import errno, os, sys
+            try: os.getxattr(sys.argv[1], "system.posix_acl_access")
+            except OSError as e: sys.exit(0 if e.errno == errno.EOPNOTSUPP else f"ACL read in {sys.argv[1]}: {e}")
+            sys.exit("an ACL read succeeded in " + sys.argv[1])' "$probe"
+            rm "$probe"
             echo "ACCESS_ROWS_NOACL_DIR=$mnt" >> "$GITHUB_ENV"
             ;;
           macOS)
