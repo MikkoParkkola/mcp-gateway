@@ -9,7 +9,7 @@
 // read. A field the API leaves out reads "Not available yet", never a zero.
 // Every value goes in with textContent. The other Overview panels (Needs you,
 // the flow map, the chart) are their own slices.
-import { register } from '/ui/assets/shell.2f0fa8846ded.js';
+import { register } from '/ui/assets/shell.7aa23f613042.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -212,7 +212,8 @@ function arrange(strip, more, t, phone) {
 }
 
 async function statusTab(body, ctx) {
-  // The four reads start together; a failed series is its tile's own state, never the page's.
+  // The four reads start together; a failed series is its tile's own state, never the page's. The shell
+  // runs a tab only after the first paint, so none of them starts before it.
   const overview = ctx.api('/ui/api/overview');
   const reads = METRICS.map((m) => ctx.api(seriesPath(m)).catch(() => FAIL));
   const data = (await overview) ?? {};

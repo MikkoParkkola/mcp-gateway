@@ -283,7 +283,8 @@ test.describe('boot reads after first paint', () => {
     await page.addInitScript(RECORD_API);
     await page.addInitScript(HOLD_PAINT);
     await page.goto('/ui/overview/status');
-    await shellReady(page);
+    // The Overview's content follows the paint (it reads after it), so the frame is what shows: its plate.
+    await expect(page.locator('.head .plate')).toHaveText('Overview');
     await page.evaluate(() => new Promise((ok) => setTimeout(ok, 300)));
     expect(await apiPaths(page)).toEqual([]);
     await page.evaluate(() => window.__releasePaint());
@@ -317,8 +318,8 @@ test.describe('boot reads after first paint', () => {
     await page.addInitScript(HOLD_PAINT);
     await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
     await page.goto('/ui/overview/status');
-    // Signed out, the page content is hidden, so wait for it to exist, not to show.
-    await page.waitForSelector('#content [data-rendered]', { state: 'attached' });
+    // Signed out the page is hidden, and its content follows the paint, so wait for the frame's plate text.
+    await expect(page.locator('.head .plate')).toHaveText('Overview');
     await page.evaluate(() => window.__releasePaint());
     await expect(page.locator('#signin')).toBeVisible();
   });
@@ -327,7 +328,7 @@ test.describe('boot reads after first paint', () => {
     await page.addInitScript(HOLD_PAINT);
     await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ json: { count: 3 } }));
     await page.goto('/ui/overview/status');
-    await shellReady(page);
+    await expect(page.locator('.head .plate')).toHaveText('Overview');
     await page.evaluate(() => window.__releasePaint());
     await expect(page.locator(COUNT_BADGE)).toHaveText('3');
   });
@@ -340,12 +341,16 @@ async function toolsApi(page) {
 }
 const toolRows = (page) => page.locator('#content table.t tbody tr.tool');
 
-test.describe('a screen read is not a boot read', () => {
-  test('Z10 cold, with the first paint held, /ui/tools/status still reads its tools at render', async ({ page }) => {
+test.describe('a screen reads when it renders, after the first paint', () => {
+  test('Z10 cold, with the first paint held, /ui/tools/status reads its tools only once the paint is out', async ({ page }) => {
     await toolsApi(page);
     await page.addInitScript(RECORD_API);
     await page.addInitScript(HOLD_PAINT);
     await page.goto('/ui/tools/status?view=all');
+    await expect(page.locator('.head .plate')).toHaveText('Tools');
+    await page.evaluate(() => new Promise((ok) => setTimeout(ok, 300)));
+    expect(await apiPaths(page)).toEqual([]);
+    await page.evaluate(() => window.__releasePaint());
     await expect(toolRows(page)).toHaveCount(1);
     expect((await apiPaths(page)).filter((p) => p.startsWith('/ui/api/tools'))).toHaveLength(1);
   });
