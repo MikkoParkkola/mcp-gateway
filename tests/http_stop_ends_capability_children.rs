@@ -139,7 +139,7 @@ async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
                 .get(format!("http://127.0.0.1:{port}/health"))
                 .send()
                 .await
-                .is_ok()
+                .is_ok_and(|reply| reply.status().is_success())
         {
             return port;
         }
