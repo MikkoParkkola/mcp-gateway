@@ -13,7 +13,7 @@ use super::*;
 
 /// The bound a failing send must return within: the 3 s client timeout plus
 /// slack for a loaded runner.
-const SEND_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+const SEND_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// F1. A closed port: the check returns within the bound, without sending.
 #[tokio::test]

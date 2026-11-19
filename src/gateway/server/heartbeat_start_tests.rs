@@ -28,12 +28,13 @@ fn target_for(rx: &Listener) -> seam::Target {
     }
 }
 
-/// A target whose client waits 60 s for a reply: a start that awaited the
-/// heartbeat would take a minute, far past the 30 s the rows allow.
+/// A target whose client has no timeout at all: against a receiver that
+/// never answers, a start that awaited the heartbeat would never answer,
+/// far past the 30 s the rows allow.
 fn slow_target_for(rx: &Listener) -> seam::Target {
     let mut target = target_for(rx);
-    target.client = crate::heartbeat::base_builder()
-        .timeout(Duration::from_secs(60))
+    target.client = reqwest::Client::builder()
+        .no_proxy()
         .build()
         .expect("client");
     target
@@ -129,7 +130,14 @@ async fn http_start_hardened_sends_nothing() {
     let _guard = seam::register(dir.path(), target_for(&rx));
     let hardened = start_http(dir.path(), SecurityPosture::Hardened).await;
     assert_eq!(hardened.status, 200);
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // The task's first check has finished (an event, not a wait): it
+    // skipped for the posture.
+    until("the hardened check", || {
+        seam::outcomes(dir.path()).contains(&crate::heartbeat::Outcome::Skipped(
+            crate::heartbeat::Skip::Hardened,
+        ))
+    })
+    .await;
     assert_eq!(rx.connections(), 0, "a hardened start sent");
     assert!(
         !dir.path().join("heartbeat").exists(),
@@ -233,7 +241,14 @@ async fn stdio_start_hardened_sends_nothing() {
     let _guard = seam::register(dir.path(), target_for(&rx));
     let hardened = start_stdio(dir.path(), SecurityPosture::Hardened).await;
     assert!(hardened.answered, "no reply to ping");
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // The task's first check has finished (an event, not a wait): it
+    // skipped for the posture.
+    until("the hardened check", || {
+        seam::outcomes(dir.path()).contains(&crate::heartbeat::Outcome::Skipped(
+            crate::heartbeat::Skip::Hardened,
+        ))
+    })
+    .await;
     assert_eq!(rx.connections(), 0, "a hardened stdio start sent");
     assert!(!dir.path().join("heartbeat").exists());
     hardened.stop().await;

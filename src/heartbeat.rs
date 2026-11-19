@@ -492,7 +492,13 @@ pub(crate) fn start(
             // Shutdown wins over a check in flight and over the wait.
             tokio::select! {
                 _ = shutdown.recv() => return,
-                _ = check => {}
+                outcome = check => {
+                    // A row waits on this event, never on a sleep.
+                    #[cfg(test)]
+                    seam::record(&data_dir, outcome);
+                    #[cfg(not(test))]
+                    let _ = outcome;
+                }
             }
             tokio::select! {
                 _ = shutdown.recv() => return,
@@ -536,6 +542,7 @@ pub(crate) mod seam {
     impl Drop for Guard {
         fn drop(&mut self) {
             targets().remove(&self.0);
+            outcomes_by_dir().remove(&self.0);
         }
     }
 
@@ -566,6 +573,33 @@ pub(crate) mod seam {
     }
 
     /// The stall registered for `dir`, taken once.
+    /// What the started task's checks returned, by data dir.
+    fn outcomes_by_dir()
+    -> std::sync::MutexGuard<'static, std::collections::BTreeMap<PathBuf, Vec<super::Outcome>>>
+    {
+        static OUTCOMES: std::sync::Mutex<
+            std::collections::BTreeMap<PathBuf, Vec<super::Outcome>>,
+        > = std::sync::Mutex::new(std::collections::BTreeMap::new());
+        OUTCOMES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Record a finished check for a registered `dir`.
+    pub(super) fn record(dir: &Path, outcome: super::Outcome) {
+        if targets().contains_key(dir) {
+            outcomes_by_dir()
+                .entry(dir.to_path_buf())
+                .or_default()
+                .push(outcome);
+        }
+    }
+
+    /// The outcomes of every check the task ran for `dir`, in order.
+    pub(crate) fn outcomes(dir: &Path) -> Vec<super::Outcome> {
+        outcomes_by_dir().get(dir).cloned().unwrap_or_default()
+    }
+
     pub(super) fn take_stall(dir: &Path) -> Option<Stall> {
         targets().get_mut(dir).and_then(|t| t.stall.take())
     }

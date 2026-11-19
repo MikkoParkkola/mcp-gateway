@@ -53,8 +53,16 @@ async fn the_task_checks_at_start_and_after_a_day_and_ends_on_shutdown() {
         stop.subscribe(),
     );
     until("the start check", || rx.connections() == 1).await;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Two more checks finished on the same day (events, not a wait).
+    until("two more checks on the 19th", || {
+        seam::outcomes(dir.path()).len() >= 3
+    })
+    .await;
     assert_eq!(rx.connections(), 1, "a second send on the same day");
+    assert_eq!(
+        seam::outcomes(dir.path())[..3],
+        [Outcome::Sent, Outcome::NoClaim, Outcome::NoClaim]
+    );
     F9_DAY.store(20, Ordering::SeqCst);
     until("the next day's send", || rx.connections() == 2).await;
     let _ = stop.send(());
