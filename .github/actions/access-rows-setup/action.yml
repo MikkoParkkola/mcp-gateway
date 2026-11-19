@@ -1,0 +1,73 @@
+name: Writer root rows setup
+description: >-
+  Prepares a runner for the shared writer's root rows. It adds group mcpg-g and
+  the users mcpg-b and mcpg-c (mcpg-c a member of mcpg-g) with fixed ids, and on
+  Linux mounts a 16 MB ext4 image with ACLs switched off. It exports the
+  ACCESS_ROWS_* names the rows read; a row missing one fails at its first line.
+runs:
+  using: composite
+  steps:
+    - name: Group, users and no-ACL volume
+      shell: bash
+      run: |
+        set -euo pipefail
+        # These numbers and names are the contract with the rows' code.
+        G=4100
+        B=4101
+        C=4102
+        case "$RUNNER_OS" in
+          Linux)
+            sudo groupadd --gid "$G" mcpg-g
+            sudo useradd --no-create-home --user-group --uid "$B" mcpg-b
+            sudo useradd --no-create-home --user-group --uid "$C" --groups mcpg-g mcpg-c
+            img="$RUNNER_TEMP/mcpg-noacl.ext4"
+            mnt=/mnt/mcpg-noacl
+            truncate --size=16M "$img"
+            mkfs.ext4 -q "$img"
+            sudo mkdir -p "$mnt"
+            sudo mount -o loop,noacl "$img" "$mnt"
+            sudo chmod 1777 "$mnt"
+            # Proof the option took: the kernel's own view of the mount.
+            opts="$(findmnt --noheadings --output OPTIONS "$mnt")"
+            echo "$mnt mounted with: $opts"
+            case ",$opts," in *,noacl,*) ;; *) echo "::error::$mnt kept ACL support"; exit 1 ;; esac
+            echo "ACCESS_ROWS_NOACL_DIR=$mnt" >> "$GITHUB_ENV"
+            ;;
+          macOS)
+            mkuser() { # name uid primary-gid
+              sudo dscl . -create "/Users/$1"
+              sudo dscl . -create "/Users/$1" UniqueID "$2"
+              sudo dscl . -create "/Users/$1" PrimaryGroupID "$3"
+              sudo dscl . -create "/Users/$1" UserShell /usr/bin/false
+              sudo dscl . -create "/Users/$1" NFSHomeDirectory /var/empty
+            }
+            sudo dscl . -create /Groups/mcpg-g PrimaryGroupID "$G"
+            # mcpg-c gets mcpg-g as its primary group, because `sudo -u` uses the
+            # primary group, matching what setpriv --regid gives it on Linux.
+            mkuser mcpg-b "$B" 20
+            mkuser mcpg-c "$C" "$G"
+            sudo dscl . -append /Groups/mcpg-g GroupMembership mcpg-c
+            ;;
+          *)
+            echo "::error::the writer's root rows have no setup for $RUNNER_OS"
+            exit 1
+            ;;
+        esac
+        id mcpg-c
+        id -Gn mcpg-c | tr ' ' '\n' | grep -qx mcpg-g
+        printf 'ACCESS_ROWS_%s\n' "GID_G=$G" "UID_B=$B" "UID_C=$C" "USER_B=mcpg-b" "USER_C=mcpg-c" >> "$GITHUB_ENV"
+    - name: mcpg-c can traverse to the build output
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Rows start binaries as mcpg-c by their build path; the runner's home
+        # directory is closed to other users, so every parent gets o+x.
+        dir="$GITHUB_WORKSPACE"
+        if [ -d "$GITHUB_WORKSPACE/target/debug" ]; then
+          dir="$GITHUB_WORKSPACE/target/debug"
+        fi
+        until [ "$dir" = / ]; do
+          sudo chmod o+x "$dir"
+          dir="${dir%/*}"
+          dir="${dir:-/}"
+        done
