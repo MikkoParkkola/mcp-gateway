@@ -54,7 +54,10 @@ runs:
             ;;
         esac
         id mcpg-c
-        id -Gn mcpg-c | tr ' ' '\n' | grep -qx mcpg-g
+        case " $(id -Gn mcpg-c) " in
+          *" mcpg-g "*) ;;
+          *) echo "::error::mcpg-c is not a member of mcpg-g"; exit 1 ;;
+        esac
         printf 'ACCESS_ROWS_%s\n' "GID_G=$G" "UID_B=$B" "UID_C=$C" "USER_B=mcpg-b" "USER_C=mcpg-c" >> "$GITHUB_ENV"
     - name: mcpg-c can traverse to the build output
       shell: bash
