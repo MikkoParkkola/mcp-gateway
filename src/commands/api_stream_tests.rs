@@ -63,21 +63,20 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-/// Short waits, so a row about a wait finishes in well under a second.
-fn short() -> Deadlines {
-    Deadlines {
-        headers: ms(400),
-        stall: ms(400),
-        event: ms(400),
-        stream_total: ms(1500),
-        download_total: ms(1500),
-        fallback_total: ms(400),
-    }
-}
-
-/// The waits for the rows in this file, which are about what a run prints and how it exits, not about time.
+/// The waits for the rows in this file, which are about what a run prints and how it exits, not about time: one
+/// named test limit, a 10 s wait and 30 s overall, far above any starvation the suite produces (a run that is slow to
+/// be scheduled cannot fail a content row) and still short enough that a real hang fails in seconds, not minutes. The
+/// rows about the waits themselves, with short waits, are in `api_stream_wait_tests.rs`.
 fn content() -> Deadlines {
-    short()
+    let (wait, total) = (Duration::from_secs(10), Duration::from_secs(30));
+    Deadlines {
+        headers: wait,
+        stall: wait,
+        event: wait,
+        stream_total: total,
+        download_total: total,
+        fallback_total: total,
+    }
 }
 
 /// A scripted answer; `open` keeps the body pending after its chunks, as a
