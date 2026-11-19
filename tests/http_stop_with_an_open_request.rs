@@ -298,5 +298,14 @@ fn assert_teardown(root: &Path, log_before: usize) {
             .unwrap_or_else(|e| panic!("the stop did not write {file}: {e}\n{after}"));
         serde_json::from_str::<Value>(&text)
             .unwrap_or_else(|e| panic!("{file} is not whole JSON: {e}: {text:?}"));
+        // The held call was admitted, and admission records the tool's use: a
+        // usage save that wrote nothing it held fails. (A transition needs two
+        // calls in a session, so transitions.json holds none here.)
+        if file == "usage.json" {
+            assert!(
+                text.contains(TOOL),
+                "{file} does not hold the held call's tool {TOOL}: {text:?}"
+            );
+        }
     }
 }
