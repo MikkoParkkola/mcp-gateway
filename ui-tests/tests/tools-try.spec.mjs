@@ -5,7 +5,7 @@
 // Every expected string is written in the row. The screen under test is a
 // stub: each row sees the marker, then fails on its own check.
 import { test, expect, blockingViolations } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, shellModuleUrl } from './shell.mjs';
 
 const HOSTILE = '<img src=x onerror="window.__pwned=1">';
 
@@ -35,6 +35,37 @@ async function sends(bag, delta, action) {
   if (delta > 0) await expect.poll(() => bag.calls.length, { message: `${delta} more call(s) sent` }).toBe(before + delta);
   else await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
   expect(bag.calls.length, delta > 0 ? 'calls sent' : 'no call sent').toBe(before + delta);
+}
+/** The shell's one confirmation (UI1.19): its title, its one consequence, its two buttons. */
+const ask = (page, name) => page.getByRole('dialog', { name: `Run ${name}?` });
+const askRun = (page, name) => ask(page, name).getByRole('button', { name: `Run ${name}`, exact: true });
+const askKeep = (page, name) => ask(page, name).getByRole('button', { name: `Cancel ${name}`, exact: true });
+async function asked(page, name) {
+  await expect(ask(page, name)).toBeVisible();
+  await expect(ask(page, name).getByRole('listitem')).toHaveText([`${name} can change things.`]);
+}
+/** Every live-region form, as shell-live reads it: the panel has none of its own. */
+const LIVE = '[aria-live], [role="status"], [role="alert"], [role="log"], [role="marquee"], [role="timer"], output';
+/** Record the text of every entry added to the shell's announcer, from first paint. */
+async function recordAnnouncements(page) {
+  await page.addInitScript(() => {
+    window.__writes = [];
+    addEventListener('DOMContentLoaded', () => {
+      const region = document.getElementById('announcer');
+      if (!region) return;
+      new MutationObserver((records) => {
+        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
+      }).observe(region, { childList: true });
+    });
+  });
+}
+/** Whether the panel itself, or any node in it, is a live region. */
+const liveInPanel = (page) => panel(page).evaluate((n, sel) => n.matches(sel) || n.querySelector(sel) !== null, LIVE);
+const announced = async (page) => (await page.evaluate(() => window.__writes ?? [])).filter(Boolean);
+/** Wait until the announcer has written everything queued (it pauses between writes). */
+async function drained(page) {
+  const url = await shellModuleUrl(page);
+  await page.evaluate(async (u) => { const m = await import(u); await m.announcerIdle(); }, url);
 }
 const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
 
@@ -770,31 +801,37 @@ test('W1 a write tool asks before it sends', async ({ page }) => {
   const run = runOf(page, 'fs.write');
   await expect(run).toBeVisible();
   await sends(bag, 0, () => run.click());
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
+  await asked(page, 'fs.write');
+  await expect(askRun(page, 'fs.write')).toBeVisible();
+  await expect(askKeep(page, 'fs.write')).toBeVisible();
   expect(bag.calls).toHaveLength(0);
 });
 
-test('W2 confirm sends confirm_write true; cancel sends nothing and keeps the form', async ({ page }) => {
+test('W2 confirm sends confirm_write true and draws the answer in the panel; Esc sends nothing and keeps the form', async ({ page }) => {
   const cfg = {
     tools: [tool('fs.write', 'fs', 'write', {
       type: 'object',
       properties: { path: { type: 'string' } },
     })],
+    callJson: ran({ text: 'wrote it' }),
   };
   const bag = await open(page, cfg);
   const run = runOf(page, 'fs.write');
   await expect(run).toBeVisible();
   await page.getByLabel('path').fill('/tmp/kept');
   await sends(bag, 0, () => run.click());
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
+  await asked(page, 'fs.write');
   expect(bag.calls).toHaveLength(0);
-  await sends(bag, 1, () => page.keyboard.press('Enter'));
-  expect(bag.calls).toHaveLength(1);
+  await sends(bag, 1, () => askRun(page, 'fs.write').click());
   expect(bag.calls[0].body.confirm_write).toBe(true);
   expect(bag.calls[0].body.arguments).toEqual({ path: '/tmp/kept' });
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
+  await expect(panel(page)).toContainText('Answered in 212 ms');
+  await expect(panel(page)).toContainText('wrote it');
   await run.click();
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
+  await asked(page, 'fs.write');
   await sends(bag, 0, () => page.keyboard.press('Escape'));
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
   expect(bag.calls).toHaveLength(1);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
 });
@@ -820,15 +857,16 @@ test('W3 a 409 asks again and confirm resends the same arguments', async ({ page
   await expect(run).toBeVisible();
   await page.getByLabel('query').fill('helsinki');
   await page.getByLabel('limit').fill('5');
-  await run.click();
-  await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toBeVisible();
-  await sends(bag, 1, () => page.keyboard.press('Enter'));
+  await sends(bag, 1, () => run.click());
+  await asked(page, 'web.search');
+  await sends(bag, 1, () => askRun(page, 'web.search').click());
   expect(bag.calls).toHaveLength(2);
   const [first, second] = bag.calls.map((c) => c.body);
   expect(first.confirm_write).toBe(false);
   expect(second.confirm_write).toBe(true);
   expect({ ...second, confirm_write: false }).toEqual(first);
   expect(first.arguments).toEqual({ query: 'helsinki', limit: 5 });
+  await expect(panel(page)).toContainText('wrote');
 });
 
 test('W4 cancel after a 409 sends nothing more and keeps the form', async ({ page }) => {
@@ -847,14 +885,14 @@ test('W4 cancel after a 409 sends nothing more and keeps the form', async ({ pag
   await expect(run).toBeVisible();
   await page.getByLabel('query').fill('helsinki');
   await sends(bag, 1, () => run.click());
-  await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toBeVisible();
-  expect(bag.calls).toHaveLength(1);
+  await asked(page, 'web.search');
   await sends(bag, 0, () => page.keyboard.press('Escape'));
+  await expect(ask(page, 'web.search')).toHaveCount(0);
   expect(bag.calls).toHaveLength(1);
   await expect(page.getByLabel('query')).toHaveValue('helsinki');
 });
 
-test('W5 Enter confirms and Esc cancels', async ({ page }) => {
+test('W5 focus starts on Cancel: Enter and Esc keep, only the dialog\'s Run sends', async ({ page }) => {
   const cfg = {
     tools: [tool('fs.write', 'fs', 'write', {
       type: 'object',
@@ -866,18 +904,23 @@ test('W5 Enter confirms and Esc cancels', async ({ page }) => {
   await expect(run).toBeVisible();
   await page.getByLabel('path').fill('/tmp/kept');
   await run.click();
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
+  await asked(page, 'fs.write');
+  await expect(askKeep(page, 'fs.write')).toBeFocused();
+  await sends(bag, 0, () => page.keyboard.press('Enter'));
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
+  await run.click();
+  await asked(page, 'fs.write');
   await sends(bag, 0, () => page.keyboard.press('Escape'));
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
   expect(bag.calls).toHaveLength(0);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
   await run.click();
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
-  await sends(bag, 1, () => page.keyboard.press('Enter'));
-  expect(bag.calls).toHaveLength(1);
+  await asked(page, 'fs.write');
+  await sends(bag, 1, () => askRun(page, 'fs.write').click());
   expect(bag.calls[0].body.confirm_write).toBe(true);
 });
 
-test('W6 the write confirm has a Cancel button that sends nothing and keeps the form', async ({ page }) => {
+test('W6 the write confirm\'s Cancel button sends nothing and keeps the form', async ({ page }) => {
   const cfg = {
     tools: [tool('fs.write', 'fs', 'write', {
       type: 'object',
@@ -889,10 +932,12 @@ test('W6 the write confirm has a Cancel button that sends nothing and keeps the 
   await expect(run).toBeVisible();
   await page.getByLabel('path').fill('/tmp/kept');
   await sends(bag, 0, () => run.click());
-  await expect(page.getByText('fs.write can change things. Run it?', { exact: true })).toBeVisible();
-  await sends(bag, 0, () => page.getByRole('button', { name: 'Cancel', exact: true }).click());
+  await asked(page, 'fs.write');
+  await sends(bag, 0, () => askKeep(page, 'fs.write').click());
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
   expect(bag.calls).toHaveLength(0);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
+  await expect(run).toBeEnabled();
 });
 
 test('W7 a 409 after opening Status shows no confirm and sends nothing more', async ({ page }) => {
@@ -925,11 +970,46 @@ test('W7 a 409 after opening Status shows no confirm and sends nothing more', as
     await expect(page).toHaveURL(/\/ui\/tools\/status$/);
     await expect(panel(page)).toHaveCount(0);
     await sends(bag, 0, () => release());
-    await expect(page.getByText('web.search can change things. Run it?', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(bag.calls).toHaveLength(1);
   } finally {
     release();
   }
+});
+
+test('W8 a confirmed write that is blocked closes the confirm and draws Blocked in the panel', async ({ page }) => {
+  const cfg = {
+    tools: [tool('fs.write', 'fs', 'write', { type: 'object', properties: {} })],
+    onCall: (route) => route.fulfill({
+      status: 403,
+      json: { error: 'refused', message: 'the firewall rule denied this call', disposition: 'not_run' },
+    }),
+  };
+  const bag = await open(page, cfg);
+  const run = runOf(page, 'fs.write');
+  await expect(run).toBeVisible();
+  await run.click();
+  await asked(page, 'fs.write');
+  await sends(bag, 1, () => askRun(page, 'fs.write').click());
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
+  await expect(panel(page)).toContainText('Blocked');
+  await expect(panel(page)).toContainText('the firewall rule denied this call');
+});
+
+test('W9 a confirmed write with no answer stays in the confirm, which says the outcome is not confirmed', async ({ page }) => {
+  const cfg = {
+    tools: [tool('fs.write', 'fs', 'write', { type: 'object', properties: {} })],
+    onCall: (route) => route.abort('failed'),
+  };
+  const bag = await open(page, cfg);
+  const run = runOf(page, 'fs.write');
+  await expect(run).toBeVisible();
+  await run.click();
+  await asked(page, 'fs.write');
+  await sends(bag, 1, () => askRun(page, 'fs.write').click());
+  await expect(ask(page, 'fs.write')).toContainText('The gateway did not confirm the outcome.');
+  await expect(ask(page, 'fs.write')).toContainText('Reload to see whether fs.write changed.');
+  await expect(panel(page)).not.toContainText('No answer from the gateway');
 });
 
 test('E1 a refused call with a receipt says Blocked and links the receipt', async ({ page }) => {
@@ -1197,6 +1277,40 @@ test('E8b another tool\'s Run stays disabled while a call is in flight and click
   }
 });
 
+test('E8c while a confirmed write runs in the confirm, Run stays disabled until the answer is drawn', async ({ page }) => {
+  let release = () => {};
+  let started = () => {};
+  const entered = new Promise((res) => { started = res; });
+  const cfg = {
+    tools: [
+      tool('fs.write', 'fs', 'write', { type: 'object', properties: {} }),
+      tool('notes.list', 'notes', 'read', { type: 'object', properties: {} }),
+    ],
+  };
+  cfg.onCall = async (route) => {
+    started();
+    await new Promise((res) => { release = res; });
+    return route.fulfill({ json: ran({ text: 'wrote it' }) });
+  };
+  try {
+    const bag = await open(page, cfg);
+    const run = runOf(page, 'fs.write');
+    await expect(run).toBeVisible();
+    await run.click();
+    await asked(page, 'fs.write');
+    await askRun(page, 'fs.write').click();
+    await entered;
+    await expect(run).toBeDisabled();
+    expect(bag.calls).toHaveLength(1);
+    release();
+    await expect(ask(page, 'fs.write')).toHaveCount(0);
+    await expect(panel(page)).toContainText('wrote it');
+    await expect(run).toBeEnabled();
+  } finally {
+    release();
+  }
+});
+
 test('G1 a newer run drops the older lookup', async ({ page }) => {
   const held = [];
   const cfg = {};
@@ -1282,7 +1396,7 @@ test('G2 an answer for an older run is not drawn', async ({ page }) => {
       return url.pathname === '/ui/api/activity' && url.searchParams.get('q') === 't-a';
     }, { timeout: 1000 }).then(() => true, () => false);
     await panel(page).getByRole('combobox').first().selectOption({ index: 1 });
-    const answer = panel(page).locator('[aria-live]').first();
+    const answer = panel(page).locator('.tools-try-answer');
     const before = (await answer.count()) ? norm(await answer.innerText()) : '';
     release();
     expect(await listing).toBe(false);
@@ -1348,6 +1462,19 @@ const answerStates = [
   }, 'The tool may have run'],
 ];
 
+/** The headline each answer state says through the announcer, written out. */
+const HEADLINES = {
+  ran: 'Answered in 212 ms.',
+  is_error: 'The tool answered with an error.',
+  blocked: 'Blocked.',
+  'bad request': 'Not run.',
+  missing: 'Not run.',
+  failed: 'The tool may have run.',
+  deadline: 'Timed out; the tool may still be running.',
+  'audit not run': 'Not run.',
+  'audit may': 'The tool may have run.',
+};
+
 test('L1 every answer links Connect a client', async ({ page }) => {
   const queue = answerStates.map(([, reply]) => reply);
   const cfg = {
@@ -1373,24 +1500,46 @@ test('L1 every answer links Connect a client', async ({ page }) => {
   await expect(link).toHaveAttribute('href', '/ui/gateway/settings');
 });
 
-test('A1 axe passes on the form and on each answer, and the answer is a live region', async ({ page }) => {
+test('A1 axe passes on the form and on each answer; the panel has no live region and each answer\'s headline is said through the announcer', async ({ page }) => {
+  await recordAnnouncements(page);
   const queue = answerStates.map(([, reply]) => reply);
   const cfg = { onCall: (route) => route.fulfill(queue.shift()) };
   await open(page, cfg);
-  const live = page.locator('section.tools-try[aria-live], section.tools-try [aria-live]');
-  await expect(live.first()).toBeVisible();
-  expect(['polite', 'assertive']).toContain(await live.first().getAttribute('aria-live'));
+  expect(await liveInPanel(page), 'the panel or a node in it is a live region').toBe(false);
   expect(await blockingViolations(page)).toEqual([]);
   const run = runOf(page, 'web.search');
   for (const [name, , shown] of answerStates) {
+    await drained(page);
+    const before = (await announced(page)).length;
     await run.click();
     await expect(panel(page), name).toContainText(shown);
-    await expect(live.first(), name).toBeVisible();
+    await drained(page);
+    expect((await announced(page)).slice(before).join(' '), name).toBe(HEADLINES[name]);
+    expect(await liveInPanel(page), name).toBe(false);
     expect(await blockingViolations(page), name).toEqual([]);
   }
   cfg.onCall = (route) => route.abort('failed');
+  await drained(page);
+  const before = (await announced(page)).length;
   await run.click();
   await expect(panel(page)).toContainText('No answer from the gateway; the tool may have run');
-  await expect(live.first()).toBeVisible();
+  await drained(page);
+  expect((await announced(page)).slice(before).join(' ')).toBe('No answer from the gateway; the tool may have run.');
   expect(await blockingViolations(page)).toEqual([]);
+});
+
+test('A2 the steps line is said once it is drawn, after the headline', async ({ page }) => {
+  await recordAnnouncements(page);
+  const cfg = { callJson: ran({ receipt: 't-abc' }) };
+  lookup(cfg);
+  await open(page, cfg);
+  const run = runOf(page, 'web.search');
+  await expect(run).toBeVisible();
+  await drained(page);
+  const before = (await announced(page)).length;
+  await run.click();
+  await expect(panel(page)).toContainText('Recorded in Activity as a call by mikko');
+  await drained(page);
+  expect((await announced(page)).slice(before).join(' '))
+    .toBe('Answered in 212 ms. Recorded in Activity as a call by mikko.');
 });
