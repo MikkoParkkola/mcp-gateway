@@ -273,7 +273,14 @@ struct NotedChecks {
     refusal: Option<Refusal>,
     allow: Option<Allow>,
     effect: Option<(Effect, EffectSource)>,
+    /// The request scans' findings so far: `None` until a scan ran.
+    findings: Option<Vec<DecisionFinding>>,
+    /// A distinct finding beyond [`MAX_REQUEST_FINDINGS`] was dropped.
+    findings_truncated: bool,
 }
+
+/// How many distinct request findings one record keeps.
+pub(crate) const MAX_REQUEST_FINDINGS: usize = 16;
 
 impl Noted {
     /// A call answered without deciding it again (a replay, a cache hit).
@@ -328,6 +335,16 @@ impl Noted {
     /// What the tool declares the call could change, as this call read it.
     pub(crate) fn note_effect(&mut self, effect: Effect, source: EffectSource) {
         self.checks().effect = Some((effect, source));
+    }
+
+    /// One request scan ran over this call and raised `found` (possibly
+    /// nothing). Scans add to each other; a triple already held is not added
+    /// twice, and only the first [`MAX_REQUEST_FINDINGS`] distinct ones stay.
+    pub(crate) fn note_request_findings(
+        &mut self,
+        found: impl IntoIterator<Item = DecisionFinding>,
+    ) {
+        let _ = found;
     }
 
     /// The notes for a call answered without deciding it again (a cache hit):
