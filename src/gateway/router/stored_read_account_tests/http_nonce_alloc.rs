@@ -518,9 +518,8 @@ fn field(line: &str, key: &str) -> i128 {
 #[test]
 fn a_passing_refusal_row_prints_its_bytes_and_margin() {
     let row = test_path("a_refused_meta_call_costs_its_parse_plus_a_fixed_cap");
-    let exe = std::env::current_exe().expect("the running test binary must be locatable");
     for threads in [None, Some("--test-threads=1")] {
-        let mut cmd = std::process::Command::new(&exe);
+        let mut cmd = crate::test_home::test_binary();
         cmd.args([row.as_str(), "--exact"]).args(threads);
         let out = cmd
             .output()

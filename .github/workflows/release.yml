@@ -234,8 +234,13 @@ jobs:
       # The skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       - name: Test
-        # Memory every 30 s (scripts/ci/with-memory-log.sh); log-only until its duration is measured.
-        run: scripts/ci/with-memory-log.sh cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+        # The lib test binary one part at a time (scripts/ci/lib-parts.sh run), then the other targets and the
+        # doctests; memory every 30 s (scripts/ci/with-memory-log.sh), log-only until its duration is measured.
+        run: scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh run --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and

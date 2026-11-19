@@ -230,6 +230,7 @@ pub(super) fn make_capability_with_webhooks(
     }
 
     CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: "Test capability".to_string(),

@@ -286,14 +286,15 @@ async fn a_named_ca_replaces_the_system_roots() {
     );
     assert_eq!(hits.load(Ordering::SeqCst), 1);
 
+    // A verification refusal (exit 5 with the TLS message), not a refused connection or a usage error.
     let stderr = String::from_utf8_lossy(&named.stderr);
-    assert!(
-        !named.status.success(),
-        "--ca-cert was merged with the system roots"
-    );
-    assert!(
-        stderr.to_lowercase().contains("certificate"),
-        "stderr: {stderr}"
+    assert_eq!(
+        (named.status.code(), stderr.as_ref()),
+        (
+            Some(5),
+            "error: Gateway TLS verification failed.\nCheck the gateway hostname, CA and client identity files, then retry.\n"
+        ),
+        "--ca-cert was merged with the system roots, or the refusal was not a TLS one"
     );
     assert_eq!(
         hits.load(Ordering::SeqCst),

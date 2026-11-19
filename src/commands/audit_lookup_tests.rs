@@ -178,7 +178,15 @@ const GOOD: &str = r#"{"rows":[{"timestamp":"2026-11-12T10:00:00+00:00","token_j
 
 async fn ask(base: &str) -> Result<LookupAnswer, String> {
     let args = parse(&["--email-stdin"]).expect("parses");
-    lookup(base, &LinkTls::default(), TOKEN, &by_email(), &args).await
+    lookup(base, &LinkTls::default(), TOKEN, &by_email(), &args)
+        .await
+        .map_err(|error| printed(error, &by_email()))
+}
+
+/// What `error` prints for a run holding the token and `input`'s email or page token.
+fn printed(error: super::CliError, input: &LookupInput) -> String {
+    let (LookupInput::Email(secret) | LookupInput::Cursor(secret)) = input;
+    error.outcome(false, &[TOKEN, secret]).stderr().to_string()
 }
 
 /// MIK-9456.CLI.2: a good answer decodes into the typed answer, and the
@@ -228,6 +236,7 @@ async fn a_next_page_request_sends_the_token_in_the_body_and_hides_it_in_errors(
     let (base, seen) = stand_in(200, GOOD).await;
     lookup(&base, &LinkTls::default(), TOKEN, &by_cursor(), &args)
         .await
+        .map_err(|error| printed(error, &by_cursor()))
         .expect("a good answer");
     {
         let seen = seen.lock().unwrap();
@@ -245,6 +254,7 @@ async fn a_next_page_request_sends_the_token_in_the_body_and_hides_it_in_errors(
         let (base, _) = stand_in(status, echo).await;
         let message = lookup(&base, &LinkTls::default(), TOKEN, &by_cursor(), &args)
             .await
+            .map_err(|error| printed(error, &by_cursor()))
             .expect_err("a refusal");
         assert!(message.contains(&status.to_string()), "{message}");
         assert!(!message.contains(PAGE), "{message}");
@@ -327,7 +337,10 @@ async fn a_redirect_is_not_followed() {
 #[tokio::test]
 async fn a_cleartext_non_loopback_target_is_refused() {
     let message = ask("http://10.255.255.1:9").await.expect_err("refused");
-    assert!(message.contains("cleartext"), "{message}");
+    assert_eq!(
+        message,
+        "error: Gateway URL must use HTTPS or loopback HTTP.\nUse an HTTPS gateway URL or a loopback HTTP URL.\n"
+    );
 }
 
 /// MIK-9456.CLI.3: the command writes no file (no request history, no
@@ -426,23 +439,28 @@ async fn run(base: &str, input: &[u8], token: Option<&'static str>) -> std::proc
     .await
 }
 
-/// MIK-9456.CLI.2: the composed command exits 0 on a good answer and nonzero
-/// on each failure class: no credential, no email on stdin, a refusal, an
-/// answer of the wrong shape, an unreachable gateway.
+/// MIK-9456.CLI.2: the composed command exits 0 on a good answer and with its
+/// code from the shared table on each failure class: no credential 3, no email
+/// on stdin 2, a refusal 3, an answer of the wrong shape 6, an unreachable
+/// gateway 5.
 /// Mutant: any failure class exits 0.
 #[tokio::test]
 async fn the_composed_command_exits_nonzero_on_every_failure_class() {
     let ok = code(std::process::ExitCode::SUCCESS);
-    let fail = code(std::process::ExitCode::FAILURE);
+    let exit = |n: u8| code(std::process::ExitCode::from(n));
     let (good, seen) = stand_in(200, GOOD).await;
     assert_eq!(code(run(&good, EMAIL.as_bytes(), Some(TOKEN)).await), ok);
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         code(run(&good, EMAIL.as_bytes(), None).await),
-        fail,
+        exit(3),
         "no credential"
     );
-    assert_eq!(code(run(&good, b"", Some(TOKEN)).await), fail, "no email");
+    assert_eq!(
+        code(run(&good, b"", Some(TOKEN)).await),
+        exit(2),
+        "no email"
+    );
     assert_eq!(
         seen.lock().unwrap().len(),
         1,
@@ -451,13 +469,13 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
     let (refused, _) = stand_in(403, r#"{"error":"no"}"#).await;
     assert_eq!(
         code(run(&refused, EMAIL.as_bytes(), Some(TOKEN)).await),
-        fail,
+        exit(3),
         "a refusal"
     );
     let (odd, _) = stand_in(200, "{}").await;
     assert_eq!(
         code(run(&odd, EMAIL.as_bytes(), Some(TOKEN)).await),
-        fail,
+        exit(6),
         "wrong shape"
     );
     // A port from the reserved test range with nothing listening on it: every
@@ -465,7 +483,7 @@ async fn the_composed_command_exits_nonzero_on_every_failure_class() {
     let dead = format!("http://127.0.0.1:{}", crate::test_ports::reserved_port());
     assert_eq!(
         code(run(&dead, EMAIL.as_bytes(), Some(TOKEN)).await),
-        fail,
+        exit(5),
         "unreachable"
     );
 }
@@ -490,7 +508,7 @@ async fn run_page(base: &str, input: &[u8]) -> std::process::ExitCode {
 #[tokio::test]
 async fn the_composed_next_page_command_reads_the_token_from_stdin() {
     let ok = code(std::process::ExitCode::SUCCESS);
-    let fail = code(std::process::ExitCode::FAILURE);
+    let usage = code(std::process::ExitCode::from(2));
     let (good, seen) = stand_in(200, GOOD).await;
     assert_eq!(
         code(run_page(&good, format!("{PAGE}\n").as_bytes()).await),
@@ -511,7 +529,7 @@ async fn the_composed_next_page_command_reads_the_token_from_stdin() {
         ("two lines", &b"a\nb\n"[..]),
         ("a space", &b"a b"[..]),
     ] {
-        assert_eq!(code(run_page(&good, bad).await), fail, "{name}");
+        assert_eq!(code(run_page(&good, bad).await), usage, "{name}");
     }
     assert_eq!(
         seen.lock().unwrap().len(),
@@ -599,6 +617,7 @@ async fn a_bad_window_is_refused_before_a_request_is_sent() {
         let parsed = parse(&argv).expect("parses");
         let message = lookup(&base, &LinkTls::default(), TOKEN, &by_email(), &parsed)
             .await
+            .map_err(|error| printed(error, &by_email()))
             .expect_err("a bad window");
         assert!(
             message.contains("--from") || message.contains("--to"),

@@ -21,11 +21,13 @@ use mcp_gateway::cli::events::{DeadLetterAction, DeadLettersArgs};
 
 use serde_json::json;
 
-use super::api::{ApiExit, ApiOutcome, ApiRequest, run_api_with, write_outcome};
+use super::api::{ApiRequest, run_api_with};
+use super::cli_exit::emit_to;
+use super::cli_exit::{CliExit, CliOutcome};
 
 use super::dashboard_link::{
-    AdminCallError, AdminFailureKind, AdminResponse, LinkTls, TOKEN_ENV, admin_call,
-    admin_call_url, dead_letters_request, fetch_link,
+    AdminCallError, AdminFailureKind, AdminResponse, LinkTls, Remedies, TOKEN_ENV, admin_call_url,
+    dead_letters_request,
 };
 
 const TOKEN: &str = "api-unit-credential";
@@ -41,6 +43,34 @@ fn args(path: &str) -> ApiArgs {
         url: None,
         tls: DashboardLinkTls::default(),
     }
+}
+
+/// The commands' `admin_call` as a read, its error as it prints for a run holding `token`.
+async fn admin_call(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    tls: &LinkTls,
+) -> Result<serde_json::Value, String> {
+    super::dashboard_link::admin_call(
+        method,
+        base,
+        path,
+        token,
+        tls,
+        super::cli_exit::Request::Read,
+        &Remedies::read(base),
+    )
+    .await
+    .map_err(|error| error.outcome(false, &[token]).stderr().to_string())
+}
+
+/// `fetch_link`, its error as it prints for a run holding `token`.
+async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    super::dashboard_link::fetch_link(base, token, tls)
+        .await
+        .map_err(|error| error.outcome(false, &[token]).stderr().to_string())
 }
 
 fn credential(name: &str) -> Option<String> {
@@ -138,7 +168,7 @@ async fn stand_in_with_headers(
     reason = "fixtures pin every error field independently"
 )]
 fn assert_error(
-    out: &ApiOutcome,
+    out: &CliOutcome,
     json_output: bool,
     code: u8,
     kind: &str,
@@ -147,10 +177,11 @@ fn assert_error(
     status: Option<u16>,
     request_id: Option<&str>,
 ) {
-    assert_eq!(out.exit.code(), code, "{}", out.stderr);
-    assert!(out.stdout.is_empty(), "errors must never reach stdout");
+    assert_eq!(out.exit().code(), code, "{}", out.stderr());
+    assert!(out.stdout().is_empty(), "errors must never reach stdout");
     if json_output {
-        let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("one JSON error");
+        let printed: serde_json::Value =
+            serde_json::from_str(out.stderr()).expect("one JSON error");
         assert_eq!(
             printed,
             json!({
@@ -165,9 +196,9 @@ fn assert_error(
             })
         );
     } else {
-        assert_eq!(out.stderr, format!("error: {message}\n{remedy}\n"));
+        assert_eq!(out.stderr(), format!("error: {message}\n{remedy}\n"));
     }
-    assert!(!out.stderr.contains(TOKEN));
+    assert!(!out.stderr().contains(TOKEN));
 }
 
 async fn refused(base: &str, path: &str, message: &str, remedy: &str) {
@@ -293,9 +324,9 @@ async fn a11_non_json_2xx_body_printed_raw() {
         send,
     )
     .await;
-    assert_eq!(out.exit.code(), 0, "{}", out.stderr);
-    assert_eq!(out.stdout, raw.as_bytes());
-    assert!(out.stderr.contains("non-JSON"), "{}", out.stderr);
+    assert_eq!(out.exit().code(), 0, "{}", out.stderr());
+    assert_eq!(out.stdout(), raw.as_bytes());
+    assert!(out.stderr().contains("non-JSON"), "{}", out.stderr());
     let seen = listener.seen.lock().expect("requests");
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].authorization, format!("Bearer {TOKEN}"));
@@ -348,37 +379,37 @@ async fn a12_existing_admin_call_callers_unchanged() {
 }
 
 #[tokio::test]
-async fn a12_existing_admin_call_errors_keep_their_wording() {
+async fn a12_admin_call_errors_use_the_shared_shape() {
     for (status, body, expected) in [
         (
             StatusCode::FORBIDDEN,
             r#"{"reason":"no standing","error":"ignored"}"#,
-            "the gateway answered 403 Forbidden: ignored",
+            "The gateway answered HTTP 403: ignored\nUse a token permitted to perform this operation for {base}, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
             r#"{"reason":"no standing"}"#,
-            "the gateway answered 403 Forbidden: no standing",
+            "The gateway answered HTTP 403: no standing\nUse a token permitted to perform this operation for {base}, then retry.",
         ),
         (
             StatusCode::NOT_FOUND,
             r#"{"error":"missing"}"#,
-            "the gateway answered 404 Not Found: missing",
+            "The gateway answered HTTP 404: missing\nCheck that the gateway supports this command (update the gateway or the CLI), then retry.",
         ),
         (
             StatusCode::BAD_GATEWAY,
             "plain",
-            "the gateway answered 502 Bad Gateway: no reason given",
+            "The gateway answered HTTP 502: its error body is not JSON\nResolve the gateway error, then retry.",
         ),
         (
             StatusCode::OK,
             "plain",
-            "the gateway answered 200 OK with no JSON body",
+            "The gateway returned an invalid response.\nCheck the gateway response against UI API 1.",
         ),
         (
             StatusCode::OK,
             "null",
-            "the gateway answered 200 OK with no JSON body",
+            "The gateway returned an invalid response.\nCheck the gateway response against UI API 1.",
         ),
     ] {
         let listener = stand_in(status, "application/json", body).await;
@@ -390,7 +421,8 @@ async fn a12_existing_admin_call_errors_keep_their_wording() {
             &LinkTls::default(),
         )
         .await
-        .expect_err("legacy error");
+        .expect_err("an error");
+        let expected = format!("error: {}\n", expected.replace("{base}", &listener.base));
         assert_eq!(error, expected);
     }
 }
@@ -430,7 +462,7 @@ async fn data_sources_and_query_are_sent_unchanged() {
             send,
         )
         .await;
-        assert_eq!(out.exit.code(), 0, "{}", out.stderr);
+        assert_eq!(out.exit().code(), 0, "{}", out.stderr());
         assert_eq!(stdin_calls.load(Ordering::SeqCst), usize::from(reads_stdin));
         let seen = listener.seen.lock().expect("requests");
         assert_eq!(seen.len(), 1);
@@ -452,7 +484,7 @@ async fn missing_or_blank_credential_never_sends() {
             3,
             "AuthRefused",
             "No gateway credential is available.",
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
         ),
         (
             Some(""),
@@ -496,11 +528,11 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
     for (status, remedy) in [
         (
             StatusCode::UNAUTHORIZED,
-            "Run mcp-gateway login --gateway http://127.0.0.1:1, then retry.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for http://127.0.0.1:1, then retry.",
         ),
         (
             StatusCode::FORBIDDEN,
-            "Use an entitled credential; run mcp-gateway login --gateway http://127.0.0.1:1 with an account permitted to perform this operation, then retry.",
+            "Use a token permitted to perform this operation for http://127.0.0.1:1, then retry.",
         ),
     ] {
         for json_output in [false, true] {
@@ -522,16 +554,16 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
                 },
             )
             .await;
-            assert_eq!(out.exit, ApiExit::AuthRefused);
-            assert!(out.stdout.is_empty());
-            assert!(!out.stderr.contains(TOKEN));
+            assert_eq!(out.exit(), CliExit::AuthRefused);
+            assert!(out.stdout().is_empty());
+            assert!(!out.stderr().contains(TOKEN));
             if json_output {
                 let printed: serde_json::Value =
-                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                    serde_json::from_str(out.stderr()).expect("valid JSON error");
                 assert_eq!(printed["error"]["remedy"], remedy);
                 assert_eq!(printed["error"]["http_status"], status.as_u16());
             } else {
-                assert!(out.stderr.contains(remedy));
+                assert!(out.stderr().contains(remedy));
             }
         }
     }
@@ -559,9 +591,9 @@ async fn echoed_json_credentials_are_redacted_without_corrupting_json() {
             },
         )
         .await;
-        assert_eq!(out.exit.code(), 0);
-        assert!(out.stderr.is_empty());
-        let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+        assert_eq!(out.exit().code(), 0);
+        assert!(out.stderr().is_empty());
+        let printed: serde_json::Value = serde_json::from_slice(out.stdout()).expect("valid JSON");
         assert!(!printed["echo"].as_str().expect("string").contains(token));
         assert!(
             !printed["nested"][0]
@@ -663,7 +695,7 @@ async fn truncated_response_stand() -> TruncatedStand {
     }
 }
 
-async fn echoed_body(token: &str, body: Vec<u8>) -> ApiOutcome {
+async fn echoed_body(token: &str, body: Vec<u8>) -> CliOutcome {
     run_api_with(
         &args("/ui/api/status"),
         "http://127.0.0.1:1",
@@ -682,7 +714,7 @@ async fn echoed_body(token: &str, body: Vec<u8>) -> ApiOutcome {
 }
 
 /// A gateway answer with `status` and `body` to a GET, in human or JSON mode.
-async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool) -> ApiOutcome {
+async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool) -> CliOutcome {
     let mut a = args("/ui/api/status");
     a.json = json_output;
     let body = body.as_bytes().to_vec();
@@ -711,3 +743,6 @@ mod transport;
 
 #[path = "api_redaction_tests.rs"]
 mod redaction;
+
+#[path = "api_matrix_tests.rs"]
+mod matrix;

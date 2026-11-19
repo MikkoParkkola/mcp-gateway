@@ -128,6 +128,10 @@ pub struct CapabilityBackend {
     delivery_observer: parking_lot::Mutex<Option<DeliveryObserver>>,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
+    /// This backend's key for its declarations in the process-wide pacing
+    /// map. Unique per instance, unlike `name`: two backends sharing a name
+    /// never withdraw each other's declarations.
+    pacing_owner: u64,
     /// What was listed when a listing change was last announced.
     listing: parking_lot::Mutex<Option<Vec<String>>>,
     /// Wakes the listing watch when the catalogue changes.
@@ -146,6 +150,14 @@ pub struct CapabilityBackend {
     /// the startup function does not.
     #[cfg(test)]
     scan_completions: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for CapabilityBackend {
+    /// Withdraw this backend's pacing declarations: the hosts it paced keep
+    /// their buckets, at the strictest interval a surviving backend declares.
+    fn drop(&mut self) {
+        crate::capability::pacing::seed(self.pacing_owner, &HashMap::new());
+    }
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -167,6 +179,9 @@ pub struct RugPullRecord {
 impl CapabilityBackend {
     /// Create a new capability backend
     pub fn new(name: &str, executor: Arc<CapabilityExecutor>) -> Self {
+        // Each backend's pacing owner: process-unique, unlike its name.
+        static NEXT_PACING_OWNER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         // One set, shared, until an operation replaces it. A note before any
         // operation has started is on the catalogue a snapshot would read.
         let unread = OperationUnread::default();
@@ -197,6 +212,7 @@ impl CapabilityBackend {
             #[cfg(test)]
             delivery_observer: parking_lot::Mutex::new(take_delivery_observer()),
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
+            pacing_owner: NEXT_PACING_OWNER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
             #[cfg(test)]
@@ -239,33 +255,48 @@ impl CapabilityBackend {
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
-        let removed = if let Some(&pos) = caps.index.get(name) {
-            caps.entries.remove(pos);
-            caps.tools.remove(pos);
-            caps.sources.remove(pos);
-            caps.index.remove(name);
-            caps.unloaded.insert(name.to_owned());
-            // Shift remaining indices down.
-            for idx in caps.index.values_mut() {
-                if *idx > pos {
-                    *idx -= 1;
-                }
-            }
-            // Published, and the lock still held: no reader can observe the
-            // removal under the old epoch.
-            self.executor.bump_policy_epoch();
-            self.executor.bump_mcp_generation(name);
-            self.bump_catalogue_generation(&caps);
-            true
-        } else {
-            false
-        };
+        let removed = self.remove_locked(&mut caps, name);
         drop(caps);
+        self.after_unload(name);
+        removed
+    }
+
+    /// The part of [`Self::unload_capability`] done under the catalogue's
+    /// write lock: remove `name` and publish the removal under a new epoch.
+    fn remove_locked(
+        &self,
+        caps: &mut parking_lot::RwLockWriteGuard<'_, IndexedCapabilities>,
+        name: &str,
+    ) -> bool {
+        let Some(&pos) = caps.index.get(name) else {
+            return false;
+        };
+        caps.entries.remove(pos);
+        caps.tools.remove(pos);
+        caps.sources.remove(pos);
+        caps.index.remove(name);
+        caps.unloaded.insert(name.to_owned());
+        // Shift remaining indices down.
+        for idx in caps.index.values_mut() {
+            if *idx > pos {
+                *idx -= 1;
+            }
+        }
+        // Published, and the lock still held: no reader can observe the
+        // removal under the old epoch.
+        self.executor.bump_policy_epoch();
+        self.executor.bump_mcp_generation(name);
+        self.bump_catalogue_generation(caps);
+        true
+    }
+
+    /// The part of [`Self::unload_capability`] done after the lock is
+    /// released.
+    fn after_unload(&self, name: &str) {
         self.catalogue_changed();
         // After the epoch bump: a call that started before it is stopped here,
         // and one that starts after it is refused at `acquire`.
         self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
-        removed
     }
 
     /// Mark a capability as quarantined by a rug-pull event.
@@ -431,11 +462,34 @@ impl CapabilityBackend {
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
         validate_cli_templates(&capability)?;
+        // The loader's rules for rate_limit and attribution hold for a
+        // definition registered directly too, before the catalogue changes.
+        super::definition::maps_rules::check_parsed(
+            std::path::Path::new(&capability.name),
+            &capability,
+        )?;
         let name = capability.name.clone();
         let mut caps = self.capabilities.write();
+        // A GraphQL or JSON-RPC provider on a host this catalogue, with this
+        // definition, or the process paces is refused, as the loader refuses it.
+        let intervals = crate::capability::pacing::declared_intervals(
+            caps.entries
+                .iter()
+                .filter(|c| c.name != name)
+                .chain([&capability]),
+        );
+        if let Some(reason) =
+            crate::capability::pacing::unpaced_protocol_refusal(&capability, &intervals)
+        {
+            return Err(crate::Error::Config(format!("{name}: {reason}")));
+        }
+        // Only a definition that paces a host can put others on a paced one.
+        let paces = !crate::capability::pacing::declared_intervals([&capability]).is_empty();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
         caps.unloaded.remove(&name);
+        // The host policy is the whole catalogue's.
+        crate::capability::pacing::seed_from(self.pacing_owner, &caps.entries);
         self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children
@@ -449,6 +503,12 @@ impl CapabilityBackend {
             self.executor.stop_mcp(&name);
         }
         drop(caps);
+        // A paced REST definition can put a GraphQL or JSON-RPC provider
+        // registered earlier on a paced host, as a directory load can. Swept
+        // before subscribers hear of the change, so none sees a doomed tool.
+        if paces {
+            self.unload_unpaced_protocols();
+        }
         self.catalogue_changed();
         Ok(())
     }
@@ -490,6 +550,7 @@ impl CapabilityBackend {
 }
 
 fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {
+    let result = super::apply_attribution(capability, result);
     let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
     ToolsCallResult {
         content: vec![Content::Text {

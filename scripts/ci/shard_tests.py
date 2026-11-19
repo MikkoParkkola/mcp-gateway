@@ -35,6 +35,7 @@ import glob
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -271,6 +272,34 @@ def contents(path: str, most: int | None = 3) -> str:
     return shown + (f", +{len(found) - most} more" if len(found) > most else "")
 
 
+@contextlib.contextmanager
+def private_home(base: dict[str, str] | None, tmp: str | None):
+    """A gateway home of the shard's own for its test binaries, on every OS: without one, every
+    shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
+    (not inside it, so the leftover check never reads it) and removed after the shard, also when a
+    step fails. The config and data dirs the lib resolves are set beneath it."""
+    home = os.path.join(
+        os.path.dirname(tmp) if tmp else tempfile.gettempdir(), f"shard-home-{secrets.token_hex(8)}"
+    )
+    # Owner-only on POSIX. Not on Windows: there a 0o700 mkdir (what mkdtemp does) writes a
+    # protected DACL that also grants OWNER RIGHTS (S-1-3-4), and the gateway refuses a lock dir
+    # that any SID but the user, SYSTEM and Administrators may write, so every auth-on start under
+    # this home failed. A plain mkdir inherits the account's own temp-dir ACL instead.
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    env = dict(os.environ if base is None else base)
+    env["MCP_GATEWAY_TEST_HOME_DIR"] = home
+    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    try:
+        yield env
+    finally:
+        try:
+            shutil.rmtree(home)
+        except OSError as error:
+            # Not a shard failure, but never silent: a kept home is state the next run must not see.
+            print(f"::warning::could not remove the shard's gateway home {home}: {error}")
+
+
 def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     failed = run_steps(os_kind, shard, program)
     for f in failed:
@@ -311,27 +340,27 @@ def runner_config(path: str) -> list[str]:
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
-    env = {**os.environ, "TMPDIR": tmp} if tmp else None
     runner = runner_config(write_runner(tmp)) if tmp else []
-    for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
-        rc, lines = cargo(
-            [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-            program,
-            env,
-        )
-        n = selected(lines)
-        results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
-        print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
-              f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
-              f"ignored {sum(r[2] for r in results)}, rc {rc}")
-        if rc != 0:
-            failed.append(f"{step}: cargo exited {rc}")
-        if n < floor:
-            failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
-    if EXAMPLES.get(os_kind) == shard:
-        rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
-        if rc != 0:
-            failed.append(f"examples: cargo build exited {rc}")
+    with private_home({**os.environ, "TMPDIR": tmp} if tmp else None, tmp) as env:
+        for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
+            rc, lines = cargo(
+                [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                program,
+                env,
+            )
+            n = selected(lines)
+            results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
+            print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
+                  f"passed {sum(r[0] for r in results)}, failed {sum(r[1] for r in results)}, "
+                  f"ignored {sum(r[2] for r in results)}, rc {rc}")
+            if rc != 0:
+                failed.append(f"{step}: cargo exited {rc}")
+            if n < floor:
+                failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+        if EXAMPLES.get(os_kind) == shard:
+            rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
+            if rc != 0:
+                failed.append(f"examples: cargo build exited {rc}")
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return failed
@@ -554,6 +583,86 @@ def self_test() -> int:
         assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    # H1: every shard, on every OS, gives cargo and a prebuilt lib
+    # binary a private gateway home beside its TMPDIR, and removes it after the
+    # shard, also when cargo fails (R6.1, R6.4, R6.5). The recorder stands in
+    # for cargo and writes down what it was given.
+    record_dir = tempfile.mkdtemp(prefix="shard-record-")
+    record = os.path.join(record_dir, "env.json")
+    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR")
+    recorder_src = (
+        "import json, os, sys\n"
+        f"keys = {keys!r}\n"
+        "if '--list' in sys.argv:\n"
+        "    sys.exit(0)\n"
+        "seen = {k: os.environ.get(k) for k in keys}\n"
+        "seen['mode'] = os.stat(seen['MCP_GATEWAY_TEST_HOME_DIR']).st_mode & 0o777\n"
+        "json.dump(seen, open(os.environ['RECORD_ENV'], 'w'))\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "sys.exit(int(os.environ.get('RECORD_RC', '0')))\n"
+    )
+    recorder = (sys.executable, "-c", recorder_src)
+
+    def home_given(os_kind: str) -> str:
+        seen = json.load(open(record, encoding="utf-8"))
+        home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
+        assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
+        assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
+        assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        if os.name != "nt":
+            assert seen["mode"] == 0o700, ("the home is owner-only", os_kind, oct(seen["mode"]))
+        if os_kind in TMP_GUARDED:
+            # A prebuilt binary gets its BY_BINARY folder; the shard's own TMPDIR is above it.
+            shard_tmp = seen["TMPDIR"]
+            while shard_tmp and not os.path.basename(shard_tmp).startswith("shard-tmp-"):
+                shard_tmp = os.path.dirname(shard_tmp) if os.path.dirname(shard_tmp) != shard_tmp else ""
+            assert shard_tmp and os.path.dirname(home) == os.path.dirname(shard_tmp), (os_kind, seen)
+            assert not os.path.commonpath([home, shard_tmp]) == shard_tmp, "beside, not inside, TMPDIR"
+        return home
+
+    os.environ["RECORD_ENV"] = record
+    try:
+        for os_kind in sorted(SHARDS):
+            shard = sorted(SHARDS[os_kind])[0]
+            assert run_steps(os_kind, shard, recorder) == [], (os_kind, shard)
+            assert not os.path.exists(home_given(os_kind)), (os_kind, "the shard removes its home")
+        os.environ["RECORD_RC"] = "1"
+        try:
+            failed = run_steps("linux", "lib-a", recorder)
+        finally:
+            del os.environ["RECORD_RC"]
+        assert any("cargo exited 1" in f for f in failed), failed
+        assert not os.path.exists(home_given("linux")), "a failed shard removes its home too"
+        if os.name == "posix":
+            binary = os.path.join(record_dir, "fake-lib")
+            with open(binary, "w", encoding="utf-8") as f:
+                f.write(f"#!{sys.executable}\n{recorder_src}")
+            single = next(name for name, steps in SHARDS["linux"].items() if len(steps) == 1)
+            assert run_prebuilt("linux", single, binary) == 0, "the prebuilt control run"
+            assert not os.path.exists(home_given("linux")), "a prebuilt shard removes its home"
+    finally:
+        del os.environ["RECORD_ENV"]
+        shutil.rmtree(record_dir, ignore_errors=True)
+    # R5.2: a forgotten harness. A test binary given no home builds its
+    # fallback in TMPDIR, and the leftover check names it. Given the shard's
+    # home it builds none, and the shard stays green.
+    forgetful = (sys.executable, "-c", (
+        "import os, tempfile\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "if os.environ.get('PLANT_FORGOTTEN') or not os.environ.get('MCP_GATEWAY_TEST_HOME_DIR'):\n"
+        "    tempfile.mkdtemp(prefix='mcp-gateway-test-home-')\n"
+    ))
+    os.environ["PLANT_FORGOTTEN"] = "1"
+    try:
+        forgot = run_steps("linux", "lib-a", forgetful)
+    finally:
+        del os.environ["PLANT_FORGOTTEN"]
+    assert len(forgot) == 1 and forgot[0].startswith("left in TMPDIR: mcp-gateway-test-home-"), forgot
+    assert run_steps("linux", "lib-a", forgetful) == [], "given the shard's home, no fallback is built"
     parts_rows()
     print("shard_tests self-test: ok")
     return 0
@@ -709,7 +818,8 @@ def parts_rows() -> None:
     with tempfile.TemporaryDirectory() as d:
         log = os.path.join(d, "runs")
 
-        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False) -> None:
+        def part(k: int, names: list[str], listed: list[str] | None = None, residue: bool = False,
+                 rc: int = 0) -> None:
             folder = os.path.join(d, f"linux-lib-tests-p{k}", f"p{k}")
             os.makedirs(folder, exist_ok=True)
             exe = os.path.join(folder, f"lib-tests-p{k}")
@@ -719,8 +829,11 @@ def parts_rows() -> None:
                         'if [ "$1" = --list ]; then shift; f="$1"\n'
                         f'  for t in {body}; do case "$t" in *"$f"*) echo "$t: test";; esac; done; exit 0; fi\n'
                         f'echo "p{k} $*" >> {log}\n'
+                        'h="${MCP_GATEWAY_TEST_HOME_DIR:-none}"; [ -d "$h" ] && there=exists || there=missing\n'
+                        f'echo "$h|${{XDG_CONFIG_HOME:-none}}|${{MCP_GATEWAY_CONFIG_DIR:-none}}|$there" > {log}.home\n'
                         + ('touch "$TMPDIR/leftover"\n' if residue else "")
-                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n')
+                        + f'echo "running {len(names)} tests"; echo "test result: ok. {len(names)} passed; 0 failed; 0 ignored"\n'
+                        + f'exit {rc}\n')
             os.chmod(exe, 0o755)
             with open(os.path.join(folder, "list.txt"), "w") as f:
                 f.write("".join(f"{t}: test\n" for t in (names if listed is None else listed)))
@@ -745,6 +858,21 @@ def parts_rows() -> None:
         assert run_one("--exact", "m3::t3", d, []) == 0
         runs = open(log).read().splitlines()
         assert runs == ["p3 m3::t3 --exact"], runs
+        # H1: the run gets a private gateway home of its own, present while it runs, with the config and data
+        # dirs beneath it, and removed after it.
+        def run_home() -> str:
+            home, xdg, cfg, there = open(log + ".home").read().strip().split("|")
+            assert os.path.basename(home).startswith("shard-home-"), ("run-one gives the binary a home", home)
+            assert (xdg, cfg) == (os.path.join(home, ".config"), os.path.join(home, ".mcp-gateway")), (xdg, cfg)
+            assert there == "exists", ("the home exists while the binary runs", home)
+            assert not os.path.exists(home), ("run-one removes its home", home)
+            return home
+        run_home()
+        # A failing binary: its exit code is run-one's, and the home is still removed.
+        fresh()
+        part(3, ["m3::upgrade_x3", "m3::t3"], rc=3)
+        assert run_one("--exact", "m3::t3", d, []) == 3, "run-one passes the binary's exit code on"
+        run_home()
         fresh()
         import contextlib
         import io
@@ -946,15 +1074,16 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
         # What the cargo runner gives this binary: its own folder, so a leftover is reported under it.
         env["TMPDIR"] = os.path.join(tmp, BY_BINARY, LIB_TARGET)
         os.makedirs(env["TMPDIR"])
-    p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
     lines = []
-    assert p.stdout is not None
-    for raw in p.stdout:
-        sys.stdout.buffer.write(raw)
-        sys.stdout.buffer.flush()
-        lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-    rc = p.wait()
+    with private_home(env, tmp) as home_env:
+        p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=home_env, cwd=ROOT)
+        assert p.stdout is not None
+        for raw in p.stdout:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.flush()
+            lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+        rc = p.wait()
     # The binary prints no cargo `Running` header: arm the count as cargo's would.
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
     failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
@@ -1070,7 +1199,9 @@ def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
         return 1
     ((k, names),) = hits.items()
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
-    return subprocess.run([binaries[k], *names, "--exact", *extra], env=env, cwd=ROOT).returncode
+    # A private gateway home, as every other lib test run gets (H1).
+    with private_home(env, None) as home_env:
+        return subprocess.run([binaries[k], *names, "--exact", *extra], env=home_env, cwd=ROOT).returncode
 
 
 # Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up

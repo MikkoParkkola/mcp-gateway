@@ -1863,7 +1863,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.d82a4a9834d8.js');
+    m = await import('/ui/assets/tooltip.c4528509befc.js');
   } catch {
     return;
   }

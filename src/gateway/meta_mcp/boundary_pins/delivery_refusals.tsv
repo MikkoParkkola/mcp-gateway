@@ -32,8 +32,6 @@ src/capability/executor/cli_argv.rs	render_stdin	refuse_nul	1	not-a-decision	a N
 src/capability/executor/client.rs	configured	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
 src/capability/executor/client.rs	configured	refuse_loopback_name	1	feeds	a redirect hop naming loopback: refuse_hop delivers it and raises refused while vouched
 src/capability/executor/client.rs	end_send	ssrf_refusal	1	not-delivered	predicate: whether a refused first hop was ever sent, for the latency sample only; nothing is answered
-src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	1	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched; the caller still receives the transport error
-src/capability/executor/client.rs	send_with_retry	ssrf_refusal	1	recorded	a capability HTTP call the SSRF guard refuses: the send raises refused while vouched
 src/capability/executor/credentials.rs	refresh_provider_token	record_refusal	3	recorded	the token endpoint's cleartext and destination checks, and the refresh flight's destination refusal before the config wrap: each raises refused while vouched through record_refusal, a malformed endpoint records no refusal (the record reads delivered)
 src/capability/executor/graphql.rs	execute	record_refusal	1	recorded	the GraphQL endpoint's destination check: a destination refusal raises refused while vouched through record_refusal, a malformed URL records no refusal (the record reads delivered)
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	recorded	a GraphQL endpoint naming loopback: the call site raises refused while vouched
@@ -371,8 +369,8 @@ src/security/decision_record.rs	refusal_pair	refusal	1	not-delivered	reads the n
 src/security/firewall/refused_rules.rs	refuse_authored	first_refusal	1	no-record	a config write's refusal (render, replace); no call delivers it
 src/security/firewall/refused_rules.rs	warn_refused_rules	first_refusal	1	not-delivered	a load warning; nothing is refused
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	recorded	an OAuth destination refusal reached through the refresh flight: each interactive caller records it at its join; the non-interactive token step records none
-src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
-src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
+src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_attempts
+src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_attempts
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/security/needles.rs	scrubbed_answer	refusal	2	feeds	a backend answer that holds a value the gateway injected is replaced; the call records it refused where it is delivered (delivery_facts::echo_refusal_delivered, read with the cell's echo_refusal_built)
 src/security/needles_configured.rs	scrub_stored_text	refusal	2	feeds	a stored error's message that holds a current value at a full set, or whose redaction by one set forms another set's value, is replaced on the way out; the call records it refused (delivery_facts::echo_refusal_built)

@@ -43,6 +43,25 @@ impl CapabilityExecutor {
         }
     }
 
+    /// A new executor in normal mode whose clients resolve names through
+    /// `resolver`, unpinned: for rows that reach a local stub by a `.test`
+    /// name, so the cache and the hop checks run as in production.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_test_resolver<R>(resolver: R) -> Self
+    where
+        R: crate::security::ssrf::HostResolver + Clone + 'static,
+    {
+        let mut executor = Self::new();
+        executor.client = client::build_over(move || {
+            reqwest::Client::builder().no_proxy().dns_resolver(
+                crate::security::ssrf::PinningResolver::new(resolver.clone())
+                    .with_policy(crate::security::ssrf::DestinationPolicy::Configured),
+            )
+        });
+        executor
+    }
+
     /// A new executor whose calls go through `capabilities.egress_proxy` when
     /// it is set, and direct and pinned otherwise (#1881). A value the load
     /// check would refuse is ignored here, which only ever means direct.

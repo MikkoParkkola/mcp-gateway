@@ -298,7 +298,7 @@ async fn a4_api_401_names_login() {
     let (_root, gw) = started().await;
     let wrong = "cli-api-test-wrong-key-0123456789abcdef";
     let remedy = format!(
-        "Run mcp-gateway login --gateway {}, then retry. Gateway reason: -32000.",
+        "Set MCP_GATEWAY_TOKEN to a valid token for {}, then retry. Gateway reason: -32000.",
         gw.url
     );
     for json_mode in [false, true] {
@@ -320,13 +320,13 @@ async fn a4_api_401_names_login() {
     }
 }
 
-/// A5: a valid key without the route's standing exits 3 and asks for an
-/// entitled credential, without promising that login adds privileges.
+/// A5: a valid key without the route's standing exits 3 and asks for a token
+/// permitted to perform the operation.
 #[tokio::test(flavor = "multi_thread")]
 async fn a5_api_403_for_a_standard_key() {
     let (_root, gw) = started().await;
     let remedy = format!(
-        "Use an entitled credential; run mcp-gateway login --gateway {} with an account permitted to perform this operation, then retry.",
+        "Use a token permitted to perform this operation for {}, then retry.",
         gw.url
     );
     for json_mode in [false, true] {
@@ -388,7 +388,10 @@ async fn a8_the_token_is_never_echoed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a9_no_credential_names_login_and_sends_nothing() {
     let probe = Probe::start().await;
-    let remedy = format!("Run mcp-gateway login --gateway {}, then retry.", probe.url);
+    let remedy = format!(
+        "Set MCP_GATEWAY_TOKEN to a valid token for {}, then retry.",
+        probe.url
+    );
     for json_mode in [false, true] {
         let run = api_at(
             &probe.url,
@@ -512,7 +515,7 @@ async fn expired_and_revoked_credentials_are_both_refused() {
         gw.rewrite_config(settings);
         gw.restart().await;
         let remedy = format!(
-            "Run mcp-gateway login --gateway {}, then retry. Gateway reason: -32000.",
+            "Set MCP_GATEWAY_TOKEN to a valid token for {}, then retry. Gateway reason: -32000.",
             gw.url
         );
         for json_mode in [false, true] {
