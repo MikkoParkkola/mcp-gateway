@@ -388,3 +388,43 @@ fn an_annotation_below_the_depth_bound_is_not_mirrored() {
         }
     }
 }
+
+/// The depth bound sits exactly 32 levels below the root: a declaration there is
+/// validated and mirrored, one level deeper is neither, and a valid top-level
+/// declaration beside it is mirrored as long as nothing within the bound is
+/// invalid. Red if the bound is off by one either way, which depths 2 and 40
+/// cannot tell.
+#[test]
+fn the_depth_bound_is_thirty_two_levels_below_the_root() {
+    // `tenant` declared `depth` levels below the root, `owner` at the root.
+    fn chain(depth: usize, header: &str) -> (Value, Value) {
+        let mut schema = json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": header}
+        }});
+        let mut arguments = json!({"tenant": "t"});
+        for _ in 0..depth {
+            schema = json!({"type": "object", "properties": {"nested": schema}});
+            arguments = json!({"nested": arguments});
+        }
+        schema["properties"]["owner"] = json!({"type": "string", "x-mcp-header": "Owner"});
+        arguments["owner"] = json!("o");
+        (schema, arguments)
+    }
+    let owner = ("Mcp-Param-Owner".to_string(), "o".to_string());
+    let tenant = ("Mcp-Param-Tenant".to_string(), "t".to_string());
+    for (depth, header, want) in [
+        (32, "Tenant", vec![owner.clone(), tenant.clone()]),
+        (33, "Tenant", vec![owner.clone()]),
+        // An invalid name within the bound excludes the whole tool...
+        (32, "bad name", vec![]),
+        // ...and one past the bound is never read.
+        (33, "bad name", vec![owner.clone()]),
+    ] {
+        let (schema, arguments) = chain(depth, header);
+        assert_eq!(
+            mirror_headers(&schema, &arguments),
+            want,
+            "depth {depth}, header {header:?}"
+        );
+    }
+}
