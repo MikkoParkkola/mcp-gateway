@@ -153,6 +153,7 @@ pub(super) fn try_dashboard_bootstrap(
             return Some(refused_sign_in(
                 Navigation::of(request.headers()),
                 refused_value(),
+                REFUSED_SIGN_IN_TARGET,
             ));
         }
         let Redemption { bound, now } = match state
@@ -173,6 +174,7 @@ pub(super) fn try_dashboard_bootstrap(
                 return Some(refused_sign_in(
                     Navigation::of(request.headers()),
                     refused_value(),
+                    REFUSED_SIGN_IN_TARGET,
                 ));
             }
         };
@@ -214,22 +216,26 @@ impl Navigation {
 /// Where a refused browser is sent: one fixed shell address and hint word.
 /// Nothing in the request feeds it, so it cannot be turned into a redirect
 /// elsewhere, and it reads the same whichever value was refused.
-#[cfg(feature = "webui")]
-const REFUSED_SIGN_IN_TARGET: &str = "/ui/overview/status?signin=link-refused";
+pub(crate) const REFUSED_SIGN_IN_TARGET: &str = "/ui/overview/status?signin=link-refused";
 
 /// A refused link or code: a browser navigation goes back to the shell,
 /// which says so in plain words; anything else gets `refusal` unchanged.
+/// `target` is that shell address. Nothing in the request feeds it.
 /// Without the dashboard there is no shell, so every caller gets `refusal`.
-pub(crate) fn refused_sign_in(navigation: Navigation, refusal: Response) -> Response {
+pub(crate) fn refused_sign_in(
+    navigation: Navigation,
+    refusal: Response,
+    target: &'static str,
+) -> Response {
     #[cfg(feature = "webui")]
     if navigation == Navigation::Document {
         return super::handoff::private(axum::response::IntoResponse::into_response((
             axum::http::StatusCode::SEE_OTHER,
-            [(axum::http::header::LOCATION, REFUSED_SIGN_IN_TARGET)],
+            [(axum::http::header::LOCATION, target)],
         )));
     }
     #[cfg(not(feature = "webui"))]
-    let _ = navigation;
+    let _ = (navigation, target);
     refusal
 }
 
@@ -255,7 +261,7 @@ fn refused_value() -> Response {
 /// cookie and a 303 to `/dashboard`. The session ends at `bound`'s cap, the
 /// minting credential's expiry, when that comes before the absolute limit,
 /// and with its minting key.
-pub(super) fn signed_in(
+pub(crate) fn signed_in(
     bootstrap: &DashboardBootstrap,
     live: &crate::config_reload::LiveConfig,
     bound: super::Bound,
