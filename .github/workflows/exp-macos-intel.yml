@@ -1,0 +1,54 @@
+name: exp-macos-intel
+# A measurement, never merged: the lib test binary build on the Intel macOS label, as the macOS lib-b shard builds it
+# (the same step, the same CARGO_BUILD_JOBS), to compare with the Apple Silicon build time.
+on:
+  push:
+    branches: [exp/velocity-macos-intel]
+concurrency:
+  group: exp-macos-intel
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+jobs:
+  build:
+    name: Build the lib test binary on ${{ matrix.label }}
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [macos-26-intel]
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: The hardware this job got
+        run: |
+          echo "label ${{ matrix.label }}: $(uname -m), $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo n/a)"
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
+      - name: Build the lib test binary once
+        timeout-minutes: 110
+        run: |
+          start=$(date +%s)
+          python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+          echo "BUILD_MINUTES=$(( ($(date +%s) - start) / 60 ))" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The sampler's last lines
+        if: always()
+        run: tail -n 5 "$RUNNER_TEMP/mac-sampler.log" || true
