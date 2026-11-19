@@ -21,10 +21,10 @@ were deleted is lowered in the same diff, where review sees it.
 
   shard_tests.py run <os> <shard>    run it (exit 1 on failure or under floor)
   shard_tests.py export-lib <dir>    build the lib test binary and copy it to <dir>
-  shard_tests.py wait-lib <artifact> <producer job name>
-                                     wait for it in this run (found=true|false)
   shard_tests.py run-prebuilt <os> <shard> <binary>
-                                     run a PREBUILT or SHARED_BUILD shard from that binary
+                                     run a SHARED_BUILD shard from that binary
+  shard_tests.py run-prebuilt-parts <os> <leg> --build <dir>
+                                     build and run a PARTS leg's lib test parts one at a time
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
@@ -40,6 +40,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lib_union  # noqa: E402  the one parser of the part count N
 
 SDK = "a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result"
 BURST = "mik_7479_full_burst"
@@ -89,22 +93,36 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 295)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
-    # macOS builds the `--lib` test binary once (about two macOS runners; a
-    # second build cost 19-86 min, which #4562 removed). The `lib-b` job builds
-    # it, uploads it and runs the heavier half (Linux 45b: 1237 s of 2170 s);
-    # the `int` job, after its own suite, runs the other half from that binary
-    # (PREBUILT). Coverage is checked exactly on the binary (union_problems:
-    # no overlap, nothing missing); the floors are a coarse check, about 2%
-    # under the halves the pilot selected (run 42527204476: 9539 + 8161).
+    # macOS builds the lib test parts, never the whole binary (it swapped the 3-core, 7 GB runner): `lib-b`
+    # builds and runs parts 1-4 one at a time, `int` runs its suite and `int-lib` builds and runs part 5 in the
+    # same job. PARTS is the one source of which leg takes which part; the workflow names the leg only.
     "macos": {
-        "lib-b": [(*_LIB_B, 9350)],
-        "lib-a": [(*_LIB_A, 8000)],
+        "lib-b": [("parts", ["--lib"], [], 0)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 1600), ("doc", ["--doc"], [], 55)],
+        "int-lib": [("parts", ["--lib"], [], 0)],
     },
 }
-# Shards that are no matrix leg of their own: each runs from the lib test
-# binary another shard of its OS built and exported (`export-lib`).
-PREBUILT = {"macos": {"lib-a": "lib-b"}}
+# Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`).
+PARTS = {"macos": {"lib-b": (1, 2, 3, 4), "int-lib": (5,)}}
+# The macOS part counts the floors come from (each part's list less the macOS skips), with the run they were read
+# from: the E1 dispatch run at 0a3037aecd, both legs' per-part notices. Each leg's floor is its parts' sum, 2% under.
+MACOS_PART_COUNTS = {"run": "44460056220 (E1, macOS, 0a3037aecd)", 1: 3827, 2: 3700, 3: 4526, 4: 5157, 5: 3615}
+
+
+def part_count() -> int:
+    """N, from the build script that declares it (lib_union.py's parser)."""
+    return lib_union.part_count(Path(ROOT, lib_union.BUILD_SCRIPT))
+
+
+def leg_parts(os_kind: str, leg: str, solo: bool = False) -> tuple[int, ...]:
+    """The parts LEG builds; lib-b in the os-sensitive solo lane (it runs alone) takes every part."""
+    if solo and leg == "lib-b":
+        return tuple(range(1, part_count() + 1))
+    return PARTS[os_kind][leg]
+
+
+for _leg, _parts in PARTS["macos"].items():
+    SHARDS["macos"][_leg] = [("parts", ["--lib"], [], sum(MACOS_PART_COUNTS[k] for k in _parts) * 98 // 100)]
 # Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
 # of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
 SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
@@ -338,6 +356,9 @@ def runner_config(path: str) -> list[str]:
 
 
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
+    if any(step == "parts" for step, _, _, _ in SHARDS[os_kind][shard]):
+        # Never a whole `cargo test --lib`: the leg's parts are built one at a time.
+        return [f"{shard} builds lib test parts; run it with run-prebuilt-parts {os_kind} {shard} --build <dir>"]
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
     runner = runner_config(write_runner(tmp)) if tmp else []
@@ -583,6 +604,7 @@ def self_test() -> int:
         assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    built_parts_rows()
     # H1: every shard, on every OS, gives cargo and a prebuilt lib
     # binary a private gateway home beside its TMPDIR, and removes it after the
     # shard, also when cargo fails (R6.1, R6.4, R6.5). The recorder stands in
@@ -668,9 +690,82 @@ def self_test() -> int:
     return 0
 
 
+def built_parts_rows() -> None:
+    """R1-R5: a part-building leg builds its parts in order through lib-parts.sh, deletes each binary before the next
+    build, accounts for every listed name, keeps going after a failed part, and holds its floor."""
+    saved = {leg: SHARDS["macos"][leg] for leg in PARTS["macos"]}
+    with tempfile.TemporaryDirectory() as root:
+        log = os.path.join(root, "log")
+        fake = os.path.join(root, "lib-parts.sh")
+        # The fake build: logs `build K`, refuses to build while a part binary is still on disk, and writes a binary
+        # that lists `mK::a mK::b mK::<SDK>` and runs per BEHAVE_K (ok, short, extra, red, panic: b in libtest's
+        # should-panic form, child: b's result after a child's unfinished `test <child> ... ` on one line, diag: b only in
+        # a diagnostic's text, `diagnostic: test mK::b ... ok`, never run). FAIL_LIST_K=1
+        # fails the export after the binary is written, before its list.
+        with open(fake, "w") as f:
+            f.write('#!/bin/sh\nk=$2; d=$3; echo "build $k" >> "$LOG"\n'
+                    'for b in "$d"/p*/lib-tests-p*; do [ -e "$b" ] && { echo "left $b" >> "$LOG"; exit 7; }; done\n'
+                    '[ "$(eval echo \\${FAIL_BUILD_$k:-})" = 1 ] && exit 5\n'
+                    'mkdir -p "$d/p$k"; printf "m$k::a: test\\nm$k::b: test\\nm$k::' + SDK + ': test\\n" > "$d/p$k/list.txt"\n'
+                    'cat > "$d/p$k/lib-tests-p$k" <<EOF\n#!/bin/sh\nb=\\${BEHAVE_$k:-ok}\n'
+                    'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
+                    ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
+                    ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
+                    ' *) echo "test m$k::b ... ok" ;; esac\n'
+                    '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
+                    '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
+        os.chmod(fake, 0o755)
+
+        def leg_run(leg: str, floor: int, **env: str) -> tuple[int, list[str]]:
+            open(log, "w").close()
+            SHARDS["macos"][leg] = [("parts", ["--lib"], [], floor)]
+            out_dir = tempfile.mkdtemp(dir=root)
+            keep = {k: os.environ.get(k) for k in ("LOG", "MACOS_LIB_SOLO", *env)}
+            os.environ.update({"LOG": log, **env})
+            try:
+                with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
+                    rc = run_built_parts("macos", leg, out_dir, ("sh", fake))
+            finally:
+                for k, v in keep.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            return rc, open(log).read().split("\n")[:-1]
+
+        try:
+            # R1: the leg's parts from PARTS, in order, each binary gone before the next build; the clean run passes.
+            rc, steps = leg_run("lib-b", 8)
+            assert (rc, steps) == (0, ["build 1", "build 2", "build 3", "build 4"]), (rc, steps)
+            rc, steps = leg_run("int-lib", 2)
+            assert (rc, steps) == (0, ["build 5"]), (rc, steps)
+            # R2: a part that ran a listed test less, or a test it does not list, fails the leg.
+            assert leg_run("lib-b", 8, BEHAVE_2="short")[0] == 1, "a part that ran one test fewer passed"
+            assert leg_run("lib-b", 8, BEHAVE_3="extra")[0] == 1, "a part that ran an unlisted test passed"
+            # R3: the SDK name each part lists is skipped (libtest's substring rule) and not expected to run.
+            # R4: a failed build or a red binary fails the leg, and every later part still runs; the floor holds.
+            rc, steps = leg_run("lib-b", 6, FAIL_BUILD_2="1")
+            assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
+            rc, steps = leg_run("lib-b", 8, BEHAVE_2="red")
+            assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
+            # An export that failed after writing its binary: the binary is gone before part 3 builds (the fake build
+            # logs `left` and refuses while one is on disk), and the leg fails.
+            rc, steps = leg_run("lib-b", 6, FAIL_LIST_2="1")
+            assert rc == 1 and steps == ["build 1", "build 2", "build 3", "build 4"], (rc, steps)
+            # A #[should_panic] test's result line counts as run.
+            assert leg_run("lib-b", 8, BEHAVE_2="panic")[0] == 0, "a should-panic result was not counted"
+            # A result after a child process's unfinished line, on the same line, counts as run.
+            assert leg_run("lib-b", 8, BEHAVE_2="child")[0] == 0, "a result after a child's partial line was not counted"
+            # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
+            assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
+            assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
+            # R5: the solo lane's lib-b builds every part.
+            rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
+            assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
+        finally:
+            SHARDS["macos"].update(saved)
+
+
 def prebuilt_rows() -> None:
-    """The lib test binary is found in cargo's JSON, exported, and a PREBUILT shard run
-    from it counts its selection against its floor and fails on a red binary."""
+    """The lib test binary is found in cargo's JSON and exported, and a shared-build leg run from it counts its
+    selection against its floor, fails on a red binary and keeps the TMPDIR guard."""
     art = {"reason": "compiler-artifact", "target": {"kind": ["lib"], "name": "mcp_gateway"},
            "profile": {"test": True}, "executable": "/t/deps/mcp_gateway-1"}
     other = [json.dumps({**art, "target": {"kind": ["bin"]}}), json.dumps({**art, "profile": {"test": False}}),
@@ -692,22 +787,6 @@ def prebuilt_rows() -> None:
                         '  for t in $n; do echo "$t: test"; done; exit 0; fi\n'
                         f"{body}\n")
             os.chmod(fake, 0o644)  # run_prebuilt restores the exec bit an artifact drops
-        floor = SHARDS["macos"]["lib-a"][0][3]
-        binary(f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"; '
-               '[ "$1" = "gateway::" ] && [ "$CARGO_MANIFEST_DIR" = "$PWD" ] || exit 9')
-        assert run_prebuilt("macos", "lib-a", fake) == 0
-        binary(f'echo "running {floor - 1} tests"')
-        assert run_prebuilt("macos", "lib-a", fake) == 1, "a selection under the floor passed"
-        binary(f'echo "running {floor} tests"; exit 101')
-        assert run_prebuilt("macos", "lib-a", fake) == 1, "a red binary passed"
-        # The coverage guard: halves that overlap, or leave a test out, fail a green run.
-        ok_run = f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"'
-        binary(ok_run, "overlap")
-        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "overlap passed"
-        binary(ok_run, "gap")
-        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "a gap passed"
-        binary(ok_run)
-        assert run_prebuilt("macos", "lib-a", fake) == 0 and union_problems(fake, "macos") == []
         # Linux: a shared-build leg runs under the TMPDIR guard a cargo shard has. The binary sees its own
         # BY_BINARY folder as TMPDIR, and a test that leaves a file there fails the leg.
         lfloor = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
@@ -742,74 +821,6 @@ def prebuilt_rows() -> None:
             f.write("#!/bin/sh\necho '   Compiling x'\n")
         os.chmod(cargo_none, 0o755)
         assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
-    # wait_for_lib: when int waits, and when it gives up and builds its half itself.
-    def waits(states, grace=600, warned=None):
-        t = [0.0]
-        seq = iter(states)
-
-        def fetch():  # an exception in the list stands for a failed `gh api` call
-            s = next(seq)
-            if isinstance(s, Exception):
-                raise s
-            return s
-        warn = (warned.append if warned is not None else lambda _: None)
-        return wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], grace, 20, warn=warn)
-    assert waits([(False, "in_progress")] * 400 + [(True, "in_progress")]), "a slow producer was abandoned"
-    assert waits([(True, None)]), "a binary from an earlier attempt was not reused"
-    assert not waits([(False, "in_progress"), (False, "completed")]), "a producer that ended without it was awaited"
-    assert not waits([(False, None)] * 40), "an absent producer (int rerun alone) was awaited past grace"
-    assert not waits([(False, "queued")] * 40), "a producer queued past grace was awaited"
-    assert waits([(False, "queued")] * 5 + [(True, "in_progress")]), "a briefly queued producer was abandoned"
-    # A failed fetch (one `gh api` blip) never fails the job: it warns with gh's own text and polls on;
-    # five failures in a row give up on the shared binary and build the half here. The literals pin the
-    # five: rows built from FETCH_FAILURE_LIMIT would pass with any value of it.
-    assert FETCH_FAILURE_LIMIT == 5, FETCH_FAILURE_LIMIT
-    blip = RuntimeError("gh api exited 1: HTTP 502 Bad Gateway")
-    warned = []
-    assert waits([blip, (True, "in_progress")], warned=warned), "one failed fetch lost a binary that was there"
-    assert any("HTTP 502 Bad Gateway" in w and "::warning::" in w for w in warned), f"gh's error not shown: {warned}"
-    assert waits([blip] * 4 + [(False, "in_progress")] + [blip] * 4 + [(True, "in_progress")]), \
-        "four failures, a good fetch and four more fell back: failures that never ran five in a row added up"
-    assert not waits([blip] * 5), "five failed fetches in a row did not fall back to building here"
-    # The production seam, as in the incident: a non-zero `gh api` exit goes through gh_api and the real
-    # fetch, and is a warning and a poll, never a crash. The fake honours check=True as subprocess.run
-    # does, so restoring check=True (the incident's CalledProcessError) fails this row.
-    def fake_run(answers):
-        seq = iter(answers)
-
-        def run(cmd, check=False, **_):
-            rc, out, err = next(seq)
-            if check and rc:
-                raise subprocess.CalledProcessError(rc, cmd, out, err)
-            return subprocess.CompletedProcess(cmd, rc, out, err)
-        return run
-    try:
-        gh_api("repos/o/r/actions/runs/1/artifacts?name=hidden", ".total_count",
-               run=fake_run([(1, "", "HTTP 502: Bad Gateway\n")]))
-    except RuntimeError as e:
-        msg = str(e)
-    else:
-        raise AssertionError("a failed gh api call returned instead of raising")
-    assert "exited 1" in msg and "HTTP 502: Bad Gateway" in msg, f"gh's exit and text not carried: {msg}"
-    assert "?" not in msg and "hidden" not in msg, f"the query string reached the log: {msg}"
-    blip_run = fake_run([(1, "", "HTTP 502: Bad Gateway\n"), (0, "1\n", ""), (0, "in_progress\n", "")])
-    fetch = lib_fetch("o/r", "1", "1", "macos-lib-tests", "macOS shard lib-b",
-                      gh=lambda p, j: gh_api(p, j, run=blip_run))
-    seen, t = [], [0.0]
-    assert wait_for_lib(fetch, lambda s: t.__setitem__(0, t[0] + s), lambda: t[0], 600, 20, warn=seen.append), \
-        "a failed gh api call through the real fetch lost a binary that was there"
-    assert len(seen) == 1 and "HTTP 502: Bad Gateway" in seen[0], f"expected one warning with gh's text: {seen}"
-    # The rehearsal input skips the wait and asks for the fallback, touching no API.
-    with tempfile.TemporaryDirectory() as root:
-        out = os.path.join(root, "out")
-        saved = {k: os.environ.get(k) for k in ("MACOS_LIB_REHEARSE_FALLBACK", "GITHUB_OUTPUT")}
-        os.environ.update(MACOS_LIB_REHEARSE_FALLBACK="true", GITHUB_OUTPUT=out)
-        try:
-            assert wait_lib("macos-lib-tests", "macOS shard lib-b") == 0
-            assert open(out).read() == "found=false\n"
-        finally:
-            for k, v in saved.items():
-                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def parts_rows() -> None:
@@ -1015,7 +1026,7 @@ def lib_test_binary(lines: list[str]) -> str | None:
 
 def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
     """Build the `--lib` test binary (the same build `cargo test --all-features --lib` reuses) and
-    copy it to `dest` as LIB_BINARY, for a PREBUILT shard on another runner."""
+    copy it to `dest` as LIB_BINARY, for the SHARED_BUILD legs on other runners."""
     rc, lines = cargo([*BASE, "--lib", "--no-run", "--message-format=json-render-diagnostics"], program)
     path = lib_test_binary(lines) if rc == 0 else None
     if path is None:
@@ -1094,7 +1105,7 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
 
 
 def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
-    """Run a PREBUILT or SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
+    """Run a SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
     ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
     n, failed = _run_binary(os_kind, shard, binary)
     print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
@@ -1108,8 +1119,7 @@ def part_binaries(directory: str) -> tuple[dict[int, str], list[str]]:
     """The lib test part binaries under DIRECTORY (`*/pK/lib-tests-pK`, one artifact folder each) and the problems
     that stop a run before any test: parts other than exactly 1..N, a binary whose `--list` differs from the
     `list.txt` the union job checked, or two parts listing the same test."""
-    n = int(re.search(r"const\s+N\s*:\s*u32\s*=\s*(\d+)\s*;",
-                      open(os.path.join(ROOT, "scripts", "dev", "test-parts-build.rs")).read()).group(1))
+    n = part_count()
     found: dict[int, str] = {}
     out: list[str] = []
     for path in sorted(glob.glob(os.path.join(directory, "*", "p*", "lib-tests-p*"))):
@@ -1153,6 +1163,68 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
     failed += [f"{step}: selected {total} tests over the parts, below the floor of {floor}"] * (total < floor)
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+# libtest's per-test result line; a #[should_panic] test reads `test <name> - should panic ... ok`. Anchored at the line
+# start, with any number of unfinished `test <name> ... ` before the result: a test that re-runs the binary as a child
+# shares stdout, and the child's unfinished line can precede the parent's result (E1, run 44460056220). Text that is
+# not a libtest prefix (`diagnostic: test x ... ok`) never counts.
+RESULT_LINE = re.compile(r"^(?:test \S+(?: - should panic)? \.\.\. )*test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
+
+
+def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
+    """Build and run LEG's lib test parts one at a time (PARTS, leg_parts): `lib-parts.sh export K DIRECTORY` builds
+    part K and writes pK/lib-tests-pK and pK/list.txt; the binary runs every test with the OS skips; the names it
+    reports must be its list less the names a skip matches (libtest's substring rule); then the binary is deleted
+    before the next part builds. Every part runs even after one fails; the floor applies to the sum."""
+    ((step, _args, _test_args, floor),) = SHARDS[os_kind][leg]
+    script = script or ("bash", os.path.join(ROOT, "scripts", "ci", "lib-parts.sh"))
+    patterns = [a for a in SKIPS[os_kind] if a != "--skip"]
+    solo = os.environ.get("MACOS_LIB_SOLO") == "true"
+    env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
+    failed: list[str] = []
+    total = 0
+    for k in leg_parts(os_kind, leg, solo):
+        print(f"::group::{os_kind} {leg}: part {k}", flush=True)
+        binary = os.path.join(directory, f"p{k}", f"lib-tests-p{k}")
+        recorded = os.path.join(directory, f"p{k}", "list.txt")
+        try:
+            rc = subprocess.run([*script, "export", str(k), directory], cwd=ROOT).returncode
+            if rc != 0 or not os.path.isfile(binary) or not os.path.isfile(recorded):
+                failed.append(f"part {k}: its build failed (lib-parts.sh exited {rc})")
+                continue
+            listed_names = {x[: -len(": test")] for x in open(recorded).read().splitlines() if x.endswith(": test")}
+            want = {n for n in listed_names if not any(p in n for p in patterns)}
+            os.chmod(binary, 0o755)
+            reported: dict[str, str] = {}
+            with private_home(env, None) as home_env:
+                p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     env=home_env, cwd=ROOT)
+                assert p.stdout is not None
+                for raw in p.stdout:
+                    sys.stdout.buffer.write(raw)
+                    sys.stdout.buffer.flush()
+                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    if m:
+                        reported[m.group(1)] = m.group(2)
+                prc = p.wait()
+        finally:
+            # The binary goes before the next part builds, also when an export or a run failed part way.
+            if os.path.lexists(binary):
+                os.remove(binary)
+            print("::endgroup::", flush=True)
+        total += len(reported)
+        print(f"::notice::{os_kind} {leg} part {k}: ran {len(reported)}, its list less the skips {len(want)}")
+        if prc != 0:
+            failed.append(f"part {k}: test binary exited {prc}")
+        if set(reported) != want:
+            failed.append(f"part {k}: ran {len(reported)} tests, its list less the skips is {len(want)} "
+                          f"(missing e.g. {sorted(want - set(reported))[:3]}, extra e.g. {sorted(set(reported) - want)[:3]})")
+    print(f"::notice::{os_kind} {leg} {step} (built parts): ran {total} (floor {floor})")
+    failed += [f"{step}: ran {total} tests over the parts, below the floor of {floor}"] * (total < floor)
+    for f in failed:
+        print(f"::error::{os_kind} {leg} {f}")
     return 1 if failed else 0
 
 
@@ -1204,102 +1276,24 @@ def run_one(mode: str, pattern: str, directory: str, extra: list[str]) -> int:
         return subprocess.run([binaries[k], *names, "--exact", *extra], env=home_env, cwd=ROOT).returncode
 
 
-# Failed fetches in a row (one every `interval` s, so about 100 s of API trouble) before int gives up
-# on the shared binary and builds its half itself. A single failed `gh api` call never fails the job.
-FETCH_FAILURE_LIMIT = 5
-
-
-def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20, warn=print) -> bool:
-    """Whether the exported lib binary arrives. `fetch()` gives (artifact present, producer job
-    status in this attempt or None). Gives up, so the caller builds the half itself, when the
-    producer finished without it, or is absent from this attempt (a rerun of int alone) or still
-    queued `grace` seconds in (both macOS runners held by waiting jobs). An in-progress producer
-    is waited for: building again would cost more than waiting. A fetch that fails (a `gh api`
-    error) is shown as a warning with gh's own text and polled again; FETCH_FAILURE_LIMIT failures in
-    a row give up, as a missing binary does."""
-    start = clock()
-    failures = 0
-    while True:
-        try:
-            present, status = fetch()
-        except (RuntimeError, OSError, ValueError) as e:
-            failures += 1
-            warn(f"::warning::wait-lib: fetch failed ({failures} in a row): {e}")
-            if failures >= FETCH_FAILURE_LIMIT:
-                warn(f"::warning::wait-lib: {failures} failed fetches in a row; building this half here")
-                return False
-            sleep(interval)
-            continue
-        failures = 0
-        if present:
-            return True
-        if status == "completed":
-            return False
-        if status in (None, "queued", "waiting", "pending") and clock() - start >= grace:
-            return False
-        sleep(interval)
-
-
-def gh_api(path: str, jq: str, run=subprocess.run) -> str:
-    """One `gh api` call. A non-zero exit raises RuntimeError carrying gh's own text (rate limit, 5xx,
-    auth), which wait_for_lib shows as a warning before polling again. The logged path drops its query
-    string; the path holds no secret."""
-    p = run(["gh", "api", path, "--jq", jq], capture_output=True, text=True)
-    if p.returncode:
-        raise RuntimeError(f"gh api {path.split('?')[0]} exited {p.returncode}: {p.stderr.strip()[:300]}")
-    return p.stdout.strip()
-
-
-def lib_fetch(repo: str, run_id: str, attempt: str, artifact: str, producer: str, gh=gh_api):
-    """wait_for_lib's fetch: (artifact present in this run, producer job status in this attempt or None)."""
-    def fetch():
-        count = gh(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={artifact}", ".total_count")
-        status = gh(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
-                    f'[.jobs[] | select(.name == "{producer}") | .status][0] // ""')
-        return int(count or 0) > 0, status or None
-    return fetch
-
-
-def wait_lib(artifact: str, producer: str) -> int:
-    """Wait for `artifact` from job `producer` of this run; write found=true|false to GITHUB_OUTPUT."""
-    if os.environ.get("MACOS_LIB_REHEARSE_FALLBACK") == "true":
-        # A dispatch input: rehearse the path a missing binary takes, without breaking lib-b.
-        print(f"::notice::wait-lib: rehearsing the fallback; {artifact} not used")
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write("found=false\n")
-        return 0
-    repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
-    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-
-    import time
-    start = time.monotonic()
-    found = wait_for_lib(lib_fetch(repo, run_id, attempt, artifact, producer), time.sleep, time.monotonic)
-    waited = int(time.monotonic() - start)
-    print(f"::notice::wait-lib: {artifact} {'found' if found else 'not coming; building this half here'}"
-          f" after {waited} s")
-    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-        f.write(f"found={'true' if found else 'false'}\n")
-    return 0
-
-
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
     if len(argv) == 4 and argv[1] == "run" and argv[3] in SHARDS.get(argv[2], {}):
-        return run(argv[2], argv[3])  # a PREBUILT shard too: int's fallback build
+        return run(argv[2], argv[3])
     if len(argv) == 3 and argv[1] == "export-lib":
         return export_lib(argv[2])
-    if len(argv) == 4 and argv[1] == "wait-lib":
-        return wait_lib(argv[2], argv[3])
     if len(argv) == 5 and argv[1] == "run-prebuilt-parts" and argv[3] in SHARED_BUILD.get(argv[2], ()):
         return run_prebuilt_parts(argv[2], argv[3], argv[4])
+    if (len(argv) == 6 and argv[1] == "run-prebuilt-parts" and argv[4] == "--build"
+            and argv[3] in PARTS.get(argv[2], {})):
+        return run_built_parts(argv[2], argv[3], argv[5])
     if len(argv) >= 4 and argv[1] == "which":
         return which_one(argv[2], argv[3], argv[5:] if len(argv) > 4 and argv[4] == "--" else [])
     if len(argv) >= 5 and argv[1] == "run-one" and argv[2] in ("--exact", "--module"):
         extra = argv[6:] if len(argv) > 5 and argv[5] == "--" else []
         return run_one(argv[2], argv[3], argv[4], extra)
-    if (len(argv) == 5 and argv[1] == "run-prebuilt"
-            and (argv[3] in PREBUILT.get(argv[2], {}) or argv[3] in SHARED_BUILD.get(argv[2], ()))):
+    if len(argv) == 5 and argv[1] == "run-prebuilt" and argv[3] in SHARED_BUILD.get(argv[2], ()):
         return run_prebuilt(argv[2], argv[3], argv[4])
     print(__doc__, file=sys.stderr)
     return 2

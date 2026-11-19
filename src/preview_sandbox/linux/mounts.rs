@@ -440,7 +440,10 @@ fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
     let ca_pem = config.join("ca.pem");
     let (mut saw_config, mut saw_ca) = (false, false);
     let proxy_socket = staged(PROXY_SOCKET);
-    let npm_planned = plan.fetch.as_ref().is_some_and(|f| f.npm.is_some());
+    let fetcher_planned = plan
+        .fetch
+        .as_ref()
+        .is_some_and(|f| f.npm.is_some() || f.uv.is_some());
     let mut saw_proxy = false;
     for m in rows.iter().filter(|m| descends_from(rows, m, root_id)) {
         let fail = |why: &str| Err(format!("verifying {} ({why})", m.point.display()));
@@ -448,7 +451,7 @@ fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
             return fail("not nosuid");
         }
         if m.point == proxy_socket {
-            if !npm_planned {
+            if !fetcher_planned {
                 return fail("a proxy socket with no npm fetch planned");
             }
             saw_proxy = true;
@@ -495,7 +498,7 @@ fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
             return fail("not nodev");
         }
     }
-    if npm_planned && !saw_proxy {
+    if fetcher_planned && !saw_proxy {
         return Err(format!("verifying {} (missing)", proxy_socket.display()));
     }
     if plan.fetch.is_some() && !(saw_config && saw_ca) {
