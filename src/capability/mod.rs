@@ -32,6 +32,7 @@
 //! The executor injects credentials at runtime, so they never appear in
 //! logs, error messages, or MCP responses.
 
+mod attribution;
 mod backend;
 #[cfg(test)]
 pub(crate) mod op_gate;
@@ -60,7 +61,25 @@ mod linear_get_issue_tests;
 #[cfg(test)]
 mod linear_write_tests;
 mod loader;
+#[cfg(tp1)]
+#[cfg(test)]
+mod maps_attribution_tests;
+#[cfg(test)]
+pub(crate) mod maps_harness;
+#[cfg(tp1)]
+#[cfg(test)]
+mod maps_live_tests;
+#[cfg(tp1)]
+#[cfg(test)]
+mod maps_pacing_tests;
+#[cfg(tp1)]
+#[cfg(test)]
+mod maps_tools_tests;
 mod openapi;
+mod pacing;
+#[cfg(tp1)]
+#[cfg(test)]
+mod pacing_tests;
 mod parser;
 mod pin_file;
 mod read_only_call;
@@ -75,6 +94,7 @@ mod tenant_read_tests;
 pub mod validator;
 mod watcher;
 
+pub(crate) use attribution::apply_attribution;
 pub use backend::{CapabilityBackend, CapabilityBackendStatus, DirectoryLoad, RugPullRecord};
 pub use definition::ProtocolConfig;
 pub use definition::*;
@@ -108,7 +128,8 @@ pub use schema_validator::{
     SchemaValidationResult, ValidationViolation, validate_arguments, validate_output,
 };
 pub(crate) use schema_validator::{
-    advertised_output_schema, published_output, rewrap_published_output, unwrap_published_output,
+    advertised_output_schema, output_root_is_wrapped, published_output, rewrap_published_output,
+    unwrap_published_output,
 };
 pub use validator::{Issue, IssueSeverity, validate_capabilities, validate_capability_definition};
 pub use watcher::{CapabilityWatcher, CatalogueChanged};

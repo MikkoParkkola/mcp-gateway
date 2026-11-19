@@ -1,16 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Dashboard logout and re-entry (MIK-7570.SESSION.1, E5).
+//! Dashboard logout, sign-in and re-entry (E5).
 //!
-//! Logout lives on its own router, merged outside authentication and outside
-//! the E1-f audit layer. An expired session must still be able to log out, and
-//! an audit outage must never block a revocation. Re-entry is an ordinary
-//! audited admin route inside [`super::api_router`].
+//! Logout and sign-in live on their own router, merged outside authentication
+//! and outside the E1-f audit layer. An expired session must still be able to
+//! log out, and an audit outage must never block a revocation. Sign-in writes
+//! its own audit records. Re-entry is an ordinary audited admin route inside
+//! [`super::api_router`].
 
 use crate::gateway::routes;
 use std::sync::Arc;
 
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, FromRequest, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -20,14 +21,23 @@ use serde_json::json;
 use super::errors::{admin_auth_required, flat_error};
 use super::guard::Guard;
 use crate::gateway::auth::{
-    Now, SessionLimits, cookies_are_secure, dashboard_session_who, session_cookie,
-    session_cookie_value,
+    AuthenticatedClient, Bound, MintingKey, NamedApiKey, Navigation, Now, SessionLimits,
+    cookies_are_secure, dashboard_session_who, is_gateway_admin, refused_sign_in, session_cookie,
+    session_cookie_value, signed_in,
 };
 use crate::gateway::router::AppState;
 use crate::security::audit::AuditEnvelope;
 
 /// Path of the logout route.
 pub const LOGOUT_PATH: &str = routes::DASHBOARD_LOGOUT;
+
+/// Where a refused sign-in form returns a browser. Fixed: nothing in the
+/// request chooses it.
+const SIGNIN_REFUSED_TARGET: &str = "/ui/overview/status#signin-refused";
+
+/// Audit surface of `POST /ui/signin`. This router is outside the E1-f layer,
+/// so the route writes the record itself.
+const SIGNIN_SURFACE: &str = "ui_signin";
 
 /// `POST /dashboard/logout`, unauthenticated by design: holding a handle is
 /// the right to revoke it. POST only, so a link or an image cannot log anyone
@@ -39,11 +49,14 @@ pub const LOGOUT_PATH: &str = routes::DASHBOARD_LOGOUT;
 pub fn logout_router() -> Router<Arc<AppState>> {
     // Every answer on the handoff path, including a router 405 or an
     // extractor 413, is neither cached nor sent onward as a `Referer`.
+    // Sign-in shares the handoff's private layer, so a router 405 and an
+    // extractor 413 or 415 are `no-store` too.
     let handoff = Router::new()
         .route(
             routes::DASHBOARD_HANDOFF,
             get(handoff_form).post(handoff_code),
         )
+        .route(routes::UI_SIGNIN, post(signin))
         .layer(axum::middleware::map_response(handoff_private));
     Router::new()
         .route(routes::DASHBOARD_LOGOUT, post(logout))
@@ -119,6 +132,213 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         .into_response()
 }
 
+/// `POST /ui/signin`: one form field, `key`, for a session cookie.
+///
+/// Origin is decided before the body is read. A refused origin, a bad body
+/// and an extra field never check the key. The presented key is not logged
+/// and is not written into the audit record.
+async fn signin(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    request: axum::http::Request<axum::body::Body>,
+) -> Response {
+    let headers = request.headers().clone();
+    if !signin_origin_ok(&state, header_str(&headers, header::ORIGIN)) {
+        tracing::warn!("sign-in refused: Origin is absent or is not this gateway");
+        return crate::gateway::middleware::bearer_unauthorized_response(
+            "Sign in from this gateway's own page.",
+        );
+    }
+    if !is_form(&headers) {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    let body = match axum::body::Bytes::from_request(request, &()).await {
+        Ok(body) => body,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let Some(presented) = single_key(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let navigation = Navigation::of(&headers);
+    let presented_session = session_cookie_value(&headers);
+    let resolved = generation.auth().validate_token_with_origin(&presented);
+    drop(presented);
+    let Some((client, named)) = resolved else {
+        return signin_refused(&state, navigation).await;
+    };
+    if !is_gateway_admin(Some(&client)) {
+        return signin_refused(&state, navigation).await;
+    }
+    let Some(bound) = bound_for(generation.auth(), &client, named.as_ref()) else {
+        return signin_refused(&state, navigation).await;
+    };
+    let who = crate::security::audit::AuditWho::from_request(
+        Some(&client),
+        None,
+        generation.auth().record_key(),
+    );
+    if signin_audit(&state, crate::security::audit::AuditEnvelope::ok(who))
+        .await
+        .is_err()
+    {
+        return signin_withheld();
+    }
+    let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
+    let now = Now::read();
+    if let Some(handle) = presented_session {
+        state.dashboard_bootstrap.revoke(&handle, now, &limits);
+    }
+    signed_in(
+        &state.dashboard_bootstrap,
+        &state.live_config,
+        bound,
+        now,
+        cookies_are_secure(&state.live_config),
+    )
+}
+
+/// The gateway's own origin, as [`crate::gateway::router::admits_signin`]
+/// decides it. An absent Origin is not one.
+fn signin_origin_ok(state: &AppState, origin: Option<&str>) -> bool {
+    origin.is_some_and(|origin| crate::gateway::router::admits_signin(&state.live_config, origin))
+}
+
+fn header_str(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn is_form(headers: &HeaderMap) -> bool {
+    header_str(headers, header::CONTENT_TYPE)
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            value
+                .trim()
+                .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        })
+}
+
+/// The body is exactly one field named `key`. Any other shape is `None`, and
+/// the value is not checked.
+fn single_key(body: &[u8]) -> Option<String> {
+    let mut pairs = url::form_urlencoded::parse(body);
+    let (name, value) = pairs.next()?;
+    if name != "key" || pairs.next().is_some() {
+        return None;
+    }
+    Some(value.into_owned())
+}
+
+/// A key that does not resolve, or resolves but is not an admin key this
+/// route can bind. Counted once, recorded once, and answered by the fixed
+/// refusal. The key is not part of the record.
+async fn signin_refused(state: &AppState, navigation: Navigation) -> Response {
+    crate::security::security_metrics::auth_failure(
+        crate::security::security_metrics::AuthFailureKind::InvalidCredential,
+    );
+    tracing::warn!("sign-in refused: the key is not an admin key for this gateway");
+    let envelope = crate::security::audit::AuditEnvelope {
+        outcome: crate::security::audit::AuditOutcome::Denied(
+            crate::error::rpc_codes::INVALID_REQUEST,
+        ),
+        ..crate::security::audit::AuditEnvelope::ok(refusal_who())
+    };
+    if signin_audit(state, envelope).await.is_err() {
+        return signin_withheld();
+    }
+    refused_sign_in(
+        navigation,
+        crate::gateway::middleware::bearer_unauthorized_response("Invalid token"),
+        SIGNIN_REFUSED_TARGET,
+    )
+}
+
+/// No principal and no account: a refusal names nobody.
+fn refusal_who() -> crate::security::audit::AuditWho {
+    crate::security::audit::AuditWho {
+        credential_kind: None,
+        principal: crate::gateway::record_principal::RecordPrincipal::none(),
+        account: String::new(),
+        authority: None,
+        subject: None,
+    }
+}
+
+/// What a session minted by this credential is bound to, by a dashboard link
+/// or by the sign-in form. It ends no later than the minting key's expiry
+/// (otherwise a key used minutes before it expires would buy a full absolute
+/// limit of access), with that key on a reload, by its quota identity, and
+/// with the secret this request matched, by its fingerprint. The expiry comes
+/// from `auth`, the table that authenticated this request, so a reload cannot
+/// split them; the key is found by its credential, not its name, since two keys
+/// may share a name when a config skipped load validation. The static bearer
+/// binds nothing: it is restart-only. An API key that cannot be bound (not
+/// found, or no quota identity or fingerprint) may not mint: `None`.
+fn bound_for(
+    auth: &crate::gateway::auth::ResolvedAuthConfig,
+    client: &AuthenticatedClient,
+    named: Option<&NamedApiKey>,
+) -> Option<Bound> {
+    if client.api_key_identity().is_none() {
+        return Some(Bound {
+            not_after: None,
+            key: None,
+        });
+    }
+    let not_after = auth
+        .api_keys()
+        .iter()
+        .find(|key| key.principal() == client.principal)
+        .map(|key| key.expires_at.map(std::time::SystemTime::from))?;
+    Some(Bound {
+        not_after,
+        key: Some(MintingKey {
+            quota: client.quota_principal.clone()?,
+            digest_tag: named?.digest_tag().to_owned(),
+        }),
+    })
+}
+
+/// One `ui_signin` record with an empty domain map. No log skips the write.
+/// A fail-closed failure withholds the answer; a best-effort failure does not.
+async fn signin_audit(
+    state: &AppState,
+    envelope: crate::security::audit::AuditEnvelope,
+) -> Result<(), ()> {
+    let Some(log) = &state.transparency_log else {
+        return Ok(());
+    };
+    let fail_closed =
+        log.failure_policy() == crate::security::audit::AuditFailurePolicy::FailClosed;
+    let written = log
+        .append_bounded(move |logger| {
+            logger
+                .append_admin_action(SIGNIN_SURFACE, serde_json::Map::new(), &envelope)
+                .map_err(std::io::Error::other)
+        })
+        .await;
+    match written {
+        Ok(()) => Ok(()),
+        Err(error) if fail_closed => {
+            tracing::warn!(%error, "sign-in was not recorded; no session was opened");
+            Err(())
+        }
+        Err(error) => {
+            tracing::warn!(%error, "sign-in was not recorded; the answer was still sent");
+            Ok(())
+        }
+    }
+}
+
+fn signin_withheld() -> Response {
+    crate::gateway::http_error::json_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        crate::gateway::http_error::jsonrpc_error_body(
+            crate::error::rpc_codes::INTERNAL_ERROR,
+            "Sign-in was not recorded, so no session was opened.",
+        ),
+    )
+}
+
 /// `POST /ui/api/dashboard-link`: re-arm a fresh single-use link.
 ///
 /// Only a credential the link's redemption also accepts may mint one: the
@@ -138,32 +358,20 @@ pub(super) async fn dashboard_link(
     let Some(client) = guard.client else {
         return admin_auth_required().into_response();
     };
-    // A session opened by this link ends no later than the key that minted
-    // it: otherwise a key used minutes before its expiry would buy a full
-    // absolute limit of access after it.
-    // The expiry comes from the resolved key that authenticated this request,
-    // not the live file, so a reload cannot split them. A key that is not
-    // found cannot prove its expiry, so it may not mint: fail closed.
-    let not_after = if client.api_key_identity().is_some() {
-        // The table that authenticated this request: its pinned generation.
-        let keys = generation.auth().api_keys();
-        let Some(key) = keys
-            .iter()
-            // By the credential, not the name: two keys may share a name
-            // when a config skipped load validation (MIK-8489).
-            .find(|k| k.principal() == client.principal)
-        else {
-            return admin_auth_required().into_response();
-        };
-        key.expires_at.map(std::time::SystemTime::from)
-    } else {
-        None
+    let Some(bound) = bound_for(
+        generation.auth(),
+        &client,
+        named.as_ref().map(|Extension(key)| key),
+    ) else {
+        return admin_auth_required().into_response();
     };
     // Host, port and TLS are restart-only: the running listener's values, not
     // a reloaded file's, say where a browser can reach this process.
     let running = state.live_config.running();
     let host = running.server.host.as_str();
-    if !is_wildcard(host) && !crate::gateway::router::is_loopback_bind(host) {
+    if !crate::gateway::router::is_wildcard_bind(host)
+        && !crate::gateway::router::is_loopback_bind(host)
+    {
         // Redemption accepts only a loopback peer, and a browser reaching a
         // concrete network address is not one: the link could never open.
         return flat_error(
@@ -173,29 +381,7 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    // Bound to the minting key, by its quota identity, so the link and the
-    // session it opens end with that key on a reload (K13). The bearer binds
-    // nothing: it is restart-only.
-    // An API-key client that carries no quota identity cannot be bound to
-    // its key, so it may not mint: fail closed.
-    // The session lives while the secret this request matched is valid, so
-    // it is bound to that secret's fingerprint too; an API-key client whose
-    // match left none cannot be bound to its secret, and may not mint.
-    let digest_tag = named.map(|Extension(key)| key.digest_tag().to_owned());
-    let key = match (
-        client.api_key_identity(),
-        client.quota_principal.clone(),
-        digest_tag,
-    ) {
-        (None, _, _) => None,
-        (Some(_), Some(quota), Some(digest_tag)) => {
-            Some(crate::gateway::auth::MintingKey { quota, digest_tag })
-        }
-        (Some(_), _, _) => return admin_auth_required().into_response(),
-    };
-    let value = state
-        .dashboard_bootstrap
-        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
+    let value = state.dashboard_bootstrap.rearm_bound(bound);
     let scheme = if running.mtls.enabled {
         "https"
     } else {
@@ -216,7 +402,7 @@ pub(super) async fn dashboard_link(
 fn loopback_authority(host: &str, port: u16) -> String {
     let host = match host.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V6(ip)) if ip.is_unspecified() => "::1",
-        _ if is_wildcard(host) => "127.0.0.1",
+        _ if crate::gateway::router::is_wildcard_bind(host) => "127.0.0.1",
         _ => host,
     };
     if host.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -226,21 +412,13 @@ fn loopback_authority(host: &str, port: u16) -> String {
     }
 }
 
-/// A bind on every interface, in any spelling (`0.0.0.0`, `::`,
-/// `0:0:0:0:0:0:0:0`), or none given.
-fn is_wildcard(host: &str) -> bool {
-    host.is_empty()
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_unspecified())
-}
-
 #[cfg(tp3)]
 #[cfg(test)]
 mod mik_8659_dashboard_tests {
-    async fn t1f_app_state(
+    pub(super) async fn t1f_app_state(
         auth_config: &std::sync::Arc<crate::gateway::auth::ResolvedAuthConfig>,
         store_dir: &std::path::Path,
+        config: crate::config::Config,
     ) -> std::sync::Arc<super::super::super::router::AppState> {
         use std::sync::Arc;
         let backends = Arc::new(crate::backend::BackendRegistry::new());
@@ -266,7 +444,7 @@ mod mik_8659_dashboard_tests {
             dashboard_bootstrap: Arc::default(),
             tls_enabled: false,
             live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
-                crate::config_reload::flags_off(crate::config::Config::default()),
+                crate::config_reload::flags_off(config.clone()),
                 Arc::clone(auth_config),
             )),
             agent_auth: agent_auth.clone(),
@@ -311,7 +489,7 @@ mod mik_8659_dashboard_tests {
             control_plane_store: None,
             control_plane_base: None,
             live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
-                crate::config_reload::flags_off(crate::config::Config::default()),
+                crate::config_reload::flags_off(config),
                 Arc::clone(auth_config),
             )),
             export_status: None,
@@ -370,7 +548,12 @@ mod mik_8659_dashboard_tests {
             ..real
         };
         let store_dir = tempfile::tempdir().expect("task store dir");
-        let state = t1f_app_state(&auth_config, store_dir.path()).await;
+        let state = t1f_app_state(
+            &auth_config,
+            store_dir.path(),
+            crate::config::Config::default(),
+        )
+        .await;
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
@@ -428,7 +611,12 @@ mod mik_8659_dashboard_tests {
         let mut unbindable = real;
         unbindable.quota_principal = None;
         let store_dir = tempfile::tempdir().expect("task store dir");
-        let state = t1f_app_state(&auth_config, store_dir.path()).await;
+        let state = t1f_app_state(
+            &auth_config,
+            store_dir.path(),
+            crate::config::Config::default(),
+        )
+        .await;
         // Premise: the access table admits this client, so a 403 below is
         // the mint's own refusal, not the guard's.
         assert!(
@@ -481,3 +669,10 @@ mod mik_8659_dashboard_tests {
         );
     }
 }
+
+/// The dashboard link's binding order, and the session bound it shares with
+/// the sign-in form.
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "session_bound_tests.rs"]
+mod bound_tests;

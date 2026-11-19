@@ -643,6 +643,19 @@ const ROWS: &[Row] = &[
         Payload::None,
         [303, 303, 303, 303],
     ),
+    // src/gateway/ui/session.rs `signin`, on the handoff router inside
+    // `logout_router`, merged outside authentication
+    // (src/gateway/router/mod.rs `unauthenticated_routes`). This fixture sends
+    // no Origin, and an absent Origin is the route's own 401 (JSON-RPC, not
+    // the origin guard's 403) for every caller. The served 303 mint is cited
+    // in `SERVED_BY`.
+    row(
+        "/ui/signin",
+        Method::POST,
+        "/ui/signin",
+        Payload::None,
+        [401, 401, 401, 401],
+    ),
 ];
 
 const GROUPS: [&[Row]; 5] = [

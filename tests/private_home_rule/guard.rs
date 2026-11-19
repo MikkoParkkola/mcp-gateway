@@ -131,7 +131,7 @@ const WRAPPED: &[(&str, &str)] = &[
         "a_symlinked_program_runs_under_its_requested_name",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "ca_files_are_read_only_from_the_run_child",
     ),
     (
@@ -139,28 +139,28 @@ const WRAPPED: &[(&str, &str)] = &[
         "canaries_outside_the_binds_are_unreadable",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "f2_t1_the_unshares_only_child_is_the_helper",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "f2_t2_the_run_child_holds_no_control_connection",
     ),
     ("preview_sandbox_linux", "masked_system_paths_are_empty"),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "r1_a_fetching_preview_runs_its_target_after_the_handshake",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "r6b_a_dropped_start_leaves_no_sandbox_running",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "r6b_a_helper_that_never_connects_is_refused",
     ),
     (
-        "preview_sandbox_linux",
+        "preview_sandbox_linux_fetch",
         "the_ca_snapshot_sits_under_tmp_on_this_host",
     ),
     (

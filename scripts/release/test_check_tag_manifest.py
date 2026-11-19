@@ -712,11 +712,16 @@ MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test bi
 # ci.yml's Linux lib test part binaries: its consumers rerun within the day reuse them; after that a consumer rerun
 # fails red at the download (it never builds its own) until linux-lib-build reruns too. Nothing published depends on them.
 LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build reruns; a large test binary per part per run")
+# The gateway binary ci.yml's linux-gateway-bin job hands the Linux lib shards for the preview sandbox rows: a shard
+# rerun within the day reuses it; after that the shard fails red at the download until linux-gateway-bin reruns.
+# Nothing published depends on it.
+LINUX_GATEWAY_BINARY = ("1", "a shard rerun after a day fails red until the build reruns; a large debug binary per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
     ("ci.yml", "linux-lib-tests-p${{ matrix.part }}"): LINUX_LIB_BINARY,
+    ("ci.yml", "linux-gateway-bin"): LINUX_GATEWAY_BINARY,
 }
 
 
@@ -2398,6 +2403,26 @@ class WorkflowWiring(unittest.TestCase):
             set(re.findall(r"--skip\s+(\S+)", script)),
             linux_skips | packaged_only,
             "the packaged run must skip the Linux suite's list plus only the repo-only reads",
+        )
+
+    def test_release_verify_runs_the_lib_tests_by_part_with_todays_flags(self):
+        # The whole lib test binary swaps a 16 GB runner past its limits, so verify runs it one part at a time through
+        # the shared helper, with today's flags (all features, no --locked, as before the split) and today's one skip.
+        # A memory tripwire step that runs after a failure follows it.
+        root = pathlib.Path(__file__).parents[2]
+        spec = importlib.util.spec_from_file_location("shard_tests", root / "scripts" / "ci" / "shard_tests.py")
+        st = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(st)
+        blocks = steps("release.yml", "verify")
+        test = [b for b in blocks if "- name: Test" in joined(b)]
+        self.assertEqual(len(test), 1, "release verify has one Test step")
+        want = f"run: scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh run --all-features -- --skip {st.SDK}"
+        self.assertEqual([c for c in joined(test[0]) if c.startswith("run:")], [want])
+        later = blocks[blocks.index(test[0]) + 1:]
+        self.assertTrue(
+            any(any("scripts/ci/memory-tripwire.sh" in c for c in joined(b)) and "if: always()" in joined(b)
+                for b in later),
+            "an `if: always()` memory tripwire step must follow verify's Test step",
         )
 
     def test_release_tooling_unit_tests_block_on_every_ref(self):

@@ -543,8 +543,9 @@ DOC_MENTIONS_ALLOWED: dict[tuple[str, str], str] = {
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_SMOKE"): _TEST_SCRIPT,
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_IMAGE"): _TEST_SCRIPT,
     ("docs/runtime/provider_planner.md", "MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE"): _TEST_SCRIPT,
-    # A bare name in prose can belong to another schema; these two do.
+    # A bare name in prose can belong to another schema; these do.
     ("docs/control_plane.md", "schema_version"): "a field of the control-plane API response, not a gateway config key",
+    ("docs/CLI.md", "schema_version"): "a field of the JSON error document the CLI prints (src/commands/cli_exit.rs, CliError::outcome), not a gateway config key",
     ("docs/runtime/descriptor_spec.md", "max_entries"): "a field of the Hebb sandbox descriptor schema, not gateway config",
 }
 

@@ -7,13 +7,17 @@
 //   /ui, /ui/classic       a stand-in for the classic page (fixtures/classic.html)
 //   /ui/assets/{file}      an asset from shell.rs's ASSETS table, by exact name
 //   /ui/api/{path}         fixtures/api/{path}.json for GET, else 404
-//   /ui/{*path}            the shell document, with the gateway's CSP
+//   POST /ui/signin        stand-in for the no-JS sign-in route
+//   GET /dashboard         the signed-in page ("Signed in")
+//   /ui/{*path}            the shell document, with the gateway's CSP and the
+//                          Referrer-Policy parsed from shell.rs
 //
-// The asset table is parsed from shell.rs rather than copied, and the CSP is
-// built as shell.rs builds it: src/gateway/ui/csp-base.txt with the SHA-256 of
-// the document's inlined frame. Answers are gzip by the gateway's one rule,
-// src/gateway/ui/compression.json (tower-http's default predicate), so the
-// tests cannot drift from what the gateway serves. Node stdlib only.
+// The asset table and that Referrer-Policy are parsed from shell.rs rather
+// than copied, and the CSP is built as shell.rs builds it:
+// src/gateway/ui/csp-base.txt with the SHA-256 of the document's inlined frame.
+// Answers are gzip by the gateway's one rule, src/gateway/ui/compression.json
+// (tower-http's default predicate), so the tests cannot drift from what the
+// gateway serves. Node stdlib only.
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
@@ -48,9 +52,21 @@ function parseAssets(src) {
   return table;
 }
 
+/** The shell document's Referrer-Policy, from the one REFERRER_POLICY entry. No match, no server: never a default. */
+function parseReferrerPolicy(src) {
+  const found = [...src.matchAll(/\(header::REFERRER_POLICY,\s*"([^"]*)"\)/g)].map((m) => m[1]);
+  if (found.length === 0) throw new Error('shell.rs: REFERRER_POLICY entry not found');
+  if (found.length !== 1) throw new Error('shell.rs: REFERRER_POLICY entry is not unique');
+  return found[0];
+}
+
 const CSP = buildCsp();
 const ASSETS = parseAssets(SHELL_RS);
+const REFERRER_POLICY = parseReferrerPolicy(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
+/** The one key POST /ui/signin accepts. The browser rows post this exact body. */
+const FIXTURE_KEY = 'mcpg_fixture_key_0123456789';
+const DASHBOARD = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Dashboard</title></head><body><p>Signed in</p></body></html>';
 
 /** A q-value as tower-http parses it: "q=" then 0 or 1 with at most 3 decimals, else null. */
 function qvalue(param) {
@@ -170,11 +186,58 @@ function streamOpen(req, res, name) {
   ch.open = res;
 }
 
+// Test-only sign-in log (tests/shell-signin-nojs.spec.mjs). POST /ui/signin
+// records every request's method, Origin, Referer and body. A fixture-signin
+// cookie names the channel, the way fixture-stream names a stream channel,
+// because every worker shares this server. Read it at /__signin/<channel>/log
+// and clear it at /__signin/<channel>/reset. The stand-in mirrors the route:
+// an Origin that is not this server's own (including "null" and an absent
+// Origin) is refused with no cookie; the one fixture key is Set-Cookie and
+// 303 to /dashboard; any other body is 303 to the fixed refused address.
+const signinLogs = new Map();
+const signinLog = (name) => {
+  if (!signinLogs.has(name)) signinLogs.set(name, []);
+  return signinLogs.get(name);
+};
+
+function pageOrigin() {
+  return `http://127.0.0.1:${port}`;
+}
+
+async function postSignIn(req, res) {
+  const body = await readBody(req);
+  const channel = (req.headers.cookie ?? '').match(/(?:^|;\s*)fixture-signin=([\w-]+)/);
+  signinLog(channel ? channel[1] : '').push({
+    method: req.method,
+    origin: req.headers.origin ?? null,
+    referer: req.headers.referer ?? null,
+    body,
+  });
+  if (req.headers.origin !== pageOrigin()) return send(res, 403, {}, '');
+  if (body === `key=${FIXTURE_KEY}`) {
+    return send(res, 303, {
+      location: '/dashboard',
+      'set-cookie': 'mcp_gateway_session=fixture-session; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600',
+    }, '');
+  }
+  return send(res, 303, { location: '/ui/overview/status#signin-refused' }, '');
+}
+
 function handle(req, res) {
   const path = new URL(req.url, 'http://fixture').pathname;
   const get = req.method === 'GET' || req.method === 'HEAD';
   const control = path.match(/^\/__stream\/([\w-]+)\/(setup|send|end|log)$/);
   if (control) return streamControl(req, res, control[1], control[2]);
+  const signinControl = path.match(/^\/__signin\/([\w-]+)\/(log|reset)$/);
+  if (signinControl) {
+    const [, name, verb] = signinControl;
+    if (verb === 'log' && get) return send(res, 200, { 'content-type': 'application/json' }, JSON.stringify(signinLog(name)));
+    if (verb === 'reset' && req.method === 'POST') {
+      signinLogs.set(name, []);
+      return send(res, 204, {}, '');
+    }
+    return send(res, 405, { allow: verb === 'log' ? 'GET,HEAD' : 'POST' }, '');
+  }
   // Test-only: a body of `len` bytes of this type, so a row can run the
   // contract's boundary cases through the server's compression.
   if (path === '/__compression' && get) {
@@ -218,13 +281,17 @@ function handle(req, res) {
   // As shell.rs: a first segment of `api` or `assets` never gets the shell.
   const first = path.slice('/ui/'.length).split('/')[0];
   if (first === 'api' || first === 'assets') return send(res, 404, {}, '');
+  if (path === '/ui/signin' && req.method === 'POST') return postSignIn(req, res);
+  if (path === '/dashboard' && get) {
+    return send(res, 200, { 'content-type': 'text/html; charset=utf-8' }, DASHBOARD);
+  }
   if (path.startsWith('/ui/') && path !== '/ui/' && get) {
     return send(res, 200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-cache, no-store, must-revalidate',
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',
+      'referrer-policy': REFERRER_POLICY,
     }, shellDocument(req));
   }
   return send(res, 404, {}, '');

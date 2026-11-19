@@ -51,6 +51,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
             "logout_revokes_server_side",
         )],
     ),
+    // This fixture sends no Origin, so the table pins the route's 401. The
+    // cited test pins the served 303 mint.
+    (
+        "/ui/signin",
+        Method::POST,
+        &[(
+            "src/gateway/router/signin_form_tests.rs",
+            "n7_a_presented_handle_is_replaced_and_the_old_one_is_not_live",
+        )],
+    ),
     // PR1: 422 is the handler's fixed JSON; a valid body is a served refusal.
     (
         "/ui/api/gateway/restart",
