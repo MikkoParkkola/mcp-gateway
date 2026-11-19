@@ -1261,8 +1261,9 @@ jobs:
       - name: Allow unprivileged user namespaces (preview sandbox tests)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The executed completion rows (tests/completion_shells.rs, an int-a target) load the generated scripts in fish
-      # and PowerShell. fish is Ubuntu's own package; pwsh is on the runner image. The rows have no skip path: a
-      # missing shell fails them, so dropping this step or moving the target to int-b fails the shard.
+      # and PowerShell. fish is Ubuntu's own package; pwsh is on the runner image. A host without them skips the rows,
+      # but every shard runs in required mode (TESTS_REQUIRE_ALL=1, scripts/ci/shard_tests.py), where the same miss
+      # fails them: dropping this step, or moving the target to int-b, fails the shard.
       - name: Install fish (completion rows)
         if: matrix.shard == 'int-a'
         run: |

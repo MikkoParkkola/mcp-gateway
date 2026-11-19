@@ -1,18 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Executed completions (MIK-9681.CLIUX.20; completions r2-final, rows C5 and C6): the generated fish and PowerShell
-//! scripts loaded in the real shells. Runs on the Linux integration job, which installs fish and has pwsh; a missing
-//! shell fails the row there, never skips it.
+//! scripts loaded in the real shells. A host without fish or pwsh skips each row with that reason; in required mode
+//! (`TESTS_REQUIRE_ALL=1`, set for every CI test shard) the same miss fails the row. The Linux int-a shard installs
+//! fish and has pwsh.
 
 #![cfg(target_os = "linux")]
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "../src/test_skip.rs"]
+mod test_skip;
 
 use std::path::Path;
 use std::process::Command;
 
 const TOOLS: [&str; 2] = ["good_cap", "other_cap"];
+
+/// The first of fish and pwsh this host cannot run, as a skip requirement.
+fn missing_shell() -> Option<String> {
+    ["fish", "pwsh"]
+        .into_iter()
+        .find(|shell| {
+            !Command::new(shell)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success())
+        })
+        .map(|shell| {
+            format!("{shell} is not installed on this host (CI's int-a shard has fish and pwsh)")
+        })
+}
 
 fn capability(dir: &Path, name: &str) {
     std::fs::write(
@@ -114,6 +132,10 @@ fn sorted(items: &[&str]) -> Vec<String> {
 /// C5: each command line gets exactly its expected candidates in fish and PowerShell.
 #[test]
 fn completions_bind_values_to_their_argument() {
+    if let Some(requirement) = missing_shell() {
+        test_skip::skip_or_fail(&requirement);
+        return;
+    }
     let home = tempfile::tempdir().expect("home");
     let work = tempfile::tempdir().expect("work");
     std::fs::write(work.path().join("planted.yaml"), "x").expect("planted");
@@ -269,6 +291,10 @@ fn completions_bind_values_to_their_argument() {
 /// each in the named way (cases it gets right are not claimed).
 #[test]
 fn clap_completes_own_fish_and_powershell_get_the_named_cases_wrong() {
+    if let Some(requirement) = missing_shell() {
+        test_skip::skip_or_fail(&requirement);
+        return;
+    }
     let home = tempfile::tempdir().expect("home");
     let work = tempfile::tempdir().expect("work");
     std::fs::write(work.path().join("planted.yaml"), "x").expect("planted");
@@ -332,6 +358,10 @@ fn hostile_input_stays_inert() {
     use mcp_gateway::cli::completion::{CompletionShell, generate};
     const HELP: &str =
         "say 'hi' $(touch canary) a\\'b ~x *y \u{2018}a\u{2019} \u{201a}b\u{201b} \\`";
+    if let Some(requirement) = missing_shell() {
+        test_skip::skip_or_fail(&requirement);
+        return;
+    }
     let safe = ["good_cap", "café", "x.y-z", "_private", "9", "2fa_check"];
     let refused = [
         "a b",
