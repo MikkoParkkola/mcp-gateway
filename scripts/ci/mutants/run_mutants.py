@@ -24,10 +24,12 @@ Standard library only; runs on Linux and on Windows.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -191,6 +193,35 @@ def classify_baseline(run: Outcome) -> Verdict | None:
 
 
 def run_cmd(cmd: list[str], limit: int, log: Path, env: dict | None = None) -> Outcome:
+    """Runs cmd as run_in_group does, in a gateway home of its own: tests that resolve the
+    home in-process refuse to run without a private one."""
+    with gateway_home(env) as home_env:
+        return run_in_group(cmd, limit, log, home_env)
+
+
+@contextlib.contextmanager
+def gateway_home(env: dict | None):
+    """A fresh gateway home on top of `env` (the runner's own when None), removed afterwards.
+    This file is fetched alone from the release line and must not import from the tree under
+    test, so it keeps its own copy of scripts/ci/shard_tests.py private_home."""
+    home = os.path.join(tempfile.gettempdir(), f"mutant-home-{os.urandom(8).hex()}")
+    # Owner-only on POSIX. On Windows a plain mkdir: a 0o700 one gets a DACL that the gateway's
+    # lock-dir check refuses (shard_tests.private_home has the details).
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    child = dict(os.environ if env is None else env)
+    child["MCP_GATEWAY_TEST_HOME_DIR"] = home
+    child["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    child["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    try:
+        yield child
+    finally:
+        try:
+            shutil.rmtree(home)
+        except OSError as error:
+            print(f"::warning::could not remove the gateway home {home}: {error}", flush=True)
+
+
+def run_in_group(cmd: list[str], limit: int, log: Path, env: dict | None = None) -> Outcome:
     """Runs cmd in its own process group; on timeout kills the whole tree and waits
     for it, so no test process outlives its row (or locks files on Windows)."""
     kw: dict = {}
@@ -290,6 +321,43 @@ def fetch_release_line() -> None:
     worktree of the repository, breaking their merge-bases."""
     depth = ["--depth=1"] if git("rev-parse", "--is-shallow-repository") == "true" else []
     git("fetch", "--quiet", *depth, "origin", RELEASE_LINE)
+
+
+HOME_CASES = 2  # the runner's own env, a caller's env
+
+
+def home_check() -> list[str]:
+    """Two run_cmd calls, one with the runner's env and one with an env of the caller's: each
+    child sees its own existing gateway home with the config and data dirs under it, keeps
+    what the caller put in its env, and the home is gone when run_cmd returns."""
+    probe = ("import json, os\n"
+             "keys = ('MCP_GATEWAY_TEST_HOME_DIR', 'XDG_CONFIG_HOME', 'MCP_GATEWAY_CONFIG_DIR', 'HOME_PROBE')\n"
+             "seen = {k: os.environ.get(k) for k in keys}\n"
+             "seen['exists'] = os.path.isdir(seen['MCP_GATEWAY_TEST_HOME_DIR'] or '')\n"
+             "print(json.dumps(seen))\n")
+    errs, homes = [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        for case, env in (("runner env", None), ("caller env", {**os.environ, "HOME_PROBE": "kept"})):
+            out = run_cmd([sys.executable, "-c", probe], 60, Path(tmp) / "home.log", env)
+            try:
+                seen = json.loads(out.output.strip().splitlines()[-1])
+            except (IndexError, ValueError):
+                errs.append(f"{case}: the probe printed no report: {out.output!r}")
+                continue
+            home = seen["MCP_GATEWAY_TEST_HOME_DIR"] or ""
+            homes.append(home)
+            if not seen["exists"]:
+                errs.append(f"{case}: the command saw no existing home ({home!r})")
+            elif (seen["XDG_CONFIG_HOME"] != os.path.join(home, ".config")
+                  or seen["MCP_GATEWAY_CONFIG_DIR"] != os.path.join(home, ".mcp-gateway")):
+                errs.append(f"{case}: config or data dir outside the home: {seen}")
+            if env is not None and seen["HOME_PROBE"] != "kept":
+                errs.append(f"{case}: the caller's env did not reach the command")
+            if home and os.path.exists(home):
+                errs.append(f"{case}: the home {home} was left behind")
+    if len(homes) == 2 and homes[0] and homes[0] == homes[1]:
+        errs.append("two commands shared one home")
+    return errs
 
 
 FETCH_CASES = 2  # full clone, shallow clone
@@ -1150,6 +1218,9 @@ def self_test() -> int:
     for err in fetch_check():
         print(f"self-test: release-line fetch: {err}", file=sys.stderr)
         rc = 1
+    for err in home_check():
+        print(f"self-test: private home: {err}", file=sys.stderr)
+        rc = 1
     schemata_cases, schemata_failures = schemata_self_test()
     driver_cases, driver_failures = schemata_driver_self_test() if os.name != "nt" else (0, [])
     schemata_cases += driver_cases
@@ -1158,7 +1229,8 @@ def self_test() -> int:
         print(f"self-test: schemata: {failure}", file=sys.stderr)
         rc = 1
     if rc == 0:
-        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES + schemata_cases
+        total = (len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES + HOME_CASES
+                 + schemata_cases)
         print(f"self-test: {total} classifier, manifest, ref and release-line fetch cases as expected")
     return rc
 

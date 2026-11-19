@@ -25,6 +25,10 @@ were deleted is lowered in the same diff, where review sees it.
                                      run a SHARED_BUILD shard from that binary
   shard_tests.py run-prebuilt-parts <os> <leg> --build <dir>
                                      build and run a PARTS leg's lib test parts one at a time
+  shard_tests.py with-home -- <cmd>...
+                                     run <cmd> in a private gateway home, removed afterwards
+  shard_tests.py export-home <file>  make a private gateway home for the rest of a CI job and
+                                     append its variables to <file> ($GITHUB_ENV)
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
@@ -290,24 +294,31 @@ def contents(path: str, most: int | None = 3) -> str:
     return shown + (f", +{len(found) - most} more" if len(found) > most else "")
 
 
+def make_home(parent: str) -> dict[str, str]:
+    """A fresh, empty gateway home made in `parent`, given as the three variables that send test binaries to it:
+    the override itself, and the config and data dirs the library resolves beneath it."""
+    home = os.path.join(parent, f"shard-home-{secrets.token_hex(8)}")
+    # Only the owner may enter it on POSIX. Windows gets a plain mkdir that inherits the account's temp-dir ACL:
+    # the 0o700 form (the one mkdtemp uses) writes a protected DACL with an OWNER RIGHTS entry, and the gateway
+    # rejects a lock dir writable by any SID beyond the user, SYSTEM and Administrators, so auth-on starts broke.
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    return {
+        "MCP_GATEWAY_TEST_HOME_DIR": home,
+        "XDG_CONFIG_HOME": os.path.join(home, ".config"),
+        "MCP_GATEWAY_CONFIG_DIR": os.path.join(home, ".mcp-gateway"),
+    }
+
+
 @contextlib.contextmanager
 def private_home(base: dict[str, str] | None, tmp: str | None):
     """A gateway home of the shard's own for its test binaries, on every OS: without one, every
     shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
     (not inside it, so the leftover check never reads it) and removed after the shard, also when a
     step fails. The config and data dirs the lib resolves are set beneath it."""
-    home = os.path.join(
-        os.path.dirname(tmp) if tmp else tempfile.gettempdir(), f"shard-home-{secrets.token_hex(8)}"
-    )
-    # Owner-only on POSIX. Not on Windows: there a 0o700 mkdir (what mkdtemp does) writes a
-    # protected DACL that also grants OWNER RIGHTS (S-1-3-4), and the gateway refuses a lock dir
-    # that any SID but the user, SYSTEM and Administrators may write, so every auth-on start under
-    # this home failed. A plain mkdir inherits the account's own temp-dir ACL instead.
-    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    values = make_home(os.path.dirname(tmp) if tmp else tempfile.gettempdir())
+    home = values["MCP_GATEWAY_TEST_HOME_DIR"]
     env = dict(os.environ if base is None else base)
-    env["MCP_GATEWAY_TEST_HOME_DIR"] = home
-    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
-    env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    env.update(values)
     try:
         yield env
     finally:
@@ -323,6 +334,23 @@ def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
+
+
+def with_home(cmd: list[str]) -> int:
+    """Run a test command outside the shards (a workflow step, lib-parts.sh run) in a private
+    gateway home of its own, the same as a shard's, and hand back its exit code."""
+    with private_home(None, None) as env:
+        return subprocess.run(cmd, env=env).returncode
+
+
+def export_home(env_file: str) -> int:
+    """For a CI step whose command stays as written: make a gateway home for the rest of the job in RUNNER_TEMP
+    (which the runner empties at the start and end of every job) and append its variables to `env_file`
+    ($GITHUB_ENV), so the job's later steps run their tests in it."""
+    values = make_home(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
+    with open(env_file, "a", encoding="utf-8") as f:
+        f.writelines(f"{key}={value}\n" for key, value in values.items())
+    return 0
 
 
 RUNNER_NAME = ".shard-runner.sh"
@@ -686,8 +714,68 @@ def self_test() -> int:
     assert len(forgot) == 1 and forgot[0].startswith("left in TMPDIR: mcp-gateway-test-home-"), forgot
     assert run_steps("linux", "lib-a", forgetful) == [], "given the shard's home, no fallback is built"
     parts_rows()
+    with_home_rows()
+    export_home_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def with_home_rows() -> None:
+    """S1: `with-home -- CMD` runs CMD in a private gateway home, hands back its exit code, and
+    removes the home afterwards, also when CMD fails."""
+    probe = (
+        "import json, os, sys\n"
+        "keys = ('MCP_GATEWAY_TEST_HOME_DIR', 'XDG_CONFIG_HOME', 'MCP_GATEWAY_CONFIG_DIR')\n"
+        "seen = {k: os.environ.get(k) for k in keys}\n"
+        "home = seen['MCP_GATEWAY_TEST_HOME_DIR'] or ''\n"
+        "seen['mode'] = os.stat(home).st_mode & 0o777 if os.path.isdir(home) else None\n"
+        "json.dump(seen, open(sys.argv[1], 'w'))\n"
+        "sys.exit(int(sys.argv[2]))\n"
+    )
+    with tempfile.TemporaryDirectory() as scratch:
+        record = os.path.join(scratch, "seen.json")
+        for rc in (0, 3):
+            got = main(["shard_tests.py", "with-home", "--", sys.executable, "-c", probe, record, str(rc)])
+            assert got == rc, f"with-home returned {got} for a command that exited {rc}"
+            seen = json.load(open(record, encoding="utf-8"))
+            home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
+            assert home and seen["mode"] is not None, f"the command saw no existing home: {seen}"
+            assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), seen
+            assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), seen
+            if os.name != "nt":
+                assert seen["mode"] == 0o700, f"the home is not owner-only: {oct(seen['mode'])}"
+            assert not os.path.exists(home), f"exit {rc}: the home {home} was left behind"
+
+
+def export_home_rows() -> None:
+    """S2: `export-home FILE` makes a gateway home in RUNNER_TEMP for the rest of a CI job and appends its three
+    variables to FILE ($GITHUB_ENV) after what is already there; the home stays for the job's later steps."""
+    keys = ["MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR"]
+    with tempfile.TemporaryDirectory() as runner_temp:
+        env_file = os.path.join(runner_temp, "github_env")
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write("EARLIER=kept\n")
+        saved = os.environ.get("RUNNER_TEMP")
+        os.environ["RUNNER_TEMP"] = runner_temp
+        try:
+            rc = main(["shard_tests.py", "export-home", env_file])
+        finally:
+            if saved is None:
+                del os.environ["RUNNER_TEMP"]
+            else:
+                os.environ["RUNNER_TEMP"] = saved
+        assert rc == 0, f"export-home returned {rc}"
+        lines = open(env_file, encoding="utf-8").read().splitlines()
+        assert lines[0] == "EARLIER=kept", f"export-home rewrote what was there: {lines}"
+        got = dict(line.split("=", 1) for line in lines[1:])
+        assert sorted(got) == sorted(keys), f"exported {sorted(got)}, expected {sorted(keys)}"
+        home = got["MCP_GATEWAY_TEST_HOME_DIR"]
+        assert os.path.dirname(home) == runner_temp, f"the home {home} is not in RUNNER_TEMP"
+        assert os.path.isdir(home), "the exported home does not exist after the step"
+        assert got["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), got
+        assert got["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), got
+        if os.name != "nt":
+            assert os.stat(home).st_mode & 0o777 == 0o700, "the exported home is not owner-only"
 
 
 def built_parts_rows() -> None:
@@ -1295,6 +1383,10 @@ def main(argv: list[str]) -> int:
         return run_one(argv[2], argv[3], argv[4], extra)
     if len(argv) == 5 and argv[1] == "run-prebuilt" and argv[3] in SHARED_BUILD.get(argv[2], ()):
         return run_prebuilt(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == "with-home" and argv[2] == "--":
+        return with_home(argv[3:])
+    if len(argv) == 3 and argv[1] == "export-home":
+        return export_home(argv[2])
     print(__doc__, file=sys.stderr)
     return 2
 
