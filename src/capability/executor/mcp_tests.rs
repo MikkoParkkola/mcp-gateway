@@ -139,6 +139,33 @@ pub(super) async fn call(
     executor.execute_mcp(cap, config, &params, context).await
 }
 
+/// An executor wired as the gateway wires it: its MCP children take the
+/// registry's stop deadline, so a stop of that registry concerns them too.
+#[cfg(unix)]
+pub(super) fn executor_joined_to(registry: &crate::backend::BackendRegistry) -> CapabilityExecutor {
+    CapabilityExecutor::new().with_stop_deadline(registry.stop_deadline())
+}
+
+/// True once no process answers to `pid` (`kill -0` fails), checked every
+/// 100 ms for at most `limit`.
+#[cfg(unix)]
+pub(super) async fn gone_within(pid: &str, limit: Duration) -> bool {
+    let give_up = std::time::Instant::now() + limit;
+    loop {
+        let probe = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .expect("kill runs");
+        if !probe.success() {
+            return true;
+        }
+        if std::time::Instant::now() >= give_up {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn an_operation_calls_its_mapped_tool_with_typed_arguments() {
     let executor = CapabilityExecutor::new();
@@ -270,19 +297,44 @@ async fn unloading_stops_the_child_and_its_descendants() {
     assert_eq!(executor.mcp_children.len(), 1);
     executor.stop_unloaded_mcp(&|_| false);
     assert_eq!(executor.mcp_children.len(), 0, "evicted at once");
-    let mut alive = true;
-    for _ in 0..50 {
-        let status = std::process::Command::new("kill")
-            .args(["-0", &pid])
-            .status()
-            .unwrap();
-        if !status.success() {
-            alive = false;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!alive, "grandchild {pid} outlived its MCP child");
+    assert!(
+        gone_within(&pid, Duration::from_secs(5)).await,
+        "grandchild {pid} outlived its MCP child"
+    );
+}
+
+/// The HTTP stop's backend stage spends the deadline the capability children
+/// share, so it has to end a live child the way it ends a registered backend.
+/// The executor outlives the stop here: nothing else can end the child.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_gateway_stop_ends_a_live_capability_mcp_child() {
+    let registry = crate::backend::BackendRegistry::new();
+    let executor = executor_joined_to(&registry);
+    let started = call(
+        &executor,
+        &capability(),
+        json!({"operation": "say", "text": "before the stop"}),
+        &caller("a"),
+    )
+    .await
+    .unwrap();
+    let child = started["pid"]
+        .as_i64()
+        .expect("echo names its pid")
+        .to_string();
+    assert_eq!(executor.mcp_children.len(), 1, "premise: one idle child");
+
+    let stage_ends = tokio::time::Instant::now() + Duration::from_secs(5);
+    registry
+        .stop_all_by(stage_ends, crate::backend::Handover::AtEntry)
+        .await;
+
+    assert!(
+        gone_within(&child, Duration::from_secs(1)).await,
+        "the stop returned with capability child {child} still running"
+    );
+    drop(executor);
 }
 
 #[tokio::test]
@@ -613,19 +665,10 @@ async fn reload_stops_an_edited_capabilitys_children_and_keeps_an_unchanged_ones
     #[cfg(unix)]
     {
         let pid = pid.to_string();
-        let mut alive = true;
-        for _ in 0..50 {
-            let status = std::process::Command::new("kill")
-                .args(["-0", &pid])
-                .status()
-                .unwrap();
-            if !status.success() {
-                alive = false;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(!alive, "superseded child {pid} still running after 5 s");
+        assert!(
+            gone_within(&pid, Duration::from_secs(5)).await,
+            "superseded child {pid} still running after 5 s"
+        );
     }
     #[cfg(not(unix))]
     let _ = pid;
