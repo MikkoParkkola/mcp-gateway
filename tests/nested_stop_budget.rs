@@ -282,6 +282,9 @@ enum During {
     /// Freeze the inner (SIGSTOP) as soon as it logs that it was told to
     /// hurry, keep it frozen this long, then let it run again (SIGCONT).
     Stall(Duration),
+    /// Record the stop's timeline for the margin measurement: every pid's
+    /// exit as it happens, the inner's hurry line, the SIGTERM's wall time.
+    Watch,
 }
 
 /// The inner logs one of these once the outer's SIGTERM reaches it after its stdin
@@ -292,6 +295,28 @@ const HURRY_LINES: [&str; 2] = ["hurrying the stop", "shutdown hurried by a sign
 /// SIGTERM, so the outer's kill lands while the inner is still frozen and
 /// only the outer's own sweep can end what the inner started.
 const STALL_PAST_THE_NEED: Duration = Duration::from_secs(3);
+
+/// Prints "<pid> <wall-clock ns>" the moment each given pid exits, through a
+/// pidfd each (Linux), so a stop's timeline is read without polling. A pid
+/// already gone when the watcher starts prints "<pid> gone-before".
+const EXIT_WATCHER: &str = r#"import os, select, sys, time
+watching = {}
+poller = select.poll()
+for arg in sys.argv[1:]:
+    try:
+        fd = os.pidfd_open(int(arg))
+    except ProcessLookupError:
+        print(arg, "gone-before", flush=True)
+        continue
+    watching[fd] = arg
+    poller.register(fd, select.POLLIN)
+give_up = time.monotonic() + 120
+while watching and time.monotonic() < give_up:
+    for fd, _ in poller.poll(1000):
+        print(watching.pop(fd), time.time_ns(), flush=True)
+        poller.unregister(fd)
+        os.close(fd)
+"#;
 
 /// `kill -<sig> <pid>`, best effort: a pid that has already gone is the
 /// row's own business to judge.
@@ -448,12 +473,50 @@ async fn run_with(
         "inner and leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
+    let watcher = matches!(during, During::Watch).then(|| {
+        tokio::process::Command::new("python3")
+            .args(["-I", "-c", EXIT_WATCHER])
+            .args(leaves.iter().map(u32::to_string))
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn() // spawn-check: not the gateway: the pidfd exit watcher of the margin measurement
+            .expect("the exit watcher")
+    });
+    // Wall time, to line up with the watcher's stamps and the inner's log.
+    let signalled_wall = std::time::SystemTime::now();
     // The pid list starts with the inner gateway's (inner.pid, above).
     let freeze = match during {
-        During::Nothing => None,
+        During::Nothing | During::Watch => None,
         During::Stall(hold) => Some(freeze_once_hurried(root, leaves[0], hold)),
     };
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
+    if let Some(watcher) = watcher {
+        let exits = tokio::time::timeout(STOP_BOUND, watcher.wait_with_output())
+            .await
+            .expect("the exit watcher ended")
+            .expect("the exit watcher's output");
+        let hurry = std::fs::read_to_string(root.join("inner.log"))
+            .unwrap_or_default()
+            .lines()
+            .find(|line| HURRY_LINES.iter().any(|mark| line.contains(mark)))
+            .unwrap_or_default()
+            .to_owned();
+        let signalled_ns = signalled_wall
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_nanos()
+            .to_string();
+        // One line per run, read by the margin harness; nothing here is asserted.
+        eprintln!(
+            "MEASURE {}",
+            json!({
+                "signalled_wall_ns": signalled_ns,
+                "pids": leaves,
+                "exits": String::from_utf8_lossy(&exits.stdout),
+                "inner_hurry_line": hurry,
+            })
+        );
+    }
     let logs_then = logs(root);
     if let Some(freeze) = freeze {
         assert!(
@@ -504,6 +567,23 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
         stop.logs
     );
 }
+/// One measured stop of the chain at the floor, for sizing the nested margin:
+/// its timeline goes out as a MEASURE line (each pid's exit from a pidfd
+/// watcher, the inner's hurry line, the SIGTERM's wall time). It asserts no
+/// timing; the margin harness runs it many times under load and reads the lines.
+#[cfg(target_os = "linux")]
+#[ignore = "a measurement for the margin harness, not a CI row"]
+#[tokio::test]
+async fn measure_one_nested_stop_for_the_margin() {
+    run_with(
+        HTTP_MINIMUM,
+        Duration::from_secs(8),
+        &["leaf"],
+        During::Watch,
+    )
+    .await;
+}
+
 /// A nested gateway frozen past its nested need, right after its parent's
 /// SIGTERM reaches it, cannot end its own leaf before the parent kills it. The
 /// parent's descendant sweep then has to end the leaf and the leaf's child:
