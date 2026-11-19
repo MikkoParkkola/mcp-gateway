@@ -1,0 +1,60 @@
+name: REL.3 smoke of the published 3.5.2 -full image
+
+# Throwaway: runs only on its own branch, once, on an amd64 runner (the -full image
+# is published for linux/amd64 only). Checks the released image by digest; builds
+# and publishes nothing. The branch is deleted after the run.
+on:
+  push:
+    branches: [throwaway/rel3-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Published -full image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE: ghcr.io/mikkoparkkola/mcp-gateway@sha256:46e66d63570380bd645241217b979d4252a5758d372111cd40f84f22bf3ad215
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pull the image by digest
+        run: |
+          docker pull --quiet "$IMAGE"
+          docker image inspect "$IMAGE" --format 'pulled {{.Id}} for {{.Os}}/{{.Architecture}}'
+
+      # The repository's own -full smoke at this tag: EXTRA_APT_PACKAGES=iproute2 and a
+      # mounted /docker-entrypoint.d step, which must log as run by root, leave
+      # /usr/sbin/ip in place and hand the gateway to the image user.
+      - name: Extra packages and a drop-in step
+        run: bash scripts/ci/smoke-full-image.sh "$IMAGE"
+
+      # A stdio backend started by the gateway must inherit npm_config_allow_git.
+      - name: npm_config_allow_git reaches a stdio backend
+        run: |
+          work="$(mktemp -d)"
+          printf '%s\n' \
+            'server:' \
+            '  host: 127.0.0.1' \
+            '  port: 39400' \
+            'meta_mcp:' \
+            '  warm_start: [envprobe]' \
+            'backends:' \
+            '  envprobe:' \
+            "    command: \"sh -c 'env > /tmp/envprobe.txt; exec sleep 300'\"" \
+            > "$work/gateway.yaml"
+          chmod 644 "$work/gateway.yaml"
+          docker run --detach --name allowgit --pull never \
+            --env npm_config_allow_git=all \
+            --volume "$work/gateway.yaml:/etc/rel3/gateway.yaml:ro" \
+            "$IMAGE" --config /etc/rel3/gateway.yaml
+          found=no
+          for _ in $(seq 1 60); do
+            if docker exec allowgit test -s /tmp/envprobe.txt 2>/dev/null; then found=yes; break; fi
+            sleep 1
+          done
+          docker logs allowgit 2>&1 | tail -n 5
+          [ "$found" = yes ] || { echo "the backend never wrote its environment within 60 s"; exit 1; }
+          docker exec allowgit grep -x 'npm_config_allow_git=all' /tmp/envprobe.txt
