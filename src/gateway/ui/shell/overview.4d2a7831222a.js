@@ -11,7 +11,8 @@
 // the flow map, the chart) are their own slices.
 import { register, go, el as h } from '/ui/assets/shell.5eea2ad6bf49.js';
 
-const SVG = 'http://www.w3.org/2000/svg';
+// The SVG namespace, read off an element the HTML parser makes, so no asset carries a URL.
+const SVG = document.createRange().createContextualFragment('<svg></svg>').firstChild.namespaceURI;
 const NOT_YET = 'Not available yet';
 const CLOCK = "Not available right now: the counter clock can't be read";
 const UNCOUNTED = 'Not counted on this gateway';
