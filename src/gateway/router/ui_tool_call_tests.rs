@@ -16,6 +16,7 @@ use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_config;
 use super::ui_tool_call_cell_tests::assert_refused_delivery;
+use super::ui_tool_call_receipt_tests::unreceipted;
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};
@@ -24,7 +25,7 @@ use crate::transport::Transport;
 
 const ROUTE: &str = "/ui/api/tools/call";
 pub(super) const ADMIN: &str = "k-admin";
-const USER: &str = "k-user";
+pub(super) const USER: &str = "k-user";
 /// An admin key denied `write` by policy.
 const ADMIN_DENIED: &str = "k-admin-deny";
 pub(super) const SERVER: &str = "alpha";
@@ -280,7 +281,7 @@ async fn register_as(
 }
 
 /// POST `body` to the route as `key`; the status and the JSON answer.
-async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
         .uri(ROUTE)
@@ -302,7 +303,7 @@ async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
     )
 }
 
-fn call(tool: &str, confirm_write: bool) -> Value {
+pub(super) fn call(tool: &str, confirm_write: bool) -> Value {
     json!({"server": SERVER, "tool": tool, "arguments": {}, "confirm_write": confirm_write})
 }
 
@@ -444,8 +445,8 @@ async fn t10_no_such_server_is_not_run() {
     assert_eq!(body["disposition"], "not_run", "{body} {:#?}", records(&fx));
     let (denied_status, denied) = post(&fx, ADMIN_DENIED, call("write", true)).await;
     assert_eq!(
-        (status, &body),
-        (denied_status, &denied),
+        (status, unreceipted(&body)),
+        (denied_status, unreceipted(&denied)),
         "as a denied tool"
     );
     assert!(status.is_client_error(), "{status}");
@@ -476,7 +477,7 @@ async fn t28_a_missing_tool_and_a_denied_one_answer_alike() {
     assert_eq!(mask(&denied), mask(&missing), "/mcp: {denied} vs {missing}");
     let (s1, b1) = post(&fx, ADMIN_DENIED, call("write", true)).await;
     let (s2, b2) = post(&fx, ADMIN_DENIED, call("missing", true)).await;
-    assert_eq!((s1, &b1), (s2, &b2), "the route");
+    assert_eq!((s1, unreceipted(&b1)), (s2, unreceipted(&b2)), "the route");
     assert!(s1.is_client_error(), "{s1} {b1}");
     assert_eq!(sent(&fx), 0);
 }

@@ -100,6 +100,25 @@ pub(super) fn trace_error_frame(response: &mut axum::response::Response, trace: 
     }
 }
 
+/// The trace a refusal's record was written under, set only when that write
+/// succeeded; [`ErrorFrame`]'s trace is no such proof, since `build_response`
+/// seeds it from the ambient trace.
+#[cfg(feature = "webui")]
+#[derive(Clone)]
+pub(super) struct RefusalRecorded(pub(super) String);
+
+/// The trace of the refusal record `response` answers with, when one was
+/// written: the web UI tool call's receipt for a call refused before dispatch.
+#[cfg(feature = "webui")]
+pub(in crate::gateway) fn refusal_record_trace(
+    response: &axum::response::Response,
+) -> Option<String> {
+    response
+        .extensions()
+        .get::<RefusalRecorded>()
+        .map(|recorded| recorded.0.clone())
+}
+
 /// Build an HTTP response with a `mcp-session-id` header and a given status.
 pub(super) fn build_response(
     rpc: JsonRpcResponse,
