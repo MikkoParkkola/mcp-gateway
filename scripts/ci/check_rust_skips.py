@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Every Rust test skip goes through `crate::test_wait::skip_or_fail` and returns right after it.
+"""Every Rust test skip goes through `skip_or_fail` (src/test_skip.rs) and returns right after it.
+
+Lib tests call it as `crate::test_wait::skip_or_fail`; integration tests, a separate crate, include the same file with
+`#[path = "../src/test_skip.rs"] mod test_skip;` and call `test_skip::skip_or_fail`.
 
 A test that prints "skipped" and returns reads as a pass on a host that lacks what it needs. Two rules over every tracked
 `src/**/*.rs` and `tests/**/*.rs` file (comments are not code):
@@ -21,7 +24,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EXEMPT = {
-    "src/test_wait.rs": "defines the helper and prints its skip line",
+    "src/test_skip.rs": "defines the helper and prints its skip line",
+    "src/test_wait.rs": "re-exports the helper to lib tests; its A4 row calls it bare, in a child, to test it",
     "tests/preview_sandbox_linux.rs": "keeps its own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "tests/common/preview_sandbox.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "tests/preview_sandbox_linux_fetch.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
@@ -68,8 +72,9 @@ def findings_in(rel: str, text: str) -> list[str]:
     for i, (n, line) in enumerate(lines):
         stripped = line.strip()
         is_print = stripped.startswith(("eprintln!(", "println!("))
-        if is_print and "skip" in stripped.lower() and rel != "src/test_wait.rs" and returns_after(lines, i):
-            out.append(f"{rel}:{n}: a hand-written skip (a print naming skip, then return): use crate::test_wait::skip_or_fail")
+        if is_print and "skip" in stripped.lower() and rel != "src/test_skip.rs" and returns_after(lines, i):
+            out.append(f"{rel}:{n}: a hand-written skip (a print naming skip, then return): use skip_or_fail, as crate::test_wait::skip_or_fail in "
+                       "the lib or test_skip::skip_or_fail through #[path = \"../src/test_skip.rs\"] in tests/")
         if "skip_or_fail(" in stripped and not stripped.startswith("pub") and "fn skip_or_fail" not in stripped:
             if not returns_after(lines, i):
                 out.append(f"{rel}:{n}: skip_or_fail must be followed, at the same indent, by return or None")
@@ -105,9 +110,18 @@ def self_test() -> int:
         ("B1 a multi-line helper call is read to its semicolon", 'fn t() {\n    skip_or_fail(\n        &format!("{}", 1),\n    );\n    return;\n}\n', 0, ""),
         ("an inline test module in an ordinary src file is scanned", "mod tests {\n" + hand + "}\n", 1, "hand-written"),
     ]
+    # Integration tests are their own crate: they reach the helper through #[path = "../src/test_skip.rs"].
+    shell = 'fn t() {\n    if let Some(r) = missing_shell() {\n        test_skip::skip_or_fail(&r);\n        return;\n    }\n}\n'
+    integration = [
+        ("B1c an integration test calling test_skip::skip_or_fail then return passes", shell, 0, ""),
+        ("B1c an integration test printing skipped then a bare early return is found",
+         shell.replace("        test_skip::skip_or_fail(&r);\n", '        eprintln!("skipped: {r}");\n'), 1, "hand-written"),
+        ("B1c an integration test calling the helper without its return is found",
+         shell.replace("        return;\n", "        work();\n"), 1, "followed"),
+    ]
     wrong = 0
-    for label, text, want, needle in cases:
-        got = findings_in("src/a.rs", text)
+    for rel, (label, text, want, needle) in [("src/a.rs", c) for c in cases] + [("tests/completion_shells.rs", c) for c in integration]:
+        got = findings_in(rel, text)
         ok = (len(got) > 0) == bool(want) and all(needle in g for g in got[:1])
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}" + ("" if ok else f": {got}"))
@@ -117,7 +131,7 @@ def self_test() -> int:
     (d / "src/a.rs").write_text(hand)
     (d / "src/deep/er").mkdir(parents=True)
     (d / "src/deep/er/b.rs").write_text(hand)
-    (d / "src/test_wait.rs").write_text('fn skip_or_fail(r: &str) {\n    eprintln!("skipped: {r}");\n}\n')
+    (d / "src/test_skip.rs").write_text('fn skip_or_fail(r: &str) {\n    eprintln!("skipped: {r}");\n}\n')
     subprocess.run(["git", "add", "-A"], cwd=d, check=True)
     ok = len(findings(d)) == 2 and any("src/deep/er/b.rs" in f for f in findings(d))
     wrong += not ok
