@@ -604,6 +604,11 @@ function mountTryForm(slot, answer, tools, ctx) {
   let runBtn = null;
   let mainNodes = [];
   let stepNodes = [];
+  // Set while the shell confirm is or was open for this Run: its close sends focus to a still-disabled Run.
+  let asked = false;
+  // Tools whose last confirmed run the gateway never confirmed: the shell refuses their confirm until reload.
+  const unconfirmed = new Set();
+  const keyOf = (tool) => `tools-try:${tool.server}/${tool.name}`;
 
   const picker = h('select', { class: 'input', id: 'try-tool' },
     ...tools.map((t, i) => h('option', { value: String(i) }, toolOptionLabel(t))));
@@ -730,15 +735,28 @@ function mountTryForm(slot, answer, tools, ctx) {
   };
 
   /** The shell's one deciding-action dialog (UI1.19) runs the confirmed call. */
-  const confirmRun = (tool, args) => ctx.confirm({
-    opener: runBtn,
-    key: `tools-try:${tool.server}/${tool.name}`,
-    verb: 'Run',
-    object: tool.name,
-    progress: `Running ${tool.name}…`,
-    consequences: [`${tool.name} can change things.`],
-    run: () => send(tool, args, true),
-  });
+  const confirmRun = async (tool, args) => {
+    asked = true;
+    const res = await ctx.confirm({
+      opener: runBtn,
+      key: keyOf(tool),
+      verb: 'Run',
+      object: tool.name,
+      progress: `Running ${tool.name}…`,
+      consequences: [`${tool.name} can change things.`],
+      run: () => send(tool, args, true),
+    });
+    if (res.outcome === 'unconfirmed' && section.isConnected) {
+      unconfirmed.add(keyOf(tool));
+      const runId = ++seq;
+      mainNodes = [h('p', {}, `${tool.name} may have run; the gateway did not confirm it`),
+        h('p', {}, 'Reload the page before running it again.')];
+      stepNodes = [];
+      paint(runId);
+      ctx.announce(mainNodes[0].textContent);
+    }
+    return res;
+  };
 
   const callTool = async (runId, tool, args) => {
     let info;
@@ -762,11 +780,11 @@ function mountTryForm(slot, answer, tools, ctx) {
   };
 
   const syncRun = () => {
-    if (runBtn && runBtn.isConnected) runBtn.disabled = inFlight;
+    if (runBtn && runBtn.isConnected) runBtn.disabled = inFlight || unconfirmed.has(keyOf(chosen()));
   };
 
   const onRun = async () => {
-    if (!runBtn || runBtn.disabled || inFlight) return;
+    if (!runBtn || runBtn.disabled || inFlight || unconfirmed.has(keyOf(chosen()))) return;
     const args = collectArgs(fields);
     if (!args) return;
     const tool = chosen();
@@ -783,6 +801,10 @@ function mountTryForm(slot, answer, tools, ctx) {
     } finally {
       inFlight = false;
       syncRun();
+      // The shell's close could not focus Run while it was disabled; focus it now it is enabled.
+      if (asked && runBtn?.isConnected && !runBtn.disabled
+          && (document.activeElement === document.body || document.activeElement === null)) runBtn.focus();
+      asked = false;
     }
   };
 
@@ -791,9 +813,9 @@ function mountTryForm(slot, answer, tools, ctx) {
     fields = fieldsFor(t.schema);
     fieldsBox.replaceChildren(...fields.map((f) => f.wrap));
     runBtn = h('button', { class: 'btn', type: 'button' }, `Run ${t.name}`);
-    runBtn.disabled = inFlight;
     runBtn.addEventListener('click', onRun);
     form.replaceChildren(pickerField, fieldsBox, runBtn);
+    syncRun();
   };
 
   picker.addEventListener('change', () => {
