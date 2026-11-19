@@ -102,9 +102,12 @@ async fn t1_a_deep_link_answers_the_shell_document() {
             Some(SHELL_CSP.trim_end()),
             "{uri}"
         );
+        // same-origin: a no-referrer document posts its sign-in form with
+        // Origin null, which the origin gate refuses; cross-origin requests
+        // still send no Referer.
         assert_eq!(
             reply.header(header::REFERRER_POLICY),
-            Some("no-referrer"),
+            Some("same-origin"),
             "{uri}"
         );
         assert_eq!(

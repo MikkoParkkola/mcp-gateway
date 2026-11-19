@@ -420,3 +420,79 @@ async fn r7k_a_stuck_write_ends_at_the_deadline() {
         .expect("the write did not end within the guard");
     assert!(written.is_err());
 }
+
+/// RF4 (NPM.8), kills "a step's wire name drifts" and "`refused` takes any
+/// string or null": each step round-trips through `fetch_done` by its fixed
+/// name, an absent `refused` is no step, and `null`, a dropped step name or a
+/// step in another case refuse the line.
+#[test]
+fn rf4_each_step_round_trips_and_nothing_else_parses() {
+    use crate::preview_sandbox::control_msg::{FetchDone, FetchStep};
+    let names = [
+        "setup",
+        "npm-install",
+        "lock-check",
+        "npm-ci",
+        "sweep",
+        "relay",
+        "proxy-socket",
+        "uv-install",
+        "direct-url-check",
+    ];
+    assert_eq!(FetchStep::ALL.len(), names.len());
+    for (step, name) in FetchStep::ALL.into_iter().zip(names) {
+        let done = FetchDone {
+            fetch_done: true,
+            refused: Some(step),
+        };
+        let line = serde_json::to_string(&done).expect("encode");
+        assert_eq!(
+            line,
+            format!("{{\"fetch_done\":true,\"refused\":\"{name}\"}}")
+        );
+        assert_eq!(
+            serde_json::from_str::<FetchDone>(&line).expect("parse"),
+            done
+        );
+    }
+    let plain: FetchDone = serde_json::from_str("{\"fetch_done\":true}").expect("parse");
+    assert_eq!(plain.refused, None);
+    assert_eq!(
+        serde_json::to_string(&plain).expect("encode"),
+        "{\"fetch_done\":true}"
+    );
+    for line in [
+        "{\"fetch_done\":true,\"refused\":null}",
+        "{\"fetch_done\":true,\"refused\":\"deadline\"}",
+        "{\"fetch_done\":true,\"refused\":\"NpmCi\"}",
+        "{\"fetch_done\":true,\"refused\":1}",
+    ] {
+        assert!(serde_json::from_str::<FetchDone>(line).is_err(), "{line}");
+    }
+}
+
+/// U-steps (the uv fetch, design 8), kills "a step echoes another's words" and "a
+/// step is dropped": each of the nine steps carries its own fixed words,
+/// written here as literals, never read back from `describe`.
+#[test]
+fn u_steps_every_step_has_its_own_words() {
+    use crate::preview_sandbox::control_msg::FetchStep;
+    let words = [
+        (FetchStep::Setup, "preparing the fetch"),
+        (FetchStep::NpmInstall, "the fetch's npm install"),
+        (FetchStep::LockCheck, "the fetch's lock check"),
+        (FetchStep::NpmCi, "the fetch's npm ci"),
+        (FetchStep::Sweep, "the fetch's sweep"),
+        (FetchStep::Relay, "stopping the fetch's relay"),
+        (FetchStep::ProxySocket, "removing the fetch's proxy socket"),
+        (FetchStep::UvInstall, "the fetch's uv install"),
+        (FetchStep::DirectUrlCheck, "the fetch's direct-URL check"),
+    ];
+    assert_eq!(
+        FetchStep::ALL.to_vec(),
+        words.iter().map(|(step, _)| *step).collect::<Vec<_>>()
+    );
+    for (step, want) in words {
+        assert_eq!(step.describe(), want, "{step:?}");
+    }
+}

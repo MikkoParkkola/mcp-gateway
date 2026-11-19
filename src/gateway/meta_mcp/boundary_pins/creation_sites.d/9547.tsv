@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/preview_sandbox/linux/fetch_uv.rs	write_wrapper	fs-write	1	no-secret	the uv fetch's -S interpreter wrapper (mode 0555) in the preview home's tmpfs inside the sandbox; Linux only; holds only the interpreter's path

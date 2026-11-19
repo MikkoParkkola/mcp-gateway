@@ -705,18 +705,22 @@ HANDOFF_RETENTION_DAYS = 90
 # A re-run of the grade job alone after they expire fails (the merge refuses a
 # missing bundle); re-running all jobs rebuilds them.
 COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per PR run")
-# The macOS lib test binary lib-b hands to int in the same run: a
-# rerun of int alone within the day reuses it, after that int builds its half
-# itself; nothing published depends on it.
-MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test binary per run")
+# ci.yml's macOS part lists, one artifact per leg: only the same run's macOS lib union job reads them, and a rerun
+# of the legs writes them again. Nothing published depends on them.
+MACOS_LIB_LISTS = ("1", "the same run's union job reads them; rerunning the legs rewrites them")
 # ci.yml's Linux lib test part binaries: its consumers rerun within the day reuse them; after that a consumer rerun
 # fails red at the download (it never builds its own) until linux-lib-build reruns too. Nothing published depends on them.
 LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build reruns; a large test binary per part per run")
+# The gateway binary ci.yml's linux-gateway-bin job hands the Linux lib shards for the preview sandbox rows: a shard
+# rerun within the day reuses it; after that the shard fails red at the download until linux-gateway-bin reruns.
+# Nothing published depends on it.
+LINUX_GATEWAY_BINARY = ("1", "a shard rerun after a day fails red until the build reruns; a large debug binary per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
-    ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
+    ("ci.yml", "macos-lib-lists-${{ matrix.shard }}"): MACOS_LIB_LISTS,
     ("ci.yml", "linux-lib-tests-p${{ matrix.part }}"): LINUX_LIB_BINARY,
+    ("ci.yml", "linux-gateway-bin"): LINUX_GATEWAY_BINARY,
 }
 
 
@@ -2917,8 +2921,8 @@ class WorkflowWiring(unittest.TestCase):
             (("coverage-probe.yml", step, "coverage-linux", ["7"]), True),
             (("coverage-probe.yml", step, "cov-shard-other", ["7"]), True),
             (("ci.yml", step, "cov-shard-sdk", ["7"]), True),
-            (("ci.yml", step, "macos-lib-tests", ["7"]), True),
-            (("coverage-probe.yml", step, "macos-lib-tests", ["1"]), True),
+            (("ci.yml", step, "macos-lib-lists-${{ matrix.shard }}", ["7"]), True),
+            (("coverage-probe.yml", step, "macos-lib-lists-${{ matrix.shard }}", ["1"]), True),
         ]
         for handoff, flagged in cases:
             self.assertEqual(bool(wrong_handoffs([handoff])), flagged, handoff)

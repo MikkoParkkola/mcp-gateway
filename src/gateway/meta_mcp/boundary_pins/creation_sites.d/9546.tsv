@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/preview_sandbox/linux/mounts.rs	proxy_socket	fs-write	1	no-secret	empty mount-point file for the proxy socket on the preview sandbox's own /tmp; Linux only; holds no content

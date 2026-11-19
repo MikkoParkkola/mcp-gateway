@@ -74,8 +74,27 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
+        // A GraphQL or JSON-RPC provider on a paced host fails loading, like a
+        // file the loader refuses: judged on the whole catalogue these files
+        // join, so the order they are read in decides nothing.
+        let intervals = {
+            let caps = self.capabilities.read();
+            crate::capability::pacing::declared_intervals(
+                caps.entries
+                    .iter()
+                    .chain(loaded.files.iter().map(|file| &file.definition)),
+            )
+        };
         for file in loaded.files {
             let capability = file.definition.name.clone();
+            if let Some(reason) =
+                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
+            {
+                warn!(backend = %self.name, capability = %capability, error = %reason, "Failed to load capability");
+                report.admitted -= 1;
+                report.unreadable.push(file.path.clone());
+                continue;
+            }
             // Digest outside the catalogue lock. The bytes are not stored.
             let source = self.source_of(&file.path, &file.bytes);
             if let Err(error) = self.admit_from(file.path, file.definition, Some(source)) {
@@ -91,6 +110,9 @@ impl CapabilityBackend {
             }
             tokio::task::yield_now().await;
         }
+        // A directory loaded earlier may hold a GraphQL or JSON-RPC provider
+        // on a host this one paces: the end state must not depend on order.
+        self.unload_unpaced_protocols();
 
         info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
         Ok(report)
@@ -111,7 +133,6 @@ impl CapabilityBackend {
         let operation = self.lock_operation().await;
         let dirs: Vec<String> = self.directories.read().clone();
         let mut failed_dirs: Vec<(String, String)> = Vec::new();
-        let mut refused_logs: Vec<(String, String)> = Vec::new();
 
         // Before any note, so this reload's set is not the one still stored
         // on the catalogue. Install below is what stores it. An empty
@@ -145,25 +166,12 @@ impl CapabilityBackend {
         }
 
         // The same admission gate the initial load applies.
-        let (mut admitted, mut trusted) = (Vec::with_capacity(loaded_files.len()), Vec::new());
-        let mut refused = std::collections::HashSet::new();
-        for file in loaded_files {
-            match validate_capability_account_binding(
-                &file.definition,
-                self.executor.account_strategies(),
-            ) {
-                Ok(()) => {
-                    let source = self.source_of(&file.path, &file.bytes);
-                    trusted.push((file.path, file.definition.name.clone()));
-                    admitted.push((file.definition, Some(source)));
-                }
-                Err(error) => {
-                    total -= 1;
-                    refused.insert(file.definition.name.clone());
-                    refused_logs.push((file.definition.name.clone(), error.to_string()));
-                }
-            }
-        }
+        let Admission {
+            admitted,
+            trusted,
+            refused,
+            refused_logs,
+        } = self.admit_reloaded(loaded_files, &mut total);
 
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
@@ -194,6 +202,7 @@ impl CapabilityBackend {
             super::super::op_gate::reach(super::super::op_gate::Step::Swap);
             caps.install(admitted);
             caps.settle_absent(refused);
+            crate::capability::pacing::seed_from(self.pacing_owner, &caps.entries);
             // With the entries, under the same lock: the part names this
             // catalogue and the coverage of the operation that wrote it.
             caps.unread = self.recording.lock().clone();
@@ -236,5 +245,118 @@ impl CapabilityBackend {
         }
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
+    }
+}
+
+/// What a reload's admission gate let through, and what it refused.
+struct Admission {
+    admitted: Vec<(CapabilityDefinition, Option<super::indexed::ServedSource>)>,
+    /// Each admitted file's path and capability name.
+    trusted: Vec<(String, String)>,
+    refused: std::collections::HashSet<String>,
+    /// Each account-binding refusal's capability and error, logged after the
+    /// catalogue lock is released.
+    refused_logs: Vec<(String, String)>,
+}
+
+impl CapabilityBackend {
+    /// The admission gate the initial load applies, on a reload's files:
+    /// GraphQL and JSON-RPC providers on a paced host, then account bindings.
+    /// `total` drops by one for each file refused.
+    fn admit_reloaded(
+        &self,
+        mut files: Vec<crate::capability::loader::LoadedCapability>,
+        total: &mut usize,
+    ) -> Admission {
+        let mut gate = Admission {
+            admitted: Vec::with_capacity(files.len()),
+            trusted: Vec::new(),
+            refused: std::collections::HashSet::new(),
+            refused_logs: Vec::new(),
+        };
+        *total -= self.drop_unpaced_protocols(&mut files, &mut gate.refused);
+        for file in files {
+            match validate_capability_account_binding(
+                &file.definition,
+                self.executor.account_strategies(),
+            ) {
+                Ok(()) => {
+                    let source = self.source_of(&file.path, &file.bytes);
+                    gate.trusted.push((file.path, file.definition.name.clone()));
+                    gate.admitted.push((file.definition, Some(source)));
+                }
+                Err(error) => {
+                    *total -= 1;
+                    gate.refused.insert(file.definition.name.clone());
+                    gate.refused_logs
+                        .push((file.definition.name.clone(), error.to_string()));
+                }
+            }
+        }
+        gate
+    }
+
+    /// Unload every registered capability that puts a GraphQL or JSON-RPC
+    /// provider on a host the whole catalogue or the process now paces,
+    /// logging each at WARN. Judged and removed under one write lock, so a
+    /// definition re-registered meanwhile is judged as it stands. It may come
+    /// from an earlier directory, so no directory's count is adjusted.
+    pub(super) fn unload_unpaced_protocols(&self) {
+        let mut caps = self.capabilities.write();
+        let intervals = crate::capability::pacing::declared_intervals(caps.entries.iter());
+        let refused: Vec<(String, String)> = caps
+            .entries
+            .iter()
+            .filter_map(|c| {
+                crate::capability::pacing::unpaced_protocol_refusal(c, &intervals)
+                    .map(|reason| (c.name.clone(), reason))
+            })
+            .collect();
+        let removed: Vec<(String, String)> = refused
+            .into_iter()
+            .filter(|(name, _)| self.remove_locked(&mut caps, name))
+            .collect();
+        // Logged after the lock is released, as reload logs.
+        drop(caps);
+        for (name, reason) in &removed {
+            warn!(
+                backend = %self.name,
+                capability = %name,
+                error = %reason,
+                "Capability unloaded: a GraphQL or JSON-RPC provider on a paced host"
+            );
+            self.after_unload(name);
+        }
+    }
+
+    /// Take out of `files` every capability that puts a GraphQL or JSON-RPC
+    /// provider on a host the new catalogue paces, logging each at WARN and
+    /// adding its name to `refused`; return how many. Judged on the whole
+    /// catalogue, so file order decides nothing.
+    fn drop_unpaced_protocols(
+        &self,
+        files: &mut Vec<crate::capability::loader::LoadedCapability>,
+        refused: &mut std::collections::HashSet<String>,
+    ) -> usize {
+        let intervals = crate::capability::pacing::declared_intervals(
+            files.iter().map(|file| &file.definition),
+        );
+        let before = files.len();
+        files.retain(|file| {
+            let Some(reason) =
+                crate::capability::pacing::unpaced_protocol_refusal(&file.definition, &intervals)
+            else {
+                return true;
+            };
+            warn!(
+                backend = %self.name,
+                capability = %file.definition.name,
+                error = %reason,
+                "Capability refused on reload"
+            );
+            refused.insert(file.definition.name.clone());
+            false
+        });
+        before - files.len()
     }
 }

@@ -390,3 +390,222 @@ fn dispatch_ignores_ordinary_commands() {
     let args: Vec<OsString> = ["mcp-gateway", "serve", SANDBOX].map(Into::into).into();
     assert!(dispatch(&args).is_none());
 }
+
+/// Kills "a masked npm or node counts as placed": `/usr` is bound read-only
+/// but `/usr/local` is masked, so a node there (an `n` or tarball install)
+/// is not in the root until the plan binds it back; a hidden path never is,
+/// even under a bind-back.
+#[test]
+fn a_file_under_a_mask_is_not_placed() {
+    let mut plan = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let absent = Path::new("/usr/local/bin/preview-placed-row-node");
+    assert!(placed(Path::new("/usr/bin/env"), &plan), "a system file");
+    assert!(!placed(absent, &plan), "a file under the /usr/local mask");
+    plan.bound_back.push("/usr/local/bin".to_owned());
+    assert!(placed(absent, &plan), "a file bound back under the mask");
+    let hidden = PathBuf::from(plan.hidden.first().expect("the gateway's paths are hidden"));
+    let parent = hidden.parent().expect("a hidden path has a parent");
+    plan.bound_back.push(parent.display().to_string());
+    assert!(!placed(&hidden.join("node"), &plan), "a hidden path");
+}
+
+/// R-bind, kills "the fetch binds the /usr/local trees whole" and "a covered
+/// bind-back stays": an `n` layout (npm's cli inside its package under
+/// `/usr/local/lib`, node in `/usr/local/bin`) binds back exactly node's file
+/// and npm's package, never the trees around them, since an npx preview's
+/// run phase executes downloaded code.
+#[test]
+fn an_n_layout_binds_back_only_node_and_npms_package() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let package = "/usr/local/lib/preview-row/node_modules/npm";
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = "/usr/local/preview-row/bin/node";
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
+    let mut plan = base.clone();
+    plan.bound_back = vec![format!("{package}/bin"), format!("{package}/lib")];
+    let (exec, node_dir) =
+        place_npm(&mut plan, npx, Path::new(&cli), Path::new(node)).expect("an n layout is placed");
+    assert_eq!(node_dir, PathBuf::from("/usr/local/preview-row/bin"));
+    assert_eq!(plan.bound_back, [node, package]);
+    assert_eq!(plan.read_only, base.read_only);
+    assert_eq!(exec, PathBuf::from(&cli));
+}
+
+/// R-bind in any known layout, kills "npx's runtime
+/// tree is kept" and "a runtime tree is bound whole": an NVM install shows
+/// only node's real file and npm's package, read-only; the tree npx was
+/// bound by as the program goes first (the fetch never runs npx), so the
+/// tree's global packages and its `etc/npmrc` are not shown. Kills "a layout
+/// outside the known trees is bound": a node and an
+/// npm-shaped package anywhere else refuse by name, since a directory named
+/// `node_modules/npm` there proves nothing about what it holds.
+#[test]
+fn any_layout_binds_only_node_and_npms_package() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let tree = "/home/preview-row/.nvm/versions/node/v20.0.0";
+    let package = format!("{tree}/lib/node_modules/npm");
+    let npx = format!("{package}/bin/npx-cli.js");
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = format!("{tree}/bin/node");
+    let mut plan = base.clone();
+    // What build_plan bound for npx as the program: its runtime tree.
+    plan.read_only.push(tree.to_owned());
+    let (exec, _) = place_npm(
+        &mut plan,
+        Path::new(&npx),
+        Path::new(&cli),
+        Path::new(&node),
+    )
+    .expect("an NVM install is placed");
+    assert_eq!(
+        plan.read_only,
+        [base.read_only.clone(), vec![node, package]].concat()
+    );
+    assert_eq!(plan.bound_back, base.bound_back);
+    assert_eq!(exec, PathBuf::from(&cli));
+
+    let tool = "/opt/hostedtoolcache/node/20.1.0/x64";
+    let package = format!("{tool}/lib/node_modules/npm");
+    let npx = format!("{package}/bin/npx-cli.js");
+    let mut plan = base.clone();
+    // npx's lone real file, bound by build_plan outside every known tree.
+    plan.read_only.push(npx.clone());
+    let refused = place_npm(
+        &mut plan,
+        Path::new(&npx),
+        Path::new(&format!("{package}/bin/npm-cli.js")),
+        Path::new(&format!("{tool}/bin/node")),
+    )
+    .expect_err("a layout outside the known trees refuses");
+    assert!(
+        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
+        "{refused}"
+    );
+}
+
+/// R-bind, kills "a covering bind-back keeps the trees whole": a regular npx
+/// file in `/usr/local/bin` gives the program bind `/usr/local/bin` and
+/// `/usr/local/lib` whole; the fetch never runs npx, so it replaces them
+/// with node's file and npm's package, and covers npm's builtin `npmrc`
+/// (a token stored there stays unreadable to the downloaded code).
+#[test]
+fn a_covering_usr_local_bind_back_is_replaced_by_the_narrow_binds() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let package = "/usr/local/lib/preview-row/node_modules/npm";
+    let cli = format!("{package}/bin/npm-cli.js");
+    let node = "/usr/local/preview-row/bin/node";
+    let mut plan = base.clone();
+    plan.bound_back = vec!["/usr/local/bin".to_owned(), "/usr/local/lib".to_owned()];
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
+    place_npm(&mut plan, npx, Path::new(&cli), Path::new(node)).expect("placed");
+    assert_eq!(plan.bound_back, [node, package]);
+    let npmrc = format!("{package}/npmrc");
+    assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
+}
+
+/// Kills "a directory or a hidden path is taken for node": a node path that
+/// is a directory (shown or not) refuses by name, and so does one under the
+/// gateway's hidden paths, or an npm package under a masked secret path.
+#[test]
+fn a_directory_or_hidden_node_refuses() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let cli = Path::new("/usr/local/lib/preview-row/node_modules/npm/bin/npm-cli.js");
+    let hidden =
+        Path::new(base.hidden.first().expect("the gateway's paths are hidden")).join("node");
+    for node in [Path::new("/usr/lib"), hidden.as_path()] {
+        let npx = Path::new("/usr/local/bin/preview-row-npx");
+        let refused = place_npm(&mut base.clone(), npx, cli, node).expect_err("refused");
+        assert!(
+            matches!(&refused, Refusal::Step(s) if s.starts_with("placing node")),
+            "{}: {refused}",
+            node.display()
+        );
+    } // An npm-shaped package under a masked secret path is never bound.
+    let secret = Path::new("/etc/ssl/private/node_modules/npm/bin/npm-cli.js");
+    let npx = Path::new("/usr/local/bin/preview-row-npx");
+    let node = Path::new("/usr/local/preview-row/bin/node");
+    let refused = place_npm(&mut base.clone(), npx, secret, node).expect_err("refused");
+    assert!(
+        matches!(&refused, Refusal::Step(s) if s.starts_with("placing npm")),
+        "{refused}"
+    );
+}
+
+/// Kills "a system npm keeps its builtin npmrc readable":
+/// npm's builtin `npmrc` is covered whatever its package directory is
+/// called, as for Debian's `/usr/share/nodejs/npm`, which a system root
+/// already shows, so nothing is bound for it.
+#[test]
+fn a_system_npms_builtin_npmrc_is_covered() {
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let root = "/usr/share/preview-row/nodejs/npm";
+    let cli = format!("{root}/bin/npm-cli.js");
+    let npx = Path::new("/usr/bin/preview-row-npx");
+    let node = Path::new("/usr/preview-row/bin/node");
+    let mut plan = base.clone();
+    place_npm(&mut plan, npx, Path::new(&cli), node).expect("a system npm is placed");
+    let npmrc = format!("{root}/npmrc");
+    assert_eq!(plan.masked, [base.masked.clone(), vec![npmrc]].concat());
+    assert_eq!(plan.read_only, base.read_only);
+    assert_eq!(plan.bound_back, base.bound_back);
+}
+
+/// Kills "PATH keeps a node alias the root hides": when node in npx's
+/// directory is a link to a real file elsewhere (another version tree, as a
+/// Homebrew or versioned install lays out), only the real file is bound, so
+/// the link is not shown inside the root; PATH then names the real file's
+/// own directory, where `env node` finds it.
+#[test]
+fn a_linked_node_is_found_on_path_through_its_real_directory() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let scratch = scratch();
+    let versions = scratch.path().join(".nvm/versions/node");
+    let (linked, real) = (versions.join("v1"), versions.join("v2"));
+    let package = linked.join("lib/node_modules/npm");
+    for dir in [linked.join("bin"), real.join("bin"), package.join("bin")] {
+        std::fs::create_dir_all(dir).expect("tree");
+    }
+    for file in [
+        real.join("bin/node"),
+        package.join("bin/npm-cli.js"),
+        package.join("bin/npx-cli.js"),
+    ] {
+        std::fs::write(&file, "#!/bin/sh\n").expect("file");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    }
+    symlink(real.join("bin/node"), linked.join("bin/node")).expect("node link");
+    let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
+    let mut plan = base.clone();
+    plan.read_only.push(linked.display().to_string());
+    let (_, node_dir) = place_npm(
+        &mut plan,
+        &package.join("bin/npx-cli.js"),
+        &package.join("bin/npm-cli.js"),
+        &linked.join("bin/node"),
+    )
+    .expect("a linked node is placed");
+    let real_bin = std::fs::canonicalize(real.join("bin")).expect("real bin");
+    assert_eq!(node_dir, real_bin);
+}
+
+/// RF8 (G2), kills "the helper's stderr reaches the caller after the
+/// credential": once the credential is out, a sandbox that ended first is
+/// refused in fixed words whatever its stderr held; before it, the helper's
+/// own refusal is still classified from its stderr.
+#[test]
+fn rf8_no_helper_stderr_reaches_the_caller_after_the_credential() {
+    let url = ["https", "://x", ":0123abcd", "@registry.npmjs.org/p"].concat();
+    let stderr = format!(
+        "preview-sandbox: refused at fetching the package (npm ERR! {url} /home/runner/.npmrc)"
+    );
+    let after = super::ended_refusal(true, &stderr);
+    let text = format!("{after:?} {after}");
+    for leaked in ["0123abcd", "registry.npmjs.org", ".npmrc", "npm ERR"] {
+        assert!(!text.contains(leaked), "{text}");
+    }
+    assert_eq!(after, super::ended_refusal(true, ""));
+    assert_eq!(
+        super::ended_refusal(false, &stderr),
+        super::classify(&stderr)
+    );
+}

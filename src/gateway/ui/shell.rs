@@ -21,6 +21,14 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
+        "activity.237d685089d2.css",
+        include_bytes!("shell/activity.237d685089d2.css"),
+    ),
+    (
+        "activity.c0dd4c921ed3.js",
+        include_bytes!("shell/activity.c0dd4c921ed3.js"),
+    ),
+    (
         "BigShoulders-700.5faff1f81ec2.woff2",
         include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
     ),
@@ -41,36 +49,40 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.37fd19f8ad4b.js",
-        include_bytes!("shell/gateway.37fd19f8ad4b.js"),
+        "gateway.77f47fc02a8e.js",
+        include_bytes!("shell/gateway.77f47fc02a8e.js"),
     ),
     (
-        "shell.8a1ede0f5317.css",
-        include_bytes!("shell/shell.8a1ede0f5317.css"),
+        "shell.b5a1acc637d1.js",
+        include_bytes!("shell/shell.b5a1acc637d1.js"),
     ),
     (
-        "shell.db568604154d.js",
-        include_bytes!("shell/shell.db568604154d.js"),
+        "shell.c460caebf770.css",
+        include_bytes!("shell/shell.c460caebf770.css"),
     ),
     (
-        "tips.f9c96bf3e868.json",
-        include_bytes!("shell/tips.f9c96bf3e868.json"),
+        "shell.nojs.4e34f233c1ba.css",
+        include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
+    ),
+    (
+        "tips.97a2331e510a.json",
+        include_bytes!("shell/tips.97a2331e510a.json"),
     ),
     (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
     ),
     (
-        "tools.dc172b2eec3f.js",
-        include_bytes!("shell/tools.dc172b2eec3f.js"),
+        "tools.94bb9908fb1b.js",
+        include_bytes!("shell/tools.94bb9908fb1b.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.fe1af9f8517d.js",
-        include_bytes!("shell/tooltip.fe1af9f8517d.js"),
+        "tooltip.5abb0fe53753.js",
+        include_bytes!("shell/tooltip.5abb0fe53753.js"),
     ),
 ];
 
@@ -120,7 +132,9 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::REFERRER_POLICY, "no-referrer"),
+            // A no-referrer document posts Origin null, which the origin gate refuses.
+            // same-origin still sends no Referer off this origin.
+            (header::REFERRER_POLICY, "same-origin"),
         ],
         Html(DOCUMENT),
     )

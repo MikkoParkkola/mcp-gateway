@@ -43,18 +43,21 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
-    ("scripts/ci/shard_tests.py", ("export-lib", "<TMP>/lib-bin")): "cargo: builds the macOS lib test binary",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-b", "--build", "<TMP>/parts")):
+        "cargo: builds and runs macOS lib test parts 1-4, one at a time",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "int-lib", "--build", "<TMP>/parts")):
+        "cargo: builds and runs macOS lib test part 5",
     ("scripts/ci/lib-parts.sh", ("export", "$PART", "<TMP>/lib-bin")): "cargo: builds one part of the Linux lib test binary",
+    ("scripts/ci/lib-parts.sh", ("export", "1", "<TMP>/lib-bin")): "cargo: builds part 1 of the Linux lib test binary, the live map rows' part",
     ("scripts/ci/memory-tripwire.sh", ("2048", "<TMP>/memory-trend.txt")): "ci-env: reads this job's swap-out and cgroup memory.peak",
     ("scripts/ci/lib_union.py", ("<TMP>/lib-bin", "<TMP>/expected")): "artifact: compares the lists of the part binaries linux-lib-build built",
     ("scripts/dev/test_parts.py", ("expect", "x86_64-unknown-linux-gnu", "<TMP>/expected")): "artifact: writes the expected lists the union check compares with the part binaries'",
-    ("scripts/ci/shard_tests.py", ("run", "macos", "lib-a")): "cargo: builds and runs a macOS lib half",
+    ("scripts/ci/lib_union.py", ("<TMP>/lists", "<TMP>/expected")): "artifact: compares the part lists the macOS legs uploaded",
+    ("scripts/dev/test_parts.py", ("expect", "aarch64-apple-darwin", "<TMP>/expected")): "artifact: writes the expected lists the macOS union check compares with the legs' lists",
     ("scripts/ci/shard_tests.py", ("run", "macos", "int")): "cargo: runs the macOS integration shard (the os-int label's lane job)",
     ("scripts/ci/os_sensitive_diff.py", ("--base", "HEAD^1", "--head", "HEAD", "--pr", "$PR_NUMBER", "--labels", "$LABELS",
                                          "--expect-second-parent", "$PR_HEAD_SHA")):
         "ci-env: reads the pull request number, labels and head sha from the event payload",
-    ("scripts/ci/shard_tests.py", ("run-prebuilt", "macos", "lib-a", "<TMP>/lib-bin/lib-tests")):
-        "artifact: runs the lib test binary another job built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "linux", "${{matrix.shard}}", "<TMP>/lib-bin")):
         "artifact: runs the lib test part binaries linux-lib-build built",
     ("scripts/ci/shard_tests.py", ("run-one", "--module", "commands::upgrade::upgrade_notice_tests::", "<TMP>/lib-bin"),
@@ -71,8 +74,6 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/shard_tests.py", ("which", "config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked",
                                    "<TMP>/lib-bin", "--", "--ignored")):
         "artifact: finds a test's part binary among the ones linux-lib-build built",
-    ("scripts/ci/shard_tests.py", ("wait-lib", "macos-lib-tests", "macOS shard lib-b")):
-        "ci-env: polls this run's artifacts and jobs through the Actions API",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-dead.rs", "--integrity", "scripts/dev/testdata/registry-dead.integrity.json")): "network: live lookups, CI expects exit 1 (registry-packages.yml, known-dead step)",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-integrity.rs", "--integrity", "scripts/dev/testdata/registry-integrity.integrity.json")): "network: live digest lookup, CI expects exit 1 (MIK-8513 wrong-digest step)",
@@ -1273,7 +1274,8 @@ class Repository(unittest.TestCase):
             names,
             sorted([
                 "alert-rules.yml", "c6-obligations.yml", "changelog.yml", "ci.yml", "coverage-probe.yml",
-                "dependabot-auto-merge.yml", "docker.yml", "mrtr7b-full-burst.yml", "npm-wrapper.yml",
+                "dependabot-auto-merge.yml", "docker.yml", "maps-live-smoke.yml", "mrtr7b-full-burst.yml",
+                "npm-wrapper.yml",
                 "pr-body-hygiene.yml", "registry-packages.yml", "rustdoc.yml", "ui-tests.yml",
             ]),
         )

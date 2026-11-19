@@ -331,6 +331,11 @@ syn = { version = "2.0.119", features = ["full", "visit"] }
 # The mutant-site scan (src/mutant_scan.rs) walks raw token trees (already in Cargo.lock).
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 
+# The preview relay's rows listen on a Unix socket with a backlog of one (rustix `net`), to stall a
+# connect; tests only (already in Cargo.lock, no new crate).
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1.1", features = ["net"] }
+
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
 ## A2A (Agent2Agent) transport — proxy A2A agents as MCP backends.

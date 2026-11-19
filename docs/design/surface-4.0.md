@@ -1473,7 +1473,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:READYZ |
 | `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:SSE |
 | `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:UI |
-| `/ui/api/activity` | INTERNAL | private JSON API of the bundled web UI | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_ACTIVITY |
+| `/ui/api/activity` | INTERNAL | private JSON API of the bundled web UI | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); each answer names the access it applied (`access`: all, own or scoped); documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_ACTIVITY |
 | `/ui/api/activity/export` | INTERNAL | private JSON API of the bundled web UI | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` | src/gateway/routes.rs:UI_ACTIVITY_EXPORT |
 | `/ui/api/activity/{id}` | INTERNAL | private JSON API of the bundled web UI | one Activity row's receipt, same access as the list; 404 for a row the caller may not read | src/gateway/routes.rs:UI_ACTIVITY_RECEIPT |
 | `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_BACKENDS |
@@ -1528,6 +1528,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/tools/call` | INTERNAL | private JSON API of the bundled web UI | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run | src/gateway/routes.rs:UI_TOOLS_CALL |
 | `/ui/assets/{file}` | INTERNAL | content-hashed static files of the bundled web UI (MIK-8870) | none: the UI's own files, not an integration surface | src/gateway/routes.rs:UI_ASSET |
 | `/ui/classic` | INTERNAL | transitional page kept one release | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_CLASSIC |
+| `/ui/signin` | INTERNAL | UI plumbing, no scripted use | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_SIGNIN |
 | `/ui/{*path}` | INTERNAL | deep-link fallback, UI detail | still served unchanged; left out of the route reference; UPGRADING names it | src/gateway/routes.rs:UI_SHELL |
 | `dynamic &route (src/gateway/webhooks/mod.rs)` | KEEP | inbound webhooks under `webhooks.base_path` | - | src/gateway/webhooks/mod.rs:323 |
 | `dynamic callback_path (src/oauth/callback.rs)` | KEEP | backend OAuth redirect on its own short-lived loopback listener | - | src/oauth/callback.rs:309 |

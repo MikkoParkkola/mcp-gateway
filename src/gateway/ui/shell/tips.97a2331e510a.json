@@ -17,14 +17,7 @@
   "activity": [
    "activity.actions.contents",
    "activity.actions.format",
-   "activity.actions.on-a-machine-that-has",
-   "activity.status.blocked",
-   "activity.status.calls-made-with-your-key",
-   "activity.status.caught-per-hour",
-   "activity.status.outcome",
-   "activity.status.prompt-injection-medium-found-in",
-   "activity.status.signature-valid",
-   "activity.status.the-chart-shows-the-same"
+   "activity.actions.on-a-machine-that-has"
   ],
   "costs": [
    "costs.settings.at-14-05-12-answered",
@@ -125,11 +118,15 @@
   ]
  },
  "_pending_later": {
-  "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page",
+  "activity.status.caught-per-hour": "Activity › Status: the firewall chart",
+  "activity.status.prompt-injection-medium-found-in": "Activity › Status: the call receipt",
+  "activity.status.signature-valid": "Activity › Status: the call receipt",
+  "activity.status.the-chart-shows-the-same": "Activity › Status: the firewall chart",
   "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
   "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
   "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
-  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client"
+  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client",
+  "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page"
  },
  "_pending_rows": [
   "access.actions.keys",
@@ -313,7 +310,7 @@
   "text": "The firewall stopped this call or its answer. The agent got an error instead."
  },
  "activity.status.calls-made-with-your-key": {
-  "title": "Calls made with your key, ana. Members",
+  "title": "Calls made with your key",
   "text": "As a member you see your own key's calls. An admin or auditor sees every key."
  },
  "activity.status.caught-per-hour": {

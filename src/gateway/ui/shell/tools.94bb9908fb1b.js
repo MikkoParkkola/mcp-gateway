@@ -7,7 +7,7 @@
 // page. It reads GET /ui/api/tools once per render. Every server-supplied
 // string goes in with textContent. The shell is imported by its exact hashed
 // name, so this page registers in the same module instance the document loaded.
-import { go, register, ApiError } from '/ui/assets/shell.db568604154d.js';
+import { go, register, ApiError } from '/ui/assets/shell.b5a1acc637d1.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -133,7 +133,7 @@ function loadNote() {
   // The tooltip module loads after the catalogue is drawn and never holds it up: a static
   // import would put its bytes before every page's first paint, and if it fails to load
   // the sentence simply stands without its (i).
-  import('/ui/assets/tooltip.fe1af9f8517d.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
+  import('/ui/assets/tooltip.5abb0fe53753.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
   return load;
 }
 
