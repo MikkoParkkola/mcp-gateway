@@ -246,8 +246,10 @@ async fn only_a_firewall_that_scans_notes_findings() {
     use crate::security::decision_record::{Decided, Noted, Refused};
     use crate::security::firewall::{Firewall, FirewallConfig};
     let on = Firewall::from_config(FirewallConfig::default(), None);
-    let mut off_config = FirewallConfig::default();
-    off_config.enabled = false;
+    let off_config = FirewallConfig {
+        enabled: false,
+        ..FirewallConfig::default()
+    };
     let off = Firewall::from_config(off_config, None);
     let (from_off, from_on) = with_route_scope(async {
         note_request_findings(&off, &[]);
