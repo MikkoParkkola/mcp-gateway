@@ -268,8 +268,9 @@ struct State {
     transitions: u64,
     /// Tools the counters file names (its series layout is private).
     counted: Vec<String>,
-    /// Calls per tool in costs.json, by tool name.
-    cost_calls: Vec<(String, u64)>,
+    /// Spend per tool in costs.json, in cents, by tool name (0.01 per call).
+    /// costs.json carries spend, not calls: its `call_count` is always 0.
+    cost_cents: Vec<(String, u64)>,
 }
 
 fn state(dir: &Path) -> State {
@@ -295,17 +296,25 @@ fn state(dir: &Path) -> State {
     counted.sort();
     let costs = mcp_gateway::cost_accounting::persistence::load(&data.join("costs.json"))
         .expect("costs.json loads");
-    let mut cost_calls: Vec<(String, u64)> = costs
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a test's spend is a few cents"
+    )]
+    let mut cost_cents: Vec<(String, u64)> = costs
         .tool_totals
         .iter()
-        .map(|(k, v)| (k.rsplit(':').next().unwrap_or(k).to_owned(), v.call_count))
+        .map(|(k, v)| {
+            let cents = (v.total_cost_usd * 100.0).round() as u64;
+            (k.rsplit(':').next().unwrap_or(k).to_owned(), cents)
+        })
         .collect();
-    cost_calls.sort();
+    cost_cents.sort();
     State {
         usage,
         transitions: tracker.total_transitions(),
         counted,
-        cost_calls,
+        cost_cents,
     }
 }
 
@@ -340,7 +349,7 @@ async fn baseline(dir: &Path, config: &Path) {
             usage: [1, 1, 0, 0],
             transitions: 1,
             counted: names(&["alpha", "beta"]),
-            cost_calls: vec![("alpha".into(), 1), ("beta".into(), 1)],
+            cost_cents: vec![("alpha".into(), 1), ("beta".into(), 1)],
         },
         "premise: run 1's state A on disk"
     );
@@ -397,7 +406,7 @@ async fn k_simple(mode: &str, held_sse: bool) {
             usage: [2, 2, 0, 0],
             transitions: 2,
             counted: names(&["alpha", "beta"]),
-            cost_calls: vec![("alpha".into(), 2), ("beta".into(), 2)],
+            cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2)],
         },
         "run 2's records lost by a kill inside the grace"
     );
@@ -453,7 +462,7 @@ async fn k_inflight_a_held_request_does_not_hold_the_saves() {
             usage: [2, 2, 0, 1],
             transitions: 3,
             counted: names(&["alpha", "beta"]),
-            cost_calls: vec![("alpha".into(), 2), ("beta".into(), 2)],
+            cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2)],
         },
         "a held request's session lost by a kill inside the grace"
     );
@@ -499,7 +508,7 @@ async fn k_post_a_request_completing_during_the_stop_is_saved() {
             usage: [2, 2, 1, 1],
             transitions: 4,
             counted: names(&["alpha", "beta", "slow"]),
-            cost_calls: vec![("alpha".into(), 2), ("beta".into(), 2), ("slow".into(), 1)],
+            cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2), ("slow".into(), 1)],
         },
         "a request completing during the stop was not saved before the kill"
     );
