@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { plantFromArgs, plantDoc, plantCsp } from '../perf/plant.mjs';
 import {
   stats, judge, checkRun, passComplete, drift, busy, controlCheck, exitCode, recalibrationFlag,
-  marginFromSpread, nightlyCheck, treeCheck,
+  marginFromSpread, nightlyCheck, treeCheck, judgeJob, GATE_SCHEDULE, VERDICT_SCHEDULE,
 } from '../perf/first-paint-lib.mjs';
 
 const URL = 'http://127.0.0.1:4390/ui/overview/status';
@@ -213,4 +213,68 @@ test('R10 server.mjs: refuses the flag alone; with --perf-gate serves the plante
   } finally {
     child.kill();
   }
+});
+
+// R15: one job's judgement from its gathered reports (the runner only gathers).
+const withFcp = (fcp, index = 2500) => report({
+  environment: { ...report().environment, benchmarkIndex: index },
+  audits: { ...report().audits, 'first-contentful-paint': { numericValue: fcp } },
+});
+const runs = (n, fcp, index) => Array.from({ length: n }, () => withFcp(fcp, index));
+const ALL = { gateMobile: EXPECTED, gateDesktop: EXPECTED, control: EXPECTED, unthrottled: EXPECTED, simulate: EXPECTED };
+const CONFIG = { baseline: 700, margin: 250, calibrationIndex: 2500 };
+const QUIET = [{ pressure: 0.5, load1: 1.0 }];
+const T = { pressure: 6.0, load1: 3.0 };
+const defaults = () => ({ gateMobile: runs(20, 720), gateDesktop: runs(20, 400), control: runs(20, 1030), unthrottled: runs(5, 300), simulate: runs(5, 900) });
+const job = (over = {}) => judgeJob({
+  mode: 'gate', config: CONFIG, schedule: GATE_SCHEDULE, expected: ALL, samples: QUIET, thresholds: T, reports: defaults(), ...over,
+});
+
+test('R15 job: the schedules are the design\'s table', () => {
+  expect(GATE_SCHEDULE).toEqual({ gateMobile: 20, gateDesktop: 20, control: 20, unthrottled: 5, simulate: 5 });
+  expect(VERDICT_SCHEDULE).toEqual({ gateMobile: 20, unthrottled: 5 });
+});
+
+test('R15 job: a quiet, complete, passing job exits 0', () => {
+  const j = job();
+  expect(j.exit).toBe(0);
+  expect(j.verdicts).toEqual({ gateMobile: { verdict: 'pass', warn: false, reasons: [] }, gateDesktop: { verdict: 'pass', warn: false, reasons: [] } });
+});
+
+test('R15 job: a busy stop with 7 of 20 gate reports exits 3, not 2; a bad gathered report still exits 2', () => {
+  const stopped = { gateMobile: runs(7, 720), gateDesktop: runs(7, 400), control: runs(6, 1030), unthrottled: runs(2, 300), simulate: runs(2, 900) };
+  const busySamples = [{ pressure: 0.5, load1: 1.0 }, { pressure: 6.5, load1: 1.0 }];
+  expect(job({ reports: stopped, samples: busySamples }).exit).toBe(3);
+  const bad = { ...stopped, gateMobile: [...runs(6, 720), report({ finalDisplayedUrl: 'http://127.0.0.1:4390/ui/error' })] };
+  expect(job({ reports: bad, samples: busySamples }).exit).toBe(2);
+});
+
+test('R15 job: without a busy stop, a missing report exits 2', () => {
+  expect(job({ reports: { ...defaults(), gateMobile: runs(19, 720) } }).exit).toBe(2);
+});
+
+test('R15 job: budget and regression on mobile exit 1; desktop over budget alone exits 1', () => {
+  const r = (mobile, desktop) => ({ gateMobile: runs(20, mobile), gateDesktop: runs(20, desktop), control: runs(20, mobile + 310), unthrottled: runs(5, 300), simulate: runs(5, 900) });
+  expect(job({ reports: r(950, 400) }).verdicts.gateMobile.reasons).toEqual(['regression']);
+  expect(job({ reports: r(950, 400) }).exit).toBe(1);
+  expect(job({ reports: r(720, 1000) }).verdicts.gateDesktop.reasons).toEqual(['budget']);
+  expect(job({ reports: r(720, 1000) }).exit).toBe(1);
+});
+
+test('R15 job: drift over 20% exits 4 even with a budget failure', () => {
+  const r = { ...defaults(), gateMobile: runs(20, 1000), control: runs(20, 1300), unthrottled: runs(5, 300, 3001) };
+  expect(job({ reports: r }).exit).toBe(4);
+});
+
+test('R15 job: a control under the margin exits 2; proof mode needs the control to fail', () => {
+  expect(job({ reports: { ...defaults(), control: runs(20, 969.9) } }).exit).toBe(2);
+  expect(job({ mode: 'proof', reports: { ...defaults(), control: runs(20, 970) } }).exit).toBe(0);
+  // Baseline 900: a 980 control is 260 over the gate but under both rules, so proof mode refuses it.
+  expect(job({ mode: 'proof', config: { ...CONFIG, baseline: 900 }, reports: { ...defaults(), control: runs(20, 980) } }).exit).toBe(2);
+});
+
+test('R15 job: a UI12.9 verdict reads only the mobile gate and the drift runs', () => {
+  const j = job({ schedule: VERDICT_SCHEDULE, reports: { gateMobile: runs(20, 720), unthrottled: runs(5, 300) } });
+  expect(j.exit).toBe(0);
+  expect(Object.keys(j.verdicts)).toEqual(['gateMobile']);
 });

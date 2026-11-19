@@ -173,3 +173,52 @@ export function treeCheck({ head, expected, porcelain }) {
   const first = porcelain.split('\n').find((l) => l !== '');
   return first === undefined ? null : `tree not clean: ${first}`;
 }
+
+/** Runs per pass (design section 3): a full gate run, and one UI12.9 verdict (the mobile gate and its drift runs). */
+export const GATE_SCHEDULE = Object.freeze({ gateMobile: RUNS, gateDesktop: RUNS, control: RUNS, unthrottled: SIDE_RUNS, simulate: SIDE_RUNS });
+export const VERDICT_SCHEDULE = Object.freeze({ gateMobile: RUNS, unthrottled: SIDE_RUNS });
+
+/**
+ * One job's judgement from the reports it gathered. A busy refusal stops the job, so missing reports are not a
+ * fault then; any gathered report that fails its checks still is. `mode` is 'proof' (calibration's control check
+ * and this ticket's READY) or 'gate'. Returns the exit code, the problems behind it, the judged verdicts and stats.
+ */
+export function judgeJob({ mode, config, schedule, expected, reports, samples, thresholds }) {
+  const problems = [];
+  const host = busy(samples, thresholds);
+  if (host.fault || host.refuse) problems.push(host.problem);
+  const out = { problems, verdicts: {}, stats: {} };
+  const fault = () => exitCode({ fault: true });
+  if (host.refuse) {
+    const bad = Object.keys(schedule).flatMap((p) => (reports[p] ?? []).map((r) => checkRun(r, expected[p]))).find((c) => !c.ok);
+    if (bad) problems.push(bad.problem);
+    return { ...out, exit: exitCode({ fault: Boolean(bad) || host.fault, busy: true }) };
+  }
+  const fcps = {};
+  let indices = [];
+  for (const [p, count] of Object.entries(schedule)) {
+    const pass = passComplete(reports[p] ?? [], expected[p], count);
+    if (!pass.ok) problems.push(`${p}: ${pass.problem}`);
+    else {
+      fcps[p] = pass.fcps;
+      out.stats[p] = stats(pass.fcps);
+      if (p === 'unthrottled') indices = pass.indices;
+    }
+  }
+  if (host.fault || problems.length) return { ...out, exit: fault() };
+  const d = drift(indices, config.calibrationIndex);
+  out.drift = d;
+  if (d.refuse) problems.push(`index drift ${Math.round(d.ratio * 1000) / 10}%, over ${DRIFT_LIMIT * 100}%: recalibrate`);
+  out.verdicts.gateMobile = judge({ median: out.stats.gateMobile.median, baseline: config.baseline, margin: config.margin });
+  if (schedule.gateDesktop) out.verdicts.gateDesktop = judge({ median: out.stats.gateDesktop.median, baseline: null, margin: null });
+  let controlFault = false;
+  if (schedule.control) {
+    const c = controlCheck({ mode, controlMedian: out.stats.control.median, gateMedian: out.stats.gateMobile.median, baseline: config.baseline, margin: config.margin });
+    if (!c.ok) {
+      problems.push(c.problem);
+      controlFault = true;
+    }
+  }
+  const failed = Object.values(out.verdicts).some((v) => v.verdict === 'fail');
+  return { ...out, exit: exitCode({ fault: controlFault, drift: d.refuse, failed }) };
+}
