@@ -103,6 +103,33 @@ class CfgEvaluation(ExpectRows):
         self.assertEqual(self.expected(tree(src__a_DOT_rs=part1_module(body)), "windows")[1],
                          ["a::tests::plain", "a::tests::win"])
 
+    def test_the_macos_target_expects_its_own_names(self):
+        """U1: the macOS union's expected lists. A test the Linux configuration has and macOS's cfg excludes is not
+        expected on macOS; a macOS-only test is, so a macOS list missing it fails the union."""
+        body = (
+            "    #[test]\n    fn plain() {}\n"
+            '    #[cfg(target_os = "linux")]\n    #[test]\n    fn linux_only() {}\n'
+            '    #[cfg(target_os = "macos")]\n    #[test]\n    fn mac() {}\n'
+        )
+        table = "config\tx86_64-unknown-linux-gnu\t--all-features\t\nconfig\taarch64-apple-darwin\t--all-features\t\n"
+        files = tree(**{"src__a_DOT_rs": part1_module(body), "scripts__dev__test-parts-ci_DOT_tsv": table})
+        # Through `expect TARGET OUTDIR`, as the union job runs it: the target picks the compiler's cfg text.
+        expect_module = self.tool._expect_module()
+        expect_module.print_cfg = {"x86_64-unknown-linux-gnu": LINUX, "aarch64-apple-darwin": MACOS}.__getitem__
+        saved = self.tool._expect_module
+        self.tool._expect_module = lambda: expect_module
+        try:
+            for target, want in (("x86_64-unknown-linux-gnu", "a::tests::linux_only\na::tests::plain\n"),
+                                 ("aarch64-apple-darwin", "a::tests::mac\na::tests::plain\n")):
+                with self.subTest(target), TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    write_tree(root, files)
+                    out = root / "expected"
+                    self.assertEqual(self.tool.main(["test_parts.py", "expect", target, str(out)], root=root), 0)
+                    self.assertEqual((out / "p1.txt").read_text(), want)
+        finally:
+            self.tool._expect_module = saved
+
     def test_features_are_all_on_and_custom_cfgs_off(self):
         body = (
             '    #[cfg(feature = "firewall")]\n    #[test]\n    fn with_fw() {}\n'

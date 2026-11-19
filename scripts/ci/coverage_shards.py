@@ -9,20 +9,27 @@ it). A trial splits that step across runners and merges the profiles. Each
 shard is the same command over a subset, and the shards of one plan are exact
 complements of it:
 
-- the library is split by a libtest filter and the matching `--skip`;
+- plan 4 compiles the library as parts `lib-1` through `lib-N`, with no
+  libtest filter; N comes from the shared build script reader;
+- plan 3 splits the library by a libtest filter and the matching `--skip`,
+  while plan 1 runs every target together;
 - the bins go whole into one shard;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`).
 
 `check` reads `cargo metadata` and fails when a target that `--tests` builds
-falls in no shard or in two, so a new kind of target cannot drop out of the
-merged grade unnoticed. Unlike `shard_tests.py`, nothing else is skipped (the
+falls in no shard or has unexpected owners. Plan 4 requires exactly the N
+library parts; every other target has one owner. `lists` adapts downloaded
+library test inventories for the union check, which verifies their contents
+against the source. Unlike `shard_tests.py`, nothing else is skipped (the
 grade runs the full-burst test), and there are no doctests, examples or
 TMPDIR guard, as in the single job.
 
   coverage_shards.py plan <n>              print the plan's shards as JSON
   coverage_shards.py check <n> <metadata>  check the partition (file or -)
   coverage_shards.py run <n> <shard>       run one shard, or `sdk` (exit 1 on failure)
+  coverage_shards.py lists OUT SHARDS     write OUT/lib-K/pK/list.txt from
+                                           SHARDS/cov-shard-lib-K/tests.tsv
   coverage_shards.py objects <report-log> <manifest>...
                                            every manifest executable with coverage
                                            sections is read by each llvm-cov command
@@ -35,9 +42,12 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lib_union  # noqa: E402
 from shard_tests import GLOB_A, GLOB_ALL, GLOB_B, HEADER, LIB_SPLIT, RESULT, SDK, cargo  # noqa: E402
 
 # Every plan also runs the SDK journey's binary as its own part, as the single
@@ -60,17 +70,31 @@ PLANS: dict[int, dict[str, tuple[list[str], list[str]]]] = {
         "int": (["--bins", "--test", GLOB_ALL], []),
     },
     4: {
-        "lib-a": _LIB_A,
-        "lib-b": _LIB_B,
         "int-a": (["--bins", "--test", GLOB_A], []),
         "int-b": (["--test", GLOB_B], []),
     },
 }
 
 
+def plan(n: int) -> dict[str, tuple[list[str], list[str]]]:
+    """Build a fresh plan on demand without changing the registry.
+
+    Bundle readers can import this module without a build script. Resolve the
+    reader's path against this checkout so callers can change working directory.
+    """
+    # Callers may edit either argument list without changing later plans.
+    selected = {shard: (list(args), list(test)) for shard, (args, test) in PLANS[n].items()}
+    if n == 4:
+        count = lib_union.part_count(Path(__file__).resolve().parents[2] / lib_union.BUILD_SCRIPT)
+        selected = {
+            **{f"lib-{k}": (["--lib"], []) for k in range(1, count + 1)},
+            **selected,
+        }
+    return selected
+
+
 def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -> list[str]:
-    """The shards that run target `name` of `kind`. The library is split by a
-    filter and its complement, so its two shards together are one owner."""
+    """The shards that run target `name` of `kind`, including every library part."""
     found = []
     for shard, (args, _test) in plan.items():
         if "--tests" in args:
@@ -88,9 +112,13 @@ def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -
 
 def check(n: int, metadata: dict) -> list[str]:
     """Every target `cargo test --tests` builds, with the shards that own it:
-    the problems, empty when the library is split in exactly two shards by a
-    filter and its `--skip`, and every other target is in exactly one."""
-    plan = PLANS[n]
+    the problems, empty when the library has exactly its plan's owners and
+    filters, and every other target is in exactly one shard."""
+    selected = plan(n)
+    parts = ([f"lib-{k}" for k in range(1, lib_union.part_count(
+        Path(__file__).resolve().parents[2] / lib_union.BUILD_SCRIPT) + 1)]
+        if any(re.fullmatch(r"lib-[1-9][0-9]*", shard) for shard in selected) else None)
+    filter_pair = _LIB_A in selected.values() and _LIB_B in selected.values()
     problems = []
     # The grade runs without `--workspace`, so cargo builds the workspace's
     # default members; an older cargo that omits them means the root package.
@@ -107,11 +135,15 @@ def check(n: int, metadata: dict) -> list[str]:
             # `--tests` builds every target whose `test` flag is set.
             if not target.get("test", kind in ("lib", "bin", "test")):
                 continue
-            found = owners(plan, kind, target["name"])
+            found = owners(selected, kind, target["name"])
             if kind == "lib":
-                # Whole in one shard, or split by the filter and its `--skip`.
-                filters = sorted(" ".join(plan[s][1]) for s in found)
-                if filters not in ([""], sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"])):
+                # Numbered compile parts must each run without a libtest filter.
+                # The plan's contents choose the rule, not its registry number.
+                filters = sorted(" ".join(selected[s][1]) for s in found)
+                if parts is not None:
+                    if sorted(found) != sorted(parts) or any(selected[s][1] for s in found):
+                        problems.append(f"lib {target['name']}: in {found}, filters {filters}; expected {parts}")
+                elif filters != (sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"]) if filter_pair else [""]):
                     problems.append(f"lib {target['name']}: split as {filters}")
             elif len(found) != 1:
                 problems.append(f"{kind} {target['name']}: in {found or 'no shard'}")
@@ -123,7 +155,7 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
         # The SDK journey's binary alone, single-threaded, the same in every plan.
         select = [*BASE, "--test", SDK_TARGET, "--", "--test-threads", "1"]
     else:
-        args, test_args = PLANS[n][shard]
+        args, test_args = plan(n)[shard]
         select = [*BASE, *args, "--", *test_args, "--skip", SDK]
     # The tests come from libtest's own listing, before anything runs, so no
     # output can interleave with a name; the run's per-binary result lines then
@@ -146,6 +178,39 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     print(f"::notice::coverage {n}/{shard}: {sum(map(len, listed.values()))} tests "
           f"in {len(listed)} binaries, rc {rc}")
     return rc or (1 if problems else 0)
+
+
+def lists(out: Path, shards: Path) -> list[str]:
+    """Adapt downloaded numbered lib inventories, preserving ignored test names.
+
+    Missing parts remain absent for lib_union to diagnose; a present artifact
+    must supply a nonempty library inventory before it can become a list.
+    """
+    # Reject reused output before writing anything: a missing shard must never
+    # inherit a stale inventory from an earlier download.
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        return [f"{out}: output must be absent or an empty directory"]
+    problems = []
+    for shard in sorted(shards.glob("cov-shard-lib-*")):
+        match = re.fullmatch(r"cov-shard-lib-([1-9][0-9]*)", shard.name)
+        if match is None or not shard.is_dir():
+            continue
+        source = shard / "tests.tsv"
+        try:
+            rows = source.read_text(encoding="utf-8").splitlines()
+        except OSError as error:
+            problems.append(f"{source}: {error}")
+            continue
+        names = [fields[1] for row in rows if len(fields := row.split("\t")) == 3
+                 and fields[0] == "unittests src/lib.rs" and fields[1]]
+        if not names:
+            problems.append(f"{source}: lists no library test")
+            continue
+        k = match.group(1)
+        destination = out / f"lib-{k}" / f"p{k}" / "list.txt"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("".join(f"{name}: test\n" for name in names), encoding="utf-8")
+    return problems
 
 
 def binary_of(header: str) -> str:
@@ -361,6 +426,8 @@ def on_disk(root: str, manifests: list[str]) -> list[str]:
 
 
 def self_test() -> int:
+    from unittest.mock import patch
+
     def target(kind: str, name: str, test: bool = True) -> dict:
         return {"kind": [kind], "name": name, "test": test}
 
@@ -395,16 +462,13 @@ def self_test() -> int:
         want = [] if n == 1 else ["example demo: in no shard"]
         assert check(n, extra) == want, (n, check(n, extra))
     # A glob class that stops being a complement shows up as an unowned target.
-    broken = {k: (list(a), list(t)) for k, (a, t) in PLANS[4].items()}
+    broken = plan(4)
     broken["int-b"] = (["--test", "[m-z]*"], [])
-    PLANS[99] = broken
-    try:
-        assert check(99, good) == ["test Lower_upper_A: in no shard"], check(99, good)
-    finally:
-        del PLANS[99]
+    with patch(__name__ + ".plan", return_value=broken):
+        assert check(4, good) == ["test Lower_upper_A: in no shard"], check(4, good)
     # Glob classes match case-sensitively, as cargo does: an upper-case first
     # letter falls in [!a-l]* and only there.
-    assert owners(PLANS[4], "test", "Lower_upper_A") == ["int-b"]
+    assert owners(plan(4), "test", "Lower_upper_A") == ["int-b"]
     # Two builds differing only outside the coverage sections digest alike; a different
     # coverage mapping, a missing section or a non-ELF file does not.
     cov = [("__llvm_covfun", b"FUN"), ("__llvm_covmap", b"MAP"), (".rodata", b"seed-1")]
@@ -490,13 +554,202 @@ def self_test() -> int:
         with open(os.path.join(d, "debug/deps/a-1"), "wb") as f:
             f.write(elf([("__llvm_covfun", b"other"), *cov[1:]]))
         assert on_disk(d, [listed])[0] == "debug/deps/a-1: digest differs from its manifest"
-    print("coverage_shards self-test: ok")
-    return 0
+    print("coverage_shards existing self-test rows: ok")
+    return coverage_parts_self_test()
+
+
+def coverage_parts_self_test() -> int:
+    """Run every assertion row even when earlier RED rows fail."""
+    import contextlib
+    import copy
+    import io
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import lib_union
+
+    def p1() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = root / "scripts/dev/test-parts-build.rs"
+            build.parent.mkdir(parents=True)
+            build.write_text("const N: u32 = 5;\n", encoding="utf-8")
+            with contextlib.chdir(root), patch.object(lib_union, "BUILD_SCRIPT", build):
+                got = set(plan(4))
+            want = {"lib-1", "lib-2", "lib-3", "lib-4", "lib-5", "int-a", "int-b"}
+            assert got == want, f"plan(4) names {sorted(got)}, expected {sorted(want)}"
+
+    def p2() -> None:
+        # The implementation must retain plan(n) and call this module's one reader.
+        with patch.object(lib_union, "part_count", return_value=2) as reader:
+            got = set(plan(4))
+        want = {"lib-1", "lib-2", "int-a", "int-b"}
+        assert got == want, f"patched N=2: plan(4) names {sorted(got)}, expected {sorted(want)}"
+        assert reader.called, "plan(4) did not call lib_union.part_count"
+
+    def p3() -> None:
+        selected = plan(4)
+        assert "lib-2" in selected, "plan(4) has no lib-2 for run's argv check"
+        header = "     Running unittests src/lib.rs (target/debug/deps/mcp_gateway-fixture)"
+        responses = [(0, [header, "sample: test"]), (0, [header]),
+                     (0, [header, "test result: ok. 1 passed; 0 failed; 0 ignored"])]
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            with patch(__name__ + ".cargo", side_effect=responses) as fake:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = run(4, "lib-2")
+        expected = ["llvm-cov", "--no-report", "--all-features", "--lib", "--", "--skip", SDK]
+        got = [call.args[0] for call in fake.call_args_list]
+        assert got == [expected + ["--list"], expected + ["--list", "--ignored"], expected], got
+        assert rc == 0, f"run returned {rc}"
+
+    metadata = {"workspace_root": "/w", "packages": [
+        {"id": "gw", "manifest_path": "/w/Cargo.toml", "targets": [
+            {"kind": ["lib"], "name": "mcp_gateway", "test": True}]}]}
+    complete = {f"lib-{k}": (["--lib"], []) for k in range(1, 6)}
+    complete.update({"int-a": (["--bins", "--test", "[a-l]*"], []),
+                     "int-b": (["--test", "[!a-l]*"], [])})
+
+    def p4(change: str) -> None:
+        candidate = copy.deepcopy(complete)
+        if change == "missing lib-3":
+            del candidate["lib-3"]
+        elif change == "extra lib-6":
+            candidate["lib-6"] = (["--lib"], [])
+        elif change == "duplicate lib-2":
+            # Ordinary dict literals discard repeated keys. Preserve a repeated
+            # item so owners() really returns lib-2 twice, not a different name.
+            class RepeatedPart(dict):
+                def items(self):
+                    return [*super().items(), ("lib-2", self["lib-2"])]
+
+            candidate = RepeatedPart(candidate)
+        elif change == "filtered lib-2":
+            candidate["lib-2"] = (["--lib"], ["gateway::"])
+        with patch.object(lib_union, "part_count", return_value=5):
+            with patch(__name__ + ".plan", return_value=complete):
+                control = check(4, metadata)
+            with patch(__name__ + ".plan", return_value=candidate):
+                broken = check(4, metadata)
+        # Each negative row requires a passing control: rejecting everything is not validation.
+        assert control == [], f"valid five-part ownership rejected: {control}"
+        if change != "complete":
+            assert broken, f"{change} was accepted"
+
+    def p5(case: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards, out = root / "shards", root / "lists"
+            lib = shards / "cov-shard-lib-2"
+            lib.mkdir(parents=True)
+            if case == "mixed binaries":
+                (lib / "tests.tsv").write_text(
+                    "unittests src/lib.rs\ta::one\tok\n"
+                    "tests/x.rs\tintegration::excluded\tok\n"
+                    "unittests src/lib.rs\tb::two\tignored\n", encoding="utf-8")
+                other = shards / "cov-shard-lib-5"
+                other.mkdir()
+                (other / "tests.tsv").write_text("unittests src/lib.rs\tc::three\tok\n", encoding="utf-8")
+                for name in ("int-a", "int-b", "sdk"):
+                    other = shards / f"cov-shard-{name}"
+                    other.mkdir()
+                    (other / "tests.tsv").write_text("unittests src/lib.rs\tnot_a_lib_part\tok\n", encoding="utf-8")
+            elif case == "empty tsv":
+                (lib / "tests.tsv").write_text("", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["coverage_shards.py", "lists", str(out), str(shards)])
+            if case != "mixed binaries":
+                assert rc != 0, f"lists accepted {case}: exit {rc}"
+                return
+            assert rc == 0, f"lists returned {rc}"
+            got = {p.relative_to(out).as_posix(): p.read_text(encoding="utf-8")
+                   for p in out.rglob("*") if p.is_file()}
+            want = {"lib-2/p2/list.txt": "a::one: test\nb::two: test\n",
+                    "lib-5/p5/list.txt": "c::three: test\n"}
+            assert got == want, f"lists wrote {got!r}, expected {want!r} (no integration or SDK lists)"
+
+    def p6() -> None:
+        # Resolving different build counts must never turn the registry into a cache.
+        before = copy.deepcopy(PLANS)
+        for count in (2, 5):
+            with patch.object(lib_union, "part_count", return_value=count):
+                selected, again = plan(4), plan(4)
+            assert PLANS == before, "plan(4) mutated PLANS"
+            want = {f"lib-{k}" for k in range(1, count + 1)} | {"int-a", "int-b"}
+            assert set(selected) == set(again) == want, "plan(4) lost numbered lib parts"
+            assert selected is not again and selected is not PLANS[4], "plan(4) reused a plan dict"
+
+    def p7() -> None:
+        # Exercise both argument lists, including the generated library parts.
+        before = copy.deepcopy(PLANS)
+        try:
+            for n in PLANS:
+                selected, second = plan(n), plan(n)
+                expected = copy.deepcopy(second)
+                for args, test in selected.values():
+                    args.append("changed cargo argument")
+                    test.append("changed libtest argument")
+                assert PLANS == before, f"mutating plan({n}) argument lists changed PLANS"
+                assert second == expected, f"mutating plan({n}) argument lists changed another call"
+                assert plan(n) == expected, f"mutating plan({n}) argument lists changed a later call"
+        finally:
+            # A failing isolation row must not contaminate subsequent rows.
+            if PLANS != before:
+                PLANS.clear()
+                PLANS.update(before)
+
+    def p9() -> None:
+        # A plan number alone says nothing about how its library is partitioned.
+        whole = {"lib": (["--lib"], [])}
+        with patch(__name__ + ".plan", return_value=whole):
+            problems = check(2, metadata)
+        assert problems == [], f"whole-lib fixture plan 2 rejected: {problems}"
+
+    def p8() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shards, out = root / "shards", root / "lists"
+            lib = shards / "cov-shard-lib-2"
+            lib.mkdir(parents=True)
+            (lib / "tests.tsv").write_text("unittests src/lib.rs\tfresh\tok\n", encoding="utf-8")
+            stale = out / "lib-1/p1/list.txt"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("stale: test\n", encoding="utf-8")
+            before = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = main(["coverage_shards.py", "lists", str(out), str(shards)])
+            assert rc != 0, "lists accepted a nonempty output directory"
+            after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+            assert after == before, "lists wrote files before rejecting a nonempty output directory"
+
+    rows = [("P1 fixture N=5", p1), ("P2 shared reader N=2", p2), ("P3 literal cargo argv", p3)]
+    rows += [(f"P4 {case}", lambda case=case: p4(case)) for case in
+             ("complete", "missing lib-3", "extra lib-6", "duplicate lib-2", "filtered lib-2")]
+    rows += [(f"P5 {case}", lambda case=case: p5(case)) for case in
+             ("mixed binaries", "empty tsv", "missing tsv")]
+    rows += [("P6 plan registry unchanged", p6), ("P7 plan argument lists isolated", p7),
+             ("P8 nonempty lists output refused", p8), ("P9 whole-lib plan 2", p9)]
+    wrong = 0
+    for label, test in rows:
+        try:
+            test()
+        except AssertionError as error:
+            wrong += 1
+            print(f"FAIL {label}: {error}")
+        else:
+            print(f"ok   {label}")
+    print(f"coverage parts self-test: {len(rows) - wrong} ok, {wrong} assertion failures")
+    return 1 if wrong else 0
 
 
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
+    if len(argv) == 4 and argv[1] == "lists":
+        problems = lists(Path(argv[2]), Path(argv[3]))
+        for problem in problems:
+            print(f"::error::coverage lists: {problem}")
+        return 1 if problems else 0
     if len(argv) == 3 and argv[1] == "canary":
         problems = canary(open(argv[2], encoding="utf-8", errors="replace").read())
         for p in problems:
@@ -518,7 +771,7 @@ def main(argv: list[str]) -> int:
                 print(f"{digest(f.read())}  {path}")
         return 0
     if len(argv) == 3 and argv[1] == "plan" and argv[2].isdigit() and int(argv[2]) in PLANS:
-        print(json.dumps(sorted(PLANS[int(argv[2])])))
+        print(json.dumps(sorted(plan(int(argv[2])))))
         return 0
     if len(argv) == 4 and argv[1] == "check" and argv[2].isdigit() and int(argv[2]) in PLANS:
         raw = sys.stdin.read() if argv[3] == "-" else open(argv[3], encoding="utf-8").read()
@@ -527,7 +780,7 @@ def main(argv: list[str]) -> int:
             print(f"::error::coverage partition: {p}")
         return 1 if problems else 0
     if (len(argv) == 4 and argv[1] == "run" and argv[2].isdigit() and int(argv[2]) in PLANS
-            and (argv[3] == SDK_PART or argv[3] in PLANS[int(argv[2])])):
+            and (argv[3] == SDK_PART or argv[3] in plan(int(argv[2])))):
         return run(int(argv[2]), argv[3])
     print(__doc__, file=sys.stderr)
     return 2

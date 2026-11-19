@@ -1184,6 +1184,66 @@ CASES = [
         PUSH_STEP + "\n" + SMOKE_STEP,
         CAUGHT,
     ),
+    # The mingw cache fill downloads under its own bound, not the windows shard's 600 s, and its job timeout fits
+    # two attempts of it; the shard keeps the script's bound.
+    (
+        "mingw-fill-bound-deleted",
+        "mingw-debs.yml",
+        '        env:\n          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-bound-back-to-the-shards",
+        "mingw-debs.yml",
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        '          MINGW_DOWNLOAD_SECONDS: "600"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-timeout-too-short-for-two-attempts",
+        "mingw-debs.yml",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 100\n",
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-timeout-without-setup-slack",
+        "mingw-debs.yml",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 108\n",
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-index-refresh-bound-raised-at-job-level",
+        "mingw-debs.yml",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 115\n    env:\n      MINGW_UPDATE_SECONDS: \"1800\"\n",
+        CAUGHT,
+    ),
+    (
+        "mingw-shard-given-the-fills-bound",
+        "feature-combos.yml",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-shard-given-a-longer-index-refresh",
+        "feature-combos.yml",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
+        '          MINGW_UPDATE_SECONDS: "1800"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-bound-unquoted",
+        "mingw-debs.yml",
+        '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        "          MINGW_DOWNLOAD_SECONDS: 3000\n",
+        TOLERATED,
+    ),
 ]
 
 # The rehearsal verify (the rehearsal readonly verify design)
