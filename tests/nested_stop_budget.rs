@@ -275,6 +275,54 @@ fn sigterm(pid: u32) {
     );
 }
 
+/// What a row does to the inner gateway while the outer one stops.
+#[derive(Clone, Copy)]
+enum During {
+    Nothing,
+    /// Freeze the inner (SIGSTOP) as soon as it logs that it was told to
+    /// hurry, keep it frozen this long, then let it run again (SIGCONT).
+    Stall(Duration),
+}
+
+/// The inner logs one of these once the outer's SIGTERM reaches it after its stdin
+/// has closed: from here it has only the nested need before the outer kills it.
+const HURRY_LINES: [&str; 2] = ["hurrying the stop", "shutdown hurried by a signal"];
+
+/// Longer than the 1.5 s nested need the outer leaves an inner after its
+/// SIGTERM, so the outer's kill lands while the inner is still frozen and
+/// only the outer's own sweep can end what the inner started.
+const STALL_PAST_THE_NEED: Duration = Duration::from_secs(3);
+
+/// `kill -<sig> <pid>`, best effort: a pid that has already gone is the
+/// row's own business to judge.
+fn send(pid: u32, sig: &str) {
+    let _ = std::process::Command::new("kill")
+        .args([format!("-{sig}"), pid.to_string()])
+        .status();
+}
+
+/// Watches inner.log for any of [`HURRY_LINES`], then freezes `inner` for `hold`.
+/// Yields whether the freeze happened, so a row whose inner never hurried
+/// fails by that name instead of passing without a stall.
+fn freeze_once_hurried(root: &Path, inner: u32, hold: Duration) -> tokio::task::JoinHandle<bool> {
+    let log = root.join("inner.log");
+    tokio::spawn(async move {
+        let stop_looking = Instant::now() + STOP_BOUND;
+        while Instant::now() < stop_looking {
+            if std::fs::read_to_string(&log)
+                .is_ok_and(|text| HURRY_LINES.iter().any(|line| text.contains(line)))
+            {
+                send(inner, "STOP");
+                tokio::time::sleep(hold).await;
+                send(inner, "CONT");
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    })
+}
+
 fn alive_pids(pids: &[u32]) -> Vec<u32> {
     pids.iter()
         .copied()
@@ -312,6 +360,15 @@ struct Stopped {
 }
 
 async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped {
+    run_with(total, inner_stop, leaves, During::Nothing).await
+}
+
+async fn run_with(
+    total: Duration,
+    inner_stop: Duration,
+    leaves: &[&str],
+    during: During,
+) -> Stopped {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
@@ -391,8 +448,19 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped 
         "inner and leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
+    // The pid list starts with the inner gateway's (inner.pid, above).
+    let freeze = match during {
+        During::Nothing => None,
+        During::Stall(hold) => Some(freeze_once_hurried(root, leaves[0], hold)),
+    };
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
     let logs_then = logs(root);
+    if let Some(freeze) = freeze {
+        assert!(
+            freeze.await.expect("the freeze task"),
+            "the inner never logged that it was told to hurry, so nothing was stalled\n{logs_then}"
+        );
+    }
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
@@ -436,6 +504,22 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
         stop.logs
     );
 }
+/// A nested gateway frozen past its nested need, right after its parent's
+/// SIGTERM reaches it, cannot end its own leaf before the parent kills it. The
+/// parent's descendant sweep then has to end the leaf and the leaf's child:
+/// once the stop is over, no process of the tree is left.
+/// Red if the sweep stops killing what a killed backend leaves behind.
+#[tokio::test]
+async fn a_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
+    run_with(
+        HTTP_MINIMUM,
+        Duration::from_secs(8),
+        &["leaf"],
+        During::Stall(STALL_PAST_THE_NEED),
+    )
+    .await;
+}
+
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
