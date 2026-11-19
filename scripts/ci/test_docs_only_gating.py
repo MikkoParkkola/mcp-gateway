@@ -74,7 +74,7 @@ RELEASE_PRS = {"feature-combos-pr"}
 # this repository), docs-only or not, into any base; every non-PR event runs it
 # as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
 # own cases below, so it is in neither SKIPPED nor KEPT.
-MACOS_TRAIN = {"macos-shards", "macos-check"}
+MACOS_TRAIN = {"macos-shards", "macos-check", "macos-lib-union"}
 # Lane pull requests into the release line only (never a train, a throwaway, a fork or another base), and no push:
 # the os-int label's check, and the macOS int shard that label turns on. Checked by lane_label_errors below, so they
 # are in neither SKIPPED nor KEPT. Both skip a release-line push (POST_MERGE_SKIPPED).
@@ -109,7 +109,7 @@ POST_MERGE_SKIPPED = {
     # Platform builds: scarce hosted runners; the tag workflow runs both.
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
-    "test-shards", "windows-shards", "windows-clippy", "macos-shards",
+    "test-shards", "windows-shards", "windows-clippy", "macos-shards", "macos-lib-union",
     "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
@@ -227,7 +227,7 @@ def macos_train_errors(jobs: dict) -> list[str]:
     errors = [f"MACOS_TRAIN names a job ci.yml lacks: {j}" for j in sorted(MACOS_TRAIN - set(jobs))]
     if errors:
         return errors
-    shards, check = jobs["macos-shards"], jobs["macos-check"]
+    shards, check, union = jobs["macos-shards"], jobs["macos-check"], jobs["macos-lib-union"]
     # On a same-repo train into the release line the aggregate skips: merge-train judges its shards itself
     # from the base rules (rollups_ok). Its shards still run there.
     judged_by_merge_train = {"code train", "docs-only train", "scope failed on a train"}
@@ -236,7 +236,9 @@ def macos_train_errors(jobs: dict) -> list[str]:
         after = dict(c, needs=dict(c["needs"], **{"macos-shards": {
             "result": "success" if shards_ran else "skipped", "outputs": {}}}))
         check_want = want and label not in judged_by_merge_train
-        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want)):
+        # The lib union runs wherever its shards do, a merge train included: it has no train skip.
+        for job, ran, w in (("macos-shards", shards_ran, want), ("macos-check", runs(check, after), check_want),
+                            ("macos-lib-union", runs(union, after), want)):
             if ran != w:
                 errors.append(f"{job}: {label} {'skips' if w else 'runs'}")
     # Where the aggregate runs (a train into main stands in for every non-release-line train), it runs
@@ -247,6 +249,8 @@ def macos_train_errors(jobs: dict) -> list[str]:
         c = dict(c, needs=dict(c["needs"], **{"macos-shards": {"result": result, "outputs": {}}}))
         if not runs(check, c):
             errors.append(f"macos-check: a train with a {result} shard skips")
+        if not runs(union, c):
+            errors.append(f"macos-lib-union: a train with a {result} shard skips")
     return errors
 
 
