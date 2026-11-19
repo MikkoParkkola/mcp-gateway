@@ -143,7 +143,7 @@ pub(crate) fn decide(snapshot: &Snapshot) -> Result<(), Skip> {
     }) {
         return Err(Skip::Proxy);
     }
-    if snapshot.posture == SecurityPosture::Hardened {
+    if mutant!("MW", false, snapshot.posture == SecurityPosture::Hardened) {
         return Err(Skip::Hardened);
     }
     Ok(())
