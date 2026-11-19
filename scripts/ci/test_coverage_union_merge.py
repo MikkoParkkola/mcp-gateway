@@ -102,9 +102,11 @@ class UnionRows(unittest.TestCase):
                   "unittests src/lib.rs\tforeign_shard_test\tok\n")
         # The union step runs test_parts.py with the gates' pinned interpreter (tree-sitter) and everything else with
         # python3, as this test runs (it needs yaml, which that environment lacks). A wrapper, not a symlink: a venv's
-        # python finds its packages only when called by its own path. Without the venv (a dev machine), this
-        # interpreter stands in and must have tree-sitter itself.
-        gate_python = ROOT / "scripts/gate-env/.venv/bin/python"
+        # python finds its packages only when called by its own path. The interpreter is found as the gates find
+        # it: $GATE_PY where pre-push binds it (its CI-check replays run in scratch clones with no venv of their
+        # own), else this checkout's synced venv (CI). Without either (a dev machine), this interpreter stands in
+        # and must have tree-sitter itself.
+        gate_python = Path(os.environ.get("GATE_PY") or ROOT / "scripts/gate-env/.venv/bin/python")
         python = root / "scripts/gate-env/.venv/bin/python"
         python.parent.mkdir(parents=True)
         target = gate_python if gate_python.exists() else Path(sys.executable)
