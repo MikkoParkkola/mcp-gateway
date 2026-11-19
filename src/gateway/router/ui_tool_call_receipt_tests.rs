@@ -70,12 +70,13 @@ async fn get_json(fx: &Fx, path: &str) -> (StatusCode, Value) {
 }
 
 fn activity_query(receipt: &str) -> String {
+    use std::fmt::Write as _;
     let mut q = String::new();
     for byte in receipt.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
             q.push(byte as char);
         } else {
-            q.push_str(&format!("%{byte:02X}"));
+            let _ = write!(q, "%{byte:02X}");
         }
     }
     format!("{}?q={q}", crate::gateway::routes::UI_ACTIVITY)
@@ -547,7 +548,7 @@ async fn b7_an_ordinary_mcp_refusal_is_unchanged() {
         !serialized.contains("receipt"),
         "receipt in the response body: {serialized}"
     );
-    let named: Vec<&str> = headers.keys().map(|name| name.as_str()).collect();
+    let named: Vec<&str> = headers.keys().map(axum::http::HeaderName::as_str).collect();
     assert!(
         named.iter().all(|name| !name.contains("receipt")),
         "a header names receipt: {named:?}"
@@ -571,8 +572,13 @@ async fn b7_an_ordinary_mcp_refusal_is_unchanged() {
     let (listed_status, listed) = get_json(&fx, crate::gateway::routes::UI_ACTIVITY).await;
     assert_eq!(listed_status, StatusCode::OK, "{listed}");
     let row = one_blocked_read(&listed);
-    // Today's record, field for field. Per-record values (id, counter, hashes,
-    // timestamp, trace) are checked for their shape only.
+    assert_todays_blocked_read_row(row);
+}
+
+/// Today's blocked `read` record on `/ui/api/activity`, field for field. Per-record
+/// values (id, counter, hashes, timestamp, trace) are checked for their shape only.
+#[cfg(feature = "firewall")]
+fn assert_todays_blocked_read_row(row: &Value) {
     assert_eq!(
         keys_of(row),
         [
