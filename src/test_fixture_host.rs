@@ -97,6 +97,12 @@ pub(crate) struct TestPki {
 
 /// A fresh [`TestPki`] for `host`, the CA named `ca_name`.
 pub(crate) fn test_pki(host: &str, ca_name: &str) -> TestPki {
+    test_pki_names(&[host], ca_name)
+}
+
+/// A fresh [`TestPki`] whose leaf names every one of `hosts` (the first is
+/// its common name), the CA named `ca_name`.
+pub(crate) fn test_pki_names(hosts: &[&str], ca_name: &str) -> TestPki {
     use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 
     let ca_key = KeyPair::generate().expect("fixture CA key");
@@ -116,10 +122,11 @@ pub(crate) fn test_pki(host: &str, ca_name: &str) -> TestPki {
 
     let leaf_key = KeyPair::generate().expect("fixture leaf key");
     let mut leaf_params =
-        CertificateParams::new(vec![host.to_string()]).expect("fixture leaf params");
+        CertificateParams::new(hosts.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>())
+            .expect("fixture leaf params");
     leaf_params
         .distinguished_name
-        .push(rcgen::DnType::CommonName, host);
+        .push(rcgen::DnType::CommonName, *hosts.first().expect("a host"));
     let leaf = leaf_params
         .signed_by(&leaf_key, &issuer)
         .expect("the fixture CA signs the leaf");
