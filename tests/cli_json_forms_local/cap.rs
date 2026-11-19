@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! JSON forms of the cap commands (J7-J11, F), a part of cli_json_forms_local split out under the file-size
+//! JSON forms of the cap commands (J7-J11, F), a part of `cli_json_forms_local` split out under the file-size
 //! ceiling: the same binary, helpers and literal expectations.
 
 use super::{Path, Value, document, json, run};
