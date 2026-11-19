@@ -966,7 +966,7 @@ fn sig_path() -> Signature {
 
 fn sig_prefix() -> Signature {
     Signature {
-        short: Some('p'),
+        short: None,
         takes_value: true,
         value_name: Some("PREFIX".into()),
         repeated: false,
@@ -1207,6 +1207,45 @@ fn tls_output_keeps_out_as_a_hidden_alias() {
             "{leaf:?}: {help}"
         );
     }
+}
+
+/// N1 ruling (2026-11-19): `--prefix` keeps `-p` as a hidden short alias, so `-p` names `--port` alone in help. On
+/// each import command `-p` still sets the prefix, and the long help shows `--prefix` without `-p`.
+#[test]
+fn prefix_keeps_p_as_a_hidden_alias() {
+    let leaves: [(&str, &[&str]); 2] = [
+        ("import", &["./openapi.yaml"]),
+        ("import-url", &["https://api.example.com"]),
+    ];
+    let mut checked = 0;
+    for (leaf, positional) in leaves {
+        // import-url exists only with the discovery feature.
+        let Some(node) = built()
+            .find_subcommand("cap")
+            .and_then(|c| c.find_subcommand(leaf))
+            .cloned()
+        else {
+            continue;
+        };
+        let mut argv = vec!["mcp-gateway", "cap", leaf];
+        argv.extend_from_slice(positional);
+        argv.extend_from_slice(&["-p", "stripe"]);
+        let matches = built()
+            .try_get_matches_from(&argv)
+            .unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        let (_, cap) = matches.subcommand().expect("cap");
+        let (_, at) = cap.subcommand().expect("leaf");
+        assert_eq!(
+            at.get_one::<String>("prefix").map(String::as_str),
+            Some("stripe"),
+            "{argv:?}"
+        );
+        let help = node.clone().render_long_help().to_string();
+        assert!(help.contains("--prefix"), "{leaf}: {help}");
+        assert!(!help.contains("-p, --prefix"), "{leaf}: {help}");
+        checked += 1;
+    }
+    assert!(checked >= 1, "cap import is always built");
 }
 
 // ── M1: the man page renderer (CLIUX.20) ──────────────────────────────────────

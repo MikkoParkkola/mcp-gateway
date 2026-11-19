@@ -76,7 +76,7 @@ pub enum CapCommand {
         output: PathBuf,
 
         /// String prepended to every generated capability name (e.g. "stripe")
-        #[arg(short, long)]
+        #[arg(long, short_alias = 'p')]
         prefix: Option<String>,
 
         /// Default bearer-token credential reference for all generated capabilities (e.g. `env:API_TOKEN`)
@@ -214,7 +214,7 @@ pub enum CapCommand {
         url: String,
 
         /// String prepended to every generated capability name (e.g. "stripe")
-        #[arg(short, long)]
+        #[arg(long, short_alias = 'p')]
         prefix: Option<String>,
 
         /// Directory to write the generated capability files into
