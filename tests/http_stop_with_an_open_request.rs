@@ -34,6 +34,8 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 const STOP_TOTAL: Duration = Duration::from_secs(19);
 /// The supervisor's grace: after it, the row sends SIGKILL, as docker does.
 const GRACE: Duration = Duration::from_secs(20);
+/// The shutdown saves the stop must write, in the gateway's data dir.
+const SAVE_FILES: [&str; 2] = ["usage.json", "transitions.json"];
 
 /// A stdio MCP server in Python that never answers `tools/call`: it marks the
 /// call started and goes on reading. Its stdin closing is the gateway's
@@ -137,6 +139,7 @@ async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
         if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
             && client
                 .get(format!("http://127.0.0.1:{port}/health"))
+                .timeout(READY_BOUND)
                 .send()
                 .await
                 .is_ok()
@@ -206,7 +209,9 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
 
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
-    let session = open_session(&client, &base, root).await;
+    let session = tokio::time::timeout(READY_BOUND, open_session(&client, &base, root))
+        .await
+        .unwrap_or_else(|_| panic!("the session setup hung\n{}", logs(root)));
 
     // The request the stop finds open: its backend never answers.
     let call = json!({
@@ -216,7 +221,7 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
             "arguments": { "server": BACKEND, "tool": TOOL, "arguments": {} }
         }
     });
-    let _open = tokio::spawn({
+    let open = tokio::spawn({
         let client = client.clone();
         let base = base.clone();
         async move { post(&client, &base, Some(&session), &call).await }
@@ -231,6 +236,19 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    // Before the signal: the request is still open, and neither save file
+    // exists yet, so the ones found after the stop were written by it.
+    assert!(
+        !open.is_finished(),
+        "the request ended before the stop\n{}",
+        logs(root)
+    );
+    let state = root.join("gateway-state");
+    for file in SAVE_FILES {
+        assert!(!state.join(file).exists(), "{file} existed before the stop");
+    }
+    let log_before = logs(root).len();
 
     // The supervisor: SIGTERM, then SIGKILL once the grace is over. The
     // gateway passes only if it exits by itself first.
@@ -251,27 +269,34 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
          (total {STOP_TOTAL:?}): {exited:?}\n{}",
         logs(root)
     );
+    assert_teardown(root, log_before);
+}
+
+/// What the stop must have done by the time the gateway has exited.
+fn assert_teardown(root: &Path, log_before: usize) {
+    // The backend's mark: the backend stage closes its stdin and waits for it
+    // to exit before the gateway goes on, so the mark is there now. A gateway
+    // that skipped the stage would close the pipe only by exiting, after this.
+    assert!(
+        root.join("stopped").exists(),
+        "the backend's stdin was not closed by the backend stage before the gateway exited\n{}",
+        logs(root)
+    );
+    // Only what the stop logged: lines from before the signal do not count.
     let log_text = logs(root);
+    let after = &log_text[log_before..];
     for line in [
         "Saved search ranking usage data",
         "Saved transition tracking data",
         "Shutting down backends",
     ] {
-        assert!(
-            log_text.contains(line),
-            "the stop skipped {line:?}\n{log_text}"
-        );
+        assert!(after.contains(line), "the stop skipped {line:?}\n{after}");
     }
-    // The backend writes its mark once its stdin closes, which can land just
-    // after the gateway has exited: wait for it, under the hang guard.
-    let stopped = root.join("stopped");
-    let stopped_by = tokio::time::Instant::now() + mcp_gateway::gateway::test_helpers::HANG_BOUND;
-    while !stopped.exists() {
-        assert!(
-            tokio::time::Instant::now() < stopped_by,
-            "the backend's stdin never closed: the backend stage did not reach it\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    let state = root.join("gateway-state");
+    for file in SAVE_FILES {
+        let text = std::fs::read_to_string(state.join(file))
+            .unwrap_or_else(|e| panic!("the stop did not write {file}: {e}\n{after}"));
+        serde_json::from_str::<Value>(&text)
+            .unwrap_or_else(|e| panic!("{file} is not whole JSON: {e}: {text:?}"));
     }
 }

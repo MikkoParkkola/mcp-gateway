@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! SEP-2243 outbound header mirroring: the nine rows of the 3.5.x-line fix
-//! (pull request #5052), kept as a regression proof on 4.0. Adapted only where
-//! 4.0's API differs: (A1) `streamable_http` is an `Option<bool>`; (A2) the
-//! backend config's newer fields come from `BackendConfig::default()`; (A3) this
-//! header. Every assertion is the original's.
+//! (pull request #5052, its commit 728120f610), kept as a regression proof on
+//! 4.0. Adapted only where 4.0's API differs: (A1) `streamable_http` is an
+//! `Option<bool>`; (A2) the backend config's newer fields come from
+//! `BackendConfig::default()`; (A3) this header. One adaptation makes every row
+//! stricter: (A4) a header name sent more than once fails the row, so a
+//! caller's value appended beside the mirrored one cannot hide. Every assertion
+//! is otherwise the original's.
 //!
 //! A tool argument whose `inputSchema` property carries `x-mcp-header` must be
 //! mirrored onto an `Mcp-Param-{name}` header of the outbound `tools/call`.
@@ -133,12 +136,23 @@ fn backend_for(url: &str) -> Backend {
     )
 }
 
+/// The value of header `name` on the captured request. A name sent more than
+/// once fails the row: a caller-supplied value appended beside the mirrored
+/// one would otherwise hide behind the first.
 fn captured_header(captured: &Arc<Mutex<Captured>>, name: &str) -> Option<String> {
     let slot = captured.lock().expect("capture mutex poisoned");
     let headers = slot.headers.as_ref().expect("no request reached the mock");
-    headers
-        .get(name)
+    let values: Vec<String> = headers
+        .get_all(name)
+        .iter()
         .map(|value| value.to_str().expect("header not ASCII").to_string())
+        .collect();
+    assert!(
+        values.len() <= 1,
+        "{name} was sent {} times: {values:?}",
+        values.len()
+    );
+    values.into_iter().next()
 }
 
 #[tokio::test]
