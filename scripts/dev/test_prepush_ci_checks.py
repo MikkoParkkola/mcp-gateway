@@ -92,15 +92,19 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/coverage_shard_merge.sh", ("${expected[@]}",)): "artifact: unpacks the parts' coverage bundles into target/",
     ("scripts/ci/coverage_shards.py", ("canary", "linux.lcov")): "artifact: reads the merged coverage report",
     ("scripts/ci/coverage_shards.py", ("check", "$COVERAGE_PARTS", "metadata.json")): "cargo: reads cargo metadata output",
-    ("scripts/ci/coverage_shards.py", ("objects", "$log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_shards.py", ("objects", "report-lcov.log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_union.py", ("report-lcov.log", "linux-single.lcov", "linux.lcov")): "artifact: re-runs the grade's logged llvm-cov export per lib part and joins the exports",
     ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
-    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "$PART"),
-     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1', "tee run.log")): (
-        "cargo: runs an instrumented cargo test part"),
+    ("scripts/ci/coverage_shards.py", ("lists", "<TMP>/lib-lists", "shards")): (
+        "artifact: reads the downloaded coverage lib parts' test lists"),
+    ("scripts/ci/lib-parts.sh", ("cov", "$COVERAGE_PARTS", "$PART")): (
+        "cargo: builds and runs one instrumented coverage part under the memory gate"),
+    ("scripts/ci/lib_union.py", ("<TMP>/lib-lists", "<TMP>/expected")): (
+        "artifact: compares the coverage lib parts' lists with the source's sets"),
     ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "sdk"),
      ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1', "tee run.log")): (
         "cargo: runs the instrumented SDK journey"),
-    ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
+    ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/linux.lcov",)): "artifact: reads a CI coverage artifact",
     ("scripts/dev/test_run_prepush_ci_checks.py", ()): (
         "budget: tests the runner itself; 22.5 s would put the CI-checks stage at about 114 s of its "
         "120 s budget on every push; CI runs it on every PR"
