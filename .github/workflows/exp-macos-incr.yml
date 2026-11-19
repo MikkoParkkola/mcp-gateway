@@ -1,0 +1,51 @@
+name: exp-macos-incr
+# A measurement, never merged: the macOS lib test binary build with rustc's incremental session restored from a cache (the
+# experiment of #4858 under a guard that never takes a macOS slot from a train). Run 1 is cold; run 2 follows a one-line
+# source change and restores run 1's cache. Compare "Build the lib test binary once" minutes and the hardware line.
+on:
+  push:
+    branches: [exp/velocity-macos-incr]
+concurrency:
+  group: exp-macos-incr
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+jobs:
+  build:
+    name: Build the lib test binary, incremental cache
+    runs-on: macos-latest
+    timeout-minutes: 130
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: Restore the incremental build cache
+        id: incr
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: exp-macos-incr-${{ github.run_id }}
+          restore-keys: exp-macos-incr-
+      - name: What was restored and the hardware this job got
+        run: |
+          echo "cache-hit=${{ steps.incr.outputs.cache-hit }} matched=${{ steps.incr.outputs.cache-matched-key }}"
+          du -sh target ~/.cargo/registry 2>/dev/null || echo "no target directory yet"
+          echo "hardware: $(uname -m), $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo n/a)"
+      - name: Build the lib test binary once
+        timeout-minutes: 120
+        run: |
+          start=$(date +%s)
+          python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
+          echo "BUILD_MINUTES=$(( ($(date +%s) - start) / 60 ))" | tee -a "$GITHUB_STEP_SUMMARY"
