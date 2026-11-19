@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -246,9 +247,11 @@ def base_problem(base: str, rows: dict[str, int], root: Path) -> str | None:
     if subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
                       capture_output=True).returncode != 0:
         return f"--base {base} is not a commit in this repository; nothing was compared"
+    if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}:{TSV}"], capture_output=True).returncode:
+        return None  # the commit exists and holds no list yet: nothing to compare against
     r = subprocess.run(["git", "-C", str(root), "show", f"{base}:{TSV}"], capture_output=True, text=True)
     if r.returncode != 0:
-        return None  # the commit exists but has no list yet: nothing to compare against
+        return f"{TSV} at {base} exists but could not be read; nothing was compared"
     was = sum(read_tsv(r.stdout).values())
     if sum(rows.values()) > was:
         return f"{TSV}: total {sum(rows.values())} is above {base}'s {was}: a ceiling cannot be raised, mark the new limits instead"
@@ -340,6 +343,19 @@ def self_test() -> int:
            ("a row for a gone file fails", any("gone" in x for x in ceilings_problems({}, {"old.rs": 2}, {"old.rs"}))),
            ("a TSV round trip keeps the rows", read_tsv(HEADER + "a.rs\t2\nb.rs\t1\n") == {"a.rs": 2, "b.rs": 1}),
            ("a --base that is not a commit is refused, not skipped", base_problem("<MERGE_BASE>", {}, ROOT) is not None)]
+    # The ratchet itself, against a throwaway repository whose base commit holds a list totalling 3.
+    with tempfile.TemporaryDirectory() as d:
+        git = ["git", "-C", d, "-c", "user.email=self-test@example.invalid", "-c", "user.name=self-test"]
+        subprocess.run(git + ["init", "-q"], check=True)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "before the list"], check=True)
+        before = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        (Path(d) / TSV).parent.mkdir(parents=True, exist_ok=True)
+        (Path(d) / TSV).write_text(HEADER + "a.rs\t2\nb.rs\t1\n")
+        subprocess.run(git + ["add", TSV], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "the list"], check=True)
+        exp += [("a total raised above the base fails", base_problem("HEAD", {"a.rs": 3, "b.rs": 1}, Path(d)) is not None),
+                ("a total equal to the base passes", base_problem("HEAD", {"a.rs": 2, "b.rs": 1}, Path(d)) is None),
+                ("a base from before the list compares nothing", base_problem(before, {"a.rs": 9}, Path(d)) is None)]
     for label, good in exp:
         print(("ok   " if good else "FAIL ") + label)
         bad += not good
