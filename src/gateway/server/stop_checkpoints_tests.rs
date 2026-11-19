@@ -168,7 +168,8 @@ async fn l_stall_last_the_last_pass_ends_at_its_deadline() {
     };
     let (quick, _, quick_last) = counting("quick");
     let checkpoints = Checkpoints::new(vec![stuck, quick]);
-    let (t0, given) = (Instant::now(), Duration::from_secs(2));
+    let t0 = Instant::now();
+    let given = Duration::from_secs(2);
     let ended = tokio::time::timeout(Duration::from_secs(60), checkpoints.finish(t0 + given)).await;
     assert!(ended.is_ok(), "the last pass outlived its deadline");
     assert_eq!(

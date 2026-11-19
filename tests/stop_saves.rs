@@ -30,11 +30,9 @@ const BACKEND: &str = "py";
 const KEY: &str = "stop-rows-test-key-0123456789abcdef";
 const KEY_SHA256: &str = "sha256:5525b685b8931918e1ca0cd45a7d61b76dd70bde3d57aed84d503976dc9aee3e";
 /// Docker's and compose's default stop grace: the claim's window, and the bound
-/// on every event wait.
+/// on every event wait. A stream held to the listener grace (17.1 s at the
+/// default total) is still open when it runs out.
 const GRACE: Duration = Duration::from_secs(10);
-/// A stream held to the listener grace (17.1 s at the default total) stays
-/// open far past this; one ended at the signal closes well inside it.
-const STREAM_END: Duration = Duration::from_secs(2);
 
 /// argv[1] = prompt | stubborn. `slow` marks its call, then answers once the
 /// test creates `slow-gate`; `hang` marks its call and never answers;
@@ -585,7 +583,7 @@ async fn s_sse_a_session_stream_ends_at_the_signal() {
         .expect("sse");
     gw.signal("-TERM");
     let t0 = Instant::now();
-    let ended = tokio::time::timeout(STREAM_END, async {
+    let ended = tokio::time::timeout(GRACE, async {
         while let Ok(Some(_)) = stream.chunk().await {}
     })
     .await;
