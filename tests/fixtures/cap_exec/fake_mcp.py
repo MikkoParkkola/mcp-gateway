@@ -98,3 +98,10 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "unknown tool"}})
     else:
         send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "no such method"}})
+
+# stdin ended: the graceful MCP stop closed it. A row that names a mark file
+# learns the child was stopped this way, not killed outright.
+mark = os.environ.get("CAP_EXEC_TEST_EOF_MARK")
+if mark:
+    with open(mark, "w") as out:
+        out.write("eof\n")
