@@ -107,18 +107,32 @@ const LAUNCHERS: [&str; 8] = [
 /// Whether a launch line passes `DO_NOT_TRACK=1` through an env flag (`-e`,
 /// `--env`, or a Helm `--set`/`--set-string` value), not just mentions it.
 fn launch_sets_dnt(launch: &str) -> bool {
-    let words: Vec<&str> = launch.split_whitespace().collect();
+    // A quoted word is the same word to the shell (`-e "DO_NOT_TRACK=1"`).
+    let words: Vec<&str> = launch
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+        .collect();
     let helm_value = |v: &str| v.ends_with(".DO_NOT_TRACK=1") || v == "DO_NOT_TRACK=1";
-    words.windows(2).any(|w| match w[0] {
-        "-e" | "--env" => w[1] == "DO_NOT_TRACK=1",
-        "--set" | "--set-string" => helm_value(w[1]),
-        _ => false,
-    }) || words.iter().any(|w| {
-        *w == "--env=DO_NOT_TRACK=1"
-            || ["--set=", "--set-string="]
-                .iter()
-                .any(|f| w.strip_prefix(f).is_some_and(|v| helm_value(v)))
-    })
+    // The chart's container environment is a list (`extraEnv`): its name and
+    // its string value set at the same index.
+    let helm_list = (0..8).any(|i| {
+        let set =
+            |flag: &str, value: String| words.windows(2).any(|w| w[0] == flag && w[1] == value);
+        set("--set", format!("extraEnv[{i}].name=DO_NOT_TRACK"))
+            && set("--set-string", format!("extraEnv[{i}].value=1"))
+    });
+    helm_list
+        || words.windows(2).any(|w| match w[0] {
+            "-e" | "--env" => w[1] == "DO_NOT_TRACK=1",
+            "--set" | "--set-string" => helm_value(w[1]),
+            _ => false,
+        })
+        || words.iter().any(|w| {
+            *w == "--env=DO_NOT_TRACK=1"
+                || ["--set=", "--set-string="]
+                    .iter()
+                    .any(|f| w.strip_prefix(f).is_some_and(|v| helm_value(v)))
+        })
 }
 
 /// Scripts whose gateway image arrives as their first argument (docker.yml
@@ -448,6 +462,32 @@ fn every_image_launch_sets_dnt() {
     assert!(
         gateway_launches("planted.sh", named).is_empty(),
         "a secret named mcp-gateway-* counted as a launch"
+    );
+    // The chart's list form and a quoted flag value (implementation): kept
+    // when name and value share an index, caught otherwise.
+    let chart = "helm upgrade --install gw ./deploy/helm/mcp-gateway";
+    for (args, caught) in [
+        (
+            "--set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[0].value=1'",
+            false,
+        ),
+        (
+            "--set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[1].value=1'",
+            true,
+        ),
+        ("--set 'extraEnv[0].name=DO_NOT_TRACK'", true),
+    ] {
+        let launch = format!("{chart} {args}\n");
+        assert_eq!(
+            launches_without_dnt("planted.sh", &launch).len(),
+            usize::from(caught),
+            "{args}"
+        );
+    }
+    let quoted = "docker run -e \"DO_NOT_TRACK=1\" ghcr.io/mikkoparkkola/mcp-gateway:test\n";
+    assert!(
+        launches_without_dnt("planted.sh", quoted).is_empty(),
+        "a quoted setting was refused"
     );
     // The judgement last, so a red run proves every control above first.
     assert!(

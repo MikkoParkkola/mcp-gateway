@@ -88,6 +88,7 @@ fi
 echo "== install $IMAGE with probes on =="
 if ! "$HELM" upgrade --install "$RELEASE" "$CHART" \
     --namespace "$NAMESPACE" \
+    --set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[0].value=1' \
     --set image.registry="$REGISTRY" \
     --set image.repository="$REPOSITORY" \
     --set image.tag="$TAG" \
@@ -98,6 +99,11 @@ if ! "$HELM" upgrade --install "$RELEASE" "$CHART" \
   diagnose
   exit 1
 fi
+
+echo "== the rendered pod carries DO_NOT_TRACK=1 (our runs never send the heartbeat) =="
+dnt="$("$KUBECTL" get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
+  -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="DO_NOT_TRACK")].value}')"
+[ "$dnt" = "1" ] || { echo "FAIL: the pod's DO_NOT_TRACK is '$dnt', not 1" >&2; exit 1; }
 
 echo "== /livez answers 200 through the Service =="
 svc="$("$KUBECTL" get svc -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE" \
@@ -217,6 +223,7 @@ DIGEST="sha256:$(printf %s "$KEY0" | sha256sum | awk '{print $1}')"
 echo "== install api_keys mode with persistence =="
 if ! "$HELM" upgrade --install "$RELEASE" "$CHART" \
     --namespace "$NAMESPACE" \
+    --set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[0].value=1' \
     --set image.registry="$REGISTRY" \
     --set image.repository="$REPOSITORY" \
     --set image.tag="$TAG" \
