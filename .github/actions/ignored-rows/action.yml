@@ -24,7 +24,8 @@ runs:
         ROWS_BINARY: ${{ inputs.binary }}
         ROWS_FILTER: ${{ inputs.filter }}
       run: |
-        set -uo pipefail
+        # The runner starts composite bash with -e; this step reads exit codes itself.
+        set +e -uo pipefail
         read -r -a bin <<< "$ROWS_BINARY"
         selected="$("${bin[@]}" --list --ignored "$ROWS_FILTER" | grep -c ': test$')"
         echo "rows selected by ${ROWS_FILTER}: ${selected:-0}"

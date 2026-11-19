@@ -1423,7 +1423,8 @@ jobs:
         run: |
           set -euo pipefail
           # The parts' own lists say which part holds them, so no part number is pinned here.
-          holder="$(grep -l -F 'config_persistence_access_tests::root::' "$RUNNER_TEMP"/lib-bin/*/p*/list.txt)"
+          holder="$(grep -l -F 'config_persistence_access_tests::root::' "$RUNNER_TEMP"/lib-bin/*/p*/list.txt)" \
+            || { echo "::error::no lib test part's list names a root row"; exit 1; }
           part_dir="$(dirname "$holder")"
           sudo mkdir -p -m 0755 /opt/writer-rows
           sudo cp "$part_dir/lib-tests-$(basename "$part_dir")" /opt/writer-rows/lib-tests
