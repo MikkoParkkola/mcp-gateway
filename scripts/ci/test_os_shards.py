@@ -36,7 +36,13 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "windows": ("windows-shards", "windows-check", "Windows check", "Windows shard "),
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
-EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build", "linux-lib-union"]}
+EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build", "linux-lib-union"],
+               "macos-check": ["macos-lib-union"]}
+# Union jobs: they run when a build failed too (`!cancelled()` and the shards' guard, no train skip), so a failed
+# part turns them red, never skipped.
+UNION_JOBS = ("linux-lib-union", "macos-lib-union")
+# Part-building legs that run inside another leg's job, not as a matrix leg: int builds and runs part 5.
+INNER_LEGS = {"macos": {"int-lib": "int"}}
 # An OS whose lib legs run from one shared lib test binary: (their job, the build job). The legs are the runner's
 # SHARED_BUILD; they keep the shard job's name, so the check names stay; the build job's own wiring is
 # check_shared_lib.py's.
@@ -76,8 +82,8 @@ COVERS = {"linux": {"lib", "bins", "tests", "doc"}, "macos": {"lib", "bins", "te
 
 
 def legs_of(st, os_kind: str) -> list[str]:
-    """The shards that are matrix legs: all but those run from another shard's binary (PREBUILT)."""
-    return sorted(set(st.SHARDS[os_kind]) - set(getattr(st, "PREBUILT", {}).get(os_kind, {})))
+    """The shards that are matrix legs: all but a part leg that runs inside another leg's job (INNER_LEGS)."""
+    return sorted(set(st.SHARDS[os_kind]) - set(INNER_LEGS.get(os_kind, {})))
 
 
 def runner():
@@ -125,7 +131,9 @@ def table_problems(st) -> list[str]:
                     out.append(f"{os_kind} {name} {step}: floor must be positive")
                 if "--lib" in args:
                     kinds.add("lib")
-                    lib_filters.append(tuple(test_args))
+                    # Part legs split the lib by part, not by filter: test_macos_parts.py holds their partition.
+                    if step != "parts":
+                        lib_filters.append(tuple(test_args))
                 if "--doc" in args:
                     kinds.add("doc")
                 if "--bins" in args:
@@ -136,7 +144,7 @@ def table_problems(st) -> list[str]:
                     globs.append(args[args.index("--test") + 1])
                 if "--skip" in args or any(a in st.SKIPS[os_kind] for a in test_args if a != "--skip"):
                     out.append(f"{os_kind} {name} {step}: an OS skip belongs in SKIPS, not the shard")
-        if not lib_cascade(lib_filters):
+        if lib_filters and not lib_cascade(lib_filters):
             out.append(f"{os_kind}: lib shards {lib_filters} are not the whole lib or a cascade of filters and their --skips")
         if sorted(globs) not in ([st.GLOB_ALL], sorted([st.GLOB_A, st.GLOB_B])):
             out.append(f"{os_kind}: integration globs {globs} are not `*` or a class and its negation")
@@ -195,16 +203,14 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         # Linux shards build the library test binary through the memory log (check_swap_jobs.py enforces it there).
         memlog = "scripts/ci/with-memory-log.sh " if os_kind == "linux" else ""
         call = f"{memlog}{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
-        # An OS with PREBUILT shards also exports the lib binary first and runs each prebuilt
-        # shard from it after the suite.
-        prebuilt = sorted(getattr(st, "PREBUILT", {}).get(os_kind, {}))
-        # Each prebuilt shard: wait for the binary, run from it, or build it here when it is not coming.
-        want = ([f'{py} scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"'] if prebuilt else []) + [call]
-        for leg in prebuilt:
-            producer = st.PREBUILT[os_kind][leg]
-            want += [f'{py} scripts/ci/shard_tests.py wait-lib macos-lib-tests "{prefix}{producer}"',
-                     f'{py} scripts/ci/shard_tests.py run-prebuilt {os_kind} {leg} "$RUNNER_TEMP/lib-bin/lib-tests"',
-                     f"{py} scripts/ci/shard_tests.py run {os_kind} {leg}"]
+        want = [call]
+        # An OS whose lib legs build the parts: each matrix part leg builds and runs its parts before the suite
+        # call, and an inner part leg (int's part 5) after it, in the same job.
+        part_legs = list(getattr(st, "PARTS", {}).get(os_kind, {}))
+        if part_legs:
+            built = lambda leg: f'{py} scripts/ci/shard_tests.py run-prebuilt-parts {os_kind} {leg} --build "$RUNNER_TEMP/parts"'
+            inner = INNER_LEGS.get(os_kind, {})
+            want = [built(l) for l in part_legs if l not in inner] + [call] + [built(l) for l in part_legs if l in inner]
         calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
         if calls != want:
             out.append(f"{shard_key}: runner calls {calls}, want exactly {want!r}")
@@ -229,7 +235,7 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " && " + TRAIN_SKIP + " }}").replace(" ", ""):
             out.append(f"{agg_key}: if must be !cancelled(), the shards' own guard and the merge-train skip, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
-            if extra in (shared_key, "linux-lib-union"):
+            if extra == shared_key or extra in UNION_JOBS:
                 # It runs when the build failed too, so a failed part turns it red, never skipped.
                 want_if = "${{ !cancelled() && " + guard + " }}"
                 if str(jobs.get(extra, {}).get("if", "")).replace(" ", "") != want_if.replace(" ", ""):
@@ -345,11 +351,15 @@ def self_test(jobs: dict, st) -> None:
         check = labelled_guard if "macos-check" in clause_on else train_guard
         j["macos-shards"]["if"] = "${{ " + shards + " }}"
         j["macos-check"]["if"] = "${{ !cancelled() && " + check + " && " + TRAIN_SKIP + " }}"
+        if "macos-lib-union" in j:  # the union job follows the shards' guard
+            j["macos-lib-union"]["if"] = "${{ !cancelled() && " + shards + " }}"
 
     def train_only(j):
         j["macos-shards"]["strategy"]["matrix"]["shard"] = legs_of(st, "macos")
         j["macos-shards"]["if"] = "${{ " + train_guard + " }}"
         j["macos-check"]["if"] = "${{ !cancelled() && " + train_guard + " && " + TRAIN_SKIP + " }}"
+        if "macos-lib-union" in j:
+            j["macos-lib-union"]["if"] = "${{ !cancelled() && " + train_guard + " }}"
 
     for name, form in (("train-only", train_only), ("labelled", labelled_form)):
         j = copy.deepcopy(jobs)
