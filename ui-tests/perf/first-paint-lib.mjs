@@ -8,10 +8,12 @@
 
 export const BUDGET_MS = 1000;
 export const WARN_MS = 900;
-export const REGRESSION_MS = 250;
+export const MARGIN_MS = 250;
+export const MARGIN_CEILING_MS = 290;
 export const DRIFT_LIMIT = 0.2;
 export const RUNS = 20;
-export const SIGNOFF_RISE_MS = 100;
+export const SIDE_RUNS = 5;
+export const NIGHTLY_MAX_AGE_MS = 26 * 3600 * 1000;
 
 /** Median (mean of the two middle values for an even count), nearest-rank p25 and p75, and the spread. */
 export function stats(values) {
@@ -25,10 +27,10 @@ export function stats(values) {
 }
 
 /** The gate's two failure rules, and the warning. `baseline` null means the pass has no regression rule (desktop). */
-export function judge({ median, baseline }) {
+export function judge({ median, baseline, margin }) {
   const reasons = [];
   if (median >= BUDGET_MS) reasons.push('budget');
-  if (baseline != null && median >= baseline + REGRESSION_MS) reasons.push('regression');
+  if (baseline != null && median >= baseline + margin) reasons.push('regression');
   return { verdict: reasons.length ? 'fail' : 'pass', warn: median >= WARN_MS, reasons };
 }
 
@@ -73,12 +75,12 @@ export function checkRun(report, expected) {
   return { ok: true, fcp, index };
 }
 
-/** A pass needs exactly RUNS valid reports. */
-export function passComplete(reports, expected) {
+/** A pass needs exactly its table count of valid reports (RUNS for the gates and the control, SIDE_RUNS for the rest). */
+export function passComplete(reports, expected, count) {
   const checked = reports.map((r) => checkRun(r, expected));
   const firstBad = checked.find((c) => !c.ok);
   if (firstBad) return { ok: false, problem: firstBad.problem };
-  if (checked.length !== RUNS) return { ok: false, problem: `${checked.length} valid reports, expected ${RUNS}` };
+  if (checked.length !== count) return { ok: false, problem: `${checked.length} valid reports, expected ${count}` };
   return { ok: true, fcps: checked.map((c) => c.fcp), indices: checked.map((c) => c.index) };
 }
 
@@ -110,15 +112,16 @@ export function busy(samples, thresholds) {
 }
 
 /**
- * The planted slowdown must show (the control at least REGRESSION_MS over the same round's gate), and,
- * when the baseline is the current page (calibration and READY), must fail the gate's rules.
+ * The planted slowdown must show (the control at least the margin over the same round's gate), and,
+ * in proof mode (calibration and this ticket's READY, when the baseline is the current page), must fail the gate's rules.
+ * Every later run is in gate mode, so an improved page never turns the control into a permanent fault.
  */
-export function controlCheck({ mode, controlMedian, gateMedian, baseline }) {
+export function controlCheck({ mode, controlMedian, gateMedian, baseline, margin }) {
   const over = controlMedian - gateMedian;
-  if (over < REGRESSION_MS) {
-    return { ok: false, problem: `control ${Math.round(over * 10) / 10} ms over the gate, expected ${REGRESSION_MS} or more` };
+  if (over < margin) {
+    return { ok: false, problem: `control ${Math.round(over * 10) / 10} ms over the gate, expected ${margin} or more` };
   }
-  if (mode !== 'nightly' && judge({ median: controlMedian, baseline }).verdict !== 'fail') {
+  if (mode === 'proof' && judge({ median: controlMedian, baseline, margin }).verdict !== 'fail') {
     return { ok: false, problem: 'control did not fail the gate' };
   }
   return { ok: true };
@@ -133,8 +136,40 @@ export function exitCode({ fault, busy: isBusy, drift: drifted, failed }) {
   return 0;
 }
 
-/** A recalibration whose baseline rises SIGNOFF_RISE_MS or more needs the lead's sign-off. */
+/** Any rise of the baseline in a recalibration needs the lead's sign-off, so small rises cannot ratchet it up. */
 export function recalibrationFlag(oldBaseline, newBaseline) {
   const rise = Math.round((newBaseline - oldBaseline) * 10) / 10;
-  return { rise, needsSignoff: rise >= SIGNOFF_RISE_MS };
+  return { rise, needsSignoff: newBaseline > oldBaseline };
+}
+
+/**
+ * The regression margin from the calibration's five gate-mobile medians: MARGIN_MS while it is at least 3x their
+ * spread (max - min), else 3x the spread rounded up to 10 ms; over MARGIN_CEILING_MS refuses, because the 300 ms
+ * control could no longer be told from noise.
+ */
+export function marginFromSpread(medians) {
+  const spread = Math.max(...medians) - Math.min(...medians);
+  const widened = 3 * spread > MARGIN_MS;
+  const margin = widened ? Math.ceil((3 * spread) / 10) * 10 : MARGIN_MS;
+  return { spread, margin, widened, refuse: margin > MARGIN_CEILING_MS };
+}
+
+/**
+ * At READY: no nightly record, or a newest one older than NIGHTLY_MAX_AGE_MS, blocks ("nightly missed").
+ * A newest nightly that did not exit 0 does not block (that would also stop the PR fixing it); it returns a banner.
+ */
+export function nightlyCheck(record, nowMs) {
+  if (!record) return { ok: false, problem: 'nightly missed: no record' };
+  if (nowMs - Date.parse(record.timestamp) > NIGHTLY_MAX_AGE_MS) {
+    return { ok: false, problem: `nightly missed: last run ${record.timestamp}` };
+  }
+  const banner = record.exit === 0 ? null : `NIGHTLY FAILED: exit ${record.exit} at ${record.timestamp} on ${record.sha}`;
+  return { ok: true, banner };
+}
+
+/** The verdict binds to the commit it names: HEAD must be the expected SHA and `git status --porcelain` empty. */
+export function treeCheck({ head, expected, porcelain }) {
+  if (head !== expected) return `HEAD ${head} is not the expected ${expected}`;
+  const first = porcelain.split('\n').find((l) => l !== '');
+  return first === undefined ? null : `tree not clean: ${first}`;
 }

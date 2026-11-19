@@ -7,6 +7,7 @@
 import { test, expect } from '@playwright/test';
 import {
   stats, judge, checkRun, passComplete, drift, busy, controlCheck, exitCode, recalibrationFlag,
+  marginFromSpread, nightlyCheck, treeCheck,
 } from '../perf/first-paint-lib.mjs';
 
 const URL = 'http://127.0.0.1:4390/ui/overview/status';
@@ -40,19 +41,23 @@ function report(over = {}) {
 const TWENTY = [812, 790, 805, 760, 798, 801, 777, 790, 815, 793, 788, 820, 799, 786, 803, 795, 781, 809, 797, 802];
 
 test('R1 budget: a median of 999.9 passes and 1000.0 fails', () => {
-  expect(judge({ median: 999.9, baseline: 900 }).verdict).toBe('pass');
-  expect(judge({ median: 1000.0, baseline: 900 }).verdict).toBe('fail');
-  expect(judge({ median: 1000.0, baseline: 900 }).reasons).toEqual(['budget']);
+  expect(judge({ median: 999.9, baseline: 900, margin: 250 }).verdict).toBe('pass');
+  expect(judge({ median: 1000.0, baseline: 900, margin: 250 }).verdict).toBe('fail');
+  expect(judge({ median: 1000.0, baseline: 900, margin: 250 }).reasons).toEqual(['budget']);
 });
 
 test('R2 warn: 900.0 warns and 899.9 does not', () => {
-  expect(judge({ median: 900.0, baseline: 800 }).warn).toBe(true);
-  expect(judge({ median: 899.9, baseline: 800 }).warn).toBe(false);
+  expect(judge({ median: 900.0, baseline: 800, margin: 250 }).warn).toBe(true);
+  expect(judge({ median: 899.9, baseline: 800, margin: 250 }).warn).toBe(false);
 });
 
-test('R3 regression: with baseline 600, a median of 849.9 passes and 850.0 fails', () => {
-  expect(judge({ median: 849.9, baseline: 600 }).verdict).toBe('pass');
-  expect(judge({ median: 850.0, baseline: 600 })).toEqual({ verdict: 'fail', warn: false, reasons: ['regression'] });
+test('R3 regression: baseline 600 + margin 250 fails at 850.0, not 849.9; desktop (no baseline) passes 850.0', () => {
+  expect(judge({ median: 849.9, baseline: 600, margin: 250 }).verdict).toBe('pass');
+  expect(judge({ median: 850.0, baseline: 600, margin: 250 })).toEqual({ verdict: 'fail', warn: false, reasons: ['regression'] });
+  // The margin is read, not a constant: a 260 margin moves the line to 860.
+  expect(judge({ median: 850.0, baseline: 600, margin: 260 }).verdict).toBe('pass');
+  expect(judge({ median: 860.0, baseline: 600, margin: 260 }).reasons).toEqual(['regression']);
+  expect(judge({ median: 850.0, baseline: null, margin: null })).toEqual({ verdict: 'pass', warn: false, reasons: [] });
 });
 
 test('R4 median and spread from a literal set of 20', () => {
@@ -79,16 +84,26 @@ test('R5 faults: each broken report is refused with its own problem', () => {
     ['infinite index', report({ environment: { ...report().environment, benchmarkIndex: Infinity } }), 'no benchmark index'],
   ];
   for (const [name, r, problem] of cases) expect(checkRun(r, EXPECTED), name).toEqual({ ok: false, problem });
-  expect(passComplete(Array.from({ length: 19 }, () => report()), EXPECTED)).toEqual({ ok: false, problem: '19 valid reports, expected 20' });
-  expect(passComplete(Array.from({ length: 20 }, () => report()), EXPECTED).ok).toBe(true);
+  expect(passComplete(Array.from({ length: 19 }, () => report()), EXPECTED, 20)).toEqual({ ok: false, problem: '19 valid reports, expected 20' });
+  expect(passComplete(Array.from({ length: 20 }, () => report()), EXPECTED, 20).ok).toBe(true);
+  const UNTHROTTLED = { ...EXPECTED, settings: { throttlingMethod: 'provided', throttling: { cpuSlowdownMultiplier: 1 } } };
+  const plain = () => report({ configSettings: { ...structuredClone(SETTINGS), throttlingMethod: 'provided', throttling: { ...SETTINGS.throttling, cpuSlowdownMultiplier: 1 } } });
+  expect(passComplete(Array.from({ length: 4 }, plain), UNTHROTTLED, 5)).toEqual({ ok: false, problem: '4 valid reports, expected 5' });
+  expect(passComplete(Array.from({ length: 5 }, plain), UNTHROTTLED, 5).ok).toBe(true);
+  // An unthrottled run carrying the calibrated multiplier is refused against its own pass row.
+  expect(checkRun(report({ configSettings: { ...structuredClone(SETTINGS), throttlingMethod: 'provided' } }), UNTHROTTLED))
+    .toEqual({ ok: false, problem: 'setting throttling.cpuSlowdownMultiplier is 5.4, expected 1' });
 });
 
-test('R6 control: the plant must show, and must fail when the baseline is the current page', () => {
-  expect(controlCheck({ mode: 'nightly', controlMedian: 1049.9, gateMedian: 800, baseline: 900 })).toEqual({ ok: false, problem: 'control 249.9 ms over the gate, expected 250 or more' });
-  expect(controlCheck({ mode: 'nightly', controlMedian: 1050, gateMedian: 800, baseline: 900 })).toEqual({ ok: true });
-  expect(controlCheck({ mode: 'nightly', controlMedian: 850, gateMedian: 600, baseline: 900 })).toEqual({ ok: true });
-  expect(controlCheck({ mode: 'ready', controlMedian: 850, gateMedian: 600, baseline: 900 })).toEqual({ ok: false, problem: 'control did not fail the gate' });
-  expect(controlCheck({ mode: 'ready', controlMedian: 1050, gateMedian: 800, baseline: 800 })).toEqual({ ok: true });
+test('R6 control: the plant must show, and must fail the rules in proof mode only', () => {
+  const m = 250;
+  expect(controlCheck({ mode: 'gate', controlMedian: 1049.9, gateMedian: 800, baseline: 900, margin: m })).toEqual({ ok: false, problem: 'control 249.9 ms over the gate, expected 250 or more' });
+  expect(controlCheck({ mode: 'gate', controlMedian: 1050, gateMedian: 800, baseline: 900, margin: m })).toEqual({ ok: true });
+  expect(controlCheck({ mode: 'gate', controlMedian: 850, gateMedian: 600, baseline: 900, margin: m })).toEqual({ ok: true });
+  expect(controlCheck({ mode: 'proof', controlMedian: 850, gateMedian: 600, baseline: 900, margin: m })).toEqual({ ok: false, problem: 'control did not fail the gate' });
+  expect(controlCheck({ mode: 'proof', controlMedian: 1050, gateMedian: 800, baseline: 800, margin: m })).toEqual({ ok: true });
+  // The margin is read: at 260 the same 250 ms difference is too small.
+  expect(controlCheck({ mode: 'gate', controlMedian: 1050, gateMedian: 800, baseline: 900, margin: 260 })).toEqual({ ok: false, problem: 'control 250 ms over the gate, expected 260 or more' });
 });
 
 test('R7 drift: 20.1% over and under refuse, exactly 20.0% judges', () => {
@@ -115,8 +130,35 @@ test('R9 exit precedence: fault 2 > busy 3 > drift 4 > failed 1 > passed 0', () 
   expect(exitCode({})).toBe(0);
 });
 
-test('R11 recalibration: a baseline rising 100.0 ms needs sign-off, 99.9 ms does not', () => {
-  expect(recalibrationFlag(700, 800)).toEqual({ rise: 100, needsSignoff: true });
-  expect(recalibrationFlag(700, 799.9)).toEqual({ rise: 99.9, needsSignoff: false });
+test('R11 recalibration: any rise of the baseline needs sign-off; an equal or lower one does not', () => {
+  expect(recalibrationFlag(700, 700.1)).toEqual({ rise: 0.1, needsSignoff: true });
+  expect(recalibrationFlag(700, 700)).toEqual({ rise: 0, needsSignoff: false });
   expect(recalibrationFlag(800, 700)).toEqual({ rise: -100, needsSignoff: false });
+});
+
+test('R12 margin: 250 while 3x the spread fits, widened to the next 10 ms above, refused over 290', () => {
+  // Spreads with exact binary values, so the row tests the rule and not float noise.
+  const five = (spread) => [700, 700 + spread, 700 + spread / 2, 700, 700];
+  expect(marginFromSpread(five(83.25))).toEqual({ spread: 83.25, margin: 250, widened: false, refuse: false });
+  expect(marginFromSpread(five(83.5))).toEqual({ spread: 83.5, margin: 260, widened: true, refuse: false });
+  expect(marginFromSpread(five(96.5))).toEqual({ spread: 96.5, margin: 290, widened: true, refuse: false });
+  expect(marginFromSpread(five(96.75))).toEqual({ spread: 96.75, margin: 300, widened: true, refuse: true });
+});
+
+test('R13 stale tree: HEAD must be the expected SHA and the tree clean', () => {
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  expect(treeCheck({ head: A, expected: A, porcelain: '' })).toBe(null);
+  expect(treeCheck({ head: B, expected: A, porcelain: '' })).toBe(`HEAD ${B} is not the expected ${A}`);
+  expect(treeCheck({ head: A, expected: A, porcelain: '?? ui-tests/stray.txt\n' })).toBe('tree not clean: ?? ui-tests/stray.txt');
+  expect(treeCheck({ head: A, expected: A, porcelain: ' M src/gateway/ui/shell/index.html\n' })).toBe('tree not clean:  M src/gateway/ui/shell/index.html');
+});
+
+test('R14 nightly record at READY: missed blocks, failed only banners', () => {
+  const now = Date.parse('2026-11-20T06:00:00Z');
+  const rec = (ts, exit) => ({ timestamp: ts, sha: 'c'.repeat(40), exit });
+  expect(nightlyCheck(rec('2026-11-19T04:00:00Z', 0), now)).toEqual({ ok: true, banner: null });
+  expect(nightlyCheck(rec('2026-11-19T03:59:59Z', 0), now)).toEqual({ ok: false, problem: 'nightly missed: last run 2026-11-19T03:59:59Z' });
+  expect(nightlyCheck(null, now)).toEqual({ ok: false, problem: 'nightly missed: no record' });
+  expect(nightlyCheck(rec('2026-11-20T03:31:00Z', 1), now)).toEqual({ ok: true, banner: `NIGHTLY FAILED: exit 1 at 2026-11-20T03:31:00Z on ${'c'.repeat(40)}` });
 });
