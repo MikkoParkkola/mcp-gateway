@@ -148,44 +148,10 @@ fn logs(root: &Path) -> String {
     plain
 }
 
-#[tokio::test]
-async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
-    let root = tempfile::tempdir().expect("temp root");
-    let root = root.path();
-    let port = free_port();
-    let config = write_config(root, port);
-    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-
-    let mut gateway = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            gateway.env_remove(key);
-        }
-    }
-    let mut gateway = gateway
-        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-        .current_dir(root)
-        .arg("--config")
-        .arg(&config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone().expect("log handle")))
-        .stderr(Stdio::from(log))
-        .spawn()
-        .expect("the gateway binary spawns");
-    let _cleanup = KillPid(gateway.id());
-
-    let client = reqwest::Client::new();
-    let base = format!("http://127.0.0.1:{port}");
-    let ready_by = tokio::time::Instant::now() + READY_BOUND;
-    while client.get(format!("{base}/health")).send().await.is_err() {
-        assert!(
-            tokio::time::Instant::now() < ready_by,
-            "the gateway never became ready\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-
+/// Opens a session and starts the request the stop will find open: its
+/// backend never answers, so it holds its connection for as long as the
+/// gateway lets it. Returns once the backend has the call.
+async fn hold_a_request(client: &reqwest::Client, base: &str, root: &Path) {
     let init = json!({
         "jsonrpc": "2.0", "id": 0, "method": "initialize",
         "params": {
@@ -194,13 +160,13 @@ async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
             "clientInfo": { "name": "HttpStopBoundTest", "version": "1.0.0" }
         }
     });
-    let (body, session) = post(&client, &base, None, &init)
+    let (body, session) = post(client, base, None, &init)
         .await
         .unwrap_or_else(|e| panic!("initialize failed: {e}\n{}", logs(root)));
     let session = session.unwrap_or_else(|| panic!("no session id: {body}\n{}", logs(root)));
     post(
-        &client,
-        &base,
+        client,
+        base,
         Some(&session),
         &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     )
@@ -218,7 +184,7 @@ async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
     });
     let _open = tokio::spawn({
         let client = client.clone();
-        let base = base.clone();
+        let base = base.to_string();
         async move { post(&client, &base, Some(&session), &call).await }
     });
     let called = root.join("called");
@@ -231,24 +197,64 @@ async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+#[tokio::test]
+async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
+    let root = tempfile::tempdir().expect("temp root");
+    let root = root.path();
+    let port = free_port();
+    let config = write_config(root, port);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+
+    let mut gateway = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
+            gateway.env_remove(key);
+        }
+    }
+    let mut gateway = gateway
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        // A red run leaves no gateway behind: the child is killed through its
+        // own handle, never by a pid the system may already have reused.
+        .kill_on_drop(true)
+        .spawn()
+        .expect("the gateway binary spawns");
+    let pid = gateway.id().expect("the gateway's pid");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+    let ready_by = tokio::time::Instant::now() + READY_BOUND;
+    while client.get(format!("{base}/health")).send().await.is_err() {
+        assert!(
+            tokio::time::Instant::now() < ready_by,
+            "the gateway never became ready\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    hold_a_request(&client, &base, root).await;
 
     // What a supervisor sends: SIGTERM to the gateway only, so the backend
     // can only learn of the stop from the gateway's `stop_all`.
     let signalled = std::process::Command::new("kill")
-        .args(["-TERM", &gateway.id().to_string()])
+        .args(["-TERM", &pid.to_string()])
         .status()
         .expect("kill runs");
     assert!(signalled.success(), "the signal was delivered");
     let signalled_at = std::time::Instant::now();
 
-    let exited = tokio::time::timeout(
-        STOP_BOUND,
-        tokio::task::spawn_blocking(move || gateway.wait()),
-    )
-    .await;
+    let exited = tokio::time::timeout(STOP_BOUND, gateway.wait()).await;
     let took = signalled_at.elapsed();
     assert!(
-        matches!(&exited, Ok(Ok(Ok(status))) if status.success()),
+        matches!(&exited, Ok(Ok(status)) if status.success()),
         "with a request still open, the gateway did not finish its stop: {exited:?}\n{}",
         logs(root)
     );
@@ -277,16 +283,4 @@ async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
     );
     at("Shutting down backends");
     at(&format!("Stopping backend backend={BACKEND}"));
-}
-
-/// SIGKILLs a pid when the row ends, so a red run leaks no gateway.
-struct KillPid(u32);
-
-impl Drop for KillPid {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &self.0.to_string()])
-            .stderr(Stdio::null())
-            .status();
-    }
 }
