@@ -114,21 +114,31 @@ class CoverageGrade(unittest.TestCase):
         self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
 
     def require_self_rev(self):
-        result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
-        if result.returncode and os.environ.get("CI") == "true":
-            # CI checks out shallow: fetch the one pinned commit (read from the script, so the two cannot drift).
-            # This fetch reads the real origin (https) into the real checkout, so it runs with the caller's
-            # environment: the fixture environment allows only file:// transports, for the disposable clones.
-            # It lands on a branch because a clone of a shallow repository copies only what a ref reaches
-            # (--shared is ignored there), so isolated_probe's clone sees the commit only through a ref.
-            subprocess.run([self.git, "fetch", "--no-tags", "--depth=1", "origin",
-                            f"+{SELF_REV}:refs/heads/coverage-grade-self-rev"], cwd=ROOT,
-                           text=True, capture_output=True, timeout=90)
-            result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
-        if result.returncode:
+        in_ci = os.environ.get("CI") == "true"
+        present = not self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"]).returncode
+        fetched = None
+        if in_ci:
+            # CI checks out shallow, and a clone of a shallow repository ignores --shared and copies only what a ref
+            # reaches, so isolated_probe's clone sees the pinned commit only through a ref. Point a branch at it:
+            # locally when the object is already here (even unreferenced), else by fetching the one commit (read
+            # from the script, so the two cannot drift) from the real origin. The fetch runs outside the fixture
+            # environment, which allows only file:// transports, but without the GIT_* variables setUp strips, so
+            # nothing in the caller's environment can point it at another repository.
+            ref = "refs/heads/coverage-grade-self-rev"
+            if present:
+                self.command([self.git, "update-ref", ref, SELF_REV])
+            else:
+                env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+                env["GIT_TERMINAL_PROMPT"] = "0"
+                fetched = subprocess.run([self.git, "fetch", "--no-tags", "--depth=1", "origin",
+                                          f"+{SELF_REV}:{ref}"],
+                                         cwd=ROOT, env=env, text=True, capture_output=True, timeout=90)
+                present = not self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"]).returncode
+        if not present:
             # A silent skip in CI would leave the self-check and the refusal untested, so CI fails instead.
-            if os.environ.get("CI") == "true":
-                self.fail(f"pinned SELF_REV {SELF_REV} is absent in CI and could not be fetched")
+            if in_ci:
+                detail = fetched.stderr.strip() if fetched else ""
+                self.fail(f"pinned SELF_REV {SELF_REV} is absent in CI and could not be fetched: {detail}")
             self.skipTest(f"pinned SELF_REV {SELF_REV} is absent from local history; no fetch attempted")
 
     def isolated_probe(self):
