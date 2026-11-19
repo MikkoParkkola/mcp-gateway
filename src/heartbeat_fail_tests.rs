@@ -27,6 +27,14 @@ async fn a_closed_port_returns_within_the_bound() {
     let out = heartbeat_once(&release(), dir.path(), &test_client(), &closed, nov19).await;
     assert_eq!(out, Outcome::Failed);
     assert!(started.elapsed() < SEND_BOUND, "{:?}", started.elapsed());
+    // Control (tp-r1): the same fixture and client against a live listener
+    // sends, so "Failed" above came from the closed port, not a dead core.
+    let rx = Listener::start(Answer::NoContent).await;
+    let control = tempfile::tempdir().expect("dir");
+    assert_eq!(
+        heartbeat_once(&release(), control.path(), &test_client(), &rx.url(), nov19).await,
+        Outcome::Sent
+    );
 }
 
 /// F2. A receiver that accepts and never answers: the check returns within
@@ -71,7 +79,14 @@ async fn a_redirect_is_not_followed() {
     let second = Listener::start(Answer::NoContent).await;
     let first = Listener::start(Answer::RedirectTo(second.url())).await;
     let dir = tempfile::tempdir().expect("dir");
-    let _ = heartbeat_once(&release(), dir.path(), &test_client(), &first.url(), nov19).await;
+    let c = test_client();
+    let out = heartbeat_once(&release(), dir.path(), &c, &first.url(), nov19).await;
+    assert_eq!(out, Outcome::Failed, "a redirect is not a delivery");
+    assert_eq!(
+        heartbeat_once(&release(), dir.path(), &c, &first.url(), nov19).await,
+        Outcome::NoClaim,
+        "the day stays claimed after a redirect"
+    );
     assert_eq!(first.connections(), 1);
     assert_eq!(second.connections(), 0, "the redirect was followed");
     let direct = tempfile::tempdir().expect("dir");
@@ -140,8 +155,9 @@ async fn production_client_refuses_an_untrusted_certificate() {
         "an untrusted issuer was accepted"
     );
     let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("CA");
-    let trusting = base_builder()
-        .https_only(true)
+    // The release builder plus one root: the only difference from the client
+    // that was refused (tp-r1).
+    let trusting = production_builder()
         .add_root_certificate(ca)
         .build()
         .expect("client");
@@ -151,4 +167,27 @@ async fn production_client_refuses_an_untrusted_certificate() {
         Outcome::Sent
     );
     assert_eq!(hits.load(Ordering::SeqCst), 1, "control");
+}
+
+/// W3 (as behaviour, tp-r1). The release target is the literal receiver URL
+/// with the release client: that client opens no connection to a plain-HTTP
+/// listener, which the test client reaches (control).
+#[tokio::test]
+async fn production_target_is_the_literal_url_and_the_release_client() {
+    let (url, client) = production_target();
+    assert_eq!(url, "https://telemetry.revaluator.ai/v1/heartbeat");
+    let rx = Listener::start(Answer::NoContent).await;
+    let dir = tempfile::tempdir().expect("dir");
+    let out = heartbeat_once(&release(), dir.path(), &client, &rx.url(), nov19).await;
+    assert_eq!(out, Outcome::Failed);
+    assert_eq!(
+        rx.connections(),
+        0,
+        "the release target's client spoke plain HTTP"
+    );
+    let control = tempfile::tempdir().expect("dir");
+    assert_eq!(
+        heartbeat_once(&release(), control.path(), &test_client(), &rx.url(), nov19).await,
+        Outcome::Sent
+    );
 }

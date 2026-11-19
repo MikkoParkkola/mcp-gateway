@@ -125,6 +125,8 @@ pub(crate) enum Outcome {
     Skipped(Skip),
     NoId,
     NoClaim,
+    /// The clock read before the epoch: no date, nothing claimed or sent.
+    NoDate,
     DateMoved,
     Sent,
     Failed,
@@ -154,9 +156,22 @@ pub(crate) fn base_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
 }
 
-/// The release client: [`base_builder`] plus HTTPS only.
+/// The release client's builder: [`base_builder`] plus HTTPS only, with
+/// certificate verification on. Shared so a row's trusting control differs
+/// from the release client only by one extra root.
+pub(crate) fn production_builder() -> reqwest::ClientBuilder {
+    base_builder()
+}
+
+/// The release client.
 pub(crate) fn production_client() -> reqwest::Client {
-    base_builder().build().unwrap_or_default()
+    production_builder().build().unwrap_or_default()
+}
+
+/// Where and how the release task sends: the literal receiver URL and the
+/// release client. The task reads only this outside a test.
+pub(crate) fn production_target() -> (&'static str, reqwest::Client) {
+    ("", base_builder().build().unwrap_or_default())
 }
 
 /// Start the server's heartbeat task: a check at start, then hourly, ending
@@ -185,9 +200,17 @@ pub(crate) mod seam {
         pub(crate) today: super::Today,
         /// The check interval for this dir (production: one hour).
         pub(crate) every: std::time::Duration,
-        /// When set, the check's filesystem thread waits on it before its
-        /// first filesystem call (a stalled disk).
-        pub(crate) stall: Option<std::sync::mpsc::Receiver<()>>,
+        /// When set, the check's filesystem thread stalls before its first
+        /// filesystem call (a stalled disk).
+        pub(crate) stall: Option<Stall>,
+    }
+
+    /// A stalled disk: the filesystem thread sends `reached` on arrival,
+    /// waits for `release`, and sends `done` as it exits.
+    pub(crate) struct Stall {
+        pub(crate) reached: std::sync::mpsc::Sender<()>,
+        pub(crate) release: std::sync::mpsc::Receiver<()>,
+        pub(crate) done: std::sync::mpsc::Sender<()>,
     }
 
     /// Removes the registration when dropped.
@@ -220,3 +243,8 @@ mod wiring_tests;
 #[cfg(test)]
 #[path = "heartbeat_fail_tests.rs"]
 mod fail_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "heartbeat_scan_tests.rs"]
+mod scan_tests;

@@ -21,7 +21,8 @@ struct Seen {
     method: String,
     path: String,
     query: Option<String>,
-    headers: BTreeSet<String>,
+    /// Header name (lowercase) to value.
+    headers: BTreeMap<String, String>,
     body: String,
 }
 
@@ -120,7 +121,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Seen> {
         Some((p, q)) => (p.to_owned(), Some(q.to_owned())),
         None => (target, None),
     };
-    let mut headers = BTreeSet::new();
+    let mut headers = BTreeMap::new();
     let mut length = 0_usize;
     for line in lines.filter(|l| !l.is_empty()) {
         let (name, value) = line.split_once(':')?;
@@ -128,7 +129,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Seen> {
         if name == "content-length" {
             length = value.trim().parse().ok()?;
         }
-        headers.insert(name);
+        headers.insert(name, value.trim().to_owned());
     }
     while buf.len() < head_end + length {
         let n = stream.read(&mut chunk).await.ok()?;
@@ -200,6 +201,17 @@ pub(super) fn is_install_id(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Create `path` owner-only (0700 on Unix), so the wide-dir rule is never
+/// what decides a row about something else.
+pub(super) fn owner_only_dir(path: &Path) {
+    std::fs::create_dir(path).expect("dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    }
+}
+
 pub(super) fn read_id(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("heartbeat").join("install-id")).expect("an install id")
 }
@@ -227,12 +239,24 @@ async fn request_is_exactly_the_five_fields() {
         "content-length",
     ]
     .into();
-    assert!(r.headers.contains("content-type"), "{:?}", r.headers);
     assert!(
-        r.headers.iter().all(|h| allowed.contains(h.as_str())),
+        r.headers.keys().all(|h| allowed.contains(h.as_str())),
         "{:?}",
         r.headers
     );
+    // Values too (tp-r1): none may carry anything about the machine or user.
+    assert_eq!(
+        r.headers.get("content-type").map(String::as_str),
+        Some("application/json")
+    );
+    let host = r.headers.get("host").expect("a host header");
+    assert!(host.starts_with("127.0.0.1:"), "{host}");
+    for (name, value) in &r.headers {
+        assert!(
+            ["content-type", "host", "content-length"].contains(&name.as_str()) || value.len() < 64,
+            "{name}: {value}"
+        );
+    }
     let body: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&r.body).expect("a JSON object");
     let keys: BTreeSet<&str> = body.keys().map(String::as_str).collect();
@@ -257,41 +281,42 @@ fn production_url_is_the_literal() {
     assert_eq!(EVENT, "heartbeat");
 }
 
-/// P3. A host name, user name, config dir and backend name in the
-/// environment never reach the request, and the check still sends.
+/// N1. A clock that reads before the epoch gives no date: nothing is
+/// claimed or sent; a readable clock sends (control).
 #[tokio::test]
-async fn planted_host_and_config_never_reach_the_request() {
-    let planted = [
-        ("HOSTNAME", "planted-host-7f3a"),
-        ("USER", "planted-user-7f3a"),
-        ("MCP_GATEWAY_CONFIG_DIR", "/planted/config-7f3a"),
-        ("MCP_GATEWAY_BACKEND", "planted-backend-7f3a"),
-    ];
-    let snapshot = Snapshot::read(Build::Release, SecurityPosture::Standard, |name| {
-        planted
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, v)| OsString::from(v))
-    });
+async fn a_clock_before_the_epoch_sends_nothing() {
+    fn before_epoch() -> Option<NaiveDate> {
+        None
+    }
     let dir = tempfile::tempdir().expect("dir");
     let rx = Listener::start(Answer::NoContent).await;
+    let out = heartbeat_once(
+        &release(),
+        dir.path(),
+        &test_client(),
+        &rx.url(),
+        before_epoch,
+    )
+    .await;
+    assert_eq!(out, Outcome::NoDate);
+    assert_eq!(rx.connections(), 0);
+    let claims = std::fs::read_dir(dir.path().join("heartbeat"))
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("day-"))
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(claims, 0, "a day was claimed without a date");
+    let control = tempfile::tempdir().expect("dir");
     assert_eq!(
-        heartbeat_once(&snapshot, dir.path(), &test_client(), &rx.url(), nov19).await,
+        heartbeat_once(&release(), control.path(), &test_client(), &rx.url(), nov19).await,
         Outcome::Sent
     );
-    let seen = rx.requests();
-    assert_eq!(seen.len(), 1);
-    for (_, value) in planted {
-        assert!(
-            !seen[0].body.contains("7f3a"),
-            "{value} leaked into {}",
-            seen[0].body
-        );
-    }
 }
 
 /// The CI names, written out here rather than taken from `CI` (A7).
-const CI_NAMES: [&str; 18] = [
+pub(super) const CI_NAMES: [&str; 18] = [
     "CI",
     "CONTINUOUS_INTEGRATION",
     "GITHUB_ACTIONS",
@@ -312,7 +337,7 @@ const CI_NAMES: [&str; 18] = [
     "BUDDY",
 ];
 /// The proxy names, written out.
-const PROXY_NAMES: [&str; 6] = [
+pub(super) const PROXY_NAMES: [&str; 6] = [
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -440,7 +465,7 @@ async fn skipped_sends_nothing(snapshot: Snapshot, why: Skip) {
         heartbeat_once(&release(), control.path(), &test_client(), &rx.url(), nov19).await,
         Outcome::Sent
     );
-    assert_eq!(rx.connections(), 1, "control");
+    assert_eq!(rx.requests().len(), 1, "control");
 }
 
 /// D1-D5 through the core: each skip reason opens no connection.
@@ -469,7 +494,7 @@ fn threads_share_one_send_per_day() {
     let dir = tempfile::tempdir().expect("dir");
     let barrier = Arc::new(std::sync::Barrier::new(4));
     let url = rx.url();
-    let outcomes: Vec<Outcome> = std::thread::scope(|s| {
+    let outcomes: Vec<(Outcome, String)> = std::thread::scope(|s| {
         let joins: Vec<_> = (0..4)
             .map(|_| {
                 let (barrier, url, path, handle) = (
@@ -480,13 +505,14 @@ fn threads_share_one_send_per_day() {
                 );
                 s.spawn(move || {
                     barrier.wait();
-                    handle.block_on(heartbeat_once(
+                    let out = handle.block_on(heartbeat_once(
                         &release(),
                         path,
                         &test_client(),
                         &url,
                         nov19,
-                    ))
+                    ));
+                    (out, read_id(path))
                 })
             })
             .collect();
@@ -495,13 +521,21 @@ fn threads_share_one_send_per_day() {
             .map(|j| j.join().expect("thread"))
             .collect()
     });
-    assert_eq!(
-        outcomes.iter().filter(|o| **o == Outcome::Sent).count(),
-        1,
-        "{outcomes:?}"
+    let sent = outcomes.iter().filter(|(o, _)| *o == Outcome::Sent).count();
+    assert_eq!(sent, 1, "{outcomes:?}");
+    assert!(
+        outcomes
+            .iter()
+            .all(|(o, _)| matches!(o, Outcome::Sent | Outcome::NoClaim)),
+        "a loser did something other than NoClaim: {outcomes:?}"
     );
-    assert_eq!(rx.connections(), 1);
-    assert!(is_install_id(&read_id(dir.path())));
+    assert_eq!(rx.requests().len(), 1);
+    let id = read_id(dir.path());
+    assert!(is_install_id(&id));
+    assert!(
+        outcomes.iter().all(|(_, seen)| *seen == id),
+        "threads read different ids: {outcomes:?}"
+    );
 }
 
 /// O3. The next UTC day sends again, with the same id.
@@ -532,6 +566,16 @@ async fn next_day_sends_again_with_the_same_id() {
         .collect();
     assert_eq!(ids.len(), 2);
     assert_eq!(ids[0], ids[1], "the id changed between days");
+    let other = tempfile::tempdir().expect("dir");
+    assert_eq!(
+        heartbeat_once(&release(), other.path(), &c, &rx.url(), nov19).await,
+        Outcome::Sent
+    );
+    assert_ne!(
+        read_id(other.path()),
+        ids[0],
+        "two clean data dirs got the same id"
+    );
 }
 
 /// O4. A clock moved back to a day already claimed sends nothing; the next
@@ -553,7 +597,7 @@ async fn a_clock_moved_back_never_resends() {
         heartbeat_once(&release(), dir.path(), &c, &rx.url(), nov18).await,
         Outcome::NoClaim
     );
-    assert_eq!(rx.connections(), 2);
+    assert_eq!(rx.requests().len(), 2);
 }
 
 /// O5. `heartbeat` is a regular file (fails even as root): nothing is sent
@@ -571,7 +615,7 @@ async fn a_blocked_heartbeat_dir_sends_nothing() {
         heartbeat_once(&release(), clean.path(), &test_client(), &rx.url(), nov19).await,
         Outcome::Sent
     );
-    assert_eq!(rx.connections(), 1, "control");
+    assert_eq!(rx.requests().len(), 1, "control");
 }
 
 /// O6. A valid id, but today's claim path is a directory: nothing is sent;
@@ -594,7 +638,7 @@ async fn a_valid_id_with_a_blocked_claim_sends_nothing() {
         heartbeat_once(&release(), dir.path(), &c, &rx.url(), nov20).await,
         Outcome::Sent
     );
-    assert_eq!(rx.connections(), 2);
+    assert_eq!(rx.requests().len(), 2);
 }
 
 /// O7. An empty, short or non-hex `install-id` is never replaced and sends
@@ -607,9 +651,12 @@ async fn a_malformed_id_is_never_replaced() {
         "abc123",
         "0123456789abcdef0123456789abcdeg",
         "0123456789abcdef0123456789abcdef\n",
+        "0123456789abcdef0123456789abcde",
+        "0123456789abcdef0123456789abcdef0",
+        "0123456789ABCDEF0123456789ABCDEF",
     ] {
         let dir = tempfile::tempdir().expect("dir");
-        std::fs::create_dir(dir.path().join("heartbeat")).expect("dir");
+        owner_only_dir(&dir.path().join("heartbeat"));
         std::fs::write(dir.path().join("heartbeat").join("install-id"), planted).expect("plant");
         let out = heartbeat_once(&release(), dir.path(), &test_client(), &rx.url(), nov19).await;
         assert_eq!(out, Outcome::NoId, "{planted:?}");
@@ -623,14 +670,15 @@ async fn a_malformed_id_is_never_replaced() {
     );
 }
 
-/// The clock O8 reads: the first call says the 19th, every later call the 20th.
-static PAST_MIDNIGHT_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// O8's data dir, so its clock can watch the claim.
+static PAST_MIDNIGHT_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// The 19th until the 19th's claim exists in O8's dir, then the 20th: the
+/// date moves between the claim and the send however often the code reads it.
 fn past_midnight() -> Option<NaiveDate> {
-    if PAST_MIDNIGHT_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
-        nov19()
-    } else {
-        nov20()
-    }
+    let claimed = PAST_MIDNIGHT_DIR
+        .get()
+        .is_some_and(|d| d.join("heartbeat").join("day-2026-11-19").exists());
+    if claimed { nov20() } else { nov19() }
 }
 
 /// O8. The date moves between the claim and the send: nothing is sent; a
@@ -639,7 +687,9 @@ fn past_midnight() -> Option<NaiveDate> {
 async fn a_claim_past_midnight_sends_nothing() {
     let dir = tempfile::tempdir().expect("dir");
     let rx = Listener::start(Answer::NoContent).await;
-    PAST_MIDNIGHT_CALLS.store(0, Ordering::SeqCst);
+    PAST_MIDNIGHT_DIR
+        .set(dir.path().to_path_buf())
+        .expect("set once");
     let out = heartbeat_once(
         &release(),
         dir.path(),
