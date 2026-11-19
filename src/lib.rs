@@ -379,6 +379,9 @@ mod log_under_lock_scan_tests;
 #[cfg(tp3)]
 #[cfg(all(test, unix))]
 mod file_mode_inherit_tests;
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+mod state_save_atomic_tests;
 
 #[cfg(test)]
 pub(crate) mod test_classification_count;
