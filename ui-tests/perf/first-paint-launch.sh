@@ -7,7 +7,7 @@
 #   spark-slot run full <owner> first-paint -- ui-tests/perf/first-paint-launch.sh <mode> <sha>
 # It checks the tree is clean at <sha> (Spark gets no .git), sends it to Spark, and runs the gate there under a
 # Spark-local lock: a second gate finds the lock held and exits 3 at once. Outputs, and a calibration's config,
-# are copied back to ~/.claude/data/first-paint/.
+# are copied back to ${XDG_STATE_HOME:-~/.local/state}/mcp-gateway/first-paint/.
 set -uo pipefail
 mode=${1:?mode} sha=${2:?sha}
 root=$(git rev-parse --show-toplevel) || exit 2
@@ -39,7 +39,7 @@ COPYFILE_DISABLE=1 tar -C "$root" --no-xattrs --no-mac-metadata --exclude .git -
 rc=${PIPESTATUS[1]}
 [ "$rc" -eq 255 ] && { echo "could not reach Spark over ssh"; exit 75; }
 
-dest=~/.claude/data/first-paint; mkdir -p "$dest/out"
+dest="${XDG_STATE_HOME:-$HOME/.local/state}/mcp-gateway/first-paint"; mkdir -p "$dest/out"
 name=$(sed -n 's/^outputs: \(.*\)\.json, .*/\1/p' "$out" | tail -1)
 if [ -n "$name" ]; then
 	"${ssh_cmd[@]}" "cat $name.json" >"$dest/out/${name##*/}.json"

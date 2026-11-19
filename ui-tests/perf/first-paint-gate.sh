@@ -18,7 +18,7 @@ case "$mode" in
 esac
 # READY modes read the nightly record first (written on this Mac by first-paint-nightly.sh). A missing or
 # stale record blocks; a failed nightly only banners, as the first and last line and atop the summary.
-record=~/.claude/data/first-paint/nightly.json
+record="${XDG_STATE_HOME:-$HOME/.local/state}/mcp-gateway/first-paint/nightly.json"
 export FIRST_PAINT_BANNER=""
 case "$mode" in ready | proof | verdicts)
 	check=$(cd ui-tests && RECORD="$record" node --input-type=module -e "

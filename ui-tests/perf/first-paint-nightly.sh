@@ -8,12 +8,13 @@
 # Run it from a copy outside the dedicated worktree: moving that worktree must not change the script under it.
 # Fetches the branch into a private ref (refs/first-paint/nightly; nobody's origin/* refs move), checks the
 # worktree out detached there, runs the gate in nightly mode under the first-paint slot owner, and records
-# timestamp, branch, SHA and exit in ~/.claude/data/first-paint/nightly.json whatever happened, so READY can
+# timestamp, branch, SHA and exit in ${XDG_STATE_HOME:-~/.local/state}/mcp-gateway/first-paint/nightly.json
+# whatever happened, so READY can
 # tell a missed nightly from a failed one.
 {
 	set -uo pipefail
 	wt=${1:?worktree} branch=${2:-docs/ranking-1-release-line}
-	dir=~/.claude/data/first-paint
+	dir="${XDG_STATE_HOME:-$HOME/.local/state}/mcp-gateway/first-paint"
 	mkdir -p "$dir"
 	sha=none rc=2
 	echo "nightly $(date -u +%Y-%m-%dT%H:%M:%SZ): $branch in $wt"
