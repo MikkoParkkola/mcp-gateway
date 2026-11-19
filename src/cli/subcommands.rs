@@ -21,7 +21,10 @@ pub use trust::{
 #[derive(Subcommand, Debug)]
 pub enum CapCommand {
     /// Check that a capability YAML file is well-formed and complete
-    #[command(about = "Validate a capability definition file")]
+    #[command(
+        about = "Validate a capability definition file",
+        after_help = "Examples:\n  mcp-gateway cap validate ./weather.yaml\n"
+    )]
     Validate {
         /// Path to the capability YAML file to validate
         #[arg(required = true)]
@@ -34,7 +37,10 @@ pub enum CapCommand {
     /// `sha256:` line. The loader will reject any future modification to
     /// the file that does not update the pin, defeating rug-pull attacks
     /// described in Invariant Labs' "Tool Poisoning Attacks" writeup.
-    #[command(about = "Pin a capability YAML with its SHA-256 hash")]
+    #[command(
+        about = "Pin a capability YAML with its SHA-256 hash",
+        after_help = "Examples:\n  mcp-gateway cap pin ./weather.yaml\n"
+    )]
     Pin {
         /// Path to the capability YAML file to pin
         #[arg(required = true)]
@@ -42,7 +48,10 @@ pub enum CapCommand {
     },
 
     /// Show all capability definitions found in a directory tree
-    #[command(about = "List capabilities in a directory")]
+    #[command(
+        about = "List capabilities in a directory",
+        after_help = "Examples:\n  mcp-gateway cap list\n"
+    )]
     List {
         /// Root directory to scan for capability YAML files
         #[arg(default_value = "capabilities")]
@@ -53,7 +62,10 @@ pub enum CapCommand {
     ///
     /// Reads the spec, creates one capability file per operation, and writes
     /// them to the output directory. Supports both YAML and JSON input.
-    #[command(about = "Convert an OpenAPI spec into capability definitions")]
+    #[command(
+        about = "Convert an OpenAPI spec into capability definitions",
+        after_help = "Examples:\n  mcp-gateway cap import ./openapi.yaml\n"
+    )]
     Import {
         /// Path to the `OpenAPI` specification file (YAML or JSON)
         #[arg(required = true)]
@@ -73,7 +85,10 @@ pub enum CapCommand {
     },
 
     /// Execute a capability once and print the result (useful for debugging)
-    #[command(about = "Test a capability by invoking it with sample arguments")]
+    #[command(
+        about = "Test a capability by invoking it with sample arguments",
+        after_help = "Examples:\n  mcp-gateway cap test ./weather.yaml --args '{\"city\": \"Oulu\"}'\n"
+    )]
     Test {
         /// Path to the capability YAML file to execute
         #[arg(required = true)]
@@ -94,7 +109,10 @@ pub enum CapCommand {
     /// report classifies ownership, transport exposure, trust status, data
     /// risk, recommended action, confidence, verification, and rollback. It
     /// never invokes discovered tools.
-    #[command(about = "Auto-discover existing MCP servers on this machine")]
+    #[command(
+        about = "Auto-discover existing MCP servers on this machine",
+        after_help = "Examples:\n  mcp-gateway cap discover\n"
+    )]
     Discover {
         /// Output format: "table" (human-readable), "json", or "yaml"
         #[arg(short, long, default_value = "table")]
@@ -125,7 +143,10 @@ pub enum CapCommand {
     },
 
     /// Download a capability from a GitHub repository into the local directory
-    #[command(about = "Install a capability from the community registry")]
+    #[command(
+        about = "Install a capability from the community registry",
+        after_help = "Examples:\n  mcp-gateway cap install stock_quote\n"
+    )]
     Install {
         /// Name of the capability to install (e.g. `stock_quote`)
         #[arg(required = true)]
@@ -149,7 +170,10 @@ pub enum CapCommand {
     },
 
     /// Find capabilities by name, description, or tag
-    #[command(about = "Search the capability registry")]
+    #[command(
+        about = "Search the capability registry",
+        after_help = "Examples:\n  mcp-gateway cap search weather\n"
+    )]
     Search {
         /// Text to match against capability names, descriptions, and tags
         #[arg(required = true)]
@@ -161,7 +185,10 @@ pub enum CapCommand {
     },
 
     /// Display every capability in the registry with its description and auth status
-    #[command(about = "List all capabilities in the registry")]
+    #[command(
+        about = "List all capabilities in the registry",
+        after_help = "Examples:\n  mcp-gateway cap registry-list\n"
+    )]
     RegistryList {
         /// Root directory containing capability definitions to index
         #[arg(short = 'C', long, default_value = "capabilities")]
@@ -174,7 +201,11 @@ pub enum CapCommand {
     /// it to capability YAML files, deduplicates against the output directory,
     /// and writes the results.
     #[cfg(feature = "discovery")]
-    #[command(name = "import-url", about = "Import API capabilities from a URL")]
+    #[command(
+        name = "import-url",
+        about = "Import API capabilities from a URL",
+        after_help = "Examples:\n  mcp-gateway cap import-url https://api.example.com\n"
+    )]
     ImportUrl {
         /// URL to probe for an API specification
         #[arg(required = true)]
@@ -210,7 +241,10 @@ pub enum CapCommand {
 #[derive(Subcommand, Debug)]
 pub enum ProtocolImportCommand {
     /// Preview disabled capability drafts from an API or MCP package source.
-    #[command(about = "Preview disabled import drafts without writing or enabling tools")]
+    #[command(
+        about = "Preview disabled import drafts without writing or enabling tools",
+        after_help = "Examples:\n  mcp-gateway import preview --kind openapi ./api.yaml\n"
+    )]
     Preview {
         /// Source format to import.
         #[arg(long, value_enum)]
@@ -234,7 +268,10 @@ pub enum ProtocolImportCommand {
     },
 
     /// Write reviewed import drafts to an inactive draft directory.
-    #[command(about = "Apply reversible import drafts to disk without enabling tools")]
+    #[command(
+        about = "Apply reversible import drafts to disk without enabling tools",
+        after_help = "Examples:\n  mcp-gateway import apply --kind openapi ./api.yaml\n"
+    )]
     Apply {
         /// Source format to import.
         #[arg(long, value_enum)]
@@ -270,7 +307,10 @@ pub enum ProtocolImportCommand {
 #[derive(Subcommand, Debug)]
 pub enum RankingCommand {
     /// Evaluate deterministic offline ranking fixtures.
-    #[command(about = "Evaluate adaptive ranking against a fixture corpus")]
+    #[command(
+        about = "Evaluate adaptive ranking against a fixture corpus",
+        after_help = "Examples:\n  mcp-gateway ranking eval ./fixtures.json\n"
+    )]
     Eval {
         /// JSON file containing a fixture array or an object with a cases array.
         #[arg(required = true)]
@@ -301,7 +341,10 @@ pub enum ProtocolImportKind {
 #[derive(Subcommand, Debug)]
 pub enum KubernetesCommand {
     /// Build a non-mutating reconcile plan from enterprise custom resources.
-    #[command(about = "Plan Kubernetes enterprise reconciliation without mutating the cluster")]
+    #[command(
+        about = "Plan Kubernetes enterprise reconciliation without mutating the cluster",
+        after_help = "Examples:\n  mcp-gateway kubernetes plan ./resources.yaml\n"
+    )]
     Plan {
         /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
         #[arg(required = true)]
@@ -317,7 +360,10 @@ pub enum KubernetesCommand {
     },
 
     /// Run the deterministic controller-manager reconcile loop.
-    #[command(about = "Run Kubernetes enterprise controller-manager reconciliation")]
+    #[command(
+        about = "Run Kubernetes enterprise controller-manager reconciliation",
+        after_help = "Examples:\n  mcp-gateway kubernetes controller ./resources.yaml\n"
+    )]
     Controller {
         /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
         #[arg(required = true)]
@@ -347,7 +393,8 @@ pub enum KubernetesCommand {
     /// Build a gated live-cluster apply command plan.
     #[command(
         name = "apply-plan",
-        about = "Plan Kubernetes enterprise cluster apply commands with explicit mutation gates"
+        about = "Plan Kubernetes enterprise cluster apply commands with explicit mutation gates",
+        after_help = "Examples:\n  mcp-gateway kubernetes apply-plan ./resources.yaml\n"
     )]
     ApplyPlan {
         /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.

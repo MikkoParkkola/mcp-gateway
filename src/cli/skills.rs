@@ -43,7 +43,10 @@ pub enum SkillsCommand {
     ///     commands/<name>.md      ← per-capability reference
     ///     crust.json              ← ownership marker
     /// ```
-    #[command(about = "Generate agent skill bundles from capability definitions")]
+    #[command(
+        about = "Generate agent skill bundles from capability definitions",
+        after_help = "Examples:\n  mcp-gateway skills generate\n"
+    )]
     Generate {
         /// Capabilities directory to load from
         #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
@@ -82,7 +85,10 @@ pub enum SkillsCommand {
     /// **Security**: imported skills are stored read-only.  No code in the
     /// SKILL.md body is executed — the gateway only surfaces the content
     /// for human/agent inspection.
-    #[command(about = "Import a SKILL.md file into the registry")]
+    #[command(
+        about = "Import a SKILL.md file into the registry",
+        after_help = "Examples:\n  mcp-gateway skills import ./SKILL.md\n"
+    )]
     Import {
         /// Path or URL to a SKILL.md file or a directory containing one
         #[arg(required = true)]
@@ -94,7 +100,10 @@ pub enum SkillsCommand {
     },
 
     /// List all skills in the local registry
-    #[command(about = "List imported skills")]
+    #[command(
+        about = "List imported skills",
+        after_help = "Examples:\n  mcp-gateway skills list\n"
+    )]
     List {
         /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
         #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
@@ -102,7 +111,10 @@ pub enum SkillsCommand {
     },
 
     /// Search imported skills by name, description, keywords, or triggers
-    #[command(about = "Search the imported skill registry")]
+    #[command(
+        about = "Search the imported skill registry",
+        after_help = "Examples:\n  mcp-gateway skills search weather\n"
+    )]
     Search {
         /// Free-text query (case-insensitive substring match)
         #[arg(required = true)]
@@ -114,7 +126,10 @@ pub enum SkillsCommand {
     },
 
     /// Show the full content of an imported skill
-    #[command(about = "Show a single imported skill by name")]
+    #[command(
+        about = "Show a single imported skill by name",
+        after_help = "Examples:\n  mcp-gateway skills show weather\n"
+    )]
     Show {
         /// Skill name (as reported by `skills list`)
         #[arg(required = true)]
@@ -126,7 +141,10 @@ pub enum SkillsCommand {
     },
 
     /// Remove a skill from the registry
-    #[command(about = "Remove a skill from the registry")]
+    #[command(
+        about = "Remove a skill from the registry",
+        after_help = "Examples:\n  mcp-gateway skills remove weather\n"
+    )]
     Remove {
         /// Skill name to remove
         #[arg(required = true)]

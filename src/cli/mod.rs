@@ -150,7 +150,8 @@ impl std::fmt::Display for InitProfile {
 #[command(
     version = concat!(env!("CARGO_PKG_VERSION"), " (UI API ", crate::ui_api_version::ui_api_version!(), ")"),
     about,
-    long_about = None
+    long_about = None,
+    after_help = "Examples:\n  mcp-gateway serve --config ./gateway.yaml\n"
 )]
 pub struct Cli {
     /// Path to the gateway configuration file (YAML)
@@ -216,7 +217,8 @@ pub enum AccountsCommand {
     /// by construction.
     #[command(
         name = "init-store",
-        about = "Create an empty personal-account store from --config (offline)"
+        about = "Create an empty personal-account store from --config (offline)",
+        after_help = "Examples:\n  mcp-gateway accounts init-store --config ./gateway.yaml\n"
     )]
     InitStore,
     /// Migrate one 3.x OAuth credential into the per-principal store.
@@ -231,7 +233,8 @@ pub enum AccountsCommand {
     /// for something that has already happened.
     #[command(
         name = "migrate-credentials",
-        about = "Migrate one 3.x OAuth credential into the account store (offline)"
+        about = "Migrate one 3.x OAuth credential into the account store (offline)",
+        after_help = "Examples:\n  mcp-gateway accounts migrate-credentials --descriptor-id gh --legacy-issuer https://gh.io\n"
     )]
     MigrateCredentials {
         /// The `accounts.descriptors` map key to migrate into.
@@ -270,7 +273,10 @@ fn parse_off_switch(value: &str) -> bool {
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Start the gateway server (default when no subcommand is given)
-    #[command(about = "Start the gateway server")]
+    #[command(
+        about = "Start the gateway server",
+        after_help = "Examples:\n  mcp-gateway serve --config ./gateway.yaml\n"
+    )]
     Serve {
         /// Run in stdio mode: read JSON-RPC from stdin, write responses to stdout.
         ///
@@ -287,13 +293,18 @@ pub(crate) enum Command {
     },
 
     /// Manage capability definitions (validate, test, import, install)
-    #[command(subcommand, about = "Capability management commands")]
+    #[command(
+        subcommand,
+        about = "Capability management commands",
+        after_help = "Examples:\n  mcp-gateway cap list\n"
+    )]
     Cap(CapCommand),
 
     /// Preview safe protocol imports before writing or enabling generated tools
     #[command(
         subcommand,
-        about = "Preview safe imports from API and MCP package sources"
+        about = "Preview safe imports from API and MCP package sources",
+        after_help = "Examples:\n  mcp-gateway import preview --kind openapi ./api.yaml\n"
     )]
     Import(ProtocolImportCommand),
 
@@ -301,7 +312,8 @@ pub(crate) enum Command {
     #[command(
         subcommand,
         hide = true,
-        about = "Kubernetes enterprise deployment commands"
+        about = "Kubernetes enterprise deployment commands",
+        after_help = "Examples:\n  mcp-gateway kubernetes plan ./resources.yaml\n"
     )]
     Kubernetes(KubernetesCommand),
 
@@ -309,14 +321,16 @@ pub(crate) enum Command {
     #[command(
         subcommand,
         hide = true,
-        about = "Adaptive ranking evaluation commands"
+        about = "Adaptive ranking evaluation commands",
+        after_help = "Examples:\n  mcp-gateway ranking eval ./fixtures.json\n"
     )]
     Ranking(RankingCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
     #[command(
         subcommand,
-        about = "Certificate lifecycle management (init-ca, issue-server, issue-client)"
+        about = "Certificate lifecycle management (init-ca, issue-server, issue-client)",
+        after_help = "Examples:\n  mcp-gateway tls init-ca --output ./tls\n"
     )]
     Tls(TlsCommand),
 
@@ -324,27 +338,41 @@ pub(crate) enum Command {
     #[command(
         subcommand,
         hide = true,
-        about = "TrustCard and CBOM metadata commands"
+        about = "TrustCard and CBOM metadata commands",
+        after_help = "Examples:\n  mcp-gateway trust generate\n"
     )]
     Trust(TrustCommand),
 
     /// Export and verify public provenance keys
-    #[command(subcommand, about = "Export and verify public provenance keys")]
+    #[command(
+        subcommand,
+        about = "Export and verify public provenance keys",
+        after_help = "Examples:\n  mcp-gateway provenance public-key\n"
+    )]
     Provenance(ProvenanceCommand),
 
     /// Manage caller identity and local personal-capability grants.
-    #[command(subcommand, about = "Identity and local grant administration")]
+    #[command(
+        subcommand,
+        about = "Identity and local grant administration",
+        after_help = "Examples:\n  mcp-gateway identity grants list\n"
+    )]
     Identity(IdentityCommand),
 
     /// Offline administration of the personal-account custody store.
-    #[command(subcommand, about = "Personal account store administration (offline)")]
+    #[command(
+        subcommand,
+        about = "Personal account store administration (offline)",
+        after_help = "Examples:\n  mcp-gateway accounts init-store --config ./gateway.yaml\n"
+    )]
     Accounts(AccountsCommand),
 
     /// Print the `sha256:<hex>` digest of an API key read from stdin, for
     /// `auth.api_keys[].key_sha256`. Offline: reads no config, makes no call.
     #[command(
         name = "hash-key",
-        about = "Digest an API key read from stdin (offline)"
+        about = "Digest an API key read from stdin (offline)",
+        after_help = "Examples:\n  mcp-gateway hash-key\n"
     )]
     HashKey {
         /// Check the key against this digest instead: exit 0 on a match, 1 on
@@ -354,7 +382,10 @@ pub(crate) enum Command {
     },
 
     /// Generate a starter gateway.yaml with sensible defaults
-    #[command(about = "Create a new gateway configuration file")]
+    #[command(
+        about = "Create a new gateway configuration file",
+        after_help = "Examples:\n  mcp-gateway init --output ./gateway.yaml\n"
+    )]
     Init {
         /// File path to write the generated configuration to
         #[arg(short, long, default_value = "gateway.yaml")]
@@ -372,7 +403,10 @@ pub(crate) enum Command {
     },
 
     /// Fetch live statistics from a running gateway instance
-    #[command(about = "Show observed invocation counts and cache behavior")]
+    #[command(
+        about = "Show observed invocation counts and cache behavior",
+        after_help = "Examples:\n  mcp-gateway stats --url https://gw.example.com\n"
+    )]
     Stats {
         /// Base URL of the running gateway (without /mcp suffix).
         ///
@@ -384,11 +418,14 @@ pub(crate) enum Command {
     },
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
+    #[command(after_help = "Examples:\n  mcp-gateway dashboard-link\n")]
     DashboardLink(dashboard_link::DashboardLinkArgs),
     /// Administer MCP Events: list and replay dead-lettered deliveries
+    #[command(after_help = "Examples:\n  mcp-gateway events dead-letters list\n")]
     Events(events::EventsArgs),
     /// Send one request to a running gateway's admin API (`/ui/api/...`) and
     /// print its JSON; reads `MCP_GATEWAY_TOKEN`.
+    #[command(after_help = "Examples:\n  mcp-gateway api GET status\n")]
     Api(api::ApiArgs),
 
     /// Lint capability YAMLs against agent-UX best practices
@@ -396,7 +433,10 @@ pub(crate) enum Command {
     /// Validates one or more capability files (or directories) against the
     /// full agent-UX rules engine (AX-001..AX-009) and reports issues with
     /// colored output. Supports JSON, SARIF, and auto-fix modes.
-    #[command(about = "Validate capability definitions against agent-UX rules")]
+    #[command(
+        about = "Validate capability definitions against agent-UX rules",
+        after_help = "Examples:\n  mcp-gateway validate ./capabilities\n"
+    )]
     Validate {
         /// Files or directories to validate (YAML capabilities)
         #[arg(required = true)]
@@ -426,14 +466,22 @@ pub(crate) enum Command {
     /// composable CLI commands.  Supports JSON args from stdin for piping:
     ///
     ///   `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
-    #[command(subcommand, about = "Invoke gateway tools directly from the CLI")]
+    #[command(
+        subcommand,
+        about = "Invoke gateway tools directly from the CLI",
+        after_help = "Examples:\n  mcp-gateway tool list\n"
+    )]
     Tool(ToolCommand),
 
     /// Generate agent skill bundles from capability definitions
     ///
     /// Converts loaded capability YAML files into Markdown skill bundles
     /// that AI agents can discover and load via the `loadSkill` convention.
-    #[command(subcommand, about = "Generate agent skill bundles")]
+    #[command(
+        subcommand,
+        about = "Generate agent skill bundles",
+        after_help = "Examples:\n  mcp-gateway skills generate\n"
+    )]
     Skills(SkillsCommand),
 
     /// Setup wizard and config export — import MCP servers or export gateway config
@@ -441,7 +489,11 @@ pub(crate) enum Command {
     /// Two sub-modes:
     ///   `setup wizard`  — scan AI clients and import MCP servers into gateway.yaml
     ///   `setup export`  — write gateway config into AI client config files
-    #[command(subcommand, about = "Setup wizard and config export")]
+    #[command(
+        subcommand,
+        about = "Setup wizard and config export",
+        after_help = "Examples:\n  mcp-gateway setup wizard\n"
+    )]
     Setup(SetupCommand),
 
     /// Add an MCP backend to the gateway configuration
@@ -473,7 +525,10 @@ pub(crate) enum Command {
     /// # Both styles work:
     /// mcp-gateway add --command "npx -y tavily-mcp@0.2.22" tavily
     /// ```
-    #[command(about = "Add an MCP backend to gateway.yaml (or the `--config` file)")]
+    #[command(
+        about = "Add an MCP backend to gateway.yaml (or the `--config` file)",
+        after_help = "Examples:\n  mcp-gateway add tavily\n"
+    )]
     Add {
         /// Name for the new backend (used as the config key and registry lookup)
         name: String,
@@ -517,7 +572,10 @@ pub(crate) enum Command {
     },
 
     /// Remove an MCP backend from the gateway configuration
-    #[command(about = "Remove an MCP backend from gateway.yaml (or the `--config` file)")]
+    #[command(
+        about = "Remove an MCP backend from gateway.yaml (or the `--config` file)",
+        after_help = "Examples:\n  mcp-gateway remove tavily\n"
+    )]
     Remove {
         /// Name of the backend to remove
         name: String,
@@ -529,7 +587,10 @@ pub(crate) enum Command {
     },
 
     /// List configured MCP backends
-    #[command(about = "List the backends configured in gateway.yaml (or the `--config` file)")]
+    #[command(
+        about = "List the backends configured in gateway.yaml (or the `--config` file)",
+        after_help = "Examples:\n  mcp-gateway list\n"
+    )]
     List {
         /// Output as JSON (codex-compatible)
         #[arg(long)]
@@ -541,7 +602,8 @@ pub(crate) enum Command {
 
     /// Get details about a specific MCP backend
     #[command(
-        about = "Show details of a backend configured in gateway.yaml (or the `--config` file)"
+        about = "Show details of a backend configured in gateway.yaml (or the `--config` file)",
+        after_help = "Examples:\n  mcp-gateway get tavily\n"
     )]
     Get {
         /// Backend name to inspect
@@ -571,7 +633,10 @@ pub(crate) enum Command {
     /// # Emit YAML rule set for SIEM import
     /// mcp-gateway doctor --shadow --shadow-format yaml
     /// ```
-    #[command(about = "Check gateway configuration and backend health")]
+    #[command(
+        about = "Check gateway configuration and backend health",
+        after_help = "Examples:\n  mcp-gateway doctor\n"
+    )]
     Doctor {
         /// Attempt to auto-fix issues where possible (e.g. create missing dirs)
         #[arg(long)]
@@ -638,7 +703,10 @@ pub(crate) enum Command {
     /// # Preview changes without writing anything
     /// mcp-gateway upgrade --dry-run
     /// ```
-    #[command(about = "Apply post-upgrade migrations and update version stamp")]
+    #[command(
+        about = "Apply post-upgrade migrations and update version stamp",
+        after_help = "Examples:\n  mcp-gateway upgrade --dry-run\n"
+    )]
     Upgrade {
         /// Show what would change without writing any files
         #[arg(long)]
@@ -665,7 +733,11 @@ pub(crate) enum Command {
     /// # Show entries for a specific session
     /// mcp-gateway audit show --session sess-abc123
     /// ```
-    #[command(subcommand, about = "Transparency log audit commands")]
+    #[command(
+        subcommand,
+        about = "Transparency log audit commands",
+        after_help = "Examples:\n  mcp-gateway audit verify\n"
+    )]
     Audit(AuditCommand),
 
     /// Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
@@ -673,7 +745,8 @@ pub(crate) enum Command {
     #[command(
         subcommand,
         hide = true,
-        about = "Sandbox runtime substrate commands (opt-in)"
+        about = "Sandbox runtime substrate commands (opt-in)",
+        after_help = "Examples:\n  mcp-gateway runtime compile ./sandbox.yaml\n"
     )]
     Runtime(RuntimeCommand),
 }
@@ -684,7 +757,10 @@ pub(crate) enum Command {
 pub enum RuntimeCommand {
     /// Compile a sandbox descriptor to its substrate bundle (gVisor OCI or
     /// Apple VM-spec), running schema + security preflight first.
-    #[command(about = "Compile a sandbox descriptor (YAML/JSON) to a substrate bundle")]
+    #[command(
+        about = "Compile a sandbox descriptor (YAML/JSON) to a substrate bundle",
+        after_help = "Examples:\n  mcp-gateway runtime compile ./sandbox.yaml\n"
+    )]
     Compile {
         /// Path to the descriptor file (YAML or JSON).
         #[arg(value_name = "DESCRIPTOR")]
@@ -708,7 +784,10 @@ pub enum ToolCommand {
     /// - JSON piped on stdin: `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
     ///
     /// Multiple sources are merged; command-line keys override stdin.
-    #[command(about = "Call a tool with JSON arguments")]
+    #[command(
+        about = "Call a tool with JSON arguments",
+        after_help = "Examples:\n  mcp-gateway tool invoke weather_current location=Oulu\n"
+    )]
     Invoke {
         /// Tool name to invoke
         #[arg(required = true)]
@@ -741,7 +820,10 @@ pub enum ToolCommand {
     /// config) and prints each tool with its description and authentication
     /// requirement. `-C` or `MCP_GATEWAY_CAPABILITIES` names another
     /// directory. `capabilities.enabled` does not change what is read.
-    #[command(about = "List tools from a local capability catalogue")]
+    #[command(
+        about = "List tools from a local capability catalogue",
+        after_help = "Examples:\n  mcp-gateway tool list\n"
+    )]
     List {
         /// Directory containing capability YAML definitions
         #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
@@ -756,7 +838,10 @@ pub enum ToolCommand {
     ///
     /// Prints the tool's description and its JSON Schema input definition,
     /// useful for discovering required/optional parameters before invoking.
-    #[command(about = "Show a tool's input schema")]
+    #[command(
+        about = "Show a tool's input schema",
+        after_help = "Examples:\n  mcp-gateway tool inspect weather_current\n"
+    )]
     Inspect {
         /// Tool name to inspect
         #[arg(required = true)]
@@ -782,7 +867,10 @@ pub enum ToolCommand {
     ///   mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
     ///   mcp-gateway tool completions bash >> ~/.bashrc
     ///   mcp-gateway tool completions fish > ~/.config/fish/completions/mcp-gateway.fish
-    #[command(about = "Generate shell completions")]
+    #[command(
+        about = "Generate shell completions",
+        after_help = "Examples:\n  mcp-gateway tool completions zsh\n"
+    )]
     Completions {
         /// Target shell
         #[arg(required = true, value_enum)]

@@ -18,7 +18,10 @@ pub enum SetupCommand {
     /// running processes for existing MCP servers, lets you pick which ones to
     /// import into the gateway config, and optionally writes the gateway entry
     /// back into each AI client so they point at the gateway instead.
-    #[command(about = "Interactive setup wizard — import existing MCP servers")]
+    #[command(
+        about = "Interactive setup wizard — import existing MCP servers",
+        after_help = "Examples:\n  mcp-gateway setup wizard\n"
+    )]
     Wizard {
         /// Skip all interactive prompts and import every discovered server
         #[arg(long)]
@@ -57,7 +60,10 @@ pub enum SetupCommand {
     /// mcp-gateway setup export --target all --dry-run
     /// ```
     #[cfg(feature = "config-export")]
-    #[command(about = "Generate client-specific MCP config files from gateway.yaml")]
+    #[command(
+        about = "Generate client-specific MCP config files from gateway.yaml",
+        after_help = "Examples:\n  mcp-gateway setup export --target all --dry-run\n"
+    )]
     Export {
         /// Target client(s) to export for
         #[arg(short, long, default_value = "all", value_enum)]

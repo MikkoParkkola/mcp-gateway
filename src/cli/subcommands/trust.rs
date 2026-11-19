@@ -14,7 +14,10 @@ use crate::cli::output::OutputFormat;
 #[derive(Subcommand, Debug)]
 pub enum TrustCommand {
     /// Generate `TrustCard` and CBOM metadata from local capability YAML files.
-    #[command(about = "Generate TrustCard metadata from local capabilities")]
+    #[command(
+        about = "Generate TrustCard metadata from local capabilities",
+        after_help = "Examples:\n  mcp-gateway trust generate\n"
+    )]
     Generate {
         /// Directory containing capability YAML definitions.
         #[arg(
@@ -35,7 +38,10 @@ pub enum TrustCommand {
     },
 
     /// Inspect one generated `TrustCard` from the local capability catalogue.
-    #[command(about = "Inspect a generated TrustCard for one capability")]
+    #[command(
+        about = "Inspect a generated TrustCard for one capability",
+        after_help = "Examples:\n  mcp-gateway trust inspect weather_current\n"
+    )]
     Inspect {
         /// Capability/server name to inspect.
         #[arg(required = true)]
@@ -56,7 +62,10 @@ pub enum TrustCommand {
     },
 
     /// Validate a `TrustCard` file or generated local capability `TrustCard`s.
-    #[command(about = "Validate TrustCard metadata")]
+    #[command(
+        about = "Validate TrustCard metadata",
+        after_help = "Examples:\n  mcp-gateway trust validate --file ./trustcard.json\n"
+    )]
     Validate {
         /// `TrustCard` JSON or YAML file to validate. If omitted, generated
         /// `TrustCard`s from --capabilities are validated.
@@ -83,7 +92,11 @@ pub enum TrustCommand {
     },
 
     /// Evaluate generated `TrustCard`s with `CatalogTrustLab`.
-    #[command(subcommand, about = "CatalogTrustLab advisory evaluation commands")]
+    #[command(
+        subcommand,
+        about = "CatalogTrustLab advisory evaluation commands",
+        after_help = "Examples:\n  mcp-gateway trust lab evaluate\n"
+    )]
     Lab(TrustLabCommand),
 }
 
@@ -91,7 +104,10 @@ pub enum TrustCommand {
 #[derive(Subcommand, Debug)]
 pub enum TrustLabCommand {
     /// Evaluate one or all local capability `TrustCard`s.
-    #[command(about = "Evaluate generated TrustCards with CatalogTrustLab")]
+    #[command(
+        about = "Evaluate generated TrustCards with CatalogTrustLab",
+        after_help = "Examples:\n  mcp-gateway trust lab evaluate\n"
+    )]
     Evaluate {
         /// Optional capability/server name to evaluate. If omitted, every
         /// generated local `TrustCard` is evaluated.
@@ -191,7 +207,10 @@ pub enum TlsCommand {
     ///
     /// Store the CA key offline (or in a vault). Use the CA cert as the
     /// `ca_cert` path in `gateway.yaml`.
-    #[command(about = "Generate a Root CA certificate and key")]
+    #[command(
+        about = "Generate a Root CA certificate and key",
+        after_help = "Examples:\n  mcp-gateway tls init-ca --output ./tls\n"
+    )]
     InitCa {
         /// Common Name for the CA certificate (e.g. "MCP Gateway Root CA")
         #[arg(long, default_value = "MCP Gateway Root CA")]
@@ -207,7 +226,10 @@ pub enum TlsCommand {
     },
 
     /// Issue a server certificate signed by the CA.
-    #[command(about = "Issue a server certificate (for the gateway)")]
+    #[command(
+        about = "Issue a server certificate (for the gateway)",
+        after_help = "Examples:\n  mcp-gateway tls issue-server --cn gw.example.com\n"
+    )]
     IssueServer {
         /// Path to the CA certificate file
         #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.crt")]
@@ -235,7 +257,10 @@ pub enum TlsCommand {
     },
 
     /// Issue a client certificate for an agent, signed by the CA.
-    #[command(about = "Issue a client certificate (for an agent)")]
+    #[command(
+        about = "Issue a client certificate (for an agent)",
+        after_help = "Examples:\n  mcp-gateway tls issue-client --cn claude-code-agent\n"
+    )]
     IssueClient {
         /// Path to the CA certificate file
         #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.crt")]
@@ -271,7 +296,10 @@ pub enum TlsCommand {
 #[derive(Subcommand, Debug)]
 pub enum AuditCommand {
     /// Verify the tamper-evidence hash chain of the transparency log
-    #[command(about = "Verify the transparency log hash chain")]
+    #[command(
+        about = "Verify the transparency log hash chain",
+        after_help = "Examples:\n  mcp-gateway audit verify\n"
+    )]
     Verify {
         /// Path to the log (default: ~/.mcp-gateway/transparency/transparency.jsonl)
         #[arg(long)]
@@ -294,11 +322,17 @@ pub enum AuditCommand {
     },
 
     /// Look up the key server's retained issuance rows by email (admin)
-    #[command(about = "Look up retained key-server issuance rows by email (admin)")]
+    #[command(
+        about = "Look up retained key-server issuance rows by email (admin)",
+        after_help = "Examples:\n  mcp-gateway audit lookup-email --email-stdin\n"
+    )]
     LookupEmail(crate::cli::audit_lookup::LookupEmailArgs),
 
     /// Show log entries for a specific session
-    #[command(about = "Show transparency log entries for a session")]
+    #[command(
+        about = "Show transparency log entries for a session",
+        after_help = "Examples:\n  mcp-gateway audit show --session sess-abc123\n"
+    )]
     Show {
         /// Session ID to filter by
         #[arg(long, required = true)]
@@ -317,11 +351,17 @@ pub enum AuditCommand {
 #[derive(Subcommand, Debug)]
 pub enum ProvenanceCommand {
     /// Export the gateway's public provenance key as JWK.
-    #[command(about = "Export the public provenance key")]
+    #[command(
+        about = "Export the public provenance key",
+        after_help = "Examples:\n  mcp-gateway provenance public-key\n"
+    )]
     PublicKey,
 
     /// Verify a signed provenance receipt against trusted public keys.
-    #[command(about = "Verify a signed provenance receipt")]
+    #[command(
+        about = "Verify a signed provenance receipt",
+        after_help = "Examples:\n  mcp-gateway provenance verify --trust ./keys.json ./receipt.json\n"
+    )]
     Verify {
         /// JSON file holding the trusted public keys (one JWK or a JWKS).
         #[arg(long)]

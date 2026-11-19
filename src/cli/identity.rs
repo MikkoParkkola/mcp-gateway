@@ -12,7 +12,11 @@ use crate::cli::output::OutputFormat;
 #[derive(Subcommand, Debug)]
 pub enum IdentityCommand {
     /// Manage local identity-grant rows for personal capabilities.
-    #[command(subcommand, about = "Manage local identity grants")]
+    #[command(
+        subcommand,
+        about = "Manage local identity grants",
+        after_help = "Examples:\n  mcp-gateway identity grants list\n"
+    )]
     Grants(IdentityGrantsCommand),
 }
 
@@ -21,7 +25,10 @@ pub enum IdentityCommand {
 #[derive(Subcommand, Debug)]
 pub enum IdentityGrantsCommand {
     /// List local grant rows.
-    #[command(about = "List local identity grants")]
+    #[command(
+        about = "List local identity grants",
+        after_help = "Examples:\n  mcp-gateway identity grants list\n"
+    )]
     List {
         /// Local JSON or YAML grant file.
         #[arg(long, default_value = "~/.mcp-gateway/identity-grants.yaml")]
@@ -37,7 +44,10 @@ pub enum IdentityGrantsCommand {
     },
 
     /// Append or replace one local grant row.
-    #[command(about = "Add a local identity grant")]
+    #[command(
+        about = "Add a local identity grant",
+        after_help = "Examples:\n  mcp-gateway identity grants grant --grant-id g1 --subject oidc:alice --capability weather --any-agent\n"
+    )]
     Grant {
         /// Local JSON or YAML grant file. Created when missing.
         #[arg(long, default_value = "~/.mcp-gateway/identity-grants.yaml")]
@@ -110,7 +120,10 @@ pub enum IdentityGrantsCommand {
     },
 
     /// Mark one local grant row as revoked.
-    #[command(about = "Revoke a local identity grant")]
+    #[command(
+        about = "Revoke a local identity grant",
+        after_help = "Examples:\n  mcp-gateway identity grants revoke --grant-id weather-access\n"
+    )]
     Revoke {
         /// Local JSON or YAML grant file.
         #[arg(long, default_value = "~/.mcp-gateway/identity-grants.yaml")]

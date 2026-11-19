@@ -16,6 +16,7 @@ pub struct EventsArgs {
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum EventsCommand {
     /// List or replay dead-lettered event deliveries; reads `MCP_GATEWAY_TOKEN`.
+    #[command(after_help = "Examples:\n  mcp-gateway events dead-letters list\n")]
     DeadLetters(DeadLettersArgs),
 }
 
