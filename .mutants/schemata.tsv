@@ -1,0 +1,5 @@
+head_sha	fde959ea707a89a03f159f0c57fa962d0edd0289
+#mutant MW
+mcp_gateway	heartbeat::tests::hardened_skips	src/heartbeat_tests.rs:181
+mcp_gateway	gateway::server::test_seams::heartbeat_start_tests::http_start_hardened_sends_nothing	src/gateway/server/heartbeat_start_tests.rs:17
+mcp_gateway	gateway::server::test_seams::heartbeat_start_tests::stdio_start_hardened_sends_nothing	src/gateway/server/heartbeat_start_tests.rs:17
