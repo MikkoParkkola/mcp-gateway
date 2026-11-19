@@ -28,6 +28,24 @@ fn walk(cmd: &clap::Command, path: &mut Vec<String>, out: &mut Vec<(String, clap
     }
 }
 
+/// As [`walk`], without hidden commands or anything under them: N1 judges the flags a user can see (lead ruling
+/// 2026-11-19).
+fn walk_visible(
+    cmd: &clap::Command,
+    path: &mut Vec<String>,
+    out: &mut Vec<(String, clap::Command)>,
+) {
+    out.push((path.join(" "), cmd.clone()));
+    for sub in cmd
+        .get_subcommands()
+        .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
+    {
+        path.push(sub.get_name().to_owned());
+        walk_visible(sub, path, out);
+        path.pop();
+    }
+}
+
 fn all_commands() -> Vec<(String, clap::Command)> {
     let mut out = Vec::new();
     walk(&built(), &mut Vec::new(), &mut out);
@@ -269,7 +287,7 @@ fn signature(arg: &clap::Arg) -> Signature {
 /// counts once, at the command that defines it; aliases count as their primary flag.
 fn leaf_flags(root: &clap::Command) -> Vec<(String, String, Signature, String, Option<String>)> {
     let mut commands = Vec::new();
-    walk(root, &mut Vec::new(), &mut commands);
+    walk_visible(root, &mut Vec::new(), &mut commands);
     let mut out = Vec::new();
     for (path, cmd) in commands {
         if cmd.has_subcommands() && !path.is_empty() {
@@ -401,9 +419,586 @@ fn flag_problems(
 
 /// The ruled table (N1). Each entry: the flag, its one meaning sentence, its signature; exceptions per leaf with
 /// the ticket that ends them; and each leaf's literal default.
-const RULED: &[Ruled] = &[];
-const EXCEPTIONS: &[Exception] = &[];
-const DEFAULTS: &[(&str, &str, Option<&str>)] = &[];
+// N1's table (lead ruling 2026-11-19): visible commands only; one ruled meaning and signature per shared flag;
+// per-leaf exceptions where a flag really means something else there, each with its own meaning line.
+const RULED: &[Ruled] = &[
+    Ruled {
+        long: "--ca-cert",
+        meaning: "PEM CA the gateway's server certificate must chain to; replaces the built-in roots. Without it, a config-derived URL on an mTLS listener trusts only `mtls.ca_cert`",
+        signature: sig_ca_cert,
+    },
+    Ruled {
+        long: "--ca-key",
+        meaning: "Path to the CA private key file",
+        signature: sig_ca_key,
+    },
+    Ruled {
+        long: "--capabilities",
+        meaning: "Root directory containing capability definitions to index",
+        signature: sig_capabilities,
+    },
+    Ruled {
+        long: "--client-cert",
+        meaning: "PEM client certificate for a listener that requires one (`mtls.require_client_cert`); pair with `--client-key`",
+        signature: sig_client_cert,
+    },
+    Ruled {
+        long: "--client-key",
+        meaning: "PEM private key for `--client-cert`",
+        signature: sig_client_key,
+    },
+    Ruled {
+        long: "--cn",
+        meaning: "Common Name of the certificate",
+        signature: sig_cn,
+    },
+    Ruled {
+        long: "--config",
+        meaning: "Path to the gateway configuration file (YAML)",
+        signature: sig_config,
+    },
+    Ruled {
+        long: "--context-integrity-profile",
+        meaning: "Context-integrity profile attached to generated draft policy defaults",
+        signature: sig_context_integrity_profile,
+    },
+    Ruled {
+        long: "--dry-run",
+        meaning: "Show what would change without writing anything",
+        signature: sig_dry_run,
+    },
+    Ruled {
+        long: "--file",
+        meaning: "Local JSON or YAML grant file",
+        signature: sig_file,
+    },
+    Ruled {
+        long: "--fix",
+        meaning: "Fix the issues found, where possible",
+        signature: sig_fix,
+    },
+    Ruled {
+        long: "--force",
+        meaning: "Overwrite what is already there",
+        signature: sig_force,
+    },
+    Ruled {
+        long: "--format",
+        meaning: "Output format",
+        signature: sig_format,
+    },
+    Ruled {
+        long: "--grant-id",
+        meaning: "The grant id",
+        signature: sig_grant_id,
+    },
+    Ruled {
+        long: "--kind",
+        meaning: "Source format to import",
+        signature: sig_kind,
+    },
+    Ruled {
+        long: "--path",
+        meaning: "Path to the log (default: ~/.mcp-gateway/transparency/transparency.jsonl)",
+        signature: sig_path,
+    },
+    Ruled {
+        long: "--prefix",
+        meaning: "String prepended to every generated capability name (e.g. \"stripe\")",
+        signature: sig_prefix,
+    },
+    Ruled {
+        long: "--registry",
+        meaning: "Registry file path (defaults to ~/.mcp-gateway/skills.json)",
+        signature: sig_registry,
+    },
+    Ruled {
+        long: "--validity-days",
+        meaning: "Validity period in days",
+        signature: sig_validity_days,
+    },
+];
+const EXCEPTIONS: &[Exception] = &[
+    Exception {
+        long: "--ca-cert",
+        leaf: "tls issue-server",
+        meaning: "Path to the CA certificate file",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--ca-cert",
+        leaf: "tls issue-client",
+        meaning: "Path to the CA certificate file",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--cn",
+        leaf: "tls init-ca",
+        meaning: "Common Name of the certificate",
+        ticket: "ruled 2026-11-19: optional here (it has a default), kept",
+    },
+    Exception {
+        long: "--config",
+        leaf: "setup export",
+        meaning: "Gateway config file to read",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--config",
+        leaf: "doctor",
+        meaning: "Gateway config file to inspect (auto-detected when omitted)",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--format",
+        leaf: "cap discover",
+        meaning: "Output format: \"table\" (human-readable), \"json\", or \"yaml\"",
+        ticket: "ruled 2026-11-19: same meaning, value set differs, kept",
+    },
+    Exception {
+        long: "--format",
+        leaf: "validate",
+        meaning: "Output format",
+        ticket: "ruled 2026-11-19: same meaning, value set differs, kept",
+    },
+    Exception {
+        long: "--json",
+        leaf: "api",
+        meaning: "Emit errors as one structured JSON object on stderr. Successful responses retain the gateway's native JSON or raw bytes",
+        ticket: "ruled 2026-11-19: different meaning, kept; MIK-9822.FLAG.1",
+    },
+    Exception {
+        long: "--json",
+        leaf: "list",
+        meaning: "Output as JSON (codex-compatible)",
+        ticket: "ruled 2026-11-19: different meaning, kept; MIK-9822.FLAG.1",
+    },
+    Exception {
+        long: "--output",
+        leaf: "cap import",
+        meaning: "Directory to write the generated capability files into",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "cap install",
+        meaning: "Local directory to save the downloaded capability into",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "cap import-url",
+        meaning: "Directory to write the generated capability files into",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "import apply",
+        meaning: "Directory to write generated draft files into",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "tls init-ca",
+        meaning: "Directory to write `ca.crt` and `ca.key` into",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "tls issue-server",
+        meaning: "Directory to write `server.crt` and `server.key`",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "tls issue-client",
+        meaning: "Directory to write `<cn>.crt` and `<cn>.key`",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "init",
+        meaning: "File path to write the generated configuration to",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--output",
+        leaf: "setup wizard",
+        meaning: "Path to write (or update) the gateway configuration file",
+        ticket: "ruled 2026-11-19: different meaning, kept",
+    },
+    Exception {
+        long: "--shadow",
+        leaf: "cap discover",
+        meaning: "Emit a passive `ShadowRadar` report for servers that are NOT registered in the gateway config",
+        ticket: "ruled 2026-11-19: different meaning, kept; MIK-9822.FLAG.1",
+    },
+    Exception {
+        long: "--shadow",
+        leaf: "doctor",
+        meaning: "Emit operator-facing DLP/firewall regex rules for network-layer MCP detection instead of running the normal health checks",
+        ticket: "ruled 2026-11-19: different meaning, kept; MIK-9822.FLAG.1",
+    },
+    Exception {
+        long: "--url",
+        leaf: "stats",
+        meaning: "Base URL of the running gateway (without /mcp suffix)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+    Exception {
+        long: "--url",
+        leaf: "dashboard-link",
+        meaning: "Gateway base URL (default as for `stats`)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+    Exception {
+        long: "--url",
+        leaf: "events dead-letters",
+        meaning: "Gateway base URL (default as for `dashboard-link`)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+    Exception {
+        long: "--url",
+        leaf: "api",
+        meaning: "Gateway base URL (default as for `dashboard-link`)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+    Exception {
+        long: "--url",
+        leaf: "add",
+        meaning: "HTTP URL for the server (streamable HTTP / SSE transport)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+    Exception {
+        long: "--url",
+        leaf: "audit lookup-email",
+        meaning: "Gateway base URL (default as for `dashboard-link`)",
+        ticket: "MIK-9683.CLIUX.24 (one --gateway flag)",
+    },
+];
+const DEFAULTS: &[(&str, &str, Option<&str>)] = &[
+    ("--ca-cert", "dashboard-link", None),
+    ("--ca-cert", "events dead-letters", None),
+    ("--ca-cert", "api", None),
+    ("--ca-cert", "audit lookup-email", None),
+    (
+        "--ca-key",
+        "tls issue-server",
+        Some("/etc/mcp-gateway/tls/ca.key"),
+    ),
+    (
+        "--ca-key",
+        "tls issue-client",
+        Some("/etc/mcp-gateway/tls/ca.key"),
+    ),
+    ("--capabilities", "cap search", Some("capabilities")),
+    ("--capabilities", "cap registry-list", Some("capabilities")),
+    ("--client-cert", "dashboard-link", None),
+    ("--client-cert", "events dead-letters", None),
+    ("--client-cert", "api", None),
+    ("--client-cert", "audit lookup-email", None),
+    ("--client-key", "dashboard-link", None),
+    ("--client-key", "events dead-letters", None),
+    ("--client-key", "api", None),
+    ("--client-key", "audit lookup-email", None),
+    ("--cn", "tls issue-server", None),
+    ("--cn", "tls issue-client", None),
+    ("--config", "", None),
+    (
+        "--context-integrity-profile",
+        "import preview",
+        Some("imported_tool_baseline"),
+    ),
+    (
+        "--context-integrity-profile",
+        "import apply",
+        Some("imported_tool_baseline"),
+    ),
+    ("--dry-run", "cap import-url", Some("false")),
+    ("--dry-run", "skills generate", Some("false")),
+    ("--dry-run", "setup export", Some("false")),
+    ("--dry-run", "upgrade", Some("false")),
+    (
+        "--file",
+        "identity grants list",
+        Some("~/.mcp-gateway/identity-grants.yaml"),
+    ),
+    (
+        "--file",
+        "identity grants grant",
+        Some("~/.mcp-gateway/identity-grants.yaml"),
+    ),
+    (
+        "--file",
+        "identity grants revoke",
+        Some("~/.mcp-gateway/identity-grants.yaml"),
+    ),
+    ("--fix", "validate", Some("false")),
+    ("--fix", "doctor", Some("false")),
+    ("--force", "cap discover", Some("false")),
+    ("--force", "import apply", Some("false")),
+    ("--force", "setup wizard", Some("false")),
+    ("--force", "add", Some("false")),
+    ("--force", "remove", Some("false")),
+    ("--format", "import preview", Some("table")),
+    ("--format", "import apply", Some("table")),
+    ("--format", "identity grants list", Some("table")),
+    ("--format", "identity grants grant", Some("table")),
+    ("--format", "identity grants revoke", Some("table")),
+    ("--format", "tool invoke", Some("json")),
+    ("--format", "tool list", Some("table")),
+    ("--format", "tool inspect", Some("table")),
+    ("--format", "doctor", Some("table")),
+    ("--grant-id", "identity grants grant", None),
+    ("--grant-id", "identity grants revoke", None),
+    ("--kind", "import preview", None),
+    ("--kind", "import apply", None),
+    ("--path", "audit verify", None),
+    ("--path", "audit show", None),
+    ("--prefix", "cap import", None),
+    ("--prefix", "cap import-url", None),
+    ("--registry", "skills import", None),
+    ("--registry", "skills list", None),
+    ("--registry", "skills search", None),
+    ("--registry", "skills show", None),
+    ("--registry", "skills remove", None),
+    ("--validity-days", "tls init-ca", Some("3650")),
+    ("--validity-days", "tls issue-server", Some("365")),
+    ("--validity-days", "tls issue-client", Some("1")),
+];
+
+fn sig_ca_cert() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CA_CERT".into()),
+        repeated: false,
+        required: false,
+        env: Some("MCP_GATEWAY_CA_CERT".into()),
+        possible: vec![],
+    }
+}
+
+fn sig_ca_key() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CA_KEY".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_capabilities() -> Signature {
+    Signature {
+        short: Some('C'),
+        takes_value: true,
+        value_name: Some("CAPABILITIES".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_client_cert() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CLIENT_CERT".into()),
+        repeated: false,
+        required: false,
+        env: Some("MCP_GATEWAY_CLIENT_CERT".into()),
+        possible: vec![],
+    }
+}
+
+fn sig_client_key() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CLIENT_KEY".into()),
+        repeated: false,
+        required: false,
+        env: Some("MCP_GATEWAY_CLIENT_KEY".into()),
+        possible: vec![],
+    }
+}
+
+fn sig_cn() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CN".into()),
+        repeated: false,
+        required: true,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_config() -> Signature {
+    Signature {
+        short: Some('c'),
+        takes_value: true,
+        value_name: Some("CONFIG".into()),
+        repeated: false,
+        required: false,
+        env: Some("MCP_GATEWAY_CONFIG".into()),
+        possible: vec![],
+    }
+}
+
+fn sig_context_integrity_profile() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("CONTEXT_INTEGRITY_PROFILE".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_dry_run() -> Signature {
+    Signature {
+        short: None,
+        takes_value: false,
+        value_name: Some("DRY_RUN".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_file() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("FILE".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_fix() -> Signature {
+    Signature {
+        short: None,
+        takes_value: false,
+        value_name: Some("FIX".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_force() -> Signature {
+    Signature {
+        short: None,
+        takes_value: false,
+        value_name: Some("FORCE".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_format() -> Signature {
+    Signature {
+        short: Some('f'),
+        takes_value: true,
+        value_name: Some("FORMAT".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec!["json".into(), "table".into(), "plain".into()],
+    }
+}
+
+fn sig_grant_id() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("GRANT_ID".into()),
+        repeated: false,
+        required: true,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_kind() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("KIND".into()),
+        repeated: false,
+        required: true,
+        env: None,
+        possible: vec![
+            "openapi".into(),
+            "graphql".into(),
+            "postman".into(),
+            "oci-mcp-package".into(),
+        ],
+    }
+}
+
+fn sig_path() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("PATH".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_prefix() -> Signature {
+    Signature {
+        short: Some('p'),
+        takes_value: true,
+        value_name: Some("PREFIX".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
+
+fn sig_registry() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("REGISTRY".into()),
+        repeated: false,
+        required: false,
+        env: Some("MCP_GATEWAY_SKILLS_REGISTRY".into()),
+        possible: vec![],
+    }
+}
+
+fn sig_validity_days() -> Signature {
+    Signature {
+        short: None,
+        takes_value: true,
+        value_name: Some("VALIDITY_DAYS".into()),
+        repeated: false,
+        required: false,
+        env: None,
+        possible: vec![],
+    }
+}
 
 /// N1 (MIK-9681.CLIUX.19): one meaning per flag name across the tree. On failure it also prints what it observed for
 /// every shared flag, so a reviewer can read the table against the tree.
