@@ -1022,6 +1022,31 @@ test('W9 a confirmed write with no answer stays in the confirm; once closed, the
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('W10 an unconfirmed write keeps that tool off after leaving the screen and coming back, until a reload', async ({ page }) => {
+  const cfg = {
+    tools: [tool('fs.write', 'fs', 'write', { type: 'object', properties: {} })],
+    onCall: (route) => route.abort('failed'),
+  };
+  const bag = await open(page, cfg);
+  const run = runOf(page, 'fs.write');
+  await expect(run).toBeVisible();
+  await run.click();
+  await asked(page, 'fs.write');
+  await sends(bag, 1, () => askRun(page, 'fs.write').click());
+  await expect(ask(page, 'fs.write')).toContainText('The gateway did not confirm the outcome.');
+  await ask(page, 'fs.write').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(run).toBeDisabled();
+  await page.locator('nav.tabs').getByRole('link', { name: 'Status', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/tools\/status$/);
+  await page.locator('nav.tabs').getByRole('link', { name: 'Actions', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/tools\/actions$/);
+  const again = runOf(page, 'fs.write');
+  await expect(again).toBeVisible();
+  await expect(again, 'still off after coming back').toBeDisabled();
+  await sends(bag, 0, () => again.click({ force: true, timeout: 5000 }));
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
 test('E1 a refused call with a receipt says Blocked and links the receipt', async ({ page }) => {
   const cfg = {};
   cfg.onCall = (route) => route.fulfill({
