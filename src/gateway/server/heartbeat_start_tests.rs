@@ -40,7 +40,7 @@ fn slow_target_for(rx: &Listener) -> seam::Target {
 }
 
 /// A running HTTP gateway and how long it took from construction to answer
-/// `/health`.
+/// `/livez`.
 struct RunningHttp {
     trigger: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<crate::Result<()>>,
@@ -48,7 +48,9 @@ struct RunningHttp {
     took: Duration,
 }
 
-/// Start the HTTP gateway on `dir` with `posture` and GET `/health`; the
+/// Start the HTTP gateway on `dir` with `posture` and GET `/livez` (it
+/// answers whenever the server serves; `/health` also reports backend and
+/// capability health, which a hardened start may degrade); the
 /// whole of it (construction, bind, answer) is bounded at 30 s.
 async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningHttp {
     let started = std::time::Instant::now();
@@ -85,7 +87,7 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
             panic!("the server ended before binding: {:?}", server.await);
         };
         let status = reqwest::Client::new()
-            .get(format!("http://127.0.0.1:{port}/health"))
+            .get(format!("http://127.0.0.1:{port}/livez"))
             .send()
             .await
             .map(|r| r.status().as_u16())
@@ -94,7 +96,7 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
     };
     let (trigger, server, status) = tokio::time::timeout(Duration::from_secs(30), run)
         .await
-        .expect("constructed, bound and answered /health within 30 s");
+        .expect("constructed, bound and answered /livez within 30 s");
     RunningHttp {
         trigger,
         server,
@@ -118,7 +120,7 @@ impl RunningHttp {
 /// W1 + F7. A hardened HTTP gateway, observed while it runs, opens no
 /// connection to the receiver and creates no heartbeat state. Control: the
 /// standard posture, against a receiver that never answers and a client that
-/// would wait a minute, answers `/health` within 30 s of construction and
+/// would wait a minute, answers `/livez` within 30 s of construction and
 /// connects to the receiver before it is stopped.
 #[tokio::test]
 async fn http_start_hardened_sends_nothing() {
