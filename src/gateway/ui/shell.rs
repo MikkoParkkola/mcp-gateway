@@ -21,6 +21,14 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
+        "activity.237d685089d2.css",
+        include_bytes!("shell/activity.237d685089d2.css"),
+    ),
+    (
+        "activity.b5afded41aee.js",
+        include_bytes!("shell/activity.b5afded41aee.js"),
+    ),
+    (
         "BigShoulders-700.5faff1f81ec2.woff2",
         include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
     ),
@@ -41,12 +49,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.9828963b2981.js",
-        include_bytes!("shell/gateway.9828963b2981.js"),
+        "gateway.09e79c7e9c83.js",
+        include_bytes!("shell/gateway.09e79c7e9c83.js"),
     ),
     (
-        "shell.2f0fa8846ded.js",
-        include_bytes!("shell/shell.2f0fa8846ded.js"),
+        "shell.04dcfe66fe5b.js",
+        include_bytes!("shell/shell.04dcfe66fe5b.js"),
     ),
     (
         "shell.c460caebf770.css",
@@ -57,24 +65,24 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
-        "tips.e6787e40c917.json",
-        include_bytes!("shell/tips.e6787e40c917.json"),
+        "tips.9279e31274d7.json",
+        include_bytes!("shell/tips.9279e31274d7.json"),
     ),
     (
         "tools.5cacef0c94f9.css",
         include_bytes!("shell/tools.5cacef0c94f9.css"),
     ),
     (
-        "tools.f8320a6ed8a4.js",
-        include_bytes!("shell/tools.f8320a6ed8a4.js"),
+        "tools.ea510090a6d7.js",
+        include_bytes!("shell/tools.ea510090a6d7.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.c4528509befc.js",
-        include_bytes!("shell/tooltip.c4528509befc.js"),
+        "tooltip.dca2f4f2ff5a.js",
+        include_bytes!("shell/tooltip.dca2f4f2ff5a.js"),
     ),
 ];
 

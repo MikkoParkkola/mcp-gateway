@@ -18,7 +18,7 @@ use rustix::fs::FileType;
 use rustix::process::{DumpableBehavior, WaitOptions, set_dumpable_behavior};
 
 use super::control_client::{self, HELPER_BOUNDS};
-use super::plan::{self, HostNamespaces, Plan};
+use super::plan::{self, Fetcher, HostNamespaces, Plan};
 
 pub(super) fn run(plan: &Plan) -> ExitCode {
     let control = match setup(plan) {
@@ -30,10 +30,15 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
     };
     let mut run = None;
     if let Some(mut control) = control {
-        let npm = plan.fetch.as_ref().and_then(|paths| paths.npm.as_ref());
-        let fetched = match npm {
-            Some(npm) => super::fetch_step::npm(&mut control, npm, plan.limits).map(Some),
-            None => fetch(&mut control).map(|()| None),
+        let fetched = match fetcher(plan) {
+            Ok(Some(Fetcher::Npm(npm))) => {
+                super::fetch_step::npm(&mut control, npm, plan.limits).map(Some)
+            }
+            Ok(Some(Fetcher::Uv(uv))) => {
+                super::fetch_uv::uv(&mut control, uv, plan.limits).map(Some)
+            }
+            Ok(None) => fetch(&mut control).map(|()| None),
+            Err(why) => Err(why),
         };
         // Dropped before any child exists, so no preview process can inherit
         // or reach the control connection.
@@ -79,11 +84,8 @@ fn setup(plan: &Plan) -> Result<Option<UnixStream>, String> {
         .map(|paths| open_path(&paths.ca, FileType::RegularFile, "the CA snapshot"))
         .transpose()?;
     // The proxy socket likewise: it sits beside the snapshot.
-    let proxy = plan
-        .fetch
-        .as_ref()
-        .and_then(|paths| paths.npm.as_ref())
-        .map(|npm| open_path(&npm.proxy, FileType::Socket, "the proxy socket"))
+    let proxy = fetcher(plan)?
+        .map(|fetcher| open_path(fetcher.proxy(), FileType::Socket, "the proxy socket"))
         .transpose()?;
     super::mounts::build_root(
         plan,
@@ -187,6 +189,15 @@ fn check_descriptors() -> Result<(), String> {
         extra.sort_unstable();
         Err(format!("checking descriptors (inherited: {extra:?})"))
     }
+}
+
+/// The one fetcher the plan names, if any; a plan naming both refuses.
+fn fetcher(plan: &Plan) -> Result<Option<Fetcher<'_>>, String> {
+    plan.fetch
+        .as_ref()
+        .map(super::plan::FetchPaths::fetcher)
+        .transpose()
+        .map(Option::flatten)
 }
 
 /// Start the target through `__preview-drop` and stay as PID 1 until it

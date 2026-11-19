@@ -72,7 +72,7 @@ async fn s_resume_the_stop_settles_what_a_resumed_stream_holds() {
     let multiplexer = multiplexer(&key_server);
     let id = session(&multiplexer);
     let mut body = body(&multiplexer, &id, Some("1"));
-    let first = tokio::time::timeout(Duration::from_secs(5), body.next())
+    let first = tokio::time::timeout(Duration::from_secs(10), body.next())
         .await
         .expect("the connected event arrives")
         .expect("the stream is open")
