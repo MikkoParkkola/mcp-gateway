@@ -123,7 +123,7 @@ impl RunningHttp {
 #[tokio::test]
 async fn http_start_hardened_sends_nothing() {
     let rx = Listener::start(Answer::NoContent).await;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let _guard = seam::register(dir.path(), target_for(&rx));
     let hardened = start_http(dir.path(), SecurityPosture::Hardened).await;
     assert_eq!(hardened.status, 200);
@@ -136,7 +136,7 @@ async fn http_start_hardened_sends_nothing() {
     hardened.stop().await;
 
     let hang = Listener::start(Answer::Never).await;
-    let control = tempfile::tempdir().expect("dir");
+    let control = crate::test_dir_keep::kept_tempdir();
     let _control_guard = seam::register(control.path(), slow_target_for(&hang));
     let standard = start_http(control.path(), SecurityPosture::Standard).await;
     assert_eq!(standard.status, 200);
@@ -227,7 +227,7 @@ impl RunningStdio {
 #[tokio::test]
 async fn stdio_start_hardened_sends_nothing() {
     let rx = Listener::start(Answer::NoContent).await;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let _guard = seam::register(dir.path(), target_for(&rx));
     let hardened = start_stdio(dir.path(), SecurityPosture::Hardened).await;
     assert!(hardened.answered, "no reply to ping");
@@ -237,7 +237,7 @@ async fn stdio_start_hardened_sends_nothing() {
     hardened.stop().await;
 
     let hang = Listener::start(Answer::Never).await;
-    let control = tempfile::tempdir().expect("dir");
+    let control = crate::test_dir_keep::kept_tempdir();
     let _control_guard = seam::register(control.path(), slow_target_for(&hang));
     let standard = start_stdio(control.path(), SecurityPosture::Standard).await;
     assert!(standard.answered, "ping waited on the heartbeat");
