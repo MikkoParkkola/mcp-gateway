@@ -325,6 +325,9 @@ fn assert_teardown(root: &Path, log_before: usize, marked_while_running: bool) {
         "Saved search ranking usage data",
         "Saved transition tracking data",
         "Shutting down backends",
+        // The stage reaching this backend, logged by the stage itself: with the
+        // mark, the stdin close is the stage's, not the exit's.
+        "Stopping backend",
     ] {
         assert!(after.contains(line), "the stop skipped {line:?}\n{after}");
     }
