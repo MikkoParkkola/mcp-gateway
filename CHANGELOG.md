@@ -208,6 +208,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queries.
 
 ### Changed
+- **A tool whose nested `x-mcp-header` declarations are invalid or repeat a
+  header name is no longer listed.** Validation now reads `properties` down to
+  32 levels below the root, as the mirroring does, so a declaration inside a
+  nested object that breaks a constraint (an empty or non-token name, a control
+  character, an unsupported type, or a name already declared at any level,
+  compared ignoring case) leaves the tool out of `tools/list`, as a top-level
+  one already did. Such a tool was listed before and its nested declaration
+  silently ignored; after upgrading it disappears from the list until its
+  server fixes the schema.
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the
   `gateway_list_tools` / `gateway_search_tools` descriptions all derive their
