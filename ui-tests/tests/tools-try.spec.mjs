@@ -828,6 +828,7 @@ test('W2 confirm sends confirm_write true and draws the answer in the panel; Esc
   await expect(ask(page, 'fs.write')).toHaveCount(0);
   await expect(panel(page)).toContainText('Answered in 212 ms');
   await expect(panel(page)).toContainText('wrote it');
+  await expect(run, 'focus back on Run after the confirm closes').toBeFocused();
   await run.click();
   await asked(page, 'fs.write');
   await sends(bag, 0, () => page.keyboard.press('Escape'));
@@ -890,6 +891,7 @@ test('W4 cancel after a 409 sends nothing more and keeps the form', async ({ pag
   await expect(ask(page, 'web.search')).toHaveCount(0);
   expect(bag.calls).toHaveLength(1);
   await expect(page.getByLabel('query')).toHaveValue('helsinki');
+  await expect(run, 'focus back on Run after the confirm closes').toBeFocused();
 });
 
 test('W5 focus starts on Cancel: Enter and Esc keep, only the dialog\'s Run sends', async ({ page }) => {
@@ -938,6 +940,7 @@ test('W6 the write confirm\'s Cancel button sends nothing and keeps the form', a
   expect(bag.calls).toHaveLength(0);
   await expect(page.getByLabel('path')).toHaveValue('/tmp/kept');
   await expect(run).toBeEnabled();
+  await expect(run, 'focus back on Run after the confirm closes').toBeFocused();
 });
 
 test('W7 a 409 after opening Status shows no confirm and sends nothing more', async ({ page }) => {
@@ -996,7 +999,7 @@ test('W8 a confirmed write that is blocked closes the confirm and draws Blocked 
   await expect(panel(page)).toContainText('the firewall rule denied this call');
 });
 
-test('W9 a confirmed write with no answer stays in the confirm, which says the outcome is not confirmed', async ({ page }) => {
+test('W9 a confirmed write with no answer stays in the confirm; once closed, the panel says so and Run stays off', async ({ page }) => {
   const cfg = {
     tools: [tool('fs.write', 'fs', 'write', { type: 'object', properties: {} })],
     onCall: (route) => route.abort('failed'),
@@ -1010,6 +1013,13 @@ test('W9 a confirmed write with no answer stays in the confirm, which says the o
   await expect(ask(page, 'fs.write')).toContainText('The gateway did not confirm the outcome.');
   await expect(ask(page, 'fs.write')).toContainText('Reload to see whether fs.write changed.');
   await expect(panel(page)).not.toContainText('No answer from the gateway');
+  await ask(page, 'fs.write').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(ask(page, 'fs.write')).toHaveCount(0);
+  await expect(panel(page)).toContainText('fs.write may have run; the gateway did not confirm it');
+  await expect(panel(page)).toContainText('Reload the page before running it again.');
+  await expect(run).toBeDisabled();
+  await sends(bag, 0, () => run.click({ force: true, timeout: 5000 }));
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('E1 a refused call with a receipt says Blocked and links the receipt', async ({ page }) => {
