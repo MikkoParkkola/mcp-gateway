@@ -595,22 +595,6 @@ function outcomeNodes({ status, unreadable, body, message }) {
   return nodes;
 }
 
-function askToRun(name) {
-  return new Promise((resolve) => {
-    const title = h('p', { id: 'try-ask-title' }, `${name} can change things. Run it?`);
-    const goBtn = h('button', { type: 'button', class: 'btn' }, 'Run');
-    const cancelBtn = h('button', { type: 'button', class: 'btn' }, 'Cancel');
-    const dialog = h('dialog', { class: 'tools-try-ask', 'aria-labelledby': 'try-ask-title' }, title, goBtn, cancelBtn);
-    let yes = false;
-    goBtn.addEventListener('click', () => { yes = true; dialog.close(); });
-    cancelBtn.addEventListener('click', () => { dialog.close(); });
-    dialog.addEventListener('close', () => { dialog.remove(); resolve(yes); });
-    document.body.append(dialog);
-    dialog.showModal();
-    goBtn.focus();
-  });
-}
-
 function mountTryForm(slot, answer, tools, ctx) {
   const section = answer.closest('section');
   let seq = 0;
@@ -668,15 +652,15 @@ function mountTryForm(slot, answer, tools, ctx) {
     if (counts) nodes.push(h('p', {}, counts));
     stepNodes = nodes;
     paint(runId);
+    ctx.announce(`Recorded in Activity as a call by ${account}`);
   };
 
   const paintMiss = (runId, sawError, receipt) => {
     if (runId !== seq) return;
-    stepNodes = [
-      h('p', {}, sawError ? 'Firewall steps could not be read' : 'Firewall steps not recorded yet'),
-      h('p', {}, receipt),
-    ];
+    const line = sawError ? 'Firewall steps could not be read' : 'Firewall steps not recorded yet';
+    stepNodes = [h('p', {}, line), h('p', {}, receipt)];
     paint(runId);
+    ctx.announce(line);
   };
 
   const lookupReceipt = async (runId, receipt, content) => {
@@ -716,14 +700,19 @@ function mountTryForm(slot, answer, tools, ctx) {
     mainNodes = outcomeNodes(info);
     stepNodes = [];
     paint(runId);
+    ctx.announce(mainNodes[0].textContent);
     const receipt = info.body && typeof info.body.receipt === 'string' ? info.body.receipt : '';
     if (receipt) lookupReceipt(runId, receipt, contentOf(info.body));
   };
 
-  const callTool = async (runId, tool, args, confirmWrite) => {
-    let body;
+  /**
+   * One call. Every answer the gateway gives comes back as what the panel draws; a 401
+   * (sign-in takes over) and no readable answer throw, so inside the confirm they are
+   * the shell's own states.
+   */
+  const send = async (tool, args, confirmWrite) => {
     try {
-      body = await ctx.api('/ui/api/tools/call', {
+      const body = await ctx.api('/ui/api/tools/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -733,32 +722,43 @@ function mountTryForm(slot, answer, tools, ctx) {
           confirm_write: confirmWrite,
         }),
       });
+      return { status: 200, body };
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.unreadable || err.status === 0 || err.status === 401) throw err;
+      return { status: err.status, body: err.body, message: err.serverMessage, code: err.code };
+    }
+  };
+
+  /** The shell's one deciding-action dialog (UI1.19) runs the confirmed call. */
+  const confirmRun = (tool, args) => ctx.confirm({
+    opener: runBtn,
+    key: `tools-try:${tool.server}/${tool.name}`,
+    verb: 'Run',
+    object: tool.name,
+    progress: `Running ${tool.name}…`,
+    consequences: [`${tool.name} can change things.`],
+    run: () => send(tool, args, true),
+  });
+
+  const callTool = async (runId, tool, args) => {
+    let info;
+    try {
+      info = await send(tool, args, false);
     } catch (err) {
       if (err?.name === 'AbortError') return;
-      if (runId !== seq) return;
-      if (err instanceof ApiError && !confirmWrite
-          && (err.code === 'confirm_write_required' || err.body?.error === 'confirm_write_required')) {
-        // A confirm for a run the user has left, or for an older run, never opens and never resends.
-        if (runId !== seq || !section.isConnected) return;
-        const yes = await askToRun(tool.name);
-        if (runId !== seq || !section.isConnected || !yes) return;
-        return callTool(runId, tool, args, true);
-      }
-      if (runId !== seq) return;
-      if (err instanceof ApiError) {
-        showOutcome(runId, {
-          status: err.status,
-          unreadable: err.unreadable,
-          body: err.body,
-          message: err.serverMessage,
-        });
-        return;
-      }
-      showOutcome(runId, { status: 0 });
-      return;
+      info = err instanceof ApiError
+        ? { status: err.status, unreadable: err.unreadable, body: err.body, message: err.serverMessage }
+        : { status: 0 };
     }
     if (runId !== seq) return;
-    showOutcome(runId, { status: 200, body });
+    if (info.status === 409 && (info.code === 'confirm_write_required' || info.body?.error === 'confirm_write_required')) {
+      // A confirm for a run the user has left, or for an older run, never opens and never resends.
+      if (!section.isConnected) return;
+      const res = await confirmRun(tool, args);
+      if (res.outcome !== 'done' || runId !== seq || !section.isConnected) return;
+      info = res.value;
+    }
+    showOutcome(runId, info);
   };
 
   const syncRun = () => {
@@ -773,14 +773,13 @@ function mountTryForm(slot, answer, tools, ctx) {
     inFlight = true;
     syncRun();
     try {
-      let confirmWrite = false;
       if (tool.class !== 'read') {
-        const yes = await askToRun(tool.name);
-        if (!yes || !section.isConnected) return;
-        confirmWrite = true;
+        const res = await confirmRun(tool, args);
+        if (res.outcome !== 'done' || !section.isConnected) return;
+        showOutcome(++seq, res.value);
+        return;
       }
-      const runId = ++seq;
-      await callTool(runId, tool, args, confirmWrite);
+      await callTool(++seq, tool, args);
     } finally {
       inFlight = false;
       syncRun();
@@ -812,7 +811,6 @@ async function actionsTab(body, ctx) {
     class: 'tk tools-try',
     'data-try-stub': true,
     'aria-labelledby': titleId,
-    'aria-live': 'polite',
   }, h('h2', { class: 'kicker', id: titleId }, 'Try a tool'));
   const slot = h('div', { class: 'tools-try-slot' });
   const answer = h('div', { class: 'tools-try-answer' });
