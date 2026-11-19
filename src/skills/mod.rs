@@ -105,6 +105,7 @@ mod tests {
         named.insert(
             "primary".to_owned(),
             ProviderConfig {
+                rate_limit: None,
                 service: "rest".to_owned(),
                 cost_per_call: 0.0,
                 timeout: 30,
@@ -112,6 +113,7 @@ mod tests {
             },
         );
         CapabilityDefinition {
+            attribution: None,
             fulcrum: "1.0".to_owned(),
             name: name.to_owned(),
             description: format!("Desc of {name}"),

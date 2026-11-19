@@ -29,6 +29,9 @@
 
 pub mod api;
 pub mod audit_lookup;
+/// The leaf commands' output classes and error-conversion state, enforced by its rows.
+#[cfg(test)]
+mod command_classes;
 pub mod completion;
 pub mod dashboard_link;
 pub(crate) mod entry;

@@ -1,0 +1,9 @@
+head e8a093c911bd53ca6da9a8115befd00cb6807a2a run 44215521926
+geocode 2026-11-18T01:24:16.495Z 200 application/json; charset=utf-8 https://geocoding-api.open-meteo.com/v1/search?name=Helsinki&count=5
+geocode_none 2026-11-18T01:24:17.490Z 200 application/json; charset=utf-8 https://geocoding-api.open-meteo.com/v1/search?name=Qxzvqzzyx&count=5
+weather 2026-11-18T01:24:18.480Z 200 application/json; charset=utf-8 https://api.open-meteo.com/v1/forecast?latitude=60.1699&longitude=24.9384&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,sunrise,sunset&timezone=auto
+nominatim_search 2026-11-18T01:24:19.619Z 200 application/json; charset=utf-8 https://nominatim.openstreetmap.org/search?q=Helsinki+Cathedral&format=jsonv2&limit=5
+nominatim_reverse 2026-11-18T01:24:20.935Z 200 application/json; charset=utf-8 https://nominatim.openstreetmap.org/reverse?lat=60.1699&lon=24.9384&format=jsonv2&zoom=18
+photon_search 2026-11-18T01:24:22.368Z 200 application/json https://photon.komoot.io/api/?q=Helsinki+Cathedral&limit=5
+overpass_nearby 2026-11-18T01:24:24.197Z 200 application/json https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3Bnwr%28around%3A500%2C60.1699%2C24.9384%29%5Bamenity%3Dcafe%5D%3Bout%20center%2020%3B
+osrm_route 2026-11-18T01:25:02.397Z 200 application/json; charset=UTF-8 https://router.project-osrm.org/route/v1/driving/24.9384,60.1699;22.2666,60.4518?overview=false

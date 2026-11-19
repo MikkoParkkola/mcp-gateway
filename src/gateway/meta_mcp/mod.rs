@@ -801,6 +801,10 @@ mod guide_alloc_tests;
 #[cfg(tp2)]
 #[cfg(test)]
 mod legacy_row_planted_tests;
+/// Pacing and attribution through `gateway_invoke`.
+#[cfg(tp2)]
+#[cfg(test)]
+mod maps_invoke_tests;
 #[cfg(tp2)]
 #[cfg(test)]
 mod oracle_audit_tests;

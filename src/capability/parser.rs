@@ -55,7 +55,9 @@ pub(crate) fn parse_capability_text(
     content: &str,
     path: &std::path::Path,
 ) -> Result<CapabilityDefinition> {
+    super::definition::maps_rules::check_raw(path, content)?;
     let mut capability = parse_capability(content)?;
+    super::definition::maps_rules::check_parsed(path, &capability)?;
 
     // ── Rug-pull guard: SHA-256 pin verification ────────────────────────────
     //

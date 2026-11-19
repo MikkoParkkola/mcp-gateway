@@ -41,36 +41,40 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.a15765357c1f.js",
-        include_bytes!("shell/gateway.a15765357c1f.js"),
+        "gateway.9828963b2981.js",
+        include_bytes!("shell/gateway.9828963b2981.js"),
     ),
     (
-        "shell.8a1ede0f5317.css",
-        include_bytes!("shell/shell.8a1ede0f5317.css"),
+        "shell.2f0fa8846ded.js",
+        include_bytes!("shell/shell.2f0fa8846ded.js"),
     ),
     (
-        "shell.b410045c062e.js",
-        include_bytes!("shell/shell.b410045c062e.js"),
+        "shell.c460caebf770.css",
+        include_bytes!("shell/shell.c460caebf770.css"),
     ),
     (
-        "tips.93dac071a1b5.json",
-        include_bytes!("shell/tips.93dac071a1b5.json"),
+        "shell.nojs.4e34f233c1ba.css",
+        include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
+    ),
+    (
+        "tips.e6787e40c917.json",
+        include_bytes!("shell/tips.e6787e40c917.json"),
     ),
     (
         "tools.5cacef0c94f9.css",
         include_bytes!("shell/tools.5cacef0c94f9.css"),
     ),
     (
-        "tools.f6a41316d873.js",
-        include_bytes!("shell/tools.f6a41316d873.js"),
+        "tools.f8320a6ed8a4.js",
+        include_bytes!("shell/tools.f8320a6ed8a4.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.d82a4a9834d8.js",
-        include_bytes!("shell/tooltip.d82a4a9834d8.js"),
+        "tooltip.c4528509befc.js",
+        include_bytes!("shell/tooltip.c4528509befc.js"),
     ),
 ];
 
@@ -120,7 +124,9 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::REFERRER_POLICY, "no-referrer"),
+            // A no-referrer document posts Origin null, which the origin gate refuses.
+            // same-origin still sends no Referer off this origin.
+            (header::REFERRER_POLICY, "same-origin"),
         ],
         Html(DOCUMENT),
     )

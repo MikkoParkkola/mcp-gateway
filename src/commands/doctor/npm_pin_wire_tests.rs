@@ -533,11 +533,12 @@ async fn child(fake: &Fake, mode: &str, env: &[(&str, &str)]) -> String {
         let _ = write!(hex, "{b:02x}");
         hex
     });
-    let exe = std::env::current_exe().expect("the test binary");
-    let mut command = tokio::process::Command::new(exe);
+    let mut command = tokio::process::Command::from(crate::test_home::test_binary());
     command
         .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
         .env_clear()
+        // The clear drops the parent's home too: give it back, before the row's own values.
+        .envs(crate::test_home::child_env())
         .env("NPM_PIN_CHILD", mode)
         .env("NPM_PIN_BASE", fake.base().as_str())
         .env("NPM_PIN_CA", hex);

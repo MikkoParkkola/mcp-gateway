@@ -1,0 +1,8 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola
+   SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* Linked only inside <noscript>: with script off the card is the sign-in form,
+   shown though it carries `hidden`, with the no-JavaScript note instead of the
+   tab-only one. A browser running script never loads this sheet. */
+#signin[hidden] { display: grid; }
+#signin .signin-note-nojs { display: block; }
+#signin .signin-note-tab { display: none; }

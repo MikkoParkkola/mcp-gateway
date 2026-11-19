@@ -31,7 +31,7 @@ pub(super) fn kill_log(dir: &Path) -> PathBuf {
 /// cleanly. Only success is refused, since an abort's status differs per
 /// platform.
 pub(super) fn killed_at(at: At, dir: &Path) {
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
+    let out = crate::test_home::test_binary()
         .args([
             "--exact",
             "security::transparency_log::kill_tests::child",

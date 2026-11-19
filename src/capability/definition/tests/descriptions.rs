@@ -203,6 +203,7 @@ fn make_capability_with_schema(
     input: serde_json::Value,
 ) -> CapabilityDefinition {
     CapabilityDefinition {
+        attribution: None,
         fulcrum: "1.0".to_string(),
         name: name.to_string(),
         description: description.to_string(),

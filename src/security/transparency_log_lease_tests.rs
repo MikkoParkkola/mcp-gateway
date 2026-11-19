@@ -101,7 +101,7 @@ fn another_process_is_refused_for_the_whole_life_of_the_logger() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = log_path(&dir);
     let child = || {
-        std::process::Command::new(std::env::current_exe().unwrap())
+        crate::test_home::test_binary()
             .args([
                 "--exact",
                 "security::transparency_log::lease_tests::lease_child_process",

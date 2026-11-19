@@ -1968,6 +1968,17 @@
         "src/events/fanout_tests.rs"
       ],
       "note": "Graded 2026-10-06 at 409e95619 (PR #3053). Red first: CI run 37389841733 on tests-only head fa3b5f303 failed an_occurrence_with_a_lifecycle_key_reaches_only_its_holders (src/events/fanout_tests.rs:342) at its own assertion (:406). Green: CI run 37392187866 at head 363e96f2b; feature combinations run 37410040809 green. Mutants m1-m3 all RED (run 37412373714 on 363e96f2b: no filter, inverted key, keyless occurrence dropped). The row delivers a keyed occurrence only to holders of its key, a key nobody holds reaches no one (:416), and a keyless occurrence still reaches every matching subscription."
+    },
+    {
+      "id": "MIK-9760.MAPS.11",
+      "status": "pending",
+      "stage": "built",
+      "blocked_on": "none",
+      "evidence": [
+        "src/capability/maps_live_tests.rs",
+        "tests/fixtures/maps/PROVENANCE.md"
+      ],
+      "note": "Added 2026-11-18 on the lead's instruction, logged for operator ratification (the operator can strike it). Met when the maps-live-smoke run on the release-candidate commit shows all eight live rows passing, maps_live_overpass included; the evidence then names that run id. Status at the map tools' pull request (#5056): the first live run (44215521926) recorded all eight providers at HTTP 200, Overpass included (tests/fixtures/maps/run-44215521926), and T-overpass-success replays that answer and checks the gateway's outgoing request against the one Overpass answered. Live gateway rows, each 7 of 8 with only maps_live_overpass failing: run 44219812883 attempt 1, Overpass answered 502 at capacity; attempts 2 and 3, the request was cut at 30.1 s by the gateway's own 30 s provider default while the record job's curl got 200 after about 26 s and 37 s, so overpass_nearby now waits 55 s (#5056); run 44251057257 on that fix, a transport failure after 0.28 s whose cause the capability error does not show. A follow-up makes that cause visible and lands before the release-candidate run, so that run tells a provider error from a gateway defect."
     }
   ],
   "decisions": [

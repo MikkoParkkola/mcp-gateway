@@ -22,7 +22,9 @@ const PORT_B: &str = "server:\n  port: 39002\n";
 pub(super) const MARKER: &[u8] = b"GWMARK-7f3a";
 
 pub(super) struct Rig {
-    pub(super) dir: tempfile::TempDir,
+    /// Shared, so a kept dir (`crate::test_dir_keep`) can outlive the rig in a
+    /// store a late worker still holds.
+    pub(super) dir: Arc<tempfile::TempDir>,
     pub(super) path: PathBuf,
     pub(super) ctx: Arc<ReloadContext>,
     pub(super) store: Arc<ConfigHistory>,
@@ -33,7 +35,8 @@ pub(super) fn rig(yaml: &str) -> Rig {
 }
 
 /// [`rig`] in `dir`, so a test can install seams for it before the store opens.
-pub(super) fn rig_in(dir: tempfile::TempDir, yaml: &str) -> Rig {
+pub(super) fn rig_in(dir: impl Into<Arc<tempfile::TempDir>>, yaml: &str) -> Rig {
+    let dir = dir.into();
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, yaml).expect("write config");
     // The startup inputs as a real start reads them, process overrides

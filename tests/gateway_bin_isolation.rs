@@ -55,6 +55,96 @@ fn a_cleared_environment_still_opens_the_store_under_the_fixture_home() {
     );
 }
 
+/// R8 (D2): in the gateway binary the operator's `MCP_GATEWAY_CONFIG_DIR`
+/// still decides the data dir when a test home is set. The task store is
+/// home-derived (`tasks.store_dir`), so it proves only that the gateway started;
+/// the protocol-revision window it saves on shutdown lives in the data dir, so
+/// it must land under the operator's dir and not under the home's default. The
+/// test-home rule that ignores the variable applies only to test builds.
+#[test]
+fn the_operator_data_dir_wins_over_the_test_home_in_the_binary() {
+    let fixture = tempfile::tempdir().expect("a fixture home");
+    let operator = tempfile::tempdir().expect("an operator data dir");
+    let started = fixture.path().join(".mcp-gateway").join("tasks");
+    let window =
+        |data: &std::path::Path| data.join("protocol-revision-telemetry").join("window.json");
+    let home_data = fixture.path().join(".mcp-gateway");
+    let mut child = gateway_bin::command(fixture.path(), gateway_bin::Inherit::Nothing)
+        .env("MCP_GATEWAY_CONFIG_DIR", operator.path())
+        .args(["serve", "--stdio"])
+        .current_dir(fixture.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn() // spawn-check: waits for exit: the row reaps it before its fixture drops
+        .expect("the gateway starts");
+
+    // Bounded only as a hang guard: the home-derived store appears as it starts.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !started.is_dir() && Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("child status") {
+            panic!("the gateway exited ({status}) before it started");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !started.is_dir() {
+        // Reap it first: a panic here would leave it running over its fixture.
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the gateway never started");
+    }
+
+    // End of stdin is an orderly stdio shutdown, which saves the window.
+    drop(child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.try_wait().expect("child status").is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.wait();
+    let listing = |root: &std::path::Path| {
+        walk(root)
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        window(operator.path()).is_file(),
+        "no protocol-revision window under MCP_GATEWAY_CONFIG_DIR:\n{}\nhome:\n{}",
+        listing(operator.path()),
+        listing(fixture.path())
+    );
+    assert!(
+        !window(&home_data).exists(),
+        "the window also landed in the home's default data dir:\n{}",
+        listing(fixture.path())
+    );
+}
+
+/// Paths under `root`, depth first, for a failure message: symlinked dirs are
+/// not entered, and the listing stops at 200 entries.
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if found.len() >= 200 {
+                return found;
+            }
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
+    found
+}
+
 /// `gateway_bin::Reaped`: a test's gateway is stopped, and every process it
 /// started is gone, before the folders it writes into are removed.
 #[cfg(unix)]
