@@ -19,12 +19,12 @@ use crate::security::posture::SecurityPosture;
 /// One request as the listener saw it.
 #[derive(Clone, Debug)]
 pub(crate) struct Seen {
-    method: String,
-    path: String,
-    query: Option<String>,
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) query: Option<String>,
     /// Header name (lowercase) to value.
-    headers: BTreeMap<String, String>,
-    body: String,
+    pub(crate) headers: BTreeMap<String, String>,
+    pub(crate) body: String,
 }
 
 /// How the listener answers.
@@ -158,7 +158,7 @@ pub(crate) fn nov19() -> Option<NaiveDate> {
 pub(crate) fn nov20() -> Option<NaiveDate> {
     day(20)
 }
-fn nov18() -> Option<NaiveDate> {
+pub(crate) fn nov18() -> Option<NaiveDate> {
     day(18)
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn release() -> Snapshot {
 }
 
 /// `release()` with one variable set.
-fn with(name: &str, value: &str) -> Snapshot {
+pub(crate) fn with(name: &str, value: &str) -> Snapshot {
     let mut s = release();
     s.env.insert(name.to_owned(), value.to_owned());
     s
@@ -184,7 +184,7 @@ pub(crate) fn test_client() -> reqwest::Client {
 
 /// The runtime string for this host, written out (not built from the code's
 /// expression).
-fn expected_runtime() -> &'static str {
+pub(crate) fn expected_runtime() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux/x86_64",
         ("linux", "aarch64") => "linux/aarch64",
