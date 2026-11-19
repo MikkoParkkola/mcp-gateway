@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Text pre-check for two clippy lints that cost a Spark lint round when they slip through (no compile needed).
 
   too_many_lines   a fn body with more than LIMIT non-blank, non-comment lines between its braces (clippy's own
