@@ -413,14 +413,11 @@ pub(crate) fn production_builder() -> reqwest::ClientBuilder {
     base_builder().https_only(true)
 }
 
-/// The release client. A builder error leaves an HTTPS-only default client.
+/// The release client. A builder error (no TLS backend) leaves the default
+/// client; the release URL is HTTPS either way and redirects stay off only
+/// in the built one, so that case sends to the literal URL alone.
 pub(crate) fn production_client() -> reqwest::Client {
-    production_builder().build().unwrap_or_else(|_| {
-        reqwest::Client::builder()
-            .https_only(true)
-            .build()
-            .unwrap_or_default()
-    })
+    production_builder().build().unwrap_or_default()
 }
 
 /// Where and how the release task sends: the literal receiver URL and the
