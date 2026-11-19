@@ -25,6 +25,10 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
 /// poll interval and a loaded host's scheduling, not a second stop.
 const BUDGET_SLACK: Duration = Duration::from_secs(2);
+/// When a supervisor kills a gateway still running past its stop total. The
+/// kill reaches only the gateway's own process, so the backend tree must be
+/// gone by then.
+const EXTERNAL_KILL_AFTER: Duration = Duration::from_secs(1);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
 /// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
@@ -94,6 +98,55 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     )
     .expect("config");
     path
+}
+/// The floor this binary puts under an HTTP stop total, as its own refusal of a
+/// one-second total states it. A row that runs at this value follows the
+/// product when the floor moves, where a copied number would quietly test a
+/// larger budget.
+async fn http_floor_from_binary() -> Duration {
+    let temp = tempfile::tempdir().expect("temp root");
+    let root = temp.path();
+    let mut config = base_config(root, "probe");
+    config.server.host = "127.0.0.1".into();
+    config.server.port = gateway_bin::ANY_PORT;
+    config.server.shutdown_timeout = Duration::from_secs(1);
+    let path = save(root, "probe.yaml", &config);
+    let out = tokio::process::Command::from(gateway_bin::command(
+        &root.join("home"),
+        gateway_bin::Inherit::Environment,
+    ))
+    .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+    .current_dir(root)
+    .arg("--config")
+    .arg(path)
+    .output()
+    .await
+    .expect("the probe start ran");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "a one-second stop total was accepted\n{said}"
+    );
+    let tail = said
+        .split("set it to at least ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the refusal names no floor\n{said}"));
+    let digits: String = tail
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let secs: f64 = digits
+        .parse()
+        .unwrap_or_else(|_| panic!("the refusal's floor does not read as seconds\n{said}"));
+    assert!(
+        tail[digits.len()..].starts_with('s'),
+        "the refusal's floor is not given in seconds\n{said}"
+    );
+    Duration::from_secs_f64(secs)
 }
 fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
     std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
@@ -417,13 +470,18 @@ const PARENT_30S: Duration = Duration::from_secs(30);
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
+    let floor = http_floor_from_binary().await;
+    let stop = run(floor, Duration::from_secs(8), &["leaf"]).await;
     let gone = stop.gone_at.duration_since(stop.sent);
-    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    // Every recorded pid of the tree (inner, leaf, the leaf's own child) must
+    // be gone before a supervisor's kill one second past the total, which
+    // would end the outer gateway alone and orphan the rest. The poll can
+    // only see the end late, so a pass is never early.
+    // timing-oracle: vs EXTERNAL_KILL_AFTER (why: the kill a supervisor sends past the total reaches the outer gateway only)
     assert!(
-        gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
-        HTTP_MINIMUM + BUDGET_SLACK,
+        gone <= floor + EXTERNAL_KILL_AFTER,
+        "the chain outlived an external kill at the total plus {EXTERNAL_KILL_AFTER:?}: \
+         {gone:?} against a {floor:?} total\n{}",
         stop.logs
     );
     // P4 (RETIRE.4): a full-budget stop, measured to the outer process's exit, ends inside
@@ -431,8 +489,8 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
     let exited = stop.exited_at.duration_since(stop.sent);
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the process exits inside the stop total, short of the watchdog's slack)
     assert!(
-        exited <= HTTP_MINIMUM + Duration::from_millis(200),
-        "the gateway exited {exited:?} after its SIGTERM, past its {HTTP_MINIMUM:?} total\n{}",
+        exited <= floor + Duration::from_millis(200),
+        "the gateway exited {exited:?} after its SIGTERM, past its {floor:?} total\n{}",
         stop.logs
     );
 }
