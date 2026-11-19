@@ -433,6 +433,12 @@ mod tests {
     /// their order, on one line with one newline; a view that cannot serialize is an error, not a partial line.
     #[test]
     fn document_puts_schema_version_first_on_one_line() {
+        struct Refuses;
+        impl serde::Serialize for Refuses {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("refused"))
+            }
+        }
         #[derive(serde::Serialize)]
         struct View {
             zeta: u8,
@@ -446,12 +452,6 @@ mod tests {
             Ok("{\"schema_version\":1,\"zeta\":7,\"alpha\":\"a\"}\n".to_owned())
         );
 
-        struct Refuses;
-        impl serde::Serialize for Refuses {
-            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
-                Err(serde::ser::Error::custom("refused"))
-            }
-        }
         assert!(document(&Refuses).is_err());
     }
 }

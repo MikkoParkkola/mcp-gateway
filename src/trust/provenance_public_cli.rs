@@ -113,7 +113,7 @@ fn run_verify(
     render: crate::cli::output::Render,
 ) -> ExitCode {
     verdict_printed(
-        verify_receipt(trust_path, receipt_path, result_path),
+        &verify_receipt(trust_path, receipt_path, result_path),
         signature_only,
         accept_unbound,
         render,
@@ -121,7 +121,7 @@ fn run_verify(
     .emit(crate::cli::output::OnWriteFailure::Ignore)
 }
 
-/// The verdict of one receipt: the status and key id, or the snake_case reason printed after `INVALID `.
+/// The verdict of one receipt: the status and key id, or the `snake_case` reason printed after `INVALID `.
 fn verify_receipt(
     trust_path: &std::path::Path,
     receipt_path: &std::path::Path,
@@ -157,13 +157,13 @@ fn verify_receipt(
 
 /// The one printer of a provenance verdict, text or document; the exit is 0 for an accepted verdict, 1 otherwise.
 fn verdict_printed(
-    verdict: Result<(VerifyStatus, String), String>,
+    verdict: &Result<(VerifyStatus, String), String>,
     signature_only: bool,
     accept_unbound: bool,
     render: crate::cli::output::Render,
 ) -> crate::cli::output::Printed {
     use crate::cli::output::{Printed, Render};
-    let (status, accepted, kid, reason) = match &verdict {
+    let (status, accepted, kid, reason) = match verdict {
         Ok((VerifyStatus::Bound, kid)) => ("bound", true, Some(kid.as_str()), None),
         Ok((VerifyStatus::Unbound, kid)) => ("unbound", accept_unbound, Some(kid.as_str()), None),
         Ok((VerifyStatus::SignatureOnly, kid)) => {
@@ -172,7 +172,7 @@ fn verdict_printed(
         Err(reason) => ("invalid", false, None, Some(reason.as_str())),
     };
     let stdout = match render {
-        Render::Text => match &verdict {
+        Render::Text => match verdict {
             Ok((VerifyStatus::Bound, kid)) => format!("BOUND kid={kid}\n"),
             Ok((VerifyStatus::Unbound, kid)) if accept_unbound => {
                 format!("UNBOUND kid={kid} (accepted: --accept-unbound)\n")

@@ -157,7 +157,7 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
 /// The verdict `audit verify --export` reached, before it is printed.
 enum ExportVerdict {
     Valid(ExportReport),
-    /// The text after `INVALID `: a snake_case refusal, or the read failure's sentence.
+    /// The text after `INVALID `: a `snake_case` refusal, or the read failure's sentence.
     Invalid(String),
 }
 

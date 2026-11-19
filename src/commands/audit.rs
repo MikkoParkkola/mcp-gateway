@@ -109,21 +109,7 @@ fn run_audit_verify(
             if render == Render::Json {
                 return print_verdict(&result, signed, verify_mode, ExitCode::SUCCESS);
             }
-            let mode = if signed {
-                "hash chain + per-entry HMAC"
-            } else {
-                "hash chain (no secret configured; HMAC not checked)"
-            };
-            let scope = match verify_mode {
-                VerifyMode::Live => "live log",
-                VerifyMode::Archive => "archive copy; tail completeness not checked",
-            };
-            println!(
-                "✓ Chain verified ({mode}; {scope}) — {} entries checked across {} \
-                 segments, {} expired by retention, no tampering detected.",
-                result.entries_checked, result.segments_checked, result.segments_expired
-            );
-            print_findings(&result);
+            print_pass(&result, signed, verify_mode);
             ExitCode::SUCCESS
         }
         Ok(result) => {
@@ -159,6 +145,30 @@ fn run_audit_verify(
             ExitCode::FAILURE
         }
     }
+}
+
+/// The passing verdict's text: the check that ran, the scope, the counts, then every finding on stderr.
+fn print_pass(
+    result: &mcp_gateway::security::transparency_log::VerifyResult,
+    signed: bool,
+    verify_mode: mcp_gateway::security::transparency_log::VerifyMode,
+) {
+    use mcp_gateway::security::transparency_log::VerifyMode;
+    let mode = if signed {
+        "hash chain + per-entry HMAC"
+    } else {
+        "hash chain (no secret configured; HMAC not checked)"
+    };
+    let scope = match verify_mode {
+        VerifyMode::Live => "live log",
+        VerifyMode::Archive => "archive copy; tail completeness not checked",
+    };
+    println!(
+        "✓ Chain verified ({mode}; {scope}) — {} entries checked across {} \
+         segments, {} expired by retention, no tampering detected.",
+        result.entries_checked, result.segments_checked, result.segments_expired
+    );
+    print_findings(result);
 }
 
 /// `audit verify --json`'s document (MIK-9764.JSONF.1, design 3a): every field always present; text read from the
