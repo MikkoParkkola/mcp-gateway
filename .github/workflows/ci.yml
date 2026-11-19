@@ -1414,6 +1414,36 @@ jobs:
       - name: Local users for the writer's root rows
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         uses: ./.github/actions/access-rows-setup
+      # Throwaway probe only: which mounts on this runner keep unix owners yet refuse an ACL.
+      - name: Probe only, filesystems without ACLs
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        run: |
+          set +e -x
+          uname -r
+          sudo dmesg | tail -n 12
+          command -v setfacl getfacl mkfs.btrfs mkfs.f2fs
+          check() { # label mountpoint
+            sudo mkdir -p "$2/d"
+            sudo chown 4101:4100 "$2/d"
+            sudo chmod 0750 "$2/d"
+            stat -c '%u:%g %a' "$2/d"
+            sudo setfacl -m u:4102:rx "$2/d"
+            echo "RESULT $1 setfacl rc=$?"
+            sudo getfacl -p "$2/d"
+            findmnt --noheadings --output FSTYPE,OPTIONS "$2"
+          }
+          sudo mkdir -p /mnt/p-ramfs && sudo mount -t ramfs ramfs /mnt/p-ramfs && check ramfs /mnt/p-ramfs
+          sudo mkdir -p /mnt/p-tmpfs && sudo mount -t tmpfs -o size=8m tmpfs /mnt/p-tmpfs && check tmpfs /mnt/p-tmpfs
+          truncate --size=128M "$RUNNER_TEMP/p.btrfs"
+          mkfs.btrfs -q "$RUNNER_TEMP/p.btrfs" && sudo mkdir -p /mnt/p-btrfs \
+            && sudo mount -o loop,noacl "$RUNNER_TEMP/p.btrfs" /mnt/p-btrfs && check btrfs-noacl /mnt/p-btrfs
+          truncate --size=16M "$RUNNER_TEMP/p.ext4"
+          mkfs.ext4 -q "$RUNNER_TEMP/p.ext4" && sudo mkdir -p /mnt/p-ext4 \
+            && sudo mount -o loop "$RUNNER_TEMP/p.ext4" /mnt/p-ext4 && check ext4-plain /mnt/p-ext4
+          sudo mount -o remount,noacl /mnt/p-ext4
+          echo "RESULT ext4 remount noacl rc=$?"
+          sudo dmesg | tail -n 4
+          exit 0
       - name: The part holding the writer's root rows, where user C can run it
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         run: |
@@ -1428,6 +1458,15 @@ jobs:
           # C starts it once here, so a red row means a refusal and never a binary C could not start.
           sudo setpriv --reuid "$ACCESS_ROWS_UID_C" --regid "$ACCESS_ROWS_GID_G" --init-groups \
             /opt/writer-rows/lib-tests --list --ignored config_persistence_access_tests::child::save | grep -F ': test'
+      # Throwaway probe only: line has no root rows, so give the rows step a real part binary; it must go red
+      # with its zero-match error, not with a missing file.
+      - name: Probe only, a real part binary for the rows step
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        run: |
+          if [ -x /opt/writer-rows/lib-tests ]; then exit 0; fi
+          sudo mkdir -p -m 0755 /opt/writer-rows
+          for b in "$RUNNER_TEMP"/lib-bin/*/p1/lib-tests-p1; do sudo install -m 0755 "$b" /opt/writer-rows/lib-tests; done
+          ls -l /opt/writer-rows
       - name: Writer root rows (library)
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         uses: ./.github/actions/ignored-rows
