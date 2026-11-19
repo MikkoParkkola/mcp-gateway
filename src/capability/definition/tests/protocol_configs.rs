@@ -73,6 +73,7 @@ fn provider_config_protocol_config_maps_rest_service() {
     // WHEN: calling protocol_config()
     // THEN: returns ProtocolConfig::Rest with the same RestConfig
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "rest".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -96,6 +97,7 @@ fn provider_config_protocol_config_defaults_empty_service_to_rest() {
     // WHEN: calling protocol_config()
     // THEN: falls back to REST
     let provider = ProviderConfig {
+        rate_limit: None,
         service: String::new(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -119,6 +121,7 @@ fn provider_config_protocol_config_unknown_service_falls_back_to_rest() {
     // WHEN: calling protocol_config()
     // THEN: falls back to REST (backward compat)
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "grpc".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -262,6 +265,7 @@ fn provider_config_graphql_service_maps_to_graphql_protocol() {
     // WHEN: calling protocol_config()
     // THEN: returns ProtocolConfig::Graphql
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -289,6 +293,7 @@ fn provider_config_graphql_uses_base_url_plus_path_when_no_endpoint() {
     // WHEN: calling protocol_config()
     // THEN: endpoint is base_url + path
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -311,6 +316,7 @@ fn provider_config_graphql_empty_endpoint_resolves_to_base_url_plus_path() {
     // WHEN: calling protocol_config()
     // THEN: endpoint is base_url + path, as on the JSON-RPC arm
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -336,6 +342,7 @@ fn provider_config_graphql_extracts_query_from_body_string() {
     // WHEN: calling protocol_config()
     // THEN: query is extracted from body
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -357,6 +364,7 @@ fn provider_config_graphql_extracts_query_from_body_object() {
     // WHEN: calling protocol_config()
     // THEN: query is extracted from body.query
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -378,6 +386,7 @@ fn provider_config_graphql_maps_static_params_to_variables() {
     // WHEN: calling protocol_config()
     // THEN: static_params become graphql variables
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -400,6 +409,7 @@ fn provider_config_graphql_maps_static_params_to_variables() {
 #[test]
 fn provider_config_graphql_preserves_response_path() {
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "graphql".to_string(),
         cost_per_call: 0.0,
         timeout: 30,
@@ -505,6 +515,7 @@ fn protocol_config_as_jsonrpc_returns_none_for_non_jsonrpc() {
 #[test]
 fn provider_config_jsonrpc_service_maps_to_jsonrpc_protocol() {
     let provider = ProviderConfig {
+        rate_limit: None,
         service: "jsonrpc".to_string(),
         cost_per_call: 0.0,
         timeout: 10,

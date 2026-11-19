@@ -1,0 +1,65 @@
+sha256: bd3e6012f64b8fd45d75cc8e592a0beae844039108beca94d3d9662dcb661035
+fulcrum: "1.0"
+name: geocode
+description: >-
+  Find places by name and get their coordinates, using the Open-Meteo
+  geocoding API (no API key). Feed the latitude and longitude to weather.
+  Paced at one request per 250 ms per gateway process; Open-Meteo also caps
+  free use at 600 per minute, 5,000 per hour and 10,000 per day. The free
+  tier is non-commercial; commercial use needs an Open-Meteo plan.
+attribution: "Data by Open-Meteo.com (CC BY 4.0)"
+
+schema:
+  input:
+    type: object
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 200
+        description: Place name to search for, e.g. "Helsinki"
+      count:
+        type: integer
+        minimum: 1
+        maximum: 100
+        description: Most results to return (Open-Meteo's default when left out)
+    required: [name]
+  output:
+    type: object
+    additionalProperties: true
+    properties:
+      results:
+        type: array
+        description: Matching places (absent when nothing matches)
+      generationtime_ms:
+        type: number
+      attribution:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    rate_limit:
+      interval_ms: 250
+    config:
+      endpoint: https://geocoding-api.open-meteo.com/v1/search
+      method: GET
+      headers:
+        User-Agent: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      params:
+        name: "{name}"
+        count: "{count}"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+
+metadata:
+  category: maps
+  tags: [maps, geocoding, places, coordinates, open-meteo]
+  cost_category: free
+  execution_time: fast
+  read_only: true

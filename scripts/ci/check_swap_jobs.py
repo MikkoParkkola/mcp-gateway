@@ -92,6 +92,7 @@ EXPECTED = {
     ("ci.yml", "test-shards"),
     ("ci.yml", "test-throwaway-hosted"),
     ("coverage-probe.yml", "linux-part"),
+    ("maps-live-smoke.yml", "gateway"),
     ("mutants.yml", "linux-hosted"),
     ("packaged-suite.yml", "packaged-suite"),
     ("release.yml", "verify"),

@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-130%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-140%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25%20%7C%202026--07--28-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -17,7 +17,7 @@
 
 **Unlimited MCP servers, tools and APIs. One fixed context cost.**
 
-Plug every tool you own into Claude, Cursor, Codex or any MCP client. MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 11 tools by default instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand, and never drowns in tool definitions. 130+ REST API capabilities ship built in, and one command imports the servers you already have. On a 100-tool stack that is about 1,100 tokens of tool definitions per request instead of about 15,000, as modeled in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
+Plug every tool you own into Claude, Cursor, Codex or any MCP client. MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 11 tools by default instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand, and never drowns in tool definitions. 140+ REST API capabilities ship built in, and one command imports the servers you already have. On a 100-tool stack that is about 1,100 tokens of tool definitions per request instead of about 15,000, as modeled in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
 
 ![demo](demo.gif)
 
@@ -40,7 +40,7 @@ flowchart LR
     T2["MCP backend<br/>Context7 (http)"]
     C1["REST capability<br/>GitHub"]
     C2["REST capability<br/>Stripe"]
-    Cn["130+ capabilities"]
+    Cn["140+ capabilities"]
 
     AI -->|"11 tool defs"| META
     META --> DISC
@@ -288,7 +288,7 @@ Each client entry connects over HTTP when the gateway's health endpoint answers,
 
 - **A fixed, small context cost.** In the README benchmark, 100 backend tools cost about 1,100 tokens of tool definitions instead of 15,000, because the agent sees 11 meta-tools instead of every definition. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The gateway sets no limit on backends or tools; the agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
-- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 130+ capabilities ship built in.
+- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 140+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
 - **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, optional SHA-256 pinning with rug-pull detection protects each pinned capability, and controls are mapped to all ten OWASP Agentic AI Top 10 risks in a self-assessment that also lists the remaining gaps. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Backends and capability YAMLs hot-reload while the AI stays connected. No restart, no lost context.
@@ -412,7 +412,7 @@ flowchart TB
     FS --> B1["Tavily<br/>(stdio)"]
     FS --> B2["Context7<br/>(http)"]
     FS --> B3["Pieces<br/>(sse)"]
-    FS --> B4["REST capabilities<br/>(130+)"]
+    FS --> B4["REST capabilities<br/>(140+)"]
 ```
 
 Single-binary gateway. An AI client talks to the compact meta-surface, and the gateway dynamically discovers and routes to backend tools. Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability), `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner), `identity_propagation/`, `key_server/`, `cost_accounting/`, `scheduler/`, `skills/`, `config_reload/`, and `a2a/` (outbound A2A bridge).
@@ -439,11 +439,11 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 
 ### Integration and discovery
 
-The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
+The gateway ships with **140+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
 | Feature | Description |
 |---------|-------------|
-| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [130+ built-in](capabilities/). OpenAPI import supported. |
+| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [140+ built-in](capabilities/). OpenAPI import supported. |
 | **Transform chains** | Namespace, filter, rename, and response transforms. [Example](examples/transform-example.yaml). |
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |

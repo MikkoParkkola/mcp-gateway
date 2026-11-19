@@ -195,7 +195,7 @@ const FLOOR_TAG_QUERY_TOP1: f64 = 0.600;
 /// that file's `tool_inventory_size` is what `gen_corpus.py` derived from the
 /// frozen 119-tool tree (FREEZE.md), and editing it would stop the generator
 /// reproducing the corpus byte for byte (MIK-7850.TESTS.2).
-const POOL_SIZE_AT_LAST_MEASUREMENT: usize = 137;
+const POOL_SIZE_AT_LAST_MEASUREMENT: usize = 143;
 
 /// Fail with a message that names the metric, both numbers and the freeze
 /// record, so a red run explains itself without opening this file.
