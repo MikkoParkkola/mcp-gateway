@@ -79,7 +79,7 @@ def run(args, **env_extra):
         # A runner image's apt sources: Ubuntu's in ubuntu.sources (24.04 on), a third-party repository beside it.
         apt_etc = pathlib.Path(t) / "etc" / "apt"
         (apt_etc / "sources.list.d").mkdir(parents=True)
-        (apt_etc / "sources.list").write_text("")
+        (apt_etc / "sources.list").write_text(env.get("STUB_SOURCES_LIST", ""))
         if not env.get("STUB_NO_UBUNTU_SOURCES"):
             (apt_etc / "sources.list.d" / "ubuntu.sources").write_text("URIs: mirror+file:/etc/apt/apt-mirrors.txt\n")
         (apt_etc / "sources.list.d" / "microsoft-prod.list").write_text("deb https://packages.microsoft.com/ubuntu/24.04/prod noble main\n")
@@ -237,11 +237,31 @@ def an_unrelated_source_failing_does_not_fail_the_attempt():
 
 @row
 def before_24_04_the_sources_list_is_read():
-    rc, out, calls, _ = run(["download", "<OUT>"], STUB_NO_UBUNTU_SOURCES="1")
+    rc, out, calls, _ = run(["download", "<OUT>"], STUB_NO_UBUNTU_SOURCES="1",
+                            STUB_SOURCES_LIST="deb mirror+file:/etc/apt/apt-mirrors.txt jammy main universe\n")
     assert rc == 0, out
     update = next(line for line in calls.splitlines() if line.startswith("apt-get") and " update" in line)
     assert "/etc/apt/sources.list " in update and "Dir::Etc::SourceList=/dev/null" not in update, update
     assert "parts: \n" in calls, calls
+
+
+@row
+def no_ubuntu_source_fails_fast():
+    # Neither ubuntu.sources nor a deb line in sources.list: two attempts would read only the image's old index.
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_NO_UBUNTU_SOURCES="1", STUB_SOURCES_LIST="# none\n")
+    assert rc == 1, (rc, out)
+    assert "::error::mingw packages: no Ubuntu apt source in" in out, out
+    assert apt_steps(calls) == [], calls
+    assert debs == [], debs
+
+
+@row
+def the_refresh_keeps_the_other_sources_indexes():
+    # apt's List-Cleanup (on by default) erases the cached indexes of sources a refresh does not read.
+    rc, out, calls, _ = run(["download", "<OUT>"])
+    assert rc == 0, out
+    update = next(line for line in calls.splitlines() if line.startswith("apt-get") and " update" in line)
+    assert "-o APT::Get::List-Cleanup=0" in update, update
 
 
 def main():

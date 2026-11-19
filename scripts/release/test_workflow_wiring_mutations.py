@@ -1208,6 +1208,13 @@ CASES = [
         CAUGHT,
     ),
     (
+        "mingw-fill-timeout-without-setup-slack",
+        "mingw-debs.yml",
+        "    timeout-minutes: 115\n",
+        "    timeout-minutes: 108\n",
+        CAUGHT,
+    ),
+    (
         "mingw-fill-index-refresh-bound-raised-at-job-level",
         "mingw-debs.yml",
         "    timeout-minutes: 115\n",
@@ -1220,6 +1227,14 @@ CASES = [
         "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
         "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
         '          MINGW_DOWNLOAD_SECONDS: "3000"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-shard-given-a-longer-index-refresh",
+        "feature-combos.yml",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
+        '          MINGW_UPDATE_SECONDS: "1800"\n',
         CAUGHT,
     ),
     (

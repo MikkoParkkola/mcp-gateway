@@ -845,14 +845,15 @@ class WorkflowWiring(unittest.TestCase):
         self.assertEqual(1, len(downloads), "the fill downloads in exactly one step")
         self.assertEqual("3000", env_of(fill_workflow, fill, downloads[0], "MINGW_DOWNLOAD_SECONDS"))
         self.assertEqual("", env_of(fill_workflow, fill, downloads[0], "MINGW_UPDATE_SECONDS"))
-        self.assertGreaterEqual(int(fill["timeout-minutes"]) * 60, 2 * (3000 + 180))
+        self.assertGreaterEqual(int(fill["timeout-minutes"]) * 60, 2 * (3000 + 180) + 300,
+                                "two attempts and their index refreshes, plus 5 min for setup and the cache steps")
         shard_workflow = yaml.safe_load((WORKFLOWS / "feature-combos.yml").read_text())
         shard_downloads = [(job, s) for job in shard_workflow["jobs"].values() for s in job.get("steps") or []
                            if "mingw-debs.sh download" in (s.get("run") or "")]
         self.assertTrue(shard_downloads, "the windows shard downloads on a cache miss")
         for job, step in shard_downloads:
-            self.assertEqual("", env_of(shard_workflow, job, step, "MINGW_DOWNLOAD_SECONDS"),
-                             "the shard keeps the script's 600 s")
+            for name in ("MINGW_DOWNLOAD_SECONDS", "MINGW_UPDATE_SECONDS"):
+                self.assertEqual("", env_of(shard_workflow, job, step, name), f"the shard keeps the script's {name}")
 
     def test_every_reader_of_verify_outputs_needs_verify_directly(self):
         # `needs` exposes direct dependencies only. A job that reads
