@@ -27,6 +27,8 @@ pub(super) fn unreceipted(body: &Value) -> Value {
     body
 }
 
+/// The object's keys, sorted. Its rows all need the firewall feature.
+#[cfg(feature = "firewall")]
 fn keys_of(body: &Value) -> Vec<&str> {
     let mut keys: Vec<&str> = body
         .as_object()
