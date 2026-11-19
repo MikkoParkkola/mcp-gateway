@@ -214,7 +214,9 @@ fn child_saves(class: Class) -> bool {
 /// Re-run `test_path` in a child shell that runs `setup` first; the child
 /// saves `state` to `target`. Returns its exit success and stdout.
 fn run_child(test_path: &str, setup: &str, target: &Path, state: &str) -> (bool, String) {
-    let exe = std::env::current_exe().expect("the running test binary");
+    // The program path from the sanctioned helper; `sh` runs it so the size
+    // limit applies before the exec.
+    let exe = crate::test_home::test_binary().get_program().to_owned();
     let script = format!("{setup}; exec \"$0\" '{test_path}' --exact --nocapture --test-threads=1");
     // The child's coverage profile goes to a private file: under a size limit
     // it would be written empty and corrupt the measured set.

@@ -53,7 +53,6 @@ src/personal_accounts/storage_windows.rs	create_directory	helper:create_dir_priv
 src/private_fs.rs	create_dir_private	helper:create_dir_private	1	helper	calls the crate's create_dir_private
 src/private_fs.rs	create_file_private	helper:create_file_private	1	helper	calls the crate's create_file_private
 src/protocol_revision_telemetry/durable.rs	write_json_atomic	helper:create_private_replacing	1	helper	calls the crate's create_private_replacing
-src/ranking/ranker.rs	save	fs-write	1	no-secret	tool usage counts
 src/registry/mod.rs	install_from_github	fs-write	1	no-secret	installs public capability YAML
 src/secret_store/files.rs	create	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/secret_store/index.rs	append	helper:create_new_private	1	helper	calls the crate's create_new_private
@@ -64,8 +63,6 @@ src/security/transparency_log_segments.rs	write_hwm	open-create	1	no-secret	audi
 src/skills/installer.rs	copy_dir_recursive	fs-copy	1	no-secret	skill files; public
 src/skills/installer.rs	install_bundle	fs-write	3	no-secret	skill files; public
 src/skills/registry.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic
-src/tool_profiles/persistence.rs	save	fs-write	1	no-secret	tool usage profiles
-src/transition.rs	save	fs-write	1	no-secret	transition state
 src/trust/claim_capture.rs	open	open-create	1	no-secret	append-only claim log
 src/validator/cli_handler.rs	run_validate_command	fs-write	1	no-secret	validation report output
 src/commands/upgrade.rs	backup_config	helper:copy_keeping_access	1	helper	config backup keeps the config's access
