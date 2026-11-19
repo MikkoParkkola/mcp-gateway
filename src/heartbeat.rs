@@ -238,7 +238,7 @@ fn is_id(s: &str) -> bool {
 /// The published id, `None` when there is none yet. An entry that is not a
 /// private file, or does not hold exactly an id, is an error: it is never
 /// replaced, so that install stays silent rather than minting a second id.
-fn read_id(dir: &Path) -> std::io::Result<Option<String>> {
+fn read_install_id(dir: &Path) -> std::io::Result<Option<String>> {
     let path = dir.join("install-id");
     if std::fs::symlink_metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
         return Ok(None);
@@ -272,9 +272,10 @@ fn publish_id(dir: &Path) -> std::io::Result<String> {
             crate::config_persistence::sync_dir_of(&dir.join("install-id"))?;
             Ok(id)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_id(dir)?.ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "the winner's id vanished")
-        }),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_install_id(dir)?
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "the winner's id vanished")
+            }),
         Err(e) => Err(e),
     }
 }
@@ -298,7 +299,7 @@ fn claim_day(dir: &Path, date: chrono::NaiveDate) -> std::io::Result<bool> {
 /// on its own thread; any failure stops the check before the send.
 fn prepare(data_dir: &Path, date: chrono::NaiveDate) -> Result<String, Outcome> {
     let dir = state_dir(data_dir).map_err(|_| Outcome::NoId)?;
-    let id = match read_id(&dir) {
+    let id = match read_install_id(&dir) {
         Ok(Some(id)) => id,
         Ok(None) => publish_id(&dir).map_err(|_| Outcome::NoId)?,
         Err(_) => return Err(Outcome::NoId),
