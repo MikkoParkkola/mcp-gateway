@@ -605,6 +605,7 @@ def self_test() -> int:
     per_binary_rows()
     prebuilt_rows()
     built_parts_rows()
+    built_parts_root_rows()
     # H1: every shard, on every OS, gives cargo and a prebuilt lib
     # binary a private gateway home beside its TMPDIR, and removes it after the
     # shard, also when cargo fails (R6.1, R6.4, R6.5). The recorder stands in
@@ -761,6 +762,64 @@ def built_parts_rows() -> None:
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
         finally:
             SHARDS["macos"].update(saved)
+
+
+def built_parts_root_rows() -> None:
+    """R6-R9: the part that lists a root row runs it once more under PRIVILEGE, before its binary goes; a red, a
+    non-zero exit or a missing row fails the leg; parts without root rows never use PRIVILEGE."""
+    global PRIVILEGE
+    saved_leg, saved_priv = SHARDS["macos"]["lib-b"], PRIVILEGE
+    row = ROOT_ROWS + "r1"
+    with tempfile.TemporaryDirectory() as root:
+        log, build, priv = (os.path.join(root, x) for x in ("log", "build.sh", "priv.sh"))
+        # Stand-in build: part K lists mK::a, and the part named by ROOT_PART also lists the root row. Its binary
+        # reports the row as ignored on a plain run; with --ignored it acts per ROOT_BEHAVE (ok, red, none, exit).
+        with open(build, "w") as f:
+            f.write(f'#!/bin/sh\necho "build $2" >> "$LOG"\nmkdir -p "$3/p$2"\nout="$3/p$2/lib-tests-p$2"\n'
+                    f'echo "m$2::a: test" > "$3/p$2/list.txt"\n'
+                    f'[ "$2" = "${{ROOT_PART:-}}" ] && echo "{row}: test" >> "$3/p$2/list.txt"\n'
+                    f'printf \'#!/bin/sh\\ncase " $* " in *" --ignored "*) ;; *) echo "test m%s::a ... ok"\\n'
+                    f'  grep -q root "$0.list" && echo "test {row} ... ignored"\\n  exit 0 ;; esac\\n\' "$2" > "$out"\n'
+                    f'cp "$3/p$2/list.txt" "$out.list"\n'
+                    f'cat >> "$out" <<"EOF"\ncase "${{ROOT_BEHAVE:-ok}}" in\n  ok) echo "test {row} ... ok" ;;\n'
+                    f'  red) echo "test {row} ... FAILED"; exit 101 ;;\n  exit) echo "test {row} ... ok"; exit 3 ;;\n'
+                    f'esac\nexit 0\nEOF\n')
+        # Stand-in privilege: logs which binary it starts and whether that binary is still on disk.
+        with open(priv, "w") as f:
+            f.write('#!/bin/sh\n[ -e "$1" ] && on=present || on=gone\necho "priv $(basename "$1") $on" >> "$LOG"\n'
+                    'exec "$@"\n')
+        PRIVILEGE = ("sh", priv)
+        SHARDS["macos"]["lib-b"] = [("parts", ["--lib"], [], 4)]
+
+        def leg(**env: str) -> tuple[int, list[str]]:
+            open(log, "w").close()
+            keep = {k: os.environ.get(k) for k in ("LOG", "MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE")}
+            for k in ("MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE"):
+                os.environ.pop(k, None)
+            os.environ.update({"LOG": log, **env})
+            try:
+                with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
+                    rc = run_built_parts("macos", "lib-b", tempfile.mkdtemp(dir=root), ("sh", build))
+            finally:
+                for k, v in keep.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            return rc, open(log).read().split("\n")[:-1]
+
+        builds = ["build 1", "build 2", "build 3", "build 4"]
+        try:
+            # R9: no part lists a root row, so nothing runs under PRIVILEGE.
+            assert leg() == (0, builds), leg()
+            # R6: part 3's root row runs under PRIVILEGE once, after part 3's run and while its binary is on disk.
+            rc, steps = leg(ROOT_PART="3")
+            assert (rc, steps) == (0, [*builds[:3], "priv lib-tests-p3 present", builds[3]]), (rc, steps)
+            # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; part 4 still builds.
+            for behave in ("red", "exit"):
+                rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
+                assert rc == 1 and steps[-1] == builds[3], (behave, rc, steps)
+            # R8: a root run that reports none of the listed root rows fails the leg.
+            assert leg(ROOT_PART="3", ROOT_BEHAVE="none")[0] == 1, "a root run that ran no root row passed"
+        finally:
+            SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
 
 
 def prebuilt_rows() -> None:
@@ -1171,6 +1230,12 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
 # shares stdout, and the child's unfinished line can precede the parent's result (E1, run 44460056220). Text that is
 # not a libtest prefix (`diagnostic: test x ... ok`) never counts.
 RESULT_LINE = re.compile(r"^(?:test \S+(?: - should panic)? \.\.\. )*test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
+
+# The writer's rows that need root: #[ignore]d, so the part run above reports them as ignored. The part step runs
+# them once more as root, from the same binary, before it is deleted. PRIVILEGE is the prefix for that run; the
+# self-test swaps in a logging stand-in.
+ROOT_ROWS = "config_persistence_access_tests::root::"
+PRIVILEGE: tuple[str, ...] = ("sudo", "-E")
 
 
 def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
