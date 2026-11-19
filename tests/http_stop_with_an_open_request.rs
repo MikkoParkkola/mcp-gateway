@@ -152,6 +152,32 @@ async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
     }
 }
 
+/// Opens an MCP session (`initialize`, then `notifications/initialized`) and
+/// returns its id.
+async fn open_session(client: &reqwest::Client, base: &str, root: &Path) -> String {
+    let init = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "OpenRequestStopTest", "version": "1.0.0" }
+        }
+    });
+    let (body, session) = post(client, base, None, &init)
+        .await
+        .unwrap_or_else(|e| panic!("initialize failed: {e}\n{}", logs(root)));
+    let session = session.unwrap_or_else(|| panic!("no session id: {body}\n{}", logs(root)));
+    post(
+        client,
+        base,
+        Some(&session),
+        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("initialized failed: {e}\n{}", logs(root)));
+    session
+}
+
 #[tokio::test]
 async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
     let root = tempfile::tempdir().expect("temp root");
@@ -180,26 +206,7 @@ async fn a_stop_with_an_open_request_finishes_inside_the_supervisors_grace() {
 
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
-    let init = json!({
-        "jsonrpc": "2.0", "id": 0, "method": "initialize",
-        "params": {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "OpenRequestStopTest", "version": "1.0.0" }
-        }
-    });
-    let (body, session) = post(&client, &base, None, &init)
-        .await
-        .unwrap_or_else(|e| panic!("initialize failed: {e}\n{}", logs(root)));
-    let session = session.unwrap_or_else(|| panic!("no session id: {body}\n{}", logs(root)));
-    post(
-        &client,
-        &base,
-        Some(&session),
-        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("initialized failed: {e}\n{}", logs(root)));
+    let session = open_session(&client, &base, root).await;
 
     // The request the stop finds open: its backend never answers.
     let call = json!({
