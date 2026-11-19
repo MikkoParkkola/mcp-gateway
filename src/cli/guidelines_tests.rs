@@ -209,36 +209,7 @@ fn the_example_checker_names_each_fault() {
     );
 }
 
-/// H3 (MIK-9681.CLIUX.18): a mistyped command suggests the closest one, from clap's own error context.
-#[test]
-fn a_mistyped_command_suggests_the_closest_match() {
-    use clap::error::{ContextKind, ContextValue, ErrorKind};
-    for (argv, suggested) in [
-        (vec!["mcp-gateway", "stast"], "stats"),
-        (vec!["mcp-gateway", "cap", "lsit"], "list"),
-    ] {
-        let err = built()
-            .try_get_matches_from(&argv)
-            .expect_err("a typo is refused");
-        assert_eq!(err.kind(), ErrorKind::InvalidSubcommand, "{argv:?}");
-        match err.get(ContextKind::SuggestedSubcommand) {
-            Some(ContextValue::Strings(list)) => {
-                assert_eq!(list, &vec![suggested.to_owned()], "{argv:?}")
-            }
-            other => panic!("{argv:?}: no suggestion: {other:?}"),
-        }
-    }
-    let rendered = built()
-        .try_get_matches_from(["mcp-gateway", "stast"])
-        .unwrap_err()
-        .to_string();
-    assert!(
-        rendered
-            .lines()
-            .any(|l| l == "  tip: a similar subcommand exists: 'stats'"),
-        "{rendered}"
-    );
-}
+// H3 (a typo suggests only visible commands) runs against the real binary: tests/cli_output_rows.rs.
 
 // ── N rows: one meaning per flag name (CLIUX.19) ──────────────────────────────
 

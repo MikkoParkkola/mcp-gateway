@@ -3,7 +3,8 @@
 //! Exit-table rows that need the built binary (test plan T13, and the lead's 2026-11-17 rule for free-text formats):
 //! each remote command's real entry point returns the shared table's code as the process exit with the same text
 //! the in-process rows check; and `cap discover --format json` (src/cli/subcommands.rs:101, a free-text `format`)
-//! is classed JSON-capable only because this row runs it and parses its stdout.
+//! is classed JSON-capable only because this row runs it and parses its stdout. H3 (MIK-9681.CLIUX.18): a mistyped
+//! command suggests only visible commands, read from the real binary's stderr.
 #![cfg(all(unix, feature = "webui"))]
 
 #[path = "common/gateway_bin.rs"]
@@ -253,5 +254,87 @@ fn remote_commands_refuse_with_the_table_through_the_binary() {
         "{} mismatch(es):\n{}",
         misses.len(),
         misses.join("\n")
+    );
+}
+
+// ── H3: a typo never names a hidden command (MIK-9681.CLIUX.18; design addendum H3) ─────────────────────────────
+
+/// The hidden top-level commands, written out (A8); H3a checks the tree agrees.
+const HIDDEN: [&str; 4] = ["kubernetes", "ranking", "runtime", "trust"];
+
+/// clap's own suggestions for `argv`, before the binary rewrites the error: the premise that a hidden name is offered.
+fn clap_suggests(argv: &[&str]) -> Vec<String> {
+    use clap::error::{ContextKind, ContextValue};
+    let err = <mcp_gateway::cli::Cli as clap::CommandFactory>::command()
+        .try_get_matches_from(argv)
+        .expect_err("a typo is refused");
+    match err.get(ContextKind::SuggestedSubcommand) {
+        Some(ContextValue::Strings(list)) => list.clone(),
+        other => panic!("{argv:?}: clap suggests nothing: {other:?}"),
+    }
+}
+
+fn names_no_hidden_command(stderr: &str) {
+    for name in HIDDEN {
+        assert!(
+            !stderr.contains(&format!("'{name}'")),
+            "{name} is named: {stderr}"
+        );
+    }
+}
+
+/// H3a: `stast` is close to the visible `stats` and the hidden `trust`; only `stats` is suggested.
+#[test]
+fn a_typo_suggests_only_the_visible_command() {
+    let tree = <mcp_gateway::cli::Cli as clap::CommandFactory>::command();
+    for name in HIDDEN {
+        assert!(
+            tree.find_subcommand(name).is_some_and(|c| c.is_hide_set()),
+            "{name} is a hidden top-level command"
+        );
+    }
+    assert_eq!(clap_suggests(&["mcp-gateway", "stast"]), ["trust", "stats"]);
+    let (code, stdout, stderr) = run(&["stast"], None, b"");
+    assert_eq!(code, Some(2), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(
+        stderr.contains("unrecognized subcommand 'stast'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l == "  tip: a similar subcommand exists: 'stats'"),
+        "{stderr}"
+    );
+    names_no_hidden_command(&stderr);
+}
+
+/// H3b: `kubernets` is close only to the hidden `kubernetes`, so no suggestion tip is printed at all.
+#[test]
+fn a_typo_close_only_to_a_hidden_command_gets_no_tip() {
+    assert_eq!(clap_suggests(&["mcp-gateway", "kubernets"]), ["kubernetes"]);
+    let (code, stdout, stderr) = run(&["kubernets"], None, b"");
+    assert_eq!(code, Some(2), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(
+        stderr.contains("unrecognized subcommand 'kubernets'"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("similar subcommand"), "{stderr}");
+    names_no_hidden_command(&stderr);
+}
+
+/// H3c: a typo at a nested level gets that level's visible suggestion.
+#[test]
+fn a_nested_typo_suggests_the_visible_command_there() {
+    let (code, stdout, stderr) = run(&["cap", "lsit"], None, b"");
+    assert_eq!(code, Some(2), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l == "  tip: a similar subcommand exists: 'list'"),
+        "{stderr}"
     );
 }
