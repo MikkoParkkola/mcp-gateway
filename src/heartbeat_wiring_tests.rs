@@ -11,7 +11,7 @@ use chrono::NaiveDate;
 
 use std::collections::BTreeSet;
 
-use super::tests::{
+use super::fixtures::{
     Answer, CI_NAMES, Listener, PROXY_NAMES, is_install_id, nov19, read_id, release, test_client,
 };
 use super::*;

@@ -7,8 +7,8 @@
 
 use std::time::Duration;
 
+use crate::heartbeat::fixtures::{Answer, Listener, nov19, test_client};
 use crate::heartbeat::seam;
-use crate::heartbeat::tests::{Answer, Listener, nov19, test_client};
 use crate::security::posture::SecurityPosture;
 
 /// Wait up to 30 s of real time for `done`.
@@ -134,47 +134,56 @@ async fn http_start_hardened_sends_nothing() {
     standard.stop().await;
 }
 
-/// A running stdio gateway and whether it answered `ping`.
+/// A running stdio gateway, its pipes, and whether it answered `ping`.
 struct RunningStdio {
     task: tokio::task::JoinHandle<()>,
+    _pipes: (
+        tokio::io::DuplexStream,
+        tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    ),
     answered: bool,
 }
 
-/// Start the stdio gateway on `dir` with `posture` and send `ping`; a reply
-/// counts only as JSON-RPC with id 1 and a result, within 30 s of
-/// construction.
+/// Start the stdio gateway on `dir` with `posture` and send `ping`; the
+/// whole of it (construction, write, reply) is bounded at 30 s, and a reply
+/// counts only as JSON-RPC with id 1 and a result.
 async fn start_stdio(dir: &std::path::Path, posture: SecurityPosture) -> RunningStdio {
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
-    let started = std::time::Instant::now();
-    let mut config = crate::config::Config::default();
-    config.security.posture = posture;
-    let gateway = super::super::Gateway::new(config)
+    let run = async {
+        let mut config = crate::config::Config::default();
+        config.security.posture = posture;
+        let gateway = super::super::Gateway::new(config)
+            .await
+            .expect("a gateway")
+            .with_data_dir(dir.to_path_buf());
+        let (mut client, input) = tokio::io::duplex(64 * 1024);
+        let (output, reader) = tokio::io::duplex(1 << 20);
+        let task =
+            tokio::spawn(async move { drop(gateway.run_stdio_on(input, output, None).await) });
+        client
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+            .await
+            .expect("write");
+        let mut lines = tokio::io::BufReader::new(reader).lines();
+        let line = lines.next_line().await.ok().flatten();
+        let answered = line.is_some_and(|l| {
+            serde_json::from_str::<serde_json::Value>(&l)
+                .is_ok_and(|v| v["id"] == 1 && v.get("result").is_some())
+        });
+        RunningStdio {
+            task,
+            _pipes: (client, lines),
+            answered,
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), run)
         .await
-        .expect("a gateway")
-        .with_data_dir(dir.to_path_buf());
-    let (mut client, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let task = tokio::spawn(async move { drop(gateway.run_stdio_on(input, output, None).await) });
-    client
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
-        .await
-        .expect("write");
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    let bound = Duration::from_secs(30).saturating_sub(started.elapsed());
-    let reply = tokio::time::timeout(bound, lines.next_line()).await;
-    let answered = matches!(reply, Ok(Ok(Some(ref line)))
-        if serde_json::from_str::<serde_json::Value>(line)
-            .is_ok_and(|v| v["id"] == 1 && v.get("result").is_some()));
-    // The pipes must outlive the observation: keep them with the task.
-    let task = tokio::spawn(async move {
-        let _pipes = (client, lines);
-        let _ = task.await;
-    });
-    RunningStdio { task, answered }
+        .expect("constructed and answered ping within 30 s")
 }
 
 impl RunningStdio {
-    /// Abort the server and await it.
+    /// Abort the server task itself and await it: cancelled or a clean end,
+    /// never a panic.
     async fn stop(self) {
         self.task.abort();
         let joined = self.task.await;
@@ -182,7 +191,8 @@ impl RunningStdio {
             joined.is_ok()
                 || joined
                     .as_ref()
-                    .is_err_and(tokio::task::JoinError::is_cancelled)
+                    .is_err_and(tokio::task::JoinError::is_cancelled),
+            "{joined:?}"
         );
     }
 }

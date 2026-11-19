@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::tests::{Answer, Listener, nov19, release, test_client};
+use super::fixtures::{Answer, Listener, nov19, release, test_client};
 use super::*;
 
 /// The bound a failing send must return within: the 3 s client timeout plus
@@ -210,6 +210,34 @@ async fn start_resolves_the_release_target_without_a_seam() {
         rx.connections(),
         0,
         "the resolved release client spoke plain HTTP"
+    );
+    // The very client start resolves refuses an untrusted issuer too (tp-r3),
+    // and the resolved clock gives a date (an always-None clock would never send).
+    assert!(
+        (released.today)().is_some(),
+        "the resolved clock gave no date"
+    );
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&hits);
+    let app = axum::Router::new().route(
+        "/v1/heartbeat",
+        axum::routing::post(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let (base, _ca) = crate::test_tls::https_server(app).await;
+    let tls = tempfile::tempdir().expect("dir");
+    let tls_url = format!("{base}/v1/heartbeat");
+    let out = heartbeat_once(&release(), tls.path(), &released.client, &tls_url, nov19).await;
+    assert_eq!(out, Outcome::Failed);
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the resolved client accepted an untrusted issuer"
     );
     let registered = tempfile::tempdir().expect("dir");
     let _guard = seam::register(

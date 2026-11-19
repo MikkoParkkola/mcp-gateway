@@ -253,10 +253,14 @@ pub(crate) mod seam {
     }
 }
 
+#[cfg(test)]
+#[path = "heartbeat_fixtures.rs"]
+pub(crate) mod fixtures;
+
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "heartbeat_tests.rs"]
-pub(crate) mod tests;
+mod tests;
 
 #[cfg(tp3)]
 #[cfg(test)]

@@ -82,7 +82,14 @@ fn helpers_without_dnt(text: &str) -> Vec<String> {
     // Comments are not settings (tp-r2): drop each line's `//` tail first.
     let code: String = text
         .lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
+        .map(|l| {
+            // A `//` after `:` is a URL, not a comment (tp-r3).
+            let cut = l
+                .match_indices("//")
+                .map(|(i, _)| i)
+                .find(|&i| i == 0 || &l[i - 1..i] != ":");
+            cut.map_or(l, |i| &l[..i])
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let starts: Vec<usize> = code
@@ -101,7 +108,11 @@ fn helpers_without_dnt(text: &str) -> Vec<String> {
             continue;
         };
         // The setting must come after the command is built, on its chain.
-        let set = chunk[built..].contains(r#".env("DO_NOT_TRACK", "1")"#);
+        // On the gateway command's own chain: no other `Command::new` between
+        // the build and the setting (tp-r3).
+        let rest = &chunk[built..];
+        let next_command = rest.find("Command::new").unwrap_or(rest.len());
+        let set = rest[..next_command].contains(r#".env("DO_NOT_TRACK", "1")"#);
         if !set {
             out.push(name);
         }
@@ -171,7 +182,10 @@ fn launches_without_dnt(text: &str) -> Vec<String> {
     let joined = text.replace("\\\r\n", " ").replace("\\\n", " ");
     joined
         .lines()
+        // A `#` after whitespace starts a shell or YAML comment (tp-r3).
+        .map(|l| l.find(" #").map_or(l, |i| &l[..i]))
         .filter(|l| LAUNCHERS.iter().any(|c| l.contains(c)))
+        .filter(|l| !l.contains("docker compose up") && !l.contains("docker compose run"))
         .filter(|l| l.contains("mcp-gateway"))
         .filter(|l| !launch_sets_dnt(l))
         .map(|l| l.trim().to_owned())
@@ -181,37 +195,64 @@ fn launches_without_dnt(text: &str) -> Vec<String> {
 /// A compose file that runs the gateway image without `DO_NOT_TRACK` set to
 /// `1` in an `environment:` entry.
 fn compose_without_dnt(text: &str) -> bool {
-    // Per service (tp-r2): a block starts at a two-space key under `services:`.
-    let mut blocks: Vec<Vec<&str>> = Vec::new();
-    let mut in_services = false;
-    for line in text.lines() {
-        if line.starts_with("services:") {
-            in_services = true;
+    // Per service, at whatever indent the file uses; only `environment:`
+    // entries count (not labels); trailing comments dropped (tp-r3).
+    let mut services: Vec<(bool, bool)> = Vec::new();
+    let (mut in_services, mut service_indent, mut in_env) = (false, None, false);
+    for raw in text.lines() {
+        let line = raw.find(" #").map_or(raw, |i| &raw[..i]).trim_end();
+        if line.trim().is_empty() {
             continue;
         }
-        if in_services && !line.starts_with(' ') && !line.trim().is_empty() {
-            in_services = false;
+        let indent = line.len() - line.trim_start().len();
+        let t = line.trim();
+        if indent == 0 {
+            in_services = t == "services:";
+            continue;
         }
         if !in_services {
             continue;
         }
-        let indent = line.len() - line.trim_start().len();
-        if indent == 2 && line.trim_end().ends_with(':') {
-            blocks.push(Vec::new());
-        } else if let Some(block) = blocks.last_mut() {
-            block.push(line.trim());
+        let si = *service_indent.get_or_insert(indent);
+        if indent == si {
+            services.push((false, false));
+            in_env = false;
+            continue;
+        }
+        let Some(service) = services.last_mut() else {
+            continue;
+        };
+        if t.starts_with("image:") && t.contains("mcp-gateway") {
+            service.0 = true;
+        }
+        if t.starts_with("environment:") {
+            in_env = true;
+            if t.contains("DO_NOT_TRACK=1")
+                || t.contains("DO_NOT_TRACK: 1")
+                || t.contains("DO_NOT_TRACK: \"1\"")
+            {
+                service.1 = true;
+            }
+            continue;
+        }
+        if in_env && indent > si {
+            let e = t.trim_start_matches("- ");
+            if [
+                "DO_NOT_TRACK=1",
+                "DO_NOT_TRACK: 1",
+                "DO_NOT_TRACK: \"1\"",
+                "DO_NOT_TRACK: '1'",
+            ]
+            .contains(&e)
+            {
+                service.1 = true;
+            }
+        }
+        if !t.starts_with('-') && t.ends_with(':') && !t.starts_with("environment:") {
+            in_env = false;
         }
     }
-    blocks.iter().any(|block| {
-        let gateway = block
-            .iter()
-            .any(|l| l.starts_with("image:") && l.contains("mcp-gateway"));
-        let set = block.iter().any(|l| {
-            let l = l.trim_start_matches("- ");
-            l == "DO_NOT_TRACK=1" || l == "DO_NOT_TRACK: \"1\"" || l == "DO_NOT_TRACK: '1'"
-        });
-        gateway && !set
-    })
+    services.iter().any(|(gateway, set)| *gateway && !set)
 }
 
 /// Our own launch surfaces: shell scripts and Makefiles under `scripts/` and
@@ -284,6 +325,18 @@ fn every_image_launch_sets_dnt() {
         "launches without DO_NOT_TRACK=1: {missing:?}"
     );
     for launcher in LAUNCHERS {
+        // Compose launches take service names; their environment is checked
+        // per service in the compose file (compose_without_dnt below).
+        if launcher.starts_with("docker compose") {
+            continue;
+        }
+        let commented =
+            format!("{launcher} ghcr.io/mikkoparkkola/mcp-gateway:test # -e DO_NOT_TRACK=1\n");
+        assert_eq!(
+            launches_without_dnt(&commented).len(),
+            1,
+            "an opt-out in a comment passed for {launcher}"
+        );
         let planted = format!("{launcher} \\\n  ghcr.io/mikkoparkkola/mcp-gateway:test\n");
         assert_eq!(
             launches_without_dnt(&planted).len(),
