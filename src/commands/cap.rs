@@ -606,7 +606,8 @@ providers:
                 "missing.yaml",
             ),
             (&file, "{", "❌ Invalid JSON arguments: ", "EOF"),
-            (&file, r#"{"city": 5}"#, "❌ ", "city"),
+            // The schema refusal: `city` is required and missing.
+            (&file, "{}", "❌ ", "city"),
         ];
         for (path, args, start, names) in cases {
             for render in [Render::Text, Render::Json] {
