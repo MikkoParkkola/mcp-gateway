@@ -18,7 +18,10 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 SCRIPT = HERE / "coverage_grade.sh"
 BASELINE = ROOT / "docs/release/baselines/coverage-39396107020"
-SELF_REV = "07027881e"
+# The script is the one source of the pinned revision; this reads it rather than repeating it.
+SELF_REV = next(line.split("=", 1)[1].strip() for line in
+                (Path(__file__).resolve().parent / "coverage_grade.sh").read_text().splitlines()
+                if line.startswith("SELF_REV="))
 UNION = "scripts/ci/coverage_union.py"
 PROBE = ".github/workflows/coverage-probe.yml"
 REPO = "MikkoParkkola/mcp-gateway"
@@ -112,7 +115,14 @@ class CoverageGrade(unittest.TestCase):
 
     def require_self_rev(self):
         result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
+        if result.returncode and os.environ.get("CI") == "true":
+            # CI checks out shallow: fetch the one pinned commit (read from the script, so the two cannot drift).
+            self.command([self.git, "fetch", "--no-tags", "--depth=1", "origin", SELF_REV])
+            result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
         if result.returncode:
+            # A silent skip in CI would leave the self-check and the refusal untested, so CI fails instead.
+            if os.environ.get("CI") == "true":
+                self.fail(f"pinned SELF_REV {SELF_REV} is absent in CI and could not be fetched")
             self.skipTest(f"pinned SELF_REV {SELF_REV} is absent from local history; no fetch attempted")
 
     def isolated_probe(self):

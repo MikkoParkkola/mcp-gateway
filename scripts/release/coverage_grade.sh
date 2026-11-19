@@ -28,7 +28,7 @@ cd "$(git -C "$HERE" rev-parse --show-toplevel)"
 # Offline self-check baseline: release-line commit 07027881e, whose grader
 # inputs and outputs are vendored below (artifacts were kept 14 days then).
 SELF_DIR=docs/release/baselines/coverage-39396107020
-SELF_REV=07027881e
+SELF_REV=07027881e9c0ba06188dc4dd4f30ca6a311f2d0f
 
 # The probe workflow a graded run must have executed, byte for byte: this
 # checkout's .github/workflows/coverage-probe.yml (MIK-8217 moved it there; CI

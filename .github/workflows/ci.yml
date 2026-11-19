@@ -1856,13 +1856,10 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
-      # The self-check and the old-revision refusal read coverage_grade.sh's pinned SELF_REV; the checkout is
-      # shallow, so that one commit is fetched first (without it those rows would skip).
+      # The self-check and the old-revision refusal read coverage_grade.sh's pinned SELF_REV; in this shallow CI
+      # checkout the test fetches that one commit itself (and fails, rather than skipping, if it cannot).
       - name: Test the release coverage grade script
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin 07027881e9c0ba06188dc4dd4f30ca6a311f2d0f
-          python3 scripts/release/test_coverage_grade.py
+        run: python3 scripts/release/test_coverage_grade.py
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
