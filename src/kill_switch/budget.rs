@@ -62,7 +62,12 @@ impl BudgetWindow {
 
     /// Compute the error rate over all valid entries (0.0–1.0).
     pub fn error_rate(&mut self) -> f64 {
-        self.evict_before(Instant::now());
+        self.error_rate_at(Instant::now())
+    }
+
+    /// [`Self::error_rate`] judged at `now` rather than the real clock.
+    pub(super) fn error_rate_at(&mut self, now: Instant) -> f64 {
+        self.evict_before(now);
         let total = self.entries.len();
         if total == 0 {
             return 0.0;

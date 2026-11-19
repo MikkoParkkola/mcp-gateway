@@ -37,10 +37,10 @@ MARK = re.compile(r"//\s*limit-under-test\s*\(([^)]*)\)\s*:\s*(.*)$")
 BASES = {"fires-only", "paused-clock", "injected-clock"}
 NAMED = {"absorbed-by", "floor-raised"}
 NUM = r"(\d[\d_]*)(?:[iu](?:8|16|32|64|128|size))?"
-LIT = re.compile(
-    rf"Duration::from_(millis|micros|nanos)\(\s*{NUM}\s*\)"
-    r"|Duration::from_secs_f(?:32|64)\(\s*(\d*\.\d+)(?:_?f(?:32|64))?\s*\)"
-    rf"|Duration::new\(\s*0(?:_?[iu](?:32|64))?\s*,\s*{NUM}\s*\)"
+LIT = re.compile(  # `,?`: rustfmt puts a trailing comma after an argument it wraps onto its own line
+    rf"Duration::from_(millis|micros|nanos)\(\s*{NUM}\s*,?\s*\)"
+    r"|Duration::from_secs_f(?:32|64)\(\s*(\d*\.\d+)(?:_?f(?:32|64))?\s*,?\s*\)"
+    rf"|Duration::new\(\s*0(?:_?[iu](?:32|64))?\s*,\s*{NUM}\s*,?\s*\)"
 )
 LIMITS = {"millis": 1000, "micros": 1_000_000, "nanos": 1_000_000_000}
 
@@ -241,9 +241,14 @@ def ceilings_problems(counts: dict[str, int], rows: dict[str, int], gone: set[st
 
 
 def base_problem(base: str, rows: dict[str, int], root: Path) -> str | None:
+    # Fail closed: a revision that does not resolve (a typo, an unexpanded placeholder) must not read as
+    # "no list at the base yet", or the ratchet would pass without comparing anything.
+    if subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+                      capture_output=True).returncode != 0:
+        return f"--base {base} is not a commit in this repository; nothing was compared"
     r = subprocess.run(["git", "-C", str(root), "show", f"{base}:{TSV}"], capture_output=True, text=True)
     if r.returncode != 0:
-        return None  # the list does not exist at the base yet: nothing to compare against
+        return None  # the commit exists but has no list yet: nothing to compare against
     was = sum(read_tsv(r.stdout).values())
     if sum(rows.values()) > was:
         return f"{TSV}: total {sum(rows.values())} is above {base}'s {was}: a ceiling cannot be raised, mark the new limits instead"
@@ -257,7 +262,10 @@ def run(root: Path, base: str | None) -> int:
     gone = {p for p in rows if not (root / p).exists()}
     # unmarked literals are judged by the count rule alone; marker refusals are findings of their own
     refusals = [f for f in findings if "marker refused" in f]
-    probs = refusals + ceilings_problems(counts, rows, gone)
+    # a file over its ceiling also lists each unmarked literal in it, so the author need not hunt for them
+    over = {p for p, n in counts.items() if n > rows.get(p, 0)}
+    detail = [f for f in findings if "no `//" in f and f.split(":", 1)[0] in over]
+    probs = refusals + ceilings_problems(counts, rows, gone) + detail
     if base and (why := base_problem(base, rows, root)):
         probs.append(why)
     print("\n".join(probs))
@@ -313,6 +321,7 @@ def self_test() -> int:
         ("zero forms are the no-delay value", "src/a_tests.rs", 'fn t() { let a = Duration::ZERO; let b = Duration::from_millis(0); let c = Duration::from_secs(0); }\n', 0, ""),
         ("a literal in a comment or a string is not counted", "src/a_tests.rs", 'fn t() {\n    // Duration::from_millis(50)\n    let s = "Duration::from_millis(50)";\n}\n', 0, ""),
         ("a typed literal with underscores is caught", "src/a_tests.rs", 'fn t() { let a = Duration::from_millis(5_0u64); }\n', 1, "sub-second limit"),
+        ("a rustfmt-wrapped literal with a trailing comma is caught", "src/a_tests.rs", 'fn t() {\n    let d = Duration::from_millis(\n        50,\n    );\n}\n', 1, "sub-second limit"),
     ]
     bad = 0
     for label, path, text, want, needle in cases:
@@ -329,7 +338,8 @@ def self_test() -> int:
            ("a count below its ceiling fails (lower it)", any("c.rs now has 0" in x for x in probs)),
            ("a new file with a literal and no row fails", any("new.rs" in x for x in ceilings_problems({"new.rs": 1}, {}, set()))),
            ("a row for a gone file fails", any("gone" in x for x in ceilings_problems({}, {"old.rs": 2}, {"old.rs"}))),
-           ("a TSV round trip keeps the rows", read_tsv(HEADER + "a.rs\t2\nb.rs\t1\n") == {"a.rs": 2, "b.rs": 1})]
+           ("a TSV round trip keeps the rows", read_tsv(HEADER + "a.rs\t2\nb.rs\t1\n") == {"a.rs": 2, "b.rs": 1}),
+           ("a --base that is not a commit is refused, not skipped", base_problem("<MERGE_BASE>", {}, ROOT) is not None)]
     for label, good in exp:
         print(("ok   " if good else "FAIL ") + label)
         bad += not good

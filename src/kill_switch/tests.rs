@@ -329,7 +329,7 @@ fn window_failure_count_survives_size_and_age_eviction() {
         (1, 0),
         "age eviction must drop both failures"
     );
-    assert!((w.error_rate() - 0.0).abs() < f64::EPSILON);
+    assert!((w.error_rate_at(later) - 0.0).abs() < f64::EPSILON);
 
     w.record_at(false, later);
     w.reset();
