@@ -1,0 +1,21 @@
+head_sha	c32e24e18c298722da293da81f4a8522c0240db6
+#mutant h1b
+mcp_gateway	cli::guidelines_tests::a_command_without_about_is_reported	src/cli/guidelines_tests.rs:203
+#mutant h2w
+mcp_gateway	cli::guidelines_tests::the_example_checker_names_each_fault	src/cli/guidelines_tests.rs:245
+#mutant h2s
+mcp_gateway	cli::guidelines_tests::the_example_checker_names_each_fault	src/cli/guidelines_tests.rs:237
+#mutant h2h
+mcp_gateway	cli::guidelines_tests::the_example_checker_names_each_fault	src/cli/guidelines_tests.rs:229
+#mutant h2p
+mcp_gateway	cli::guidelines_tests::the_example_checker_names_each_fault	src/cli/guidelines_tests.rs:225
+#mutant n4
+mcp_gateway	cli::guidelines_tests::the_flag_checker_names_each_fault	src/cli/guidelines_tests.rs:1123
+#mutant n3
+mcp_gateway	cli::guidelines_tests::the_flag_checker_names_each_fault	src/cli/guidelines_tests.rs:1106
+#mutant n2
+mcp_gateway	cli::guidelines_tests::the_flag_checker_names_each_fault	src/cli/guidelines_tests.rs:1089
+#mutant c3a
+mcp_gateway	cli::completion::completion_tests::the_loader_refuses_a_hostile_tool_name	src/cli/completion_tests.rs:147
+#mutant c7
+mcp_gateway	cli::completion::completion_tests::every_real_value_is_completion_safe	src/cli/completion_tests.rs:200
