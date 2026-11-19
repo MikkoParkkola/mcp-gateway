@@ -587,8 +587,10 @@ async fn the_tool_values_are_exactly_the_directory_names() {
     assert_eq!(values, TOOLS);
 }
 
+// The help's command substitution names its own file: the refused value `$(touch canary)` must reach no script, and
+// a help string holding that same text would make the substring check below unpassable.
 const HOSTILE_HELP: &str =
-    "say 'hi' $(touch canary) a\\'b ~x *y \u{2018}a\u{2019} \u{201a}b\u{201b} \\`";
+    "say 'hi' $(touch help_canary) a\\'b ~x *y \u{2018}a\u{2019} \u{201a}b\u{201b} \\`";
 const SAFE: [&str; 6] = ["good_cap", "café", "x.y-z", "_private", "9", "2fa_check"];
 const REFUSED: [&str; 14] = [
     "a b",
