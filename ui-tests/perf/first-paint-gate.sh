@@ -16,14 +16,44 @@ case "$mode" in
 	verdicts) export SPARK_SLOT_MAX_MINUTES=120 ;; # ~500 runs, about 85 minutes
 	calibrate) export SPARK_SLOT_MAX_MINUTES=100 ;; # 370 runs, about 65 minutes
 esac
+# READY modes read the nightly record first (written on this Mac by first-paint-nightly.sh). A missing or
+# stale record blocks; a failed nightly only banners, as the first and last line and atop the summary.
+record=~/.claude/data/first-paint/nightly.json
+export FIRST_PAINT_BANNER=""
+case "$mode" in ready | proof | verdicts)
+	check=$(cd ui-tests && RECORD="$record" node --input-type=module -e "
+import { existsSync, readFileSync } from 'node:fs';
+import { nightlyCheck } from './perf/first-paint-lib.mjs';
+const r = existsSync(process.env.RECORD) ? JSON.parse(readFileSync(process.env.RECORD, 'utf8')) : null;
+const n = nightlyCheck(r, Date.now());
+console.log(n.ok ? (n.banner ?? '') : 'MISSED ' + n.problem);
+console.log(r ? 'last nightly: ' + r.timestamp + ' on ' + r.ref + ' ' + r.sha + ' (exit ' + r.exit + ')' : 'last nightly: none');
+") || exit 2
+	verdict=$(sed -n 1p <<<"$check")
+	if [ "${verdict#MISSED }" != "$verdict" ]; then
+		echo "${verdict#MISSED }"
+		echo "start the nightly by hand: launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway.first-paint-nightly"
+		echo "exit 2: fault"
+		exit 2
+	fi
+	FIRST_PAINT_BANNER=$verdict
+	[ -n "$FIRST_PAINT_BANNER" ] && echo "$FIRST_PAINT_BANNER"
+	sed -n 2p <<<"$check"
+	;;
+esac
+finish() {
+	[ -n "$FIRST_PAINT_BANNER" ] && echo "$FIRST_PAINT_BANNER"
+	exit "$1"
+}
+
 deadline=$(($(date +%s) + 6 * 3600))
 dropped=0
 while :; do
 	spark-slot run full "$owner" "first-paint-$mode" -- ui-tests/perf/first-paint-launch.sh "$mode" "$sha"
 	rc=$?
 	if [ "$rc" -eq 75 ] && [ "$dropped" -eq 0 ]; then dropped=1; echo "Spark unreachable once (75); retrying"; continue; fi
-	[ "$rc" -eq 3 ] || exit "$rc"
-	if [ $(($(date +%s) + 900)) -gt "$deadline" ]; then echo "no quiet window found in 6 hours (exit 3)"; exit 3; fi
+	[ "$rc" -eq 3 ] || finish "$rc"
+	if [ $(($(date +%s) + 900)) -gt "$deadline" ]; then echo "no quiet window found in 6 hours (exit 3)"; finish 3; fi
 	echo "busy host (exit 3) at $(date -u +%H:%MZ); retrying in 15 minutes"
 	sleep 900
 done

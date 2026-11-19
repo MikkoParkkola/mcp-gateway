@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import lighthouse from 'lighthouse';
 import { chromium } from '@playwright/test';
 import {
-  RUNS, SIDE_RUNS, GATE_SCHEDULE, VERDICT_SCHEDULE, busy, judgeJob, passSettings, nightlyCheck, stats, drift,
+  RUNS, SIDE_RUNS, GATE_SCHEDULE, VERDICT_SCHEDULE, busy, judgeJob, passSettings, stats, drift,
   marginFromSpread, recalibrationFlag, controlCheck, passComplete, DRIFT_LIMIT,
 } from './first-paint-lib.mjs';
 
@@ -26,7 +26,6 @@ const UI_TESTS = join(HERE, '..');
 const SHELL_DIR = join(UI_TESTS, '..', 'src', 'gateway', 'ui', 'shell');
 export const CONFIG_PATH = join(HERE, 'first-paint.config.json');
 const HOME = process.env.FIRST_PAINT_HOME ?? join(homedir(), 'first-paint');
-export const NIGHTLY_RECORD = join(HOME, 'nightly.json');
 const PAGE = '/ui/overview/status';
 const READY_TIMEOUT_MS = 30_000;
 const AUDITS = ['first-contentful-paint', 'network-requests'];
@@ -316,10 +315,6 @@ export async function calibrate({ sha, urls, shell, log }) {
   }
 }
 
-function readRecord() {
-  return existsSync(NIGHTLY_RECORD) ? JSON.parse(readFileSync(NIGHTLY_RECORD, 'utf8')) : null;
-}
-
 /** Writes first-paint-<sha>-<UTC>.json and .md under ~/first-paint/out; never overwrites. */
 function writeOutputs({ mode, sha, lines, data }) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -340,17 +335,9 @@ async function main(argv) {
   const { mode, sha } = parseArgs(argv);
   const log = (s) => console.log(s);
   const shell = shellFile();
-  let banner = null;
-  let config = null;
-  if (mode !== 'calibrate') {
-    config = loadConfig();
-    if (mode !== 'nightly') {
-      const n = nightlyCheck(readRecord(), Date.now());
-      if (!n.ok) throw new Fault(`${n.problem}; start the nightly by hand: launchctl kickstart -k gui/$(id -u)/com.claude.mcp-gateway.first-paint-nightly`);
-      banner = n.banner;
-    }
-  }
-  if (banner) console.log(banner);
+  // The nightly record and its READY check live on the Mac (first-paint-gate.sh), so a nightly that never
+  // reached Spark is still recorded.
+  const config = mode === 'calibrate' ? null : loadConfig();
   const plain = await startServer([]);
   const planted = mode === 'verdicts' ? null : await startServer(['--plant-first-paint-delay-ms=300']);
   const urls = { gateMobile: plain.url, gateDesktop: plain.url, unthrottled: plain.url, simulate: plain.url, control: planted?.url };
@@ -363,7 +350,7 @@ async function main(argv) {
     plain.stop();
     planted?.stop();
   }
-  const head = [`first paint, ${mode}, ${sha}, ${new Date().toISOString()}`, ...(banner ? [banner] : [])];
+  const head = [`first paint, ${mode}, ${sha}, ${new Date().toISOString()}`];
   let lines;
   let data;
   if (mode === 'calibrate') {
@@ -381,28 +368,13 @@ async function main(argv) {
   const name = writeOutputs({ mode, sha, lines, data });
   for (const l of lines.slice(1)) console.log(l);
   console.log(`outputs: ${name}.json, ${name}.md`);
-  if (banner) console.log(banner);
   return result.exit;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  let mode = null;
-  let sha = null;
-  try {
-    ({ mode, sha } = parseArgs(process.argv.slice(2)));
-  } catch { /* main reports it */ }
-  const record = (exit) => {
-    if (mode !== 'nightly' || !sha) return;
-    mkdirSync(HOME, { recursive: true });
-    writeFileSync(NIGHTLY_RECORD, `${JSON.stringify({ timestamp: new Date().toISOString(), sha, exit })}\n`);
-  };
-  main(process.argv.slice(2)).then((exit) => {
-    record(exit);
-    process.exit(exit);
-  }, (e) => {
+  main(process.argv.slice(2)).then((exit) => process.exit(exit), (e) => {
     console.error(e instanceof Fault ? `fault: ${e.message}` : e?.stack ?? String(e));
     console.log('exit 2: fault');
-    record(2);
     process.exit(2);
   });
 }

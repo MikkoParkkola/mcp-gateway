@@ -41,7 +41,11 @@ rc=${PIPESTATUS[1]}
 
 dest=~/.claude/data/first-paint; mkdir -p "$dest/out"
 name=$(sed -n 's/^outputs: \(.*\)\.json, .*/\1/p' "$out" | tail -1)
-if [ -n "$name" ]; then "${ssh_cmd[@]}" "cat $name.json" >"$dest/out/${name##*/}.json"; "${ssh_cmd[@]}" "cat $name.md" >"$dest/out/${name##*/}.md"; fi
+if [ -n "$name" ]; then
+	"${ssh_cmd[@]}" "cat $name.json" >"$dest/out/${name##*/}.json"
+	md="$dest/out/${name##*/}.md"
+	{ [ -n "${FIRST_PAINT_BANNER:-}" ] && echo "$FIRST_PAINT_BANNER"; "${ssh_cmd[@]}" "cat $name.md"; } >"$md"
+fi
 if [ "$mode" = calibrate ] && [ "$rc" -eq 0 ]; then
 	"${ssh_cmd[@]}" 'cat ~/first-paint/src/ui-tests/perf/first-paint.config.json' >"$dest/first-paint.config.json"
 	echo "config copied to $dest/first-paint.config.json (commit it as a reviewed change)"
