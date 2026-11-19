@@ -699,7 +699,8 @@ def built_parts_rows() -> None:
         fake = os.path.join(root, "lib-parts.sh")
         # The fake build: logs `build K`, refuses to build while a part binary is still on disk, and writes a binary
         # that lists `mK::a mK::b mK::<SDK>` and runs per BEHAVE_K (ok, short, extra, red, panic: b in libtest's
-        # should-panic form, child: b's result after a child's unfinished `test <child> ... ` on one line). FAIL_LIST_K=1
+        # should-panic form, child: b's result after a child's unfinished `test <child> ... ` on one line, diag: b only in
+        # a diagnostic's text, `diagnostic: test mK::b ... ok`, never run). FAIL_LIST_K=1
         # fails the export after the binary is written, before its list.
         with open(fake, "w") as f:
             f.write('#!/bin/sh\nk=$2; d=$3; echo "build $k" >> "$LOG"\n'
@@ -709,6 +710,7 @@ def built_parts_rows() -> None:
                     'cat > "$d/p$k/lib-tests-p$k" <<EOF\n#!/bin/sh\nb=\\${BEHAVE_$k:-ok}\n'
                     'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
                     ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
+                    ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
@@ -751,6 +753,8 @@ def built_parts_rows() -> None:
             assert leg_run("lib-b", 8, BEHAVE_2="panic")[0] == 0, "a should-panic result was not counted"
             # A result after a child process's unfinished line, on the same line, counts as run.
             assert leg_run("lib-b", 8, BEHAVE_2="child")[0] == 0, "a result after a child's partial line was not counted"
+            # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
+            assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
@@ -1162,10 +1166,11 @@ def run_prebuilt_parts(os_kind: str, shard: str, directory: str) -> int:
     return 1 if failed else 0
 
 
-# libtest's per-test result; a #[should_panic] test reads `test <name> - should panic ... ok`. Not anchored to the line
-# start: a test that re-runs the binary as a child shares stdout, and the child's unfinished `test <child> ... ` can
-# precede the parent's result on the same line (E1, run 44460056220).
-RESULT_LINE = re.compile(r"(?<!\S)test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
+# libtest's per-test result line; a #[should_panic] test reads `test <name> - should panic ... ok`. Anchored at the line
+# start, with any number of unfinished `test <name> ... ` before the result: a test that re-runs the binary as a child
+# shares stdout, and the child's unfinished line can precede the parent's result (E1, run 44460056220). Text that is
+# not a libtest prefix (`diagnostic: test x ... ok`) never counts.
+RESULT_LINE = re.compile(r"^(?:test \S+(?: - should panic)? \.\.\. )*test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b")
 
 
 def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
@@ -1200,7 +1205,8 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
                 for raw in p.stdout:
                     sys.stdout.buffer.write(raw)
                     sys.stdout.buffer.flush()
-                    for m in RESULT_LINE.finditer(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n"))):
+                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    if m:
                         reported[m.group(1)] = m.group(2)
                 prc = p.wait()
         finally:
