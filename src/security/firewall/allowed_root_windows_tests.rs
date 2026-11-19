@@ -124,7 +124,9 @@ fn r14_no_existing_prefix_is_unresolvable() {
         .into_iter()
         .find(|d| real(&ResolveOp::Metadata(format!(r"{d}:\").into())).is_err())
     else {
-        crate::test_wait::skip_or_fail("one of the drives Q, R, W, X unmounted (all four are mounted here)");
+        crate::test_wait::skip_or_fail(
+            "one of the drives Q, R, W, X unmounted (all four are mounted here)",
+        );
         return;
     };
     let fx = Fx::new(&["path"], FirewallAction::Block);

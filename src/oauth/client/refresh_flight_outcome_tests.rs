@@ -159,7 +159,9 @@ async fn a_rotated_token_that_cannot_be_saved_is_not_resent() {
     if !set_mode(dir.path(), 0o500) {
         set_mode(dir.path(), 0o700);
         gate.release.notify_one();
-        crate::test_wait::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
+        crate::test_wait::skip_or_fail(
+            "a user that cannot write a read-only storage directory (this one is privileged)",
+        );
         return;
     }
     gate.release.notify_one();
@@ -195,7 +197,9 @@ async fn a_refresh_that_cannot_mark_its_token_sends_nothing() {
 
     if !set_mode(dir.path(), 0o500) {
         set_mode(dir.path(), 0o700);
-        crate::test_wait::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
+        crate::test_wait::skip_or_fail(
+            "a user that cannot write a read-only storage directory (this one is privileged)",
+        );
         return;
     }
     let result = headless(&owned).await;
@@ -295,7 +299,9 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
 
     if !set_mode(dir.path(), 0o500) {
         set_mode(dir.path(), 0o700);
-        crate::test_wait::skip_or_fail("a user that cannot write a read-only storage directory (this one is privileged)");
+        crate::test_wait::skip_or_fail(
+            "a user that cannot write a read-only storage directory (this one is privileged)",
+        );
         return;
     }
     let result = headless(&owned).await;

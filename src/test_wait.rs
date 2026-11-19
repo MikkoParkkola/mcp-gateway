@@ -96,7 +96,9 @@ pub(crate) fn required_mode(value: Option<&str>) -> Result<bool, String> {
     match value {
         None | Some("0") => Ok(false),
         Some("1") => Ok(true),
-        Some(other) => Err(format!("TESTS_REQUIRE_ALL must be 0 or 1 when set, got {other:?}")),
+        Some(other) => Err(format!(
+            "TESTS_REQUIRE_ALL must be 0 or 1 when set, got {other:?}"
+        )),
     }
 }
 
@@ -126,7 +128,7 @@ mod tests {
     use std::ops::ControlFlow;
     use std::time::Duration;
 
-    use std::process::{Command, Output};
+    use std::process::Output;
 
     use super::{required_mode, wait_real_time, wait_until};
 
@@ -216,8 +218,13 @@ mod tests {
     }
 
     fn child(value: Option<&str>) -> Output {
-        let mut cmd = Command::new(std::env::current_exe().expect("this test binary"));
-        cmd.args(["--ignored", "--exact", "test_wait::tests::skip_child", "--nocapture"]);
+        let mut cmd = crate::test_home::test_binary();
+        cmd.args([
+            "--ignored",
+            "--exact",
+            "test_wait::tests::skip_child",
+            "--nocapture",
+        ]);
         cmd.env_remove("TESTS_REQUIRE_ALL");
         if let Some(v) = value {
             cmd.env("TESTS_REQUIRE_ALL", v);
@@ -240,12 +247,20 @@ mod tests {
             let out = child(value);
             let err = String::from_utf8_lossy(&out.stderr);
             assert!(out.status.success(), "{value:?}: {err}");
-            assert!(err.contains(&format!("skipped: {PLANTED}")), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!("skipped: {PLANTED}")),
+                "{value:?}: {err}"
+            );
         }
         let out = child(Some("1"));
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{err}");
-        assert!(err.contains(&format!("required here but unavailable on this host: {PLANTED}")), "{err}");
+        assert!(
+            err.contains(&format!(
+                "required here but unavailable on this host: {PLANTED}"
+            )),
+            "{err}"
+        );
         let out = child(Some("yes"));
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{err}");
