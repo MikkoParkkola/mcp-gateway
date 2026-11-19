@@ -218,18 +218,6 @@ impl Gateway {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Wait for `done(log)`, bounded by `bound`; false when the bound ran out.
-    async fn wait_log(&self, bound: Duration, done: impl Fn(&str) -> bool) -> bool {
-        let until = Instant::now() + bound;
-        while Instant::now() < until {
-            if done(&self.log_text()) {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        done(&self.log_text())
-    }
-
     async fn stop_clean(mut self) -> String {
         self.signal("-TERM");
         let status = tokio::time::timeout(Duration::from_secs(60), self.child.wait())
@@ -458,9 +446,12 @@ async fn k_inflight_a_held_request_does_not_hold_the_saves() {
     kill_if_running(gw).await;
     assert_eq!(
         state(dir.path()),
+        // A transition is recorded when its call completes
+        // (invoke/post_dispatch.rs, record_and_predict), and `hang` never
+        // does: run 2 adds alpha to beta only.
         State {
             usage: [2, 2, 0, 1],
-            transitions: 3,
+            transitions: 2,
             counted: names(&["alpha", "beta"]),
             cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2)],
         },
@@ -504,9 +495,12 @@ async fn k_post_a_request_completing_during_the_stop_is_saved() {
     kill_if_running(gw).await;
     assert_eq!(
         state(dir.path()),
+        // `slow` completes during the stop, after `beta` (`hang` never
+        // completes, so it records no transition): run 2 adds alpha to beta
+        // and beta to slow.
         State {
             usage: [2, 2, 1, 1],
-            transitions: 4,
+            transitions: 3,
             counted: names(&["alpha", "beta", "slow"]),
             cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2), ("slow".into(), 1)],
         },
