@@ -79,21 +79,30 @@ fn start_is_called_only_from_the_two_servers() {
 /// sets `DO_NOT_TRACK` (a lexical split at each `fn `: a nested fn ends the
 /// outer chunk early, which can only flag more, never less).
 fn helpers_without_dnt(text: &str) -> Vec<String> {
-    let starts: Vec<usize> = text
+    // Comments are not settings (tp-r2): drop each line's `//` tail first.
+    let code: String = text
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let starts: Vec<usize> = code
         .match_indices("fn ")
         .map(|(i, _)| i)
-        .filter(|&i| i == 0 || text[..i].ends_with(char::is_whitespace))
+        .filter(|&i| i == 0 || code[..i].ends_with(char::is_whitespace))
         .collect();
     let mut out = Vec::new();
     for (k, &s) in starts.iter().enumerate() {
-        let chunk = &text[s..starts.get(k + 1).copied().unwrap_or(text.len())];
+        let chunk = &code[s..starts.get(k + 1).copied().unwrap_or(code.len())];
         let name: String = chunk[3..]
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
-        if chunk.contains("CARGO_BIN_EXE_mcp-gateway")
-            && !chunk.contains(r#".env("DO_NOT_TRACK", "1")"#)
-        {
+        let Some(built) = chunk.find("CARGO_BIN_EXE_mcp-gateway") else {
+            continue;
+        };
+        // The setting must come after the command is built, on its chain.
+        let set = chunk[built..].contains(r#".env("DO_NOT_TRACK", "1")"#);
+        if !set {
             out.push(name);
         }
     }
@@ -121,6 +130,10 @@ fn each_gateway_helper_sets_dnt() {
     let mentioned = r#"fn mentioned() -> Command { // DO_NOT_TRACK
         let mut c = Command::new(env!("CARGO_BIN_EXE_mcp-gateway")); c.env_remove("DO_NOT_TRACK"); c }"#;
     assert_eq!(helpers_without_dnt(mentioned), ["mentioned"]);
+    let unrelated = r#"fn unrelated() -> Command {
+        let mut other = Command::new("true"); other.env("DO_NOT_TRACK", "1");
+        Command::new(env!("CARGO_BIN_EXE_mcp-gateway")) }"#;
+    assert_eq!(helpers_without_dnt(unrelated), ["unrelated"]);
 }
 
 /// The launch commands that start a container or pod.
@@ -139,13 +152,16 @@ const LAUNCHERS: [&str; 8] = [
 /// `--env`, or a Helm `--set`/`--set-string` value), not just mentions it.
 fn launch_sets_dnt(launch: &str) -> bool {
     let words: Vec<&str> = launch.split_whitespace().collect();
-    words.windows(2).any(|w| {
-        matches!(w[0], "-e" | "--env" | "--set" | "--set-string")
-            && w[1].ends_with("DO_NOT_TRACK=1")
+    let helm_value = |v: &str| v.ends_with(".DO_NOT_TRACK=1") || v == "DO_NOT_TRACK=1";
+    words.windows(2).any(|w| match w[0] {
+        "-e" | "--env" => w[1] == "DO_NOT_TRACK=1",
+        "--set" | "--set-string" => helm_value(w[1]),
+        _ => false,
     }) || words.iter().any(|w| {
-        ["-e=", "--env=", "--set=", "--set-string="]
-            .iter()
-            .any(|f| w.starts_with(f) && w.ends_with("DO_NOT_TRACK=1"))
+        *w == "--env=DO_NOT_TRACK=1"
+            || ["--set=", "--set-string="]
+                .iter()
+                .any(|f| w.strip_prefix(f).is_some_and(|v| helm_value(v)))
     })
 }
 
@@ -165,12 +181,37 @@ fn launches_without_dnt(text: &str) -> Vec<String> {
 /// A compose file that runs the gateway image without `DO_NOT_TRACK` set to
 /// `1` in an `environment:` entry.
 fn compose_without_dnt(text: &str) -> bool {
-    text.contains("mcp-gateway")
-        && text.contains("image:")
-        && !text.lines().any(|l| {
-            let l = l.trim().trim_start_matches("- ");
+    // Per service (tp-r2): a block starts at a two-space key under `services:`.
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    let mut in_services = false;
+    for line in text.lines() {
+        if line.starts_with("services:") {
+            in_services = true;
+            continue;
+        }
+        if in_services && !line.starts_with(' ') && !line.trim().is_empty() {
+            in_services = false;
+        }
+        if !in_services {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if indent == 2 && line.trim_end().ends_with(':') {
+            blocks.push(Vec::new());
+        } else if let Some(block) = blocks.last_mut() {
+            block.push(line.trim());
+        }
+    }
+    blocks.iter().any(|block| {
+        let gateway = block
+            .iter()
+            .any(|l| l.starts_with("image:") && l.contains("mcp-gateway"));
+        let set = block.iter().any(|l| {
+            let l = l.trim_start_matches("- ");
             l == "DO_NOT_TRACK=1" || l == "DO_NOT_TRACK: \"1\"" || l == "DO_NOT_TRACK: '1'"
-        })
+        });
+        gateway && !set
+    })
 }
 
 /// Our own launch surfaces: shell scripts and Makefiles under `scripts/` and
@@ -226,7 +267,10 @@ fn every_image_launch_sets_dnt() {
         for launch in launches_without_dnt(&text) {
             missing.push(format!("{path}: {launch}"));
         }
-        let name = path.rsplit('/').next().unwrap_or("");
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if (name.starts_with("docker-compose") || name.starts_with("compose"))
             && compose_without_dnt(&text)
         {
@@ -271,6 +315,11 @@ fn every_image_launch_sets_dnt() {
         !compose_without_dnt(&compose_kept),
         "a compose service with the variable was refused"
     );
+    let two = "services:\n  other:\n    image: busybox\n    environment:\n      - DO_NOT_TRACK=1\n  gw:\n    image: ghcr.io/mikkoparkkola/mcp-gateway:test\n";
+    assert!(
+        compose_without_dnt(two),
+        "another service's setting covered the gateway service"
+    );
 }
 
 /// DOC1. docs/PRIVACY.md states the facts the code fixes, written out here as
@@ -285,6 +334,9 @@ fn privacy_text_states_the_facts() {
         "`project`",
         "`event`",
         "`install_id`",
+        "mcp-gateway version",
+        "operating system and processor architecture",
+        "the time the heartbeat arrived",
         "https://telemetry.revaluator.ai/v1/heartbeat",
         "city name and a country code",
         "three months",

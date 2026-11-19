@@ -147,7 +147,7 @@ async fn production_client_refuses_an_untrusted_certificate() {
     let (base, ca_pem) = crate::test_tls::https_server(app).await;
     let url = format!("{base}/v1/heartbeat");
     let dir = tempfile::tempdir().expect("dir");
-    let out = heartbeat_once(&release(), dir.path(), &production_client(), &url, nov19).await;
+    let out = heartbeat_once(&release(), dir.path(), &production_target().1, &url, nov19).await;
     assert_eq!(out, Outcome::Failed);
     assert_eq!(
         hits.load(Ordering::SeqCst),
@@ -189,5 +189,44 @@ async fn production_target_is_the_literal_url_and_the_release_client() {
     assert_eq!(
         heartbeat_once(&release(), control.path(), &test_client(), &rx.url(), nov19).await,
         Outcome::Sent
+    );
+}
+
+/// W3b (tp-r2). With no registered target, `resolve` gives the task the
+/// release target: the literal URL, a client that refuses plain HTTP, and a
+/// one-hour interval; a registered target is used only for its own dir.
+#[tokio::test]
+async fn start_resolves_the_release_target_without_a_seam() {
+    let dir = tempfile::tempdir().expect("dir");
+    let released = resolve(dir.path());
+    assert!(!released.from_seam);
+    assert_eq!(released.url, "https://telemetry.revaluator.ai/v1/heartbeat");
+    assert_eq!(released.every, std::time::Duration::from_secs(3600));
+    let rx = Listener::start(Answer::NoContent).await;
+    let probe = tempfile::tempdir().expect("dir");
+    let out = heartbeat_once(&release(), probe.path(), &released.client, &rx.url(), nov19).await;
+    assert_eq!(out, Outcome::Failed);
+    assert_eq!(
+        rx.connections(),
+        0,
+        "the resolved release client spoke plain HTTP"
+    );
+    let registered = tempfile::tempdir().expect("dir");
+    let _guard = seam::register(
+        registered.path(),
+        seam::Target {
+            url: rx.url(),
+            client: test_client(),
+            today: nov19,
+            every: std::time::Duration::from_millis(50),
+            stall: None,
+        },
+    );
+    let seamed = resolve(registered.path());
+    assert!(seamed.from_seam);
+    assert_eq!(seamed.url, rx.url());
+    assert!(
+        !resolve(dir.path()).from_seam,
+        "a registration leaked to another dir"
     );
 }

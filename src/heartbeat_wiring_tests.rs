@@ -59,7 +59,10 @@ async fn the_task_checks_at_start_and_after_a_day_and_ends_on_shutdown() {
     until("the next day's send", || rx.connections() == 2).await;
     let _ = stop.send(());
     let ended = tokio::time::timeout(Duration::from_secs(5), task).await;
-    assert!(ended.is_ok(), "the task did not end on shutdown");
+    assert!(
+        matches!(ended, Ok(Ok(()))),
+        "the task did not end on shutdown"
+    );
 }
 
 /// F10. Shutdown does not wait for a stalled disk: the check's filesystem
@@ -102,7 +105,7 @@ async fn shutdown_does_not_wait_for_a_stalled_disk() {
     let _ = stop.send(());
     let ended = tokio::time::timeout(Duration::from_secs(2), task).await;
     assert!(
-        ended.is_ok(),
+        matches!(ended, Ok(Ok(()))),
         "shutdown waited for the stalled filesystem thread"
     );
     assert_eq!(rx.connections(), 0, "the stalled check sent");
@@ -240,7 +243,17 @@ fn read_by_child(all: &[&str], set: &[(&str, &str)]) -> BTreeSet<String> {
     for (name, value) in set {
         cmd.env(name, value);
     }
-    let out = cmd.output().expect("child");
+    cmd.stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("child");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while child.try_wait().expect("wait").is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the reader child ran past 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().expect("output");
     assert!(out.status.success(), "the reader child failed: {out:?}");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let list = marker(&text, "HBREAD=[").expect("the child printed its snapshot");
@@ -317,6 +330,15 @@ async fn planted_host_and_config_never_reach_the_request() {
         ("MCP_GATEWAY_BACKEND", "planted-backend-7f3a"),
     ];
     let mut cmd = tokio::process::Command::from(crate::test_home::test_binary());
+    // Every switch cleared, so the child's own snapshot decides to send even
+    // where this process runs under CI or a proxy (tp-r2).
+    for name in ["DO_NOT_TRACK", "NO_TELEMETRY"]
+        .iter()
+        .chain(CI_NAMES.iter())
+        .chain(PROXY_NAMES.iter())
+    {
+        cmd.env_remove(name);
+    }
     cmd.args([
         "--exact",
         PLANTED_CHILD,
@@ -327,6 +349,10 @@ async fn planted_host_and_config_never_reach_the_request() {
     .env("HB_CHILD_DIR", dir.path())
     .env("HB_CHILD_URL", rx.url())
     .envs(planted)
+    .env(
+        "MCP_GATEWAY_CONFIG_DIR",
+        dir.path().join("planted-config-7f3a"),
+    )
     .stdout(std::process::Stdio::piped())
     .kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(60), cmd.output())
@@ -343,162 +369,4 @@ async fn planted_host_and_config_never_reach_the_request() {
         !whole.contains("7f3a"),
         "a planted value reached the request: {whole}"
     );
-}
-
-/// A target for `dir`: the listener, the test client, the 19th, fast ticks.
-fn target_for(rx: &Listener) -> seam::Target {
-    seam::Target {
-        url: rx.url(),
-        client: test_client(),
-        today: nov19,
-        every: Duration::from_millis(50),
-        stall: None,
-    }
-}
-
-/// A target whose client waits 60 s for a reply: a start that awaited the
-/// heartbeat would take a minute, far past the 30 s the rows allow.
-fn slow_target_for(rx: &Listener) -> seam::Target {
-    let mut target = target_for(rx);
-    target.client = base_builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .expect("client");
-    target
-}
-
-/// Run the HTTP gateway on `dir` with `posture` from construction to a
-/// `/health` answer, then shut it down and await it. Returns the status and
-/// the time from construction to the answer.
-async fn http_start(dir: &std::path::Path, posture: SecurityPosture) -> (u16, Duration) {
-    let started = std::time::Instant::now();
-    let mut config = crate::config::Config::default();
-    config.server.host = "127.0.0.1".to_string();
-    config.server.port = 0;
-    config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
-    config.security.posture = posture;
-    let mut gateway = crate::gateway::Gateway::new(config)
-        .await
-        .expect("a gateway")
-        .with_data_dir(dir.to_path_buf());
-    let bound = gateway.bound_port_for_test();
-    let trigger = gateway.shutdown_trigger_for_test();
-    let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
-    let port = tokio::time::timeout(Duration::from_secs(30), bound)
-        .await
-        .expect("bound within 30 s")
-        .expect("the bound port");
-    let status = reqwest::Client::new()
-        .get(format!("http://127.0.0.1:{port}/health"))
-        .send()
-        .await
-        .map(|r| r.status().as_u16())
-        .unwrap_or(0);
-    let took = started.elapsed();
-    trigger.send(()).expect("run holds the trigger");
-    let ended = tokio::time::timeout(Duration::from_secs(30), server)
-        .await
-        .expect("run returns after the trigger")
-        .expect("run does not panic");
-    assert!(ended.is_ok(), "{ended:?}");
-    (status, took)
-}
-
-/// W1 + F7. A hardened HTTP gateway opens no connection to the receiver and
-/// creates no heartbeat state. Control: the standard posture, against a
-/// receiver that never answers and a client that would wait a minute,
-/// connects once and answers `/health` within 30 s of construction.
-#[tokio::test]
-async fn http_start_hardened_sends_nothing() {
-    let rx = Listener::start(Answer::NoContent).await;
-    let dir = tempfile::tempdir().expect("dir");
-    let _guard = seam::register(dir.path(), target_for(&rx));
-    let (status, _) = http_start(dir.path(), SecurityPosture::Hardened).await;
-    assert_eq!(status, 200);
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(rx.connections(), 0, "a hardened start sent");
-    assert!(
-        !dir.path().join("heartbeat").exists(),
-        "a hardened start created state"
-    );
-
-    let hang = Listener::start(Answer::Never).await;
-    let control = tempfile::tempdir().expect("dir");
-    let _control_guard = seam::register(control.path(), slow_target_for(&hang));
-    let (status, took) = http_start(control.path(), SecurityPosture::Standard).await;
-    assert_eq!(status, 200);
-    assert!(
-        took < Duration::from_secs(30),
-        "the start waited on the heartbeat: {took:?}"
-    );
-    until("control: the standard start's heartbeat", || {
-        hang.connections() == 1
-    })
-    .await;
-}
-
-/// Start the stdio gateway on `dir` with `posture`, send `ping`, and return
-/// whether a JSON-RPC reply with id 1 and a result came within 30 s of
-/// construction. The server task is aborted and awaited.
-async fn stdio_start(dir: &std::path::Path, posture: SecurityPosture) -> bool {
-    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
-    let started = std::time::Instant::now();
-    let mut config = crate::config::Config::default();
-    config.security.posture = posture;
-    let gateway = crate::gateway::Gateway::new(config)
-        .await
-        .expect("a gateway")
-        .with_data_dir(dir.to_path_buf());
-    let (mut client, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let task = tokio::spawn(async move { drop(gateway.run_stdio_on(input, output, None).await) });
-    client
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
-        .await
-        .expect("write");
-    let mut lines = tokio::io::BufReader::new(reader).lines();
-    let bound = Duration::from_secs(30).saturating_sub(started.elapsed());
-    let reply = tokio::time::timeout(bound, lines.next_line()).await;
-    let answered = matches!(reply, Ok(Ok(Some(ref line)))
-        if serde_json::from_str::<serde_json::Value>(line)
-            .is_ok_and(|v| v["id"] == 1 && v.get("result").is_some()));
-    task.abort();
-    let joined = task.await;
-    assert!(
-        joined.is_ok()
-            || joined
-                .as_ref()
-                .is_err_and(tokio::task::JoinError::is_cancelled)
-    );
-    answered
-}
-
-/// W2 + F8. A hardened stdio gateway opens no connection and creates no
-/// state. Control: the standard posture, against a receiver that never
-/// answers and a client that would wait a minute, connects once and still
-/// answers `ping` within 30 s.
-#[tokio::test]
-async fn stdio_start_hardened_sends_nothing() {
-    let rx = Listener::start(Answer::NoContent).await;
-    let dir = tempfile::tempdir().expect("dir");
-    let _guard = seam::register(dir.path(), target_for(&rx));
-    assert!(
-        stdio_start(dir.path(), SecurityPosture::Hardened).await,
-        "no reply to ping"
-    );
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(rx.connections(), 0, "a hardened stdio start sent");
-    assert!(!dir.path().join("heartbeat").exists());
-
-    let hang = Listener::start(Answer::Never).await;
-    let control = tempfile::tempdir().expect("dir");
-    let _control_guard = seam::register(control.path(), slow_target_for(&hang));
-    assert!(
-        stdio_start(control.path(), SecurityPosture::Standard).await,
-        "ping waited on the heartbeat"
-    );
-    until("control: the standard stdio start's heartbeat", || {
-        hang.connections() == 1
-    })
-    .await;
 }

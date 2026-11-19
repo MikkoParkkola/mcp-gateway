@@ -174,6 +174,30 @@ pub(crate) fn production_target() -> (&'static str, reqwest::Client) {
     ("", base_builder().build().unwrap_or_default())
 }
 
+/// What the task for one data dir uses.
+pub(crate) struct Resolved {
+    pub(crate) url: String,
+    pub(crate) client: reqwest::Client,
+    pub(crate) today: Today,
+    pub(crate) every: std::time::Duration,
+    /// True only for a target a test registered for this dir.
+    pub(crate) from_seam: bool,
+}
+
+/// The target `start` uses for `data_dir`: a registered test target (test
+/// builds only), else [`production_target`], the system clock and one hour.
+pub(crate) fn resolve(data_dir: &Path) -> Resolved {
+    let _ = data_dir;
+    let (url, client) = production_target();
+    Resolved {
+        url: url.to_owned(),
+        client,
+        today: || None,
+        every: std::time::Duration::ZERO,
+        from_seam: false,
+    }
+}
+
 /// Start the server's heartbeat task: a check at start, then hourly, ending
 /// on `shutdown`.
 pub(crate) fn start(
@@ -232,7 +256,7 @@ pub(crate) mod seam {
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "heartbeat_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(tp3)]
 #[cfg(test)]

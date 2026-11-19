@@ -17,7 +17,7 @@ use super::*;
 
 /// One request as the listener saw it.
 #[derive(Clone, Debug)]
-struct Seen {
+pub(crate) struct Seen {
     method: String,
     path: String,
     query: Option<String>,
@@ -28,7 +28,7 @@ struct Seen {
 
 /// How the listener answers.
 #[derive(Clone)]
-pub(super) enum Answer {
+pub(crate) enum Answer {
     NoContent,
     Error500,
     RedirectTo(String),
@@ -36,14 +36,14 @@ pub(super) enum Answer {
 }
 
 /// A loopback HTTP listener that records every connection and request.
-pub(super) struct Listener {
+pub(crate) struct Listener {
     base: String,
     connections: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<Seen>>>,
 }
 
 impl Listener {
-    pub(super) async fn start(answer: Answer) -> Self {
+    pub(crate) async fn start(answer: Answer) -> Self {
         let socket = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -85,15 +85,15 @@ impl Listener {
         }
     }
 
-    pub(super) fn url(&self) -> String {
+    pub(crate) fn url(&self) -> String {
         format!("{}/v1/heartbeat", self.base)
     }
 
-    pub(super) fn connections(&self) -> usize {
+    pub(crate) fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
     }
 
-    fn requests(&self) -> Vec<Seen> {
+    pub(crate) fn requests(&self) -> Vec<Seen> {
         self.seen.lock().expect("log").clone()
     }
 }
@@ -151,10 +151,10 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Seen> {
 fn day(d: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(2026, 11, d)
 }
-pub(super) fn nov19() -> Option<NaiveDate> {
+pub(crate) fn nov19() -> Option<NaiveDate> {
     day(19)
 }
-pub(super) fn nov20() -> Option<NaiveDate> {
+pub(crate) fn nov20() -> Option<NaiveDate> {
     day(20)
 }
 fn nov18() -> Option<NaiveDate> {
@@ -162,7 +162,7 @@ fn nov18() -> Option<NaiveDate> {
 }
 
 /// A release snapshot with nothing set: the one that sends.
-pub(super) fn release() -> Snapshot {
+pub(crate) fn release() -> Snapshot {
     Snapshot {
         build: Build::Release,
         posture: SecurityPosture::Standard,
@@ -177,7 +177,7 @@ fn with(name: &str, value: &str) -> Snapshot {
     s
 }
 
-pub(super) fn test_client() -> reqwest::Client {
+pub(crate) fn test_client() -> reqwest::Client {
     base_builder().build().expect("a test client")
 }
 
@@ -195,7 +195,7 @@ fn expected_runtime() -> &'static str {
     }
 }
 
-pub(super) fn is_install_id(s: &str) -> bool {
+pub(crate) fn is_install_id(s: &str) -> bool {
     s.len() == 32
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -203,7 +203,7 @@ pub(super) fn is_install_id(s: &str) -> bool {
 
 /// Create `path` owner-only (0700 on Unix), so the wide-dir rule is never
 /// what decides a row about something else.
-pub(super) fn owner_only_dir(path: &Path) {
+pub(crate) fn owner_only_dir(path: &Path) {
     std::fs::create_dir(path).expect("dir");
     #[cfg(unix)]
     {
@@ -212,7 +212,7 @@ pub(super) fn owner_only_dir(path: &Path) {
     }
 }
 
-pub(super) fn read_id(dir: &Path) -> String {
+pub(crate) fn read_id(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("heartbeat").join("install-id")).expect("an install id")
 }
 
@@ -251,12 +251,25 @@ async fn request_is_exactly_the_five_fields() {
     );
     let host = r.headers.get("host").expect("a host header");
     assert!(host.starts_with("127.0.0.1:"), "{host}");
-    for (name, value) in &r.headers {
+    if let Some(accept) = r.headers.get("accept") {
+        assert_eq!(accept, "*/*");
+    }
+    if let Some(encodings) = r.headers.get("accept-encoding") {
         assert!(
-            ["content-type", "host", "content-length"].contains(&name.as_str()) || value.len() < 64,
-            "{name}: {value}"
+            encodings
+                .split(',')
+                .map(str::trim)
+                .all(|e| ["gzip", "deflate", "br"].contains(&e)),
+            "accept-encoding: {encodings}"
         );
     }
+    let length: usize = r
+        .headers
+        .get("content-length")
+        .expect("a length")
+        .parse()
+        .expect("a number");
+    assert_eq!(length, r.body.len());
     let body: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&r.body).expect("a JSON object");
     let keys: BTreeSet<&str> = body.keys().map(String::as_str).collect();
@@ -316,7 +329,7 @@ async fn a_clock_before_the_epoch_sends_nothing() {
 }
 
 /// The CI names, written out here rather than taken from `CI` (A7).
-pub(super) const CI_NAMES: [&str; 18] = [
+pub(crate) const CI_NAMES: [&str; 18] = [
     "CI",
     "CONTINUOUS_INTEGRATION",
     "GITHUB_ACTIONS",
@@ -337,7 +350,7 @@ pub(super) const CI_NAMES: [&str; 18] = [
     "BUDDY",
 ];
 /// The proxy names, written out.
-pub(super) const PROXY_NAMES: [&str; 6] = [
+pub(crate) const PROXY_NAMES: [&str; 6] = [
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -655,14 +668,24 @@ async fn a_malformed_id_is_never_replaced() {
         "0123456789abcdef0123456789abcdef0",
         "0123456789ABCDEF0123456789ABCDEF",
     ] {
+        // The code creates its own owner-only dir and a valid id first (so no
+        // other rule decides, on any OS), then the id is replaced (tp-r2).
         let dir = tempfile::tempdir().expect("dir");
-        owner_only_dir(&dir.path().join("heartbeat"));
+        assert_eq!(
+            heartbeat_once(&release(), dir.path(), &test_client(), &rx.url(), nov18).await,
+            Outcome::Sent
+        );
         std::fs::write(dir.path().join("heartbeat").join("install-id"), planted).expect("plant");
+        let before = rx.requests().len();
         let out = heartbeat_once(&release(), dir.path(), &test_client(), &rx.url(), nov19).await;
+        assert_eq!(
+            rx.requests().len(),
+            before,
+            "a malformed id was sent: {planted:?}"
+        );
         assert_eq!(out, Outcome::NoId, "{planted:?}");
         assert_eq!(read_id(dir.path()), planted, "the planted id was replaced");
     }
-    assert_eq!(rx.connections(), 0);
     let clean = tempfile::tempdir().expect("dir");
     assert_eq!(
         heartbeat_once(&release(), clean.path(), &test_client(), &rx.url(), nov19).await,
