@@ -484,7 +484,7 @@ fn the_flag_checker_names_each_fault() {
         signature: plain_value,
     }];
     let defaults = [("--x", "a", None), ("--x", "b", None)];
-    let arg = |name: &str| {
+    let arg = |name: &'static str| {
         clap::Arg::new("x")
             .long("x")
             .value_name(name)
