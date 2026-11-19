@@ -878,7 +878,8 @@ jobs:
   # caught before it merges.
   macos-shards:
     name: macOS shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    # Throwaway probe only: runs on this probe PR.
+    if: ${{ true }}
     runs-on: macos-latest
     # Each leg builds lib test parts, never the whole lib test binary (it
     # swapped this 3-core, 7 GB runner: 19 to 86 min of build): lib-b builds
@@ -894,7 +895,7 @@ jobs:
         # A lane PR labelled os-sensitive runs lib-b alone, and that job builds
         # and runs every part: these runners serve every train
         # (test_os_label_routing.py).
-        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
+        shard: ["int"]
     permissions:
       contents: read
     env:
@@ -1148,7 +1149,7 @@ jobs:
   # when it fails, so it ends red, never skipped (scripts/ci/check_shared_lib.py).
   linux-lib-build:
     name: Linux lib test binary (part ${{ matrix.part }})
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -1231,7 +1232,7 @@ jobs:
   # step-limit rule keeps, stays under the job's 30.
   linux-gateway-bin:
     name: Linux gateway binary for the sandbox rows
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1260,7 +1261,7 @@ jobs:
 
   test-shards:
     name: Linux shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -1268,7 +1269,7 @@ jobs:
       matrix:
         # Selections and floors: scripts/ci/shard_tests.py. The lib halves run from the shared binary in
         # test-shards-lib (same check names).
-        shard: [int-a, int-b]
+        shard: [int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/add-swap
@@ -1355,13 +1356,13 @@ jobs:
   test-shards-lib:
     name: Linux shard ${{ matrix.shard }}
     needs: [linux-lib-build, linux-gateway-bin]
-    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [lib-a, lib-b]
+        shard: [lib-b]
     steps:
       - name: The shared lib test binary was built
         env:
