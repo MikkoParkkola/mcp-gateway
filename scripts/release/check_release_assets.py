@@ -118,8 +118,12 @@ def doc_problems(directory: Path, version: str, docs: list[str]) -> list[str]:
         elif sums[name] != digest:
             found.append(f"{SUMS}: the hash of {name} differs from the file")
         if name == "mcp-gateway.1":
-            first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
-            if first.rstrip() != page_title(version):
+            # clap_mangen opens the page with two quote-macro lines (.ie/.el) before .TH, and ends .TH with a space.
+            title = next(
+                (l for l in path.read_text(encoding="utf-8", errors="replace").splitlines() if l.startswith(".TH ")),
+                "",
+            )
+            if title.rstrip() != page_title(version):
                 found.append(f"{name}: the .TH line is not `{page_title(version)}`")
     return found
 

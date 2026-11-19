@@ -190,8 +190,6 @@ class ReleaseAssets(unittest.TestCase):
         self.assertEqual(gate.binaries(self.dir), sorted(EXPECTED))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 PAGE = '.TH mcp-gateway 1  "mcp-gateway 4.0.0"\n.SH NAME\nmcp\\-gateway\n'
@@ -263,6 +261,18 @@ class ReleaseDocuments(ReleaseAssets):
         self.rewrite_page('.TH other-tool 1  "other-tool 4.0.0"\n')
         self.assert_fault('mcp-gateway.1: the .TH line is not `.TH mcp-gateway 1  "mcp-gateway 4.0.0"`')
 
+    # clap_mangen's real page opens with two quote-macro lines before .TH and ends .TH with a space.
+    PREAMBLE = ".ie \\n(.g .ds Aq \\(aq\n.el .ds Aq '\n"
+
+    def test_a_page_as_clap_mangen_writes_it_passes(self):
+        self.rewrite_page(self.PREAMBLE + '.TH mcp-gateway 1  "mcp-gateway 4.0.0" \n')
+        code, text = self.run_main()
+        self.assertEqual(code, 0, text)
+
+    def test_a_page_with_the_preamble_and_another_version(self):
+        self.rewrite_page(self.PREAMBLE + '.TH mcp-gateway 1  "mcp-gateway 3.9.0" \n')
+        self.assert_fault('mcp-gateway.1: the .TH line is not `.TH mcp-gateway 1  "mcp-gateway 4.0.0"`')
+
     def rewrite_page(self, th_line):
         import hashlib
 
@@ -276,3 +286,6 @@ class ReleaseDocuments(ReleaseAssets):
         code, text = self.run_main(docs=())
         self.assertEqual(code, 2, text)
         self.assertIn("--doc", text)
+
+if __name__ == "__main__":
+    unittest.main()
