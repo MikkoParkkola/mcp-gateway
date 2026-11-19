@@ -127,6 +127,8 @@ impl DispatchNotes {
 mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
+#[cfg(feature = "firewall")]
+pub(crate) use decision::note_request_findings;
 #[cfg(test)]
 pub(crate) use decision::take_refusal_kind;
 pub(crate) use decision::{

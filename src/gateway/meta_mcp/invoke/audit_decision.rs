@@ -70,6 +70,15 @@ pub(crate) fn note_declared_effect(
     note_decision(|noted| noted.note_effect(effect, source));
 }
 
+/// What one request scan of this call's own arguments raised (possibly
+/// nothing): into the dispatch notes inside a dispatch, else the route
+/// stage's, which only that stage's own refusal record reads.
+#[cfg(feature = "firewall")]
+pub(crate) fn note_request_findings(found: &[crate::security::firewall::Finding]) {
+    use crate::security::decision_record::DecisionFinding;
+    note_decision(|noted| noted.note_request_findings(found.iter().map(DecisionFinding::from)));
+}
+
 /// Note the check that allowed this call, rank-merged with any allow noted
 /// before it: into the open dispatch notes, else the open signing sink, else
 /// nowhere. Never the route scope or the request memo: a route-stage or

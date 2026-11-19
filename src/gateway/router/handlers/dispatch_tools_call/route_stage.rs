@@ -235,6 +235,9 @@ impl<'a> RouteStage<'a> {
                 }
                 if let Some((code, reason)) = verdict.request_refusal() {
                     use crate::security::decision_record::DecisionKind;
+                    // This target's own findings, for the refusal's record;
+                    // an allowed target's are read again by its dispatch.
+                    audit::note_request_findings(&verdict.findings);
                     audit::note_refused_by(DecisionKind::Firewall, rule);
                     // A content finding about a step names the definition: it
                     // answers as every other step refusal does (A3).

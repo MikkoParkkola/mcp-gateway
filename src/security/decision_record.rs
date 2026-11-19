@@ -87,6 +87,26 @@ pub(crate) struct DecisionFinding {
     pub location: String,
 }
 
+/// A firewall finding as the record keeps it: the three closed names, in
+/// the spelling the firewall's audit row uses. The free text (description,
+/// matched fragment) is never read here.
+#[cfg(feature = "firewall")]
+impl From<&crate::security::firewall::Finding> for DecisionFinding {
+    fn from(finding: &crate::security::firewall::Finding) -> Self {
+        fn wire(value: impl Serialize) -> String {
+            match serde_json::to_value(value) {
+                Ok(serde_json::Value::String(name)) => name,
+                _ => String::new(),
+            }
+        }
+        Self {
+            scan_type: wire(finding.scan_type),
+            severity: wire(finding.severity),
+            location: wire(finding.location),
+        }
+    }
+}
+
 /// How much of the capability catalogue a config revision covers.
 ///
 /// Serialized as `covered`, `not_loaded` or `partial`.
@@ -344,16 +364,30 @@ impl Noted {
         &mut self,
         found: impl IntoIterator<Item = DecisionFinding>,
     ) {
-        let _ = found;
+        let checks = self.checks();
+        let kept = checks.findings.get_or_insert_with(Vec::new);
+        for finding in found {
+            if kept.contains(&finding) {
+                continue;
+            }
+            if kept.len() == MAX_REQUEST_FINDINGS {
+                checks.findings_truncated = true;
+                break;
+            }
+            kept.push(finding);
+        }
     }
 
     /// The notes for a call answered without deciding it again (a cache hit):
-    /// no refusal and no allow of its own, but the declared effect this
-    /// call's admission established.
+    /// no refusal and no allow of its own, but the declared effect and the
+    /// request findings this call's admission established.
     pub(crate) fn as_not_redecided(&self) -> Self {
         let mut noted = Self::not_redecided();
         if let Some(held) = self.0.as_deref() {
-            noted.checks().effect = held.effect;
+            let checks = noted.checks();
+            checks.effect = held.effect;
+            checks.findings.clone_from(&held.findings);
+            checks.findings_truncated = held.findings_truncated;
         }
         noted
     }
@@ -435,8 +469,8 @@ impl Noted {
             kind,
             rule_id: rule_id.map(|id| id.as_str().to_owned()),
             grant_id,
-            request_findings: None,
-            request_findings_truncated: false,
+            request_findings: self.0.as_deref().and_then(|c| c.findings.clone()),
+            request_findings_truncated: self.0.as_deref().is_some_and(|c| c.findings_truncated),
             declared_effect: self.0.as_deref().and_then(|c| c.effect.map(|(e, _)| e)),
             declared_effect_source: self.0.as_deref().and_then(|c| c.effect.map(|(_, s)| s)),
             decided,

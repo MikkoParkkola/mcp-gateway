@@ -226,6 +226,7 @@ fn firewall_refusal(
             "Firewall: direct backend request warning"
         );
     }
+    crate::gateway::meta_mcp::invoke::audit::note_request_findings(&verdict.findings);
     if let Some((code, message)) = verdict.request_refusal() {
         crate::gateway::meta_mcp::invoke::audit::note_refused_by(
             crate::security::decision_record::DecisionKind::Firewall,

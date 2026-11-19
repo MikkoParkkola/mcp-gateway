@@ -309,6 +309,9 @@ impl MetaMcp {
             );
         }
         let (code, message) = verdict.request_refusal()?;
+        // Only a refusal keeps the route scan's findings: an admitted target's
+        // own dispatch scans its arguments again.
+        super::audit::note_request_findings(&verdict.findings);
         if target == ScanTarget::Step && verdict.refusal_words_content() {
             return Some(crate::gateway::meta_mcp::step_not_permitted());
         }
@@ -427,6 +430,9 @@ impl MetaMcp {
             crate::security::firewall::ScanSubject::Arguments,
             outbound.backend,
         );
+        // The record keeps what this call's own arguments raised; the answers
+        // merged below are a caller's replies, never request findings.
+        super::audit::note_request_findings(&verdict.findings);
         if let Some(answers) = outbound.answers {
             let (answered, answered_rule) = firewall.rescan_attributed(
                 policy,
