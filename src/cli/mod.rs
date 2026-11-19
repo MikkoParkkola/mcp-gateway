@@ -32,12 +32,24 @@ pub mod audit_lookup;
 /// The leaf commands' output classes and error-conversion state, enforced by its rows.
 #[cfg(test)]
 mod command_classes;
+// Used by the man page example (through `#[path]`) and by its row; the binary never renders a page.
 pub mod completion;
 pub mod dashboard_link;
 pub(crate) mod entry;
 pub mod events;
+#[cfg(tp1)]
+#[cfg(test)]
+#[cfg(all(
+    feature = "runtime-substrate",
+    feature = "config-export",
+    feature = "discovery"
+))]
+#[path = "guidelines_tests.rs"]
+mod guidelines_tests;
 pub mod identity;
 pub mod invoke;
+#[cfg(test)]
+mod man_page_render;
 pub mod output;
 pub mod redact;
 mod setup;

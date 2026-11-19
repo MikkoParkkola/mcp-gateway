@@ -76,6 +76,7 @@ pub(crate) mod random_secret;
 #[cfg(test)]
 #[path = "random_secret_tests.rs"]
 mod random_secret_tests;
+pub(crate) mod ui_api_version;
 // The decision set serves only the web UI's routes and stream.
 #[cfg(feature = "webui")]
 mod decisions;

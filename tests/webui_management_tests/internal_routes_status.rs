@@ -37,6 +37,7 @@ async fn ui_status_redacts_for_a_non_admin() {
                 "degraded_count",
                 "healthy_count",
                 "server_count",
+                "ui_api_version",
                 "uptime_secs",
                 "version"
             ],
@@ -60,6 +61,8 @@ async fn ui_status_redacts_for_a_non_admin() {
             json["server_count"], 1,
             "the fixture's backend is counted: {text}"
         );
+        // V2 (MIK-9681.CLIUX.20): the counts-only view carries the UI API version, the literal 1.
+        assert_eq!(json["ui_api_version"], 1, "{caller:?}: {text}");
         assert!(
             !text.contains("docs"),
             "{caller:?} got the backend name: {text}"
@@ -75,4 +78,35 @@ async fn ui_status_redacts_for_a_non_admin() {
     assert_eq!(status, StatusCode::OK);
     let json: Value = serde_json::from_slice(&body).expect("status is JSON");
     assert_eq!(json["servers"][0]["name"], "docs", "{json}");
+    // V2: the full view carries it too.
+    assert_eq!(json["ui_api_version"], 1, "{json}");
+}
+
+/// V4 (MIK-9681.CLIUX.20): the number `--version` prints after `UI API ` is the number the status route serves, so the
+/// two cannot drift apart. (V3, the builder's two views, is covered by V2: the route builds both, full for the admin
+/// and counts-only for everyone else.)
+#[tokio::test]
+async fn the_version_line_and_the_status_route_agree() {
+    use clap::CommandFactory;
+    let line = mcp_gateway::cli::Cli::command().render_version();
+    let printed: u64 = line
+        .split("(UI API ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no UI API version in {line:?}"));
+    let gw = gateway(Fixture::AuthOff).await;
+    let (status, _, body) = send(
+        &gw,
+        request(
+            &Method::GET,
+            "/ui/api/status",
+            Caller::AnonOff,
+            Payload::None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: Value = serde_json::from_slice(&body).expect("status is JSON");
+    assert_eq!(json["ui_api_version"].as_u64(), Some(printed), "{json}");
 }

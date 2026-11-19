@@ -179,3 +179,87 @@ class ReleaseAssets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PAGE = '.TH mcp-gateway 1  "mcp-gateway 4.0.0"\n.SH NAME\nmcp\\-gateway\n'
+
+
+class ReleaseDocuments(ReleaseAssets):
+    """M3 (MIK-9681.CLIUX.20): documents named by a repeatable --doc are signed, listed with their real hash and,
+    for the man page, carry the release's .TH line. Run through main() so a checker that does not know --doc fails
+    on its exit code."""
+
+    def setUp(self):
+        super().setUp()
+        import hashlib
+
+        self.docs = {"mcp-gateway.1": PAGE, "NOTICE.txt": "notice\n"}
+        lines = (self.dir / "SHA256SUMS.txt").read_text().splitlines()
+        for name, text in self.docs.items():
+            self.write(name, text)
+            self.write(name + ".sigstore.json", "{}")
+            lines.append(f"{hashlib.sha256(text.encode()).hexdigest()}  {name}")
+        self.write("SHA256SUMS.txt", "\n".join(lines) + "\n")
+
+    def run_main(self, *extra, docs=("mcp-gateway.1", "NOTICE.txt")):
+        argv = [str(self.dir), "--version", VERSION]
+        for doc in docs:
+            argv += ["--doc", doc]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = gate.main([*argv, *extra, *EXPECTED])
+            except SystemExit as exit_:
+                code = exit_.code
+        return code, out.getvalue() + err.getvalue()
+
+    def test_a_complete_set_with_two_documents_passes(self):
+        self.assertEqual(self.run_main()[0], 0)
+
+    def assert_fault(self, message):
+        code, text = self.run_main()
+        self.assertEqual(code, 1, text)
+        self.assertIn(message, text)
+
+    def test_a_missing_document(self):
+        self.drop("mcp-gateway.1")
+        self.assert_fault("mcp-gateway.1: missing")
+
+    def test_a_missing_bundle(self):
+        self.drop("mcp-gateway.1.sigstore.json")
+        self.assert_fault("mcp-gateway.1: no .sigstore.json")
+
+    def test_a_missing_sums_line(self):
+        lines = [l for l in (self.dir / "SHA256SUMS.txt").read_text().splitlines() if not l.endswith("  mcp-gateway.1")]
+        self.write("SHA256SUMS.txt", "\n".join(lines) + "\n")
+        self.assert_fault("SHA256SUMS.txt: does not list mcp-gateway.1")
+
+    def test_a_document_edited_after_listing(self):
+        self.write("mcp-gateway.1", PAGE + ".\\\" edited\n")
+        self.assert_fault("SHA256SUMS.txt: the hash of mcp-gateway.1 differs from the file")
+
+    def test_the_second_document_alone_has_a_wrong_line(self):
+        self.write("NOTICE.txt", "notice, edited\n")
+        self.assert_fault("SHA256SUMS.txt: the hash of NOTICE.txt differs from the file")
+
+    def test_a_page_of_another_version(self):
+        self.rewrite_page('.TH mcp-gateway 1  "mcp-gateway 3.9.0"\n')
+        self.assert_fault('mcp-gateway.1: the .TH line is not `.TH mcp-gateway 1  "mcp-gateway 4.0.0"`')
+
+    def test_a_page_of_another_program(self):
+        self.rewrite_page('.TH other-tool 1  "other-tool 4.0.0"\n')
+        self.assert_fault('mcp-gateway.1: the .TH line is not `.TH mcp-gateway 1  "mcp-gateway 4.0.0"`')
+
+    def rewrite_page(self, th_line):
+        import hashlib
+
+        text = th_line + PAGE.split("\n", 1)[1]
+        self.write("mcp-gateway.1", text)
+        lines = [l for l in (self.dir / "SHA256SUMS.txt").read_text().splitlines() if not l.endswith("  mcp-gateway.1")]
+        lines.append(f"{hashlib.sha256(text.encode()).hexdigest()}  mcp-gateway.1")
+        self.write("SHA256SUMS.txt", "\n".join(lines) + "\n")
+
+    def test_no_doc_outside_sbom_only_is_a_usage_error(self):
+        code, text = self.run_main(docs=())
+        self.assertEqual(code, 2, text)
+        self.assertIn("--doc", text)
