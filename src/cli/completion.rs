@@ -306,6 +306,77 @@ complete -c mcp-gateway -l no-meta-mcp -d 'Disable Meta-MCP mode'
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+/// The shells `tool completions` writes for. bash and zsh come from clap_complete as it is; fish and PowerShell come
+/// from this module's own generator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum CompletionShell {
+    /// bash, by clap_complete.
+    Bash,
+    /// zsh, by clap_complete.
+    Zsh,
+    /// fish, by the generator here.
+    Fish,
+    /// PowerShell, by the generator here.
+    Powershell,
+}
+
+/// A generated script and the values left out of it because `completion_safe` refused them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Generated {
+    /// The script, as `tool completions` prints it.
+    pub script: String,
+    /// The refused values, in the order met; the command names each on stderr.
+    pub left_out: Vec<String>,
+}
+
+/// Whether fish and PowerShell may offer `value`: non-empty, first character a letter, a digit or `_`, the rest
+/// letters, digits, `_`, `.` or `-` (letters and digits of any script).
+#[must_use]
+pub fn completion_safe(value: &str) -> bool {
+    let _ = value;
+    false
+}
+
+/// The completion copy of the real command tree: hidden commands and arguments removed, the closed value lists
+/// added (the log-level values, the shell names, `tool_names` for `tool invoke` and `tool inspect`), and a file hint
+/// on `--config`.
+#[must_use]
+pub fn completion_tree(tool_names: &[String]) -> clap::Command {
+    let _ = tool_names;
+    <crate::cli::Cli as clap::CommandFactory>::command()
+}
+
+/// The script for `shell` from `tree`.
+#[must_use]
+pub fn generate(shell: CompletionShell, tree: clap::Command) -> Generated {
+    let _ = (shell, tree);
+    Generated::default()
+}
+
+/// `tool completions`' print step: the script on stdout, each left-out value named on stderr in Rust's `{:?}` form.
+///
+/// # Errors
+///
+/// A failed write.
+pub(crate) fn write_completions(
+    generated: &Generated,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+) -> std::io::Result<()> {
+    let _ = stderr;
+    stdout.write_all(generated.script.as_bytes())
+}
+
+#[cfg(tp1)]
+#[cfg(test)]
+#[cfg(all(
+    feature = "runtime-substrate",
+    feature = "config-export",
+    feature = "discovery"
+))]
+#[path = "completion_tests.rs"]
+mod completion_tests;
+
 #[cfg(tp1)]
 #[cfg(test)]
 mod tests {

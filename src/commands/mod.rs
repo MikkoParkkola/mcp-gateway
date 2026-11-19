@@ -18,7 +18,7 @@ mod audit;
 mod audit_lookup;
 mod backend_url_keys;
 mod cap;
-mod capability_dirs;
+pub(crate) mod capability_dirs;
 /// The shared exit table and error shape; used by the webui-only remote commands until `MIK-9765.LERR.2`.
 #[cfg(feature = "webui")]
 mod cli_exit;
