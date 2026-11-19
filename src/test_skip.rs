@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The one rule for a test that cannot run on this host. This file imports nothing from the crate, so both kinds of
 //! test compile the same two functions: lib tests through `crate::test_wait`, which includes and re-exports it, and
-//! integration tests through `#[path = "../src/test_skip.rs"] mod test_skip;`.
+//! integration tests through `#[path = "../src/test_skip.rs"] mod test_skip;`. Include it only in a test file that
+//! calls `skip_or_fail`: `required_mode` is used only through it, so an include with no call is dead code under
+//! `-D warnings`.
 
 /// Whether a test that cannot run on this host must fail instead of skipping, from `TESTS_REQUIRE_ALL`: unset or
 /// `0` skips (`0` is the local opt-out), `1` requires, and any other value is an error naming it, so a typo cannot
