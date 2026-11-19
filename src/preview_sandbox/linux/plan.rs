@@ -69,6 +69,25 @@ pub(crate) struct FetchPaths {
     /// The fetch's CA snapshot, beside it: opened by the helper before it
     /// stages the root (never a bind target, so not refused under `/tmp`).
     pub(crate) ca: String,
+    /// The npm package fetched before the run; `None` is the handshake alone.
+    pub(crate) npm: Option<NpmFetch>,
+}
+
+/// An npm package the fetch step installs before the run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NpmFetch {
+    /// The registry spec: `name` or `@scope/name`, optional `@version`.
+    pub(crate) spec: String,
+    /// The server's own arguments, after the spec.
+    pub(crate) run_args: Vec<String>,
+    /// npm's executable inside the root (the launcher's probe found it).
+    pub(crate) npm: String,
+    /// node's directory inside the root, first on the fetch's and the run's PATH.
+    pub(crate) node_dir: String,
+    /// `ip`, for `ip link set lo up` inside the root.
+    pub(crate) ip: String,
+    /// The proxy's Unix socket (a host path), bound at `/tmp/proxy.sock`.
+    pub(crate) proxy: String,
 }
 
 /// The preview's home inside the new root: a fresh tmpfs, `HOME`, working

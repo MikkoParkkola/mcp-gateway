@@ -46,8 +46,9 @@ KEPT = {
     "scope", "public-repo-hygiene", "test", "windows-check",
     # Their shards (MIK-8482): the aggregates above only read these results.
     "test-shards", "windows-shards", "windows-clippy",
-    # The lib test binary in parts, the union check over them, and the lib shards that run them.
-    "linux-lib-build", "linux-lib-union", "test-shards-lib",
+    # The lib test binary in parts, the union check over them, the gateway binary the lib shards' sandbox rows
+    # launch, and the lib shards that run them.
+    "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
     "orphan-test-modules",
     # Compiles every test target from the packaged crate: a test that reads a
     # repository file (docs included) the package leaves out only fails here.
@@ -109,7 +110,7 @@ POST_MERGE_SKIPPED = {
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
     "test-shards", "windows-shards", "windows-clippy", "macos-shards",
-    "linux-lib-build", "linux-lib-union", "test-shards-lib",
+    "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",

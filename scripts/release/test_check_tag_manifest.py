@@ -712,11 +712,16 @@ MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test bi
 # ci.yml's Linux lib test part binaries: its consumers rerun within the day reuse them; after that a consumer rerun
 # fails red at the download (it never builds its own) until linux-lib-build reruns too. Nothing published depends on them.
 LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build reruns; a large test binary per part per run")
+# The gateway binary ci.yml's linux-gateway-bin job hands the Linux lib shards for the preview sandbox rows: a shard
+# rerun within the day reuses it; after that the shard fails red at the download until linux-gateway-bin reruns.
+# Nothing published depends on it.
+LINUX_GATEWAY_BINARY = ("1", "a shard rerun after a day fails red until the build reruns; a large debug binary per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-tests"): MACOS_LIB_BINARY,
     ("ci.yml", "linux-lib-tests-p${{ matrix.part }}"): LINUX_LIB_BINARY,
+    ("ci.yml", "linux-gateway-bin"): LINUX_GATEWAY_BINARY,
 }
 
 
