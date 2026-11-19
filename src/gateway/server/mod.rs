@@ -14,8 +14,6 @@ mod support;
 pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
 mod warmstart;
 
-use std::future::IntoFuture;
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,7 +53,13 @@ use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 #[cfg(feature = "cost-governance")]
 use support::build_persisted_costs;
-use support::{log_startup_banner, serve_tls, shutdown_signal};
+use support::{log_startup_banner, serve_plain, serve_tls, shutdown_signal};
+
+/// How much of an HTTP stop's `shutdown_timeout` the listener leaves to the
+/// in-flight drain after it: the requests the listener drops at its deadline
+/// release their permits within it, so the saves never run beside a handler
+/// that is still being torn down.
+const POST_LISTENER_RESERVE: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
@@ -1344,60 +1348,68 @@ impl Gateway {
             });
         }
 
-        // Run server — plain HTTP or mTLS depending on config
+        // One deadline for the whole stop, taken at the signal:
+        // `shutdown_timeout` is the total, and each wait below (the
+        // listener's grace, the in-flight drain) gets what is left of it,
+        // never a fresh timeout of its own. Fresh waits in series used to let
+        // a stop take a multiple of the setting.
+        let total = self.config.server.shutdown_timeout;
+        let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
+        let shutdown = {
+            let fired = Arc::clone(&fired);
+            async move {
+                shutdown_signal(shutdown_tx).await;
+                let _ = fired.set(tokio::time::Instant::now());
+            }
+        };
+        // The listener leaves a moment of the total to the drain after it, so
+        // the requests it drops at its deadline release their in-flight
+        // permits before the saves.
+        let grace = total.saturating_sub(POST_LISTENER_RESERVE);
+        // `axum_server` needs a std listener; the socket is the same one.
+        let std_listener = listener.into_std()?;
+        // Plain HTTP or mTLS: both stop the same way, open requests getting
+        // `grace` and then dropped (support.rs, `serve_plain`/`serve_tls`).
         if self.config.mtls.enabled {
-            // `axum_server` needs a std listener; the socket is the same one.
-            let std_listener = listener
-                .into_std()
-                .map_err(|e| Error::Tls(format!("could not hand the listener to TLS: {e}")))?;
-            serve_tls(
-                app,
-                std_listener,
-                addr,
-                &self.config.mtls,
-                shutdown_signal(shutdown_tx),
-            )
-            .await?;
+            serve_tls(app, std_listener, addr, &self.config.mtls, grace, shutdown).await?;
         } else {
-            let drain_bound = self.config.server.shutdown_timeout;
-            let mut draining = shutdown_tx.subscribe();
-            let server = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-            .into_future();
-            tokio::pin!(server);
+            serve_plain(app, std_listener, grace, shutdown).await?;
+        }
+        let deadline = fired
+            .get()
+            .copied()
+            .unwrap_or_else(tokio::time::Instant::now)
+            + total;
+        let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
 
-            // `with_graceful_shutdown` closes the listener when the signal resolves,
-            // then waits for every accepted connection to close. A streaming
-            // response, or a call still waiting on a backend, does not close, so
-            // that wait has no end -- and every step behind it (the in-flight drain,
-            // the expiry-sweep stop, `stop_all`, the shutdown saves) is lost to
-            // whatever ends the process. Bound it the way `join_stdout_writer`
-            // bounds a stuck writer: at `drain_bound` we stop waiting and let the
-            // teardown have its turn, leaving the still-open connections to the
-            // process exit. The bound starts on the broadcast `shutdown_signal`
-            // sends before it resolves, so it can only be shorter than the real
-            // drain, never longer.
-            let outcome = tokio::select! {
-                result = &mut server => result,
-                _ = draining.recv() => {
-                    match tokio::time::timeout(drain_bound, &mut server).await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            warn!(
-                                bound = ?drain_bound,
-                                "HTTP connections still open at the drain bound; continuing shutdown"
-                            );
-                            Ok(())
-                        }
-                    }
-                }
-            };
-            outcome.map_err(|e| Error::Tls(e.to_string()))?;
+        // Graceful drain: wait for in-flight requests to complete.
+        // The semaphore has 10,000 permits; each in-flight request holds one.
+        // We try to acquire all 10,000 (meaning all requests finished) with a timeout.
+        let drain_timeout = left();
+        info!(timeout = ?drain_timeout, "Draining in-flight requests...");
+
+        let drain_result = tokio::time::timeout(drain_timeout, inflight.acquire_many(10_000)).await;
+
+        match drain_result {
+            Ok(Ok(_permits)) => {
+                info!("All in-flight requests completed");
+            }
+            Ok(Err(_)) => {
+                warn!("Inflight semaphore closed unexpectedly during drain");
+            }
+            Err(_) => {
+                let available = inflight.available_permits();
+                let remaining = 10_000_usize.saturating_sub(available);
+                warn!(
+                    remaining_requests = remaining,
+                    "Drain timeout reached, proceeding with shutdown"
+                );
+            }
         }
 
+        // The saves run after the in-flight drain: every request has ended or
+        // been dropped with its connection, so nothing still running can
+        // change the state after it is written.
         // Save search ranker usage data
         persistence::save_with_logging(
             &ranker_path,
@@ -1426,31 +1438,6 @@ impl Gateway {
                 "Failed to save cost data on shutdown",
                 "Saved cost governance data",
             );
-        }
-
-        // Graceful drain: wait for in-flight requests to complete.
-        // The semaphore has 10,000 permits; each in-flight request holds one.
-        // We try to acquire all 10,000 (meaning all requests finished) with a timeout.
-        let drain_timeout = self.config.server.shutdown_timeout;
-        info!(timeout = ?drain_timeout, "Draining in-flight requests...");
-
-        let drain_result = tokio::time::timeout(drain_timeout, inflight.acquire_many(10_000)).await;
-
-        match drain_result {
-            Ok(Ok(_permits)) => {
-                info!("All in-flight requests completed");
-            }
-            Ok(Err(_)) => {
-                warn!("Inflight semaphore closed unexpectedly during drain");
-            }
-            Err(_) => {
-                let available = inflight.available_permits();
-                let remaining = 10_000_usize.saturating_sub(available);
-                warn!(
-                    remaining_requests = remaining,
-                    "Drain timeout reached, proceeding with shutdown"
-                );
-            }
         }
 
         // Stop all backends
