@@ -117,7 +117,13 @@ class CoverageGrade(unittest.TestCase):
         result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
         if result.returncode and os.environ.get("CI") == "true":
             # CI checks out shallow: fetch the one pinned commit (read from the script, so the two cannot drift).
-            self.command([self.git, "fetch", "--no-tags", "--depth=1", "origin", SELF_REV])
+            # This fetch reads the real origin (https) into the real checkout, so it runs with the caller's
+            # environment: the fixture environment allows only file:// transports, for the disposable clones.
+            # It lands on a branch because a clone of a shallow repository copies only what a ref reaches
+            # (--shared is ignored there), so isolated_probe's clone sees the commit only through a ref.
+            subprocess.run([self.git, "fetch", "--no-tags", "--depth=1", "origin",
+                            f"+{SELF_REV}:refs/heads/coverage-grade-self-rev"], cwd=ROOT,
+                           text=True, capture_output=True, timeout=90)
             result = self.command([self.git, "cat-file", "-e", f"{SELF_REV}^{{commit}}"])
         if result.returncode:
             # A silent skip in CI would leave the self-check and the refusal untested, so CI fails instead.
@@ -187,9 +193,17 @@ class CoverageGrade(unittest.TestCase):
             self.assert_status(self.command(["bash", str(SCRIPT), "--self-check"]), 0)
 
     def test_s2_old_revision_is_refused_before_push_and_head_reaches_push(self):
+        # The pinned commit must be in the checkout before the probe clones it (see require_self_rev). Outside CI
+        # a missing commit still skips only the SELF_REV subtest, not the head's push below.
+        try:
+            self.require_self_rev()
+            missing = None
+        except unittest.SkipTest as skip:
+            missing = skip
         self.isolated_probe()
         with self.subTest(revision=SELF_REV):
-            self.require_self_rev()
+            if missing:
+                raise missing
             absent = self.command([self.git, "cat-file", "-e", f"{SELF_REV}:{UNION}"])
             self.assertNotEqual(0, absent.returncode, "old-revision fixture unexpectedly has the union script")
             result = self.grade(SELF_REV, "old-revision")
