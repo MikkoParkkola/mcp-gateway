@@ -260,8 +260,36 @@ impl Render {
 ///
 /// The serializer's message when `view` cannot be serialized.
 pub(crate) fn document<T: serde::Serialize>(view: &T) -> Result<String, String> {
-    let _ = view;
-    Err("not built yet".to_owned())
+    /// The version first, then the view's own keys in their order.
+    #[derive(serde::Serialize)]
+    struct Versioned<'a, T> {
+        schema_version: u32,
+        #[serde(flatten)]
+        view: &'a T,
+    }
+    serde_json::to_string(&Versioned {
+        schema_version: 1,
+        view,
+    })
+    .map(|mut line| {
+        line.push('\n');
+        line
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Print a built [`document`] on stdout, exit 0; when it could not be built, the reason on stderr, exit 1.
+pub(crate) fn print_document(doc: Result<String, String>) -> std::process::ExitCode {
+    match doc {
+        Ok(doc) => {
+            crate::cli::stdout::print!("{doc}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(why) => {
+            eprintln!("Error: could not print the document: {why}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
 
 /// What a command prints and exits with, built before anything is written, so a row can read it and the command

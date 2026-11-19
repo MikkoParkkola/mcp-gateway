@@ -47,7 +47,7 @@ pub use descriptor::{
 };
 pub(crate) use export_verify::run_verify_export;
 pub use kinds::{CbomComponentKind, CbomSubjectKind, TrustEvidenceKind};
-pub use provenance_public::run_provenance_command;
+pub(crate) use provenance_public::run_provenance_command;
 pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
 pub(crate) use schema_bounds::closed_keys;

@@ -1399,6 +1399,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway validate --severity` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
 | `mcp-gateway validate -s` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
 | `mcp-gateway validate <PATHS>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
+| `mcp-gateway audit verify --json` | KEEP | the verdict as one JSON document, pass or fail | - | src/cli/subcommands/trust.rs:296 |
+| `mcp-gateway cap list --json` | KEEP | the listing as one JSON document | - | src/cli/subcommands.rs:55 |
+| `mcp-gateway cap registry-list --json` | KEEP | the index as one JSON document | - | src/cli/subcommands.rs:183 |
+| `mcp-gateway cap search --json` | KEEP | the hits as one JSON document | - | src/cli/subcommands.rs:172 |
+| `mcp-gateway cap test --json` | KEEP | the call's result as one JSON document | - | src/cli/subcommands.rs:93 |
+| `mcp-gateway cap validate --json` | KEEP | the validated capability as one JSON document | - | src/cli/subcommands.rs:31 |
+| `mcp-gateway dashboard-link --json` | KEEP | the link as one JSON document; errors as the shared JSON error | - | src/cli/dashboard_link.rs:18 |
+| `mcp-gateway get --json` | KEEP | the backend as one JSON document, values hidden | - | src/cli/mod.rs:535 |
+| `mcp-gateway hash-key --json` | KEEP | the digest as one JSON document | - | src/cli/mod.rs:334 |
+| `mcp-gateway provenance verify --json` | KEEP | the verdict as one JSON document, valid or not | - | src/cli/subcommands/trust.rs:351 |
+| `mcp-gateway skills list --json` | KEEP | the registry as one JSON document | - | src/cli/skills.rs:104 |
+| `mcp-gateway skills search --json` | KEEP | the hits as one JSON document | - | src/cli/skills.rs:119 |
+| `mcp-gateway skills show --json` | KEEP | the skill as one JSON document | - | src/cli/skills.rs:134 |
+| `mcp-gateway stats --json` | KEEP | the statistics as one JSON document | - | src/cli/mod.rs:367 |
 
 ## Surface: env
 

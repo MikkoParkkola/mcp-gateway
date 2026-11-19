@@ -199,7 +199,46 @@ pub(crate) fn export_verdict(
             r.rows, r.truncated, r.integrity_failed, r.kid
         ),
         (Render::Text, ExportVerdict::Invalid(why)) => format!("INVALID {why}\n"),
-        (Render::Json, _) => String::new(),
+        (Render::Json, verdict) => {
+            /// The export verdict's document (design 3a): the report fields null unless valid.
+            #[derive(serde::Serialize)]
+            struct View<'a> {
+                valid: bool,
+                reason: Option<&'a str>,
+                rows: Option<u64>,
+                truncated: Option<&'a str>,
+                integrity_failed: Option<u64>,
+                kid: Option<&'a str>,
+            }
+            let view = match verdict {
+                ExportVerdict::Valid(r) => View {
+                    valid: true,
+                    reason: None,
+                    rows: Some(r.rows),
+                    truncated: Some(&r.truncated),
+                    integrity_failed: Some(r.integrity_failed),
+                    kid: Some(&r.kid),
+                },
+                ExportVerdict::Invalid(why) => View {
+                    valid: false,
+                    reason: Some(why),
+                    rows: None,
+                    truncated: None,
+                    integrity_failed: None,
+                    kid: None,
+                },
+            };
+            match crate::cli::output::document(&view) {
+                Ok(doc) => doc,
+                Err(why) => {
+                    return Printed {
+                        stdout: String::new(),
+                        stderr: format!("could not print the verdict: {why}\n"),
+                        exit: 1,
+                    };
+                }
+            }
+        }
     };
     Printed {
         stdout,

@@ -346,5 +346,8 @@ pub enum ProvenanceCommand {
         /// result can ever be checked against it.
         #[arg(long)]
         accept_unbound: bool,
+        /// Print one JSON document on stdout: the verdict, valid or not
+        #[arg(long)]
+        json: bool,
     },
 }

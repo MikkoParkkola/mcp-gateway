@@ -16,6 +16,10 @@ use mcp_gateway::{
     registry::Registry,
 };
 
+use crate::cli::output::Render;
+
+#[path = "cap_json.rs"]
+mod json;
 #[path = "cap_render.rs"]
 mod render;
 mod server_scan;
@@ -25,16 +29,22 @@ use server_scan::cap_discover;
 #[allow(clippy::too_many_lines)]
 pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) -> ExitCode {
     match cmd {
-        CapCommand::Validate { file } => cap_validate(file).await,
+        CapCommand::Validate { file, json } => {
+            cap_validate(file, Render::from_json_flag(json)).await
+        }
         CapCommand::Pin { file } => cap_pin(file).await,
-        CapCommand::List { directory } => cap_list(directory, config).await,
+        CapCommand::List { directory, json } => {
+            cap_list(directory, config, Render::from_json_flag(json)).await
+        }
         CapCommand::Import {
             spec,
             output,
             prefix,
             auth_key,
         } => cap_import(spec, output, prefix, auth_key).await,
-        CapCommand::Test { file, args } => cap_test(file, args).await,
+        CapCommand::Test { file, args, json } => {
+            cap_test(file, args, Render::from_json_flag(json)).await
+        }
         CapCommand::Discover {
             format,
             write_config,
@@ -64,8 +74,11 @@ pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) 
         CapCommand::Search {
             query,
             capabilities,
-        } => cap_search(query, capabilities).await,
-        CapCommand::RegistryList { capabilities } => cap_registry_list(capabilities).await,
+            json,
+        } => cap_search(query, capabilities, Render::from_json_flag(json)).await,
+        CapCommand::RegistryList { capabilities, json } => {
+            cap_registry_list(capabilities, Render::from_json_flag(json)).await
+        }
         #[cfg(feature = "discovery")]
         CapCommand::ImportUrl {
             url,
@@ -90,7 +103,7 @@ pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) 
     }
 }
 
-async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
+async fn cap_validate(file: std::path::PathBuf, render: Render) -> ExitCode {
     match parse_capability_file(&file).await {
         Ok(cap) => {
             if let Err(e) = validate_capability(&cap) {
@@ -106,6 +119,14 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
             if issues.iter().any(|i| i.severity == IssueSeverity::Error) {
                 eprintln!("❌ Validation failed: structural errors above");
                 return ExitCode::FAILURE;
+            }
+            if render == Render::Json {
+                let warnings = issues
+                    .iter()
+                    .filter(|i| i.severity == IssueSeverity::Warning)
+                    .map(ToString::to_string)
+                    .collect();
+                return crate::cli::output::print_document(json::validate(&cap, warnings));
             }
             println!("✅ {} - valid", cap.name);
             if !cap.description.is_empty() {
@@ -189,7 +210,11 @@ fn list_executor(
     }
 }
 
-async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path>) -> ExitCode {
+async fn cap_list(
+    directory: std::path::PathBuf,
+    config: Option<&std::path::Path>,
+    render: Render,
+) -> ExitCode {
     let executor = match list_executor(config) {
         Ok(executor) => executor,
         Err((path, e)) => {
@@ -199,6 +224,19 @@ async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path
     };
     let path = directory.to_string_lossy();
     match CapabilityLoader::load_directory(&path).await {
+        Ok(caps) if render == Render::Json => {
+            let items = caps
+                .iter()
+                .map(|cap| json::ListItem {
+                    name: &cap.name,
+                    description: &cap.description,
+                    auth_type: cap.auth.required.then_some(cap.auth.auth_type.as_str()),
+                    missing_credential: executor
+                        .missing_credential(&cap.auth, &mut std::collections::HashMap::new()),
+                })
+                .collect();
+            crate::cli::output::print_document(json::list(&path, items))
+        }
         Ok(caps) => {
             if caps.is_empty() {
                 println!("No capabilities found in {path}");
@@ -266,48 +304,81 @@ async fn cap_import(
     }
 }
 
-async fn cap_test(file: std::path::PathBuf, args: String) -> ExitCode {
-    let cap = match parse_capability_file(&file).await {
+async fn cap_test(file: std::path::PathBuf, args: String, render: Render) -> ExitCode {
+    let executor = CapabilityExecutor::new();
+    cap_test_with(&executor, &file, &args, render)
+        .await
+        .emit(crate::cli::output::OnWriteFailure::ExitOnBrokenPipe)
+}
+
+/// What `cap test` prints and exits with, the call made through `executor`. Under `--json` nothing is printed
+/// before the call, and only a successful call prints a document (MIK-9764.JSONF.1, design D2, D5).
+async fn cap_test_with(
+    executor: &CapabilityExecutor,
+    file: &std::path::Path,
+    args: &str,
+    render: Render,
+) -> crate::cli::output::Printed {
+    use crate::cli::output::Printed;
+    let failed = |stdout: String, stderr: String| Printed {
+        stdout,
+        stderr,
+        exit: 1,
+    };
+    let cap = match parse_capability_file(file).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("❌ Failed to parse capability: {e}");
-            return ExitCode::FAILURE;
+            return failed(
+                String::new(),
+                format!("❌ Failed to parse capability: {e}\n"),
+            );
         }
     };
-    let params: serde_json::Value = match serde_json::from_str(&args) {
+    let params: serde_json::Value = match serde_json::from_str(args) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("❌ Invalid JSON arguments: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return failed(String::new(), format!("❌ Invalid JSON arguments: {e}\n")),
     };
     // The schema check a gateway call gets (MIK-7943); the arguments go on as
     // given, as in `invoke`.
     let verdict = mcp_gateway::capability::validate_arguments(&params, &cap.schema.input);
     if !verdict.is_valid() {
-        eprintln!("❌ {}", verdict.format_error(&cap.schema.input));
-        return ExitCode::FAILURE;
+        return failed(
+            String::new(),
+            format!("❌ {}\n", verdict.format_error(&cap.schema.input)),
+        );
     }
-    println!("Testing capability: {}", cap.name);
-    println!(
-        "Arguments: {}",
-        serde_json::to_string_pretty(&params).unwrap_or_default()
-    );
-    println!();
-    let executor = Arc::new(CapabilityExecutor::new());
-    match executor.execute(&cap, params).await {
+    let banner = match render {
+        Render::Text => format!(
+            "Testing capability: {}\nArguments: {}\n\n",
+            cap.name,
+            serde_json::to_string_pretty(&params).unwrap_or_default()
+        ),
+        Render::Json => String::new(),
+    };
+    match executor.execute(&cap, params.clone()).await {
         Ok(result) => {
-            println!("✅ Success:\n");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result).unwrap_or_default()
-            );
-            ExitCode::SUCCESS
+            let stdout = match render {
+                Render::Text => format!(
+                    "{banner}✅ Success:\n\n{}\n",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                ),
+                Render::Json => match json::test(&cap.name, &params, &result) {
+                    Ok(doc) => doc,
+                    Err(why) => {
+                        return failed(
+                            String::new(),
+                            format!("❌ Could not print the capability document: {why}\n"),
+                        );
+                    }
+                },
+            };
+            Printed {
+                stdout,
+                stderr: String::new(),
+                exit: 0,
+            }
         }
-        Err(e) => {
-            eprintln!("❌ Execution failed: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => failed(banner, format!("❌ Execution failed: {e}\n")),
     }
 }
 
@@ -338,11 +409,14 @@ async fn cap_install(
     }
 }
 
-async fn cap_search(query: String, capabilities: std::path::PathBuf) -> ExitCode {
+async fn cap_search(query: String, capabilities: std::path::PathBuf, render: Render) -> ExitCode {
     let reg = Registry::new(&capabilities);
     match reg.build_index().await {
         Ok(index) => {
             let results = index.search(&query);
+            if render == Render::Json {
+                return crate::cli::output::print_document(json::search(&query, &results));
+            }
             if results.is_empty() {
                 println!("No capabilities found matching '{query}'");
             } else {
@@ -369,9 +443,12 @@ async fn cap_search(query: String, capabilities: std::path::PathBuf) -> ExitCode
     }
 }
 
-async fn cap_registry_list(capabilities: std::path::PathBuf) -> ExitCode {
+async fn cap_registry_list(capabilities: std::path::PathBuf, render: Render) -> ExitCode {
     let reg = Registry::new(&capabilities);
     match reg.build_index().await {
+        Ok(index) if render == Render::Json => {
+            crate::cli::output::print_document(json::registry_list(&index.capabilities))
+        }
         Ok(index) => {
             println!("Available capabilities ({}):\n", index.capabilities.len());
             for entry in &index.capabilities {
@@ -470,5 +547,67 @@ providers:
                 );
             }
         }
+    }
+
+    /// J11 (MIK-9764.JSONF.1): a successful `cap test` through an executor that may reach loopback (the `cfg(test)`
+    /// seam): under `--json` one document with the capability, the arguments and the result (with no response
+    /// transform the result is the body); in text the banner, the arguments and the pretty result, as today.
+    #[tokio::test]
+    async fn cap_test_prints_one_document_on_success() {
+        use crate::cli::output::{Printed, Render};
+        use std::io::Read as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let body = br#"{"temp":21,"unit":"C"}"#;
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut request = vec![0_u8; 65536];
+                let _ = stream.read(&mut request);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("now_cap.yaml");
+        std::fs::write(
+            &file,
+            format!(
+                "name: now_cap\ndescription: Now\nschema:\n  input:\n    type: object\n    properties:\n      \
+                 city:\n        type: string\nproviders:\n  primary:\n    service: rest\n    config:\n      \
+                 base_url: http://127.0.0.1:{port}\n      path: /now\n      method: GET\n"
+            ),
+        )
+        .unwrap();
+        let executor =
+            mcp_gateway::capability::CapabilityExecutor::new().with_test_loopback_egress();
+        let args = r#"{"city": "Oulu"}"#;
+
+        let json = super::cap_test_with(&executor, &file, args, Render::Json).await;
+        assert_eq!(
+            json,
+            Printed {
+                stdout: "{\"schema_version\":1,\"capability\":\"now_cap\",\"arguments\":{\"city\":\"Oulu\"},\
+                         \"result\":{\"temp\":21,\"unit\":\"C\"}}\n"
+                    .to_owned(),
+                stderr: String::new(),
+                exit: 0,
+            }
+        );
+        let text = super::cap_test_with(&executor, &file, args, Render::Text).await;
+        assert_eq!(
+            text,
+            Printed {
+                stdout: "Testing capability: now_cap\nArguments: {\n  \"city\": \"Oulu\"\n}\n\n✅ Success:\n\n{\n  \
+                         \"temp\": 21,\n  \"unit\": \"C\"\n}\n"
+                    .to_owned(),
+                stderr: String::new(),
+                exit: 0,
+            }
+        );
     }
 }
