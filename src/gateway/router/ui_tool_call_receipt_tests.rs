@@ -16,6 +16,17 @@ use super::ui_tool_call_tests::{
     ADMIN, Fx, SERVER, Stub, USER, admin_actions, call, fixture, post, sent,
 };
 
+/// A refusal body with its receipt's value masked: each call names its own
+/// trace, so two answers alike differ only there. Whether a receipt is present
+/// stays compared.
+pub(super) fn unreceipted(body: &Value) -> Value {
+    let mut body = body.clone();
+    if let Some(receipt) = body.get_mut("receipt") {
+        *receipt = Value::String("<receipt>".to_string());
+    }
+    body
+}
+
 fn keys_of(body: &Value) -> Vec<&str> {
     let mut keys: Vec<&str> = body
         .as_object()

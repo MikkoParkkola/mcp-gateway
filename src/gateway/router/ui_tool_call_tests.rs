@@ -16,6 +16,7 @@ use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_config;
 use super::ui_tool_call_cell_tests::assert_refused_delivery;
+use super::ui_tool_call_receipt_tests::unreceipted;
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};
@@ -319,17 +320,6 @@ pub(super) fn records(fx: &Fx) -> Vec<Value> {
 }
 
 /// The route's `admin_action` records.
-/// A refusal body with its receipt's value masked: each call names its own
-/// trace, so two answers alike differ only there. Whether a receipt is present
-/// stays compared.
-fn unreceipted(body: &Value) -> Value {
-    let mut body = body.clone();
-    if let Some(receipt) = body.get_mut("receipt") {
-        *receipt = Value::String("<receipt>".to_string());
-    }
-    body
-}
-
 pub(super) fn admin_actions(fx: &Fx) -> Vec<Value> {
     records(fx)
         .into_iter()
