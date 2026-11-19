@@ -35,6 +35,18 @@ STUBS = {
         'for a in "$@"; do case "$a" in Dir::Cache::Archives=*) d=${a#Dir::Cache::Archives=} ;; esac; done\n'
         'case " $* " in *" --download-only "*) [ -z "${STUB_APT_FAIL:-}" ] || exit 100; touch "$d/gcc-mingw-w64-x86-64_1.0_amd64.deb" ;; esac\n'
         'case " $* " in *" --no-download "*) [ -z "${STUB_NODL_FAIL:-}" ] || exit 100 ;; esac\n'
+        # The index refreshes listed in STUB_UPDATE_503 hit a 503. As measured on noble's apt 2.8.4, a failed index
+        # fetch is a warning and exit 0 (the old index is kept), unless --error-on=any makes it an error and exit 100.
+        'case " $* " in *" update "*)\n'
+        '  u=$(cat "$STUB_DIR/updates" 2>/dev/null || echo 0); u=$((u+1)); echo $u > "$STUB_DIR/updates"\n'
+        '  case " ${STUB_UPDATE_503:-} " in *" $u "*)\n'
+        '    case " $* " in *" --error-on=any "*)\n'
+        '      echo "E: Failed to fetch http://mirror/ubuntu/dists/noble/InRelease  503  Service Unavailable" >&2; exit 100 ;;\n'
+        '    esac\n'
+        '    echo "W: Failed to fetch http://mirror/ubuntu/dists/noble/InRelease  503  Service Unavailable" >&2\n'
+        '    echo "W: Some index files failed to download. They have been ignored, or old ones used instead." >&2 ;;\n'
+        '  esac ;;\n'
+        'esac\n'
         'exit 0\n'
     ),
     "dpkg-deb": '#!/usr/bin/env bash\nexit 0\n',
@@ -154,6 +166,32 @@ def a_fallback_set_that_needs_a_download_fails_cleanly():
         rc, out, calls, _ = run(["install-local", t], STUB_NODL_FAIL="1")
     assert rc != 0, (rc, out)
     assert "dpkg -i" not in calls, calls
+
+
+def apt_steps(calls):
+    """The apt-get calls in order, each as update, download or other."""
+    return ["update" if " update" in line else "download" if "--download-only" in line else "other"
+            for line in calls.splitlines() if line.startswith("apt-get")]
+
+
+# A failed index refresh fails its attempt: apt-get update keeps the image's old index when a fetch fails, and that
+# index can name versions the archive no longer carries (a run downloaded every package from it and got 503s).
+@row
+def a_failed_index_refresh_fails_the_attempt_and_retries():
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_UPDATE_503="1")
+    assert rc == 0, out
+    assert apt_steps(calls) == ["update", "update", "download"], calls
+    assert "mingw attempt 1: apt-get exited 100 during the index refresh" in out, out
+    assert debs == ["gcc-mingw-w64-x86-64_1.0_amd64.deb"], debs
+
+
+@row
+def two_failed_index_refreshes_never_download_from_a_stale_index():
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_UPDATE_503="1 2")
+    assert rc == 1, (rc, out)
+    assert apt_steps(calls) == ["update", "update"], calls
+    assert "::error::mingw packages: the Ubuntu mirror did not deliver them in 2 attempts" in out, out
+    assert debs == [], debs
 
 
 def main():

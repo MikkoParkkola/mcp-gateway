@@ -11,8 +11,9 @@ on:
   push:
     branches: [main, docs/ranking-1-release-line]
   workflow_dispatch:
-  # Runner images change about weekly and the key names the image. A
-  # scheduled run fills main's cache, which every branch can read.
+  # Runner images change about weekly and the key names the image. GitHub runs a schedule only from the default
+  # branch's copy of this file, and main has none yet, so this fires once the file reaches main; until then every
+  # push to the release line fills, and a failed fill is retried by the next push.
   schedule:
     - cron: "17 3 * * 1"
 
@@ -27,8 +28,9 @@ jobs:
   fill:
     name: Fetch the mingw packages
     runs-on: ubuntu-24.04
-    # The download is its only work, so a slow mirror day has room here.
-    timeout-minutes: 90
+    # The download is its only work, so a slow mirror day has room here: two attempts of the 2700 s bound below
+    # plus the script's 180 s index refresh each (96 min), with room for the setup steps.
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +48,10 @@ jobs:
           lookup-only: true
       - name: Download the mingw packages
         if: steps.cache.outputs.cache-hit != 'true'
+        # Not the shard's 600 s: the slowest mirror on record (43.5 kB/s) delivers the 114 MB set in about 44 min,
+        # and the shard's bound only makes sense where a compile still has to fit after the download.
+        env:
+          MINGW_DOWNLOAD_SECONDS: "2700"
         run: scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
       - name: Save the mingw packages
         if: steps.cache.outputs.cache-hit != 'true'

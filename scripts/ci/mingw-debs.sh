@@ -40,9 +40,12 @@ case "${1:-}" in
     mkdir -p "$scratch/partial" "$dir"
     ok=""
     for attempt in 1 2; do
-      # The index refresh is bounded too: a trickling mirror stalls it as easily as the download.
+      # The index refresh is bounded too: a trickling mirror stalls it as easily as the download. --error-on=any
+      # makes a refresh that could not fetch every index fail the attempt: without it apt-get warns, exits 0 and
+      # keeps the image's old index, which can name versions the archive no longer carries (noble's apt 2.8.4
+      # with an unreachable mirror: exit 0 without the flag, 100 with it).
       rc=0
-      sudo timeout "$update_limit" apt-get "${apt_opts[@]}" update || rc=$?
+      sudo timeout "$update_limit" apt-get "${apt_opts[@]}" update --error-on=any || rc=$?
       if [ "$rc" -eq 0 ]; then
         sudo timeout "$limit" apt-get "${apt_opts[@]}" -o Dir::Cache::Archives="$scratch" \
           install -y --download-only --no-install-recommends "$pkg" || rc=$?

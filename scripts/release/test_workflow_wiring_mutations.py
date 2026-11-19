@@ -1184,6 +1184,44 @@ CASES = [
         PUSH_STEP + "\n" + SMOKE_STEP,
         CAUGHT,
     ),
+    # The mingw cache fill downloads under its own bound, not the windows shard's 600 s, and its job timeout fits
+    # two attempts of it; the shard keeps the script's bound.
+    (
+        "mingw-fill-bound-deleted",
+        "mingw-debs.yml",
+        '        env:\n          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        "",
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-bound-back-to-the-shards",
+        "mingw-debs.yml",
+        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        '          MINGW_DOWNLOAD_SECONDS: "600"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-timeout-too-short-for-two-attempts",
+        "mingw-debs.yml",
+        "    timeout-minutes: 105\n",
+        "    timeout-minutes: 90\n",
+        CAUGHT,
+    ),
+    (
+        "mingw-shard-given-the-fills-bound",
+        "feature-combos.yml",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n",
+        "          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}\n"
+        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        CAUGHT,
+    ),
+    (
+        "mingw-fill-bound-unquoted",
+        "mingw-debs.yml",
+        '          MINGW_DOWNLOAD_SECONDS: "2700"\n',
+        "          MINGW_DOWNLOAD_SECONDS: 2700\n",
+        TOLERATED,
+    ),
 ]
 
 # The rehearsal verify (the rehearsal readonly verify design)
