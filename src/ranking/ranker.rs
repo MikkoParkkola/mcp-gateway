@@ -139,7 +139,12 @@ impl SearchRanker {
     /// # Errors
     ///
     /// Returns an error if serialization fails or the file cannot be written.
-    // In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
+    // Atomic: the shared writer replaces the file by rename, so a crash or kill
+    // mid-save leaves the old file or the new one. Never wider by mode on Linux;
+    // on macOS a directory-inherited ACE can apply and the file's own deny ACEs
+    // are not carried over; a file another user owned becomes the writer's.
+    // Other hard links keep the old bytes. The writer's owner and macOS ACL
+    // handling is a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         // The same row and key split as the stats snapshot, so a tool name
         // with a colon is saved whole.
@@ -150,7 +155,12 @@ impl SearchRanker {
             .collect();
 
         let json = serde_json::to_string_pretty(&counts)?;
-        std::fs::write(path, json)
+        crate::config_persistence::write_atomic(
+            path,
+            json.as_bytes(),
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::Symlink::Follow,
+        )
     }
 
     /// Load usage counts from JSON file
