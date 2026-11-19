@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Rows for scripts/ci/lib_union.py: the per-run union check over the lib test part binaries' lists (U1)."""
+"""Rows for scripts/ci/lib_union.py: the per-run union check over the lib test part binaries' lists (U1), and on the
+macOS legs' layout, one artifact per leg holding several parts (U2)."""
 
 from __future__ import annotations
 
@@ -19,12 +20,17 @@ BUILD = "fn main() {\n    const N: u32 = 3;\n}\n"
 EXPECT = {1: ["a::t1", "a::t2"], 2: ["b::t3"], 3: ["c::t4"]}
 
 
-def fixture(root: Path, lists: dict[int, list[str]], expected=EXPECT, build=BUILD) -> list[str]:
-    """Write `lists` (part -> names, as each part leg's list.txt holds them, `name: test` lines) under `root`, and
-    return the check's arguments: the lists folder, the expected folder and the build script."""
+def linux_artifact(part: int) -> str:
+    return f"linux-lib-tests-p{part}"
+
+
+def fixture(root: Path, lists: dict[int, list[str]], expected=EXPECT, build=BUILD, artifact=linux_artifact) -> list[str]:
+    """Write `lists` (part -> names, as each part leg's list.txt holds them, `name: test` lines) under `root`, each
+    in the artifact folder `artifact(part)` names, and return the check's arguments: the lists folder, the expected
+    folder and the build script."""
     (root / "build.rs").write_text(build)
     for part, names in lists.items():
-        d = root / "lists" / f"linux-lib-tests-p{part}" / f"p{part}"
+        d = root / "lists" / artifact(part) / f"p{part}"
         d.mkdir(parents=True)
         (d / "list.txt").write_text("".join(f"{n}: test\n" for n in names) + "\n3 tests, 0 benchmarks\n")
     for part, names in expected.items():
@@ -33,9 +39,9 @@ def fixture(root: Path, lists: dict[int, list[str]], expected=EXPECT, build=BUIL
     return [str(root / "lists"), str(root / "expected"), str(root / "build.rs")]
 
 
-def problems(lists: dict[int, list[str]], expected=EXPECT, build=BUILD) -> list[str]:
+def problems(lists: dict[int, list[str]], expected=EXPECT, build=BUILD, artifact=linux_artifact) -> list[str]:
     with TemporaryDirectory() as tmp:
-        return U.problems(*map(Path, fixture(Path(tmp), lists, expected, build)))
+        return U.problems(*map(Path, fixture(Path(tmp), lists, expected, build, artifact)))
 
 
 class Union(unittest.TestCase):
@@ -72,6 +78,41 @@ class Union(unittest.TestCase):
         for lists, want in ((EXPECT, 0), ({1: EXPECT[1], 2: EXPECT[2]}, 1)):
             with TemporaryDirectory() as tmp:
                 self.assertEqual(U.main(["lib_union.py", *fixture(Path(tmp), lists)]), want, lists)
+
+
+# ci.yml's macOS legs on a train with N = 3 here: lib-b uploads parts 1-2 under one artifact, int part 3 under its own.
+def macos_train(part: int) -> str:
+    return "macos-lib-lists-" + ("int" if part == 3 else "lib-b")
+
+
+def macos_solo(part: int) -> str:
+    return "macos-lib-lists-lib-b"
+
+
+class MacosLayout(unittest.TestCase):
+    """U2: the macOS lists, several parts per leg artifact."""
+
+    def test_a_solo_run_s_lists_from_one_leg_pass(self):
+        self.assertEqual(problems(EXPECT, artifact=macos_solo), [])
+
+    def test_a_train_s_two_legs_pass(self):
+        self.assertEqual(problems(EXPECT, artifact=macos_train), [])
+
+    def test_a_train_missing_int_s_part_fails_naming_it(self):
+        found = problems({1: EXPECT[1], 2: EXPECT[2]}, artifact=macos_train)
+        self.assertTrue(any("part 3 was not built" in p for p in found), found)
+
+    def test_an_empty_part(self):
+        self.assertTrue(problems({**EXPECT, 2: []}, {**EXPECT, 2: []}, artifact=macos_train))
+
+    def test_two_parts_sharing_a_name(self):
+        both = {1: ["a::t1", "a::t2"], 2: ["b::t3"], 3: ["c::t4", "a::t1"]}
+        found = problems(both, both, artifact=macos_train)
+        self.assertTrue(any("a::t1" in p and "two parts" in p for p in found), found)
+
+    def test_a_name_its_expected_set_lacks(self):
+        found = problems({**EXPECT, 3: ["c::t4", "c::stray"]}, artifact=macos_train)
+        self.assertTrue(any("c::stray" in p for p in found), found)
 
 
 if __name__ == "__main__":
