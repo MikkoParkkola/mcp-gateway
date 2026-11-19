@@ -101,8 +101,8 @@ connections have no city. The install id stays the same until you delete
 `heartbeat/` from the data directory, so one install's heartbeats, their times
 and their cities can be linked into a series. Deleting it starts a new id; it
 does not remove records already stored. The id is random and contains nothing
-about you. Beside it the gateway keeps one empty file per day it tried to send,
-named by the date and kept even when that day's send failed: a local record of
+about you. Beside it the gateway keeps one empty file per day it claimed for a heartbeat,
+named by the date and kept whether or not a send followed: a local record of
 those days that never leaves your machine. Records
 are kept for three months (the receiver's own statement: trvl's PRIVACY.md,
 "Daily heartbeat").
