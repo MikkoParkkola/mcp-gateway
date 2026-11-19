@@ -595,6 +595,13 @@ function outcomeNodes({ status, unreadable, body, message }) {
   return nodes;
 }
 
+/**
+ * Tools whose last confirmed run the gateway never confirmed. The shell refuses their confirm until the page
+ * reloads, so this lives as long as the page does, not as long as one visit to the tab.
+ */
+const unconfirmed = new Set();
+const keyOf = (tool) => `tools-try:${tool.server}/${tool.name}`;
+
 function mountTryForm(slot, answer, tools, ctx) {
   const section = answer.closest('section');
   let seq = 0;
@@ -606,9 +613,6 @@ function mountTryForm(slot, answer, tools, ctx) {
   let stepNodes = [];
   // Set while the shell confirm is or was open for this Run: its close sends focus to a still-disabled Run.
   let asked = false;
-  // Tools whose last confirmed run the gateway never confirmed: the shell refuses their confirm until reload.
-  const unconfirmed = new Set();
-  const keyOf = (tool) => `tools-try:${tool.server}/${tool.name}`;
 
   const picker = h('select', { class: 'input', id: 'try-tool' },
     ...tools.map((t, i) => h('option', { value: String(i) }, toolOptionLabel(t))));
@@ -746,8 +750,8 @@ function mountTryForm(slot, answer, tools, ctx) {
       consequences: [`${tool.name} can change things.`],
       run: () => send(tool, args, true),
     });
+    if (res.outcome === 'unconfirmed') unconfirmed.add(keyOf(tool));
     if (res.outcome === 'unconfirmed' && section.isConnected) {
-      unconfirmed.add(keyOf(tool));
       const runId = ++seq;
       mainNodes = [h('p', {}, `${tool.name} may have run; the gateway did not confirm it`),
         h('p', {}, 'Reload the page before running it again.')];
