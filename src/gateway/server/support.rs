@@ -184,6 +184,7 @@ pub(super) async fn serve_tls(
     listener: std::net::TcpListener,
     addr: SocketAddr,
     mtls_config: &crate::mtls::MtlsConfig,
+    grace: std::time::Duration,
     shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> crate::Result<()> {
     use crate::mtls::cert_manager::build_tls_config;
@@ -200,10 +201,12 @@ pub(super) async fn serve_tls(
     let handle = axum_server::Handle::new();
     let handle_for_shutdown = handle.clone();
 
-    // Bridge our broadcast-based shutdown signal to the axum-server handle
+    // Bridge our broadcast-based shutdown signal to the axum-server handle:
+    // open requests get `grace`, the stop budget's share for the listener,
+    // then their connections are dropped.
     tokio::spawn(async move {
         shutdown_fut.await;
-        handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        handle_for_shutdown.graceful_shutdown(Some(grace));
     });
 
     let acceptor = PeerCertIdentityAcceptor::new(RustlsAcceptor::new(rustls_config));
@@ -218,6 +221,35 @@ pub(super) async fn serve_tls(
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|e| crate::Error::Tls(format!("TLS server error: {e}")))
+}
+
+/// Serve `app` over plain HTTP on the already bound `listener` until
+/// `shutdown_fut` resolves, then stop the way `serve_tls` does: the listener
+/// refuses new connections and open requests get `grace`. At the deadline
+/// `axum_server` returns and every open connection is dropped, so a request
+/// that never ends (a streaming response, a call whose backend never answers)
+/// cannot hold the stop, and its handler is gone, with its in-flight permit,
+/// before the saves that follow in `run`.
+///
+/// Unlike `axum::serve`, this does not enable HTTP/2 extended CONNECT
+/// (RFC 8441); nothing here serves a `WebSocket`.
+pub(super) async fn serve_plain(
+    app: axum::Router,
+    listener: std::net::TcpListener,
+    grace: std::time::Duration,
+    shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
+) -> crate::Result<()> {
+    let handle = axum_server::Handle::new();
+    let handle_for_shutdown = handle.clone();
+    tokio::spawn(async move {
+        shutdown_fut.await;
+        handle_for_shutdown.graceful_shutdown(Some(grace));
+    });
+    axum_server::from_tcp(listener)?
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
