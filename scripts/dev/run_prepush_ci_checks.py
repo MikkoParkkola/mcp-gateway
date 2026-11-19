@@ -331,6 +331,27 @@ def _paths_missing_at(command, head_clone, base_clone):
     ]
 
 
+def _failure_view(output: str) -> list[str]:
+    """The last TAIL_LINES lines of a failed check's output, led by every `WRONG` row that scrolled out of them (with its
+    detail line): a check that prints one line per row ends in a screen of `ok` rows, and the failing label sat above them
+    (a refused train once showed only "FAILS ON HEAD"). At most TAIL_LINES such lines."""
+    lines = output.splitlines()
+    tail = lines[-TAIL_LINES:]
+    scrolled = lines[: len(lines) - len(tail)]
+    groups: list[list[str]] = []  # a WRONG line with its indented detail line, kept whole or not at all
+    for i, text in enumerate(scrolled):
+        if text.startswith("WRONG"):
+            nxt = scrolled[i + 1] if i + 1 < len(scrolled) else ""
+            groups.append([text, nxt] if nxt.startswith((" ", "\t")) else [text])
+    wrong: list[str] = []
+    for n, group in enumerate(groups):
+        if len(wrong) + len(group) > TAIL_LINES:
+            wrong.append(f"  ... {len(groups) - n} more WRONG rows: see the log")
+            break
+        wrong.extend(group)
+    return [*wrong, *tail]
+
+
 def _base_rerun(result, line, *, repo, ctx, tmp, n, line_timeout_s, setup_s, backstop_at, backstop_s):
     """One line: the three-way base result (§6.5, G5) as a printed line.
 
@@ -422,7 +443,7 @@ def run(
             text.append(f"\n[{result.status}] {result.command}" + (f": {result.note}" if result.note else ""))
             if result.log:
                 text.append(f"  log: {result.log}")
-            text.extend(result.output.splitlines()[-TAIL_LINES:])
+            text.extend(_failure_view(result.output))
             if executor is None and result.status != "skipped":
                 text.append(_base_rerun(result, line, repo=repo, ctx=ctx, tmp=tmp, n=n, **bounds))
         return Report(rc=1, failures=failures, text="\n".join(text))
