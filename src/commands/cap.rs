@@ -518,7 +518,7 @@ providers:
             )
         );
         assert!(
-            !is_success(super::cap_validate(path).await),
+            !is_success(super::cap_validate(path, super::Render::Text).await),
             "cap validate fails"
         );
     }
