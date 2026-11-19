@@ -49,6 +49,26 @@ fn start_callers(files: &[(String, String)]) -> Vec<String> {
 fn start_is_called_only_from_the_two_servers() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let files = rust_files(&root.join("src"));
+    // Controls first, so a red run proves them: a planted CLI caller is found,
+    // and a string or comment naming the call is not a call.
+    let mut planted = files.clone();
+    planted.push((
+        "src/commands/planted.rs".to_owned(),
+        "fn planted() { crate::heartbeat::start(p, d, s); }".to_owned(),
+    ));
+    planted.push((
+        "src/commands/named.rs".to_owned(),
+        "// heartbeat::start(\nfn named() { let _ = \"heartbeat::start(\"; }".to_owned(),
+    ));
+    let found = start_callers(&planted);
+    assert!(
+        found.contains(&"src/commands/planted.rs".to_owned()),
+        "{found:?}"
+    );
+    assert!(
+        !found.contains(&"src/commands/named.rs".to_owned()),
+        "{found:?}"
+    );
     assert_eq!(
         start_callers(&files),
         [
@@ -70,12 +90,6 @@ fn start_is_called_only_from_the_two_servers() {
             "{path} does not pass the resolved posture: {args}"
         );
     }
-    let mut planted = files;
-    planted.push((
-        "src/commands/planted.rs".to_owned(),
-        "fn planted() { crate::heartbeat::start(p, d, s); }".to_owned(),
-    ));
-    assert!(start_callers(&planted).contains(&"src/commands/planted.rs".to_owned()));
 }
 
 /// The launch commands that start a container or pod.
@@ -361,10 +375,6 @@ fn every_image_launch_sets_dnt() {
             ));
         }
     }
-    assert!(
-        missing.is_empty(),
-        "launches without DO_NOT_TRACK=1: {missing:?}"
-    );
     for launcher in LAUNCHERS {
         // Compose launches take service names; their environment is checked
         // per service in the compose file (compose_without_dnt below).
@@ -436,6 +446,11 @@ fn every_image_launch_sets_dnt() {
     assert!(
         gateway_launches("planted.sh", named).is_empty(),
         "a secret named mcp-gateway-* counted as a launch"
+    );
+    // The judgement last, so a red run proves every control above first.
+    assert!(
+        missing.is_empty(),
+        "launches without DO_NOT_TRACK=1: {missing:?}"
     );
 }
 

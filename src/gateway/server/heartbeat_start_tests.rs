@@ -58,11 +58,21 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
         config.server.port = 0;
         config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
         config.security.posture = posture;
-        // Hardened forces message signing, which needs a secret.
-        if matches!(config.security.posture, SecurityPosture::Hardened) {
-            config.security.message_signing.shared_secret =
-                crate::security::posture::tests::SIGNING_SECRET.to_string();
-        }
+        // What a hardened HTTP start needs, set for both postures so the
+        // posture is the only difference between a row and its control (A9):
+        // a signing secret (hardened forces signing), and a caller key for the
+        // anomaly detector hardened turns on (auth with a long token), whose
+        // audit log then opens under the row's own dir.
+        config.security.message_signing.shared_secret =
+            crate::security::posture::tests::SIGNING_SECRET.to_string();
+        config.auth.enabled = true;
+        config.auth.bearer_token = Some("heartbeat-start-row-token-0123456789".to_string());
+        config.security.transparency_log.enabled = Some(true);
+        config.security.transparency_log.path = dir
+            .join("audit")
+            .join("log.jsonl")
+            .to_string_lossy()
+            .into_owned();
         let mut gateway = super::super::Gateway::new(config)
             .await
             .expect("a gateway")
@@ -70,7 +80,10 @@ async fn start_http(dir: &std::path::Path, posture: SecurityPosture) -> RunningH
         let bound = gateway.bound_port_for_test();
         let trigger = gateway.shutdown_trigger_for_test();
         let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
-        let port = bound.await.expect("the bound port");
+        // A start that ends before binding says why, not just that it ended.
+        let Ok(port) = bound.await else {
+            panic!("the server ended before binding: {:?}", server.await);
+        };
         let status = reqwest::Client::new()
             .get(format!("http://127.0.0.1:{port}/health"))
             .send()
@@ -156,12 +169,12 @@ async fn start_stdio(dir: &std::path::Path, posture: SecurityPosture) -> Running
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
     let run = async {
         let mut config = crate::config::Config::default();
+        config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
         config.security.posture = posture;
-        // Hardened forces message signing, which needs a secret.
-        if matches!(config.security.posture, SecurityPosture::Hardened) {
-            config.security.message_signing.shared_secret =
-                crate::security::posture::tests::SIGNING_SECRET.to_string();
-        }
+        // Hardened forces signing, which needs a secret; set for both
+        // postures so the posture alone differs (A9).
+        config.security.message_signing.shared_secret =
+            crate::security::posture::tests::SIGNING_SECRET.to_string();
         let gateway = super::super::Gateway::new(config)
             .await
             .expect("a gateway")
