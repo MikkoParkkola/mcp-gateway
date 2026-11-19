@@ -31,6 +31,22 @@ jobs:
       - name: Extra packages and a drop-in step
         run: bash scripts/ci/smoke-full-image.sh "$IMAGE"
 
+      # The smoke above proves `ip -V` runs; this names the exact path the release
+      # promises, from a drop-in that runs after the package install.
+      - name: /usr/sbin/ip after EXTRA_APT_PACKAGES=iproute2
+        run: |
+          probe="$(mktemp -d)"
+          printf '%s\n' '#!/bin/sh' \
+            'if [ -x /usr/sbin/ip ]; then echo "probe: /usr/sbin/ip is there"; else echo "probe: /usr/sbin/ip is absent"; fi' \
+            > "$probe/20-ip-path.sh"
+          chmod 0755 "$probe/20-ip-path.sh"
+          out="$(docker run --rm --pull never --user root \
+            --env EXTRA_APT_PACKAGES=iproute2 \
+            --volume "$probe:/docker-entrypoint.d:ro" \
+            "$IMAGE" --version 2>&1)" || true
+          printf '%s\n' "$out" | tail -n 6
+          grep -qx 'probe: /usr/sbin/ip is there' <<< "$out"
+
       # A stdio backend started by the gateway must inherit npm_config_allow_git.
       - name: npm_config_allow_git reaches a stdio backend
         run: |
