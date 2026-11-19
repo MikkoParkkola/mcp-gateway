@@ -66,7 +66,11 @@ struct Fixture {
 fn fixture(owner: u32, group: u32, dir_mode: u32, mode: u32) -> Fixture {
     let root = tempfile::tempdir_in("/tmp").expect("temp root");
     set_mode(root.path(), 0o711);
-    let dir = root.path().join("d");
+    // Canonical, so a refusal naming the writer's resolved path matches it
+    // (/tmp is a link to /private/tmp on macOS).
+    let dir = std::fs::canonicalize(root.path())
+        .expect("canonical temp root")
+        .join("d");
     std::fs::create_dir(&dir).expect("fixture dir");
     std::os::unix::fs::chown(&dir, Some(owner), Some(group)).expect("chown dir");
     set_mode(&dir, dir_mode);
@@ -300,16 +304,51 @@ fn o_text_is_exact() {
         0o620
     };
     let fx = fixture(ids.b, ids.g, 0o770, mode);
-    let (owner, me, path) = (ids.b, ids.c, fx.target.display());
-    let expected = format!(
-        "foreign-owner: refused to replace {path}: the file belongs to uid {owner}, \
-         but this gateway runs as uid {me}. Nothing was written. To save it, run the \
-         gateway as uid {owner}, or hand the file to uid {me} (chown {me} {path})."
-    );
     let refused = Outcome::Refused {
         kind: "PermissionDenied".to_owned(),
-        text: expected,
+        text: owner_refusal(&fx.target, ids.b, ids.c),
     };
     assert_eq!(save_as_c(&ids, &fx.target, "inherit"), refused, "O-text");
     assert_untouched(&fx, (ids.b, ids.g, mode), "O-text");
+}
+
+/// The owner refusal's message for `path` owned by `owner`, saved as `me`.
+fn owner_refusal(path: &Path, owner: u32, me: u32) -> String {
+    let path = path.display();
+    format!(
+        "foreign-owner: refused to replace {path}: the file belongs to uid {owner}, \
+         but this gateway runs as uid {me}. Nothing was written. To save it, run the \
+         gateway as uid {owner}, or hand the file to uid {me} (chown {me} {path})."
+    )
+}
+
+/// E-text-owner: the config text writer (CLI edits, client-config export,
+/// identity grants) follows the same owner rule, its refusal behind the
+/// text writer's own prefix.
+#[test]
+#[ignore = "access-rows root job"]
+fn e_text_owner_refuses() {
+    let ids = ids();
+    let fx = fixture(ids.b, ids.g, 0o770, 0o640);
+    let shown = fx.target.display();
+    let refused = Outcome::Refused {
+        kind: "Text".to_owned(),
+        text: format!(
+            "Failed to save config {shown}: {}",
+            owner_refusal(&fx.target, ids.b, ids.c)
+        ),
+    };
+    assert_eq!(save_as_c(&ids, &fx.target, "text"), refused, "E-text-owner");
+    assert_untouched(&fx, (ids.b, ids.g, 0o640), "E-text-owner");
+}
+
+/// E-text-root-keeps: root's text save of B's file (a sudo `setup export`
+/// into B's client config) leaves it B's, owner-only.
+#[test]
+#[ignore = "access-rows root job"]
+fn e_text_root_keeps_owner() {
+    let ids = ids();
+    let fx = fixture(ids.b, ids.g, 0o770, 0o640);
+    crate::config_persistence::write_text_atomic(&fx.target, "new").expect("root saves");
+    assert_saved_as(&fx, ids.b, 0o600, "E-text-root-keeps");
 }

@@ -462,6 +462,39 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     );
 }
 
+/// E-link-replace: below the configured path's resolution, the text writer
+/// swaps away a link standing at the path it was handed and never writes
+/// through it, so a link planted after the resolve cannot redirect the save.
+#[cfg(unix)]
+#[test]
+fn the_text_writer_replaces_a_link_at_its_own_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sentinel = dir.path().join("elsewhere.yaml");
+    std::fs::write(&sentinel, "untouched\n").expect("sentinel");
+    let at = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&sentinel, &at).expect("link");
+
+    write_yaml_at(&at, "replaced\n").expect("write");
+
+    let meta = std::fs::symlink_metadata(&at).expect("stat");
+    assert!(
+        meta.file_type().is_file(),
+        "E-link-replace: a regular file now stands at the path"
+    );
+    assert_eq!(
+        meta.permissions().mode() & 0o777,
+        0o600,
+        "E-link-replace: owner-only"
+    );
+    assert_eq!(std::fs::read_to_string(&at).expect("read"), "replaced\n");
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("read sentinel"),
+        "untouched\n",
+        "E-link-replace: the link's old target was not written"
+    );
+}
+
 /// MIK-8029: `text` spliced with `edit`'s change to the config it loads as.
 fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
     let dir = tempfile::tempdir().expect("tempdir");
