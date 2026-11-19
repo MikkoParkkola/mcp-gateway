@@ -56,6 +56,41 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
     command
 }
 
+/// The running test binary with an empty environment plus the named
+/// variables the parent has, for a child that must see only them (the
+/// private-home rule's probe children). It builds its own command, so it
+/// can never clear an isolated gateway command. A pure addition: no
+/// existing caller changes.
+pub fn test_binary_with_only_env(names: &[&str]) -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    command.env_clear();
+    for name in names {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
+/// Any `command` isolated as [`command`] isolates the gateway binary, with
+/// `home` as the test-home override and every platform-home variable (`HOME`,
+/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) under a second directory,
+/// `env_home`. A pure addition: no existing caller changes.
+pub fn isolated_with_env_home(
+    command: Command,
+    home: &Path,
+    env_home: &Path,
+    inherit: Inherit,
+) -> Command {
+    let mut command = isolated(command, home, inherit);
+    command
+        .env("HOME", env_home)
+        .env("USERPROFILE", env_home)
+        .env("APPDATA", env_home.join("AppData").join("Roaming"))
+        .env("LOCALAPPDATA", env_home.join("AppData").join("Local"));
+    command
+}
+
 /// The binary run through `wrapper` (for example `sh -c '...; exec "$0" "$@"'`),
 /// isolated the same way: the wrapper's child inherits it.
 pub fn wrapped(wrapper: &[&str], home: &Path, inherit: Inherit) -> Command {
