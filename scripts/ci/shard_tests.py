@@ -769,25 +769,29 @@ def built_parts_root_rows() -> None:
     non-zero exit or a missing row fails the leg; parts without root rows never use PRIVILEGE."""
     global PRIVILEGE
     saved_leg, saved_priv = SHARDS["macos"]["lib-b"], PRIVILEGE
-    row = ROOT_ROWS + "r1"
+    row = ROOT_ROWS + "r"
     with tempfile.TemporaryDirectory() as root:
         log, build, priv = (os.path.join(root, x) for x in ("log", "build.sh", "priv.sh"))
         # Stand-in build: part K lists mK::a, and the part named by ROOT_PART also lists the root row. Its binary
-        # reports the row as ignored on a plain run; with --ignored it acts per ROOT_BEHAVE (ok, red, none, exit).
+        # reports the row as ignored on a plain run; with --ignored it acts per ROOT_BEHAVE (ok, some, red, exit, none).
         with open(build, "w") as f:
             f.write(f'#!/bin/sh\necho "build $2" >> "$LOG"\nmkdir -p "$3/p$2"\nout="$3/p$2/lib-tests-p$2"\n'
                     f'echo "m$2::a: test" > "$3/p$2/list.txt"\n'
-                    f'[ "$2" = "${{ROOT_PART:-}}" ] && echo "{row}: test" >> "$3/p$2/list.txt"\n'
+                    f'[ "$2" = "${{ROOT_PART:-}}" ] && printf "{row}1: test\\n{row}2: test\\n" >> "$3/p$2/list.txt"\n'
                     f'printf \'#!/bin/sh\\ncase " $* " in *" --ignored "*) ;; *) echo "test m%s::a ... ok"\\n'
-                    f'  grep -q root "$0.list" && echo "test {row} ... ignored"\\n  exit 0 ;; esac\\n\' "$2" > "$out"\n'
+                    f'  grep -q root "$0.list" && echo "test {row}1 ... ignored" && echo "test {row}2 ... ignored"\\n'
+                    f'  echo run >> "$LOG"\\n  exit 0 ;; esac\\n\' "$2" > "$out"\n'
                     f'cp "$3/p$2/list.txt" "$out.list"\n'
-                    f'cat >> "$out" <<"EOF"\ncase "${{ROOT_BEHAVE:-ok}}" in\n  ok) echo "test {row} ... ok" ;;\n'
-                    f'  red) echo "test {row} ... FAILED"; exit 101 ;;\n  exit) echo "test {row} ... ok"; exit 3 ;;\n'
+                    f'cat >> "$out" <<"EOF"\ncase "${{ROOT_BEHAVE:-ok}}" in\n'
+                    f'  ok) echo "test {row}1 ... ok"; echo "test {row}2 ... ok" ;;\n'
+                    f'  some) echo "test {row}1 ... ok" ;;\n'
+                    f'  red) echo "test {row}1 ... FAILED"; echo "test {row}2 ... ok"; exit 101 ;;\n'
+                    f'  exit) echo "test {row}1 ... ok"; echo "test {row}2 ... ok"; exit 3 ;;\n'
                     f'esac\nexit 0\nEOF\n')
-        # Stand-in privilege: logs which binary it starts and whether that binary is still on disk.
+        # Stand-in privilege: logs the binary it starts, whether that binary is still on disk, and its arguments.
         with open(priv, "w") as f:
-            f.write('#!/bin/sh\n[ -e "$1" ] && on=present || on=gone\necho "priv $(basename "$1") $on" >> "$LOG"\n'
-                    'exec "$@"\n')
+            f.write('#!/bin/sh\nb=$1; shift\n[ -e "$b" ] && on=present || on=gone\n'
+                    'echo "priv $(basename "$b") $on $*" >> "$LOG"\nexec "$b" "$@"\n')
         PRIVILEGE = ("sh", priv)
         SHARDS["macos"]["lib-b"] = [("parts", ["--lib"], [], 4)]
 
@@ -805,19 +809,23 @@ def built_parts_root_rows() -> None:
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
             return rc, open(log).read().split("\n")[:-1]
 
-        builds = ["build 1", "build 2", "build 3", "build 4"]
+        # Each part's plain run logs `run` after its build; the root run must come after part 3's.
+        plain = [x for k in range(1, 5) for x in (f"build {k}", "run")]
+        call = f"priv lib-tests-p3 present {ROOT_ROWS} --ignored --test-threads=1"
         try:
             # R9: no part lists a root row, so nothing runs under PRIVILEGE.
-            assert leg() == (0, builds), leg()
-            # R6: part 3's root row runs under PRIVILEGE once, after part 3's run and while its binary is on disk.
+            assert leg() == (0, plain), leg()
+            # R6: part 3's root rows run under PRIVILEGE once, with the filter, after part 3's own run and while its
+            # binary is on disk.
             rc, steps = leg(ROOT_PART="3")
-            assert (rc, steps) == (0, [*builds[:3], "priv lib-tests-p3 present", builds[3]]), (rc, steps)
-            # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; part 4 still builds.
+            assert (rc, steps) == (0, [*plain[:6], call, *plain[6:]]), (rc, steps)
+            # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; part 4 still builds and runs.
             for behave in ("red", "exit"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
-                assert rc == 1 and steps[-1] == builds[3], (behave, rc, steps)
-            # R8: a root run that reports none of the listed root rows fails the leg.
-            assert leg(ROOT_PART="3", ROOT_BEHAVE="none")[0] == 1, "a root run that ran no root row passed"
+                assert rc == 1 and steps[-2:] == plain[-2:], (behave, rc, steps)
+            # R8: a root run that reports none, or only some, of the listed root rows fails the leg.
+            for behave in ("none", "some"):
+                assert leg(ROOT_PART="3", ROOT_BEHAVE=behave)[0] == 1, f"a root run with {behave} of its rows passed"
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
 
