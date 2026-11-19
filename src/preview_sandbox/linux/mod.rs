@@ -8,12 +8,14 @@ mod ca_bundle;
 mod control_client;
 mod drop;
 mod fetch_step;
+mod fetch_uv;
 mod helper;
 mod mounts;
 pub(crate) mod plan;
 mod probe;
 mod relay;
 pub(crate) mod seccomp;
+mod uv_probe;
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -154,6 +156,7 @@ pub(super) async fn start_fetching(
 ) -> Result<Started, Refusal> {
     use super::proxy::System;
     use std::sync::Arc;
+    uv_probe::staged_dark(target)?;
     let ambient = Ambient {
         ca_bundle,
         runtime_dir,
@@ -220,11 +223,12 @@ async fn start_fetching_with(
                 bundle.source.display()
             ))
         })?;
-    let npm = npm_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
+    let (npm, uv) = uv_probe::package_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
     plan.fetch = Some(plan::FetchPaths {
         control: utf8(&control)?,
         ca: utf8(&ca)?,
         npm,
+        uv,
     });
     let mut child = launch(unshare, helper, &plan)?;
     let outcome = match child.id() {
@@ -295,8 +299,7 @@ fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
 /// The npm fetch a target needs, or `None` when it names no package (the
 /// handshake alone). npm and node are the ones beside the target's `npx`, its
 /// version floor checked; `ip` and both must lie in the plan's bound trees,
-/// where the root shows them at the same paths. uv is refused here until its
-/// fetch is built.
+/// where the root shows them at the same paths.
 fn npm_fetch(
     target: &Target,
     plan: &mut Plan,
@@ -306,8 +309,8 @@ fn npm_fetch(
     use super::fetch::Fetch;
     let phases = super::fetch::plan(target)?;
     let spec = match phases.fetch {
-        None => return Ok(None),
-        Some(Fetch::Uv(_)) => return Err(Refusal::Step("the uv fetch is not built yet".into())),
+        // A uvx target is planned by `uv_probe::package_fetch`.
+        None | Some(Fetch::Uv(_)) => return Ok(None),
         Some(Fetch::Npm(spec)) => spec,
     };
     let requested = target.program.to_str().unwrap_or("npx");
@@ -808,11 +811,21 @@ fn classify_with(stderr: &str, host: &HostFacts) -> Refusal {
 }
 
 #[cfg(test)]
+mod elf_fixture;
+#[cfg(test)]
+mod fetch_pypi;
+#[cfg(test)]
 mod fetch_registry;
 #[cfg(test)]
 mod fetch_rows;
 #[cfg(test)]
 mod fetch_shim_rows;
+#[cfg(test)]
+mod fetch_uv_real_fixture;
+#[cfg(test)]
+mod fetch_uv_real_rows;
+#[cfg(test)]
+mod fetch_uv_rows;
 #[cfg(tp4)]
 #[cfg(test)]
 mod tests;
