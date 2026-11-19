@@ -1004,6 +1004,85 @@ jobs:
       - name: Each part lists exactly the tests the source puts in it
         run: python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"
 
+  # E2 oracle (throwaway branch, never merged): today's unsplit macOS lib test
+  # binary, listed, for comparison with the union of the five part lists.
+  macos-lib-whole:
+    name: macOS whole lib list (E2)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: Build the whole lib test binary
+        timeout-minutes: 120
+        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/whole"
+      - name: List it, unfiltered
+        run: |
+          "$RUNNER_TEMP/whole/lib-tests" --list > "$RUNNER_TEMP/whole/whole.txt"
+          echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          grep -c ': test$' "$RUNNER_TEMP/whole/whole.txt"
+      - name: Keep the list
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-lib-whole
+          path: ${{ runner.temp }}/whole/whole.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  e2-compare:
+    name: E2 parts union equals the whole lib list
+    needs: [macos-shards, macos-lib-whole]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: The cfg inputs expect evaluates for the macOS target
+        run: rustc --print cfg --target aarch64-apple-darwin
+      - name: Every leg's part lists
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: macos-lib-lists-*
+          path: ${{ runner.temp }}/lists
+          merge-multiple: false
+      - name: The whole list
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-lib-whole
+          path: ${{ runner.temp }}/whole
+      - name: The five parts' union equals the whole binary's list, with no name in two parts
+        run: |
+          python3 - "$RUNNER_TEMP/lists" "$RUNNER_TEMP/whole/whole.txt" <<'PY'
+          import pathlib, re, sys
+          def names(text):
+              return {line[: -len(": test")] for line in text.splitlines() if line.endswith(": test")}
+          parts = {}
+          for path in sorted(pathlib.Path(sys.argv[1]).glob("**/p*/list.txt")):
+              if re.fullmatch(r"p\d+", path.parent.name):
+                  parts[path.parent.name] = names(path.read_text())
+          union = set().union(*parts.values())
+          whole = names(pathlib.Path(sys.argv[2]).read_text())
+          sizes = {k: len(v) for k, v in sorted(parts.items())}
+          print(f"parts {sizes}, sum {sum(sizes.values())}, union {len(union)}, whole {len(whole)}")
+          print("in the whole list, in no part:", sorted(whole - union)[:20])
+          print("in a part, not in the whole list:", sorted(union - whole)[:20])
+          ok = len(parts) == 5 and union == whole and sum(sizes.values()) == len(union)
+          sys.exit(0 if ok else 1)
+          PY
+
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
   # with !cancelled(), so a failed or skipped shard fails it; a cancelled run
