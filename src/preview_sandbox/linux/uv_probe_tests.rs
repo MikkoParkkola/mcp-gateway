@@ -370,12 +370,14 @@ fn u_uv_place_uv_binds_its_real_file_alone() {
     );
 }
 
-/// Whether the process whose pid `pid_file` holds has ended, waiting up to
-/// 10 s: SIGKILL lands asynchronously and init then reaps an orphan, so ended
-/// is gone from /proc or a zombie ('Z' after the command name's ')'). The
-/// wait cannot hide a missing kill: the rows' processes sleep 300 s, far past
-/// it. One still running is killed here, only so a red run leaves nothing
-/// behind; the caller's assert fails it.
+/// Whether the process whose pid `pid_file` holds has ended. It waits on the
+/// event itself, polling until the pid is gone from /proc or a zombie ('Z'
+/// after the command name's ')'): SIGKILL lands asynchronously, and a loaded
+/// host can take seconds to end and reap the process. The 120 s bound is set
+/// by the failure mode, not by a run's timing: the rows' processes sleep
+/// 300 s, so a missing kill still leaves the process alive at the bound and
+/// fails the row. One still running is killed here, only so a red run leaves
+/// nothing behind; the caller's assert fails it.
 fn gone(pid_file: &Path) -> bool {
     let pid = std::fs::read_to_string(pid_file).expect("the process started");
     let pid = pid.trim();
@@ -385,7 +387,7 @@ fn gone(pid_file: &Path) -> bool {
             .rsplit_once(')')
             .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
     };
-    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !ended() && std::time::Instant::now() < wait_until {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
