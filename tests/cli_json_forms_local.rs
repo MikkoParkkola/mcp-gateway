@@ -462,4 +462,6 @@ fn skills_list_prints_a_non_utf8_path_lossily() {
 }
 
 // ── cap (J7-J11, F): cli_json_forms_local/cap.rs ─────────────────────────────────────
+// An integration test file is a crate root, so a bare `mod cap;` would look for tests/cap.rs.
+#[path = "cli_json_forms_local/cap.rs"]
 mod cap;
