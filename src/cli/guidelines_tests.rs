@@ -48,6 +48,7 @@ fn surface_paths() -> std::collections::BTreeSet<String> {
         .filter(|entry| {
             entry.split(' ').all(|word| {
                 !word.is_empty()
+                    && !word.starts_with('-')
                     && word
                         .chars()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
