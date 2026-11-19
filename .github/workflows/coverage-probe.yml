@@ -39,6 +39,7 @@ on:
       - "scripts/release/critical_function_coverage.py"
       - "scripts/release/critical_path_coverage.py"
       - "scripts/ci/coverage_shards.py"
+      - "scripts/ci/coverage_union.py"
       - "scripts/ci/coverage_shard_*.sh"
       - "scripts/ci/testdata/llvm_cov_report_v.txt"
       - "src/coverage_canary.rs"
@@ -163,13 +164,17 @@ jobs:
       - name: Run the part
         env:
           PART: ${{ matrix.part }}
-        # Healthy parts take up to 41 min; a stall ends here with its log, and the memory log samples it every 30 s
-        # (scripts/ci/check_swap_jobs.py). Its lines go to stderr, so they are in run.log too, as "memory ..." lines.
+        # A lib part builds and runs one compile-time test part (scripts/ci/lib-parts.sh cov), under the memory gate
+        # (scripts/ci/compile-cgroup.sh); the int parts run as before. A stall ends here with its log, and the memory
+        # log samples it every 30 s (scripts/ci/check_swap_jobs.py); its lines go to stderr, so they are in run.log too.
         timeout-minutes: 70
         run: |
-          set -o pipefail
           cargo llvm-cov clean --workspace
-          scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
+          scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh cov "$COVERAGE_PARTS" "$PART" > run.log 2>&1
+      # The part's output went to run.log (bundled for the grade, uploaded on failure); show it here too.
+      - name: Show the part's log
+        if: always()
+        run: if [ -f run.log ]; then cat run.log; else echo "run.log was not written (the step failed before the part ran)"; fi
       - name: Bundle
         env:
           PART: ${{ matrix.part }}
@@ -187,6 +192,11 @@ jobs:
           retention-days: 7
           compression-level: 1
           path: bundle/
+      # A part writes nothing to swap and a whole lib test build about 7 GiB (ci.yml's tripwire): past 2 GiB a whole
+      # build came back. The kernel keeps the count, so `always()` still reports after a step timeout.
+      - name: Memory tripwire
+        if: always()
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
   linux-grade:
     name: llvm-cov Linux, grade
@@ -227,16 +237,33 @@ jobs:
           bash scripts/ci/coverage_shard_merge.sh "${expected[@]}"
           cp shards/cov-shard-sdk/run.log sdk-run.log
           for p in "${expected[@]}"; do [ "$p" = sdk ] || cat "shards/cov-shard-$p/run.log"; done > all-run.log
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      # Every graded run: each lib part ran exactly the tests the source puts in that part, parts exactly 1..N, none
+      # empty, no test in two parts. The lists come from each part's own tests.tsv (bundled already); the expected sets
+      # and the check are the Linux lib gate's (ci.yml), unchanged.
+      - name: Lib test parts union
+        run: |
+          python3 scripts/ci/coverage_shards.py lists "$RUNNER_TEMP/lib-lists" shards
+          scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
+          python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-lists" "$RUNNER_TEMP/expected"
       - name: Reports
         run: |
           set -o pipefail
-          # -v prints each llvm-cov command with every -object it reads.
-          cargo llvm-cov report -v --summary-only --json --output-path cov.json 2>&1 | tee report-json.log
-          cargo llvm-cov report -v --lcov --output-path linux.lcov 2>&1 | tee report-lcov.log
-          # Each report read every executable a part built with coverage sections.
-          for log in report-json.log report-lcov.log; do
-            python3 scripts/ci/coverage_shards.py objects "$log" shards/cov-shard-*/manifest.txt
-          done
+          # -v prints the llvm-cov export command with every -object it reads. One export over all five lib part
+          # executables reads each function through the first part's mapping, and the parts give one function
+          # different hashes, so other parts' counts read zero there: this single report is kept for diagnosis and
+          # for the join's check that it loses no line or function the single report has.
+          cargo llvm-cov report -v --lcov --output-path linux-single.lcov 2>&1 | tee report-lcov.log
+          # The report read every executable a part built with coverage sections.
+          python3 scripts/ci/coverage_shards.py objects report-lcov.log shards/cov-shard-*/manifest.txt
+          # One export per part plus one for the rest, joined line by line (scripts/ci/coverage_union.py).
+          python3 scripts/ci/coverage_union.py report-lcov.log linux-single.lcov linux.lcov
           # A never-called function must show at zero: a merge that lost binaries would drop it.
           python3 scripts/ci/coverage_shards.py canary linux.lcov
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -245,11 +272,11 @@ jobs:
           retention-days: 90
           name: coverage-linux
           path: |
-            cov.json
             linux.lcov
+            linux-single.lcov
+            mismatch.txt
             all-run.log
             sdk-run.log
-            report-json.log
             report-lcov.log
             shards/*/tests.tsv
             shards/*/manifest.txt
@@ -269,7 +296,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version ${{ env.COVERAGE_LLVM_COV }}
       - name: Allow symlink creation
         shell: pwsh
         run: >-
@@ -336,7 +363,7 @@ jobs:
           status=0 functions=0 paths=0
           # stderr too, so a grader that cannot run shows why in the summary.
           python3 scripts/release/critical_function_coverage.py "$@" > functions.txt 2>&1 || functions=$?
-          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt 2>&1 || paths=$?
+          python3 scripts/release/critical_path_coverage.py art/coverage-linux/linux.lcov > paths.txt 2>&1 || paths=$?
           [ "$functions" = 0 ] && [ "$paths" = 0 ] || status=1
           # A grader's 3 is a missing report: no grade, never a graded FAIL (MIK-8265).
           verdict=$([ $status = 0 ] && echo PASS || echo FAIL)

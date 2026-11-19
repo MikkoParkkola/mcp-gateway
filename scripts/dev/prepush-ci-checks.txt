@@ -42,6 +42,10 @@ python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_lib_union.py	0	closed
 python3 scripts/ci/test_lib_parts.py	1	closed
+python3 scripts/ci/test_lib_parts_cov.py	3	closed
+python3 scripts/ci/test_compile_cgroup.py	83	closed
+python3 scripts/ci/test_coverage_parts_wiring.py	2	closed
+python3 scripts/ci/test_coverage_union_merge.py	10	closed
 python3 scripts/ci/test_memory_tripwire.py	0	closed
 python3 scripts/ci/test_lib_gates_wiring.py	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
@@ -54,6 +58,8 @@ python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_macos_parts.py	1	closed
+python3 scripts/ci/test_macos_parts.py --self-test	1	closed
 python3 scripts/ci/test_os_sensitive_diff.py	1	closed
 python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
@@ -153,3 +159,5 @@ scripts/dev/check-commit-message-hygiene.sh <BASE_TIP>..HEAD	0	closed
 scripts/dev/check-public-repo-hygiene.sh	0	closed
 tests/artifact_licenses.sh	3	closed
 tests/commit_message_hygiene.sh	8	closed
+python3 scripts/ci/test_coverage_union.py	30	closed
+python3 scripts/release/test_coverage_grade.py	25	closed
