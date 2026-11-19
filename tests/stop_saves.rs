@@ -254,8 +254,10 @@ struct State {
     /// Uses of alpha, beta, slow, hang.
     usage: [u64; 4],
     transitions: u64,
-    /// Tools the counters file names (its series layout is private).
-    counted: Vec<String>,
+    /// Calls per tool in counters.json: each label's day ring, summed over
+    /// its buckets (count 0 of a bucket is calls), so a run crossing midnight
+    /// keeps its total.
+    counted: Vec<(String, u64)>,
     /// Spend per tool in costs.json, in cents, by tool name (0.01 per call).
     /// costs.json carries spend, not calls: its `call_count` is always 0.
     cost_cents: Vec<(String, u64)>,
@@ -275,11 +277,19 @@ fn state(dir: &Path) -> State {
     let counters: Value =
         serde_json::from_slice(&std::fs::read(data.join("counters.json")).expect("counters.json"))
             .expect("counters.json parses");
-    let mut counted: Vec<String> = counters["tool"]["labels"]
+    let mut counted: Vec<(String, u64)> = counters["tool"]["labels"]
         .as_array()
         .expect("tool labels")
         .iter()
-        .filter_map(|l| l[0][1].as_str().map(str::to_owned))
+        .map(|l| {
+            let calls = l[1]["day"]
+                .as_array()
+                .expect("a day ring")
+                .iter()
+                .map(|bucket| bucket[1][0].as_u64().expect("a call count"))
+                .sum();
+            (l[0][1].as_str().expect("a tool name").to_owned(), calls)
+        })
         .collect();
     counted.sort();
     let costs = mcp_gateway::cost_accounting::persistence::load(&data.join("costs.json"))
@@ -304,10 +314,6 @@ fn state(dir: &Path) -> State {
         counted,
         cost_cents,
     }
-}
-
-fn names(list: &[&str]) -> Vec<String> {
-    list.iter().map(|s| (*s).to_owned()).collect()
 }
 
 /// Kill every backend the script recorded that is still alive: a stubborn one
@@ -336,7 +342,7 @@ async fn baseline(dir: &Path, config: &Path) {
         State {
             usage: [1, 1, 0, 0],
             transitions: 1,
-            counted: names(&["alpha", "beta"]),
+            counted: vec![("alpha".into(), 1), ("beta".into(), 1)],
             cost_cents: vec![("alpha".into(), 1), ("beta".into(), 1)],
         },
         "premise: run 1's state A on disk"
@@ -393,7 +399,7 @@ async fn k_simple(mode: &str, held_sse: bool) {
         State {
             usage: [2, 2, 0, 0],
             transitions: 2,
-            counted: names(&["alpha", "beta"]),
+            counted: vec![("alpha".into(), 2), ("beta".into(), 2)],
             cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2)],
         },
         "run 2's records lost by a kill inside the grace"
@@ -452,7 +458,7 @@ async fn k_inflight_a_held_request_does_not_hold_the_saves() {
         State {
             usage: [2, 2, 0, 1],
             transitions: 2,
-            counted: names(&["alpha", "beta"]),
+            counted: vec![("alpha".into(), 2), ("beta".into(), 2)],
             cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2)],
         },
         "a held request's session lost by a kill inside the grace"
@@ -501,7 +507,7 @@ async fn k_post_a_request_completing_during_the_stop_is_saved() {
         State {
             usage: [2, 2, 1, 1],
             transitions: 3,
-            counted: names(&["alpha", "beta", "slow"]),
+            counted: vec![("alpha".into(), 2), ("beta".into(), 2), ("slow".into(), 1)],
             cost_cents: vec![("alpha".into(), 2), ("beta".into(), 2), ("slow".into(), 1)],
         },
         "a request completing during the stop was not saved before the kill"

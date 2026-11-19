@@ -62,20 +62,14 @@ async fn s_late_a_stream_opened_after_the_stop_ends_after_connecting() {
 
 /// S-resume: a resumed stream holding a frame and a bridged prompt, queued and
 /// unread when the stop comes, ends without writing either. The prompt's waiter
-/// fails at once, no relay receipt commits, and the provisional-session counts
-/// are where they were before the stream.
+/// fails at once and no relay receipt commits. Provisional-session release is
+/// not asserted: this session is not provisional, and a stream ended by the
+/// stop drops its guards on the same path as one a client hangs up.
 #[tokio::test]
 async fn s_resume_the_stop_settles_what_a_resumed_stream_holds() {
     use crate::gateway::input_bridge::{ClientChannel as _, DeliveryCommit, DeliveryError};
     let (key_server, _, _) = key_server_with_token().await;
     let multiplexer = multiplexer(&key_server);
-    let provisional = || {
-        (
-            multiplexer.provisional_live.load(Ordering::SeqCst),
-            multiplexer.provisional_stream_live.load(Ordering::SeqCst),
-        )
-    };
-    let before = provisional();
     let id = session(&multiplexer);
     let mut body = body(&multiplexer, &id, Some("1"));
     let first = tokio::time::timeout(Duration::from_secs(5), body.next())
@@ -121,11 +115,5 @@ async fn s_resume_the_stop_settles_what_a_resumed_stream_holds() {
         commits.load(Ordering::SeqCst),
         0,
         "an unwritten prompt committed its receipt"
-    );
-    drop(body);
-    assert_eq!(
-        provisional(),
-        before,
-        "the stream left a provisional session counted"
     );
 }
