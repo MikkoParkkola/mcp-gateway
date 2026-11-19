@@ -80,7 +80,11 @@ fn start_is_called_only_from_the_two_servers() {
     // mention): the argument text names `security.posture`.
     for (path, text) in files
         .iter()
-        .filter(|(p, _)| p.ends_with("run.rs") || p.ends_with("stdio_loop.rs"))
+        // The two server files by exact path: `cli_run.rs` also ends in
+        // `run.rs` (green run).
+        .filter(|(p, _)| {
+            p == "src/gateway/server/run.rs" || p == "src/gateway/server/stdio_loop.rs"
+        })
     {
         let production = crate::test_source_text::production_text(text);
         let at = production.find("heartbeat::start(").expect("the call");
