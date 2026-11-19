@@ -112,7 +112,7 @@ async fn production_client_refuses_http() {
     let out = heartbeat_once(
         &release(),
         dir.path(),
-        &production_client(),
+        &production_client().expect("the release client builds"),
         &rx.url(),
         nov19,
     )
@@ -147,7 +147,14 @@ async fn production_client_refuses_an_untrusted_certificate() {
     let (base, ca_pem) = crate::test_tls::https_server(app).await;
     let url = format!("{base}/v1/heartbeat");
     let dir = tempfile::tempdir().expect("dir");
-    let out = heartbeat_once(&release(), dir.path(), &production_target().1, &url, nov19).await;
+    let out = heartbeat_once(
+        &release(),
+        dir.path(),
+        &production_target().expect("the release target builds").1,
+        &url,
+        nov19,
+    )
+    .await;
     assert_eq!(out, Outcome::Failed);
     assert_eq!(
         hits.load(Ordering::SeqCst),
@@ -174,7 +181,7 @@ async fn production_client_refuses_an_untrusted_certificate() {
 /// listener, which the test client reaches (control).
 #[tokio::test]
 async fn production_target_is_the_literal_url_and_the_release_client() {
-    let (url, client) = production_target();
+    let (url, client) = production_target().expect("the release target builds");
     assert_eq!(url, "https://telemetry.revaluator.ai/v1/heartbeat");
     let rx = Listener::start(Answer::NoContent).await;
     let dir = tempfile::tempdir().expect("dir");
@@ -198,7 +205,7 @@ async fn production_target_is_the_literal_url_and_the_release_client() {
 #[tokio::test]
 async fn start_resolves_the_release_target_without_a_seam() {
     let dir = tempfile::tempdir().expect("dir");
-    let released = resolve(dir.path());
+    let released = resolve(dir.path()).expect("the release target builds");
     assert!(!released.from_seam);
     assert_eq!(released.url, "https://telemetry.revaluator.ai/v1/heartbeat");
     assert_eq!(released.every, std::time::Duration::from_secs(3600));
@@ -250,11 +257,13 @@ async fn start_resolves_the_release_target_without_a_seam() {
             stall: None,
         },
     );
-    let seamed = resolve(registered.path());
+    let seamed = resolve(registered.path()).expect("a registered target");
     assert!(seamed.from_seam);
     assert_eq!(seamed.url, rx.url());
     assert!(
-        !resolve(dir.path()).from_seam,
+        !resolve(dir.path())
+            .expect("the release target builds")
+            .from_seam,
         "a registration leaked to another dir"
     );
 }

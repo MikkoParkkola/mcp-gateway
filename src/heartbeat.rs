@@ -121,10 +121,11 @@ pub(crate) enum Skip {
 pub(crate) fn decide(snapshot: &Snapshot) -> Result<(), Skip> {
     // Set and not empty, `0` or `false`: the opt-out and CI truthiness.
     let truthy = |name: &&str| {
-        snapshot.env.get(*name).is_some_and(|v| {
-            let v = v.trim();
-            !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
-        })
+        // Exact values: whitespace is a value, so `DO_NOT_TRACK=" "` opts out.
+        snapshot
+            .env
+            .get(*name)
+            .is_some_and(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")))
     };
     if snapshot.build == Build::Dev {
         return Err(Skip::DevBuild);
@@ -135,12 +136,10 @@ pub(crate) fn decide(snapshot: &Snapshot) -> Result<(), Skip> {
     if CI.iter().any(truthy) {
         return Err(Skip::Ci);
     }
-    if PROXY.iter().any(|name| {
-        snapshot
-            .env
-            .get(*name)
-            .is_some_and(|v| !v.trim().is_empty())
-    }) {
+    if PROXY
+        .iter()
+        .any(|name| snapshot.env.get(*name).is_some_and(|v| !v.is_empty()))
+    {
         return Err(Skip::Proxy);
     }
     if snapshot.posture == SecurityPosture::Hardened {
@@ -354,8 +353,9 @@ pub(crate) async fn heartbeat_once(
         Ok(Err(outcome)) => return outcome,
         Err(_) => return Outcome::NoId,
     };
-    // A check whose filesystem work ran past midnight sends nothing, so two
-    // sends can never land on one UTC day.
+    // A check whose filesystem work ran past midnight sends nothing: no
+    // check sends for a date other than the one it claimed. (A request sent
+    // just before midnight can still arrive just after it; register row.)
     if today() != Some(date) {
         return Outcome::DateMoved;
     }
@@ -414,17 +414,16 @@ pub(crate) fn production_builder() -> reqwest::ClientBuilder {
     base_builder().https_only(true)
 }
 
-/// The release client. A builder error (no TLS backend) leaves the default
-/// client; the release URL is HTTPS either way and redirects stay off only
-/// in the built one, so that case sends to the literal URL alone.
-pub(crate) fn production_client() -> reqwest::Client {
-    production_builder().build().unwrap_or_default()
+/// The release client, or `None` when it cannot be built (no TLS backend):
+/// then nothing is sent, rather than a client without these limits.
+pub(crate) fn production_client() -> Option<reqwest::Client> {
+    production_builder().build().ok()
 }
 
 /// Where and how the release task sends: the literal receiver URL and the
 /// release client. The task reads only this outside a test.
-pub(crate) fn production_target() -> (&'static str, reqwest::Client) {
-    (URL, production_client())
+pub(crate) fn production_target() -> Option<(&'static str, reqwest::Client)> {
+    production_client().map(|client| (URL, client))
 }
 
 /// What the task for one data dir uses.
@@ -438,22 +437,23 @@ pub(crate) struct Resolved {
 }
 
 /// The target `start` uses for `data_dir`: a registered test target (test
-/// builds only), else [`production_target`], the system clock and one hour.
-pub(crate) fn resolve(data_dir: &Path) -> Resolved {
+/// builds only), else [`production_target`], the system clock and one hour;
+/// `None` when the release client cannot be built.
+pub(crate) fn resolve(data_dir: &Path) -> Option<Resolved> {
     #[cfg(test)]
     if let Some(registered) = seam::resolved(data_dir) {
-        return registered;
+        return Some(registered);
     }
     #[cfg(not(test))]
     let _ = data_dir;
-    let (url, client) = production_target();
-    Resolved {
+    let (url, client) = production_target()?;
+    Some(Resolved {
         url: url.to_owned(),
         client,
         today: utc_today,
         every: std::time::Duration::from_secs(3600),
         from_seam: false,
-    }
+    })
 }
 
 /// The system clock's UTC date; `None` before the epoch.
@@ -469,7 +469,11 @@ pub(crate) fn start(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let target = resolve(&data_dir);
+        // No release client (no TLS backend): the task ends and sends nothing.
+        let Some(target) = resolve(&data_dir) else {
+            tracing::debug!("heartbeat off: no client");
+            return;
+        };
         loop {
             // A registered test target stands for a release build with
             // nothing set; everything else reads this process.

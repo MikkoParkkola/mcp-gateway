@@ -200,6 +200,9 @@ fn truthiness_empty_zero_false_do_not_opt_out() {
         }
         assert!(decide(&with(name, "1")).is_err(), "control {name}=1");
     }
+    // Whitespace is a value, not empty (code review 1).
+    assert_eq!(decide(&with("DO_NOT_TRACK", " ")), Err(Skip::OptOut));
+    assert_eq!(decide(&with("CI", " ")), Err(Skip::Ci));
 }
 
 /// D7. A proxy variable that is present but empty does not skip.
@@ -213,6 +216,8 @@ fn an_empty_proxy_variable_does_not_skip() {
             "control {name}"
         );
     }
+    // Whitespace is a value, not empty (code review 1).
+    assert_eq!(decide(&with("HTTPS_PROXY", " ")), Err(Skip::Proxy));
 }
 
 /// D9. A test build's own reader yields a development build.
