@@ -436,7 +436,10 @@ fn rf4_each_step_round_trips_and_nothing_else_parses() {
         "sweep",
         "relay",
         "proxy-socket",
+        "uv-install",
+        "direct-url-check",
     ];
+    assert_eq!(FetchStep::ALL.len(), names.len());
     for (step, name) in FetchStep::ALL.into_iter().zip(names) {
         let done = FetchDone {
             fetch_done: true,
@@ -465,5 +468,31 @@ fn rf4_each_step_round_trips_and_nothing_else_parses() {
         "{\"fetch_done\":true,\"refused\":1}",
     ] {
         assert!(serde_json::from_str::<FetchDone>(line).is_err(), "{line}");
+    }
+}
+
+/// U-steps (the uv fetch, design 8), kills "a step echoes another's words" and "a
+/// step is dropped": each of the nine steps carries its own fixed words,
+/// written here as literals, never read back from `describe`.
+#[test]
+fn u_steps_every_step_has_its_own_words() {
+    use crate::preview_sandbox::control_msg::FetchStep;
+    let words = [
+        (FetchStep::Setup, "preparing the fetch"),
+        (FetchStep::NpmInstall, "the fetch's npm install"),
+        (FetchStep::LockCheck, "the fetch's lock check"),
+        (FetchStep::NpmCi, "the fetch's npm ci"),
+        (FetchStep::Sweep, "the fetch's sweep"),
+        (FetchStep::Relay, "stopping the fetch's relay"),
+        (FetchStep::ProxySocket, "removing the fetch's proxy socket"),
+        (FetchStep::UvInstall, "the fetch's uv install"),
+        (FetchStep::DirectUrlCheck, "the fetch's direct-URL check"),
+    ];
+    assert_eq!(
+        FetchStep::ALL.to_vec(),
+        words.iter().map(|(step, _)| *step).collect::<Vec<_>>()
+    );
+    for (step, want) in words {
+        assert_eq!(step.describe(), want, "{step:?}");
     }
 }
