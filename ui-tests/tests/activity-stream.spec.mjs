@@ -579,3 +579,17 @@ test('A20 a next page says how many calls it added, through the live region', as
   await page.clock.runFor(2000);
   await expect.poll(() => page.locator('#announcer').textContent()).toContain('2 more calls.');
 });
+
+test('A21 no kind tab is named Firewall: the Outcome filter is the route to blocked calls', async ({ page }) => {
+  // Operator decision 2026-11-19: the Firewall kind tab is cut. The premises: the page drew its tabs and its filter.
+  const urls = await install(page, { answer: () => list(ROWS) });
+  await open(page, urls, '/ui/activity/status');
+  await expect(page.getByRole('group', { name: 'Outcome' }).getByRole('button', { name: 'blocked', exact: true })).toBeVisible();
+  const tabs = await page.locator('nav.tabs a').allTextContents();
+  expect(tabs.length, 'the premise: the page tabs are drawn').toBeGreaterThan(0);
+  expect(tabs.filter((t) => /firewall/i.test(t)), tabs.join(', ')).toEqual([]);
+  const content = page.locator('#content');
+  for (const role of ['tab', 'link', 'button']) {
+    await expect(content.getByRole(role, { name: /^firewall/i }), `a ${role} named Firewall`).toHaveCount(0);
+  }
+});
