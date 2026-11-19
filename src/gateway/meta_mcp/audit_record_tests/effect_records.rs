@@ -318,3 +318,84 @@ async fn a_replay_with_no_stored_facts_records_no_declared_effect() {
     assert!(d.get("declared_effect").is_none(), "{d}");
     assert!(d.get("declared_effect_source").is_none(), "{d}");
 }
+
+/// A value the SQL scan flags at medium severity, so the default firewall
+/// warns and the call goes through.
+const SQL_PLANT: &str = "x' OR 1=1";
+
+/// `gateway` with the request firewall attached at its defaults.
+fn with_default_firewall(gateway: &mut MetaMcp) {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    let scanner = Firewall::from_config(FirewallConfig::default(), None);
+    gateway.set_firewall(Some(Arc::new(scanner)));
+}
+
+/// `read` with the planted value in its arguments, under `retry`.
+async fn planted_read(gateway: &MetaMcp, retry: &crate::protocol::mrtr::RetryFields) {
+    let who = api_key_caller();
+    let base = context(&AllowAll, &who);
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext { retry, ..base };
+    let invoke = json!({"server": "alpha", "tool": "read", "arguments": {"q": SQL_PLANT}});
+    let _ = gateway.invoke_tool(&invoke, None, &caller).await;
+}
+
+fn lists_the_plant(decision: &Value) -> bool {
+    let sql =
+        json!({"scan_type": "sql_injection", "severity": "medium", "location": "request_args"});
+    decision["request_findings"]
+        .as_array()
+        .is_some_and(|found| found.contains(&sql))
+}
+
+/// A response-cache hit sends nothing, yet its record lists what its own
+/// arguments raise, as the fresh call before it did.
+#[tokio::test]
+async fn a_response_cache_hit_records_its_arguments_findings() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let (mut gateway, sent) = listing(Some(true), &dir);
+    gateway.default_cache_ttl = Duration::from_secs(600);
+    gateway.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    with_default_firewall(&mut gateway);
+    planted_read(&gateway, &crate::protocol::mrtr::NO_RETRY).await;
+    planted_read(&gateway, &crate::protocol::mrtr::NO_RETRY).await;
+    assert_eq!(sent.load(Ordering::SeqCst), 1, "premise: one send, one hit");
+    let rows = records(&dir);
+    let [fresh, hit] = rows.as_slice() else {
+        panic!("two records: {rows:?}");
+    };
+    assert!(lists_the_plant(&fresh["decision"]), "premise: {fresh}");
+    assert_eq!(
+        hit["decision"]["decided"], "cache_hit_not_redecided",
+        "{hit}"
+    );
+    assert!(lists_the_plant(&hit["decision"]), "{hit}");
+}
+
+/// An idempotency replay sends nothing, yet its record lists what its own
+/// arguments raise.
+#[tokio::test]
+async fn an_idempotency_replay_records_its_arguments_findings() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let (mut gateway, sent) = listing(Some(false), &dir);
+    let store = Arc::new(crate::idempotency::IdempotencyCache::new());
+    gateway.enable_idempotency(store, Duration::from_secs(600));
+    with_default_firewall(&mut gateway);
+    let keyed = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("findings-replay".to_owned()),
+        ..Default::default()
+    };
+    planted_read(&gateway, &keyed).await;
+    planted_read(&gateway, &keyed).await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        1,
+        "premise: one send, one replay"
+    );
+    let rows = records(&dir);
+    let [fresh, replay] = rows.as_slice() else {
+        panic!("two records: {rows:?}");
+    };
+    assert!(lists_the_plant(&fresh["decision"]), "premise: {fresh}");
+    assert_eq!(replay["decision"]["decided"], "replayed", "{replay}");
+    assert!(lists_the_plant(&replay["decision"]), "{replay}");
+}
