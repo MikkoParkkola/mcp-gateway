@@ -296,6 +296,11 @@ const HURRY_LINES: [&str; 2] = ["hurrying the stop", "shutdown hurried by a sign
 /// only the outer's own sweep can end what the inner started.
 const STALL_PAST_THE_NEED: Duration = Duration::from_secs(3);
 
+/// An inner stop total longer than the parent's whole plan. With a short one
+/// (8 s) the inner ends its leaf by itself about 2 s after its stdin closes,
+/// before the parent's SIGTERM is due, and the nested need is never in play.
+const INNER_OUTLASTS_THE_PLAN: Duration = Duration::from_secs(30);
+
 /// Prints "<pid> <wall-clock ns>" the moment each given pid exits, through a
 /// pidfd each (Linux), so a stop's timeline is read without polling. A pid
 /// already gone when the watcher starts prints "<pid> gone-before".
@@ -577,7 +582,7 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
 async fn measure_one_nested_stop_for_the_margin() {
     run_with(
         HTTP_MINIMUM,
-        Duration::from_secs(8),
+        INNER_OUTLASTS_THE_PLAN,
         &["leaf"],
         During::Watch,
     )
@@ -593,7 +598,7 @@ async fn measure_one_nested_stop_for_the_margin() {
 async fn a_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
     run_with(
         HTTP_MINIMUM,
-        Duration::from_secs(8),
+        INNER_OUTLASTS_THE_PLAN,
         &["leaf"],
         During::Stall(STALL_PAST_THE_NEED),
     )
