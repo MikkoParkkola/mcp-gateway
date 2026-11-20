@@ -8,6 +8,8 @@ heading are spared that rule, never the duplicate rule:
 - a section dated `Unreleased`;
 - the section for Cargo.toml's `[package] version`, the release being prepared,
   whose tag is cut only after its pull request lands.
+Any other `## [` heading (a typo such as `## [v1.2.0]`) fails, since neither rule
+would see it.
 
 Run from the repository root with the tags fetched (CI checks out with
 fetch-depth 0). A checkout without tags fails loudly on every section rather
@@ -28,8 +30,14 @@ def problems(changelog, tags, prepared):
     seen_at = {}
     found = []
     for number, line in enumerate(changelog.splitlines(), 1):
-        heading = VERSION_HEADING.fullmatch(line.rstrip())
+        line = line.rstrip()
+        heading = VERSION_HEADING.fullmatch(line)
         if heading is None:
+            # Any other `## [` heading would escape both rules unseen.
+            if line.startswith("## [") and line != "## [Unreleased]":
+                found.append(
+                    f"CHANGELOG.md:{number}: heading is neither [Unreleased] nor a version section: {line}"
+                )
             continue
         version, dated = heading.groups()
         if version in seen_at:
