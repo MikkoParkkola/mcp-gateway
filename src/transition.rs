@@ -160,6 +160,22 @@ impl TransitionTracker {
         known || self.distinct_pairs.load(Ordering::Relaxed) < max_pairs
     }
 
+    /// Every learned pair and its count. A router test compares two snapshots
+    /// of this map; the seeded pairs stay, and one admitted step adds one.
+    #[cfg(test)]
+    pub(crate) fn pair_counts_for_test(&self) -> std::collections::BTreeMap<(String, String), u64> {
+        let mut counts = std::collections::BTreeMap::new();
+        for outer in self.transitions.iter() {
+            for inner in outer.value().iter() {
+                counts.insert(
+                    (outer.key().clone(), inner.key().clone()),
+                    inner.value().load(Ordering::Relaxed),
+                );
+            }
+        }
+        counts
+    }
+
     /// Transitions out of `from_tool`: `(all successors, to_tool only)`.
     ///
     /// One pass that reads each counter once, so the pair is a consistent

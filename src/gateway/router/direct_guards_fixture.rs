@@ -290,7 +290,9 @@ pub(crate) use quota::Minting;
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
-pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
+pub(crate) use quota::{
+    fixture_firewalled_budget_built, fixture_firewalled_tenant, fixture_propagating_budgeted,
+};
 pub(crate) use quota::{
     fixture_propagating, fixture_propagating_logged, fixture_propagating_signed,
 };
@@ -365,6 +367,9 @@ thread_local! {
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
     static BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Distinct tenants per window when the next fixture arms the tenant guard.
+    /// `None` leaves the guard off, which is how every other fixture builds it.
+    static TENANT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Relay detection keeps every k-gram in the next fixture built here.
     static EVERY_KGRAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -525,6 +530,16 @@ async fn fixture_inner(
                 max_calls_per_window: BUDGET.with(std::cell::Cell::get),
                 window_secs: 3_600,
             },
+            tenant_guard: TENANT.with(std::cell::Cell::get).map_or_else(
+                crate::security::firewall::tenant_guard::TenantGuardConfig::default,
+                |max_tenants| crate::security::firewall::tenant_guard::TenantGuardConfig {
+                    enabled: true,
+                    max_tenants_per_window: max_tenants,
+                    window_secs: 3_600,
+                    arg_keys: vec!["tenant".to_string()],
+                    ..crate::security::firewall::tenant_guard::TenantGuardConfig::default()
+                },
+            ),
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
