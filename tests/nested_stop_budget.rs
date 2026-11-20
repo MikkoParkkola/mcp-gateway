@@ -133,7 +133,7 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     std::fs::write(
         root.join(format!("{child}.py")),
         format!(
-            "import os, sys\nwith open('{child}.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n"
+            "import os, sys\nwith open('{child}.pid', 'w') as f: f.write(str(os.getpid()))\nlog = os.open('{child}.log', os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)\nos.dup2(log, 2)\nos.execv(sys.argv[1], sys.argv[1:])\n"
         ),
     )
     .expect("chain launcher");
@@ -152,13 +152,14 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     );
     save(root, &format!("{name}.yaml"), &config)
 }
-/// The outer gateway's log, then the inner gateway's own (its stderr goes to `inner.log`),
-/// so a red row prints both stops.
+/// The outer gateway's log, then each nested gateway's own (a launcher sends its stderr to
+/// `<name>.log`), so a red row prints every stop.
 fn logs(root: &Path) -> String {
     let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap_or_default();
     format!(
-        "{}\n--- inner.log ---\n{}",
+        "{}\n--- middle.log ---\n{}\n--- inner.log ---\n{}",
         read("gateway.log"),
+        read("middle.log"),
         read("inner.log")
     )
 }
@@ -777,6 +778,21 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
 /// Red if a gateway-child's leaves outlive the stop (the sweep before the kill is missing).
 #[tokio::test]
 async fn a_two_level_hurried_stop_leaves_no_leaf() {
+    two_level_hurried_stop(None).await;
+}
+
+/// The same hurried stop, but the inner is stopped (SIGSTOP) as its signal line
+/// lands and held there past its nested need, so it ends nothing by itself: only
+/// the outer's descendant sweep can end its leaves and their children.
+/// Fails when that sweep no longer ends what a killed gateway-backend started.
+#[tokio::test]
+async fn a_hurried_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
+    two_level_hurried_stop(Some(STALL_PAST_THE_NEED)).await;
+}
+
+/// EOF, then a second signal, to a stdio outer whose backend is a gateway with two
+/// leaves; given `stall`, the inner is frozen on its signal line for that long.
+async fn two_level_hurried_stop(stall: Option<Duration>) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path();
     let leaves = ["leaf_a", "leaf_b"];
@@ -851,6 +867,8 @@ async fn a_two_level_hurried_stop_leaves_no_leaf() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    // tree[1] is the inner gateway's pid.
+    let freeze = stall.map(|hold| freeze_once_hurried(root, tree[1], hold));
     let hurried_at = Instant::now();
     sigterm(pid);
     // Observation time, not a watchdog: the outer kills at ~300 ms; allow
@@ -871,6 +889,13 @@ async fn a_two_level_hurried_stop_leaves_no_leaf() {
         .await
         .expect("outer exit deadline")
         .expect("outer exit");
+    if let Some(freeze) = freeze {
+        assert!(
+            freeze.await.expect("the freeze task"),
+            "the inner never logged that it was told to hurry, so nothing was stalled\n{}",
+            logs(root)
+        );
+    }
     reaped.reap().await;
     std::mem::forget(cleanup);
 }
