@@ -595,6 +595,8 @@ def self_test() -> int:
         ("tripwire job, unconditional swap before the build", job(swap, full, tw), True, 0),
         ("tripwire job, no library build and no swap", job(step("cargo test --test public_claims_validation"), tw), False, 1),
         ("tripwire job, swap only after the build", job(full, swap, tw), True, 2),
+        ("tripwire job, no library build, swap first", job(swap, tw), False, 0),
+        ("tripwire job, tripwire before the build it should measure", job(swap, tw, full), True, 1),
         ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
