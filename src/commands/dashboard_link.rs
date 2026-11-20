@@ -59,7 +59,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
     }
 }
 
-/// The gateway to ask: `--url` when given, otherwise the listener the config
+/// The gateway to ask: `--gateway` (or `MCP_GATEWAY_URL`) when given, otherwise the listener the config
 /// describes (`https` when it serves TLS).
 ///
 /// Unlike `stats`, a config that fails to load is an error, not a fallback to
@@ -68,7 +68,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
 ///
 /// # Errors
 ///
-/// The config load failure, when no `--url` was given.
+/// The config load failure, when no `--gateway` was given.
 pub fn dashboard_link_base(
     url: Option<String>,
     flags: DashboardLinkTls,
@@ -81,7 +81,7 @@ pub fn dashboard_link_base(
         (None, None) => None,
         _ => return Err("--client-cert and --client-key go together".to_string()),
     };
-    // `--url` describes the target: no config is read, so its trust anchor
+    // `--gateway` describes the target: no config is read, so its trust anchor
     // is `--ca-cert` or the built-in roots.
     if let Some(url) = url {
         let ca = flags.ca_cert;
@@ -116,7 +116,7 @@ pub fn dashboard_link_base(
     }
     // The listener's own CA when none is named. It becomes the only root, so
     // a public CA cannot vouch for this name; a server certificate from a
-    // public CA is reached with `--url` instead.
+    // public CA is reached with `--gateway` instead.
     let ca = flags
         .ca_cert
         .or_else(|| (!mtls.ca_cert.is_empty()).then(|| PathBuf::from(&mtls.ca_cert)));

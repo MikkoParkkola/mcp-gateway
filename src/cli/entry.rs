@@ -431,7 +431,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Resolve the base URL the `stats` command should query when `--url` was
+/// Resolve the base URL the `stats` command should query when `--gateway` was
 /// not given explicitly.
 ///
 /// `stats` used to hardcode `http://127.0.0.1:39400` as its `--url` default,
@@ -443,7 +443,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
 /// `server.host`/`server.port` (plus `--port`/`--host` overrides) that
 /// `serve` binds to, so `stats` targets the gateway `--config` describes.
 ///
-/// An explicit `url` (the `--url` flag) always wins and is returned as-is.
+/// An explicit `url` (`--gateway`, or `MCP_GATEWAY_URL`) always wins and is returned as-is.
 fn resolve_stats_url(
     url: Option<String>,
     config_path: Option<&Path>,
