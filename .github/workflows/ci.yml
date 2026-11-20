@@ -672,15 +672,41 @@ jobs:
         # Selections and floors: scripts/ci/shard_tests.py.
         shard: [lib-a, lib-b, lib-c, int-a, int-b]
     steps:
+      # Depth 2: the decide step below diffs the merge commit against its first parent.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      # A lane pull request into the release line runs these legs only when its diff can behave
+      # differently on Windows (scripts/ci/os_sensitive_diff.py --windows-decide). Trains, pushes and
+      # pull requests into other bases always run them; the merge train judges every leg on the combined
+      # tree. Fail-open: an error, or this step failing (continue-on-error), leaves no "false", so the
+      # leg runs. The repository variable WINDOWS_LEGS_SWITCH set to "off" runs every leg on every lane.
+      - name: Decide whether this lane needs the Windows legs
+        id: decide
+        continue-on-error: true
+        shell: pwsh
+        env:
+          # The event and refs, as the decide step reads them.
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          # Same repository: a fork's pull request always runs.
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          # The merge commit's second parent must be this head, or the leg runs.
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          WINDOWS_LEGS_SWITCH: ${{ vars.WINDOWS_LEGS_SWITCH }}
+        run: python scripts/ci/os_sensitive_diff.py --windows-decide
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        if: ${{ steps.decide.outputs.run != 'false' }}
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ steps.decide.outputs.run != 'false' }}
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       # Every shard: the W-T6 rows can land in any of them.
       - name: Allow symlink creation
+        if: ${{ steps.decide.outputs.run != 'false' }}
         shell: pwsh
         run: >-
           New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
@@ -699,6 +725,7 @@ jobs:
       # pwsh, never Git Bash: MSYS2 enables backup/restore privilege on the
       # admin runner, which writes through a DACL deny (MIK-7749).
       - name: Shard suite
+        if: ${{ steps.decide.outputs.run != 'false' }}
         shell: pwsh
         run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}
       # The unoptimized exe must start. Clap's derived parser needs ~900 KB of
@@ -706,7 +733,7 @@ jobs:
       # every test that spawns the binary died before parsing its arguments.
       # int-a builds the binaries (`--bins`).
       - name: The debug exe starts
-        if: ${{ !cancelled() && matrix.shard == 'int-a' }}
+        if: ${{ !cancelled() && matrix.shard == 'int-a' && steps.decide.outputs.run != 'false' }}
         shell: bash
         run: |
           set +e
@@ -728,7 +755,7 @@ jobs:
       # lib-a: the rows are library tests, and that shard has the lib built.
       - name: Privileged owner-only rows
         id: privileged
-        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
+        if: ${{ !cancelled() && matrix.shard == 'lib-a' && steps.decide.outputs.run != 'false' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

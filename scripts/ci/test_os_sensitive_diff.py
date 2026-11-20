@@ -301,7 +301,7 @@ def main() -> int:
     def decide(repo: str, pr_head: str, **over) -> tuple[str, str]:
         out = Path(tempfile.mkdtemp()) / "out"
         env = {"EVENT": "pull_request", "BASE_REF": osd.WIN_BASE, "HEAD_REF": "ci/x", "SAME_REPO": "true",
-               "PR_HEAD": pr_head, "GITHUB_OUTPUT": str(out), **over}
+               "PR_HEAD": pr_head, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(out.with_name("sum")), **over}
         line = io.StringIO()
         with contextlib.redirect_stdout(line):
             got = osd.windows_decide(env, repo)
@@ -309,6 +309,11 @@ def main() -> int:
 
     repo, pr_head = make_pr({"b.rs": b"fn b() -> usize { 2 }\n"})
     row("decide: a neutral lane PR writes run=false", decide(repo, pr_head), ("run=false", "run=false\n"))
+    summary = Path(tempfile.mkdtemp()) / "sum"
+    with contextlib.redirect_stdout(io.StringIO()):
+        osd.windows_decide({"EVENT": "pull_request", "BASE_REF": osd.WIN_BASE, "HEAD_REF": "ci/x", "SAME_REPO": "true",
+                            "PR_HEAD": pr_head, "GITHUB_STEP_SUMMARY": str(summary)}, repo)
+    row("decide: a skipped leg says why in its summary", "run=false (the diff names nothing" in summary.read_text(), True)
     row("decide: a train runs", decide(repo, pr_head, HEAD_REF="train/1")[0], "run=true")
     row("decide: a merge commit that is not this PR's runs", decide(repo, "0" * 40)[0], "run=true")
     row("decide: the switch off runs", decide(repo, pr_head, WINDOWS_LEGS_SWITCH="off")[0], "run=true")

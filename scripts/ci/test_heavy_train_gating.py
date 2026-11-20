@@ -247,9 +247,51 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     return errors
 
 
+WIN_LEGS, WIN_CLIPPY, WIN_CHECK = "windows-shards", "windows-clippy", "windows-check"
+WIN_GATE = "steps.decide.outputs.run != 'false'"
+# Steps whose own guard must survive beside the gate: (a text in the step's name, the guard's parts).
+WIN_GUARDED = {"The debug exe starts": ("!cancelled()", "matrix.shard == 'int-a'"),
+               "Privileged owner-only rows": ("!cancelled()", "matrix.shard == 'lib-a'")}
+
+
+def windows_leg_errors(jobs: dict) -> list[str]:
+    """Windows legs on a lane pull request: a decide step right after checkout, failing open, and every later step
+    gated on it as well as on its own condition. Windows clippy is never gated; windows-check still expects every
+    Windows job (the train judges it from the base copy). Job-level routing is heavy_errors' (trains always run)."""
+    errors = []
+    steps = jobs.get(WIN_LEGS, {}).get("steps", [])
+    ids = [s.get("id") for s in steps]
+    if "decide" not in ids:
+        return [f"{WIN_LEGS}: no decide step"]
+    at = ids.index("decide")
+    if at != 1 or "actions/checkout" not in str(steps[0].get("uses", "")):
+        errors.append(f"{WIN_LEGS}: the decide step is not the first step after checkout")
+    if int((steps[0].get("with") or {}).get("fetch-depth", 1)) < 2:
+        errors.append(f"{WIN_LEGS}: checkout lacks fetch-depth 2, so the merge commit's first parent is missing")
+    decide = steps[at]
+    if decide.get("continue-on-error") is not True:
+        errors.append(f"{WIN_LEGS}: the decide step does not continue on error (a failed decision must run the leg)")
+    if "os_sensitive_diff.py --windows-decide" not in str(decide.get("run", "")):
+        errors.append(f"{WIN_LEGS}: the decide step does not run os_sensitive_diff.py --windows-decide")
+    for s in steps[at + 1:]:
+        cond, name = str(s.get("if", "")), str(s.get("name") or s.get("uses", "?"))
+        if WIN_GATE not in cond:
+            errors.append(f"{WIN_LEGS}: step '{name}' is not gated on the decide step")
+        for label, parts in WIN_GUARDED.items():
+            if label in name and not all(p in cond for p in parts):
+                errors.append(f"{WIN_LEGS}: step '{name}' lost its own guard {parts}")
+    if "steps.decide" in json.dumps(jobs.get(WIN_CLIPPY, {})):
+        errors.append(f"{WIN_CLIPPY}: gated on a decide step; Windows clippy runs on every lane pull request")
+    expects = set(str(next((s.get("env", {}).get("ROLLUP_EXPECTS", "") for s in jobs.get(WIN_CHECK, {}).get(
+        "steps", []) if "ROLLUP_EXPECTS" in s.get("env", {})), "")).split())
+    if not {WIN_LEGS, WIN_CLIPPY} <= expects:
+        errors.append(f"{WIN_CHECK}: ROLLUP_EXPECTS must name {WIN_LEGS} and {WIN_CLIPPY}")
+    return errors
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    errors = heavy_errors(jobs) + gate_errors(jobs) + gate_step_errors(jobs)
+    errors = heavy_errors(jobs) + gate_errors(jobs) + gate_step_errors(jobs) + windows_leg_errors(jobs)
     # Each mutant is caught by the case named beside it.
     def keeps_clause(job: str, clause: str):
         def mutate(j: dict) -> None:
@@ -323,6 +365,52 @@ def main() -> int:
             (ci / "check_needs.py").write_text(broken)
             if expected not in gate_step_errors(jobs, Path(tree)):
                 errors.append(f"self-test: an allowance for any result was not caught by: {expected}")
+    # The Windows legs' checks, each shown to catch what it guards.
+    def win_step(j: dict, text: str) -> dict:
+        return next(s for s in j[WIN_LEGS]["steps"] if text in str(s.get("name", "")))
+
+    def ungate(j: dict) -> None:
+        st = win_step(j, "Shard suite")
+        st["if"] = str(st.get("if", "")).replace(WIN_GATE, "true")
+
+    def replace_guard(j: dict) -> None:
+        win_step(j, "Privileged owner-only rows")["if"] = "${{ " + WIN_GATE + " }}"
+
+    def no_continue(j: dict) -> None:
+        win_step(j, "Decide")["continue-on-error"] = False
+
+    def gate_clippy(j: dict) -> None:
+        j[WIN_CLIPPY]["steps"][-1]["if"] = "${{ " + WIN_GATE + " }}"
+
+    def drop_expect(j: dict) -> None:
+        for s in j[WIN_CHECK]["steps"]:
+            if "ROLLUP_EXPECTS" in s.get("env", {}):
+                s["env"]["ROLLUP_EXPECTS"] = WIN_CLIPPY
+
+    def shallow(j: dict) -> None:
+        j[WIN_LEGS]["steps"][0]["with"] = {}
+
+    for label, (mutate, expected) in {
+        "a later step not gated": (ungate, f"{WIN_LEGS}: step 'Shard suite' is not gated on the decide step"),
+        "the privileged guard replaced by the gate": (
+            replace_guard, f"{WIN_LEGS}: step 'Privileged owner-only rows' lost its own guard "
+                           f"{WIN_GUARDED['Privileged owner-only rows']}"),
+        "a decide step that fails the leg": (
+            no_continue, f"{WIN_LEGS}: the decide step does not continue on error (a failed decision must run the leg)"),
+        "Windows clippy gated": (
+            gate_clippy, f"{WIN_CLIPPY}: gated on a decide step; Windows clippy runs on every lane pull request"),
+        "windows-check forgetting the legs": (drop_expect, f"{WIN_CHECK}: ROLLUP_EXPECTS must name {WIN_LEGS} and {WIN_CLIPPY}"),
+        "a shallow checkout": (
+            shallow, f"{WIN_LEGS}: checkout lacks fetch-depth 2, so the merge commit's first parent is missing"),
+    }.items():
+        mutated = copy.deepcopy(jobs)
+        try:
+            mutate(mutated)
+        except (KeyError, StopIteration) as missing:
+            errors.append(f"self-test: '{label}' could not be applied: no {missing!r}")
+            continue
+        if expected not in windows_leg_errors(mutated):
+            errors.append(f"self-test: '{label}' was not caught by: {expected}")
     for e in errors:
         print(f"heavy-gating: {e}", file=sys.stderr)
     if not errors:

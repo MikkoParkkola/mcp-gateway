@@ -295,13 +295,15 @@ def windows_decide(env: dict, repo: str = ".") -> str:
         verdict_, why = "run", f"could not decide ({type(e).__name__}: {e}); the leg runs"
     line = f"run={'false' if verdict_ == 'skip' else 'true'}"
     print(f"{line}\n{why}")
-    out = env.get("GITHUB_OUTPUT")
-    if out:
+    for key, text in (("GITHUB_OUTPUT", line), ("GITHUB_STEP_SUMMARY", f"Windows leg: {line} ({why})")):
+        path = env.get(key)
+        if not path:
+            continue
         try:
-            with open(out, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(text + "\n")
         except OSError as e:  # no output written reads as "not false": the leg runs
-            print(f"could not write {out} ({e}); the leg runs")
+            print(f"could not write {key} ({e}); the leg runs")
     return line
 
 
