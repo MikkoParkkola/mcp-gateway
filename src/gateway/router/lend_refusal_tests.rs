@@ -114,7 +114,7 @@ async fn gateway_in(
 async fn gateway_named(
     name: &str,
     url: String,
-    mint: FixedMint,
+    mint: impl IdentityPropagation + 'static,
     mode: crate::config::InputSchemaEnforcement,
 ) -> (
     axum::Router,

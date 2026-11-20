@@ -5,12 +5,14 @@
 //! retryable "temporarily unavailable" a merely cold slot gets.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{BACKEND, FixedMint, TOOL, gateway_in, peer, post_mcp, task_request};
+use super::{
+    BACKEND, FixedMint, TOOL, gateway_in, gateway_named, peer, post_mcp, task_request,
+};
 
 /// The literal the live routes' refusal carries (`assert_meta_refusal`).
 const REFUSAL: &str = "this call carried none";
@@ -161,4 +163,253 @@ async fn a_task_read_whose_fill_the_lender_refuses_answers_the_refusal() {
     );
     assert_refusal(&answer, "R1");
     assert_eq!(gw.sent.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// R2 (TASKREAD.1, a read after a read): inside the lease the settled read
+/// took, a second read answers the same refusal from what was recorded, and
+/// the lender is not asked again: its count stays at the first read's.
+/// Today the second read answers retryable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_read_inside_the_lease_answers_the_recorded_refusal() {
+    let gw = refusing().await;
+    let id = gw.create_task().await;
+    gw.await_refusals(2).await;
+    let first = gw.settled_read(&id).await;
+    assert_eq!(
+        first.refusals_after,
+        first.refusals_before + 1,
+        "premise: the settled read's own fill reached the lender: {}",
+        first.answer
+    );
+    let second = gw.read_task(&id).await;
+    assert_refusal(&second, "R2");
+    assert_eq!(
+        gw.lender_refusals(),
+        first.refusals_after,
+        "R2: the second read did not ask the lender again"
+    );
+}
+
+/// R3 (TASKREAD.1 after the lease): the settled read takes the lease on
+/// the real clock; time is paused only then and moved one tick past the
+/// lease. The next read asks the lender again (count + 1) and answers the
+/// refusal that new fill met. Today it answers retryable.
+#[tokio::test]
+async fn a_read_after_the_lease_asks_the_lender_again_and_answers_the_refusal() {
+    let gw = refusing().await;
+    let id = gw.create_task().await;
+    gw.await_refusals(2).await;
+    let _first = gw.settled_read(&id).await;
+    tokio::time::pause();
+    tokio::time::advance(crate::gateway::meta_mcp::COLD_RETRY_BACKOFF + Duration::from_millis(1))
+        .await;
+    let before = gw.lender_refusals();
+    let after_lease = gw.read_task(&id).await;
+    assert_eq!(
+        gw.lender_refusals(),
+        before + 1,
+        "R3: the read after the lease asked the lender again: {after_lease}"
+    );
+    assert_refusal(&after_lease, "R3");
+}
+
+/// A mint that answers as `refusing` until `lend` is set and as `lending`
+/// after: the lender refuses a credential with no header, and lends one
+/// that carries a header, so the fill then reaches the peer.
+struct SwitchMint {
+    lend: Arc<AtomicBool>,
+    refusing: FixedMint,
+    lending: FixedMint,
+}
+
+#[async_trait::async_trait]
+impl super::IdentityPropagation for SwitchMint {
+    async fn propagate(
+        &self,
+        identity: &super::VerifiedIdentity,
+        backend: &super::BackendDescriptor,
+    ) -> Result<super::PropagatedCredential, super::PropagationError> {
+        let chosen = if self.lend.load(Ordering::SeqCst) {
+            &self.lending
+        } else {
+            &self.refusing
+        };
+        chosen.propagate(identity, backend).await
+    }
+}
+
+/// What the switchable peer does with a `tools/list`: answer it, fail it
+/// with a 503 (`fail`), or hold it while `hold` is set.
+#[derive(Clone, Default)]
+struct PeerControl {
+    fail: Arc<AtomicBool>,
+    hold: Arc<AtomicBool>,
+    lists: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
+}
+
+/// A loopback MCP peer driven by `control`; returns its URL.
+async fn switch_peer(control: PeerControl) -> String {
+    let route = axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+        let control = control.clone();
+        async move { answer_peer(&control, &request).await }
+    });
+    let app = axum::Router::new().route("/mcp", route);
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port");
+    let address = socket.local_addr().expect("its address");
+    tokio::spawn(async move { axum::serve(socket, app).await });
+    format!("http://{address}/mcp")
+}
+
+async fn answer_peer(control: &PeerControl, request: &Value) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let result = match request["method"].as_str() {
+        Some("tools/list") => {
+            control.lists.fetch_add(1, Ordering::SeqCst);
+            while control.hold.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            if control.fail.load(Ordering::SeqCst) {
+                return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            let schema = json!({"properties": {"q": {"type": "string"}}, "type": "object"});
+            json!({"tools": [{"inputSchema": schema, "name": TOOL}]})
+        }
+        Some("tools/call") => {
+            control.calls.fetch_add(1, Ordering::SeqCst);
+            json!({"content": [{"text": "sent", "type": "text"}]})
+        }
+        _ => json!({}),
+    };
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    axum::Json(json!({"id": id, "jsonrpc": "2.0", "result": result})).into_response()
+}
+
+/// A [`Refusing`] gateway whose lender refuses until the returned flag is
+/// set; after that the fill reaches the switchable peer, which the
+/// returned control can fail or hold.
+async fn switchable() -> (Refusing, Arc<AtomicBool>, PeerControl) {
+    let control = PeerControl::default();
+    let url = switch_peer(control.clone()).await;
+    let lend = Arc::new(AtomicBool::new(false));
+    let mint = SwitchMint {
+        lend: Arc::clone(&lend),
+        refusing: FixedMint {
+            expires_at: i64::MAX,
+            headers: Vec::new(),
+        },
+        lending: FixedMint {
+            expires_at: i64::MAX,
+            headers: vec![("authorization".to_owned(), "Bearer lent".to_owned())],
+        },
+    };
+    let closed = crate::config::InputSchemaEnforcement::Closed;
+    let (router, _dirs, (_, backend)) = gateway_named(BACKEND, url, mint, closed).await;
+    let gw = Refusing {
+        router,
+        backend,
+        sent: Arc::clone(&control.calls),
+        _dirs,
+    };
+    (gw, lend, control)
+}
+
+/// The retryable answer a merely cold slot gets: -32603 with
+/// `retryable` and `retry_after_ms`, and nothing of the lender's refusal.
+fn assert_retryable(answer: &Value, row: &str) {
+    assert_eq!(answer["error"]["code"], -32603, "{row}: {answer}");
+    let data = &answer["error"]["data"];
+    assert_eq!(data["retryable"], true, "{row}: {answer}");
+    assert!(
+        data["retry_after_ms"].is_u64(),
+        "{row}: the lease's retry time: {answer}"
+    );
+    assert!(
+        !answer.to_string().contains(REFUSAL),
+        "{row}: no refusal shows: {answer}"
+    );
+}
+
+/// R3b: the settled read's fill is refused (recorded); after the lease the
+/// lender lends again and the next fill fails at the peer (a 503, not an
+/// authorization refusal). That read answers retryable: a recorded refusal
+/// never outlives its own lease.
+#[tokio::test]
+async fn a_refusal_does_not_outlive_its_lease_when_the_next_fill_fails_otherwise() {
+    let (gw, lend, control) = switchable().await;
+    let id = gw.create_task().await;
+    gw.await_refusals(2).await;
+    let first = gw.settled_read(&id).await;
+    assert_eq!(
+        first.refusals_after,
+        first.refusals_before + 1,
+        "premise: the settled read's fill was refused: {}",
+        first.answer
+    );
+    lend.store(true, Ordering::SeqCst);
+    control.fail.store(true, Ordering::SeqCst);
+    tokio::time::pause();
+    tokio::time::advance(crate::gateway::meta_mcp::COLD_RETRY_BACKOFF + Duration::from_millis(1))
+        .await;
+    let after_lease = gw.read_task(&id).await;
+    assert_eq!(
+        gw.lender_refusals(),
+        first.refusals_after,
+        "R3b premise: the lender lent this time: {after_lease}"
+    );
+    assert_retryable(&after_lease, "R3b");
+}
+
+/// R4 (TASKREAD.3 control): the task's worker was refused, but the settled
+/// read's own fill is lent and fails at the peer (a 503). The read answers
+/// retryable with its lease's retry time, as today.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fill_failing_for_another_reason_still_answers_retryable() {
+    let (gw, lend, control) = switchable().await;
+    let id = gw.create_task().await;
+    gw.await_refusals(2).await;
+    lend.store(true, Ordering::SeqCst);
+    control.fail.store(true, Ordering::SeqCst);
+    let settled = gw.settled_read(&id).await;
+    assert_eq!(
+        settled.refusals_after, settled.refusals_before,
+        "R4 premise: the read's fill was lent, not refused: {}",
+        settled.answer
+    );
+    assert!(
+        control.lists.load(Ordering::SeqCst) > 0,
+        "R4 premise: the fill reached the peer: {}",
+        settled.answer
+    );
+    assert_retryable(&settled.answer, "R4");
+}
+
+/// R4, its second half: while one read's fill is held at the peer (its
+/// lease running), another read answers retryable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_during_another_readers_running_lease_answers_retryable() {
+    let (gw, lend, control) = switchable().await;
+    let gw = Arc::new(gw);
+    let id = gw.create_task().await;
+    gw.await_refusals(2).await;
+    lend.store(true, Ordering::SeqCst);
+    control.hold.store(true, Ordering::SeqCst);
+    let lists_before = control.lists.load(Ordering::SeqCst);
+    let holder = {
+        let (gw, id) = (Arc::clone(&gw), id.clone());
+        tokio::spawn(async move { gw.settled_read(&id).await })
+    };
+    let reached = tokio::time::timeout(Duration::from_secs(30), async {
+        while control.lists.load(Ordering::SeqCst) == lists_before {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "premise: the first read's fill reached the peer");
+    let during = gw.read_task(&id).await;
+    control.hold.store(false, Ordering::SeqCst);
+    let _ = holder.await;
+    assert_retryable(&during, "R4 running lease");
 }
