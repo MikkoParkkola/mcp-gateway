@@ -2224,6 +2224,17 @@ jobs:
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
         run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}" --compare merge-base
+      # A sub-second limit in test code names why a stall cannot flip its row,
+      # and the per-file count of unmarked ones only goes down.
+      - name: Sub-second test limits carry a marker
+        run: |
+          python3 scripts/dev/check_test_wallclock.py --self-test
+          python3 scripts/dev/check_test_wallclock.py
+      - name: The unmarked-limit ceilings do not rise against the base
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          python3 scripts/dev/check_test_wallclock.py --base "$base"
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
