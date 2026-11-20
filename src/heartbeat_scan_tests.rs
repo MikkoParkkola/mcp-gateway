@@ -808,9 +808,13 @@ fn privacy_text_states_the_facts() {
 /// Whether the chart's pod has nowhere to keep heartbeat state, judged over
 /// every template by allow-list, so a new container or volume type cannot
 /// slip past a deny list: one container image in the whole chart; one
-/// `readOnlyRootFilesystem` in the whole chart, set true; one mount in the
-/// whole chart, the config, read-only at /etc/mcp-gateway; and every volume a
-/// configMap. `templates` is (path under templates/, text) for each.
+/// `readOnlyRootFilesystem` in the whole chart, set true in the container's
+/// own securityContext (a pod-level one is not honoured); one mount in the
+/// whole chart, the config, read-only at /etc/mcp-gateway; every volume entry
+/// a configMap and nothing else; and no template setting `HOME` or
+/// `MCP_GATEWAY_CONFIG_DIR`, so the heartbeat's data dir stays under the
+/// image's home on the read-only root (a writable path such as /dev/shm is
+/// never where it writes). `templates` is (path under templates/, text).
 fn chart_pod_keeps_no_state(templates: &[(String, String)]) -> bool {
     let count = |needle: &str| -> usize {
         templates
@@ -825,15 +829,30 @@ fn chart_pod_keeps_no_state(templates: &[(String, String)]) -> bool {
     let volumes = deployment
         .split_once("\n      volumes:\n")
         .map_or("", |(_, rest)| rest);
-    let declared = volumes.matches("- name:").count();
+    // Each entry's own keys (the lines at the entry's key indent) must be
+    // exactly one configMap.
+    let entries: Vec<&str> = volumes.split("- name:").skip(1).collect();
+    let only_config_maps = !entries.is_empty()
+        && entries.iter().all(|entry| {
+            let keys: Vec<&str> = entry
+                .lines()
+                .skip(1)
+                .filter(|l| l.starts_with("          ") && !l.starts_with("           "))
+                .map(str::trim)
+                .collect();
+            keys == ["configMap:"]
+        });
     count("image:") == 1
         && count("readOnlyRootFilesystem:") == 1
-        && deployment.contains("readOnlyRootFilesystem: true")
+        && deployment.contains(
+            "          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true",
+        )
         && count("mountPath:") == 1
         && deployment.contains("mountPath: /etc/mcp-gateway\n              readOnly: true")
         && count("volumes:") == 1
-        && declared >= 1
-        && declared == volumes.matches("configMap:").count()
+        && only_config_maps
+        && count("name: HOME") == 0
+        && count("name: MCP_GATEWAY_CONFIG_DIR") == 0
 }
 
 /// DOC2. README's claim that a pod the Helm chart deploys sends nothing rests
@@ -895,6 +914,40 @@ fn the_chart_pod_has_nowhere_to_keep_heartbeat_state() {
             "          configMap:\n        - name: data\n          nfs:\n            path: /x\n",
         ),
         with("service.yaml", "\n", "\n# sidecar image: busybox\n"),
+        with(
+            "deployment.yaml",
+            "- name: MCP_GATEWAY_LOG_FORMAT",
+            "- name: HOME\n              value: /dev/shm\n            - name: MCP_GATEWAY_LOG_FORMAT",
+        ),
+        with(
+            "deployment.yaml",
+            "- name: MCP_GATEWAY_LOG_FORMAT",
+            "- name: MCP_GATEWAY_CONFIG_DIR\n              value: /dev/shm\n            - name: MCP_GATEWAY_LOG_FORMAT",
+        ),
+        with(
+            "deployment.yaml",
+            "          configMap:\n",
+            "          configMap:\n        - name: data\n          nfs:\n            server: configMap:\n",
+        ),
+        with(
+            "deployment.yaml",
+            "            readOnlyRootFilesystem: true\n",
+            "",
+        )
+        .into_iter()
+        .map(|(n, t)| {
+            let t = if n == "deployment.yaml" {
+                t.replacen(
+                    "        runAsNonRoot: true\n",
+                    "        runAsNonRoot: true\n        readOnlyRootFilesystem: true\n",
+                    1,
+                )
+            } else {
+                t
+            };
+            (n, t)
+        })
+        .collect(),
     ] {
         assert!(
             !chart_pod_keeps_no_state(&broken),
