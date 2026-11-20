@@ -428,11 +428,14 @@ fn stat_in(state: char) -> std::io::Result<String> {
     Ok(format!("4242 (sleep) {state} 1 4242 4242 0 -1"))
 }
 
+/// One `/proc/<pid>/stat` read, as the rows feed it to `ended_by`.
+type StatRead = fn() -> std::io::Result<String>;
+
 /// The reads in `reads`, then `last` for every read after them; the count of
 /// reads taken is kept in `taken`.
 fn reads_then(
     reads: Vec<std::io::Result<String>>,
-    last: fn() -> std::io::Result<String>,
+    last: StatRead,
     taken: &std::cell::Cell<usize>,
 ) -> impl FnMut() -> std::io::Result<String> + '_ {
     let mut reads = reads.into_iter();
@@ -493,7 +496,7 @@ fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
         start.elapsed()
     );
     assert!(taken.get() > 1, "the wait read once and slept to its bound");
-    let dead: [(char, fn() -> std::io::Result<String>); 3] = [
+    let dead: [(char, StatRead); 3] = [
         ('Z', || stat_in('Z')),
         ('X', || stat_in('X')),
         ('x', || stat_in('x')),
