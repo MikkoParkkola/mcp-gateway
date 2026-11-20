@@ -413,3 +413,130 @@ async fn a_read_during_another_readers_running_lease_answers_retryable() {
     let _ = holder.await;
     assert_retryable(&during, "R4 running lease");
 }
+
+/// The second per-user backend of R6, which the mint lends nothing for.
+const SECOND: &str = "lent-b";
+
+/// A mint that carries a credential only for `lends_to`'s audience: every
+/// other per-user backend's lender refuses the caller.
+struct AudienceMint {
+    lends_to: &'static str,
+}
+
+#[async_trait::async_trait]
+impl super::IdentityPropagation for AudienceMint {
+    async fn propagate(
+        &self,
+        identity: &super::VerifiedIdentity,
+        backend: &super::BackendDescriptor,
+    ) -> Result<super::PropagatedCredential, super::PropagationError> {
+        let lends = backend.audience == self.lends_to;
+        let headers = if lends {
+            vec![("authorization".to_owned(), "Bearer lent".to_owned())]
+        } else {
+            Vec::new()
+        };
+        let mint = FixedMint {
+            expires_at: i64::MAX,
+            headers,
+        };
+        mint.propagate(identity, backend).await
+    }
+}
+
+/// A second required per-user backend at `url`, under its own audience,
+/// so its lender judges the caller apart from the first backend's.
+fn second_backend(url: String) -> Arc<crate::backend::Backend> {
+    let per_user = super::IdentityPropagationConfig {
+        session_mode: super::SessionMode::PerUser,
+        audience: "https://lent-b.internal".to_owned(),
+        required: true,
+        strategy: super::PropagationStrategyKind::SignedAssertion,
+        token_exchange_scope: None,
+        token_exchange_endpoint: None,
+    };
+    let config = super::BackendConfig {
+        input_schema_enforcement: crate::config::InputSchemaEnforcement::Closed,
+        identity_propagation: Some(per_user),
+        transport: super::TransportConfig::Http {
+            protocol_version: None,
+            streamable_http: Some(true),
+            http_url: url,
+        },
+        ..super::BackendConfig::r2_off()
+    };
+    let failsafe = super::FailsafeConfig::default();
+    Arc::new(crate::backend::Backend::new(
+        SECOND,
+        config,
+        &failsafe,
+        Duration::from_secs(60),
+    ))
+}
+
+/// R6: a task of two targets on two per-user backends. Its first target
+/// is merely cold (another reader holds its lease, the fill held at the
+/// peer); its second target's fill was refused by that backend's lender.
+/// The read answers the refusal, not the first target's retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
+    let control = PeerControl::default();
+    let first_url = switch_peer(control.clone()).await;
+    let (second_url, second_sent) = peer().await;
+    let mint = AudienceMint {
+        lends_to: "https://lent.internal",
+    };
+    let closed = crate::config::InputSchemaEnforcement::Closed;
+    let (router, dirs, (meta, first)) = gateway_named(BACKEND, first_url, mint, closed).await;
+    let second = second_backend(second_url);
+    assert!(
+        meta.backends.for_test().register(Arc::clone(&second)),
+        "premise: the second backend registers"
+    );
+    let gw = Arc::new(Refusing {
+        router,
+        backend: second,
+        sent: second_sent,
+        _dirs: dirs,
+    });
+    let steps = json!([
+        {"arguments": {"q": "x"}, "tool": format!("{BACKEND}:{TOOL}")},
+        {"arguments": {"q": "y"}, "tool": format!("{SECOND}:{TOOL}")},
+    ]);
+    let params = json!({"arguments": {"chain": steps}, "name": "gateway_execute", "task": {}});
+    let (status, created) = post_mcp(&gw.router, &task_request("tools/call", params)).await;
+    let id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task handle: {status} {created}"))
+        .to_owned();
+    let _done = gw.settled_read(&id).await;
+    // The first target goes cold: the caller's slot there is evicted.
+    let binding = "alpha@https://lent.internal";
+    first.age_per_user_slot_for_test(binding, 400);
+    first.evict_idle_per_user_entries(Duration::from_secs(300));
+    assert!(
+        !first.holds_per_user_slot_for_test(binding),
+        "premise: the first backend no longer holds the caller's slot"
+    );
+    control.hold.store(true, Ordering::SeqCst);
+    let lists_before = control.lists.load(Ordering::SeqCst);
+    let holder = {
+        let (gw, id) = (Arc::clone(&gw), id.clone());
+        tokio::spawn(async move { gw.read_task(&id).await })
+    };
+    let reached = tokio::time::timeout(Duration::from_secs(30), async {
+        while control.lists.load(Ordering::SeqCst) == lists_before {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(
+        reached.is_ok(),
+        "premise: the holding reader's fill of the first target reached its peer"
+    );
+    let answer = gw.read_task(&id).await;
+    control.hold.store(false, Ordering::SeqCst);
+    let _ = holder.await;
+    assert_refusal(&answer, "R6");
+}
