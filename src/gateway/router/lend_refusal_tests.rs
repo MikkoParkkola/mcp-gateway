@@ -719,3 +719,6 @@ async fn a_stale_list_refreshed_under_a_lend_refusal_still_answers_from_the_cach
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// A stored task read whose cold fill the lender refuses.
+mod task_read;
