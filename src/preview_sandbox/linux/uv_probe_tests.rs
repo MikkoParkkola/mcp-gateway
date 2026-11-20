@@ -479,6 +479,7 @@ fn ended_by_a_failed_read_that_is_not_esrch_or_missing_keeps_waiting() {
 #[test]
 fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
     let taken = std::cell::Cell::new(0);
+    // limit-under-test (fires-only): the bound handed to ended_by; the row asserts the wait answers at it
     let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
     assert!(!ended_by(
         reads_then(Vec::new(), || stat_in('S'), &taken),
