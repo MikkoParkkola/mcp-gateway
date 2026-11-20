@@ -547,6 +547,11 @@ def self_test() -> int:
         return {"run": run, **fields}
 
     swap = {"uses": ACTION}
+    tw = step(f"{TRIPWIRE} 2048 \"$RUNNER_TEMP/memory-trend.txt\"", **{"if": "always()"})
+    # Train 64a: an integration coverage part drew a runner image with no swap, and its tripwire failed closed.
+    lib_only_swap = {**swap, "if": "startsWith(matrix.part, 'lib-')"}
+    cov_part = step("python3 scripts/ci/coverage_shards.py run 4 \"$PART\"")
+    full = step("cargo test --all-features")
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
         ("a build continued between cargo and test, no swap step",
@@ -563,7 +568,12 @@ def self_test() -> int:
         ("the mutant harness copied to the runner temp", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o'}), True, 1),
         ("the mutant harness plan step does not compile", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" plan'}), False, 0),
         ("the repo's mutant runner path", job({"run": "python3 scripts/ci/mutants/run_mutants.py run --platform linux"}), True, 1),
-        ("coverage parts gated to every lib part", job({**swap, "if": "startsWith(matrix.part, 'lib-')"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 0),
+        ("swap gated to lib parts leaves the int parts with none", job(lib_only_swap, cov_part), True, 1),
+        ("tripwire job, swap gated to lib parts", job(lib_only_swap, cov_part, tw), True, 2),
+        ("tripwire job, swap on hosted runners only", job({**swap, "if": "runner.environment == 'github-hosted'"}, full, tw), True, 1),
+        ("tripwire job, unconditional swap before the build", job(swap, full, tw), True, 0),
+        ("tripwire job, no library build and no swap", job(step("cargo test --test public_claims_validation"), tw), False, 1),
+        ("tripwire job, swap only after the build", job(full, swap, tw), True, 2),
         ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
