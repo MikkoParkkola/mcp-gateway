@@ -541,8 +541,8 @@ fn every_image_launch_sets_dnt() {
 
 /// DOC1. docs/PRIVACY.md states the facts the code fixes, written out here as
 /// literals: the five field names, the receiver URL, the stored place and
-/// time, the three-month retention, every opt-out and proxy name; and the old
-/// "sends nothing" promise is gone.
+/// time, the three-month retention, the 3.5 line's Windows exception, every
+/// opt-out and proxy name; and the old "sends nothing" promise is gone.
 #[test]
 fn privacy_text_states_the_facts() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -557,6 +557,7 @@ fn privacy_text_states_the_facts() {
         "https://telemetry.revaluator.ai/v1/heartbeat",
         "city name and a country code",
         "three months",
+        "3.5 builds for Windows send none",
         "DO_NOT_TRACK=1",
         "NO_TELEMETRY=1",
         "HTTPS_PROXY",

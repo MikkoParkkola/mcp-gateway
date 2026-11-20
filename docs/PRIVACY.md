@@ -75,7 +75,8 @@ browser makes. Those are reviewed by hand against this page.
 
 ## Daily heartbeat
 
-A released mcp-gateway server (from 4.0.0, and from 3.5.3 on the 3.5 line)
+A released mcp-gateway server (from 4.0.0, and from 3.5.3 on the 3.5 line,
+though 3.5 builds for Windows send none)
 sends at most one POST per UTC day for each data directory that persists to
 `https://telemetry.revaluator.ai/v1/heartbeat`. "Released" means any build
 without debug assertions, which the release profile is, including one you build
