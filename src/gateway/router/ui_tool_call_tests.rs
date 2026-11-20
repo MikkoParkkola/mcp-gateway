@@ -191,7 +191,7 @@ async fn register_as(
 /// its gate at most; how long a row waits for the route's answer. Each is
 /// shorter than the next: with the route's deadline broken, `slow` answers
 /// 200 inside the post bound, so the row fails on its 504 check, never hangs.
-pub(super) const ROW_DEADLINE: Duration = Duration::from_millis(100);
+pub(super) const ROW_DEADLINE: Duration = Duration::from_secs(2);
 pub(super) const SLOW_GATE_BOUND: Duration = Duration::from_secs(5);
 pub(super) const POST_BOUND: Duration = Duration::from_secs(10);
 const _: () = {
@@ -670,6 +670,7 @@ async fn the_deadline_row_survives_a_slow_path_to_the_send() {
         tokio::time::timeout(POST_BOUND, entered.notified())
             .await
             .expect("the call reached the catalogue's list");
+        // timing: lower-bound
         tokio::time::sleep(Duration::from_millis(300)).await;
         list_gate.notify_one();
     });

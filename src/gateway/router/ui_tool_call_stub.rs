@@ -88,7 +88,9 @@ impl Transport for Stub {
                     Some(gate) => {
                         let _ = tokio::time::timeout(SLOW_GATE_BOUND, gate.notified()).await;
                     }
-                    None => tokio::time::sleep(Duration::from_millis(400)).await,
+                    None => {
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                    }
                 }
                 Ok(JsonRpcResponse::success(
                     id,
