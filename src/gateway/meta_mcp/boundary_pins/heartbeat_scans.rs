@@ -487,6 +487,9 @@ fn assert_planted_launch_forms() {
 /// launch per form, without it, fails.
 #[test]
 fn every_image_launch_sets_dnt() {
+    // The planted launch forms read no repository file, so they run in the
+    // packaged crate too.
+    assert_planted_launch_forms();
     // Checkout-only, as PACKED.2: the unpacked crate ships `tests/` but not
     // `scripts/` or the workflows, so its walk would see a partial tree.
     if is_packaged_crate() {
@@ -524,7 +527,6 @@ fn every_image_launch_sets_dnt() {
             ));
         }
     }
-    assert_planted_launch_forms();
     // The judgement last, so a red run proves every control above first.
     assert!(
         missing.is_empty(),
