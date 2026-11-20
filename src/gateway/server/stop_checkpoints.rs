@@ -31,6 +31,10 @@ pub(super) const LAST_SAVE: Duration = Duration::from_millis(100);
 /// A save that reports whether it wrote its file.
 pub(super) type Save = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// What a pass's write reports as when its class's root is in a temp dir no
+/// test kept (`crate::spawn_keep::kept_at_spawn`).
+const CHECKPOINT_KIND: &str = "stop checkpoint";
+
 /// One class of state: its name in the log, the checkpoint save (skips while
 /// its file is being written) and the last pass's save (waits its turn).
 pub(super) struct Class {
@@ -107,10 +111,17 @@ async fn passes(classes: Arc<[Class]>) {
         info!("stop checkpoint pass={pass} started");
         for class in classes.iter() {
             let (name, save) = (class.name, Arc::clone(&class.checkpoint));
+            // Taken here, before the thread exists, while a test still holds
+            // its share of the dir; the write's thread holds it to its end.
+            let kept = class
+                .root
+                .as_deref()
+                .map(|root| crate::spawn_keep::kept_at_spawn(CHECKPOINT_KIND, root))
+                .unwrap_or_default();
             let spawned = std::thread::Builder::new()
                 .name(format!("stop checkpoint: {name}"))
                 .spawn(move || {
-                    if save() {
+                    if crate::spawn_keep::holding(kept, save.as_ref()) {
                         info!("stop checkpoint saved class={name} pass={pass}");
                     }
                 });
