@@ -404,12 +404,13 @@ def unreleased_fixed(text: str) -> list[str]:
 
 
 def hygiene_ids(text: str) -> list[str]:
-    """Bare tracker ids in `text` by the hygiene rule's own pattern, acceptance ids set aside."""
+    """Bare tracker ids in `text` by the hygiene rule's own patterns (scripts/dev/public-hygiene-patterns.sh):
+    acceptance ids (`ac_id_regex`) set aside first, as the checks' bare() does, then `ticket_id_regex`."""
     src = pathlib.Path(__file__).resolve().parents[2] / "scripts/dev/public-hygiene-patterns.sh"
-    line = next(x for x in src.read_text(encoding="utf-8").splitlines() if x.startswith("ticket_id_regex="))
-    pattern = line.split("=", 1)[1].strip("'").replace("[:alnum:]", "A-Za-z0-9")
-    bare = re.sub(T + r"[0-9]+\.[A-Z0-9]+\.[0-9]+[a-z]?", "", text)
-    return [m.group(0) for m in re.finditer(pattern, bare)]
+    defs = dict(x.split("=", 1) for x in src.read_text(encoding="utf-8").splitlines()
+                if x.startswith(("ticket_id_regex=", "ac_id_regex=")))
+    ticket, ac = (defs[k].strip("'").replace("[:alnum:]", "A-Za-z0-9") for k in ("ticket_id_regex", "ac_id_regex"))
+    return [m.group(0) for m in re.finditer(ticket, re.sub(ac, "", text))]
 
 
 class DropIds(unittest.TestCase):
@@ -420,6 +421,8 @@ class DropIds(unittest.TestCase):
             ("only an id", f"- a ({T}1).", "- a."),
             ("an id beside a PR number", f"- b (#12, {T}2).", "- b (#12)."),
             ("an id with a label", f"- c ({T}3 I2).", "- c."),
+            ("an id with a dotted label", f"- c2 ({T}31 MIN.2).", "- c2."),
+            ("an id beside words on one line", f"- w (not a config key, {T}32).", "- w (not a config key)."),
             ("ids split across a line break", f"- d ({T}4,\n  {T}5).", "- d."),
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
         ]
@@ -432,6 +435,15 @@ class DropIds(unittest.TestCase):
     def test_acceptance_ids_and_pr_numbers_stay(self):
         out = cf.assemble(BASE, {"21.fixed.md": f"- f ({T}7.AREA.1, #15, {T}8).\n- g {T}9.AREA.2 holds.\n"})
         self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", f"- f ({T}7.AREA.1, #15).", f"- g {T}9.AREA.2 holds."])
+        # What the fold keeps must pass the hygiene rule the release gate runs.
+        self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
+
+    def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
+        for fragment, line in ((f"- s found by {T}33.\n", 1), (f"- t (#34)\n- u (follow-up {T}35).\n", 2)):
+            with self.subTest(fragment=fragment):
+                with self.assertRaises(ValueError) as caught:
+                    cf.assemble(BASE, {"25.fixed.md": fragment})
+                self.assertIn(f"changelog.d/25.fixed.md:{line}: ", str(caught.exception))
 
     def test_an_id_in_the_unreleased_section_is_dropped_and_a_released_one_stays(self):
         changelog = BASE.replace("- existing fix (#2)", f"- existing fix (#2, {T}14)").replace("- old (#0)", f"- old (#0, {T}13)")
