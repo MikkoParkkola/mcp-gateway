@@ -48,7 +48,9 @@ pub(super) use repeat::RepeatMark;
 #[cfg(test)]
 pub(super) use repeat::{REPEAT_WINDOW, RepeatLedger};
 mod record;
-pub(super) use record::{GrantNote, select_records};
+pub(super) use record::GrantNote;
+#[cfg(test)]
+pub(super) use record::select_records;
 use record::{SlotGuard, spawn_write, write_records};
 
 /// The record kind a grant decision is written as.
