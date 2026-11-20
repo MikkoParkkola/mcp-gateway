@@ -87,7 +87,8 @@ pub fn dashboard_link_base(
         let ca = flags.ca_cert;
         return Ok((url, LinkTls { ca, identity }));
     }
-    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --gateway"))?;
+    let mut config =
+        load().map_err(|e| format!("could not load the config ({e}); pass --gateway"))?;
     if let Some(port) = port_override {
         config.server.port = port;
     }
