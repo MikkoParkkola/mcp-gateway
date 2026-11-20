@@ -190,6 +190,8 @@ pub mod semantic_search;
 pub mod simhash;
 #[doc(hidden)]
 pub mod skills;
+// What a detached writer holds so a test's temp dir outlives its writes; nothing in a release build.
+pub(crate) mod spawn_keep;
 #[doc(hidden)]
 pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.

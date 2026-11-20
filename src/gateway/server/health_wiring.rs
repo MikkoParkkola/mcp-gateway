@@ -251,8 +251,9 @@ impl Health {
     /// The shutdown step: a clean stop, then the save.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (history, path) = (Arc::clone(&self.history), self.path.clone());
-        (
+        ShutdownSave::new(
             "health save (health.json)",
+            path.clone(),
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     history.stop(now);
