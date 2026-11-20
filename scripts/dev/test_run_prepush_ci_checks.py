@@ -1105,6 +1105,26 @@ class GatePy(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [], "no row may run after the setup error")
 
+    def test_g5_main_exports_the_resolved_interpreter_to_every_row(self):
+        seen = []
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(runner, "yaml_status", return_value="PyYAML ok"), \
+                mock.patch.object(runner, "resolve_base_tip", return_value="0" * 40), \
+                mock.patch.object(runner, "resolve_gate_py", return_value=("/pinned/venv/bin/python", None)), \
+                mock.patch.object(runner, "run", side_effect=lambda *a, **k: seen.append(os.environ.get("GATE_PY"))
+                                  or runner.Report(text="", rc=0)):
+            os.environ.pop("GATE_PY", None)
+            rc = runner.main(["--merge-base", "HEAD"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen, ["/pinned/venv/bin/python"], "the rows must see the resolved interpreter")
+
+    def test_g6_a_helper_that_hangs_is_the_same_setup_error(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "SETUP_TIMEOUT_S", 1):
+            h = self.helper(tmp, "sleep 5\n")
+            py_path, err = runner.resolve_gate_py(['"$GATE_PY" a.py\t1\tclosed'], pathlib.Path(tmp), {}, helper=h)
+        self.assertIsNone(py_path)
+        self.assertIn("GATE_PY", err)
+
 
 if __name__ == "__main__":
     unittest.main()

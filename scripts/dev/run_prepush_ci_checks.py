@@ -488,7 +488,10 @@ def resolve_gate_py(lines, repo, environ=None, helper=None):
     if environ.get("GATE_PY") or not any('"$GATE_PY"' in line for line in lines):
         return None, None
     helper = helper or str(Path(repo) / "scripts/dev/gate-env-python.sh")
-    done = subprocess.run(["bash", helper], cwd=repo, capture_output=True, text=True, timeout=600)
+    try:
+        done = subprocess.run(["bash", helper], cwd=repo, capture_output=True, text=True, timeout=SETUP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, f"setup error: GATE_PY is not set and {helper} gave no answer in {SETUP_TIMEOUT_S} s; no check was run"
     found = done.stdout.strip()
     if done.returncode != 0 or not found:
         why = (done.stderr.strip() or f"{helper} exited {done.returncode}").splitlines()[-1]
