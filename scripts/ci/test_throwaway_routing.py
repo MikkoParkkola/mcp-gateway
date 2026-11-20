@@ -286,12 +286,91 @@ def throwaway_cargo_survives_a_suite_red(rc: list) -> None:
         rc.append(f"the cargo-after-suites rule missed half of its self-check: {found!r}")
 
 
+# A throwaway branch's own cargo selection (scripts/ci/throwaway_selection.py). The run text reads it in the step's
+# own shell, guards the empty case (an unguarded read of an empty string gives one empty argument), and hands it to
+# cargo in the slot before `--`; the memory-log wrapper wraps only the cargo line.
+SELECTION_CALL = "out=$(python3 scripts/ci/throwaway_selection.py args)"
+SELECTION_GUARD = 'if [ -n "$out" ]; then'
+CARGO_HEAD = 'scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast "${sel[@]}" -- '
+
+
+def selection_problems(name: str, run: str) -> list[str]:
+    """Problems in one throwaway job's `Run the tests` text."""
+    out = [f"{name}: 'Run the tests' does not read the selection ({SELECTION_CALL})"] * (SELECTION_CALL not in run)
+    out += [f"{name}: 'Run the tests' does not guard an empty selection"] * (SELECTION_GUARD not in run)
+    last = (run.strip().splitlines() or [""])[-1]
+    skips = last[len(CARGO_HEAD):].split() if last.startswith(CARGO_HEAD) else []
+    if len(skips) != 4 or skips[0] != "--skip" or skips[2] != "--skip":
+        out.append(f"{name}: the last line is not the wrapped cargo line with the selection before `--` and two skips")
+    return out
+
+
+def stub_cargo_argv(run: str, selection: "str | None") -> tuple:
+    """Run the step text (without the memory-log wrapper, a pass-through pinned by test_with_memory_log.py) under
+    `bash -e` in a temporary repository root holding the selection script and, when given, a selection file; a stub
+    cargo prints its argv. (exit status, cargo's argv or None when cargo never ran, stderr)."""
+    import json
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "scripts", "ci"))
+        shutil.copy(ROOT / "scripts/ci/throwaway_selection.py", os.path.join(root, "scripts", "ci"))
+        if selection is not None:
+            with open(os.path.join(root, "scripts", "ci", "throwaway-selection"), "w", encoding="utf-8") as f:
+                f.write(selection)
+        bin_dir = os.path.join(root, "bin")
+        os.makedirs(bin_dir)
+        with open(os.path.join(bin_dir, "cargo"), "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+        os.chmod(os.path.join(bin_dir, "cargo"), 0o755)
+        p = subprocess.run(["bash", "-e", "-c", run.replace("scripts/ci/with-memory-log.sh ", "")], cwd=root,
+                           capture_output=True, text=True,
+                           env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]})
+        return p.returncode, (json.loads(p.stdout) if p.stdout.strip() else None), p.stderr
+
+
+def throwaway_runs_its_named_selection(rc: list) -> None:
+    workflow = yaml.safe_load(open(ROOT / ".github" / "workflows" / "ci.yml", encoding="utf-8"))
+    pair = [job for job in workflow["jobs"].values() if job.get("name") == "Tests (throwaway)"]
+    runs = [next((s.get("run", "") for s in job.get("steps", []) if s.get("name") == "Run the tests"), "")
+            for job in pair]
+    if len(set(runs)) != 1:
+        rc.append("the two 'Tests (throwaway)' jobs do not run the same 'Run the tests' text")
+    for job, run in zip(pair, runs):
+        rc.extend(selection_problems(str(job.get("runs-on")), run))
+    # The rule itself fails on today's form: a cargo line with no selection read before it.
+    bare = "scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a --skip b"
+    if len(selection_problems("self-check", bare)) != 3:
+        rc.append(f"the selection rule missed part of its self-check: {selection_problems('self-check', bare)!r}")
+    # The release line never carries the file: the hygiene job runs the check on every non-throwaway head.
+    hygiene = workflow["jobs"].get("public-repo-hygiene", {}).get("steps", [])
+    if not any("python3 scripts/ci/throwaway_selection.py check-absent" in str(s.get("run", "")) for s in hygiene):
+        rc.append("public-repo-hygiene does not run throwaway_selection.py check-absent")
+    run = runs[0] if runs else ""
+    tail = run.strip().splitlines()[-1].split(" -- ", 1)[-1].split() if run.strip() else []
+    # S1 no file: cargo gets exactly today's arguments, the step's own skips after `--`.
+    got = stub_cargo_argv(run, None)
+    if got[:2] != (0, ["test", "--all-features", "--no-fail-fast", "--", *tail]):
+        rc.append(f"S1 no selection file: {got!r}")
+    # S2 a selection: its three arguments, in order, between --no-fail-fast and --.
+    got = stub_cargo_argv(run, "--test\nwriter_refusals\na=b\n")
+    if got[:2] != (0, ["test", "--all-features", "--no-fail-fast", "--test", "writer_refusals", "a=b", "--", *tail]):
+        rc.append(f"S2 a selection file: {got!r}")
+    # S3 a refused line: the step fails, cargo never runs, and stderr names the line.
+    got = stub_cargo_argv(run, "a;b\n")
+    if not (got[0] != 0 and got[1] is None and "a;b" in got[2]):
+        rc.append(f"S3 a refused selection: {got!r}")
+
+
 def main() -> int:
     rc: list[str] = []
     check("ci.yml", "Tests (throwaway)", rc)
     only_throwaway_tests(rc)
     heavy_jobs_skip_throwaway(rc)
     throwaway_cargo_survives_a_suite_red(rc)
+    throwaway_runs_its_named_selection(rc)
     check("mutants.yml", "Mutants (linux)", rc)
     for line in rc:
         print(f"routing: {line}", file=sys.stderr)
