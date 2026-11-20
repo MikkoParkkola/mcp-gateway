@@ -796,6 +796,8 @@ def built_parts_root_rows() -> None:
                     'echo "priv $(basename "$b") $on $*" >> "$LOG"\nexec "$b" "$@"\n')
         # The production prefix the root run uses, pinned before the stand-in replaces it.
         assert PRIVILEGE == ("sudo", "-E"), PRIVILEGE
+        # The rows below build their expected call from ROOT_ROWS, so pin its literal value here.
+        assert ROOT_ROWS == "config_persistence_access_tests::root::", ROOT_ROWS
         PRIVILEGE = ("sh", priv)
         SHARDS["macos"]["lib-b"] = [("parts", ["--lib"], [], 4)]
 
