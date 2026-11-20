@@ -328,6 +328,9 @@ fn with_default_firewall(gateway: &mut MetaMcp) {
     use crate::security::firewall::{Firewall, FirewallConfig};
     let scanner = Firewall::from_config(FirewallConfig::default(), None);
     gateway.set_firewall(Some(Arc::new(scanner)));
+    // A firewalled send stages relays, which refuse without a published config.
+    let published = crate::config_reload::LiveConfig::new(crate::config::Config::default());
+    gateway.set_live_config(Arc::new(published));
 }
 
 /// `read` with the planted value in its arguments, under `retry`.
