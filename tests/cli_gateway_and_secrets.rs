@@ -205,11 +205,14 @@ fn import_with_auth_key(auth_key: &str) -> (Output, Vec<String>) {
 
 #[test]
 fn auth_key_takes_each_reference_form() {
+    // The six forms the credential resolver reads, the last two included.
     for reference in [
         "env:API_TOKEN",
         "keychain:probe",
         "oauth:github",
         "file:/run/probe.key",
+        "{env.API_TOKEN}",
+        "API_TOKEN",
     ] {
         let (out, written) = import_with_auth_key(reference);
         assert_eq!(out.status.code(), Some(0), "{reference}: {}", stderr(&out));
@@ -222,36 +225,42 @@ fn auth_key_takes_each_reference_form() {
 
 #[test]
 fn auth_key_refuses_a_value_that_is_not_a_reference() {
-    // A plain value, an unrecognised scheme, a recognised scheme with nothing
-    // after it, and a recognised scheme that is not at the start.
+    // A plain value, an unrecognised scheme, a recognised scheme that is not
+    // at the start, and nothing at all.
     for value in [
         "plain-text-not-a-reference",
         "vault:probe",
-        "env:",
-        "keychain:",
         "x-env:NAME",
+        "",
     ] {
         let (out, written) = import_with_auth_key(value);
-        assert_eq!(out.status.code(), Some(2), "{value} was accepted");
+        assert_eq!(out.status.code(), Some(2), "{value:?} was accepted");
         let said = stderr(&out);
-        for form in ["env:", "keychain:", "oauth:", "file:"] {
-            assert!(
-                said.contains(form),
-                "the refusal does not name {form}: {said}"
-            );
-        }
+        assert!(
+            said.contains(AUTH_KEY_REFUSAL),
+            "not the one refusal sentence: {said}"
+        );
+        // The value, and the 20-character prefix a format error would quote.
+        let prefix: String = value.chars().take(20).collect();
         for (stream, text) in [("stderr", &said), ("stdout", &stdout(&out))] {
-            assert!(
-                !text.contains(value),
-                "the refusal repeats the value on {stream}: {text}"
-            );
+            for shown in [value, prefix.as_str()] {
+                assert!(
+                    shown.is_empty() || !text.contains(shown),
+                    "the refusal repeats {shown:?} on {stream}: {text}"
+                );
+            }
         }
         assert!(
             written.is_empty(),
-            "{value}: files were written: {written:?}"
+            "{value:?}: files were written: {written:?}"
         );
     }
 }
+
+/// What --auth-key says when given anything but a reference: every form the
+/// resolver reads, and never the value.
+const AUTH_KEY_REFUSAL: &str = "--auth-key takes a credential reference: env:NAME, keychain:NAME, \
+oauth:PROVIDER, file:PATH, {env.NAME} or a variable NAME";
 
 /// When no destination is given and the config cannot be read, the remedy
 /// names the one destination flag, not the old spelling.
