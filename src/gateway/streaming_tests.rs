@@ -184,6 +184,7 @@ async fn spawn_reaper_on_reaps_sessions_automatically() {
     let backends = Arc::new(BackendRegistry::new());
     let config = StreamingConfig {
         // Very short TTL and interval for the test
+        // limit-under-test (absorbed-by: HANG_BOUND): the reap is awaited, never a window
         session_ttl: Duration::from_millis(50),
         session_reaper_interval: Duration::from_millis(20),
         ..StreamingConfig::default()
@@ -226,6 +227,7 @@ async fn spawn_reaper_on_sweeps_the_session_lifecycle() {
 
     let backends = Arc::new(BackendRegistry::new());
     let config = StreamingConfig {
+        // limit-under-test (absorbed-by: HANG_BOUND): the sweep is awaited, never a window
         session_reaper_interval: Duration::from_millis(20),
         ..StreamingConfig::default()
     };
@@ -256,6 +258,7 @@ async fn the_reaper_fires_session_end_handlers_for_a_reaped_session() {
     lifecycle.register_session_end("record", move |id| seen.lock().push(id.to_owned()));
 
     let config = StreamingConfig {
+        // limit-under-test (absorbed-by: HANG_BOUND): the end announcement is awaited, no window
         session_reaper_interval: Duration::from_millis(20),
         session_ttl: Duration::from_millis(1),
         ..StreamingConfig::default()
@@ -292,6 +295,7 @@ async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
     // GIVEN
     let backends = Arc::new(BackendRegistry::new());
     let config = StreamingConfig {
+        // limit-under-test (fires-only): nothing waits on the tick; the row checks only for a panic
         session_reaper_interval: Duration::from_millis(10),
         ..StreamingConfig::default()
     };
@@ -307,43 +311,72 @@ async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
     // If we reach here without a panic, the reaper exited cleanly.
 }
 
+/// The idle limit the activity rows below reap with. They run on a paused
+/// clock, so a runner that stalls between the use and the reap cannot age the
+/// session past it.
+// limit-under-test (paused-clock): every row that reaps with it pauses the runtime clock
+const REAP_TTL: Duration = Duration::from_millis(50);
+
 /// MIK-7215.CONTROL.5, gap G2 (#2567): a hardened resume is activity. A session
 /// resumed after its TTL from creation, and reaped at once, survives.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_hardened_resume_keeps_a_busy_session_from_the_reaper() {
     let m =
         NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
     let owner = SessionOwner::Credential("alice".to_owned());
     let (id, receiver) = m.get_or_create_session_for(None, &owner);
     drop(receiver);
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::sleep(2 * REAP_TTL).await;
 
     assert!(m.resume_session_scoped(Some(&id), &owner, None).is_some());
+    // A real stall of twice the limit between the use and the reap: the
+    // runtime clock stands still while the thread blocks.
+    std::thread::sleep(2 * REAP_TTL);
 
     assert!(
-        m.reap_expired_sessions(Duration::from_millis(50))
-            .is_empty(),
+        m.reap_expired_sessions(REAP_TTL).is_empty(),
         "a session resumed just now is not idle"
     );
 }
 
 /// The direct backend route acts under a presented session without resuming
 /// its stream; that use is activity too.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_direct_backend_request_keeps_a_busy_session_from_the_reaper() {
     let m =
         NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
     let owner = SessionOwner::Credential("alice".to_owned());
     let (id, receiver) = m.get_or_create_session_for(None, &owner);
     drop(receiver);
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::sleep(2 * REAP_TTL).await;
 
     assert!(m.touch_if_owned(&id, &owner));
+    std::thread::sleep(2 * REAP_TTL);
 
     assert!(
-        m.reap_expired_sessions(Duration::from_millis(50))
-            .is_empty(),
+        m.reap_expired_sessions(REAP_TTL).is_empty(),
         "a session used just now is not idle"
+    );
+}
+
+/// The paused clock does move a session's age: once it passes the limit after
+/// the last use, the session is reaped. Without this the two rows above could
+/// pass by ignoring time altogether.
+#[tokio::test(start_paused = true)]
+async fn a_used_session_is_reaped_once_the_paused_clock_passes_the_limit() {
+    let m =
+        NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+    let owner = SessionOwner::Credential("alice".to_owned());
+    let (id, receiver) = m.get_or_create_session_for(None, &owner);
+    drop(receiver);
+    assert!(m.touch_if_owned(&id, &owner));
+
+    tokio::time::advance(2 * REAP_TTL).await;
+
+    assert_eq!(
+        m.reap_expired_sessions(REAP_TTL),
+        vec![id],
+        "an idle session past the limit is reaped"
     );
 }
 
@@ -750,6 +783,7 @@ async fn session_expiry_follows_a_paused_clock() {
         m.reap_expired_sessions(ttl).is_empty(),
         "premise: a new session is not expired"
     );
+    // limit-under-test (paused-clock): the advance moves only the runtime clock the row reads
     tokio::time::advance(ttl + Duration::from_millis(1)).await;
     let reaped = m.reap_expired_sessions(ttl);
     assert_eq!(

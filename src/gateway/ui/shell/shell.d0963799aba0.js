@@ -1298,7 +1298,7 @@ function draw(seq, held = null) {
     const current = () => seq === renderSeq && epoch === authEpoch;
     const loading = watchLoading(content, body, label, current);
     loadScreen(route.page).then(
-      () => accessSettled().then(() => { if (current()) draw(seq, { body, loading }); else loading.release(); }),
+      () => readyToRead().then(() => { if (current()) draw(seq, { body, loading }); else loading.release(); }),
       (err) => loading.after(() => {
         if (!current()) return;
         showBanner(content, failure(err, routeKey(route), () => render()));
@@ -1406,7 +1406,7 @@ function draw(seq, held = null) {
       content.removeAttribute('aria-busy');
     }));
   if (held) run();
-  else accessSettled().then(() => { if (current()) run(); else loading.release(); });
+  else readyToRead().then(() => { if (current()) run(); else loading.release(); });
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
@@ -1781,6 +1781,15 @@ let statusRead = null;
 const readStatus = () => (statusRead ??= loadWho());
 /** Settles when the first status attempt has (a failure or the deadline included): a screen reads after it. */
 const accessSettled = () => readStatus().then(() => {}, () => {});
+/** The first contentful paint, as one promise: once it is out, every later wait settles at once. */
+let painted = null;
+const paintOut = () => (painted ??= new Promise((ok) => afterFirstPaint(ok)));
+/**
+ * Settles when a screen may read: after the first contentful paint, then once access has settled. No
+ * page starts an /ui/api request before its first paint, the access read included: nothing the frame
+ * paints needs one, and /ui/overview/status is the first-paint budget's page.
+ */
+const readyToRead = () => paintOut().then(accessSettled);
 
 /**
  * Take a new `access`. A report, or the end of one, redraws so the sidebar, tabs,
@@ -1867,7 +1876,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.5abb0fe53753.js');
+    m = await import('/ui/assets/tooltip.04e4f1b0ef1f.js');
   } catch {
     return;
   }
@@ -2136,10 +2145,9 @@ function boot() {
   render();
   // Nothing the frame's first paint draws needs an /ui/api answer, so the boot reads
   // and the live stream start once that paint is out: on a slow link they would
-  // otherwise take round trips from the stylesheet and fonts. A screen's own data
-  // read is its content and still starts at render. /ui/overview/status starts no
-  // /ui/api request before first paint (the first-paint budget's page); a screen that
-  // lands there reads after paint, or the budget's rows catch it.
+  // otherwise take round trips from the stylesheet and fonts. A screen's own reads
+  // wait for that paint too (readyToRead), so no page, /ui/overview/status (the
+  // first-paint budget's page) included, starts an /ui/api request before it.
   // A signed-out user sees the sign-in prompt one paint later.
   afterFirstPaint(() => {
     openStream();
@@ -2161,9 +2169,13 @@ function boot() {
   });
 }
 
+/** How long the fallback below waits for a paint record before running `fn` anyway. */
+const PAINT_WAIT_MS = 1000;
+
 /**
- * Run `fn` once the first contentful paint is out. Without paint timing, or when
- * observing it throws, `fn` runs now, after the first render; either way it runs.
+ * Run `fn` once the first contentful paint is out. When a paint observer cannot be had,
+ * the timeline is read once a frame instead, and `fn` runs after the frame that shows the
+ * paint, or after PAINT_WAIT_MS where the browser records none; either way it runs.
  */
 function afterFirstPaint(fn) {
   try {
@@ -2174,7 +2186,13 @@ function afterFirstPaint(fn) {
       fn();
     }).observe({ type: 'paint', buffered: true });
   } catch {
-    fn();
+    const start = performance.now();
+    const check = () => {
+      const seen = performance.getEntriesByName?.('first-contentful-paint')?.length > 0;
+      if (seen || performance.now() - start > PAINT_WAIT_MS) setTimeout(fn);
+      else requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
   }
 }
 
