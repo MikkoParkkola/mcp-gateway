@@ -325,7 +325,8 @@ fn every_shutdown_save_construction_has_a_root_row() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir() {
                 walk(&path, found);
-            } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
+            } else if path.extension().is_some_and(|ext| ext == "rs") && !name.ends_with("tests.rs")
+            {
                 let text = std::fs::read_to_string(&path).expect("a source file");
                 let code = crate::test_source_text::sanitize(
                     &crate::test_source_text::production_text(&text),

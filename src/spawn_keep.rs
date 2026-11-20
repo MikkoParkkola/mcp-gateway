@@ -55,3 +55,19 @@ pub(crate) fn kept_at_spawn(kind: &'static str, path: &Path) -> Kept {
 pub(crate) fn kept_at_spawn(_kind: &'static str, _path: &Path) -> Kept {
     Kept
 }
+
+/// Run `work` on a detached writer's thread with `kept` held until it
+/// returns. Taking the keep as an argument moves it into the thread without
+/// a binding nobody reads.
+#[cfg(test)]
+pub(crate) fn holding<R>(kept: Kept, work: impl FnOnce() -> R) -> R {
+    let result = work();
+    drop(kept);
+    result
+}
+
+/// A release build holds nothing: `work` just runs.
+#[cfg(not(test))]
+pub(crate) fn holding<R>(Kept: Kept, work: impl FnOnce() -> R) -> R {
+    work()
+}
