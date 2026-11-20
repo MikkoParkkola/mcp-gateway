@@ -2,7 +2,7 @@ name: Writer root rows setup
 description: >-
   Prepares a runner for the shared writer's root rows. It adds group mcpg-g and
   the users mcpg-b and mcpg-c (mcpg-c a member of mcpg-g) with fixed ids, and on
-  Linux mounts a 16 MB ext4 image with ACLs switched off. It exports the
+  Linux mounts a ramfs directory that is checked to refuse POSIX ACLs. It exports the
   ACCESS_ROWS_* names the rows read; a row missing one fails at its first line.
 runs:
   using: composite
