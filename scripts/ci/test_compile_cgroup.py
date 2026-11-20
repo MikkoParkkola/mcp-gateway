@@ -817,11 +817,12 @@ sleep() {
   EPOCHREALTIME=$(awk -v now="$EPOCHREALTIME" -v by="$1" 'BEGIN { printf "%.6f", now + by }')
 }
 ''')
+        # An empty record: a gate that never sleeps then fails the equality below, not a file read.
+        (fixture.base / "sleeps").write_text("")
         fixture.start()
         done = fixture.finish()
         self.assertFalse(fixture.timed_out, "the gate did not finish under the row's clock")
         sleeps = [float(value) for value in (fixture.base / "sleeps").read_text().splitlines()]
-        self.assertTrue(sleeps)
         self.assertEqual(sleeps, [0.1], "the one poll sleep must be the 0.1 s left of the deadline, not the 20 s poll")
         self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_drain")
 
