@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absolute` while search still listed the tool. The package it named has never
   been published, and its npm scope belongs to an unrelated project, so the
   capability is removed rather than repointed. 3.5 now ships 118 built-in
-  capabilities.
+  capabilities. ([#5168](https://github.com/MikkoParkkola/mcp-gateway/pull/5168))
 
 ## [3.5.2] - 2026-10-26
 
