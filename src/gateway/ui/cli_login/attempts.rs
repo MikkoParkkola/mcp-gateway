@@ -93,10 +93,16 @@ impl Draws {
     pub(crate) fn production() -> Self {
         Self {
             code: Box::new(draw_code),
-            id: Box::new(crate::ids::new_v4),
+            id: Box::new(draw_id),
             secret: Box::new(|| crate::random_secret::random_secret("")),
         }
     }
+}
+
+/// The attempt id: a v4 UUID, called directly as the generator pins require
+/// (`random_secret_tests`), never passed on as a value.
+fn draw_id() -> uuid::Uuid {
+    crate::ids::new_v4()
 }
 
 /// Ten uniform symbols: 256 is a multiple of 32, so `% 32` adds no bias.
