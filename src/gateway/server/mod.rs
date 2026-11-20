@@ -12,6 +12,9 @@ mod support;
 // what the NEXT START does with the file, which is the startup check itself —
 // the same function the bind path calls, named here for the caller.
 pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
+// The test build's hooks into `run` (port 0, a shutdown trigger).
+#[cfg(test)]
+mod test_hooks;
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -306,6 +309,10 @@ pub struct Gateway {
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    /// The test build's hooks into `run` (the bound port, a shutdown
+    /// trigger); absent from a release build.
+    #[cfg(test)]
+    test_hooks: test_hooks::TestHooks,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -422,6 +429,8 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
+            #[cfg(test)]
+            test_hooks: test_hooks::TestHooks::default(),
         })
     }
 
@@ -1280,6 +1289,11 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        // A test that asked for port 0 learns the port here.
+        #[cfg(test)]
+        if let Some(port) = self.test_hooks.bound_port.take() {
+            let _ = port.send(listener.local_addr()?.port());
+        }
 
         log_startup_banner(
             &self.config,
@@ -1358,10 +1372,16 @@ impl Gateway {
         // Kept for a listener that fails before any signal: the background
         // tasks still need the broadcast before the teardown runs.
         let on_listener_error = shutdown_tx.clone();
+        #[cfg(test)]
+        let trigger = self.test_hooks.shutdown.take();
         let shutdown = {
             let fired = Arc::clone(&fired);
             async move {
+                #[cfg(not(test))]
                 shutdown_signal(shutdown_tx).await;
+                // A test build also stops on a test's trigger.
+                #[cfg(test)]
+                test_hooks::signal_or_trigger(shutdown_tx, trigger).await;
                 let _ = fired.set(tokio::time::Instant::now());
             }
         };
