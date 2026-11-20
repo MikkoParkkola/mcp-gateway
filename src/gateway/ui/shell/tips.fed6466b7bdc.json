@@ -101,9 +101,6 @@
    "todo.status.commit-4f2a91c-by-renovate-bot",
    "todo.status.network-until-you-firewall-it",
    "todo.status.ticked-writing-tools-start-unticked"
-  ],
-  "tools": [
-   "tools.actions.run-as"
   ]
  },
  "_pending_later": {
@@ -126,7 +123,8 @@
   "overview.status.slowest-5-last-hour": "Overview › Status: the KPI tiles' info tips",
   "overview.status.tools-agents-load": "Overview › Status: the KPI tiles' info tips",
   "overview.status.traffic": "Overview › Status: the flow map",
-  "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state"
+  "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state",
+  "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page"
  },
  "_pending_rows": [
   "access.actions.keys",

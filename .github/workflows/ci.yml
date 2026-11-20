@@ -200,6 +200,11 @@ jobs:
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
+      - name: Two clippy lints are found by text before a lint run
+        run: |
+          python3 scripts/dev/check_clippy_textlints.py --self-test
+          python3 scripts/dev/check_clippy_textlints.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -250,6 +255,11 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
+          python3 scripts/ci/test_lib_parts_cov.py
+          python3 scripts/ci/test_compile_cgroup.py
+          python3 scripts/ci/test_coverage_parts_wiring.py
+          python3 scripts/ci/test_coverage_union_merge.py
+          python3 scripts/ci/test_coverage_union.py
           python3 scripts/ci/test_memory_tripwire.py
           python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test
@@ -1912,6 +1922,10 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
+      # The self-check and the old-revision refusal read coverage_grade.sh's pinned SELF_REV; in this shallow CI
+      # checkout the test fetches that one commit itself (and fails, rather than skipping, if it cannot).
+      - name: Test the release coverage grade script
+        run: python3 scripts/release/test_coverage_grade.py
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
