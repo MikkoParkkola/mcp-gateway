@@ -113,10 +113,14 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
                     command.env_remove(name);
                 }
             }
-            // The bound port is read from an info-level banner, so an
-            // inherited filter keeps its own directives but may not hide it.
+            // The bound port is read from an info-level banner, and stdio
+            // sessions wait for an info-level ready line, so an inherited
+            // filter keeps its own directives but may not hide either.
             if let Ok(filter) = std::env::var("RUST_LOG") {
-                command.env("RUST_LOG", format!("{filter},{BANNER_TARGET}=info"));
+                command.env(
+                    "RUST_LOG",
+                    format!("{filter},{BANNER_TARGET}=info,{STDIO_READY_TARGET}=info"),
+                );
             }
         }
         Inherit::Nothing => {
@@ -180,6 +184,10 @@ where
 
 /// The module that logs the `Listening` banner [`logged_port`] reads.
 const BANNER_TARGET: &str = "mcp_gateway::gateway::server::support";
+
+/// The module that logs the ready line `stdio_session` waits for; a row
+/// derives it from the source file that logs the line.
+pub const STDIO_READY_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
 
 /// `server.port: 0` (or `-p 0`): the child binds an OS-chosen port and logs
 /// the one it got, so no port is picked here and dropped before the child
