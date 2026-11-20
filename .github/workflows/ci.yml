@@ -200,6 +200,11 @@ jobs:
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
+      - name: Two clippy lints are found by text before a lint run
+        run: |
+          python3 scripts/dev/check_clippy_textlints.py --self-test
+          python3 scripts/dev/check_clippy_textlints.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -1440,6 +1445,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
@@ -1496,6 +1505,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;

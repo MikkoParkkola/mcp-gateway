@@ -350,3 +350,68 @@ fn the_emitter_maps_write_failures() {
     }
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
+
+/// U2 (MIK-9764.JSONF.1, the JSON forms design D9): with `json` the gate also scans the decoded document. A token holding `"` or `\` is
+/// escaped by JSON, so the byte search alone cannot see it: each case first proves the raw token is absent from the
+/// bytes, then that the gate still refuses it in a nested object value, an array item and an object key (each
+/// alone), and that the same shapes without it pass.
+#[test]
+fn the_json_gate_scans_decoded_strings() {
+    let mut misses = Vec::new();
+    for token in ["tok\"quoted-0123456789", "tok\\slashed-0123456789"] {
+        let mut keyed = serde_json::Map::new();
+        keyed.insert(token.to_owned(), serde_json::json!(1));
+        let cases = [
+            (
+                "nested value",
+                serde_json::json!({"schema_version": 1, "a": {"b": format!("x{token}y")}}),
+            ),
+            (
+                "array item",
+                serde_json::json!({"schema_version": 1, "a": [1, token]}),
+            ),
+            (
+                "object key",
+                serde_json::json!({"schema_version": 1, "a": keyed}),
+            ),
+        ];
+        for (place, doc) in cases {
+            let bytes = format!("{doc}\n").into_bytes();
+            assert!(
+                !bytes.windows(token.len()).any(|w| w == token.as_bytes()),
+                "{place}: the raw token is in the bytes, so this case would not need the decoded scan"
+            );
+            let out = CliOutcome::success(bytes, "", true, &[token], StdoutRule::RefuseToken);
+            if !(out.exit() == CliExit::LocalFailure && out.stdout().is_empty()) {
+                misses.push(format!("{token:?} in a {place} passed: {:?}", out.exit()));
+            }
+        }
+        let clean = format!(
+            "{}\n",
+            serde_json::json!({"schema_version": 1, "a": {"b": "x"}, "c": ["y"], "d": {"k": 1}})
+        )
+        .into_bytes();
+        let out = CliOutcome::success(clean.clone(), "", true, &[token], StdoutRule::RefuseToken);
+        if (out.exit(), out.stdout()) != (CliExit::Ok, clean.as_slice()) {
+            misses.push(format!(
+                "{token:?}: a document without it was refused: {:?}",
+                out.stderr()
+            ));
+        }
+    }
+    let plain = b"https://gw.test/#k=tok-plain-0123456789\n".to_vec();
+    let out = CliOutcome::success(
+        plain,
+        "",
+        false,
+        &["tok-plain-0123456789"],
+        StdoutRule::RefuseToken,
+    );
+    if out.exit() != CliExit::LocalFailure {
+        misses.push(format!(
+            "text mode: the byte search passed a plain token: {:?}",
+            out.exit()
+        ));
+    }
+    assert!(misses.is_empty(), "{}", misses.join("\n"));
+}

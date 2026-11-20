@@ -51,12 +51,12 @@ const rows = (page) => page.locator('#content table.t tbody tr.tool');
 const search = (page) => page.getByRole('searchbox', { name: 'Search tools' });
 const server = (page) => page.getByRole('combobox', { name: 'Server' });
 
-test('T1: /ui/tools lands on Status with no Actions or Settings tab, and counts tools and servers', async ({ page }) => {
+test('T1: /ui/tools lands on Status, shows Actions next, and counts tools and servers', async ({ page }) => {
   await toolsScreen(page);
   await page.goto('/ui/tools');
   await shellReady(page);
   await expect(page).toHaveURL('/ui/tools/status');
-  await expect(page.locator('nav.tabs a')).toHaveText(['Status']);
+  await expect(page.locator('nav.tabs a')).toHaveText(['Status', 'Actions']);
   await expect(page.locator('.head .sub')).toHaveText('40 tools from 4 servers. Agents find them through search and invoke.');
 });
 

@@ -341,14 +341,14 @@ async fn get_existing_backend_returns_success() {
     )
     .await;
     assert_eq!(setup, ExitCode::SUCCESS, "the setup add succeeds");
-    let code = run_get_command("tavily", &path);
+    let code = run_get_command("tavily", &path, crate::cli::output::Render::Text);
     assert_eq!(code, ExitCode::SUCCESS);
 }
 
 #[test]
 fn get_missing_backend_returns_failure() {
     let (_dir, path) = temp_config();
-    let code = run_get_command("ghost", &path);
+    let code = run_get_command("ghost", &path, crate::cli::output::Render::Text);
     assert_eq!(code, ExitCode::FAILURE);
 }
 

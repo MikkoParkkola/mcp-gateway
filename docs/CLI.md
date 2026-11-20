@@ -7,9 +7,11 @@ How `mcp-gateway` commands report results and failures, so scripts can rely on t
 - Data goes to stdout. Messages, progress and errors go to stderr, so `mcp-gateway ... > out.json` captures
   only the data.
 - A JSON document the CLI writes itself, such as an error from `api --json`, carries `schema_version`.
+- `audit show` and `list --json` print a bare JSON array, without `schema_version`.
 - JSON passed through from the gateway, such as an `events dead-letters` answer, keeps the gateway's shape.
-- An error is two lines on stderr: `error: <what went wrong>`, then what to do next. With `api --json`, the
-  error is one JSON document instead.
+- An error is two lines on stderr: `error: <what went wrong>`, then what to do next. With `api --json` or
+  `dashboard-link --json`, the error is one JSON document instead.
+- A verify command prints its verdict document with `--json` whether the verdict passes or fails; the exit code is 0 for a pass and 1 for a fail.
 - A credential (`MCP_GATEWAY_TOKEN`), a looked-up email or a page token never appears in an error. If the
   report would still show one after redaction, a fixed sentence replaces it, or nothing prints at all.
 
@@ -51,7 +53,7 @@ Every command is in one class:
 - `JSON_CAPABLE` commands have a JSON form: `--json`, or `--format json`.
 - `JSON_DEFAULT` commands always print JSON:
   stdout is JSON, errors are human text on stderr, and a script reads the exit code.
-- `PENDING_JSON` commands print data with no JSON form yet. Each gets one before 4.0.0.
+- `PENDING_JSON` commands print data with no JSON form yet. None does today; a new one would be listed here.
 - `ACTION` commands change something and print only status.
 - `SCRIPT` commands print a script.
 
@@ -62,23 +64,23 @@ Every command is in one class:
 | `add` | `ACTION` |
 | `api` | `JSON_CAPABLE` |
 | `audit lookup-email` | `JSON_DEFAULT` |
-| `audit show` | `PENDING_JSON` |
-| `audit verify` | `PENDING_JSON` |
+| `audit show` | `JSON_DEFAULT` |
+| `audit verify` | `JSON_CAPABLE` |
 | `cap discover` | `JSON_CAPABLE` |
 | `cap import` | `ACTION` |
 | `cap import-url` | `ACTION` |
 | `cap install` | `ACTION` |
-| `cap list` | `PENDING_JSON` |
+| `cap list` | `JSON_CAPABLE` |
 | `cap pin` | `ACTION` |
-| `cap registry-list` | `PENDING_JSON` |
-| `cap search` | `PENDING_JSON` |
-| `cap test` | `PENDING_JSON` |
-| `cap validate` | `PENDING_JSON` |
-| `dashboard-link` | `PENDING_JSON` |
+| `cap registry-list` | `JSON_CAPABLE` |
+| `cap search` | `JSON_CAPABLE` |
+| `cap test` | `JSON_CAPABLE` |
+| `cap validate` | `JSON_CAPABLE` |
+| `dashboard-link` | `JSON_CAPABLE` |
 | `doctor` | `JSON_CAPABLE` |
 | `events dead-letters` | `JSON_DEFAULT` |
-| `get` | `PENDING_JSON` |
-| `hash-key` | `PENDING_JSON` |
+| `get` | `JSON_CAPABLE` |
+| `hash-key` | `JSON_CAPABLE` |
 | `identity grants grant` | `JSON_CAPABLE` |
 | `identity grants list` | `JSON_CAPABLE` |
 | `identity grants revoke` | `JSON_CAPABLE` |
@@ -90,7 +92,7 @@ Every command is in one class:
 | `kubernetes plan` | `JSON_CAPABLE` |
 | `list` | `JSON_CAPABLE` |
 | `provenance public-key` | `JSON_DEFAULT` |
-| `provenance verify` | `PENDING_JSON` |
+| `provenance verify` | `JSON_CAPABLE` |
 | `ranking eval` | `JSON_CAPABLE` |
 | `remove` | `ACTION` |
 | `runtime compile` | `JSON_DEFAULT` |
@@ -99,11 +101,11 @@ Every command is in one class:
 | `setup wizard` | `ACTION` |
 | `skills generate` | `ACTION` |
 | `skills import` | `ACTION` |
-| `skills list` | `PENDING_JSON` |
+| `skills list` | `JSON_CAPABLE` |
 | `skills remove` | `ACTION` |
-| `skills search` | `PENDING_JSON` |
-| `skills show` | `PENDING_JSON` |
-| `stats` | `PENDING_JSON` |
+| `skills search` | `JSON_CAPABLE` |
+| `skills show` | `JSON_CAPABLE` |
+| `stats` | `JSON_CAPABLE` |
 | `tls init-ca` | `ACTION` |
 | `tls issue-client` | `ACTION` |
 | `tls issue-server` | `ACTION` |
@@ -117,3 +119,52 @@ Every command is in one class:
 | `trust validate` | `JSON_CAPABLE` |
 | `upgrade` | `ACTION` |
 | `validate` | `JSON_CAPABLE` |
+
+## JSON forms
+
+Every command that prints data has one JSON form. The forms added in 4.0.0 list their top-level keys; each key is
+always present (`null` or `[]` when there is nothing to say), so a script can read one shape.
+
+| Command | Flag | Shape |
+| --- | --- | --- |
+| `api` | `--json` | the gateway's JSON answer; errors as one JSON document on stderr |
+| `audit lookup-email` | (none) | the gateway's lookup page, passed through |
+| `audit show` | (none) | array of log entries |
+| `audit verify` | `--json` | schema_version, ok, hmac_checked, signed_entry_seen, scope, entries_checked, segments_checked, segments_expired, failed_check, failed_at_counter, error, warnings, notes |
+| `audit verify --export` | `--json` | schema_version, valid, reason, rows, truncated, integrity_failed, kid |
+| `cap discover` | `--format json` | the discovered servers |
+| `cap list` | `--json` | schema_version, directory, capabilities |
+| `cap registry-list` | `--json` | schema_version, capabilities |
+| `cap search` | `--json` | schema_version, query, capabilities |
+| `cap test` | `--json` | schema_version, capability, arguments, result |
+| `cap validate` | `--json` | schema_version, name, description, provider, auth, warnings |
+| `dashboard-link` | `--json` | schema_version, url |
+| `doctor` | `--format json` | the doctor report (`doctor.v1`) |
+| `events dead-letters` | (none) | the gateway's answer, passed through |
+| `get` | `--json` | schema_version, name, transport, description, enabled, command, url, env, headers |
+| `hash-key` | `--json` | schema_version, key_sha256 |
+| `identity grants grant` | `--format json` | the grant written |
+| `identity grants list` | `--format json` | the grants |
+| `identity grants revoke` | `--format json` | the grant revoked |
+| `import apply` | `--format json` | the apply report |
+| `import preview` | `--format json` | the preview |
+| `kubernetes apply-plan` | `--format json` | the apply report |
+| `kubernetes controller` | `--format json` | one report per reconcile cycle |
+| `kubernetes plan` | `--format json` | the plan |
+| `list` | `--json` | array of backend objects |
+| `provenance public-key` | (none) | jwk, thumbprint |
+| `provenance verify` | `--json` | schema_version, status, accepted, kid, reason |
+| `ranking eval` | `--format json` | the evaluation report |
+| `runtime compile` | (none) | the compiled plan |
+| `skills list` | `--json` | schema_version, registry, skills |
+| `skills search` | `--json` | schema_version, query, skills |
+| `skills show` | `--json` | schema_version, name, description, version, effort, allowed_tools, triggers, keywords, source_path, auxiliary_files, code_blocks, body |
+| `stats` | `--json` | schema_version, invocations, cache_hits, cache_hit_rate, tools_discovered, tools_available, top_tools |
+| `tool inspect` | `--format json` | the tool's schema |
+| `tool invoke` | `--format json` | the tool's result |
+| `tool list` | `--format json` | the tools |
+| `trust generate` | `--format json` | the generated TrustCards |
+| `trust inspect` | `--format json` | the TrustCard |
+| `trust lab evaluate` | `--format json` | the evaluation report |
+| `trust validate` | `--format json` | the validation report |
+| `validate` | `--format json` | the validation report |
