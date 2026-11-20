@@ -13,9 +13,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::ui_tool_call_tests::{
-    ADMIN, Fx, POST_BOUND, SERVER, Stub, TestDeadline, USER, admin_actions, call,
-    deadline_after_send, fixture, install, install_slow_gated, post, sent,
+    ADMIN, Fx, POST_BOUND, Stub, TestDeadline, USER, admin_actions, call, deadline_after_send,
+    fixture, install, install_slow_gated, post, sent,
 };
+// Only the firewall rows name the server now; the stub installer goes through `install`.
+#[cfg(feature = "firewall")]
+use super::ui_tool_call_tests::SERVER;
 
 /// A refusal body with its receipt's value masked: each call names its own
 /// trace, so two answers alike differ only there. Whether a receipt is present
