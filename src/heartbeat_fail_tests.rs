@@ -253,7 +253,8 @@ async fn start_resolves_the_release_target_without_a_seam() {
             url: rx.url(),
             client: test_client(),
             today: nov19,
-            every: std::time::Duration::from_millis(50),
+            // The release period: this target is only resolved, never run.
+            every: std::time::Duration::from_secs(3600),
             stall: None,
         },
     );

@@ -23,6 +23,7 @@ fn target_for(rx: &Listener) -> seam::Target {
         url: rx.url(),
         client: test_client(),
         today: nov19,
+        // limit-under-test (absorbed-by: until): only the task's check period; a slow runner checks less often before until's bound
         every: Duration::from_millis(50),
         stall: None,
     }

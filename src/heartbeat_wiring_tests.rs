@@ -42,6 +42,7 @@ async fn the_task_checks_at_start_and_after_a_day_and_ends_on_shutdown() {
             url: rx.url(),
             client: test_client(),
             today: f9_today,
+            // limit-under-test (absorbed-by: until): only the task's check period; a slow runner checks less often before until's bound
             every: Duration::from_millis(50),
             stall: None,
         },
@@ -88,6 +89,7 @@ async fn shutdown_does_not_wait_for_a_stalled_disk() {
             url: rx.url(),
             client: test_client(),
             today: nov19,
+            // limit-under-test (absorbed-by: until): only the task's check period; a slow runner checks less often before until's bound
             every: Duration::from_millis(50),
             stall: Some(seam::Stall {
                 reached: reached_tx,
