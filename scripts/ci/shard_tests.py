@@ -843,13 +843,24 @@ def built_parts_rows() -> None:
                     '[ "$(eval echo \\${FAIL_BUILD_$k:-})" = 1 ] && exit 5\n'
                     'mkdir -p "$d/p$k"; printf "m$k::a: test\\nm$k::b: test\\nm$k::' + SDK + ': test\\n" > "$d/p$k/list.txt"\n'
                     'cat > "$d/p$k/lib-tests-p$k" <<EOF\n#!/bin/sh\nb=\\${BEHAVE_$k:-ok}\n'
-                    'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
+                    '[ "\\$b" = twoline ] || echo "test m$k::a ... ok"\n'
+                    'case "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
                     ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
                     ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
+                    # Torn lines: a child's stderr text with no newline, then libtest's result on stdout.
+                    ' tornok) printf "kill: " >&2; echo "test m$k::b ... ok" ;;'
+                    ' tornurl) printf "http://127.0.0.1:9/authorize?response_type=code&red" >&2;'
+                    ' echo "test m$k::b ... ok" ;;'
+                    ' twoline) echo "test m$k::a ... oktest m$k::b ... ok" ;;'
+                    ' failerr) printf "kill: " >&2; echo "test m$k::b ... FAILED" ;;'
+                    ' failchild) echo "test m$k::child_process ... test m$k::b ... FAILED" ;;'
+                    ' dup) echo "test m$k::b ... ok"; echo "test m$k::b ... ok" ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
-                    '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
+                    '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n'
+                    'case "\\$b" in red|failerr|failchild) exit 101 ;; esac\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
         os.chmod(fake, 0o755)
+        printed = [""]
 
         def leg_run(leg: str, floor: int, **env: str) -> tuple[int, list[str]]:
             open(log, "w").close()
@@ -858,8 +869,12 @@ def built_parts_rows() -> None:
             keep = {k: os.environ.get(k) for k in ("LOG", "MACOS_LIB_SOLO", *env)}
             os.environ.update({"LOG": log, **env})
             try:
-                with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
+                sink = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+                with contextlib.redirect_stdout(sink):
                     rc = run_built_parts("macos", leg, out_dir, ("sh", fake))
+                sink.flush()
+                # What the runner put in the job log: its notices and errors, and the binaries' own output.
+                printed[0] = sink.buffer.getvalue().decode("utf-8", "replace")
             finally:
                 for k, v in keep.items():
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
@@ -890,6 +905,25 @@ def built_parts_rows() -> None:
             assert leg_run("lib-b", 8, BEHAVE_2="child")[0] == 0, "a result after a child's partial line was not counted"
             # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
             assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
+            # Register row 1797: a child's stderr text torn into the front of libtest's result line (kill's message,
+            # an OAuth prompt's URL) must not hide the result: only the binary's stdout is counted.
+            for torn in ("tornok", "tornurl"):
+                rc = leg_run("lib-b", 8, BEHAVE_2=torn)[0]
+                assert rc == 0, (torn, rc, printed[0][-600:])
+            # That stderr text still reaches the job log, uncounted.
+            leg_run("lib-b", 8, BEHAVE_2="tornok")
+            assert "kill: " in printed[0], printed[0][-600:]
+            # Two results on one stdout line both count.
+            assert leg_run("lib-b", 8, BEHAVE_2="twoline")[0] == 0, printed[0][-600:]
+            # A FAILED behind either prefix counts as failed: the leg is red for the exit, not for a missing test.
+            for failed in ("failerr", "failchild"):
+                rc = leg_run("lib-b", 8, BEHAVE_2=failed)[0]
+                errors = [x for x in printed[0].splitlines() if x.startswith("::error::")]
+                assert (rc, errors) == (1, ["::error::macos lib-b part 2: test binary exited 101"]), (failed, rc, errors)
+            # A test reported twice fails the leg and is named.
+            rc = leg_run("lib-b", 8, BEHAVE_2="dup")[0]
+            errors = [x for x in printed[0].splitlines() if x.startswith("::error::")]
+            assert (rc, errors) == (1, ["::error::macos lib-b part 2: test m2::b reported twice (ok, ok)"]), (rc, errors)
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
