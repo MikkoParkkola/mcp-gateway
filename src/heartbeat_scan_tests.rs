@@ -805,45 +805,64 @@ fn privacy_text_states_the_facts() {
     );
 }
 
-/// Whether the chart's pod has nowhere to keep heartbeat state: a read-only
-/// root filesystem, the read-only config as its one mount, and no template
-/// adding a writable volume. `templates` is (file name, text) for each.
+/// Whether the chart's pod has nowhere to keep heartbeat state, judged over
+/// every template by allow-list, so a new container or volume type cannot
+/// slip past a deny list: one container image in the whole chart; one
+/// `readOnlyRootFilesystem` in the whole chart, set true; one mount in the
+/// whole chart, the config, read-only at /etc/mcp-gateway; and every volume a
+/// configMap. `templates` is (path under templates/, text) for each.
 fn chart_pod_keeps_no_state(templates: &[(String, String)]) -> bool {
+    let count = |needle: &str| -> usize {
+        templates
+            .iter()
+            .map(|(_, text)| text.matches(needle).count())
+            .sum()
+    };
     let deployment = templates
         .iter()
         .find(|(name, _)| name == "deployment.yaml")
         .map_or("", |(_, text)| text.as_str());
-    let writable = [
-        "emptyDir",
-        "persistentVolumeClaim",
-        "hostPath",
-        "volumeClaimTemplates",
-    ];
-    deployment.contains("readOnlyRootFilesystem: true")
-        && deployment.matches("mountPath:").count() == 1
+    let volumes = deployment
+        .split_once("\n      volumes:\n")
+        .map_or("", |(_, rest)| rest);
+    let declared = volumes.matches("- name:").count();
+    count("image:") == 1
+        && count("readOnlyRootFilesystem:") == 1
+        && deployment.contains("readOnlyRootFilesystem: true")
+        && count("mountPath:") == 1
         && deployment.contains("mountPath: /etc/mcp-gateway\n              readOnly: true")
-        && !templates
-            .iter()
-            .any(|(_, text)| writable.iter().any(|w| text.contains(w)))
+        && count("volumes:") == 1
+        && declared >= 1
+        && declared == volumes.matches("configMap:").count()
 }
 
 /// DOC2. README's claim that a pod the Helm chart deploys sends nothing rests
 /// on the chart: it holds while the pod has nowhere to write `heartbeat/`.
-/// Controls: a writable root filesystem, a second mount, and a writable
-/// volume in any template each break it.
+/// Every file under templates/ is read, subfolders included. Controls: a
+/// writable root filesystem, a second mount, a volume that is not a
+/// configMap (of a type no list names), and a second container in another
+/// template each break it.
 #[test]
 fn the_chart_pod_has_nowhere_to_keep_heartbeat_state() {
     let dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("deploy/helm/mcp-gateway/templates");
-    let templates: Vec<(String, String)> = std::fs::read_dir(&dir)
-        .expect("the chart templates")
-        .flatten()
-        .map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let text = std::fs::read_to_string(e.path()).expect("a template");
-            (name, text)
-        })
-        .collect();
+    let mut templates: Vec<(String, String)> = Vec::new();
+    let mut todo = vec![dir.clone()];
+    while let Some(d) = todo.pop() {
+        for entry in std::fs::read_dir(&d).expect("a chart folder").flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                let name = p
+                    .strip_prefix(&dir)
+                    .expect("under templates/")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                templates.push((name, std::fs::read_to_string(&p).expect("a template")));
+            }
+        }
+    }
     let with = |file: &str, from: &str, to: &str| -> Vec<(String, String)> {
         templates
             .iter()
@@ -871,10 +890,11 @@ fn the_chart_pod_has_nowhere_to_keep_heartbeat_state() {
             "volumeMounts:\n            - name: data\n              mountPath: /data\n",
         ),
         with(
-            "service.yaml",
-            "\n",
-            "\n# volumes: [{name: data, emptyDir: {}}]\n",
+            "deployment.yaml",
+            "          configMap:\n",
+            "          configMap:\n        - name: data\n          nfs:\n            path: /x\n",
         ),
+        with("service.yaml", "\n", "\n# sidecar image: busybox\n"),
     ] {
         assert!(
             !chart_pod_keeps_no_state(&broken),
