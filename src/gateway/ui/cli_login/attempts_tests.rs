@@ -164,7 +164,7 @@ fn id_and_secret_are_separate_draws() {
         .expect("a start into an empty store");
     assert_eq!(started.id, id(7));
     assert_eq!(started.secret, secret(9));
-    assert_eq!(started.code, UserCode::from_indices(distinct_code(1)));
+    assert_eq!(started.code.display(), "77777-77701");
     for (what, n) in [
         ("code", &calls.code),
         ("id", &calls.id),
@@ -187,7 +187,7 @@ fn one_collision_then_a_fresh_code_succeeds() {
     let t0 = Instant::now();
     store.start(t0).expect("A");
     let b = store.start(t0).expect("B after one collision");
-    assert_eq!(b.code, UserCode::from_indices(distinct_code(2)));
+    assert_eq!(b.code.display(), "77777-77702");
     assert_eq!(store.retained(t0), 2);
 }
 
@@ -219,7 +219,7 @@ fn eight_collisions_refuse_without_insertion() {
         "exactly eight draws for B"
     );
     let c = store.start(t0).expect("seven collisions then a fresh code");
-    assert_eq!(c.code, UserCode::from_indices(distinct_code(2)));
+    assert_eq!(c.code.display(), "77777-77702");
     assert_eq!(store.retained(t0), 2);
 }
 
