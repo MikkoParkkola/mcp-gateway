@@ -145,7 +145,7 @@ backend" and "fails a capability file" first.**
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
-| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None. Over HTTP a running task gets at most 8 s to finish at shutdown; raising `server.shutdown_timeout` past about 23 s lengthens only the listener's share, not the task drain |
+| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None. Over HTTP a running task gets at most 8 s to finish at shutdown; raising `server.shutdown_timeout` past about 23 s no longer lengthens the task drain; the extra time goes to the listener's share and the backend stop |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 19 built-in entries that `add` could not set up are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed, but an `asana` backend still on `https://mcp.asana.com/sse` must be replaced (see the item) |
@@ -3601,8 +3601,8 @@ entry with a durable upstream handle stays managed `working`, as after any resta
 **Action:** none. A task that needs more than 8 s to finish at an HTTP shutdown is cancelled and
 settled as interrupted at the next start (unless a recovery adapter keeps it managed, as above).
 Raising `server.shutdown_timeout` lengthens the drain only until it reaches those 8 s, at a total of
-about 23 s when the stages before it are quick; past that, a larger timeout only lengthens the
-listener's share.
+about 23 s when the stages before it are quick; past that, a larger timeout no longer lengthens
+the task drain: it goes to the listener's share and the backend stop.
 
 ## 122. Capability fallback providers are warned as not executed
 
