@@ -35,6 +35,98 @@ SUITE = HERE.with_name("test_check_tag_manifest.py")
 
 CAUGHT, TOLERATED, BROKEN = "caught", "tolerated", "broken"
 
+# A case whose anchor cannot be derived gets this text, which no workflow holds, so
+# the runner reports it STALE exactly as it does a typed anchor that went out of date.
+STALE = "\0 workflow span not found \0"
+
+
+def _span(text, job, first=None, last=None):
+    """Stub: the real helper lands after its rows have run red."""
+    return STALE
+
+
+def _mutate(span, *edits):
+    """Stub: the real helper lands after its rows have run red."""
+    return STALE, STALE
+
+
+# The helpers' own rows. A small workflow: an `on:` key that shares a job's id, a
+# nameless step, a step named on its second line, a comment above a step, a step
+# input called `name`, a name used in both jobs and one used twice in one job.
+_SELF_TEST_WORKFLOW = (
+    "on:\n"
+    "  push:\n"
+    "    branches: [main]\n"
+    "jobs:\n"
+    "  build:\n"
+    "    runs-on: ubuntu-24.04\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@abc # v1\n"
+    "        with:\n"
+    "          fetch-depth: 1\n"
+    "      - name: Compile\n"
+    "        run: make\n"
+    "\n"
+    "      # Runs the suite.\n"
+    "      - if: always()\n"
+    "        name: Test\n"
+    "        run: make test\n"
+    "\n"
+    "  push:\n"
+    "    needs: build\n"
+    "    steps:\n"
+    "      - name: Compile\n"
+    "        run: make release\n"
+    "      - name: Upload\n"
+    "        with:\n"
+    "          name: artifact\n"
+    "      - name: Publish\n"
+    "        run: ./publish a\n"
+    "      - name: Publish\n"
+    "        run: ./publish b\n"
+)
+
+
+def _self_test():
+    """Each row: (id, got, want), want a literal. Returns one line per row that disagrees."""
+    w = _SELF_TEST_WORKFLOW
+    rows = [
+        # A comment above the next step and the blank line before it are not part of a step.
+        ("S1", _span(w, "build", "Compile"), "      - name: Compile\n        run: make\n"),
+        # The job decides: the same step name in the other job is a different step.
+        ("S1b", _span(w, "push", "Compile"), "      - name: Compile\n        run: make release\n"),
+        ("S2", _span(w, "build", "Compile", "Test"),
+         "      - name: Compile\n        run: make\n\n      # Runs the suite.\n"
+         "      - if: always()\n        name: Test\n        run: make test\n"),
+        ("S3", _span(w, "build", None, "Compile"),
+         "  build:\n    runs-on: ubuntu-24.04\n    steps:\n"
+         "      - uses: actions/checkout@abc # v1\n        with:\n          fetch-depth: 1\n"
+         "      - name: Compile\n        run: make\n"),
+        ("S4", _span(w, "build"), "  build:\n    runs-on: ubuntu-24.04\n    steps:\n"),
+        ("S5", _span(w, "build", "uses:actions/checkout"),
+         "      - uses: actions/checkout@abc # v1\n        with:\n          fetch-depth: 1\n"),
+        ("S5b", _span(w, "build", "uses:actions/checkout@abc"), STALE),
+        ("S6", _span(w, "build", "Test"), "      - if: always()\n        name: Test\n        run: make test\n"),
+        ("S6b", _span(w, "push", "artifact"), STALE),
+        ("S7", _span(w, "deploy", "Compile"), STALE),
+        ("S8", _span(w, "build", "Missing"), STALE),
+        ("S9", _span(w, "push", "Test"), STALE),
+        ("S10", _span(w, "push", "Publish"), STALE),
+        ("S11", _span(w, "build", "Test", "Compile"), STALE),
+        ("S12", _span(w, "push"), "  push:\n    needs: build\n    steps:\n"),
+        # The second edit's text exists only once the first has been applied.
+        ("M1", _mutate("a\nb\nc\n", ("b\n", "x\n"), ("a\nx\n", "y\n")), ("a\nb\nc\n", "y\nc\n")),
+        ("M2", _mutate("a\nb\nc\n", ("z\n", "")), (STALE, STALE)),
+        ("M3", _mutate("a\na\n", ("a\n", "")), (STALE, STALE)),
+        ("M4", _mutate(STALE, ("span", "spun")), (STALE, STALE)),
+        ("M5", _mutate("a\nb\n", ("", "x\n")), (STALE, STALE)),
+    ]
+    out = [f"{name}: got {got!r}, want {want!r}" for name, got, want in rows if got != want]
+    # The marker is what makes a case stale, so it must occur in no workflow.
+    for text in [w] + [p.read_text(encoding="utf-8") for p in sorted(WORKFLOWS.glob("*.y*ml"))]:
+        if STALE in text:
+            out.append("STALE marker occurs in a workflow text")
+    return out
 # docker.yml's smoke step and the push step it guards, verbatim. Held apart so
 # the reordering case can swap them whole: deleting the gate and moving it
 # below the push are different regressions, and only the second one leaves a
@@ -2006,6 +2098,14 @@ def verdict(directory, workflow, before, after):
 
 
 def main():
+    # The cases' anchors come from the span helpers, so a wrong helper aims every case
+    # at the wrong text: its rows run first and stop the run.
+    helper_failures = _self_test()
+    if helper_failures:
+        for line in helper_failures:
+            print("SELF-TEST FAIL", line)
+        print(f"\n{len(helper_failures)} span helper rows fail; no mutation case was run")
+        return 1
     failures = []
     with tempfile.TemporaryDirectory() as directory:
         copy = pathlib.Path(directory)
