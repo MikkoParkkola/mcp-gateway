@@ -221,6 +221,9 @@ pub struct NotificationMultiplexer {
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
     /// unset when the verdict is off, which is the plain fast path.
     reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
+    /// Set once, at the stop's trigger: every session stream ends then, and
+    /// one opened later ends after its connected event.
+    stopped: tokio::sync::watch::Sender<bool>,
     /// Test pause between a frame leaving the session queue and the write-time
     /// credential check (MIK-8350): a row revokes the credential there, so the
     /// frame is withheld at write and not at the decision.
@@ -247,11 +250,19 @@ impl NotificationMultiplexer {
             provisional_stream_live: std::sync::atomic::AtomicUsize::new(0),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
+            stopped: tokio::sync::watch::Sender::new(false),
             #[cfg(test)]
             before_write_check: Arc::default(),
             #[cfg(test)]
             before_get_resolve: crate::test_pause::Slot::default(),
         }
+    }
+
+    /// End every session stream, at the stop's trigger: an open one settles
+    /// what it still holds, unwritten, and ends, so a client streaming from
+    /// this gateway no longer holds the listener for its grace.
+    pub(crate) fn stop_streams(&self) {
+        self.stopped.send_replace(true);
     }
 
     /// Install the cross-tenant read judge (once; the router does it).
