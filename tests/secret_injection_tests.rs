@@ -92,18 +92,21 @@ fn every_test_takes_the_env_lock_first() {
 
 #[test]
 fn glob_match_exact() {
+    let _env = env_lock();
     assert!(glob_match("get_weather", "get_weather"));
     assert!(!glob_match("get_weather", "get_forecast"));
 }
 
 #[test]
 fn glob_match_star() {
+    let _env = env_lock();
     assert!(glob_match("*", "anything"));
     assert!(glob_match("*", ""));
 }
 
 #[test]
 fn glob_match_prefix_wildcard() {
+    let _env = env_lock();
     assert!(glob_match("get_*", "get_weather"));
     assert!(glob_match("get_*", "get_forecast"));
     assert!(!glob_match("get_*", "set_weather"));
@@ -111,6 +114,7 @@ fn glob_match_prefix_wildcard() {
 
 #[test]
 fn glob_match_suffix_wildcard() {
+    let _env = env_lock();
     assert!(glob_match("*_weather", "get_weather"));
     assert!(glob_match("*_weather", "set_weather"));
     assert!(!glob_match("*_weather", "get_forecast"));
@@ -118,6 +122,7 @@ fn glob_match_suffix_wildcard() {
 
 #[test]
 fn glob_match_contains_wildcard() {
+    let _env = env_lock();
     assert!(glob_match("get_*_v2", "get_weather_v2"));
     assert!(!glob_match("get_*_v2", "get_weather_v3"));
 }
@@ -126,16 +131,19 @@ fn glob_match_contains_wildcard() {
 
 #[test]
 fn matches_rule_empty_patterns_matches_all() {
+    let _env = env_lock();
     assert!(tool_matches_rule("any_tool", &[]));
 }
 
 #[test]
 fn matches_rule_wildcard_matches_all() {
+    let _env = env_lock();
     assert!(tool_matches_rule("any_tool", &["*".to_string()]));
 }
 
 #[test]
 fn matches_rule_specific_pattern() {
+    let _env = env_lock();
     assert!(tool_matches_rule(
         "weather_forecast",
         &["weather_*".to_string()]
@@ -147,6 +155,7 @@ fn matches_rule_specific_pattern() {
 
 #[test]
 fn inject_no_rules_returns_unchanged() {
+    let _env = env_lock();
     let injector = SecretInjector::empty();
     let args = json!({"city": "Helsinki"});
     let result = injector
@@ -159,8 +168,9 @@ fn inject_no_rules_returns_unchanged() {
 
 #[test]
 fn inject_argument_type() {
+    let env = env_lock();
     // Set a test env var
-    unsafe { std::env::set_var("TEST_SECRET_KEY_88", "sk-test-12345") };
+    set_env(&env, "TEST_SECRET_KEY_88", "sk-test-12345");
 
     let rules = HashMap::from([(
         "weather".to_string(),
@@ -183,12 +193,13 @@ fn inject_argument_type() {
     assert_eq!(result.injected_count, 1);
     assert_eq!(result.injected_names, vec!["api_key"]);
 
-    unsafe { std::env::remove_var("TEST_SECRET_KEY_88") };
+    remove_env(&env, "TEST_SECRET_KEY_88");
 }
 
 #[test]
 fn inject_header_type() {
-    unsafe { std::env::set_var("TEST_BEARER_TOKEN_88", "bearer-abc-123") };
+    let env = env_lock();
+    set_env(&env, "TEST_BEARER_TOKEN_88", "bearer-abc-123");
 
     let rules = HashMap::from([(
         "linear".to_string(),
@@ -223,12 +234,13 @@ fn inject_header_type() {
     );
     assert_eq!(result.injected_count, 1);
 
-    unsafe { std::env::remove_var("TEST_BEARER_TOKEN_88") };
+    remove_env(&env, "TEST_BEARER_TOKEN_88");
 }
 
 #[test]
 fn inject_tool_pattern_filtering() {
-    unsafe { std::env::set_var("TEST_WRITE_KEY_88", "write-secret") };
+    let env = env_lock();
+    set_env(&env, "TEST_WRITE_KEY_88", "write-secret");
 
     let rules = HashMap::from([(
         "api".to_string(),
@@ -254,13 +266,14 @@ fn inject_tool_pattern_filtering() {
     assert_eq!(result.injected_count, 0);
     assert!(result.arguments.as_object().unwrap().is_empty());
 
-    unsafe { std::env::remove_var("TEST_WRITE_KEY_88") };
+    remove_env(&env, "TEST_WRITE_KEY_88");
 }
 
 #[test]
 fn inject_multiple_rules() {
-    unsafe { std::env::set_var("TEST_KEY_A_88", "key-a") };
-    unsafe { std::env::set_var("TEST_KEY_B_88", "key-b") };
+    let env = env_lock();
+    set_env(&env, "TEST_KEY_A_88", "key-a");
+    set_env(&env, "TEST_KEY_B_88", "key-b");
 
     let rules = HashMap::from([(
         "multi".to_string(),
@@ -294,14 +307,15 @@ fn inject_multiple_rules() {
     assert_eq!(result.arguments["data"], 42);
     assert_eq!(result.headers.get("Authorization").unwrap(), "Bearer key-b");
 
-    unsafe { std::env::remove_var("TEST_KEY_A_88") };
-    unsafe { std::env::remove_var("TEST_KEY_B_88") };
+    remove_env(&env, "TEST_KEY_A_88");
+    remove_env(&env, "TEST_KEY_B_88");
 }
 
 #[test]
 fn inject_overwrite_protection() {
+    let env = env_lock();
     // Agent tries to set their own api_key — injector should overwrite it
-    unsafe { std::env::set_var("TEST_REAL_KEY_88", "real-secret") };
+    set_env(&env, "TEST_REAL_KEY_88", "real-secret");
 
     let rules = HashMap::from([(
         "backend".to_string(),
@@ -324,11 +338,12 @@ fn inject_overwrite_protection() {
     assert_eq!(result.arguments["api_key"], "real-secret");
     assert_eq!(result.arguments["query"], "test");
 
-    unsafe { std::env::remove_var("TEST_REAL_KEY_88") };
+    remove_env(&env, "TEST_REAL_KEY_88");
 }
 
 #[test]
 fn inject_unset_env_value_errors() {
+    let _env = env_lock();
     // C4: an unset {env.X} fails the call instead of resolving to "" and being skipped
     let rules = HashMap::from([(
         "backend".to_string(),
@@ -355,6 +370,7 @@ fn inject_unset_env_value_errors() {
 
 #[test]
 fn inject_wrong_backend_returns_unchanged() {
+    let _env = env_lock();
     let rules = HashMap::from([(
         "weather".to_string(),
         vec![CredentialRule {
@@ -381,6 +397,7 @@ fn inject_wrong_backend_returns_unchanged() {
 
 #[test]
 fn from_backend_configs_empty() {
+    let _env = env_lock();
     let backends: HashMap<String, mcp_gateway::config::BackendConfig> = HashMap::new();
     let injector = SecretInjector::from_backend_configs(&backends);
     assert!(!injector.has_rules());
@@ -388,6 +405,7 @@ fn from_backend_configs_empty() {
 
 #[test]
 fn from_backend_configs_with_rules() {
+    let _env = env_lock();
     let backend = mcp_gateway::config::BackendConfig {
         secrets: vec![CredentialRule {
             name: "test_key".to_string(),
@@ -412,6 +430,7 @@ fn from_backend_configs_with_rules() {
 
 #[test]
 fn redacted_rules_does_not_contain_value() {
+    let _env = env_lock();
     let rules = HashMap::from([(
         "backend".to_string(),
         vec![CredentialRule {
@@ -438,6 +457,7 @@ fn redacted_rules_does_not_contain_value() {
 
 #[test]
 fn update_rules_adds_and_removes() {
+    let _env = env_lock();
     let mut injector = SecretInjector::empty();
     assert!(!injector.has_rules());
 
@@ -464,6 +484,7 @@ fn update_rules_adds_and_removes() {
 
 #[test]
 fn configured_backends_lists_names() {
+    let _env = env_lock();
     let rules = HashMap::from([("alpha".to_string(), vec![]), ("beta".to_string(), vec![])]);
     let injector = SecretInjector::new(rules);
     let mut backends = injector.configured_backends();
@@ -475,6 +496,7 @@ fn configured_backends_lists_names() {
 
 #[test]
 fn credential_rule_yaml_roundtrip() {
+    let _env = env_lock();
     let yaml = r#"
 name: weather_key
 credential_type: api_key
@@ -498,6 +520,7 @@ tools: ["get_*", "search_*"]
 
 #[test]
 fn credential_rule_default_values() {
+    let _env = env_lock();
     let yaml = r#"
 name: simple
 value: "literal-secret"
@@ -514,6 +537,7 @@ inject_key: token
 
 #[test]
 fn inject_query_type() {
+    let _env = env_lock();
     let rules = HashMap::from([(
         "api".to_string(),
         vec![CredentialRule {
@@ -544,6 +568,7 @@ fn inject_query_type() {
 
 #[test]
 fn inject_literal_value() {
+    let _env = env_lock();
     let rules = HashMap::from([(
         "backend".to_string(),
         vec![CredentialRule {
@@ -567,6 +592,7 @@ fn inject_literal_value() {
 /// an env file assigns now that env files load into an in-memory overlay.
 #[test]
 fn credential_resolves_against_an_env_file_overlay() {
+    let _env = env_lock();
     let dir = tempfile::tempdir().unwrap();
     let env_file = dir.path().join(".env");
     mcp_gateway::gateway::test_helpers::write_owner_only(
