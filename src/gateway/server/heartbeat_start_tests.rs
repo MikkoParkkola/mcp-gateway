@@ -158,7 +158,9 @@ impl Http {
 const HTTP_CHILD: &str = "gateway::server::heartbeat_start_tests::child_http_start";
 
 /// W1' then F7, in one child with a temp home.
-#[tokio::test]
+// One thread, stated: the heartbeat root is registered per thread, and `run`
+// must read it on the thread that registered it.
+#[tokio::test(flavor = "current_thread")]
 #[ignore = "run only as a child of http_start_honours_do_not_track_and_never_waits"]
 async fn child_http_start() {
     if !is_child() {
@@ -260,7 +262,8 @@ impl Stdio {
 const STDIO_CHILD: &str = "gateway::server::heartbeat_start_tests::child_stdio_start";
 
 /// W2', F8, then F11, in one child with a temp home.
-#[tokio::test]
+// One thread, stated: as for the HTTP child.
+#[tokio::test(flavor = "current_thread")]
 #[ignore = "run only as a child of stdio_start_honours_do_not_track_and_ends_with_its_loop"]
 async fn child_stdio_start() {
     if !is_child() {

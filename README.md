@@ -553,8 +553,10 @@ No heartbeat is sent:
   empty, `0` or `false` counts);
 - in CI, when a variable such as `CI` or `GITHUB_ACTIONS` is set to anything
   other than empty, `0` or `false`;
-- when `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` is set (in either case);
-  proxies set only in system settings are not detected;
+- when `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` (in either case) is set to
+  anything but empty, since the heartbeat never goes through a proxy; an
+  empty one does not count, and proxies set only in system settings are not
+  detected;
 - from a development build (one with debug assertions); a release build you
   compile yourself does send;
 - on Windows, where the 3.5 line sends no heartbeat at all (4.0 does);

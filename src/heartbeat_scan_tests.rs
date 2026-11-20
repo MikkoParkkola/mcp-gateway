@@ -804,3 +804,85 @@ fn privacy_text_states_the_facts() {
         "Privacy names a posture the 3.5 line does not have"
     );
 }
+
+/// Whether the chart's pod has nowhere to keep heartbeat state: a read-only
+/// root filesystem, the read-only config as its one mount, and no template
+/// adding a writable volume. `templates` is (file name, text) for each.
+fn chart_pod_keeps_no_state(templates: &[(String, String)]) -> bool {
+    let deployment = templates
+        .iter()
+        .find(|(name, _)| name == "deployment.yaml")
+        .map_or("", |(_, text)| text.as_str());
+    let writable = [
+        "emptyDir",
+        "persistentVolumeClaim",
+        "hostPath",
+        "volumeClaimTemplates",
+    ];
+    deployment.contains("readOnlyRootFilesystem: true")
+        && deployment.matches("mountPath:").count() == 1
+        && deployment.contains("mountPath: /etc/mcp-gateway\n              readOnly: true")
+        && !templates
+            .iter()
+            .any(|(_, text)| writable.iter().any(|w| text.contains(w)))
+}
+
+/// DOC2. README's claim that a pod the Helm chart deploys sends nothing rests
+/// on the chart: it holds while the pod has nowhere to write `heartbeat/`.
+/// Controls: a writable root filesystem, a second mount, and a writable
+/// volume in any template each break it.
+#[test]
+fn the_chart_pod_has_nowhere_to_keep_heartbeat_state() {
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("deploy/helm/mcp-gateway/templates");
+    let templates: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .expect("the chart templates")
+        .flatten()
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(e.path()).expect("a template");
+            (name, text)
+        })
+        .collect();
+    let with = |file: &str, from: &str, to: &str| -> Vec<(String, String)> {
+        templates
+            .iter()
+            .map(|(n, t)| {
+                (
+                    n.clone(),
+                    if n == file {
+                        t.replacen(from, to, 1)
+                    } else {
+                        t.clone()
+                    },
+                )
+            })
+            .collect()
+    };
+    for broken in [
+        with(
+            "deployment.yaml",
+            "readOnlyRootFilesystem: true",
+            "readOnlyRootFilesystem: false",
+        ),
+        with(
+            "deployment.yaml",
+            "volumeMounts:\n",
+            "volumeMounts:\n            - name: data\n              mountPath: /data\n",
+        ),
+        with(
+            "service.yaml",
+            "\n",
+            "\n# volumes: [{name: data, emptyDir: {}}]\n",
+        ),
+    ] {
+        assert!(
+            !chart_pod_keeps_no_state(&broken),
+            "a broken chart still passed"
+        );
+    }
+    assert!(
+        chart_pod_keeps_no_state(&templates),
+        "the chart's pod can now keep heartbeat state: README's Privacy claim about Helm pods needs a new look"
+    );
+}
