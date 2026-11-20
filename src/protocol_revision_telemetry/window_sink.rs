@@ -64,13 +64,9 @@ pub(crate) struct HttpSegmentSink {
 }
 
 /// The temp dirs a detached open was asked to keep, taken when its thread was
-/// spawned. Test builds only carry them; a release build passes nothing.
-#[cfg(test)]
-pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
-/// The temp dirs a detached open was asked to keep: none in a release build.
-#[cfg(not(test))]
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct Kept;
+/// spawned: test builds carry them, a release build carries nothing. Shared
+/// with every detached writer (`crate::spawn_keep`).
+pub(crate) use crate::spawn_keep::Kept;
 
 impl HttpSegmentSink {
     /// Append this process's segment under the lock. It never waits for a
