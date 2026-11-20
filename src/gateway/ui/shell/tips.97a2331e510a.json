@@ -115,9 +115,6 @@
    "todo.status.commit-4f2a91c-by-renovate-bot",
    "todo.status.network-until-you-firewall-it",
    "todo.status.ticked-writing-tools-start-unticked"
-  ],
-  "tools": [
-   "tools.actions.run-as"
   ]
  },
  "_pending_later": {
@@ -128,7 +125,8 @@
   "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
   "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
   "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
-  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client"
+  "gateway.settings.sentry-the-server-you-just": "Gateway › Settings: Connect a client",
+  "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page"
  },
  "_pending_rows": [
   "access.actions.keys",

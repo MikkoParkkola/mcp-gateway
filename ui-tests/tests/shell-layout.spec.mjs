@@ -81,7 +81,7 @@ test('L1 the tab row and the subtitle line hold their height from first paint: n
   const boot = await contentTop(page);
 
   module.release();
-  await expect(page.locator('nav.tabs a')).toHaveText(['Status']);
+  await expect(page.locator('nav.tabs a')).toHaveText(['Status', 'Actions']);
   await settle(page);
   const rendered = await contentTop(page);
 
