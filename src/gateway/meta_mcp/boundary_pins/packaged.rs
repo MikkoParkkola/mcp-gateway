@@ -50,7 +50,8 @@ fn read_if_present(root: &Path, rel: &str, packaged: bool) -> Option<String> {
     }
 }
 
-/// Every repository file a pin reads through [`repo_file`]. A closed enum, so
+/// Every repository file a pin reads through [`repo_file`], or names by path
+/// in a table while a walk reads it (the D12 launch files). A closed enum, so
 /// a new read cannot bypass the list: it must add a variant, and the vacuity
 /// guard's exhaustive `match` (no `_` arm) fails to compile until the new
 /// variant gets a case.
@@ -69,6 +70,20 @@ pub(super) enum PinnedFile {
     /// `scripts/release/check_identity_sources.py`, read by
     /// `the_table_names_every_case_the_scanner_catches`.
     IdentityScanner,
+    /// The root `Makefile`, read by `every_image_launch_sets_dnt` (D12).
+    RootMakefile,
+    /// `scripts/ci/smoke-image.sh`: D12 reads it by walking `scripts/` and
+    /// names it in its tables (its image is its first argument; its launches
+    /// are counted).
+    SmokeImage,
+    /// `scripts/ci/smoke-full-image.sh`, named by D12 like `SmokeImage`.
+    SmokeFullImage,
+    /// `scripts/dev/docker-smoke.sh`, a D12 launch file.
+    DockerSmoke,
+    /// `scripts/dev/helm-kind-lifecycle.sh`, a D12 launch file.
+    HelmKindLifecycle,
+    /// `scripts/dev/helm-kind-real-image.sh`, a D12 launch file.
+    HelmKindRealImage,
 }
 
 impl PinnedFile {
@@ -81,6 +96,12 @@ impl PinnedFile {
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
             PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
+            PinnedFile::RootMakefile => "Makefile",
+            PinnedFile::SmokeImage => "scripts/ci/smoke-image.sh",
+            PinnedFile::SmokeFullImage => "scripts/ci/smoke-full-image.sh",
+            PinnedFile::DockerSmoke => "scripts/dev/docker-smoke.sh",
+            PinnedFile::HelmKindLifecycle => "scripts/dev/helm-kind-lifecycle.sh",
+            PinnedFile::HelmKindRealImage => "scripts/dev/helm-kind-real-image.sh",
         }
     }
 }
@@ -171,6 +192,12 @@ fn pinned_repo_files_are_read_in_a_checkout() {
         PinnedFile::CiWorkflow,
         PinnedFile::UnsafeAdr,
         PinnedFile::IdentityScanner,
+        PinnedFile::RootMakefile,
+        PinnedFile::SmokeImage,
+        PinnedFile::SmokeFullImage,
+        PinnedFile::DockerSmoke,
+        PinnedFile::HelmKindLifecycle,
+        PinnedFile::HelmKindRealImage,
     ] {
         let rel = match file {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
@@ -179,6 +206,12 @@ fn pinned_repo_files_are_read_in_a_checkout() {
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
             PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
+            PinnedFile::RootMakefile => "Makefile",
+            PinnedFile::SmokeImage => "scripts/ci/smoke-image.sh",
+            PinnedFile::SmokeFullImage => "scripts/ci/smoke-full-image.sh",
+            PinnedFile::DockerSmoke => "scripts/dev/docker-smoke.sh",
+            PinnedFile::HelmKindLifecycle => "scripts/dev/helm-kind-lifecycle.sh",
+            PinnedFile::HelmKindRealImage => "scripts/dev/helm-kind-real-image.sh",
         };
         assert_eq!(rel, file.path(), "path() names the pinned file");
         assert!(
