@@ -5,7 +5,7 @@
     "minimum": 9,
     "readme_benchmark": 11
   },
-  "capability_count": 136,
+  "capability_count": 142,
   "held_capabilities": [
     {
       "name": "trawl_extract",

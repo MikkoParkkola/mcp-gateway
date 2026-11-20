@@ -349,6 +349,30 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "inside the sandbox's own mount namespace: empty mountpoint files and /proc/self/mountinfo; no secret",
     ),
     (
+        "src/preview_sandbox/linux/fetch_step.rs",
+        "the npm fetch inside the sandbox: the package-lock.json npm wrote (capped at 4 MiB) and /proc's pid list for the sweep; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_uv.rs",
+        "the uv fetch inside the sandbox: the -S interpreter wrapper written into the preview home's tmpfs, holding only the interpreter's path; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/uv_probe.rs",
+        "the uv and python3 files a uvx preview binds, read before any sandbox starts: two bytes for the script check and the interpreter's own binary (capped at 256 MiB) for its libpython name; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_rows.rs",
+        "test-only (cfg(test)): writes the fetch rows' CA bundle and a copy of the host's npm with hostile npmrc files into scratch dirs, and canary files under /usr/local (two new files, and a planted token line in npm's builtin npmrc) that it removes or restores; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_shim_rows.rs",
+        "test-only (cfg(test)): writes the fake npm tree into a scratch dir and reads the lock it wrote; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/fetch_uv_real_rows.rs",
+        "test-only (cfg(test)): copies the real uv and uvx into a fixture Python's scratch bin; no secret",
+    ),
+    (
         "src/preview_sandbox/mod.rs",
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),

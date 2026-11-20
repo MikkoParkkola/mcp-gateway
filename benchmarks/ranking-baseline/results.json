@@ -2,17 +2,17 @@
   "criterion": "MIK-3274.RANKING.3",
   "tool_inventory_size": 119,
   "corpus_size": 114,
-  "candidate_pool_size": 137,
-  "overall_top1_hit_rate": 0.7543859649122807,
+  "candidate_pool_size": 143,
+  "overall_top1_hit_rate": 0.7456140350877193,
   "overall_top3_hit_rate": 0.8596491228070176,
   "overall_top5_hit_rate": 0.8771929824561403,
-  "overall_mean_reciprocal_rank": 0.8141677662442599,
+  "overall_mean_reciprocal_rank": 0.8097553863379726,
   "by_derivation": {
     "abbreviation": {
       "n": 15,
-      "top1_hit_rate": 0.6,
+      "top1_hit_rate": 0.5333333333333333,
       "top3_hit_rate": 0.6666666666666666,
-      "mean_reciprocal_rank": 0.6532123960695387
+      "mean_reciprocal_rank": 0.6198005698005697
     },
     "description_lead": {
       "n": 24,
@@ -36,7 +36,7 @@
       "n": 20,
       "top1_hit_rate": 0.65,
       "top3_hit_rate": 0.65,
-      "mean_reciprocal_rank": 0.6685255419686984
+      "mean_reciprocal_rank": 0.6684338462045878
     },
     "typo": {
       "n": 12,
@@ -853,11 +853,11 @@
         "stripe_charges",
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 113,
+      "best_gold_rank": 119,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.008849557522123894
+      "reciprocal_rank": 0.008403361344537815
     },
     {
       "id": "tag_query::bus",
@@ -935,11 +935,11 @@
       "gold_tools": [
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 114,
+      "best_gold_rank": 120,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.008771929824561403
+      "reciprocal_rank": 0.008333333333333333
     },
     {
       "id": "tag_query::climate",
@@ -948,11 +948,11 @@
       "gold_tools": [
         "weather"
       ],
-      "best_gold_rank": 130,
+      "best_gold_rank": 136,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.007692307692307693
+      "reciprocal_rank": 0.007352941176470588
     },
     {
       "id": "tag_query::code-review",
@@ -961,11 +961,11 @@
       "gold_tools": [
         "github_create_pr"
       ],
-      "best_gold_rank": 40,
+      "best_gold_rank": 41,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.025
+      "reciprocal_rank": 0.024390243902439025
     },
     {
       "id": "tag_query::comments",
@@ -1125,11 +1125,11 @@
       "gold_tools": [
         "github_search_repos"
       ],
-      "best_gold_rank": 49,
+      "best_gold_rank": 52,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.02040816326530612
+      "reciprocal_rank": 0.019230769230769232
     },
     {
       "id": "abbreviation::crm",
@@ -1218,11 +1218,11 @@
       "gold_tools": [
         "youtube_subscription_videos"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "shared_prefix_ambiguous::bus",

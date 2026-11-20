@@ -349,6 +349,11 @@ dialog.confirm .acts { display: flex; justify-content: flex-end; flex-wrap: wrap
 .signin-notice { color: var(--color-text-secondary); font: var(--type-small); }
 .signin-note { font: var(--type-small); }
 .signin-note code { font-family: var(--font-family-mono); }
+/* The no-JavaScript note shows only under shell.nojs.css, which the document
+   links inside <noscript>. */
+.signin-note-nojs { display: none; }
+#signin-refused { display: none; color: var(--color-status-danger-fg); font: var(--type-small); }
+#signin-refused:target { display: block; }
 
 @media (max-width: 640px) {
   .palette { margin-top: 12px; }

@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 use tokio::net::{UnixListener, UnixStream};
 
 use super::Refusal;
-use super::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE};
+use super::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE, Run};
 use super::proxy::{AllowlistProxy, Credential};
 
 /// The bounds a session runs under; rows shorten them.
@@ -359,6 +359,11 @@ pub(crate) async fn serve_session(
     }
     // The revoke returns only once every tunnel of the credential is shut.
     drop(fetch);
+    // A failed fetch is never a start: refused before `expired` is written,
+    // in the gateway's own words for the step the helper named.
+    if let Some(step) = done.refused {
+        return Err(Refusal::Step(step.describe().into()));
+    }
     let expired = encode(&Expired { expired: true })?;
     by_deadline(
         deadline,
@@ -366,6 +371,18 @@ pub(crate) async fn serve_session(
         write_line(&mut write, &expired, bounds),
     )
     .await?;
+    // The preview has started only once the helper acknowledges `expired`: a
+    // helper that failed its own wait for it refuses instead of running.
+    let ack = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let line = by_deadline(
+        deadline,
+        "the run's acknowledgement",
+        read_line(&mut read, ack, bounds),
+    );
+    let run: Run = parse(&line.await?, "the run's acknowledgement")?;
+    if !run.run {
+        return Err(Refusal::Step("the sandbox sent run false".into()));
+    }
     Ok(())
 }
 

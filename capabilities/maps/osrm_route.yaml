@@ -1,0 +1,71 @@
+sha256: 9a7b0d481cb39e4ee787af9c7d7567bec416cd256cde3eb56d501d1af9857a1a
+fulcrum: "1.0"
+name: osrm_route
+description: >-
+  Driving route between two points: distance, duration and legs, from the
+  public OSRM demo server (no API key). Paced at one request per second per
+  gateway process, the demo's stated limit. The public demo server is
+  non-commercial; commercial use needs your own OSRM server.
+attribution: "© OpenStreetMap contributors"
+
+schema:
+  input:
+    type: object
+    properties:
+      from_latitude:
+        type: number
+        minimum: -90
+        maximum: 90
+      from_longitude:
+        type: number
+        minimum: -180
+        maximum: 180
+      to_latitude:
+        type: number
+        minimum: -90
+        maximum: 90
+      to_longitude:
+        type: number
+        minimum: -180
+        maximum: 180
+    required: [from_latitude, from_longitude, to_latitude, to_longitude]
+  output:
+    type: object
+    additionalProperties: true
+    properties:
+      code:
+        type: string
+      routes:
+        type: array
+        description: Routes, best first, each with distance (m) and duration (s)
+      waypoints:
+        type: array
+      attribution:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    rate_limit:
+      interval_ms: 1000
+    config:
+      endpoint: "https://router.project-osrm.org/route/v1/driving/{from_longitude},{from_latitude};{to_longitude},{to_latitude}"
+      method: GET
+      headers:
+        User-Agent: "mcp-gateway/4.0 (+https://github.com/MikkoParkkola/mcp-gateway)"
+      static_params:
+        overview: "false"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+
+metadata:
+  category: maps
+  tags: [maps, routing, directions, driving, openstreetmap, osrm]
+  cost_category: free
+  execution_time: fast
+  read_only: true

@@ -62,6 +62,8 @@ pub(crate) mod helpers;
 #[cfg(feature = "webui")]
 mod lookup_budget;
 mod origin_guard;
+#[cfg(feature = "webui")]
+pub(crate) use origin_guard::admits_signin;
 mod process_facts;
 #[cfg(feature = "webui")]
 pub(crate) use lookup_budget::{Charge, LookupBudget};
@@ -77,6 +79,16 @@ pub(crate) use watch_poll::GatewayWatchHost;
 #[must_use]
 pub fn is_loopback_bind(host: &str) -> bool {
     well_known::is_loopback_host(host)
+}
+
+/// `true` when `host` is a wildcard bind (empty, `0.0.0.0` or `::`), which
+/// serves every interface, loopback included.
+#[cfg(feature = "webui")]
+pub(crate) fn is_wildcard_bind(host: &str) -> bool {
+    host.is_empty()
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified())
 }
 mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
@@ -201,6 +213,10 @@ mod e5_dashboard_session_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod mrtr_component_tests;
+/// `POST /ui/signin` mints a dashboard session with script off.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod signin_form_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod task_lifecycle_tests;
@@ -523,6 +539,9 @@ mod withheld_listing_tests;
 mod withheld_parity_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod withheld_twin_tests;
+/// The trace of a written refusal record: the web UI tool call's receipt.
+#[cfg(feature = "webui")]
+pub(in crate::gateway) use helpers::refusal_record_trace;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 /// MIK-8518 T2: the router's grant-subject builders admit only API keys.
@@ -630,6 +649,9 @@ mod ui_tool_call_cell_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_gates_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_receipt_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_tests;

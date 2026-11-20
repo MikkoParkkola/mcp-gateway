@@ -26,10 +26,6 @@ on:
   # runs the same jobs as a branch push, which is none of them.
   workflow_dispatch:
     inputs:
-      rehearse_macos_lib_fallback:
-        description: macOS int builds and runs its lib half itself, as when lib-b's test binary does not arrive
-        type: boolean
-        default: false
       rehearse_manifest:
         description: Build both arches and assemble the provenance-tagged index, promoting no release tag
         type: boolean
@@ -204,6 +200,11 @@ jobs:
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
+      - name: Two clippy lints are found by text before a lint run
+        run: |
+          python3 scripts/dev/check_clippy_textlints.py --self-test
+          python3 scripts/dev/check_clippy_textlints.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -254,12 +255,19 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/test_lib_union.py
           python3 scripts/ci/test_lib_parts.py
+          python3 scripts/ci/test_lib_parts_cov.py
+          python3 scripts/ci/test_compile_cgroup.py
+          python3 scripts/ci/test_coverage_parts_wiring.py
+          python3 scripts/ci/test_coverage_union_merge.py
+          python3 scripts/ci/test_coverage_union.py
           python3 scripts/ci/test_memory_tripwire.py
           python3 scripts/ci/test_lib_gates_wiring.py
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
           python3 scripts/ci/test_os_label_routing.py
+          python3 scripts/ci/test_macos_parts.py
+          python3 scripts/ci/test_macos_parts.py --self-test
       # The rule that lets the sharded coverage grade replace the single job
       # (MIK-9252.SHARD.7): its rows run here, not only where it was written.
       - name: Validate the sharded-coverage comparison against planted runs
@@ -877,34 +885,29 @@ jobs:
     name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: macos-latest
-    # The lib shard compiles the `--lib` test binary from cold (every macOS
-    # shard missed the cache on the last three trains, and a hit would save
-    # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
-    # tests. At 90 a slow runner cut off a train mid-test. int's fallback
-    # (its suite, 10 min grace, then building the lib-a half itself) can reach
-    # about 140 min on a slow runner.
+    # Each leg builds lib test parts, never the whole lib test binary (it
+    # swapped this 3-core, 7 GB runner: 19 to 86 min of build): lib-b builds
+    # and runs parts 1-4 one at a time, int runs its suite and then builds and
+    # runs part 5. The step limits below plus a 10-min reserve stay under this
+    # job limit (scripts/ci/test_macos_parts.py).
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # Two jobs: about two macOS runners serve trains, and a second build of
-        # the lib test binary cost 19-86 min (#4562). So lib-b builds it once,
-        # uploads it and runs its half; int runs its suite, then the lib-a half
-        # from that binary.
-        # A lane PR labelled os-sensitive runs lib-b alone, and that job runs
-        # the lib-a half too: these runners serve every train
+        # Two jobs: about two macOS runners serve trains. Which parts each
+        # leg builds comes from scripts/ci/shard_tests.py's PARTS alone.
+        # A lane PR labelled os-sensitive runs lib-b alone, and that job builds
+        # and runs every part: these runners serve every train
         # (test_os_label_routing.py).
         shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
     permissions:
       contents: read
-      # int waits for lib-b's test binary by listing this run's artifacts.
-      actions: read
     env:
       # Two build jobs on the 3-core, 7 GB runner (macos-latest also lands on a 5-core, 14 GB one): the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
-      # The labelled lane: lib-b runs alone, so it runs the lib-a half itself.
+      # The labelled lane: lib-b runs alone, so it builds and runs every part.
       MACOS_LIB_SOLO: ${{ contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -934,53 +937,34 @@ jobs:
               sleep 30
             done
           ) &
-      # Build the lib test binary once and hand it to int before running this
-      # half, so int's lib-a half starts as soon as its own suite is done. The
-      # shard suite below reuses this build.
-      - name: Build the lib test binary once
+      # lib-b: parts 1-4, each built, run and deleted before the next (the solo
+      # lane: every part). The runner holds each part to its list less the OS
+      # skips.
+      - name: Lib test parts, built and run one at a time
         if: matrix.shard == 'lib-b'
-        timeout-minutes: 120
-        run: python3 scripts/ci/shard_tests.py export-lib "$RUNNER_TEMP/lib-bin"
-      - name: Hand the lib test binary to int
-        if: matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO != 'true'
+        timeout-minutes: 150
+        run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-b --build "$RUNNER_TEMP/parts"
+      - name: Shard suite
+        if: matrix.shard == 'int'
+        timeout-minutes: 110
+        run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      # int: part 5, after its own suite, in the same job; it runs when the
+      # suite failed too, so part 5's tests still report.
+      - name: Lib test part 5, built and run
+        if: matrix.shard == 'int' && !cancelled()
+        timeout-minutes: 50
+        run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos int-lib --build "$RUNNER_TEMP/parts"
+      # The union gate (macos-lib-union) reads every leg's part lists, also
+      # from a leg that failed.
+      - name: Keep the part lists for the union gate
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          # One name per run: a rerun of int alone finds the earlier attempt's binary.
-          name: macos-lib-tests
-          path: ${{ runner.temp }}/lib-bin/lib-tests
+          name: macos-lib-lists-${{ matrix.shard }}
+          path: ${{ runner.temp }}/parts/p*/list.txt
           retention-days: 1
           overwrite: true
-          if-no-files-found: error
-      - name: Shard suite
-        # Under the job's limit, so a slow build still leaves time for the
-        # report below.
-        timeout-minutes: 145
-        run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
-      # int: wait for lib-b's binary, then run the lib-a half from it, no
-      # compile. When it is not coming (lib-b ended without it, is absent from
-      # this attempt, or is still queued 10 min in) int builds the half itself.
-      - name: Wait for the lib test binary
-        id: wait
-        if: matrix.shard == 'int'
-        timeout-minutes: 120
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MACOS_LIB_REHEARSE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_macos_lib_fallback }}
-        run: python3 scripts/ci/shard_tests.py wait-lib macos-lib-tests "macOS shard lib-b"
-      - name: Fetch the lib test binary
-        if: matrix.shard == 'int' && steps.wait.outputs.found == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: macos-lib-tests
-          path: ${{ runner.temp }}/lib-bin
-      - name: Lib-a half from the prebuilt binary
-        if: (matrix.shard == 'int' && steps.wait.outputs.found == 'true') || (matrix.shard == 'lib-b' && env.MACOS_LIB_SOLO == 'true')
-        timeout-minutes: 60
-        run: python3 scripts/ci/shard_tests.py run-prebuilt macos lib-a "$RUNNER_TEMP/lib-bin/lib-tests"
-      - name: Lib-a half, built here (the binary is not coming)
-        if: matrix.shard == 'int' && steps.wait.outputs.found != 'true'
-        timeout-minutes: 120
-        run: python3 scripts/ci/shard_tests.py run macos lib-a
+          if-no-files-found: warn
       - name: Runner, swap and memory pressure during the build
         if: always()
         run: |
@@ -991,13 +975,52 @@ jobs:
             echo "::warning::no swap or memory pressure samples were recorded"
           fi
 
+  # The macOS legs' part lists against the parts the source puts in each, for
+  # the macOS target: every part 1..N present, each list exactly its expected
+  # names, none empty, no name in two parts (scripts/ci/lib_union.py, as
+  # linux-lib-union does for Linux). Guarded like macos-shards with
+  # !cancelled() and no merge-train skip, so a failed leg turns it red on every
+  # train, never skipped.
+  macos-lib-union:
+    name: macOS lib union
+    needs: [macos-shards]
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      - name: Every leg's part lists, one folder per leg
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: macos-lib-lists-*
+          path: ${{ runner.temp }}/lists
+          merge-multiple: false
+      - name: The names each part must list on macOS (every cfg evaluated with CI's compiler)
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect aarch64-apple-darwin "$RUNNER_TEMP/expected"
+      - name: Each part lists exactly the tests the source puts in it
+        run: python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"
+
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
   # with !cancelled(), so a failed or skipped shard fails it; a cancelled run
   # creates no aggregate (see windows-check).
   macos-check:
     name: macOS check
-    needs: [macos-shards]
+    needs: [macos-shards, macos-lib-union]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     # Read this run's job timings for the limit watch below.
@@ -1021,10 +1044,10 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2' || true
           python3 scripts/ci/job_time_watch.py macos-shards
-      - name: Every macOS shard succeeded
+      - name: Every macOS shard succeeded, and the lib union
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: macos-shards
+          ROLLUP_EXPECTS: macos-shards macos-lib-union
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
@@ -1186,6 +1209,40 @@ jobs:
           scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
           python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
 
+  # The preview sandbox's fetch rows run in the lib's own tests (their fake resolver and dialer are cfg(test), so no
+  # shipped build carries a seam) and launch the real gateway binary as the helper. The lib shards run only prebuilt
+  # test binaries, so this job builds the gateway binary once and hands it to them: apart from the part legs, so each
+  # leg and its memory tripwire still measure one part alone. Its own step limit, 15 min, plus the 10 min reserve the
+  # step-limit rule keeps, stays under the job's 30.
+  linux-gateway-bin:
+    name: Linux gateway binary for the sandbox rows
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the gateway binary for the lib shards' sandbox rows
+        timeout-minutes: 15
+        run: |
+          echo "phase compile: the gateway binary at $(date -u +%T)"
+          scripts/ci/with-memory-log.sh cargo build --all-features --bin mcp-gateway
+          mkdir -p "$RUNNER_TEMP/gateway-bin"
+          cp target/debug/mcp-gateway "$RUNNER_TEMP/gateway-bin/mcp-gateway"
+      - name: Hand the gateway binary to the lib shards
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-gateway-bin
+          path: ${{ runner.temp }}/gateway-bin/mcp-gateway
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
+
   test-shards:
     name: Linux shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
@@ -1261,7 +1318,7 @@ jobs:
   # the build failed, so they end red instead of skipped (a skipped shard would read as passing).
   test-shards-lib:
     name: Linux shard ${{ matrix.shard }}
-    needs: [linux-lib-build]
+    needs: [linux-lib-build, linux-gateway-bin]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1274,6 +1331,10 @@ jobs:
         env:
           BUILD: ${{ needs.linux-lib-build.result }}
         run: '[ "$BUILD" = success ] || { echo "::error::the shared lib test binary was not built (linux-lib-build: $BUILD)"; exit 1; }'
+      - name: The gateway binary for the sandbox rows was built
+        env:
+          BUILD: ${{ needs.linux-gateway-bin.result }}
+        run: '[ "$BUILD" = success ] || { echo "::error::the gateway binary was not built (linux-gateway-bin: $BUILD)"; exit 1; }'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Fetch the lib test part binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1281,14 +1342,24 @@ jobs:
           pattern: linux-lib-tests-p*
           path: ${{ runner.temp }}/lib-bin
           merge-multiple: false
+      - name: Fetch the gateway binary for the sandbox rows
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-gateway-bin
+          path: ${{ runner.temp }}/gateway-bin
       # ADR-027, as in test-shards: the preview sandbox tests need unprivileged user namespaces.
       - name: Allow unprivileged user namespaces (preview sandbox tests)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The artifact round trip drops the exec bit.
+      - name: The gateway binary is executable
+        run: chmod +x "$RUNNER_TEMP/gateway-bin/mcp-gateway"
       # Each part binary runs this half under today's guards; the five are checked first (exactly 1..N, each one
       # listing what its list.txt recorded, no test in two parts) and the floor applies to the sum.
       - name: Shard suite from the part binaries
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
+          # The fetch rows launch it as the sandbox helper; with the sandbox required they fail when it is missing.
+          PREVIEW_SANDBOX_GATEWAY_BIN: ${{ runner.temp }}/gateway-bin/mcp-gateway
         run: python3 scripts/ci/shard_tests.py run-prebuilt-parts linux ${{ matrix.shard }} "$RUNNER_TEMP/lib-bin"
       # The upgrade-notice lib target (upgrade_notice_tests) on the assembled guide, from the part binaries; int-b runs
       # the guide's integration target. Its tests must all sit on one part; a run that selects no test fails.
@@ -1851,6 +1922,10 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
+      # The self-check and the old-revision refusal read coverage_grade.sh's pinned SELF_REV; in this shallow CI
+      # checkout the test fetches that one commit itself (and fails, rather than skipping, if it cannot).
+      - name: Test the release coverage grade script
+        run: python3 scripts/release/test_coverage_grade.py
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"

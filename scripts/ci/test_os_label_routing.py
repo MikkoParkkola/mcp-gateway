@@ -29,7 +29,7 @@ from test_throwaway_routing import evaluate  # noqa: E402
 from test_os_shards import LABEL, LABELLED_LEGS, MATRIX  # noqa: E402
 
 # Windows runs on every lane without the label (test_heavy_train_gating.py).
-LABEL_JOBS = {"macos-shards", "macos-check"}
+LABEL_JOBS = {"macos-shards", "macos-check", "macos-lib-union"}
 # A labelled lane runs macOS's lib shard only: about two macOS runners serve every train.
 LABELLED_MACOS = LABELLED_LEGS["macos"]
 

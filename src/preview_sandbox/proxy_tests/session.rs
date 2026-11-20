@@ -6,6 +6,8 @@
 
 use super::super::super::control::{CONTROL_BOUNDS, ControlBounds, serve_session};
 use super::{Rig, connect_bytes, open, rig, send, status};
+use crate::preview_sandbox::Refusal;
+use crate::preview_sandbox::control_msg::FetchStep;
 use std::os::fd::AsFd as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -85,6 +87,7 @@ async fn s1_expired_comes_only_after_the_credentials_tunnels_are_shut() {
         read.read_line(&mut line).await.expect("expired");
         assert_eq!(line, "{\"expired\":true}\n");
         assert!(tunnel.closed().await, "the tunnel outlived `expired`");
+        write.write_all(b"{\"run\":true}\n").await.expect("write");
         secret
     };
     let (served, secret) = tokio::join!(session, script);
@@ -125,6 +128,11 @@ async fn s2_any_other_line_ends_the_session_and_revokes() {
         "{\"fetch_start\":true}",
         "{\"fetch_done\":true,\"x\":0}",
         "{\"fetch_done\":false}",
+        // RF3: `refused` is the one extra key, never with another, never null,
+        // and only a listed step.
+        "{\"fetch_done\":true,\"refused\":\"npm-ci\",\"x\":0}",
+        "{\"fetch_done\":true,\"refused\":null}",
+        "{\"fetch_done\":true,\"refused\":\"deadline\"}",
     ] {
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
@@ -257,6 +265,7 @@ async fn r7b_a_fetch_start_after_the_frame_bound_but_within_setup_is_served() {
             .expect("write");
         let mut expired = String::new();
         read.read_line(&mut expired).await.expect("expired");
+        write.write_all(b"{\"run\":true}\n").await.expect("write");
         (issued, expired)
     };
     let (served, (issued, expired)) =
@@ -460,4 +469,193 @@ async fn r7i_the_rest_of_fetch_done_ends_at_the_preview_deadline() {
         closed,
         "the session was still open a second past the deadline"
     );
+}
+
+/// RF1 (NPM.8), kills "a refused fetch is reported as a start" and "a refused
+/// fetch is answered with `expired`": for every step, a `fetch_done` naming it
+/// ends the session with that step's fixed words, never writes `expired`,
+/// shuts the tunnel the credential opened, and the credential stops working.
+#[tokio::test(flavor = "current_thread")]
+async fn rf1_a_refused_fetch_ends_the_session_with_its_step() {
+    for step in FetchStep::ALL {
+        let rig = rig().await;
+        let (helper, gateway) = UnixStream::pair().expect("pair");
+        let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        let script = async {
+            let (read, mut write) = helper.into_split();
+            let mut read = BufReader::new(read);
+            write
+                .write_all(b"{\"fetch_start\":true}\n")
+                .await
+                .expect("write");
+            let mut line = String::new();
+            read.read_line(&mut line).await.expect("credential");
+            let secret = secret_of(&line);
+            let mut tunnel = open(&rig, &connect_bytes(NPM, Some(&basic(&secret))))
+                .await
+                .expect("open");
+            assert_eq!(status(&tunnel.head().await), 200);
+            let done = serde_json::json!({"fetch_done": true, "refused": step});
+            write
+                .write_all(format!("{done}\n").as_bytes())
+                .await
+                .expect("write");
+            line.clear();
+            let _ = read.read_line(&mut line).await;
+            (secret, line, tunnel.closed().await)
+        };
+        let (served, (secret, after, closed)) =
+            tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+                .await
+                .expect("the session did not end within the guard");
+        assert_eq!(
+            served,
+            Err(Refusal::Step(step.describe().into())),
+            "{step:?}"
+        );
+        assert_eq!(
+            after, "",
+            "{step:?}: a line came after the refused fetch_done"
+        );
+        assert!(closed, "{step:?}: the tunnel outlived the refusal");
+        assert_eq!(status_under(&rig, &secret).await, 407, "{step:?}");
+    }
+}
+
+/// RF2 (NPM.8), kills "the refusal echoes what the sandbox sent": a
+/// `refused` value outside the step set (the credential itself, a URL that
+/// carries it, a path) or `null` ends the session with fixed words that hold
+/// none of it, no log line holds it either, and the credential stops working.
+#[tokio::test(flavor = "current_thread")]
+async fn rf2_an_unlisted_step_is_refused_without_echo() {
+    for kind in ["credential", "url", "path", "null"] {
+        // Current-thread runtime: the session's and the proxy's tasks log here.
+        let (logs, _logging) = crate::gateway::session_id::log_capture::capture_debug();
+        let rig = rig().await;
+        let (helper, gateway) = UnixStream::pair().expect("pair");
+        let session = serve_session(gateway, &rig.proxy, deadline(), CONTROL_BOUNDS);
+        let script = async {
+            let (read, mut write) = helper.into_split();
+            let mut read = BufReader::new(read);
+            write
+                .write_all(b"{\"fetch_start\":true}\n")
+                .await
+                .expect("write");
+            let mut line = String::new();
+            read.read_line(&mut line).await.expect("credential");
+            let secret = secret_of(&line);
+            let value = match kind {
+                "credential" => serde_json::Value::from(secret.clone()),
+                "url" => {
+                    serde_json::Value::from(format!("https://x:{secret}@registry.npmjs.org/p"))
+                }
+                "path" => serde_json::Value::from("/home/runner/.npmrc"),
+                _ => serde_json::Value::Null,
+            };
+            let done = serde_json::json!({"fetch_done": true, "refused": value});
+            write
+                .write_all(format!("{done}\n").as_bytes())
+                .await
+                .expect("write");
+            secret
+        };
+        let (served, secret) = tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+            .await
+            .expect("the session did not end within the guard");
+        let refusal = served.expect_err(kind);
+        let text = format!("{refusal:?} {refusal}");
+        for leaked in [secret.as_str(), "registry.npmjs.org/p", ".npmrc"] {
+            assert!(!text.contains(leaked), "{kind}: {text}");
+        }
+        assert_eq!(status_under(&rig, &secret).await, 407, "{kind}");
+        let logged = logs.text();
+        // Positive control: the capture saw the proxy refuse the revoked credential.
+        assert!(
+            logged.contains("preview proxy refused a request"),
+            "{kind}: {logged}"
+        );
+        for leaked in [secret.as_str(), "registry.npmjs.org/p", ".npmrc"] {
+            assert!(
+                !logged.contains(leaked),
+                "{kind}: a log line holds {leaked}"
+            );
+        }
+    }
+}
+
+/// RF7 (G1), kills "the start is reported before the helper acknowledges
+/// `expired`": a helper that reads `expired` and then sends nothing, `run`
+/// false, `run` of the wrong type, an extra key, the credential as the value
+/// or beside `run` true, half a line, or the right line after the deadline,
+/// gets no start; the session refuses at its deadline or on the line, and the
+/// refusal holds neither the credential nor the line's canary.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn rf7_no_start_without_the_runs_acknowledgement() {
+    const CANARY: &str = "rf7-canary-3d9e";
+    let kinds = [
+        "none",
+        "false",
+        "string",
+        "extra",
+        "credential",
+        "credential-extra",
+        "truncated",
+        "late",
+    ];
+    for kind in kinds {
+        let rig = rig().await;
+        let (helper, gateway) = UnixStream::pair().expect("pair");
+        let soon = tokio::time::Instant::now() + 5 * SEC;
+        let session = serve_session(gateway, &rig.proxy, soon, CONTROL_BOUNDS);
+        let script = async {
+            let (read, mut write) = helper.into_split();
+            let mut read = BufReader::new(read);
+            write
+                .write_all(b"{\"fetch_start\":true}\n")
+                .await
+                .expect("write");
+            let mut line = String::new();
+            read.read_line(&mut line).await.expect("credential");
+            let secret = secret_of(&line);
+            write
+                .write_all(b"{\"fetch_done\":true}\n")
+                .await
+                .expect("write");
+            line.clear();
+            read.read_line(&mut line).await.expect("expired");
+            let ack = match kind {
+                "none" => String::new(),
+                "false" => "{\"run\":false}\n".to_owned(),
+                "string" => format!("{{\"run\":\"{CANARY}\"}}\n"),
+                "extra" => format!("{{\"run\":true,\"step\":\"{CANARY}\"}}\n"),
+                "credential" => format!("{{\"run\":\"{secret}\"}}\n"),
+                "credential-extra" => format!("{{\"run\":true,\"x\":\"{secret}\"}}\n"),
+                "truncated" => format!("{{\"run\":\"{CANARY}"),
+                _ => {
+                    // Past the session's 5 s deadline.
+                    tokio::time::sleep(6 * SEC).await;
+                    "{\"run\":true}\n".to_owned()
+                }
+            };
+            // The session may have refused already; a failed write is fine.
+            let _ = write.write_all(ack.as_bytes()).await;
+            // The write half stays open: only the line, or its absence, ends it.
+            let mut rest = String::new();
+            let _ = read.read_line(&mut rest).await;
+            (line, secret)
+        };
+        let (served, (expired, secret)) =
+            tokio::time::timeout(GUARD, async { tokio::join!(session, script) })
+                .await
+                .expect("the session did not end within the guard");
+        assert_eq!(expired, "{\"expired\":true}\n", "{kind}");
+        let refusal = served.expect_err(kind);
+        let text = format!("{refusal:?} {refusal}");
+        for echoed in [secret.as_str(), CANARY] {
+            assert!(
+                !text.contains(echoed),
+                "{kind}: the refusal echoes the line"
+            );
+        }
+    }
 }

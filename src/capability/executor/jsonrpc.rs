@@ -192,6 +192,10 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 .expect("static content-type is valid"),
         );
 
+        // Pacing is wired into REST only, so a paced host takes no JSON-RPC call
+        // (a retained definition may predate the host's pacing).
+        crate::capability::pacing::refuse_unpaced_protocol(&jsonrpc_config.endpoint, "JSON-RPC")
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let timeout = Duration::from_secs(ctx.timeout_secs);
         let response = super::send_with_retry(
             self.executor
@@ -483,6 +487,7 @@ mod tests {
         use crate::capability::definition::{ProviderConfig, RestConfig};
 
         let provider = ProviderConfig {
+            rate_limit: None,
             service: "jsonrpc".to_string(),
             cost_per_call: 0.0,
             timeout: 30,
@@ -511,6 +516,7 @@ mod tests {
         use crate::capability::definition::{ProviderConfig, RestConfig};
 
         let provider = ProviderConfig {
+            rate_limit: None,
             service: "jsonrpc".to_string(),
             cost_per_call: 0.0,
             timeout: 30,

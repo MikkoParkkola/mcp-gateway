@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """The per-run union check over the lib test part binaries (the gate the part jobs need).
 
-Each part leg uploads `linux-lib-tests-pK/pK/list.txt`, its binary's unfiltered `--list`. `test_parts.py expect`
-writes `pK.txt`, the names that part must list. This fails unless the parts present are exactly 1..N (N from the
-build script), each list equals its expected set name for name, no part is empty, and no name sits in two parts.
+Each part leg uploads `linux-lib-tests-pK/pK/list.txt`, its binary's unfiltered `--list` (a macOS leg uploads all its
+parts' `pK/list.txt` as one artifact). `test_parts.py expect` writes `pK.txt`, the names that part must list. This fails
+unless the parts present are exactly 1..N (N from the build script), each part has one list, each list equals its
+expected set name for name, no part is empty, and no name sits in two parts.
 
 Usage: lib_union.py LISTS_DIR EXPECTED_DIR [BUILD_SCRIPT]"""
 
@@ -31,8 +32,16 @@ def listed(path: Path) -> set[str]:
 
 def problems(lists_dir: Path, expected_dir: Path, build: Path = BUILD_SCRIPT) -> list[str]:
     n = part_count(build)
-    found = {int(m.group(1)): p for p in lists_dir.glob("*/p*/list.txt") if (m := re.fullmatch(r"p(\d+)", p.parent.name))}
-    out = [f"part {k} was not built (no list)" for k in range(1, n + 1) if k not in found]
+    # `pK/list.txt` at any depth: download-artifact puts each artifact in a folder of its name, except when the
+    # pattern matches only one (the os-sensitive lane's lone macOS leg), which it unpacks into LISTS_DIR itself.
+    paths: dict[int, list[Path]] = {}
+    for p in sorted(lists_dir.glob("**/p*/list.txt")):
+        if m := re.fullmatch(r"p(\d+)", p.parent.name):
+            paths.setdefault(int(m.group(1)), []).append(p)
+    found = {k: ps[0] for k, ps in paths.items()}
+    out = [f"part {k} has {len(ps)} lists: {[str(p.relative_to(lists_dir)) for p in ps]}"
+           for k, ps in sorted(paths.items()) if len(ps) > 1]
+    out += [f"part {k} was not built (no list)" for k in range(1, n + 1) if k not in found]
     out += [f"part {k} is outside 1..={n}" for k in sorted(found) if not 1 <= k <= n]
     owner: dict[str, int] = {}
     for k in sorted(found):
