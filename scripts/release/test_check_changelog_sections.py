@@ -18,9 +18,11 @@ from pathlib import Path
 CHECKER = Path(__file__).resolve().parent / "check_changelog_sections.py"
 
 # The scratch repository must not pick up the caller's git config (signing,
-# hooks, templates), so the global and system files are switched off.
+# hooks, templates), so the global and system files are switched off. Inherited
+# GIT_* variables are dropped too: inside a git hook GIT_DIR and GIT_INDEX_FILE
+# point at the caller's repository, and git would init, commit and tag there.
 GIT_ENV = {
-    **os.environ,
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_AUTHOR_NAME": "sections-rows",
@@ -140,6 +142,22 @@ class Sections(unittest.TestCase):
                 check(headings, [], "9.0.0"),
                 (1, "CHANGELOG.md:3: [1.1.0] has no tag v1.1.0\n"),
             )
+
+    def test_r7_a_heading_the_check_cannot_read_fails(self):
+        # A "v" typed into the brackets would otherwise slip past both rules.
+        rc, out = check(
+            ["## [Unreleased]", "## [v1.2.0] - 2026-01-02", "## [1.0.0] - 2026-01-01"],
+            tags=["v1.0.0", "v1.2.0"],
+            cargo_version="1.3.0",
+        )
+        self.assertEqual(
+            (rc, out),
+            (
+                1,
+                "CHANGELOG.md:7: heading is neither [Unreleased] nor a version section:"
+                " ## [v1.2.0] - 2026-01-02\n",
+            ),
+        )
 
     def test_r6_the_cargo_exemption_covers_only_that_exact_version(self):
         with self.subTest("final version beside a beta manifest"):
