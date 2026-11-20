@@ -40,7 +40,7 @@ fn args(path: &str) -> ApiArgs {
         if_match: None,
         limit: None,
         json: false,
-        gateway: Default::default(),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: DashboardLinkTls::default(),
     }
 }
@@ -343,7 +343,7 @@ async fn a12_existing_admin_call_callers_unchanged() {
         all: false,
         subscription: Some("orders & returns".to_string()),
         reason: None,
-        gateway: Default::default(),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: DashboardLinkTls::default(),
     };
     let (method, path) = dead_letters_request(&list).expect("list");

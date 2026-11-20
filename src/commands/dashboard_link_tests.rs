@@ -404,7 +404,7 @@ fn dead_letters(
         all: false,
         subscription: None,
         reason: None,
-        gateway: Default::default(),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
     }
 }
@@ -416,7 +416,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     let token = "tok-IN-CONFIG-9679";
     let load = || Err(format!("bad bearer_token value {token}"));
     let args = || mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-        gateway: Default::default(),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
         json: false,
     };
