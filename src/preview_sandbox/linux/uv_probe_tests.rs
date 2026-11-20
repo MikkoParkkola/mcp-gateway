@@ -394,7 +394,7 @@ fn gone(pid_file: &Path) -> bool {
 }
 
 /// `ESRCH`: reading an exiting task's `/proc` file fails with this (as the
-/// product reads it, src/transport/stdio_sweep_linux.rs).
+/// product reads it, `src/transport/stdio_sweep_linux.rs`).
 const ESRCH: i32 = 3;
 
 /// Polls `read` (one read of a process's `/proc/<pid>/stat`) every 50 ms
@@ -443,7 +443,7 @@ fn reads_then(
 
 /// The two-hit flake of 2026-11-20: reading an exiting task's `/proc` file
 /// fails with ESRCH (the product reads it as gone,
-/// src/transport/stdio_sweep_linux.rs), and the same task can read as running
+/// `src/transport/stdio_sweep_linux.rs`), and the same task can read as running
 /// once more before it turns zombie. ESRCH ends the wait, and the answer is
 /// the one that ended it.
 #[test]
