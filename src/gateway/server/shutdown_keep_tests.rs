@@ -90,6 +90,7 @@ async fn an_abandoned_shutdown_save_keeps_its_dir_until_it_returns() {
     let dir = kept_tempdir();
     let root = dir.path().to_path_buf();
     let (save, mut release) = stalled_save(root.join("transitions.json"));
+    // limit-under-test (fires-only): the save is stalled until the test releases it, so this deadline always passes first; a slow runner only delays it.
     let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
     run_shutdown_saves(
         deadline,
@@ -120,6 +121,7 @@ async fn a_shutdown_save_takes_its_keep_before_its_thread_runs() {
         instant_save(root.join("transitions.json")),
     )
     .gated(Arc::clone(&gate));
+    // limit-under-test (fires-only): the save's thread waits at its gate until after this deadline, so it always passes first; a slow runner only delays it.
     let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
     run_shutdown_saves(deadline, vec![save]).await;
     crate::test_pause::within("the save's thread reached its gate", reached.notified()).await;

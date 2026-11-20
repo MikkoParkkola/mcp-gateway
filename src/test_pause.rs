@@ -152,6 +152,7 @@ mod tests {
         });
         within("thread reached", reached.notified()).await;
         slot.pause_on_thread();
+        // limit-under-test (fires-only): the parked thread cannot finish before the release, so this window always expires; a slow runner only delays it.
         let window = std::time::Duration::from_millis(100);
         // timing: absence
         let early = tokio::time::timeout(window, &mut finished).await;
