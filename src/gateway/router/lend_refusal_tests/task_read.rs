@@ -417,10 +417,12 @@ async fn a_read_during_another_readers_running_lease_answers_retryable() {
 /// The second per-user backend of R6, which the mint lends nothing for.
 const SECOND: &str = "lent-b";
 
-/// A mint that carries a credential only for `lends_to`'s audience: every
-/// other per-user backend's lender refuses the caller.
+/// A mint that always carries a credential for `lends_to`'s audience, and
+/// for every other audience only while `others` is set: once it is cleared,
+/// those per-user backends' lenders refuse the caller.
 struct AudienceMint {
     lends_to: &'static str,
+    others: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
@@ -430,7 +432,7 @@ impl super::IdentityPropagation for AudienceMint {
         identity: &super::VerifiedIdentity,
         backend: &super::BackendDescriptor,
     ) -> Result<super::PropagatedCredential, super::PropagationError> {
-        let lends = backend.audience == self.lends_to;
+        let lends = backend.audience == self.lends_to || self.others.load(Ordering::SeqCst);
         let headers = if lends {
             vec![("authorization".to_owned(), "Bearer lent".to_owned())]
         } else {
@@ -474,17 +476,22 @@ fn second_backend(url: String) -> Arc<crate::backend::Backend> {
     ))
 }
 
-/// R6: a task of two targets on two per-user backends. Its first target
-/// is merely cold (another reader holds its lease, the fill held at the
-/// peer); its second target's fill was refused by that backend's lender.
-/// The read answers the refusal, not the first target's retry.
+/// R6: a task of two targets on two per-user backends. A stored task
+/// records only the targets it sent, so both steps are lent and sent while
+/// the task runs; then both caller slots are evicted and the second
+/// backend's lender starts refusing. The first target is merely cold
+/// (another reader holds its lease, the fill held at the peer); the
+/// second target's fill is refused by its lender. The read answers the
+/// refusal, not the first target's retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
     let control = PeerControl::default();
     let first_url = switch_peer(control.clone()).await;
     let (second_url, second_sent) = peer().await;
+    let others = Arc::new(AtomicBool::new(true));
     let mint = AudienceMint {
         lends_to: "https://lent.internal",
+        others: Arc::clone(&others),
     };
     let closed = crate::config::InputSchemaEnforcement::Closed;
     let (router, dirs, (meta, first)) = gateway_named(BACKEND, first_url, mint, closed).await;
@@ -515,14 +522,26 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         "R6 second lender refusals: before the settled read {}, after it {}; it answered {}",
         done.refusals_before, done.refusals_after, done.answer
     );
-    // The first target goes cold: the caller's slot there is evicted.
-    let binding = "alpha@https://lent.internal";
-    first.age_per_user_slot_for_test(binding, 400);
-    first.evict_idle_per_user_entries(Duration::from_secs(300));
-    assert!(
-        !first.holds_per_user_slot_for_test(binding),
-        "premise: the first backend no longer holds the caller's slot"
+    assert_eq!(
+        done.answer.pointer("/result/status"),
+        Some(&json!("completed")),
+        "premise: both steps were sent, so both are recorded targets: {}",
+        done.answer
     );
+    // Both targets go cold (the caller's slots are evicted), and from now
+    // on the second backend's lender refuses the caller.
+    for (backend, binding) in [
+        (&first, "alpha@https://lent.internal"),
+        (&gw.backend, "alpha@https://lent-b.internal"),
+    ] {
+        backend.age_per_user_slot_for_test(binding, 400);
+        backend.evict_idle_per_user_entries(Duration::from_secs(300));
+        assert!(
+            !backend.holds_per_user_slot_for_test(binding),
+            "premise: {binding}'s slot is evicted"
+        );
+    }
+    others.store(false, Ordering::SeqCst);
     control.hold.store(true, Ordering::SeqCst);
     let lists_before = control.lists.load(Ordering::SeqCst);
     let holder = {
@@ -548,5 +567,10 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
     control.hold.store(false, Ordering::SeqCst);
     let held = holder.await;
     eprintln!("R6 the holding reader answered {held:?}");
+    assert_eq!(
+        gw.lender_refusals(),
+        before_read + 1,
+        "R6 premise: the read's fill of the second target was refused: {answer}"
+    );
     assert_refusal(&answer, "R6");
 }
