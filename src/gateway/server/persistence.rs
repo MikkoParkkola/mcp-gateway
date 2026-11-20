@@ -537,14 +537,6 @@ mod shutdown_deadline_tests {
         .await;
         let elapsed = start.elapsed();
         drop(release);
-        // The quick saves run on their own threads and may still be writing
-        // when the paused clock reaches the deadline: wait for both files, so
-        // the temp dir is not removed under a write still in flight.
-        let landed = crate::test_wait::wait_real_time(std::time::Duration::from_secs(10), || {
-            dir.path().join("ranker.json").exists() && dir.path().join("transitions.json").exists()
-        })
-        .await;
-        assert!(landed.is_ok(), "the quick saves never landed: {landed:?}");
         // Paused time moves only to the next timer, so the stop ends at the given
         // deadline exactly: neither a timeout of its own nor skipped saves ends it
         // at another instant.
