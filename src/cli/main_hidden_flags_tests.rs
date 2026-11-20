@@ -209,6 +209,38 @@ fn the_destination_flag_and_its_old_spellings_parse() {
     }
 }
 
+/// The destination's variable reaches each command only through the flag's
+/// own clap `env`, the route the CLI-owned variable list checks; a variable
+/// read some other way would also reach the server's config loader as a
+/// setting.
+#[test]
+fn the_destination_flag_reads_exactly_mcp_gateway_url() {
+    use clap::CommandFactory as _;
+    let mut cli = Cli::command();
+    cli.build();
+    let paths: &[&[&str]] = &[
+        &["stats"],
+        &["dashboard-link"],
+        &["api"],
+        &["events", "dead-letters"],
+        &["audit", "lookup-email"],
+    ];
+    for path in paths {
+        let mut cmd = &cli;
+        for name in *path {
+            cmd = cmd
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("no subcommand {name:?} in {path:?}"));
+        }
+        let flag = cmd
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some("gateway"))
+            .unwrap_or_else(|| panic!("{path:?} has no --gateway"));
+        let env = flag.get_env().and_then(|name| name.to_str());
+        assert_eq!(env, Some("MCP_GATEWAY_URL"), "{path:?}");
+    }
+}
+
 /// `add --url` is a backend's own address, a different meaning: it keeps its
 /// name, and `add` has no `--gateway`.
 #[test]

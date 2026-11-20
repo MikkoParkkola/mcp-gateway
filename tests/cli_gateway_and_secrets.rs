@@ -77,14 +77,27 @@ fn config_pointing_at(dir: &Path, port: u16) -> PathBuf {
 
 /// Runs one command through the shared runner, with a placeholder token and,
 /// when given, `MCP_GATEWAY_URL`.
-fn invoke(args: &[&str], gateway_env: Option<&str>) -> Output {
+fn invoke(args: &[&str], gateway_env: Option<&str>, stdin: &str) -> Output {
     let mut env = vec![("MCP_GATEWAY_TOKEN", "placeholder")];
     env.extend(gateway_env.map(|url| ("MCP_GATEWAY_URL", url)));
-    gateway_bin::run_cli(args, &env)
+    gateway_bin::run_cli_with_input(args, &env, stdin.as_bytes())
 }
 
 /// The two resolution paths: `stats` has its own, the other four share one.
 const COMMANDS: &[&[&str]] = &[&["stats"], &["api", "GET", "/ui/api/status"]];
+
+/// All five commands that reach a gateway, each with what it reads from
+/// stdin (only the email lookup reads anything).
+const ALL: &[(&[&str], &str)] = &[
+    (&["stats"], ""),
+    (&["dashboard-link"], ""),
+    (&["api", "GET", "/ui/api/status"], ""),
+    (&["events", "dead-letters", "list"], ""),
+    (
+        &["audit", "lookup-email", "--email-stdin"],
+        "someone@example.test\n",
+    ),
+];
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
@@ -92,11 +105,11 @@ fn stderr(out: &Output) -> String {
 
 #[test]
 fn the_flag_beats_the_environment() {
-    for command in COMMANDS {
+    for (command, stdin) in ALL {
         let (flag, env) = (Counting::start(), Counting::start());
         let mut args = command.to_vec();
         args.extend(["--gateway", flag.url.as_str()]);
-        let out = invoke(&args, Some(env.url.as_str()));
+        let out = invoke(&args, Some(env.url.as_str()), stdin);
         let (flag_hits, env_hits) = (flag.finish(), env.finish());
         assert!(
             flag_hits >= 1,
@@ -118,7 +131,7 @@ fn the_environment_beats_the_default() {
         let config = config_pointing_at(dir.path(), default.port());
         let mut args = command.to_vec();
         args.extend(["--config", config.to_str().expect("utf-8 path")]);
-        let out = invoke(&args, Some(env.url.as_str()));
+        let out = invoke(&args, Some(env.url.as_str()), "");
         let (env_hits, default_hits) = (env.finish(), default.finish());
         assert!(
             env_hits >= 1,
@@ -143,7 +156,7 @@ fn without_flag_or_variable_the_config_address_is_used() {
         let config = config_pointing_at(dir.path(), default.port());
         let mut args = command.to_vec();
         args.extend(["--config", config.to_str().expect("utf-8 path")]);
-        let out = invoke(&args, None);
+        let out = invoke(&args, None, "");
         assert!(
             default.finish() >= 1,
             "{command:?}: the config's address saw nothing: {}",
@@ -175,6 +188,7 @@ fn import_with_auth_key(auth_key: &str) -> (Output, Vec<String>) {
             auth_key,
         ],
         None,
+        "",
     );
     let mut written = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&caps) {

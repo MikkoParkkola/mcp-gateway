@@ -455,3 +455,27 @@ pub fn run_cli(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     }
     cmd.args(args).output().expect("start mcp-gateway")
 }
+
+/// As [`run_cli`], but `input` is written to the command's stdin and then
+/// closed, for commands that read a value (such as an email) from stdin.
+pub fn run_cli_with_input(
+    args: &[&str],
+    env: &[(&str, &str)],
+    input: &[u8],
+) -> std::process::Output {
+    use std::io::Write as _;
+    let home = tempfile::tempdir().expect("isolated home for the command");
+    let mut cmd = command(home.path(), Inherit::Nothing);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
+    let mut child = cmd.args(args).spawn().expect("start mcp-gateway");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    child.wait_with_output().expect("wait for mcp-gateway")
+}
