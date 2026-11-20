@@ -355,7 +355,7 @@ pub(crate) enum Command {
     /// Fetch live statistics from a running gateway instance
     #[command(about = "Show observed invocation counts and cache behavior")]
     Stats {
-        /// Where to send the request; without a flag or MCP_GATEWAY_URL, the
+        /// Where to send the request; without a flag or `MCP_GATEWAY_URL`, the
         /// `server.host`/`server.port` of `--config` (the file `serve` binds
         /// to), else `http://127.0.0.1:39400`.
         #[command(flatten)]

@@ -50,8 +50,8 @@ fn sounds_secret(text: &str) -> bool {
 
 /// Whether `arg` shows the property its class names.
 fn class_holds(arg: &clap::Arg, class: Carries) -> bool {
-    let names = arg.get_value_names().unwrap_or_default();
-    let named = |want: &str| names.iter().any(|name| name.as_str() == want);
+    let value_names = arg.get_value_names().unwrap_or_default();
+    let named = |want: &str| value_names.iter().any(|name| name.as_str() == want);
     match class {
         Carries::FilePath => {
             arg.get_value_parser().type_id() == std::any::TypeId::of::<std::path::PathBuf>()

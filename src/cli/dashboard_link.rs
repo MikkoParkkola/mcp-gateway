@@ -9,8 +9,8 @@ use std::path::PathBuf;
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct GatewayArg {
     /// The gateway to send to, as a base URL. Order: this flag, then
-    /// MCP_GATEWAY_URL, then the address in --config (server.host and
-    /// server.port).
+    /// `MCP_GATEWAY_URL`, then the address in `--config` (`server.host` and
+    /// `server.port`).
     // `--url` and `-u` are the old spellings: hidden aliases, so scripts
     // written for them keep working.
     #[arg(
