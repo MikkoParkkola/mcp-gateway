@@ -1,0 +1,10 @@
+head_sha	f1ef9d06ae90fa0080bfdaf4994b65a12922972d
+#mutant m1
+mcp_gateway	gateway::meta_mcp::grant_decision_slot_tests::selection_rule_table	src/gateway/meta_mcp/grant_decision_slot_tests.rs:50
+#mutant m2
+mcp_gateway	gateway::meta_mcp::grant_withheld_parity_tests::row7c_a_cancelled_withheld_call_still_logs_its_failed_record	src/gateway/meta_mcp/grant_withheld_parity_tests.rs:244
+mcp_gateway	gateway::router::tests::task_execution_adapter::x14_authorize_order::the_x14_count_waits_for_the_withheld_record_it_started	src/gateway/router/tests/task_execution_adapter/x14_authorize_order.rs:165
+#mutant m3
+mcp_gateway	gateway::meta_mcp::grant_marker_tests::a_call_cancelled_during_its_invocation_append_is_one_recorded_decision	src/gateway/meta_mcp/grant_audit_fixture.rs:254
+#mutant m3w
+mcp_gateway	gateway::meta_mcp::grant_marker_tests::a_call_cancelled_during_its_invocation_append_is_one_recorded_decision	src/gateway/meta_mcp/grant_audit_fixture.rs:254
