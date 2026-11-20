@@ -1431,7 +1431,8 @@ jobs:
       # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
       # cargo steps below still run.
       - name: Install the gate env's tree-sitter versions
-        run: python3 -m pip install --user --quiet $(python3 -c 'import tomllib; print(*tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"])')
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -1495,7 +1496,8 @@ jobs:
       # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
       # cargo steps below still run.
       - name: Install the gate env's tree-sitter versions
-        run: python3 -m pip install --user --quiet $(python3 -c 'import tomllib; print(*tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"])')
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail

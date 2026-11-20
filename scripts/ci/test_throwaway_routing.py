@@ -279,11 +279,11 @@ def throwaway_cargo_survives_a_suite_red(rc: list) -> None:
         rc.append(f"expected 2 'Tests (throwaway)' jobs, found {len(found)}")
     for job in found:
         rc.extend(cargo_after_suites_problems(str(job.get("runs-on")), job.get("steps", [])))
-    # The rule itself must be able to fail: a job whose cargo step lacks the condition is reported.
-    bare = [{"run": "python3 -m pip install x  # scripts/gate-env/pyproject.toml"},
-            {"name": "Release tooling Python suites"}, {"name": "Run the tests"}]
-    if not cargo_after_suites_problems("self-check", bare):
-        rc.append("the cargo-after-suites rule passed a job whose cargo step can be skipped")
+    # The rule itself must fail on each half: a cargo step without the condition, and no install before the suites.
+    bare = [{"name": "Release tooling Python suites"}, {"name": "Run the tests"}]
+    found = " ".join(cargo_after_suites_problems("self-check", bare))
+    if "lacks if: !cancelled()" not in found or "installs the gate env" not in found:
+        rc.append(f"the cargo-after-suites rule missed half of its self-check: {found!r}")
 
 
 def main() -> int:
