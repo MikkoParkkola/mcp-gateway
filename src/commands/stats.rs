@@ -54,7 +54,11 @@ fn stats_client() -> Result<reqwest::Client, String> {
 }
 
 /// `stats` output text for stdout (`Ok`) or stderr (`Err`). (MIK-8660 seam)
-async fn stats_outcome(client: &reqwest::Client, url: &str) -> Result<String, String> {
+async fn stats_outcome(
+    client: &reqwest::Client,
+    url: &str,
+    render: crate::cli::output::Render,
+) -> Result<String, String> {
     use serde_json::json;
 
     let request_body = json!({
@@ -70,15 +74,15 @@ async fn stats_outcome(client: &reqwest::Client, url: &str) -> Result<String, St
     let endpoint = format!("{}/mcp", url.trim_end_matches('/'));
 
     match client.post(&endpoint).json(&request_body).send().await {
-        Ok(response) => handle_stats_response(response, &endpoint).await,
+        Ok(response) => handle_stats_response(response, &endpoint, render).await,
         Err(e) => Err(format!(
             "❌ Failed to connect to gateway: {e}\n   Make sure the gateway is running at {url}\n"
         )),
     }
 }
 
-/// Run the `stats` command against a running gateway.
-pub async fn run_stats_command(url: &str) -> ExitCode {
+/// Run the `stats` command against a running gateway: its text summary, or one document with `--json`.
+pub async fn run_stats_command(url: &str, render: crate::cli::output::Render) -> ExitCode {
     let client = match stats_client() {
         Ok(client) => client,
         Err(text) => {
@@ -86,7 +90,7 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match stats_outcome(&client, url).await {
+    match stats_outcome(&client, url, render).await {
         Ok(text) => {
             print!("{text}");
             ExitCode::SUCCESS
@@ -98,7 +102,11 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
     }
 }
 
-async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result<String, String> {
+async fn handle_stats_response(
+    response: reqwest::Response,
+    url: &str,
+    render: crate::cli::output::Render,
+) -> Result<String, String> {
     if response.status().is_redirection() {
         let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
         return Err(format!(
@@ -112,15 +120,22 @@ async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result
         ));
     }
     match response.json::<serde_json::Value>().await {
-        Ok(body) => print_stats_body(&body, url),
+        Ok(body) => print_stats_body(&body, url, render),
         Err(e) => Err(format!("❌ Failed to parse response: {e}\n")),
     }
 }
 
-fn print_stats_body(body: &serde_json::Value, _url: &str) -> Result<String, String> {
+fn print_stats_body(
+    body: &serde_json::Value,
+    _url: &str,
+    render: crate::cli::output::Render,
+) -> Result<String, String> {
     if let Some(text) = extract_stats_text(body)
         && let Ok(stats) = serde_json::from_str::<serde_json::Value>(text)
     {
+        if render == crate::cli::output::Render::Json {
+            return stats_document(&stats);
+        }
         let mut out = format!(
             "📊 Gateway Statistics\n\nInvocations:       {}\nCache Hits:        {}\nCache Hit Rate:    {}\nTools Discovered:  {}\nTools Available:   {}\n",
             stats["invocations"],
@@ -151,6 +166,48 @@ fn extract_stats_text(body: &serde_json::Value) -> Option<&str> {
         .first()?
         .get("text")?
         .as_str()
+}
+
+/// `stats --json`'s document (MIK-9764.JSONF.1, design 3a): each counter is the gateway's value passed through, or
+/// null when its stats omit it; `top_tools` is `[]` when absent.
+fn stats_document(stats: &serde_json::Value) -> Result<String, String> {
+    #[derive(serde::Serialize)]
+    struct Top<'a> {
+        server: &'a str,
+        tool: &'a str,
+        count: Option<&'a serde_json::Value>,
+    }
+    #[derive(serde::Serialize)]
+    struct View<'a> {
+        invocations: Option<&'a serde_json::Value>,
+        cache_hits: Option<&'a serde_json::Value>,
+        cache_hit_rate: Option<&'a serde_json::Value>,
+        tools_discovered: Option<&'a serde_json::Value>,
+        tools_available: Option<&'a serde_json::Value>,
+        top_tools: Vec<Top<'a>>,
+    }
+    let top_tools = stats["top_tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| Top {
+                    server: tool["server"].as_str().unwrap_or(""),
+                    tool: tool["tool"].as_str().unwrap_or(""),
+                    count: tool.get("count"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::cli::output::document(&View {
+        invocations: stats.get("invocations"),
+        cache_hits: stats.get("cache_hits"),
+        cache_hit_rate: stats.get("cache_hit_rate"),
+        tools_discovered: stats.get("tools_discovered"),
+        tools_available: stats.get("tools_available"),
+        top_tools,
+    })
+    .map_err(|why| format!("❌ Could not print the statistics: {why}\n"))
 }
 
 fn print_top_tools(stats: &serde_json::Value) -> String {
@@ -296,7 +353,11 @@ mod tests {
         let base = serve(stats_stub()).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -319,7 +380,11 @@ mod tests {
         let base = format!("http://{addr}");
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -352,7 +417,11 @@ mod tests {
         let base = serve(app).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -385,7 +454,11 @@ mod tests {
         let base = serve(app).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -419,7 +492,11 @@ mod tests {
         let base = serve(app).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -454,7 +531,11 @@ mod tests {
         let base = serve(app).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");
@@ -481,7 +562,11 @@ mod tests {
         let base = serve(app).await;
         let outcome = tokio::time::timeout(
             HANG_BOUND,
-            stats_outcome(&stats_client().expect("client"), &base),
+            stats_outcome(
+                &stats_client().expect("client"),
+                &base,
+                crate::cli::output::Render::Text,
+            ),
         )
         .await
         .expect("bounded");

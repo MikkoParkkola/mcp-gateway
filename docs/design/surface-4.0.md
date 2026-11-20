@@ -208,6 +208,9 @@ Two items are `pub` beyond the module items above, both for backend secret refer
 - `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
 - `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it. Configuration history is to use it too, in a separate change.
 
+One item is `pub` for integration tests only, under the `#[doc(hidden)]` `gateway::test_helpers` module, and is INTERNAL:
+- `mcp_gateway::gateway::test_helpers::config_dir() -> Option<PathBuf>` (not on macOS), exactly what the crate's own config-directory lookup returns. The discovery test uses it to prove the lookup routes to a private home before it scans anything there. No stability promise; no logic of its own.
+
 
 ## Findings filed on the way (0-bug rule)
 
@@ -1399,6 +1402,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway validate --severity` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
 | `mcp-gateway validate -s` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
 | `mcp-gateway validate <PATHS>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
+| `mcp-gateway audit verify --json` | KEEP | the verdict as one JSON document, pass or fail | - | src/cli/subcommands/trust.rs:296 |
+| `mcp-gateway cap list --json` | KEEP | the listing as one JSON document | - | src/cli/subcommands.rs:55 |
+| `mcp-gateway cap registry-list --json` | KEEP | the index as one JSON document | - | src/cli/subcommands.rs:183 |
+| `mcp-gateway cap search --json` | KEEP | the hits as one JSON document | - | src/cli/subcommands.rs:172 |
+| `mcp-gateway cap test --json` | KEEP | the call's result as one JSON document | - | src/cli/subcommands.rs:93 |
+| `mcp-gateway cap validate --json` | KEEP | the validated capability as one JSON document | - | src/cli/subcommands.rs:31 |
+| `mcp-gateway dashboard-link --json` | KEEP | the link as one JSON document; errors as the shared JSON error | - | src/cli/dashboard_link.rs:18 |
+| `mcp-gateway get --json` | KEEP | the backend as one JSON document, values hidden | - | src/cli/mod.rs:535 |
+| `mcp-gateway hash-key --json` | KEEP | the digest as one JSON document | - | src/cli/mod.rs:334 |
+| `mcp-gateway provenance verify --json` | KEEP | the verdict as one JSON document, valid or not | - | src/cli/subcommands/trust.rs:351 |
+| `mcp-gateway skills list --json` | KEEP | the registry as one JSON document | - | src/cli/skills.rs:104 |
+| `mcp-gateway skills search --json` | KEEP | the hits as one JSON document | - | src/cli/skills.rs:119 |
+| `mcp-gateway skills show --json` | KEEP | the skill as one JSON document | - | src/cli/skills.rs:134 |
+| `mcp-gateway stats --json` | KEEP | the statistics as one JSON document | - | src/cli/mod.rs:367 |
 
 ## Surface: env
 

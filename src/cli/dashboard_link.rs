@@ -13,6 +13,9 @@ pub struct DashboardLinkArgs {
     /// TLS material to present and trust.
     #[command(flatten)]
     pub tls: DashboardLinkTls,
+    /// Print one JSON document on stdout (`url`); errors are the shared JSON error on stderr
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// The TLS material `dashboard-link` presents and trusts.

@@ -338,6 +338,7 @@ pub(crate) async fn lookup_run(
         port_override,
         host_override,
         token,
+        crate::cli::output::Render::Text,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return (out, secrets),
