@@ -17,6 +17,11 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+#[path = "common/required.rs"]
+mod required;
+
 /// Gateway URL for testing
 const GATEWAY_URL: &str = "http://localhost:39400/mcp";
 
@@ -82,7 +87,8 @@ fn parse_tool_response(response: &Value) -> Result<Value, String> {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_get_stats() {
     if !is_gateway_running().await {
-        eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
+        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
@@ -161,7 +167,8 @@ async fn test_gateway_get_stats() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_search_tools() {
     if !is_gateway_running().await {
-        eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
+        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
@@ -242,7 +249,8 @@ async fn test_gateway_search_tools() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_invoke_caching() {
     if !is_gateway_running().await {
-        eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
+        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
@@ -356,7 +364,8 @@ async fn test_invoke_caching() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_list_servers() {
     if !is_gateway_running().await {
-        eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
+        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
@@ -461,21 +470,11 @@ async fn test_gateway_list_servers() {
 }
 
 #[tokio::test]
-#[ignore = "requires mcp-gateway binary built in target/"]
 async fn test_cap_registry_list() {
-    // Check if mcp-gateway binary exists in target/debug or target/release
-    let binary_path = if std::path::Path::new("target/release/mcp-gateway").exists() {
-        "target/release/mcp-gateway"
-    } else if std::path::Path::new("target/debug/mcp-gateway").exists() {
-        "target/debug/mcp-gateway"
-    } else {
-        eprintln!("⚠️  mcp-gateway binary not found, skipping CLI test");
-        eprintln!("   Build with: cargo build --release");
-        return;
-    };
-
-    // Run: mcp-gateway cap registry-list
-    let output = std::process::Command::new(binary_path)
+    // The binary cargo built for this test crate, so it always exists and the row needs no skip; spawned through
+    // the shared helper so it runs with an isolated home, never the developer's.
+    let home = tempfile::tempdir().expect("temp home");
+    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["cap", "registry-list"])
         .output()
         .expect("Failed to execute mcp-gateway cap registry-list");
@@ -518,7 +517,8 @@ async fn test_cap_registry_list() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_integration_flow() {
     if !is_gateway_running().await {
-        eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
+        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
