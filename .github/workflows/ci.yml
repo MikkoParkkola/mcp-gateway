@@ -208,6 +208,11 @@ jobs:
           python3 scripts/ci/check_python_skips.py
           python3 scripts/ci/check_rust_skips.py --self-test
           python3 scripts/ci/check_rust_skips.py
+      # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
+      - name: Two clippy lints are found by text before a lint run
+        run: |
+          python3 scripts/dev/check_clippy_textlints.py --self-test
+          python3 scripts/dev/check_clippy_textlints.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier

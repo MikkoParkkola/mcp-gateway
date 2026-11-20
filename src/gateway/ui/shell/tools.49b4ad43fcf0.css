@@ -47,3 +47,19 @@
 .tools-called th:nth-child(3),
 .tools-called td:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; }
 .tools-called-empty { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
+
+.tools-try { display: grid; gap: var(--space-3); }
+.tools-try-form { display: grid; gap: var(--space-3); justify-items: start; }
+.tools-try-fields { display: grid; gap: var(--space-3); width: min(40rem, 100%); }
+.tools-try-form > .field { width: min(40rem, 100%); }
+.tools-try textarea.input { min-height: calc(var(--size-row) * 3); padding: var(--space-2) var(--space-3); font-family: var(--font-family-mono); }
+.tools-try input[type="checkbox"] { width: auto; min-height: var(--size-row); justify-self: start; }
+.tools-try-answer { display: grid; gap: var(--space-2); overflow-wrap: anywhere; }
+.tools-try-answer pre { margin: 0; white-space: pre-wrap; }
+
+dialog.tools-try-ask { padding: var(--space-5) var(--space-5) var(--space-4); border: 0;
+  background: var(--color-bg-surface); color: var(--color-text-primary); box-shadow: var(--shadow-3);
+  max-width: min(28rem, calc(100% - 24px)); display: grid; gap: var(--space-3); }
+dialog.tools-try-ask::backdrop { background: var(--color-bg-overlay); }
+dialog.tools-try-ask p { margin: 0; overflow-wrap: anywhere; }
+dialog.tools-try-ask .btn { justify-self: end; }
