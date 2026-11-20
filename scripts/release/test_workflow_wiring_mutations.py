@@ -1866,58 +1866,57 @@ _HOSTED_PY = (
     "        uses: ./.github/actions/add-swap\n"
 )
 _TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
-_HOSTED_PY_STEP = _HOSTED_PY + (
-    "      # The release tooling's Python suites, which `release-script-tests` runs\n"
-    '      # but which that job skips here. Without this, a throwaway meant to show\n'
-    '      # a workflow-wiring or release-script test going red passes on cargo\n'
-    '      # alone. Every suite runs and all failures are reported; seconds, no cargo.\n'
-    '      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n'
-    '        run: python3 -c \'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")\' 2>/dev/null || python3 -m pip install --user --quiet \'pyyaml==6.0.2\'\n'
-    '      - name: Release tooling Python suites\n'
-    '        run: |\n'
-    '          set -uo pipefail\n'
-    '          fail=0\n'
-    '          for suite in scripts/release/test_*.py; do\n'
-    '            echo "::group::$suite"\n'
-    '            python3 "$suite" || { echo "::error::$suite failed"; fail=1; }\n'
-    '            echo "::endgroup::"\n'
-    '          done\n'
-    '          exit "$fail"\n'
-)
+def _hosted_suites_span():
+    """The hosted throwaway job from its runner line (_HOSTED_PY) through the end of its Python suites step, read
+    from ci.yml, so the case drops every step from there to the suites without keeping a copy of them: those
+    steps change with every tooling fix, and a copy here went stale each time. A missing start or end gives text
+    that occurs nowhere, which the runner reports as a stale anchor."""
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    start = text.find(_HOSTED_PY)
+    suites_end = '          exit "$fail"\n'
+    end = text.find(suites_end, start) if start >= 0 else -1
+    if end < 0:
+        return "\0 hosted throwaway job or its suites step not found \0"
+    return text[start:end + len(suites_end)]
+
+
+_HOSTED_PY_STEP = _hosted_suites_span()
 CASES += [
     ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
     ("throwaway-python-failure-swallowed", "ci.yml",
-     '          exit "$fail"\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
+     '          exit "$fail"\n      - if: ${{ !cancelled() }}\n        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
+     "      - if: ${{ !cancelled() }}\n        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
      "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
      "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
      "      - name: Private gateway home\n"
+     "        if: ${{ !cancelled() }}\n"
      '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
      "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - name: Run the tests\n"
+     "      - name: Run the tests\n        if: ${{ !cancelled() }}\n"
      "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
      "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
      "  # Same run on the self-hosted arm64 runner.",
-     '          exit 0\n      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
+     '          exit 0\n      - if: ${{ !cancelled() }}\n        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
      "      # Restore only: saving from throwaway runs would evict the entries the\n"
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
+     "      - if: ${{ !cancelled() }}\n        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
      "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
      "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
      "      - name: Private gateway home\n"
+     "        if: ${{ !cancelled() }}\n"
      '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
      "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - name: Run the tests\n"
+     "      - name: Run the tests\n        if: ${{ !cancelled() }}\n"
      "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
      "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
      "  # Same run on the self-hosted arm64 runner.", CAUGHT),
