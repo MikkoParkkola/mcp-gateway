@@ -96,8 +96,8 @@ fn distinct_code(n: usize) -> [u8; 10] {
 /// groups of five joined by one hyphen.
 #[test]
 fn a_code_is_ten_symbols_from_the_alphabet() {
-    let drawn = [0, 1, 2, 3, 4, 27, 28, 29, 30, 31];
-    let (draws, _) = scripted(vec![drawn], vec![id(1)], vec![secret(1)]);
+    let indices = [0, 1, 2, 3, 4, 27, 28, 29, 30, 31];
+    let (draws, _) = scripted(vec![indices], vec![id(1)], vec![secret(1)]);
     let store = AttemptStore::new(draws);
     let started = store
         .start(Instant::now())
@@ -333,7 +333,7 @@ fn a_consumed_attempt_keeps_its_place_until_its_deadline() {
         None,
         "a consumed code is not found"
     );
-    let late = t0 + TEN_MINUTES - Duration::from_secs(1);
+    let late = t0 + Duration::from_secs(599);
     assert_eq!(
         store.start(late).err(),
         Some(StartRefused::Collision),

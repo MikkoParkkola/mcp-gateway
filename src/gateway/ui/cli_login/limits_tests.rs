@@ -17,7 +17,7 @@ const MINUTE: Duration = Duration::from_secs(60);
 const TEN_MINUTES: Duration = Duration::from_secs(600);
 /// The per-key map's bound (a design choice: at least every gateway cap).
 const KEY_BOUND: usize = 128;
-const JUST: Duration = Duration::from_secs(1);
+// 59 s and 599 s below: a window's end less one second, written out like the rest.
 
 fn peer(n: u32) -> IpAddr {
     IpAddr::from(n.to_be_bytes())
@@ -48,7 +48,7 @@ fn starts_five_per_peer_per_minute() {
         assert!(fresh.admit_start(peer(1), t0));
     }
     assert!(
-        !fresh.admit_start(peer(1), t0 + MINUTE - JUST),
+        !fresh.admit_start(peer(1), t0 + Duration::from_secs(59)),
         "still inside the minute"
     );
     assert!(
@@ -68,7 +68,7 @@ fn starts_one_hundred_per_gateway_per_minute() {
     }
     assert!(!limits.admit_start(peer(1000), t0), "the 101st start");
     assert!(
-        !limits.admit_start(peer(1001), t0 + MINUTE - JUST),
+        !limits.admit_start(peer(1001), t0 + Duration::from_secs(59)),
         "still inside the minute"
     );
     for k in 1..=PER_KEY {
@@ -107,7 +107,7 @@ fn failed_lookups_five_per_session_per_600_seconds() {
         limits.note_failed_lookup(&session(n), t0);
     }
     assert!(
-        !limits.may_look_up(&session(1), t0 + TEN_MINUTES - JUST),
+        !limits.may_look_up(&session(1), t0 + Duration::from_secs(599)),
         "inside 600 s"
     );
     assert!(
@@ -130,7 +130,7 @@ fn failed_lookups_one_hundred_per_gateway_per_600_seconds() {
         "a fresh session after 100 failures"
     );
     assert!(
-        !limits.may_look_up(&session(1000), t0 + TEN_MINUTES - JUST),
+        !limits.may_look_up(&session(1000), t0 + Duration::from_secs(599)),
         "inside 600 s"
     );
     assert!(
@@ -160,7 +160,7 @@ fn invalid_polls_five_per_peer_per_minute() {
         limits.note_invalid_poll(peer(n), t0);
     }
     assert!(
-        !limits.may_poll(peer(1), t0 + MINUTE - JUST),
+        !limits.may_poll(peer(1), t0 + Duration::from_secs(59)),
         "still inside the minute"
     );
     assert!(
@@ -183,7 +183,7 @@ fn invalid_polls_one_hundred_per_gateway_per_minute() {
         "a fresh peer after 100 invalid polls"
     );
     assert!(
-        !limits.may_poll(peer(1000), t0 + MINUTE - JUST),
+        !limits.may_poll(peer(1000), t0 + Duration::from_secs(59)),
         "still inside the minute"
     );
     assert!(
