@@ -1892,6 +1892,7 @@ CASES += [
      "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
      "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
      "      - name: Private gateway home\n"
+     "        if: ${{ !cancelled() }}\n"
      '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
@@ -1909,6 +1910,7 @@ CASES += [
      "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
      "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
      "      - name: Private gateway home\n"
+     "        if: ${{ !cancelled() }}\n"
      '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
