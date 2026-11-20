@@ -161,6 +161,7 @@ pub(super) struct SlotGuard {
 
 impl Drop for SlotGuard {
     fn drop(&mut self) {
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));
         // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let best_effort =
