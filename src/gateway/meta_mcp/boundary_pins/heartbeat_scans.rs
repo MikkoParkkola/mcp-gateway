@@ -498,11 +498,14 @@ fn every_image_launch_sets_dnt() {
     }
     // The floor (A3/A4): the finder sees each known gateway launch, by file,
     // before anything is judged; a finder blind to an image form sees fewer.
+    // One read of the launch files, so the floor and the judgement see the
+    // same text.
+    let sources = launch_sources();
     let mut seen = std::collections::BTreeMap::new();
-    for (path, text) in launch_sources() {
-        let n = gateway_launches(&path, &text).len();
+    for (path, text) in &sources {
+        let n = gateway_launches(path, text).len();
         if n > 0 {
-            seen.insert(path, n);
+            seen.insert(path.clone(), n);
         }
     }
     let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
@@ -511,16 +514,16 @@ fn every_image_launch_sets_dnt() {
         .collect();
     assert_eq!(seen, known, "the gateway launches found, by file");
     let mut missing = Vec::new();
-    for (path, text) in launch_sources() {
-        for launch in launches_without_dnt(&path, &text) {
+    for (path, text) in &sources {
+        for launch in launches_without_dnt(path, text) {
             missing.push(format!("{path}: {launch}"));
         }
-        let name = std::path::Path::new(&path)
+        let name = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if (name.starts_with("docker-compose") || name.starts_with("compose"))
-            && compose_without_dnt(&text)
+            && compose_without_dnt(text)
         {
             missing.push(format!(
                 "{path}: a compose service runs the gateway image without DO_NOT_TRACK=1"
