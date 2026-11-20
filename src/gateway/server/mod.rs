@@ -15,6 +15,10 @@ pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_post
 // The test build's hooks into `run` (port 0, a shutdown trigger).
 #[cfg(test)]
 mod test_hooks;
+// The heartbeat at the real start sites (unix: the 3.5 line sends nothing on
+// Windows, so no sending control exists there).
+#[cfg(all(test, unix))]
+mod heartbeat_start_tests;
 mod warmstart;
 
 use std::net::SocketAddr;

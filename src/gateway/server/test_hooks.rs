@@ -114,7 +114,7 @@ pub(super) async fn in_child(name: &str, home: &Path) -> String {
 const HTTP_CHILD: &str = "gateway::server::test_hooks::child_runs_the_http_server";
 
 /// Loopback, any free port: the only settings the A2 child changes.
-fn loopback_any_port() -> crate::config::Config {
+pub(super) fn loopback_any_port() -> crate::config::Config {
     crate::config::Config {
         server: crate::config::ServerConfig {
             host: "127.0.0.1".into(),
