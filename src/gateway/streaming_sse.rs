@@ -774,3 +774,8 @@ mod terminal_frame_tests {
 #[cfg(test)]
 #[path = "streaming_sse_gate_tests.rs"]
 mod gate_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "streaming_sse_stop_tests.rs"]
+mod stop_tests;
