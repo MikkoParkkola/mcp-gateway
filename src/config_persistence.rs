@@ -103,7 +103,8 @@ mod scratch;
 
 /// Flush `path`'s directory, so a create, rename or remove in it is durable;
 /// on Windows through the shared helper that opens the directory for it.
-fn sync_dir_of(path: &Path) -> std::io::Result<()> {
+/// Also the heartbeat's directory sync (one copy of the platform rule).
+pub(crate) fn sync_dir_of(path: &Path) -> std::io::Result<()> {
     sync_dir_for(path, None)
 }
 

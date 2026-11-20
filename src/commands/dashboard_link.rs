@@ -159,7 +159,9 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 #[path = "dashboard_link_admin.rs"]
 mod admin;
 
-use super::cli_exit::{CliError, CliExit, CliOutcome, Request, StdoutRule, emit, resolve_token};
+use super::cli_exit::{
+    CliError, CliExit, CliOutcome, Request, StdoutRule, emit, emit_to, resolve_token,
+};
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
 pub(crate) use admin::{
@@ -220,9 +222,35 @@ pub async fn run_dashboard_link_args(
     host_override: Option<&str>,
 ) -> ExitCode {
     let token = read_token(|name| std::env::var(name).ok());
+    // Stderr unlocked: the fetch awaits before anything prints, and a held lock would stall other threads' writes.
+    let exit = print_dashboard_link(
+        args,
+        load,
+        port_override,
+        host_override,
+        token,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await;
+    ExitCode::from(exit.code())
+}
+
+/// `dashboard-link` once its token is read: the outcome, printed through the shared emitter in the run's form, so a
+/// failed stdout write is the shared JSON error under `--json` too (MIK-9764.JSONF.1, design D5).
+pub(crate) async fn print_dashboard_link(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+) -> CliExit {
     let secret = token.as_deref().unwrap_or_default().to_owned();
+    let json = args.json;
     let out = dashboard_link_outcome(args, load, port_override, host_override, token).await;
-    emit(&out, false, &[&secret])
+    emit_to(&out, json, &[&secret], stdout, stderr)
 }
 
 /// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
@@ -254,7 +282,9 @@ pub(crate) fn resolved(
     port_override: Option<u16>,
     host_override: Option<&str>,
     token: Result<String, TokenError>,
+    render: crate::cli::output::Render,
 ) -> Result<(String, LinkTls, String), CliOutcome> {
+    let json = render == crate::cli::output::Render::Json;
     let secret = token.as_deref().unwrap_or_default().to_owned();
     let (base, tls) =
         dashboard_link_base(url, tls, load, port_override, host_override).map_err(|message| {
@@ -263,10 +293,10 @@ pub(crate) fn resolved(
                 message,
                 "Check the gateway settings, then retry.",
             )
-            .outcome(false, &[&secret])
+            .outcome(json, &[&secret])
         })?;
-    let token = resolve_token(token, &origin_of(&base))
-        .map_err(|error| error.outcome(false, &[&secret]))?;
+    let token =
+        resolve_token(token, &origin_of(&base)).map_err(|error| error.outcome(json, &[&secret]))?;
     Ok((base, tls, token))
 }
 
@@ -279,6 +309,8 @@ pub(crate) async fn dashboard_link_outcome(
     host_override: Option<&str>,
     token: Result<String, TokenError>,
 ) -> CliOutcome {
+    let render = crate::cli::output::Render::from_json_flag(args.json);
+    let json = render == crate::cli::output::Render::Json;
     let (base, tls, token) = match resolved(
         args.url,
         args.tls,
@@ -286,19 +318,43 @@ pub(crate) async fn dashboard_link_outcome(
         port_override,
         host_override,
         token,
+        render,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return out,
     };
     match fetch_link(&base, &token, &tls).await {
-        Ok(link) => CliOutcome::success(
-            format!("{link}\n").into_bytes(),
-            "Opens once, from this machine only.\n",
-            false,
-            &[&token],
-            StdoutRule::RefuseToken,
-        ),
-        Err(error) => error.outcome(false, &[&token]),
+        Ok(link) => {
+            // Under `--json` the document goes through the same RefuseToken gate, which then also scans its
+            // decoded strings (design D9).
+            let stdout = if json {
+                #[derive(serde::Serialize)]
+                struct View<'a> {
+                    url: &'a str,
+                }
+                match crate::cli::output::document(&View { url: &link }) {
+                    Ok(doc) => doc,
+                    Err(why) => {
+                        return CliError::new(
+                            CliExit::LocalFailure,
+                            format!("Could not print the link: {why}"),
+                            "Repeat the command.",
+                        )
+                        .outcome(json, &[&token]);
+                    }
+                }
+            } else {
+                format!("{link}\n")
+            };
+            CliOutcome::success(
+                stdout.into_bytes(),
+                "Opens once, from this machine only.\n",
+                json,
+                &[&token],
+                StdoutRule::RefuseToken,
+            )
+        }
+        Err(error) => error.outcome(json, &[&token]),
     }
 }
 
@@ -319,6 +375,7 @@ pub(crate) async fn events_outcome(
         port_override,
         host_override,
         token,
+        crate::cli::output::Render::Text,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return out,

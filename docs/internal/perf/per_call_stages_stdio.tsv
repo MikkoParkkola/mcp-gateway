@@ -119,7 +119,11 @@ src/gateway/server/mod.rs	leaky_single_user_backends	-	startup config, not per c
 src/gateway/server/persistence.rs	advance_until_saved	-	shutdown and periodic cost-save catch-up, off the request path
 src/gateway/server/persistence.rs	boot_cost_governance	-	startup cost-governance restore, once per serve
 src/gateway/server/persistence.rs	ensure_data_dir	-	startup data-directory creation, once per serve
+src/gateway/server/persistence.rs	gated	-	test-only: holds one shutdown save's thread for a row, never built in production
 src/gateway/server/persistence.rs	load_if_exists	-	startup state loading, once per serve
+src/gateway/server/persistence.rs	new	-	shutdown save construction, off the request path
+src/gateway/server/persistence.rs	root	-	test-only: reads a shutdown save's root for a row
+src/gateway/server/persistence.rs	run_now	-	test-only: runs a shutdown save's write inline for a row
 src/gateway/server/persistence.rs	run_shutdown_saves	-	shutdown saves, off the request path
 src/gateway/server/persistence.rs	save_costs	-	periodic cost saver task and shutdown saves, off the request path
 src/gateway/server/persistence.rs	save_costs_unless_busy	-	periodic cost saver task, off the request path
@@ -524,3 +528,19 @@ src/gateway/server/background.rs	join_mut	-	on-path, untimed: runs once per gate
 src/gateway/server/stdio_shutdown.rs	parent_pid	-	on-path, untimed: runs at gateway start and every 50 ms of a stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	orphan_watch	-	on-path, untimed: armed once per gateway stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	flush_pending	-	on-path, untimed: decides once per gateway stop, not per tools/call
+src/gateway/server/counter_wiring.rs	restore	-	startup counter restore, before serving
+src/gateway/server/counter_wiring.rs	checkpoint_class	-	built once per stop for the stop checkpoints, off the request path
+src/gateway/server/health_wiring.rs	gated_save	-	the periodic and stop-time health saves, off the request path
+src/gateway/server/health_wiring.rs	checkpoint_class	-	built once per stop for the stop checkpoints, off the request path
+src/gateway/server/stop_checkpoints.rs	new	-	once per gateway stop, off the request path
+src/gateway/server/stop_checkpoints.rs	start	-	once per gateway stop, at the signal
+src/gateway/server/stop_checkpoints.rs	finish	-	the last save pass of a stop, off the request path
+src/gateway/server/stop_checkpoints.rs	passes	-	the stop's once-a-second save loop, off the request path
+src/gateway/server/stop_checkpoints.rs	drains_end	-	stop budget arithmetic, once per stop
+src/gateway/server/stop_checkpoints.rs	drain_window	-	stop budget arithmetic, per drain during a stop
+src/gateway/server/stop_checkpoints.rs	last_deadline	-	stop budget arithmetic, once per stop
+src/gateway/server/stop_checkpoints.rs	landed	-	reads one save result during a stop, off the request path
+src/gateway/server/stop_checkpoints.rs	usage	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	transitions	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	cost	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	classes	-	built once per stop, off the request path

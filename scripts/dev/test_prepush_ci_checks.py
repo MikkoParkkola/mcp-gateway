@@ -97,6 +97,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
     ("scripts/ci/coverage_shards.py", ("lists", "<TMP>/lib-lists", "shards")): (
         "artifact: reads the downloaded coverage lib parts' test lists"),
+    ("scripts/ci/shard_tests.py", ("export-home", "$GITHUB_ENV")): (
+        "ci-env: makes a gateway home in RUNNER_TEMP and appends its variables to GITHUB_ENV"),
     ("scripts/ci/lib-parts.sh", ("cov", "$COVERAGE_PARTS", "$PART")): (
         "cargo: builds and runs one instrumented coverage part under the memory gate"),
     ("scripts/ci/lib_union.py", ("<TMP>/lib-lists", "<TMP>/expected")): (

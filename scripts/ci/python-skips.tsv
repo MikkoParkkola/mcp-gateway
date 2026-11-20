@@ -1,0 +1,9 @@
+# Every raw Python test skip (scripts/ci/check_python_skips.py).
+# path<TAB>reason text, exactly as in the skip call<TAB>kind: design (by design) or tool (a missing tool; the file must use required_mode)<TAB>why
+# A skip for a missing tool inside a test body calls required_mode.skip_or_fail and needs no row.
+scripts/dev/test_mcp_events_failfast.py	POSIX permission bits	design	Windows has no POSIX permission bits to check
+scripts/dev/test_test_parts.py	the pinned grammar parses this form; the gap row has nothing to pin	design	a row about a gap the pinned grammar no longer has
+scripts/release/test_build1_block.py	needs git and bash	tool	the file refuses to load where required mode is on (required_mode)
+scripts/release/test_build1_block.py	the gates step checks the tree only; its scripts check the commit	design	an inherited row that does not apply to this subclass
+scripts/release/test_coverage_grade.py	pinned SELF_REV is absent from local history; no fetch attempted	design	local runs only: in CI a missing commit is fetched, and a failed fetch fails the test
+scripts/release/test_refuse_published_release.py	jq is required	tool	the file refuses to load where required mode is on (required_mode)

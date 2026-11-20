@@ -39,6 +39,8 @@ OLD_PART = re.compile(r"(?<![\w-])lib\x2d[ab](?![\w-])")
 def condition_matches(condition: str, part: str) -> bool:
     """Evaluate only the small matrix condition language used by add-swap."""
     expression = condition.strip()
+    if not expression:
+        return True  # no `if:` at all: the step runs on every part
     if expression.startswith("${{") and expression.endswith("}}"):
         expression = expression[3:-2].strip()
     if "||" in expression:
@@ -126,7 +128,8 @@ class CoveragePartsWiring(unittest.TestCase):
                     with self.assertRaisesRegex(AssertionError, re.escape(relative)):
                         self.test_W1_only_explicit_stale_name_allowlist()
 
-    def test_W2_swap_matches_numbered_lib_parts_only(self) -> None:
+    def test_W2_swap_on_every_part(self) -> None:
+        # Every part, the integration ones too: each ends with the memory tripwire, which fails closed with no swap.
         doc = yaml.safe_load((ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8"))
         job = doc["jobs"]["linux-part"]
         steps = [step for step in job["steps"] if step.get("uses") == "./.github/actions/add-swap"]
@@ -139,7 +142,7 @@ class CoveragePartsWiring(unittest.TestCase):
         expected_lib = {f"lib-{k}" for k in range(1, count + 1)}
         self.assertEqual(parts, expected_lib | {"int-a", "int-b"},
                          "plan 4 must expose every numbered lib part before swap coverage can be proved")
-        self.assertEqual(matches, expected_lib, f"add-swap {condition!r} matches {sorted(matches)}")
+        self.assertEqual(matches, parts, f"add-swap {condition!r} matches {sorted(matches)}")
 
     def test_W3_scripts_run_by_path_are_executable(self) -> None:
         # The coverage part step runs these by path, not through `bash`: the workflow runs the first three, and
@@ -200,6 +203,23 @@ class CoveragePartsWiring(unittest.TestCase):
                 with patch.object(Path, "read_text", with_mutation):
                     with self.assertRaises(AssertionError):
                         self.test_W4_one_coverage_part_per_job()
+
+    def test_W6_whole_suite_jobs_export_a_private_home_before_their_tests(self) -> None:
+        # Tests that resolve the gateway home in-process refuse without a private one. These jobs run them with a
+        # plain cargo line, so an earlier step must put the home in the job's env (shard_tests.py export-home).
+        for workflow, job_id, test_step in (("coverage-probe.yml", "windows-grade", "Every test target"),
+                                            ("ci.yml", "test-throwaway-hosted", "Run the tests"),
+                                            ("ci.yml", "test-trusted", "Run the tests")):
+            with self.subTest(job=job_id):
+                steps = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))[
+                    "jobs"][job_id]["steps"]
+                names = [s.get("name") for s in steps]
+                self.assertIn(test_step, names, f"{workflow}:{job_id} has no step {test_step!r}")
+                exports = [i for i, s in enumerate(steps)
+                           if re.search(r"shard_tests\.py export-home \S*GITHUB_ENV", str(s.get("run", "")))]
+                self.assertTrue(exports, f"{workflow}:{job_id} never exports a private home")
+                self.assertLess(exports[0], names.index(test_step),
+                                f"{workflow}:{job_id} exports its home only after {test_step!r}")
 
     def test_W5_union_report_and_grade_wiring(self) -> None:
         source = (ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8")

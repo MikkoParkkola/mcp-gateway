@@ -381,17 +381,9 @@ fn u_uv_place_uv_binds_its_real_file_alone() {
 fn gone(pid_file: &Path) -> bool {
     let pid = std::fs::read_to_string(pid_file).expect("the process started");
     let pid = pid.trim();
-    let ended = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(_) => true,
-        Ok(stat) => stat
-            .rsplit_once(')')
-            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
-    };
-    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    while !ended() && std::time::Instant::now() < wait_until {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let ended = ended();
+    let read = || std::fs::read_to_string(format!("/proc/{pid}/stat"));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let ended = ended_by(read, until);
     if !ended {
         let _ = std::process::Command::new("kill")
             .arg("-9")
@@ -399,6 +391,105 @@ fn gone(pid_file: &Path) -> bool {
             .status();
     }
     ended
+}
+
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this (as the
+/// product reads it, `src/transport/stdio_sweep_linux.rs`).
+const ESRCH: i32 = 3;
+
+/// Polls `read` (one read of a process's `/proc/<pid>/stat`) every 50 ms
+/// until it shows the process ended or `until` passes, and answers whether it
+/// ended. A seam, so the rows below can feed it the reads an exiting task
+/// gives. Only a missing file or ESRCH says the process ended; any other
+/// failed read says nothing, so the wait goes on. The answer is the read that
+/// ended the wait: an exiting task can read as running once more after ESRCH.
+fn ended_by(mut read: impl FnMut() -> std::io::Result<String>, until: std::time::Instant) -> bool {
+    let mut ended = || match read() {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(ESRCH),
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+    };
+    loop {
+        if ended() {
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A `/proc/<pid>/stat` line for a process in `state`.
+#[allow(clippy::unnecessary_wraps)] // the reads the seam takes are results
+fn stat_in(state: char) -> std::io::Result<String> {
+    Ok(format!("4242 (sleep) {state} 1 4242 4242 0 -1"))
+}
+
+/// The reads in `reads`, then `last` for every read after them; the count of
+/// reads taken is kept in `taken`.
+fn reads_then(
+    reads: Vec<std::io::Result<String>>,
+    last: fn() -> std::io::Result<String>,
+    taken: &std::cell::Cell<usize>,
+) -> impl FnMut() -> std::io::Result<String> + '_ {
+    let mut reads = reads.into_iter();
+    move || {
+        taken.set(taken.get() + 1);
+        reads.next().unwrap_or_else(last)
+    }
+}
+
+/// The two-hit flake of 2026-11-20: reading an exiting task's `/proc` file
+/// fails with ESRCH (the product reads it as gone,
+/// `src/transport/stdio_sweep_linux.rs`), and the same task can read as running
+/// once more before it turns zombie. ESRCH ends the wait, and the answer is
+/// the one that ended it.
+#[test]
+fn ended_by_an_exiting_task_read_as_esrch_has_ended_even_if_it_reads_running_after() {
+    let taken = std::cell::Cell::new(0);
+    let reads = vec![Err(std::io::Error::from_raw_os_error(3)), stat_in('R')];
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    assert!(
+        ended_by(reads_then(reads, || stat_in('R'), &taken), until),
+        "an ESRCH read means the task is exiting; it was answered as alive"
+    );
+}
+
+/// A read that fails for another reason (here: out of descriptors) says
+/// nothing about the process, so the wait goes on until a read does.
+#[test]
+fn ended_by_a_failed_read_that_is_not_esrch_or_missing_keeps_waiting() {
+    let taken = std::cell::Cell::new(0);
+    let reads = vec![Err(std::io::Error::from_raw_os_error(24)), stat_in('S')];
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let missing = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+    let ended = ended_by(reads_then(reads, missing, &taken), until);
+    assert!(ended, "the process was gone at the third read");
+    assert_eq!(
+        taken.get(),
+        3,
+        "the wait ended before the read that showed it gone"
+    );
+}
+
+/// Controls: a process that keeps running is not ended at the bound (the rows
+/// above stay able to fail on a kill that never lands), and a zombie is.
+#[test]
+fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
+    let taken = std::cell::Cell::new(0);
+    // limit-under-test (fires-only): the bound handed to ended_by; the row asserts the wait answers at it
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    assert!(!ended_by(
+        reads_then(Vec::new(), || stat_in('S'), &taken),
+        until
+    ));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    assert!(ended_by(
+        reads_then(Vec::new(), || stat_in('Z'), &taken),
+        until
+    ));
 }
 
 /// U-floor deadline (code review r1 fold, gpt IMPROVEMENT and muse MEDIUM),

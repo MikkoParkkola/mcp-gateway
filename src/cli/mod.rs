@@ -329,6 +329,9 @@ pub(crate) enum Command {
         /// a mismatch, 2 on a malformed digest.
         #[arg(long, value_name = "DIGEST")]
         verify: Option<String>,
+        /// Print one JSON document on stdout (`key_sha256`); the `--verify` answer is its exit code
+        #[arg(long, conflicts_with = "verify")]
+        json: bool,
     },
 
     /// Generate a starter gateway.yaml with sensible defaults
@@ -359,6 +362,9 @@ pub(crate) enum Command {
         /// when no config is found. An explicit `--url` always overrides both.
         #[arg(short, long)]
         url: Option<String>,
+        /// Print one JSON document on stdout instead of the text summary
+        #[arg(long)]
+        json: bool,
     },
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
@@ -524,6 +530,9 @@ pub(crate) enum Command {
     Get {
         /// Backend name to inspect
         name: String,
+        /// Print one JSON document on stdout; values stay hidden as in the text form
+        #[arg(long)]
+        json: bool,
     },
 
     /// Diagnose gateway and backend health

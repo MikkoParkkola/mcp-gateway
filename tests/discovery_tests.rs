@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Discovery module tests
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use mcp_gateway::discovery::{
     AutoDiscovery, DiscoverySource,
     shadow::{
@@ -14,6 +20,7 @@ use mcp_gateway::discovery::{
 
 #[tokio::test]
 async fn test_auto_discovery_initialization() {
+    require_private_home!();
     let discovery = AutoDiscovery::new();
 
     // Discovery should not panic on creation
@@ -46,6 +53,7 @@ async fn test_discover_from_process() {
 
 #[tokio::test]
 async fn test_discover_claude_desktop_config() {
+    require_private_home!();
     let discovery = AutoDiscovery::new();
 
     // Should handle missing config gracefully
@@ -61,6 +69,7 @@ async fn test_discover_claude_desktop_config() {
 
 #[tokio::test]
 async fn test_discover_vscode_config() {
+    require_private_home!();
     let discovery = AutoDiscovery::new();
 
     // Should handle missing config gracefully
@@ -76,6 +85,7 @@ async fn test_discover_vscode_config() {
 
 #[tokio::test]
 async fn test_discover_mcp_config_dir() {
+    require_private_home!();
     let discovery = AutoDiscovery::new();
 
     // Should handle missing directory gracefully
@@ -126,6 +136,7 @@ async fn test_discovered_server_to_backend_config() {
 
 #[tokio::test]
 async fn test_deduplication() {
+    require_private_home!();
     let discovery = AutoDiscovery::new();
     let result = discovery.discover_all().await;
 
@@ -678,3 +689,6 @@ fn keyed_report(
         data_dir.path(),
     )
 }
+
+#[path = "discovery_tests/private_home_rows.rs"]
+mod private_home_rows;

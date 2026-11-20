@@ -63,6 +63,7 @@ pub(crate) fn create_sse_response_with_view(
     }
 
     let mut rx = session.subscribe();
+    let mut stopped = multiplexer.stopped.subscribe();
     // Held for its credential slot, which a resume may replace: each copy is
     // judged against the credential the session holds when it is written.
     let session = Arc::clone(session);
@@ -74,8 +75,8 @@ pub(crate) fn create_sse_response_with_view(
         // Send initial connection event
         yield Ok(connected_event(&session_id_owned));
 
-        loop {
-            match rx.recv().await {
+        while let Some(next) = next_unless_stopped(&mut rx, &mut stopped).await {
+            match next {
                 Ok(item) => {
                     #[cfg(test)]
                     multiplexer.before_write_check.pause().await;
@@ -332,6 +333,23 @@ fn settle_stranded(rx: &mut broadcast::Receiver<super::SessionFrame>) {
             Err(broadcast::error::TryRecvError::Lagged(_)) => {}
             Err(_) => break,
         }
+    }
+}
+
+/// The next queued item, or `None` once the gateway stops. The stop wins a
+/// tie; what is still queued then is settled unwritten, so no request waits
+/// on a copy this stream will never write.
+async fn next_unless_stopped(
+    rx: &mut broadcast::Receiver<super::SessionFrame>,
+    stopped: &mut tokio::sync::watch::Receiver<bool>,
+) -> Option<Result<super::SessionFrame, broadcast::error::RecvError>> {
+    tokio::select! {
+        biased;
+        Ok(_) = stopped.wait_for(|stop| *stop) => {
+            settle_stranded(rx);
+            None
+        }
+        next = rx.recv() => Some(next),
     }
 }
 
@@ -756,3 +774,8 @@ mod terminal_frame_tests {
 #[cfg(test)]
 #[path = "streaming_sse_gate_tests.rs"]
 mod gate_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "streaming_sse_stop_tests.rs"]
+mod stop_tests;

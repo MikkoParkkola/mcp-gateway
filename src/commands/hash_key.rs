@@ -22,8 +22,9 @@ const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify 
 
 /// Run `hash-key`. Exit codes: 0 printed or matched, 1 mismatch, 2 usage error
 /// (stdin is a terminal, empty key, a new key under `MIN_SECRET_LEN` bytes,
-/// unreadable input, or a malformed digest).
-pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
+/// unreadable input, or a malformed digest). With `--json` the digest is one
+/// document, `{"schema_version":1,"key_sha256":...}` (clap refuses it with `--verify`).
+pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Render) -> ExitCode {
     let stdin = io::stdin();
     if stdin.is_terminal() {
         eprintln!("{USAGE}");
@@ -60,6 +61,15 @@ pub fn run_hash_key_command(verify: Option<&str>) -> ExitCode {
     }
     let presented = api_key_digest_spec(key);
     match verify {
+        None if render == crate::cli::output::Render::Json => {
+            #[derive(serde::Serialize)]
+            struct View<'a> {
+                key_sha256: &'a str,
+            }
+            crate::cli::output::print_document(crate::cli::output::document(&View {
+                key_sha256: &presented,
+            }))
+        }
         None => {
             println!("{presented}");
             ExitCode::SUCCESS

@@ -114,6 +114,7 @@ async fn an_env_edit_appends_inside_the_block() {
 #[tokio::test]
 async fn a_credential_edited_in_the_panel_is_stored_not_written() {
     const VALUE: &str = "panel-typed-7c1e";
+    require_private_home!();
     let (router, path, _keep) = served(SVC).await;
     let (status, body) = patch(&router, "svc", json!({"env": {"B_TOKEN": VALUE}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");

@@ -157,13 +157,14 @@ impl CounterFile {
         self.disabled.load(Ordering::Relaxed)
     }
 
-    /// Save, waiting for a write in flight. The shutdown save.
-    pub(crate) fn save(&self, store: &CounterStore, binary_version: &str, now: u64) {
+    /// Save, waiting for a write in flight. The shutdown save. Returns
+    /// whether it wrote.
+    pub(crate) fn save(&self, store: &CounterStore, binary_version: &str, now: u64) -> bool {
         if self.disabled() {
-            return;
+            return false;
         }
         let _turn = self.busy.lock();
-        self.write(store, binary_version, now, &|_| {});
+        self.write(store, binary_version, now, &|_| {})
     }
 
     /// Save unless a write is in flight. The periodic save. Returns whether
@@ -183,8 +184,7 @@ impl CounterFile {
             );
             return false;
         };
-        self.write(store, binary_version, now, &|_| {});
-        true
+        self.write(store, binary_version, now, &|_| {})
     }
 
     /// [`Self::save`] with `hook` called at each stage.
@@ -206,7 +206,13 @@ impl CounterFile {
         self.busy.lock()
     }
 
-    fn write(&self, store: &CounterStore, binary_version: &str, now: u64, hook: &dyn Fn(Stage)) {
+    fn write(
+        &self,
+        store: &CounterStore,
+        binary_version: &str,
+        now: u64,
+        hook: &dyn Fn(Stage),
+    ) -> bool {
         let inner = store.saved_snapshot(now);
         hook(Stage::Serializing);
         let bytes = snapshot::encode(&inner, binary_version, now);
@@ -216,7 +222,7 @@ impl CounterFile {
             && let Err(e) = std::fs::create_dir_all(parent)
         {
             warn!(error = %e, "Failed to create the counters directory");
-            return;
+            return false;
         }
         match crate::config_persistence::write_atomic(
             &self.path,
@@ -224,8 +230,14 @@ impl CounterFile {
             crate::config_persistence::FileMode::Private,
             crate::config_persistence::Symlink::Replace,
         ) {
-            Ok(()) => info!(path = %self.path.display(), "Saved call counters"),
-            Err(e) => warn!(error = %e, "Failed to save call counters"),
+            Ok(()) => {
+                info!(path = %self.path.display(), "Saved call counters");
+                true
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to save call counters");
+                false
+            }
         }
     }
 }
