@@ -381,6 +381,7 @@ mod log_under_lock_scan_tests;
 mod file_mode_inherit_tests;
 #[cfg(tp3)]
 #[cfg(all(test, unix))]
+#[cfg(feature = "tool-profiles")]
 mod state_save_atomic_tests;
 #[cfg(tp3)]
 #[cfg(test)]

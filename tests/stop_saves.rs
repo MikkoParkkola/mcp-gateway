@@ -12,6 +12,8 @@
 //! the failure it separates (10 s: Docker's grace, the claim's own window).
 
 #![cfg(unix)]
+// The rows assert today's spend among the saved classes.
+#![cfg(feature = "cost-governance")]
 
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
