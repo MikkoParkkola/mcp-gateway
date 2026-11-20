@@ -14,6 +14,10 @@ This check reads every workflow and refuses:
     before its first such step;
   - an add-swap step whose `if:` is not one of ALLOWED_CONDITIONS (a condition
     that skips a library matrix row would leave that row without swap);
+  - a Linux-hosted job that runs the memory tripwire with no unconditional
+    add-swap step before its first build step (or before the tripwire, if it
+    builds nothing): the tripwire fails closed when no swap is active, and some
+    runner images come with none;
   - a hand-copied swap script (`swapon`/`mkswap` in a workflow `run:`), which
     could drift from the shared action;
   - an in-scope job list that differs from EXPECTED (a job that starts or stops
@@ -68,10 +72,9 @@ WRAPPERS = (
 )
 COPIED_SWAP = re.compile(r"\b(swapon|mkswap)\b")
 
-# The add-swap step may be conditional only in these ways: the coverage parts
-# run it on every library part and on no integration part.
+# The one condition an add-swap step may carry. Gating it to the library coverage parts went: the integration parts
+# run the memory tripwire too, and it needs active swap on every leg (train 64a: an int part on an image with none).
 ALLOWED_CONDITIONS = {
-    "startsWith(matrix.part, 'lib-')",
     # A step shared with a self-hosted twin job (mutants.yml keeps its hosted
     # and trusted Linux jobs identical): it runs on every hosted run.
     "runner.environment == 'github-hosted'",
@@ -316,7 +319,7 @@ def census(jobs_in_scope: dict, packaged_by_part: bool, packaged_run_by_part: bo
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
         last_build = max((i for i, s in enumerate(steps) if step_builds(s)), default=-1)
-        if not any((run_commands(str(s.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
+        if not any(runs_tripwire(s)
                    and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
@@ -358,6 +361,23 @@ def linux_hosted(job: dict) -> bool:
     return "ubuntu" in (" ".join(runs_on) if isinstance(runs_on, list) else str(runs_on))
 
 
+def runs_tripwire(step: dict) -> bool:
+    return (run_commands(str(step.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
+
+
+def tripwire_swap_problems(name: str, steps: list, first_build: int | None) -> list[str]:
+    """The tripwire fails closed when no swap is active, and it counts the whole job's swap-out, so its job adds swap
+    on every leg (no `if:`) before anything builds: swap added later would let a whole build pass unmeasured."""
+    trip = next((i for i, s in enumerate(steps) if runs_tripwire(s)), None)
+    if trip is None:
+        return []
+    by = trip if first_build is None else min(trip, first_build)
+    if any(s.get("uses") == ACTION and "if" not in s for s in steps[:by]):
+        return []
+    return [f"{name}: runs {TRIPWIRE} (step {trip}) with no unconditional {ACTION} step before step {by}; on a runner "
+            "image with no swap the tripwire fails closed"]
+
+
 def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     """(in scope, problems) for one job."""
     problems: list[str] = []
@@ -368,6 +388,7 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     if not linux_hosted(job):
         return False, problems
     first_build = next((i for i, s in enumerate(steps) if step_builds(s)), None)
+    problems += tripwire_swap_problems(name, steps, first_build)
     if first_build is None:
         return False, problems
     swap = next((i for i, s in enumerate(steps) if s.get("uses") == ACTION), None)
