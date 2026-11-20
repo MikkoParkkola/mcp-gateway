@@ -84,6 +84,22 @@ class Sections(unittest.TestCase):
             (rc, out), (1, "CHANGELOG.md:7: [1.0.0] appears again (first at line 3)\n")
         )
 
+    def test_r2c_every_repeat_points_at_the_first_copy(self):
+        # A third copy names line 3, not the second copy on line 7.
+        rc, out = check(
+            ["## [1.0.0] - 2026-01-01"] * 3,
+            tags=["v1.0.0"],
+            cargo_version="1.1.0-beta.1",
+        )
+        self.assertEqual(
+            (rc, out),
+            (
+                1,
+                "CHANGELOG.md:7: [1.0.0] appears again (first at line 3)\n"
+                "CHANGELOG.md:11: [1.0.0] appears again (first at line 3)\n",
+            ),
+        )
+
     def test_r2b_a_duplicate_is_reported_even_when_dated_unreleased(self):
         # The exemptions cover the tag rule only; a repeated heading is never exempt.
         rc, out = check(
