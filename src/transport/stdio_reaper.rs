@@ -773,6 +773,23 @@ mod handed_reap_tests {
             reaped.handed_all_reaped(),
             "a reap with an exit status did not count"
         );
+        // Every handed tree, not any: one still pending beside one reaped is
+        // not all reaped, until it is reaped too. (`track` keeps only pending
+        // receivers when it adds one, so the pending one goes in first.)
+        let (both, pending) = tracking(Reaped::Pending);
+        let (_reaped_sender, reaped_receiver) = watch::channel(Reaped::Done(Some(status)));
+        both.track(reaped_receiver);
+        assert!(
+            !both.handed_all_reaped(),
+            "one reaped handover beside a pending one counted as all reaped"
+        );
+        pending
+            .send(Reaped::Done(Some(status)))
+            .expect("the deadline holds the receiver");
+        assert!(
+            both.handed_all_reaped(),
+            "two reaped handovers did not count"
+        );
     }
 }
 
