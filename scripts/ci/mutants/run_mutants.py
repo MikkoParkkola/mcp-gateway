@@ -765,7 +765,8 @@ def build_refusal(built: Outcome) -> str:
     sites: set[str] = set()
     errors: list[str] = []
     finished = False
-    killed = "SIGKILL" in built.output or "signal: 9" in built.output
+    killed = any(("SIGKILL" in line or "signal: 9" in line) and "exit successfully" in line
+                 for line in built.output.splitlines())  # cargo's own cause line, not a quoted mention
     for line in built.output.splitlines():
         if line.startswith("error"):
             errors.append(line)
@@ -785,7 +786,7 @@ def build_refusal(built: Outcome) -> str:
     if sites:
         return (f"the --cfg mutants build failed at {sorted(sites)}; "
                 "move those mutants to the patch flow and rerun the rest")
-    if errors and not killed:
+    if errors and not killed and not built.timed_out:
         return f"the --cfg mutants build failed with {len(errors)} error(s) at no source site: {errors[0]}"
     how = f"timed out after {COMPILE_LIMIT} s" if built.timed_out else f"exit {built.exit}"
     end = "its compiler was killed" if killed else ("it finished" if finished else "no finished line")
@@ -1253,6 +1254,16 @@ def self_test() -> int:
         ("a plain-text error is not a death",
          build_refusal(Outcome(101, warn + "\nerror: failed to run custom build command for `x`\n", False)),
          lambda m: not m.startswith("BUILD DIED") and "failed to run custom build command" in m),
+        ("a timed-out build is a death even beside a plain-text error",
+         build_refusal(Outcome(-9, "error: could not compile `x` (lib test)\n", True)),
+         lambda m: m.startswith("BUILD DIED") and "timed out" in m),
+        ("a SIGKILL quoted outside cargo's cause line is not a kill",
+         build_refusal(Outcome(101, "error: test message mentions SIGKILL in passing\n", False)),
+         lambda m: not m.startswith("BUILD DIED") and "mentions SIGKILL" in m),
+        ("an error's site wins over a compiler kill", build_refusal(Outcome(101, err + "\n" + killed, False)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
+        ("an error's site is named with no finished line", build_refusal(Outcome(101, err + "\n", False)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
     ]
     for name, msg, check in build_rows:
         if not check(msg):
