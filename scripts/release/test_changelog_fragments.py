@@ -423,6 +423,7 @@ class DropIds(unittest.TestCase):
             ("an id with a label", f"- c ({T}3 I2).", "- c."),
             ("an id with a dotted label", f"- c2 ({T}31 MIN.2).", "- c2."),
             ("an id beside words on one line", f"- w (not a config key, {T}32).", "- w (not a config key)."),
+            ("an id beside a blank part", f"- x ({T}36, ).", "- x."),
             ("ids split across a line break", f"- d ({T}4,\n  {T}5).", "- d."),
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
         ]
@@ -439,11 +440,13 @@ class DropIds(unittest.TestCase):
         self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
 
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
-        for fragment, line in ((f"- s found by {T}33.\n", 1), (f"- t (#34)\n- u (follow-up {T}35).\n", 2)):
+        cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
+                 (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"))
+        for fragment, line, why in cases:
             with self.subTest(fragment=fragment):
                 with self.assertRaises(ValueError) as caught:
                     cf.assemble(BASE, {"25.fixed.md": fragment})
-                self.assertIn(f"changelog.d/25.fixed.md:{line}: ", str(caught.exception))
+                self.assertIn(f"changelog.d/25.fixed.md:{line}: {why}", str(caught.exception))
 
     def test_an_id_in_the_unreleased_section_is_dropped_and_a_released_one_stays(self):
         changelog = BASE.replace("- existing fix (#2)", f"- existing fix (#2, {T}14)").replace("- old (#0)", f"- old (#0, {T}13)")
