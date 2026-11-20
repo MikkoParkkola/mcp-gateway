@@ -228,7 +228,7 @@ async fn l_budget_the_drains_leave_the_last_pass_its_slice() {
 #[tokio::test]
 async fn l_classes_the_real_pass_set() {
     use crate::health_history::{DowntimeSource, HealthHistory, Restores};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path();
     let now = crate::clock::unix_secs().unwrap();
     let ranker = Arc::new(crate::ranking::SearchRanker::new());
@@ -256,6 +256,19 @@ async fn l_classes_the_real_pass_set() {
     assert_eq!(
         names,
         ["usage", "transitions", "cost", "counters", "health"]
+    );
+    // Each class keeps the file or dir it writes (K10, `crate::spawn_keep`).
+    let roots: Vec<Option<std::path::PathBuf>> =
+        all.iter().map(|class| class.root.clone()).collect();
+    assert_eq!(
+        roots,
+        [
+            Some(data.join("usage.json")),
+            Some(data.join("transitions.json")),
+            Some(data.to_path_buf()),
+            Some(data.join("counters.json")),
+            Some(data.join("health.json")),
+        ]
     );
     // Retried: the cost lock is process-wide, so another row's save can make
     // one checkpoint skip.
