@@ -595,6 +595,9 @@ async fn canary_run_in(
     ran.expect("the copied npm fetched and node ran")
 }
 
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this.
+const ESRCH: i32 = 3;
+
 /// Every live process whose command line carries `marker` (the `unshare`, the
 /// helper and a target all carry the target's arguments).
 fn marked(marker: &str) -> Vec<u32> {
@@ -603,12 +606,19 @@ fn marked(marker: &str) -> Vec<u32> {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let read = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+        // Only a missing file or ESRCH (an exiting task) means gone; a read
+        // failing for another reason says nothing, so the process counts as
+        // live, and the caller's wait goes on.
+        let unread = read.as_ref().is_err_and(|e| {
+            e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH)
+        });
+        let stat = read.unwrap_or_default();
         let state = stat
             .rsplit_once(") ")
             .and_then(|(_, rest)| rest.split_whitespace().next());
         let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-        let live = !matches!(state, None | Some("Z" | "X"));
+        let live = unread || !matches!(state, None | Some("Z" | "X"));
         if live && String::from_utf8_lossy(&cmdline).contains(marker) {
             found.push(pid);
         }

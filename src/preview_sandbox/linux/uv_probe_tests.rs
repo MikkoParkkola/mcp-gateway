@@ -393,21 +393,32 @@ fn gone(pid_file: &Path) -> bool {
     ended
 }
 
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this (as the
+/// product reads it, src/transport/stdio_sweep_linux.rs).
+const ESRCH: i32 = 3;
+
 /// Polls `read` (one read of a process's `/proc/<pid>/stat`) every 50 ms
 /// until it shows the process ended or `until` passes, and answers whether it
 /// ended. A seam, so the rows below can feed it the reads an exiting task
-/// gives.
+/// gives. Only a missing file or ESRCH says the process ended; any other
+/// failed read says nothing, so the wait goes on. The answer is the read that
+/// ended the wait: an exiting task can read as running once more after ESRCH.
 fn ended_by(mut read: impl FnMut() -> std::io::Result<String>, until: std::time::Instant) -> bool {
     let mut ended = || match read() {
-        Err(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(ESRCH),
         Ok(stat) => stat
             .rsplit_once(')')
             .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
     };
-    while !ended() && std::time::Instant::now() < until {
+    loop {
+        if ended() {
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    ended()
 }
 
 /// A `/proc/<pid>/stat` line for a process in `state`.
