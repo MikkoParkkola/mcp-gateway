@@ -155,7 +155,8 @@ fn save_as_c(ids: &Ids, target: &Path, mode: &str) -> Outcome {
 fn parse_outcome(stdout: &str) -> Outcome {
     let line = stdout
         .lines()
-        .find_map(|l| l.strip_prefix(RESULT))
+        // Uncaptured, libtest's own `test .. ...` text can lead the line.
+        .find_map(|l| l.split_once(RESULT).map(|(_, rest)| rest))
         .unwrap_or_else(|| panic!("the child printed no {RESULT} line: {stdout}"))
         .trim_start();
     if line == "saved" {
