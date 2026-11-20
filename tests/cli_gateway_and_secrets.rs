@@ -84,9 +84,6 @@ fn invoke(args: &[&str], gateway_env: Option<&str>, stdin: &str) -> Output {
     gateway_bin::run_cli(args, &env, input)
 }
 
-/// The two resolution paths: `stats` has its own, the other four share one.
-const COMMANDS: &[&[&str]] = &[&["stats"], &["api", "GET", "/ui/api/status"]];
-
 /// All five commands that reach a gateway, each with what it reads from
 /// stdin (only the email lookup reads anything).
 const ALL: &[(&[&str], &str)] = &[
@@ -102,6 +99,10 @@ const ALL: &[(&[&str], &str)] = &[
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 #[test]
@@ -126,13 +127,13 @@ fn the_flag_beats_the_environment() {
 
 #[test]
 fn the_environment_beats_the_default() {
-    for command in COMMANDS {
+    for (command, stdin) in ALL {
         let (env, default) = (Counting::start(), Counting::start());
         let dir = tempfile::tempdir().expect("config dir");
         let config = config_pointing_at(dir.path(), default.port());
         let mut args = command.to_vec();
         args.extend(["--config", config.to_str().expect("utf-8 path")]);
-        let out = invoke(&args, Some(env.url.as_str()), "");
+        let out = invoke(&args, Some(env.url.as_str()), stdin);
         let (env_hits, default_hits) = (env.finish(), default.finish());
         assert!(
             env_hits >= 1,
@@ -151,13 +152,13 @@ fn the_environment_beats_the_default() {
 /// failing for a broken fixture, not for the rule).
 #[test]
 fn without_flag_or_variable_the_config_address_is_used() {
-    for command in COMMANDS {
+    for (command, stdin) in ALL {
         let default = Counting::start();
         let dir = tempfile::tempdir().expect("config dir");
         let config = config_pointing_at(dir.path(), default.port());
         let mut args = command.to_vec();
         args.extend(["--config", config.to_str().expect("utf-8 path")]);
-        let out = invoke(&args, None, "");
+        let out = invoke(&args, None, stdin);
         assert!(
             default.finish() >= 1,
             "{command:?}: the config's address saw nothing: {}",
@@ -221,7 +222,15 @@ fn auth_key_takes_each_reference_form() {
 
 #[test]
 fn auth_key_refuses_a_value_that_is_not_a_reference() {
-    for value in ["plain-text-not-a-reference", "vault:probe"] {
+    // A plain value, an unrecognised scheme, a recognised scheme with nothing
+    // after it, and a recognised scheme that is not at the start.
+    for value in [
+        "plain-text-not-a-reference",
+        "vault:probe",
+        "env:",
+        "keychain:",
+        "x-env:NAME",
+    ] {
         let (out, written) = import_with_auth_key(value);
         assert_eq!(out.status.code(), Some(2), "{value} was accepted");
         let said = stderr(&out);
@@ -231,13 +240,37 @@ fn auth_key_refuses_a_value_that_is_not_a_reference() {
                 "the refusal does not name {form}: {said}"
             );
         }
-        assert!(
-            !said.contains(value),
-            "the refusal repeats the value: {said}"
-        );
+        for (stream, text) in [("stderr", &said), ("stdout", &stdout(&out))] {
+            assert!(
+                !text.contains(value),
+                "the refusal repeats the value on {stream}: {text}"
+            );
+        }
         assert!(
             written.is_empty(),
             "{value}: files were written: {written:?}"
         );
     }
+}
+
+/// When no destination is given and the config cannot be read, the remedy
+/// names the one destination flag, not the old spelling.
+#[test]
+fn the_config_refusal_names_the_destination_flag() {
+    let dir = tempfile::tempdir().expect("config dir");
+    let broken = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&broken, "server: [not, valid\n")
+        .expect("write the config");
+    let broken = broken.to_str().expect("utf-8 path");
+    let out = invoke(&["dashboard-link", "--config", broken], None, "");
+    let said = stderr(&out);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(
+        said.contains("--gateway"),
+        "the remedy does not name --gateway: {said}"
+    );
+    assert!(
+        !said.contains("--url"),
+        "the remedy still names --url: {said}"
+    );
 }
