@@ -135,6 +135,10 @@ fn assert_refusal(answer: &Value, row: &str) {
         "{row}: the lender's message: {answer}"
     );
     let data = answer["error"].get("data").cloned().unwrap_or(Value::Null);
+    assert_eq!(
+        data["gateway_http_status"], 403,
+        "{row}: the refusal keeps its HTTP status: {answer}"
+    );
     assert!(
         data.get("retryable").is_none() && data.get("retry_after_ms").is_none(),
         "{row}: no retry is suggested: {answer}"

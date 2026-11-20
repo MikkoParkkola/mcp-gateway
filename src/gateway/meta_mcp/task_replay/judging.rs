@@ -124,8 +124,8 @@ impl MetaMcp {
             return Some(stored_withheld(id, &error, judged));
         }
         // A lender refusal recorded in the lease is answered as the live
-        // routes answer it, never as a retry; still unrecorded, as the
-        // worker's dispatch already wrote the refusal's record.
+        // routes answer it, never as a retry; unrecorded, like the retry
+        // it takes the place of.
         if let Some((after, refused)) = cold {
             return Some(unrecorded(match refused {
                 Some(refusal) => error_response_preserving_status(
