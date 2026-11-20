@@ -7,7 +7,11 @@
 //! polling secret only the CLI holds. Time is the caller's `now`, so rows set
 //! it exactly; the draws are the caller's too (`Draws`), so rows script them.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use parking_lot::Mutex;
+use subtle::ConstantTimeEq as _;
 
 /// The 32 code symbols: digits and capitals without I, L, O and U.
 pub(crate) const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -49,9 +53,22 @@ impl UserCode {
     /// A typed code: either case, with or without the one hyphen after the
     /// fifth symbol; anything else is `None`.
     pub(crate) fn parse(text: &str) -> Option<Self> {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = text;
-        None
+        let bytes = text.as_bytes();
+        let half = CODE_LEN / 2;
+        let symbols: Vec<u8> = match bytes.len() {
+            CODE_LEN => bytes.to_vec(),
+            n if n == CODE_LEN + 1 && bytes[half] == b'-' => {
+                [&bytes[..half], &bytes[half + 1..]].concat()
+            }
+            _ => return None,
+        };
+        let mut indices = [0_u8; CODE_LEN];
+        for (slot, symbol) in indices.iter_mut().zip(symbols) {
+            let upper = symbol.to_ascii_uppercase();
+            let at = CODE_ALPHABET.iter().position(|c| *c == upper)?;
+            *slot = u8::try_from(at).ok()?;
+        }
+        Some(Self(indices))
     }
 }
 
@@ -128,9 +145,31 @@ pub(crate) enum PollRefused {
     Exhausted,
 }
 
+/// One held attempt.
+struct Attempt {
+    code: UserCode,
+    secret: String,
+    deadline: Instant,
+    /// Approved: its code no longer looks up, but it keeps its code and its
+    /// place until the deadline.
+    consumed: bool,
+    polls: u32,
+    last_poll: Option<Instant>,
+}
+
+type Held = HashMap<uuid::Uuid, Attempt>;
+
+/// Drops every attempt past its deadline at `now`.
+fn prune(held: &mut Held, now: Instant) {
+    held.retain(|_, attempt| now < attempt.deadline);
+}
+
 /// The attempts held now. A new store holds none: a restart ends them all.
 pub(crate) struct AttemptStore {
     draws: Draws,
+    /// One lock covers every check and every change, so two starts cannot
+    /// both find one code or id free (design :15). The draws run under it.
+    held: Mutex<Held>,
     /// Test only: `start` calls it after finding its code and its id free
     /// and before inserting the attempt, inside the one lock that covers the
     /// checks and the insert.
@@ -142,6 +181,7 @@ impl AttemptStore {
     pub(crate) fn new(draws: Draws) -> Self {
         Self {
             draws,
+            held: Mutex::new(HashMap::new()),
             #[cfg(test)]
             pause: None,
         }
@@ -154,30 +194,72 @@ impl AttemptStore {
     pub(crate) fn with_pause(draws: Draws, pause: Box<dyn Fn() + Send + Sync>) -> Self {
         Self {
             draws,
+            held: Mutex::new(HashMap::new()),
             pause: Some(pause),
         }
     }
 
     /// Holds a new attempt until `now + LIFETIME`.
     pub(crate) fn start(&self, now: Instant) -> Result<Started, StartRefused> {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (&self.draws, now);
-        Err(StartRefused::Full)
+        let mut held = self.held.lock();
+        prune(&mut held, now);
+        if held.len() >= CAPACITY {
+            return Err(StartRefused::Full);
+        }
+        let code = (0..MAX_CODE_DRAWS)
+            .map(|_| UserCode::from_indices((self.draws.code)()))
+            .find(|code| !held.values().any(|attempt| attempt.code == *code))
+            .ok_or(StartRefused::Collision)?;
+        let id = (self.draws.id)();
+        if held.contains_key(&id) {
+            return Err(StartRefused::Collision);
+        }
+        #[cfg(test)]
+        if let Some(pause) = &self.pause {
+            pause();
+        }
+        let secret = (self.draws.secret)();
+        let deadline = now + LIFETIME;
+        held.insert(
+            id,
+            Attempt {
+                code,
+                secret: secret.clone(),
+                deadline,
+                consumed: false,
+                polls: 0,
+                last_poll: None,
+            },
+        );
+        Ok(Started {
+            id,
+            code,
+            secret,
+            deadline,
+        })
     }
 
     /// The id of the live, unconsumed attempt holding `code`.
     pub(crate) fn lookup(&self, code: &UserCode, now: Instant) -> Option<uuid::Uuid> {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (code, now);
-        None
+        let mut held = self.held.lock();
+        prune(&mut held, now);
+        held.iter()
+            .find(|(_, attempt)| attempt.code == *code && !attempt.consumed)
+            .map(|(id, _)| *id)
     }
 
     /// Marks a live attempt consumed; its code and its place stay held until
     /// its deadline.
     pub(crate) fn consume(&self, id: uuid::Uuid, now: Instant) -> bool {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (id, now);
-        false
+        let mut held = self.held.lock();
+        prune(&mut held, now);
+        match held.get_mut(&id) {
+            Some(attempt) if !attempt.consumed => {
+                attempt.consumed = true;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The poller's view of its attempt. The secret is checked before the
@@ -188,23 +270,41 @@ impl AttemptStore {
         secret: &str,
         now: Instant,
     ) -> Result<PollState, PollRefused> {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (id, secret, now);
-        Err(PollRefused::Invalid)
+        let mut held = self.held.lock();
+        prune(&mut held, now);
+        let attempt = held
+            .get_mut(&id)
+            .filter(|attempt| bool::from(attempt.secret.as_bytes().ct_eq(secret.as_bytes())))
+            .ok_or(PollRefused::Invalid)?;
+        if attempt
+            .last_poll
+            .is_some_and(|last| now.saturating_duration_since(last) < POLL_INTERVAL)
+        {
+            return Err(PollRefused::TooSoon);
+        }
+        if attempt.polls >= MAX_POLLS {
+            return Err(PollRefused::Exhausted);
+        }
+        attempt.polls += 1;
+        attempt.last_poll = Some(now);
+        // The approved answer (a consumed attempt's token) comes with the
+        // cli-login routes.
+        Ok(PollState::Pending)
     }
 
     /// Attempts held at `now`, live or consumed.
     pub(crate) fn retained(&self, now: Instant) -> usize {
-        // SCAFFOLD: counts nothing until the implementation commit.
-        let _ = now;
-        0
+        let mut held = self.held.lock();
+        prune(&mut held, now);
+        held.len()
     }
 
     /// Sets a held attempt's poll count, so a row can reach `MAX_POLLS`
     /// before the deadline.
     #[cfg(test)]
     pub(crate) fn set_polls_for_test(&self, id: uuid::Uuid, polls: u32) {
-        // SCAFFOLD: does nothing until the implementation commit.
-        let _ = (id, polls);
+        if let Some(attempt) = self.held.lock().get_mut(&id) {
+            attempt.polls = polls;
+        }
     }
 }

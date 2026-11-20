@@ -67,9 +67,18 @@ impl HostLimiter {
     /// Whether `admit` would let `host` in at `now`, recording nothing: for
     /// limits that count only failures, checked before the work is done.
     pub(crate) fn would_admit(&self, host: &str, now: Instant) -> bool {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (host, now);
-        false
+        let live = |t: &Instant| now.duration_since(*t) < self.window;
+        let hosts = self.hosts.lock();
+        match hosts.get(host) {
+            Some(sent) => sent.iter().filter(|t| live(t)).count() < self.limit,
+            // A new key: `admit` takes it if the map has room or would shed
+            // an idle key to make some.
+            None => {
+                self.limit > 0
+                    && (hosts.len() < self.max_hosts
+                        || hosts.values().any(|sent| !sent.iter().any(live)))
+            }
+        }
     }
 
     /// Keys in the map now, live or not yet shed.

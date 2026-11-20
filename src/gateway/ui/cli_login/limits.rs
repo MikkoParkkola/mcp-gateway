@@ -13,7 +13,12 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
+
 use crate::events::limiter::HostLimiter;
+
+/// The one key of every gateway-wide cap.
+const GATEWAY: &str = "gateway";
 
 pub(crate) const STARTS_PER_PEER: u32 = 5;
 pub(crate) const STARTS_PER_GATEWAY: u32 = 100;
@@ -37,6 +42,9 @@ pub(crate) struct Limits {
     lookups_gateway: HostLimiter,
     polls_peer: HostLimiter,
     polls_gateway: HostLimiter,
+    /// Held across a start's two checks and two counts, so concurrent starts
+    /// cannot both take a cap's last slot.
+    start_lock: Mutex<()>,
 }
 
 impl Limits {
@@ -48,40 +56,45 @@ impl Limits {
             lookups_gateway: HostLimiter::new(LOOKUPS_PER_GATEWAY, LOOKUP_WINDOW, 1),
             polls_peer: HostLimiter::new(INVALID_POLLS_PER_PEER, MINUTE, MAX_TRACKED_KEYS),
             polls_gateway: HostLimiter::new(INVALID_POLLS_PER_GATEWAY, MINUTE, 1),
+            start_lock: Mutex::new(()),
         }
     }
 
     /// Counts a start from `peer` if both caps admit it.
     pub(crate) fn admit_start(&self, peer: IpAddr, now: Instant) -> bool {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (&self.starts_peer, &self.starts_gateway, peer, now);
-        false
+        let peer = peer.to_string();
+        let _both = self.start_lock.lock();
+        let admitted = self.starts_peer.would_admit(&peer, now)
+            && self.starts_gateway.would_admit(GATEWAY, now);
+        if admitted {
+            self.starts_peer.admit(&peer, now);
+            self.starts_gateway.admit(GATEWAY, now);
+        }
+        admitted
     }
 
     /// Whether `session` may try a code now; counts nothing.
     pub(crate) fn may_look_up(&self, session: &str, now: Instant) -> bool {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (&self.lookups_session, &self.lookups_gateway, session, now);
-        false
+        self.lookups_session.would_admit(session, now)
+            && self.lookups_gateway.would_admit(GATEWAY, now)
     }
 
     /// Counts one failed lookup against `session` and the gateway.
     pub(crate) fn note_failed_lookup(&self, session: &str, now: Instant) {
-        // SCAFFOLD: counts nothing until the implementation commit.
-        let _ = (session, now);
+        self.lookups_session.admit(session, now);
+        self.lookups_gateway.admit(GATEWAY, now);
     }
 
     /// Whether `peer` may poll now; counts nothing.
     pub(crate) fn may_poll(&self, peer: IpAddr, now: Instant) -> bool {
-        // SCAFFOLD: refuses until the implementation commit.
-        let _ = (&self.polls_peer, &self.polls_gateway, peer, now);
-        false
+        self.polls_peer.would_admit(&peer.to_string(), now)
+            && self.polls_gateway.would_admit(GATEWAY, now)
     }
 
     /// Counts one invalid poll against `peer` and the gateway.
     pub(crate) fn note_invalid_poll(&self, peer: IpAddr, now: Instant) {
-        // SCAFFOLD: counts nothing until the implementation commit.
-        let _ = (peer, now);
+        self.polls_peer.admit(&peer.to_string(), now);
+        self.polls_gateway.admit(GATEWAY, now);
     }
 
     /// Keys each per-key cap tracks now: start peers, lookup sessions,
