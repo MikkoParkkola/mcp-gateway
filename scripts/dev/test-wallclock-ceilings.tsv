@@ -111,6 +111,7 @@ src/gateway/router/tests/task_execution_adapter/slot_release_tasks.rs	2
 src/gateway/router/tests/task_execution_adapter/submit_authz_audit.rs	1
 src/gateway/router/ui_stream_tests/live_logs/visibility_tests.rs	1
 src/gateway/router/ui_tool_call_cell_tests.rs	1
+src/gateway/router/ui_tool_call_receipt_tests.rs	1
 src/gateway/router/ui_tool_call_tests.rs	1
 src/gateway/server/listener_tests.rs	1
 src/gateway/server/persistence_tests.rs	1
