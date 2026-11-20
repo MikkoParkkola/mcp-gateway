@@ -46,7 +46,7 @@ fn run(args: &[&str], token: Option<&str>) -> Out {
         .map(|t| ("MCP_GATEWAY_TOKEN", t))
         .into_iter()
         .collect();
-    let out = gateway_bin::run_cli(args, &env);
+    let out = gateway_bin::run_cli(args, &env, None);
     Out {
         code: out.status.code(),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

@@ -442,31 +442,19 @@ fn wait_blocking(child: &mut tokio::process::Child, bound: std::time::Duration) 
     }
 }
 
-/// Runs one CLI command to completion in a fresh isolated home (also its
-/// config directory), with stdin closed and only `env` added, and returns
-/// what it printed. For commands that end on their own, not for `serve`.
-pub fn run_cli(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
-    let home = tempfile::tempdir().expect("isolated home for the command");
-    let mut cmd = command(home.path(), Inherit::Nothing);
-    cmd.stdin(std::process::Stdio::null());
-    cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
-    for (name, value) in env {
-        cmd.env(name, value);
-    }
-    cmd.args(args).output().expect("start mcp-gateway")
-}
-
-/// As [`run_cli`], but `input` is written to the command's stdin and then
-/// closed, for commands that read a value (such as an email) from stdin.
-pub fn run_cli_with_input(
-    args: &[&str],
-    env: &[(&str, &str)],
-    input: &[u8],
-) -> std::process::Output {
+/// Starts the CLI in a throwaway isolated home, which is also where it looks
+/// for configuration, adds just the given variables, waits for it to exit and
+/// hands back its output. Given bytes are piped to stdin and the pipe closed;
+/// with none, stdin is closed from the start. Not for `serve`, which runs on.
+pub fn run_cli(args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> std::process::Output {
     use std::io::Write as _;
     let home = tempfile::tempdir().expect("isolated home for the command");
     let mut cmd = command(home.path(), Inherit::Nothing);
-    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdin(if stdin.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    });
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
@@ -474,8 +462,8 @@ pub fn run_cli_with_input(
         cmd.env(name, value);
     }
     let mut child = cmd.args(args).spawn().expect("start mcp-gateway");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input);
+    if let (Some(mut pipe), Some(bytes)) = (child.stdin.take(), stdin) {
+        let _ = pipe.write_all(bytes);
     }
     child.wait_with_output().expect("wait for mcp-gateway")
 }

@@ -80,7 +80,8 @@ fn config_pointing_at(dir: &Path, port: u16) -> PathBuf {
 fn invoke(args: &[&str], gateway_env: Option<&str>, stdin: &str) -> Output {
     let mut env = vec![("MCP_GATEWAY_TOKEN", "placeholder")];
     env.extend(gateway_env.map(|url| ("MCP_GATEWAY_URL", url)));
-    gateway_bin::run_cli_with_input(args, &env, stdin.as_bytes())
+    let input = (!stdin.is_empty()).then(|| stdin.as_bytes());
+    gateway_bin::run_cli(args, &env, input)
 }
 
 /// The two resolution paths: `stats` has its own, the other four share one.
