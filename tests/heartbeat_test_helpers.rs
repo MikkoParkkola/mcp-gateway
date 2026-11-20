@@ -78,7 +78,8 @@ fn each_gateway_helper_sets_dnt() {
             (
                 "isolated_with_env_home",
                 gateway_bin::isolated_with_env_home(
-                    std::process::Command::new(gateway_bin::path()),
+                    // Only its environment is read; the program never runs.
+                    std::process::Command::new("never-run"),
                     home.path(),
                     env_home.path(),
                     inherit,
