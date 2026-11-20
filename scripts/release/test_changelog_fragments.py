@@ -424,6 +424,7 @@ class DropIds(unittest.TestCase):
             ("an id with a dotted label", f"- c2 ({T}31 MIN.2).", "- c2."),
             ("an id beside words on one line", f"- w (not a config key, {T}32).", "- w (not a config key)."),
             ("an id beside a blank part", f"- x ({T}36, ).", "- x."),
+            ("a kept part beside an id and a blank part", f"- y (#12, {T}37, ).", "- y (#12)."),
             ("ids split across a line break", f"- d ({T}4,\n  {T}5).", "- d."),
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
         ]
