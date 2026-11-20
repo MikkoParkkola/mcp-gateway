@@ -14,6 +14,80 @@ use mcp_gateway::secret_injection::{
 };
 use serde_json::json;
 
+/// Serialises every test in this binary against the process environment: a
+/// `set_var` racing a `getenv` on another thread is undefined behaviour, and
+/// the injector reads the environment.
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Hold the environment for a whole test. Poison-tolerant: a failed test does
+/// not wedge the others.
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Set `key` while `_held` keeps every other test of this binary waiting.
+fn set_env(_held: &std::sync::MutexGuard<'static, ()>, key: &str, value: &str) {
+    // SAFETY: every test in this binary holds `ENV` for its whole body
+    // (`every_test_takes_the_env_lock_first`), so no other thread of it reads
+    // or writes the environment now.
+    unsafe { std::env::set_var(key, value) };
+}
+
+/// Remove `key` while `_held` keeps every other test of this binary waiting.
+fn remove_env(_held: &std::sync::MutexGuard<'static, ()>, key: &str) {
+    // SAFETY: as in `set_env`.
+    unsafe { std::env::remove_var(key) };
+}
+
+/// Every test in this binary holds the env lock from its first statement, and
+/// the environment is written only through `set_env` and `remove_env`: a test
+/// that would touch the environment beside another test fails here.
+#[test]
+fn every_test_takes_the_env_lock_first() {
+    let _env = env_lock();
+    let source = include_str!("secret_injection_tests.rs");
+    let lines: Vec<&str> = source.lines().collect();
+    let mut unlocked = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let line = line.trim_start();
+        if !(line.starts_with("#[test]") || line.starts_with("#[tokio::test")) {
+            continue;
+        }
+        let Some(sig) = lines[i + 1..]
+            .iter()
+            .position(|l| l.trim_start().starts_with("fn "))
+        else {
+            continue;
+        };
+        let first = lines[i + 2 + sig..]
+            .iter()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty() && !l.starts_with("//"));
+        if !matches!(
+            first,
+            Some("let env = env_lock();" | "let _env = env_lock();")
+        ) {
+            unlocked.push(lines[i + 1 + sig].trim());
+        }
+    }
+    assert!(
+        unlocked.is_empty(),
+        "tests that do not take the env lock first: {unlocked:?}"
+    );
+    let raw: usize = [
+        concat!("std::env::", "set_var("),
+        concat!("std::env::", "remove_var("),
+    ]
+    .iter()
+    .map(|needle| source.matches(needle).count())
+    .sum();
+    assert_eq!(
+        raw, 2,
+        "set_var or remove_var outside set_env and remove_env"
+    );
+}
+
 // ── glob matching ────────────────────────────────────────────────────
 
 #[test]
