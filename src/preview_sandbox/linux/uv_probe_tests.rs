@@ -371,8 +371,9 @@ fn u_uv_place_uv_binds_its_real_file_alone() {
 }
 
 /// Whether the process whose pid `pid_file` holds has ended. It waits on the
-/// event itself, polling until the pid is gone from /proc or a zombie ('Z'
-/// after the command name's ')'): SIGKILL lands asynchronously, and a loaded
+/// event itself through `ended_by`, which stops at the first read that shows
+/// the process ended (no stat file, ESRCH as it exits, or a Z, X or x state)
+/// and answers with that read. A kill takes effect asynchronously, and a loaded
 /// host can take seconds to end and reap the process. The 120 s bound is set
 /// by the failure mode, not by a run's timing: the rows' processes sleep
 /// 300 s, so a missing kill still leaves the process alive at the bound and
