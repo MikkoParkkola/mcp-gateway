@@ -462,6 +462,29 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     );
 }
 
+/// E-link-follow: the public text writer resolves a symlinked path before it
+/// saves, so the new text lands in the file the link names and the link
+/// itself stays in place.
+#[cfg(unix)]
+#[test]
+fn the_public_text_writer_saves_through_a_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let named = dir.path().join("named.json");
+    std::fs::write(&named, "old\n").expect("named file");
+    let link = dir.path().join("link.json");
+    std::os::unix::fs::symlink(&named, &link).expect("link");
+
+    write_text_atomic(&link, "new\n").expect("save through the link");
+
+    let kind = std::fs::symlink_metadata(&link).expect("lstat").file_type();
+    assert!(kind.is_symlink(), "E-link-follow: the link is still a link");
+    let saved = std::fs::read_to_string(&named).expect("read the named file");
+    assert_eq!(
+        saved, "new\n",
+        "E-link-follow: the named file holds the new text"
+    );
+}
+
 /// E-link-replace: below the configured path's resolution, the text writer
 /// swaps away a link standing at the path it was handed and never writes
 /// through it, so a link planted after the resolve cannot redirect the save.
