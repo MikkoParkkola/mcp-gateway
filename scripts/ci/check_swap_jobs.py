@@ -59,7 +59,7 @@ WRAPPERS = (
     # The shared lib test binary: `export-lib` compiles it once for the run.
     re.compile(r"scripts/ci/shard_tests\.py\s+export-lib\b"),
     # The Linux lib test binary in parts: the helper compiles each part through export-lib.
-    re.compile(r"scripts/ci/lib-parts\.sh\s+(export|run)\b"),
+    re.compile(r"scripts/ci/lib-parts\.sh\s+(export|cov|run)\b"),
     re.compile(r"scripts/ci/coverage_shards\.py\s+run\b"),
     re.compile(r"scripts/ci/packaged-tests\.sh\s+(build|run)\b"),
     # The mutant harness, run from the repo or from the copy mutants.yml takes
@@ -103,7 +103,6 @@ EXPECTED = {
 # whole build until stage B converts them.
 HELPER = "scripts/ci/lib-parts.sh"
 WHOLE_BUILD_ALLOWED = {
-    ("coverage-probe.yml", "linux-part"): "converted by the jobs PR's second half (llvm-cov Linux lib parts)",
     ("ci.yml", "test-throwaway-hosted"): "stage B: the throwaway full-test job",
     ("mutants.yml", "linux-hosted"): "stage B: mutant batches",
     ("ci.yml", "test-shards"): "builds the integration targets only (int-a, int-b): no lib test target",
@@ -544,6 +543,9 @@ def self_test() -> int:
     def job(*steps: dict, runs_on: str = "ubuntu-latest") -> dict:
         return {"runs-on": runs_on, "steps": list(steps)}
 
+    def step(run: str, **fields) -> dict:
+        return {"run": run, **fields}
+
     swap = {"uses": ACTION}
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
@@ -687,7 +689,7 @@ def self_test() -> int:
         ("a new job calling export-lib itself, without the helper",
          {**allowed, ("ci.yml", "new"): {"steps": [{"run": "python3 scripts/ci/shard_tests.py export-lib out"}]}}, True, True),
         ("an allowed job converted but still listed",
-         {**allowed, ("coverage-probe.yml", "linux-part"): helper_job}, True, True),
+         {**allowed, ("ci.yml", "test-throwaway-hosted"): helper_job}, True, True),
         ("the allowance as it stands", allowed, False, True),
         ("the packaged-crate build, its script building by part",
          {**allowed, ("ci.yml", "package-tests"): packaged_job}, False, True),
@@ -879,7 +881,45 @@ def self_test() -> int:
     ok = rc == 1 and "ci.yml:package-tests builds the library tests without" in out.getvalue()
     wrong += not ok
     print(f"{'ok   ' if ok else 'WRONG'} main, a whole build in the packaged script: exit {rc}")
-    print(f"self-test: {len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases) + len(run_cases) + len(run_census) + len(split_cases) + 1 - wrong} ok, {wrong} wrong")
+    # Coverage split C1-C3: the census reads the helper's cov mode as a build by part.
+    cov_line = 'scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh cov "$COVERAGE_PARTS" "$PART"'
+    cov_job = job(swap, step(cov_line), step("scripts/ci/memory-tripwire.sh", **{"if": "always()"}))
+
+    def c1() -> None:
+        in_scope, problems = check_job("fixture:cov", cov_job)
+        found = census({**allowed, ("fixture.yml", "cov"): cov_job}, packaged_by_part=True)
+        assert in_scope, "cov helper command is not counted as a library build"
+        assert builds_through(cov_job, (HELPER,)), "cov build is not recognized as through the helper"
+        assert not problems and not found, (problems, found)
+
+    def c2() -> None:
+        direct = job(swap, step('scripts/ci/with-memory-log.sh python3 scripts/ci/coverage_shards.py run '
+                                '"$COVERAGE_PARTS" "$PART"'),
+                     step("scripts/ci/memory-tripwire.sh", **{"if": "always()"}))
+        found = census({**allowed, ("coverage-probe.yml", "linux-part"): direct}, packaged_by_part=True)
+        want = "coverage-probe.yml:linux-part builds the library tests without scripts/ci/lib-parts.sh"
+        assert any(want in problem for problem in found), f"direct coverage build not rejected: {found}"
+
+    def c3() -> None:
+        no_tripwire = job(swap, step(cov_line))
+        found = census({**allowed, ("fixture.yml", "cov"): no_tripwire}, packaged_by_part=True)
+        want = "no `if: always()` step running scripts/ci/memory-tripwire.sh"
+        assert any(want in problem for problem in found), f"missing cov tripwire not diagnosed: {found}"
+
+    cov_cases = (("C1 cov helper counted", c1), ("C2 direct coverage forbidden", c2),
+                 ("C3 cov tripwire required", c3))
+    for label, test in cov_cases:
+        try:
+            test()
+        except AssertionError as error:
+            wrong += 1
+            print(f"WRONG {label}: {error}")
+        else:
+            print(f"ok   {label}")
+    # The summary comes last, so a failing row never prints after it.
+    total = (len(cases) + len(alias_cases) + 6 + len(memlog_cases()) + len(census_cases) + len(packaged_cases)
+             + len(run_cases) + len(run_census) + len(split_cases) + 1 + len(cov_cases))
+    print(f"self-test: {total - wrong} ok, {wrong} wrong")
     return 1 if wrong else 0
 
 
