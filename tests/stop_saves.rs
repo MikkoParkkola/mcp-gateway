@@ -12,6 +12,8 @@
 //! the failure it separates (10 s: Docker's grace, the claim's own window).
 
 #![cfg(unix)]
+// The rows assert today's spend among the saved classes.
+#![cfg(feature = "cost-governance")]
 
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
@@ -111,7 +113,8 @@ fn write_config(root: &Path, mode: &str) -> PathBuf {
 }
 
 struct Gateway {
-    child: tokio::process::Child,
+    child: gateway_bin::Reaped,
+    pid: u32,
     url: String,
     log: PathBuf,
     client: reqwest::Client,
@@ -132,12 +135,16 @@ fn client() -> reqwest::Client {
 async fn start(dir: &Path, config: &Path, tag: &str) -> Gateway {
     let log = dir.join(format!("gateway-{tag}.log"));
     let file = std::fs::File::create(&log).expect("log");
-    let child = child_command(dir, config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(file.try_clone().expect("clone")))
-        .stderr(Stdio::from(file))
-        .spawn()
-        .expect("spawn gateway");
+    // Reaped kills a gateway a failed row left running, before `dir` goes.
+    let mut child = gateway_bin::Reaped::new(
+        child_command(dir, config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(file.try_clone().expect("clone")))
+            .stderr(Stdio::from(file))
+            .spawn()
+            .expect("spawn gateway"),
+    );
+    let pid = child.child_mut().id().expect("pid");
     let client = client();
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
@@ -153,6 +160,7 @@ async fn start(dir: &Path, config: &Path, tag: &str) -> Gateway {
             {
                 return Gateway {
                     child,
+                    pid,
                     url,
                     log,
                     client,
@@ -202,7 +210,7 @@ impl Gateway {
     }
 
     fn signal(&self, sig: &str) {
-        let pid = self.child.id().expect("pid").to_string();
+        let pid = self.pid.to_string();
         assert!(
             std::process::Command::new("kill")
                 .args([sig, &pid])
@@ -218,7 +226,7 @@ impl Gateway {
 
     async fn stop_clean(mut self) -> String {
         self.signal("-TERM");
-        let status = tokio::time::timeout(Duration::from_secs(60), self.child.wait())
+        let status = tokio::time::timeout(Duration::from_secs(60), self.child.child_mut().wait())
             .await
             .expect("stopped within 60 s")
             .expect("status");
@@ -232,7 +240,7 @@ impl Gateway {
 
     async fn kill(mut self) {
         self.signal("-KILL");
-        let _ = self.child.wait().await;
+        let _ = self.child.child_mut().wait().await;
     }
 }
 
@@ -315,7 +323,7 @@ fn state(dir: &Path) -> State {
 }
 
 /// Kill every backend the script recorded that is still alive: a stubborn one
-/// outlives a SIGKILLed gateway.
+/// outlives a gateway ended by SIGKILL.
 fn reap_backends(dir: &Path) {
     for pid in std::fs::read_to_string(dir.join("backend.pid"))
         .unwrap_or_default()
@@ -350,7 +358,7 @@ async fn baseline(dir: &Path, config: &Path) {
 /// Wait until `done(log)` or the gateway exits, never past `deadline`.
 async fn until(gw: &mut Gateway, deadline: Instant, done: impl Fn(&str) -> bool) {
     while Instant::now() < deadline {
-        if done(&gw.log_text()) || gw.child.try_wait().expect("wait").is_some() {
+        if done(&gw.log_text()) || gw.child.child_mut().try_wait().expect("wait").is_some() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -359,7 +367,7 @@ async fn until(gw: &mut Gateway, deadline: Instant, done: impl Fn(&str) -> bool)
 
 /// SIGKILL if still running (a gateway that already exited cannot be killed).
 async fn kill_if_running(mut gw: Gateway) {
-    if gw.child.try_wait().expect("wait").is_none() {
+    if gw.child.child_mut().try_wait().expect("wait").is_none() {
         gw.kill().await;
     }
 }
@@ -593,5 +601,5 @@ async fn s_sse_a_session_stream_ends_at_the_signal() {
         t0.elapsed()
     );
     let mut gw = gw;
-    let _ = tokio::time::timeout(Duration::from_secs(60), gw.child.wait()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(60), gw.child.child_mut().wait()).await;
 }

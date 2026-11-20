@@ -98,7 +98,7 @@ impl Checkpoints {
 async fn passes(classes: Arc<[Class]>) {
     let mut every = tokio::time::interval(EVERY);
     every.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    for pass in 1_u64.. {
+    for pass in 1_u64..=u64::MAX {
         every.tick().await;
         info!("stop checkpoint pass={pass} started");
         for class in classes.iter() {
