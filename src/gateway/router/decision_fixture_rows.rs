@@ -649,8 +649,8 @@ async fn a3_grant_match() {
     let new = all.split_off(before);
     // The grant check writes its own record beside the invocation's
     // (`GrantNote::project`, `grant_audit/record.rs:51-92`): kind
-    // `identity_grant_decision` (`:45`, `:129`), the matched `grant_id` (`:143-145`),
-    // and no decision object among its fields.
+    // `identity_grant_decision` (`grant_audit.rs:57`, set at `record.rs:53`), the
+    // matched `grant_id` (`record.rs:68-70`), and no decision object among its fields.
     let granted: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_none()).collect();
     assert!(
         matches!(granted.as_slice(), [grant]
