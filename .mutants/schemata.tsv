@@ -1,0 +1,6 @@
+head_sha	4ff62aad3cac4cdd913726922eefb662e97dffc8
+#mutant m2
+mcp_gateway	gateway::router::tests::task_execution_adapter::x14_authorize_order::the_x14_count_waits_for_the_withheld_record_it_started	src/gateway/router/tests/task_execution_adapter/x14_authorize_order.rs:165
+#mutant m3
+mcp_gateway	gateway::router::tests::task_execution_adapter::grant_decision_tasks::cancelled_worker_keeps_its_pending_record	src/gateway/router/tests/task_execution_adapter/grant_decision_tasks.rs:97
+mcp_gateway	gateway::router::tests::task_execution_adapter::grant_decision_tasks::cancelled_worker_on_stalled_log_writes_through_the_bound	src/gateway/router/tests/task_execution_adapter/grant_decision_tasks.rs:127
