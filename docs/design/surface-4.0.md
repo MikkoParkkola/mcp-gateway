@@ -208,6 +208,9 @@ Two items are `pub` beyond the module items above, both for backend secret refer
 - `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
 - `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it. Configuration history is to use it too, in a separate change.
 
+One item is `pub` for integration tests only, under the `#[doc(hidden)]` `gateway::test_helpers` module, and is INTERNAL:
+- `mcp_gateway::gateway::test_helpers::config_dir() -> Option<PathBuf>` (not on macOS), exactly what the crate's own config-directory lookup returns. The discovery test uses it to prove the lookup routes to a private home before it scans anything there. No stability promise; no logic of its own.
+
 
 ## Findings filed on the way (0-bug rule)
 
