@@ -10,6 +10,8 @@ Docs, a file's name alone, and platform cfg lines do not count.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -25,6 +27,69 @@ def diff(path: str, *lines: str) -> str:
     adds = [x for x in lines if x.startswith("+")]
     return (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
             f"@@ -10,{len(lines) - len(adds)} +10,{len(adds)} @@\n" + "\n".join(lines) + "\n")
+
+
+def windows_rows(row) -> None:
+    """Windows legs: which lane pull requests may skip the Windows shards. Inclusive by design: a past real
+    Windows-only failure must have run Windows, and every word family and path rule triggers on its own."""
+    data = Path(__file__).resolve().parent / "testdata" / "os_sensitive"
+    # The change that broke Windows, as each pull request's diff of the failing test's own file
+    # (run 43935864771, os error 33 on a held lock file; run 44231553050, an unreadable-file row).
+    for fixture, path in (("pr5012_startup_settle_tests.diff", "src/config_reload/startup_settle_tests.rs"),
+                          ("pr5063_install_tests.diff", "src/preview_sandbox/install_tests.rs")):
+        text = (data / fixture).read_text(encoding="utf-8")
+        got = osd.windows_reasons(text, [path])
+        row(f"{fixture}: the failing test's own change runs Windows", (bool(got), any(path in r for r in got)),
+            (True, True))
+    neutral = diff("src/gateway/router/mod.rs", "+    /// The number of parts in a route.",
+                   "+fn route_len(r: &Route) -> usize { r.parts.len() }")
+    row("a platform-neutral change may skip", osd.windows_reasons(neutral, ["src/gateway/router/mod.rs"]), [])
+    row("no changed path read: run", bool(osd.windows_reasons("", [])), True)
+    lines = {
+        "lock": "+    flock(fd, LOCK_EX)?;", "process": "+    child.start_kill()?;",
+        "permission call": "+    std::fs::set_permissions(&p, perms)?;", "octal mode": "+    let mode = 0o600;",
+        "cfg attribute": "+#[cfg(windows)]", "cfg_attr": "+#[cfg_attr(unix, allow(dead_code))]",
+        "nested cfg": '+#[cfg(all(unix, not(target_os = "macos")))]', "cfg!": "+    if cfg!(windows) {",
+        "Command": '+    let out = Command::new("git").output()?;', "a lone spawn line": "+        .spawn()?;",
+        "unix ext trait": "+use std::os::unix::fs::PermissionsExt;",
+        "windows ext trait": "+use std::os::windows::fs::MetadataExt;",
+        "a removed lock line": "-    let _g = FileLock::lock_exclusive(&f)?;",
+    }
+    for family, line in lines.items():
+        row(f"windows: {family} runs Windows", bool(osd.windows_reasons(diff("src/a.rs", line), ["src/a.rs"])), True)
+    plain = diff("src/a.rs", "+fn f() {}")
+    for path in ("src/security/win_acl.rs", "src/platform/windows.rs", "src/private_fs/mod.rs",
+                 "src/secret_store/keychain.rs", "Cargo.lock", "Cargo.toml", "crates/x/Cargo.toml", "build.rs",
+                 "rust-toolchain.toml", ".cargo/config.toml", "tests/common/gateway_bin.rs",
+                 "scripts/ci/shard_tests.py", "scripts/ci/os_sensitive_diff.py", ".github/" "workflows/ci.yml"):
+        row(f"windows: changing {path} runs Windows", bool(osd.windows_reasons(plain, [path])), True)
+
+    calls: list[int] = []
+
+    def counted(result):
+        def reasons():
+            calls.append(1)
+            return result
+        return reasons
+
+    def boom():
+        raise RuntimeError("diff unreadable")
+
+    lane = ("pull_request", osd.WIN_BASE, "ci/some-change", True)
+    for name, args in (("a train", ("pull_request", osd.WIN_BASE, "train/20261120-1", True)),
+                       ("a push", ("push", "", "", True)),
+                       ("a pull request into main", ("pull_request", "main", "ci/some-change", True)),
+                       ("a pull request from a fork", ("pull_request", osd.WIN_BASE, "ci/some-change", False))):
+        calls.clear()
+        row(f"windows: {name} runs without reading a diff", (osd.windows_run(*args, "", counted([]))[0], calls), ("run", []))
+    row("windows: a lane PR with no reason skips", osd.windows_run(*lane, "", counted([]))[0], "skip")
+    row("windows: a lane PR with a reason runs", osd.windows_run(*lane, "", counted(["src/a.rs:1"]))[0], "run")
+    row("windows: an error deciding runs (fail-open)", osd.windows_run(*lane, "", boom)[0], "run")
+    calls.clear()
+    row("windows: the switch 'off' runs every lane leg", (osd.windows_run(*lane, "off", counted([]))[0], calls),
+        ("run", []))
+    row("windows: any other switch value keeps the rule", [osd.windows_run(*lane, v, counted([]))[0] for v in ("", "on", "yes")],
+        ["skip", "skip", "skip"])
 
 
 def main() -> int:
@@ -230,13 +295,39 @@ def main() -> int:
     row("the command exits 1 naming os-sensitive on an unlabelled OS-process hit, 0 when labelled",
         (cli.returncode, "--add-label os-sensitive" in cli.stdout, run_cli(repo, pr_head, '["os-sensitive"]').returncode),
         (1, True, 0))
+    windows_rows(row)
+
+    # The decide step end to end, on a real merge commit.
+    def decide(repo: str, pr_head: str, **over) -> tuple[str, str]:
+        out = Path(tempfile.mkdtemp()) / "out"
+        env = {"EVENT": "pull_request", "BASE_REF": osd.WIN_BASE, "HEAD_REF": "ci/x", "SAME_REPO": "true",
+               "PR_HEAD": pr_head, "GITHUB_OUTPUT": str(out), **over}
+        line = io.StringIO()
+        with contextlib.redirect_stdout(line):
+            got = osd.windows_decide(env, repo)
+        return got, out.read_text() if out.exists() else ""
+
+    repo, pr_head = make_pr({"b.rs": b"fn b() -> usize { 2 }\n"})
+    row("decide: a neutral lane PR writes run=false", decide(repo, pr_head), ("run=false", "run=false\n"))
+    row("decide: a train runs", decide(repo, pr_head, HEAD_REF="train/1")[0], "run=true")
+    row("decide: a merge commit that is not this PR's runs", decide(repo, "0" * 40)[0], "run=true")
+    row("decide: the switch off runs", decide(repo, pr_head, WINDOWS_LEGS_SWITCH="off")[0], "run=true")
+    repo, pr_head = make_pr({"b.rs": b"fn b() { let _l = FileLock::lock_exclusive(&f); }\n"})
+    row("decide: a lane PR with a lock line runs", decide(repo, pr_head)[0], "run=true")
+    repo, pr_head = make_pr({"Cargo.lock": b"# bumped\n"})
+    row("decide: a lane PR touching only Cargo.lock runs", decide(repo, pr_head)[0], "run=true")
+    cli = subprocess.run([sys.executable, str(Path(osd.__file__)), "--windows-decide"], cwd=repo, capture_output=True,
+                         text=True, env={"PATH": "/usr/bin:/bin", "EVENT": "push"})
+    row("decide: the command line prints run=true for a push and exits 0", (cli.returncode, cli.stdout.split("\n")[0]),
+        (0, "run=true"))
 
     for e in errors:
         print(f"os-sensitive-diff: {e}")
     if not errors:
         print("os-sensitive-diff: content triggers (secret store, keychain, file locks: os-int; signals, process groups, "
               "reaping, process errno in Rust: os-sensitive); docs, names and cfg lines do not; the failure names the "
-              "lines and each missing label's command")
+              "lines and each missing label's command; Windows legs run on an inclusive rule (cfg lines "
+              "included) and always on trains, pushes and other bases, failing open")
     return 1 if errors else 0
 
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -146,6 +147,57 @@ def scan_proc(diff_text: str) -> list[tuple[str, int, str]]:
     return scan(diff_text, OS_PROC, (".rs",), view=code_part)
 
 
+# Windows legs: a lane pull request runs the Windows shards only when its diff can behave differently on Windows.
+# Trains, pushes and pull requests into any other base always run them. The rule errs inclusive: paths that are
+# Windows-only or that route the build, and changed Rust/TOML lines naming locks or the secret store (PATTERN),
+# process code (OS_PROC), permissions, a platform cfg, process spawning or a platform extension trait. Unlike the
+# macOS kinds it reads comment and cfg-only lines too: a cfg line is what decides which code Windows compiles.
+WIN_BASE = "docs/ranking-1-release-line"
+WIN_PATHS = re.compile(
+    r"(^|/)(win_[^/]*|[^/]*windows[^/]*|private_fs[^/]*|[^/]*keychain[^/]*)(/|$)"
+    r"|^\.github/workflows/|^\.cargo/|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$|^rust-toolchain"
+    r"|^tests/common/|^scripts/ci/(shard_tests|os_sensitive_diff)\.py$",
+    re.IGNORECASE,
+)
+WIN_WORDS = re.compile(
+    r"set_permissions|PermissionsExt|\bPermissions\b|set_readonly|\breadonly\(|\bmode\(\s*0o|\b0o[0-7]{3,4}\b"
+    r"|chmod|umask|\bacl\b|dacl|owner_only|SECURITY_ATTRIBUTES|windows_sys|winapi"
+    r"|\bcfg(?:_attr)?!?\(.*\b(?:unix|windows|target_os|target_family|target_env)\b"
+    r"|Command::new|std::process|tokio::process|current_exe|\.spawn\("
+    r"|std::os::(?:windows|unix)|MetadataExt|CommandExt|OpenOptionsExt|FileTypeExt",
+    re.IGNORECASE,
+)
+
+
+def windows_reasons(diff_text: str, names: list[str]) -> list[str]:
+    """Why a lane pull request's Windows legs must run: the matched paths and lines. Empty: they may skip.
+    No changed path at all is a reason too: an empty list means the diff was not read, not that nothing changed."""
+    if not names:
+        return ["no changed path was read"]
+    why = [f"path {p}" for p in names if WIN_PATHS.search(p)]
+    for p, n, t in scan(diff_text) + scan_proc(diff_text) + scan(diff_text, WIN_WORDS):
+        why.append(f"{p}:{n}: {t[:100]}")
+    return why
+
+
+def windows_run(event: str, base_ref: str, head_ref: str, same_repo: bool, switch: str, reasons) -> tuple[str, str]:
+    """("run" | "skip", why) for one Windows leg. `reasons` is a callable returning windows_reasons for the pull
+    request's diff; it is called only for a lane pull request into WIN_BASE, and any error in it runs the leg."""
+    if not (event == "pull_request" and base_ref == WIN_BASE and same_repo and not head_ref.startswith("train/")):
+        return "run", "not a lane pull request into the release line: every Windows leg runs"
+    if switch == "off":
+        return "run", "the Windows legs switch is off: every lane leg runs"
+    try:
+        why = reasons()
+    except Exception as e:  # noqa: BLE001 - fail-open: whatever goes wrong, the leg runs
+        return "run", f"could not decide ({type(e).__name__}: {e}); the leg runs"
+    if not isinstance(why, list):
+        return "run", "could not decide (no reason list); the leg runs"
+    if why:
+        return "run", "; ".join(why[:SHOWN]) + (f"; ... and {len(why) - SHOWN} more" if len(why) > SHOWN else "")
+    return "skip", "the diff names nothing that can behave differently on Windows"
+
+
 # kind -> (label, what the matched lines touch, the shard the label runs)
 _KINDS = {"int": (LABEL, "the secret store, the keychain or a file lock", "int"),
           "proc": (LABEL_PROC, "signals, process groups, child reaping or process errno", "lib")}
@@ -221,5 +273,40 @@ def main() -> int:
     return 0
 
 
+def windows_decide(env: dict, repo: str = ".") -> str:
+    """The Windows legs' decide step: prints and returns `run=true` or `run=false`, appending it to
+    $GITHUB_OUTPUT when set. Reads EVENT, BASE_REF, HEAD_REF, SAME_REPO, PR_HEAD and WINDOWS_LEGS_SWITCH. A lane pull
+    request is judged on its merge commit (HEAD) against the first parent; anything that cannot be read runs."""
+    def reasons() -> list[str]:
+        problem = merge_problem(repo, "HEAD^1", "HEAD", env.get("PR_HEAD", ""))
+        if problem:
+            raise RuntimeError(problem)
+        names = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", "--no-renames", "HEAD^1", "HEAD"],
+                               check=True, capture_output=True).stdout.decode("utf-8", "replace").split("\0")
+        raw = subprocess.run(["git", "-C", repo, "diff", "--unified=0", "--no-color", "--text", "--no-ext-diff",
+                              "--no-textconv", "HEAD^1", "HEAD", "--", "*.rs", "*.toml"],
+                             check=True, capture_output=True).stdout
+        return windows_reasons(raw.decode("utf-8", "replace"), [n for n in names if n])
+
+    try:
+        verdict_, why = windows_run(env.get("EVENT", ""), env.get("BASE_REF", ""), env.get("HEAD_REF", ""),
+                                    env.get("SAME_REPO", "") == "true", env.get("WINDOWS_LEGS_SWITCH", ""), reasons)
+    except Exception as e:  # noqa: BLE001 - fail-open
+        verdict_, why = "run", f"could not decide ({type(e).__name__}: {e}); the leg runs"
+    line = f"run={'false' if verdict_ == 'skip' else 'true'}"
+    print(f"{line}\n{why}")
+    out = env.get("GITHUB_OUTPUT")
+    if out:
+        try:
+            with open(out, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError as e:  # no output written reads as "not false": the leg runs
+            print(f"could not write {out} ({e}); the leg runs")
+    return line
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--windows-decide"]:
+        windows_decide(dict(os.environ))
+        sys.exit(0)
     sys.exit(main())
