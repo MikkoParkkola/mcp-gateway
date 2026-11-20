@@ -39,6 +39,8 @@ OLD_PART = re.compile(r"(?<![\w-])lib\x2d[ab](?![\w-])")
 def condition_matches(condition: str, part: str) -> bool:
     """Evaluate only the small matrix condition language used by add-swap."""
     expression = condition.strip()
+    if not expression:
+        return True  # no `if:` at all: the step runs on every part
     if expression.startswith("${{") and expression.endswith("}}"):
         expression = expression[3:-2].strip()
     if "||" in expression:
@@ -126,7 +128,8 @@ class CoveragePartsWiring(unittest.TestCase):
                     with self.assertRaisesRegex(AssertionError, re.escape(relative)):
                         self.test_W1_only_explicit_stale_name_allowlist()
 
-    def test_W2_swap_matches_numbered_lib_parts_only(self) -> None:
+    def test_W2_swap_on_every_part(self) -> None:
+        # Every part, the integration ones too: each ends with the memory tripwire, which fails closed with no swap.
         doc = yaml.safe_load((ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8"))
         job = doc["jobs"]["linux-part"]
         steps = [step for step in job["steps"] if step.get("uses") == "./.github/actions/add-swap"]
@@ -139,7 +142,7 @@ class CoveragePartsWiring(unittest.TestCase):
         expected_lib = {f"lib-{k}" for k in range(1, count + 1)}
         self.assertEqual(parts, expected_lib | {"int-a", "int-b"},
                          "plan 4 must expose every numbered lib part before swap coverage can be proved")
-        self.assertEqual(matches, expected_lib, f"add-swap {condition!r} matches {sorted(matches)}")
+        self.assertEqual(matches, parts, f"add-swap {condition!r} matches {sorted(matches)}")
 
     def test_W3_scripts_run_by_path_are_executable(self) -> None:
         # The coverage part step runs these by path, not through `bash`: the workflow runs the first three, and
