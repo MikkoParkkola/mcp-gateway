@@ -611,6 +611,8 @@ fn says_nothing(e: &std::io::Error) -> bool {
 fn a_failed_stat_read_keeps_a_process_live_unless_it_is_missing_or_exiting() {
     use std::io::{Error, ErrorKind};
     assert!(says_nothing(&Error::from_raw_os_error(24)), "EMFILE");
+    assert!(says_nothing(&Error::from_raw_os_error(5)), "EIO");
+    assert!(!says_nothing(&Error::from_raw_os_error(2)), "ENOENT");
     assert!(!says_nothing(&Error::from(ErrorKind::NotFound)), "NotFound");
     assert!(!says_nothing(&Error::from_raw_os_error(ESRCH)), "ESRCH");
 }
@@ -633,7 +635,7 @@ fn marked(marker: &str) -> Vec<u32> {
             .rsplit_once(") ")
             .and_then(|(_, rest)| rest.split_whitespace().next());
         let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-        let live = unread || !matches!(state, None | Some("Z" | "X"));
+        let live = unread || !matches!(state, None | Some("Z" | "X" | "x"));
         if live && String::from_utf8_lossy(&cmdline).contains(marker) {
             found.push(pid);
         }

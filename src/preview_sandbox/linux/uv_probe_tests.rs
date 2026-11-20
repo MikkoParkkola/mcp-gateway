@@ -492,6 +492,7 @@ fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
         "the wait answered running after {:?}, before its bound",
         start.elapsed()
     );
+    assert!(taken.get() > 1, "the wait read once and slept to its bound");
     let dead: [(char, fn() -> std::io::Result<String>); 3] = [
         ('Z', || stat_in('Z')),
         ('X', || stat_in('X')),

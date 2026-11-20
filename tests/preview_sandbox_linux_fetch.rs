@@ -132,6 +132,8 @@ fn says_nothing(e: &std::io::Error) -> bool {
 fn a_failed_stat_read_keeps_a_marked_process_live_unless_it_is_missing_or_exiting() {
     use std::io::{Error, ErrorKind};
     assert!(says_nothing(&Error::from_raw_os_error(24)), "EMFILE");
+    assert!(says_nothing(&Error::from_raw_os_error(5)), "EIO");
+    assert!(!says_nothing(&Error::from_raw_os_error(2)), "ENOENT");
     assert!(!says_nothing(&Error::from(ErrorKind::NotFound)), "NotFound");
     assert!(!says_nothing(&Error::from_raw_os_error(ESRCH)), "ESRCH");
 }
@@ -170,7 +172,11 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         );
         let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let tagged = String::from_utf8_lossy(&cmdline).contains(marker);
-        if name == "unshare" && parent == Some(me) && tagged && !matches!(state, Some("Z" | "X")) {
+        if name == "unshare"
+            && parent == Some(me)
+            && tagged
+            && !matches!(state, Some("Z" | "X" | "x"))
+        {
             found.push(pid);
         }
     }
