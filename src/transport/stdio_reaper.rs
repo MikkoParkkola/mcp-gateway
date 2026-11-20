@@ -143,6 +143,16 @@ impl StopDeadline {
         self.handed.lock().len()
     }
 
+    /// Whether every tracked handover's tree has been reaped: after
+    /// [`Self::wait_handed`] up to a deadline, the kill landed before it.
+    #[cfg(all(test, unix))]
+    pub(crate) fn handed_all_reaped(&self) -> bool {
+        self.handed
+            .lock()
+            .iter()
+            .all(|receiver| *receiver.borrow() != Reaped::Pending)
+    }
+
     /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
     /// an earlier close handed over may still be in its waits, and its kill
     /// must land before the gateway returns.

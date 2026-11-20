@@ -36,9 +36,9 @@ pub(crate) use self::stdio::HURRY_WINDOW;
 #[cfg(all(test, unix))]
 pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 #[cfg(all(test, unix))]
-pub(crate) use self::stdio::NESTED_TERM_NEED_FOR_TEST;
-#[cfg(all(test, unix))]
 pub(crate) use self::stdio::NESTED_TERM_MARGIN_FOR_TEST;
+#[cfg(all(test, unix))]
+pub(crate) use self::stdio::NESTED_TERM_NEED_FOR_TEST;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
