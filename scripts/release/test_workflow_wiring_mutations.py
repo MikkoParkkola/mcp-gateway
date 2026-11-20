@@ -1892,6 +1892,10 @@ CASES += [
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
      "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
+     "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
+     "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
+     "      - name: Private gateway home\n"
+     '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
@@ -1905,6 +1909,10 @@ CASES += [
      "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
      "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
      "        with:\n          save-if: false\n"
+     "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
+     "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
+     "      - name: Private gateway home\n"
+     '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
      "      # Each skip names the job that runs the test in full, and its ticket:\n"
      "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
      "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
