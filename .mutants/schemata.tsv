@@ -1,0 +1,9 @@
+head_sha	26b6fa92487595a975912aae5d82e3abd3914697
+#mutant m1
+mcp_gateway	gateway::router::ui_tool_call_deadline_tests::the_deadline_row_survives_a_slow_path_to_the_send	src/gateway/router/ui_tool_call_deadline_tests.rs:132
+mcp_gateway	gateway::router::ui_tool_call_tests::t12_a_deadline_answers_504_and_the_records_still_land	src/gateway/router/ui_tool_call_tests.rs:534
+mcp_gateway	gateway::router::ui_tool_call_receipt_tests::b5_the_deadline_both_orders	src/gateway/router/ui_tool_call_receipt_tests.rs:465
+#mutant m2
+mcp_gateway	gateway::router::ui_tool_call_deadline_tests::the_deadline_row_survives_a_slow_path_to_the_send	src/gateway/router/ui_tool_call_deadline_tests.rs:133
+mcp_gateway	gateway::router::ui_tool_call_tests::t12_a_deadline_answers_504_and_the_records_still_land	src/gateway/router/ui_tool_call_tests.rs:535
+mcp_gateway	gateway::router::ui_tool_call_receipt_tests::b5_the_deadline_both_orders	src/gateway/router/ui_tool_call_receipt_tests.rs:480
