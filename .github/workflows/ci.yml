@@ -951,11 +951,11 @@ jobs:
       # The writer's refusal rows that need root, from the targets the suite just built. Before part 5: its build
       # sets the part variable, and the next plain cargo call would rebuild the crate.
       - name: Local users for the writer's refusal rows
-        timeout-minutes: 5
+        timeout-minutes: 2
         if: ${{ !cancelled() && matrix.shard == 'int' }}
         uses: ./.github/actions/access-rows-setup
       - name: The writer's refusal rows binary
-        timeout-minutes: 10
+        timeout-minutes: 2
         id: refusal-rows
         if: ${{ !cancelled() && matrix.shard == 'int' }}
         run: |
@@ -965,7 +965,7 @@ jobs:
           [ -x "$exe" ]
           echo "exe=$exe" >> "$GITHUB_OUTPUT"
       - name: Writer root rows (refusal surfaces)
-        timeout-minutes: 10
+        timeout-minutes: 5
         if: ${{ !cancelled() && matrix.shard == 'int' && steps.refusal-rows.outcome == 'success' }}
         uses: ./.github/actions/ignored-rows
         with:
@@ -1339,11 +1339,11 @@ jobs:
       # The writer's refusal rows that need root (#[ignore], so the suite above left them out). This leg has already
       # built their target and the gateway binary they start as user C.
       - name: Local users for the writer's refusal rows
-        timeout-minutes: 5
+        timeout-minutes: 2
         if: ${{ !cancelled() && matrix.shard == 'int-b' }}
         uses: ./.github/actions/access-rows-setup
       - name: The writer's refusal rows binary
-        timeout-minutes: 10
+        timeout-minutes: 2
         id: refusal-rows
         if: ${{ !cancelled() && matrix.shard == 'int-b' }}
         run: |
@@ -1354,7 +1354,7 @@ jobs:
           [ -x "$exe" ]
           echo "exe=$exe" >> "$GITHUB_OUTPUT"
       - name: Writer root rows (refusal surfaces)
-        timeout-minutes: 10
+        timeout-minutes: 5
         if: ${{ !cancelled() && matrix.shard == 'int-b' && steps.refusal-rows.outcome == 'success' }}
         uses: ./.github/actions/ignored-rows
         with:
@@ -1427,11 +1427,11 @@ jobs:
       # The shared writer's rows that need root and two more local users. The shard run above leaves them out
       # (#[ignore]); here they run from the same part binaries, as root, after the users exist.
       - name: Local users for the writer's root rows
-        timeout-minutes: 5
+        timeout-minutes: 2
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         uses: ./.github/actions/access-rows-setup
       - name: The part holding the writer's root rows, where user C can run it
-        timeout-minutes: 5
+        timeout-minutes: 2
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         run: |
           set -euo pipefail
@@ -1446,7 +1446,7 @@ jobs:
           sudo setpriv --reuid "$ACCESS_ROWS_UID_C" --regid "$ACCESS_ROWS_GID_G" --init-groups \
             /opt/writer-rows/lib-tests --list --ignored config_persistence_access_tests::child::save | grep -F ': test'
       - name: Writer root rows (library)
-        timeout-minutes: 10
+        timeout-minutes: 5
         if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
         uses: ./.github/actions/ignored-rows
         with:

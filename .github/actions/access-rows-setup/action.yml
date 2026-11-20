@@ -29,7 +29,8 @@ runs:
             # Proved by use: the rows need an ACL write and an ACL read there to fail as unsupported.
             probe="$mnt/.acl-probe"
             touch "$probe"
-            if err="$(setfacl -m u:nobody:r "$probe" 2>&1)"; then echo "::error::$mnt took an ACL"; exit 1; fi
+            # C locale: the check below matches setfacl's English error text.
+            if err="$(LC_ALL=C setfacl -m u:nobody:r "$probe" 2>&1)"; then echo "::error::$mnt took an ACL"; exit 1; fi
             case "$err" in *"Operation not supported"*) ;; *) echo "::error::setfacl in $mnt: $err"; exit 1 ;; esac
             # `if 1:` opens a block, so the lines below may keep this script's indent.
             python3 -I -c 'if 1:
