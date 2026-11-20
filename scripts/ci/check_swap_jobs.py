@@ -366,23 +366,22 @@ def runs_tripwire(step: dict) -> bool:
     return (run_commands(str(step.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
 
 
-def tripwire_swap_problems(name: str, steps: list, first_build: int | None) -> list[str]:
-    """The tripwire fails closed when no swap is active, and it counts the whole job's swap-out, so its job adds swap
-    on every leg (no `if:`) before anything builds: swap added later would let a whole build pass unmeasured. That is also why
-    the tripwire itself must come after the job's last build step."""
-    trips = [i for i, s in enumerate(steps) if runs_tripwire(s)]
+def tripwire_swap_problems(name: str, steps: list) -> list[str]:
+    """The tripwire counts swap-out since boot and fails closed when none is active. So in its job the unconditional
+    add-swap step comes before every shell step, and the tripwire after every other one. Position alone decides,
+    whatever a step compiles: a build the library match misses still runs between the two."""
+    shell = [i for i, s in enumerate(steps) if "run" in s]
+    trips = [i for i in shell if runs_tripwire(steps[i])]
     if not trips:
         return []
     found = []
-    swap_by = trips[0] if first_build is None else first_build
-    if not any(s.get("uses") == ACTION and "if" not in s for s in steps[:swap_by]):
-        found.append(f"{name}: needs an {ACTION} step without `if:` before step {swap_by}, since its memory tripwire "
-                     f"(step {trips[0]}) fails closed on a runner image that has no swap")
-    if first_build is not None:
-        last_build = max(i for i, s in enumerate(steps) if step_builds(s))
-        if trips[-1] < last_build:
-            found.append(f"{name}: its memory tripwire (step {trips[-1]}) comes before build step {last_build}, so "
-                         "the swap-out of that build goes uncounted")
+    if not any(s.get("uses") == ACTION and "if" not in s for s in steps[:shell[0]]):
+        found.append(f"{name}: needs an {ACTION} step without `if:` before step {shell[0]}, its first shell step, "
+                     f"since the memory tripwire (step {trips[0]}) fails closed on a runner image that has no swap")
+    later = [i for i in shell if i > trips[-1] and not runs_tripwire(steps[i])]
+    if later:
+        found.append(f"{name}: its memory tripwire (step {trips[-1]}) is not the job's last shell step: step "
+                     f"{later[0]} runs after it, and its swap-out goes uncounted")
     return found
 
 
@@ -396,7 +395,7 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     if not linux_hosted(job):
         return False, problems
     first_build = next((i for i, s in enumerate(steps) if step_builds(s)), None)
-    problems += tripwire_swap_problems(name, steps, first_build)
+    problems += tripwire_swap_problems(name, steps)
     if first_build is None:
         return False, problems
     swap = next((i for i, s in enumerate(steps) if s.get("uses") == ACTION), None)
