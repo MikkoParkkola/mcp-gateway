@@ -1468,8 +1468,19 @@ impl Gateway {
     /// # Panics
     ///
     /// Panics if RSA key pair generation fails on all retry attempts.
-    #[allow(clippy::too_many_lines)]
     pub async fn run_stdio(self) -> Result<()> {
+        // Boxed: the loop's future is large (main.rs boxes run_stdio itself).
+        Box::pin(self.run_stdio_on(tokio::io::stdin(), tokio::io::stdout())).await
+    }
+
+    /// [`Self::run_stdio`] with its request source and answer sink passed in:
+    /// the process's stdin and stdout for the binary, a pipe for a test.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn run_stdio_on<R, W>(self, input: R, output: W) -> Result<()>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
         info!(
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
@@ -1530,10 +1541,8 @@ impl Gateway {
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
         // ── Read → dispatch → write loop ────────────────────────────────────
-        let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
-        let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+        let mut reader = BufReader::new(input).lines();
+        let mut stdout = output;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = "stdio-session";
@@ -1605,7 +1614,10 @@ impl Gateway {
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
-    async fn write_response(stdout: &mut tokio::io::Stdout, value: &serde_json::Value) {
+    async fn write_response(
+        stdout: &mut (impl tokio::io::AsyncWrite + Unpin),
+        value: &serde_json::Value,
+    ) {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {
