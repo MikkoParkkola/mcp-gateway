@@ -35,12 +35,12 @@ async fn refusing() -> Refusing {
         headers: Vec::new(),
     };
     let closed = crate::config::InputSchemaEnforcement::Closed;
-    let (router, _dirs, (_, backend)) = gateway_in(peer_url, headerless, closed).await;
+    let (router, dirs, (_, backend)) = gateway_in(peer_url, headerless, closed).await;
     Refusing {
         router,
         backend,
         sent,
-        _dirs,
+        _dirs: dirs,
     }
 }
 
@@ -306,12 +306,12 @@ async fn switchable() -> (Refusing, Arc<AtomicBool>, PeerControl) {
         },
     };
     let closed = crate::config::InputSchemaEnforcement::Closed;
-    let (router, _dirs, (_, backend)) = gateway_named(BACKEND, url, mint, closed).await;
+    let (router, dirs, (_, backend)) = gateway_named(BACKEND, url, mint, closed).await;
     let gw = Refusing {
         router,
         backend,
         sent: Arc::clone(&control.calls),
-        _dirs,
+        _dirs: dirs,
     };
     (gw, lend, control)
 }
