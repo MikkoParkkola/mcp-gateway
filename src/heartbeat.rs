@@ -517,9 +517,13 @@ pub(crate) fn root() -> Option<PathBuf> {
 /// The system clock's UTC date; `None` when the clock reads before the epoch,
 /// which sends nothing (as on 4.0, whose clock refuses such a time).
 fn utc_today() -> Option<chrono::NaiveDate> {
-    let since = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
+    date_of(std::time::SystemTime::now())
+}
+
+/// The UTC date of `at`, or `None` before the epoch: [`utc_today`] at a time
+/// a row can choose.
+fn date_of(at: std::time::SystemTime) -> Option<chrono::NaiveDate> {
+    let since = at.duration_since(std::time::UNIX_EPOCH).ok()?;
     let secs = i64::try_from(since.as_secs()).ok()?;
     chrono::DateTime::from_timestamp(secs, 0).map(|t| t.date_naive())
 }

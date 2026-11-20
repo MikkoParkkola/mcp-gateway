@@ -91,6 +91,20 @@ fn production_url_is_the_literal() {
     assert_eq!(EVENT, "heartbeat");
 }
 
+/// N1b. The production clock itself gives no date a second before the epoch,
+/// and the right UTC date a day and a second after it (control). N1 injects
+/// a dateless clock; this holds the real one to it (on 4.0 the clock refuses
+/// such a time; the 3.5 port's first clock always gave a date).
+#[test]
+fn the_production_clock_gives_no_date_before_the_epoch() {
+    use std::time::{Duration, UNIX_EPOCH};
+    assert_eq!(date_of(UNIX_EPOCH - Duration::from_secs(1)), None);
+    assert_eq!(
+        date_of(UNIX_EPOCH + Duration::from_secs(86_401)),
+        NaiveDate::from_ymd_opt(1970, 1, 2)
+    );
+}
+
 /// N1. A clock that reads before the epoch gives no date: nothing is
 /// claimed or sent; a readable clock sends (control).
 #[tokio::test]
