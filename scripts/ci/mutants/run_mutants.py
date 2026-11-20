@@ -929,6 +929,13 @@ table = json.load(open(os.environ["FAKE_TABLE"]))
 args = sys.argv[1:]
 with open(os.environ["FAKE_CALLS"], "a") as f:
     f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT")}) + "\n")
+if args[:1] == ["--list"] and "parts" in table:
+    # A part's copy is named <target>-p<K>; it lists only the names the table puts in part K.
+    base = os.path.basename(sys.argv[0])
+    part = base.rsplit("-p", 1)[-1] if "-p" in base else ""
+    for name in table["parts"].get(part, []):
+        print(name + ": test")
+    sys.exit(0)
 if args[:1] == ["--list"]:
     if not table.get("no_probe"):
         print("mutant::mutants_build::only_the_named_site_switches_on: test")
@@ -975,7 +982,8 @@ FAKE_CARGO = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_CALLS"], "a") as f:
     f.write(json.dumps({"cargo": sys.argv[1:], "rustflags": os.environ.get("RUSTFLAGS", ""),
-                        "mutant": os.environ.get("MCP_GATEWAY_MUTANT")}) + "\n")
+                        "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
+                        "part": os.environ.get("MCP_GATEWAY_TEST_PART")}) + "\n")
 exe = os.environ["FAKE_EXE"]
 for name, kind in (("mcp_gateway", ["lib"]), ("itest", ["test"])):
     print(json.dumps({"reason": "compiler-artifact", "executable": exe, "profile": {"test": True},
@@ -1066,6 +1074,23 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
                 except ProcessLookupError:
                     alive = False
             expect("D9 the hung row's child process is killed too", alive, False)
+            # MUT.5: a batch builds only what its rows need, the lib test crate one part at a time,
+            # so no single compile holds the whole crate (a hosted runner dies under it).
+            parted = {**killed, "parts": {"1": ["m::t1"],
+                                          "3": [CFG_PROBE, "mutant_scan::tests::list_mutant_sites"]}}
+            rc, calls = run(parted)
+            builds = [c for c in calls if "cargo" in c]
+            expect("R1 nothing builds every target",
+                   [c for c in builds if {"--workspace", "--all-targets"} & set(c["cargo"])], [])
+            expect("R1 each lib build names its part",
+                   sorted(c.get("part") or "" for c in builds if "--lib" in c["cargo"]), ["1", "3"])
+            expect("R1 a lib-only batch builds no other target",
+                   [c for c in builds if "--lib" not in c["cargo"]], [])
+            _, ms_mixed = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\nitest\tm::t1\tsrc/x.rs:9\n")
+            _, calls = run(parted, ms_mixed)
+            others = [c["cargo"] for c in calls if "cargo" in c and "--lib" not in c["cargo"]]
+            expect("R2 one non-lib build, naming only the rows' target",
+                   [("itest" in a and "--test" in a and "--workspace" not in a) for a in others], [True])
         finally:
             TEST_LIMIT = saved_limit
             os.environ["PATH"] = saved_path
