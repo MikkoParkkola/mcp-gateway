@@ -611,7 +611,7 @@ mod r9_windows_aliases {
         let short = String::from_utf16_lossy(&units).trim().to_string();
         assert!(!short.is_empty(), "cmd printed no short form");
         if short.eq_ignore_ascii_case(&raw.to_string_lossy()) {
-            println!("skipped: 8.3 names are off on this volume ({short})");
+            crate::required::skip_or_fail(&format!("8.3 short names on this volume (got {short})"));
             return;
         }
         refused(&PathBuf::from(short));

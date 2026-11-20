@@ -26,6 +26,7 @@ fn the_shipped_capabilities_classify_as_expected() {
     // against what actually ships.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     if !root.exists() {
+        crate::test_wait::skip_or_fail("the capabilities directory of a repository checkout");
         return;
     }
     let mut flagged = Vec::new();
