@@ -14,11 +14,11 @@ This check reads every workflow and refuses:
     before its first such step;
   - an add-swap step whose `if:` is not one of ALLOWED_CONDITIONS (a condition
     that skips a library matrix row would leave that row without swap);
-  - a Linux-hosted job that runs the memory tripwire with no unconditional
-    add-swap step before its first build step (or before the tripwire, if it
-    builds nothing), or whose tripwire runs before its last build step: the
-    tripwire fails closed when no swap is active, and some runner images come
-    with none;
+  - a Linux-hosted job that runs the memory tripwire unless an add-swap step
+    without `if:` comes before its first `run:` step and the tripwire comes
+    after every other `run:` command (no build detection: position decides),
+    since the tripwire fails closed with no active swap and counts the whole
+    job's swap-out, and some runner images come with none;
   - a hand-copied swap script (`swapon`/`mkswap` in a workflow `run:`), which
     could drift from the shared action;
   - an in-scope job list that differs from EXPECTED (a job that starts or stops
@@ -382,6 +382,9 @@ def tripwire_swap_problems(name: str, steps: list) -> list[str]:
     if later:
         found.append(f"{name}: its memory tripwire (step {trips[-1]}) is not the job's last shell step: step "
                      f"{later[0]} runs after it, and its swap-out goes uncounted")
+    elif any(not c.startswith(TRIPWIRE) for c in run_commands(str(steps[trips[-1]].get("run", "")))[1:]):
+        found.append(f"{name}: step {trips[-1]} runs another command after the memory tripwire in the same step, "
+                     "and that command's swap-out goes uncounted")
     return found
 
 
@@ -567,6 +570,17 @@ def run_action(before_mb: int, after_mb: int) -> int:
         return subprocess.run(["bash", "-c", action_script()], env=env, capture_output=True, text=True).returncode
 
 
+def each_in_its_own(words: tuple, problems: list[str]) -> bool:
+    """Every word found in a different problem, so one merged message cannot stand for two."""
+    left = list(problems)
+    for word in words:
+        hit = next((p for p in left if word in p), None)
+        if hit is None:
+            return False
+        left.remove(hit)
+    return True
+
+
 def self_test() -> int:
     def job(*steps: dict, runs_on: str = "ubuntu-latest") -> dict:
         return {"runs-on": runs_on, "steps": list(steps)}
@@ -651,7 +665,7 @@ def self_test() -> int:
         in_scope, problems = check_job("fixture", j)
         if isinstance(want_problems, tuple):  # one word per expected problem, each found in its own message
             ok = (in_scope == want_scope and len(problems) == len(want_problems)
-                  and all(any(word in p for p in problems) for word in want_problems))
+                  and each_in_its_own(want_problems, problems))
         else:
             ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
