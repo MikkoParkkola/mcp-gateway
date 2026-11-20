@@ -492,12 +492,16 @@ fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
         "the wait answered running after {:?}, before its bound",
         start.elapsed()
     );
-    for dead in ['Z', 'X', 'x'] {
+    let dead: [(char, fn() -> std::io::Result<String>); 3] = [
+        ('Z', || stat_in('Z')),
+        ('X', || stat_in('X')),
+        ('x', || stat_in('x')),
+    ];
+    for (state, read) in dead {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let read = move || stat_in(dead);
         assert!(
             ended_by(reads_then(Vec::new(), read, &taken), until),
-            "state {dead} was not read as ended"
+            "state {state} was not read as ended"
         );
     }
 }
