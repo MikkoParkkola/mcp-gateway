@@ -291,6 +291,9 @@ pub enum AuditCommand {
         /// public-key` prints it (default: this gateway's configured key)
         #[arg(long, requires = "export")]
         jwk: Option<PathBuf>,
+        /// Print one JSON document on stdout: the verdict, pass or fail
+        #[arg(long)]
+        json: bool,
     },
 
     /// Look up the key server's retained issuance rows by email (admin)
@@ -343,5 +346,8 @@ pub enum ProvenanceCommand {
         /// result can ever be checked against it.
         #[arg(long)]
         accept_unbound: bool,
+        /// Print one JSON document on stdout: the verdict, valid or not
+        #[arg(long)]
+        json: bool,
     },
 }

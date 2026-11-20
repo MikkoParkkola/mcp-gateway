@@ -99,6 +99,9 @@ pub enum SkillsCommand {
         /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
         #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
         registry: Option<PathBuf>,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Search imported skills by name, description, keywords, or triggers
@@ -111,6 +114,9 @@ pub enum SkillsCommand {
         /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
         #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
         registry: Option<PathBuf>,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show the full content of an imported skill
@@ -123,6 +129,9 @@ pub enum SkillsCommand {
         /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
         #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
         registry: Option<PathBuf>,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Remove a skill from the registry
