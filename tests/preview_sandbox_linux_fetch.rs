@@ -131,8 +131,15 @@ fn says_nothing(e: &std::io::Error) -> bool {
     e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH)
 }
 
+/// True when a `/proc/<pid>/stat` state field means the process is dead:
+/// zombie (`Z`) or dead (`X`, or `x` on older kernels).
+fn dead_state(state: Option<&str>) -> bool {
+    matches!(state, Some("Z" | "X" | "x"))
+}
+
 /// The scan's read rule as a table: out of descriptors keeps a marked process
-/// live, a missing file or ESRCH counts it gone. Runs on any Linux host.
+/// live, a missing file or ESRCH counts it gone; each dead state counts it
+/// gone. Runs on any Linux host.
 #[test]
 fn a_failed_stat_read_keeps_a_marked_process_live_unless_it_is_missing_or_exiting() {
     use std::io::{Error, ErrorKind};
@@ -141,6 +148,12 @@ fn a_failed_stat_read_keeps_a_marked_process_live_unless_it_is_missing_or_exitin
     assert!(!says_nothing(&Error::from_raw_os_error(2)), "ENOENT");
     assert!(!says_nothing(&Error::from(ErrorKind::NotFound)), "NotFound");
     assert!(!says_nothing(&Error::from_raw_os_error(ESRCH)), "ESRCH");
+    for state in ["Z", "X", "x"] {
+        assert!(dead_state(Some(state)), "state {state} reads as dead");
+    }
+    for state in ["R", "S", "D"] {
+        assert!(!dead_state(Some(state)), "state {state} reads as live");
+    }
 }
 
 /// The pids of this process's live `unshare` children whose command line
@@ -177,11 +190,7 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         );
         let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let tagged = String::from_utf8_lossy(&cmdline).contains(marker);
-        if name == "unshare"
-            && parent == Some(me)
-            && tagged
-            && !matches!(state, Some("Z" | "X" | "x"))
-        {
+        if name == "unshare" && parent == Some(me) && tagged && !dead_state(state) {
             found.push(pid);
         }
     }
