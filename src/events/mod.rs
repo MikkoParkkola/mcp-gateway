@@ -40,7 +40,7 @@ mod lease_rpc;
 mod listener_credential;
 pub(crate) use listener_credential::{FenceRead, ListenerGrant, ListenerMint};
 mod lifecycle;
-mod limiter;
+pub(crate) mod limiter;
 pub(crate) mod observation;
 mod operational_source;
 pub(crate) use operational_source::{Markers, install_marker_observers};
@@ -344,6 +344,7 @@ impl EventsHub {
             client,
             verify_limit: limiter::HostLimiter::new(
                 config.verification_per_host_per_minute,
+                limiter::WINDOW,
                 MAX_TRACKED_HOSTS,
             ),
             sources: RwLock::new(Vec::new()),

@@ -10,19 +10,23 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-const WINDOW: Duration = Duration::from_secs(60);
+/// The events verification window.
+pub(crate) const WINDOW: Duration = Duration::from_secs(60);
 
-/// A sliding one-minute window per host.
+/// A sliding window per key.
 pub(crate) struct HostLimiter {
-    per_minute: usize,
+    limit: usize,
+    window: Duration,
     max_hosts: usize,
     hosts: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 impl HostLimiter {
-    pub(crate) fn new(per_minute: u32, max_hosts: usize) -> Self {
+    /// At most `limit` admissions per key in any `window`.
+    pub(crate) fn new(limit: u32, window: Duration, max_hosts: usize) -> Self {
         Self {
-            per_minute: usize::try_from(per_minute).unwrap_or(usize::MAX),
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+            window,
             max_hosts,
             hosts: Mutex::new(HashMap::new()),
         }
@@ -36,7 +40,7 @@ impl HostLimiter {
             hosts.retain(|_, sent| {
                 while sent
                     .front()
-                    .is_some_and(|t| now.duration_since(*t) >= WINDOW)
+                    .is_some_and(|t| now.duration_since(*t) >= self.window)
                 {
                     sent.pop_front();
                 }
@@ -49,15 +53,29 @@ impl HostLimiter {
         let sent = hosts.entry(host.to_owned()).or_default();
         while sent
             .front()
-            .is_some_and(|t| now.duration_since(*t) >= WINDOW)
+            .is_some_and(|t| now.duration_since(*t) >= self.window)
         {
             sent.pop_front();
         }
-        if sent.len() >= self.per_minute {
+        if sent.len() >= self.limit {
             return false;
         }
         sent.push_back(now);
         true
+    }
+
+    /// Whether `admit` would let `host` in at `now`, recording nothing: for
+    /// limits that count only failures, checked before the work is done.
+    pub(crate) fn would_admit(&self, host: &str, now: Instant) -> bool {
+        // SCAFFOLD: refuses until the implementation commit.
+        let _ = (host, now);
+        false
+    }
+
+    /// Keys in the map now, live or not yet shed.
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> usize {
+        self.hosts.lock().len()
     }
 }
 
@@ -68,7 +86,7 @@ mod tests {
 
     #[test]
     fn limits_per_host_per_minute_and_recovers() {
-        let limiter = HostLimiter::new(2, 10);
+        let limiter = HostLimiter::new(2, WINDOW, 10);
         let t0 = Instant::now();
         assert!(limiter.admit("a", t0));
         assert!(limiter.admit("a", t0));
@@ -79,7 +97,7 @@ mod tests {
 
     #[test]
     fn a_full_map_refuses_only_new_hosts_and_sheds_idle_ones() {
-        let limiter = HostLimiter::new(5, 2);
+        let limiter = HostLimiter::new(5, WINDOW, 2);
         let t0 = Instant::now();
         assert!(limiter.admit("a", t0));
         assert!(limiter.admit("b", t0));
