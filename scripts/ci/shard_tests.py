@@ -791,14 +791,16 @@ def built_parts_root_rows() -> None:
         # Stand-in privilege: logs the binary it starts, whether that binary is still on disk, and its arguments.
         with open(priv, "w") as f:
             f.write('#!/bin/sh\nb=$1; shift\n[ -e "$b" ] && on=present || on=gone\n'
+                    # A private gateway home leaking into the root run would stop the rows' mcpg-c child.
+                    '[ -n "${MCP_GATEWAY_TEST_HOME_DIR:-}" ] && on="$on private-home"\n'
                     'echo "priv $(basename "$b") $on $*" >> "$LOG"\nexec "$b" "$@"\n')
         PRIVILEGE = ("sh", priv)
         SHARDS["macos"]["lib-b"] = [("parts", ["--lib"], [], 4)]
 
         def leg(**env: str) -> tuple[int, list[str]]:
             open(log, "w").close()
-            keep = {k: os.environ.get(k) for k in ("LOG", "MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE")}
-            for k in ("MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE"):
+            keep = {k: os.environ.get(k) for k in ("LOG", "MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE", "MCP_GATEWAY_TEST_HOME_DIR")}
+            for k in ("MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE", "MCP_GATEWAY_TEST_HOME_DIR"):
                 os.environ.pop(k, None)
             os.environ.update({"LOG": log, **env})
             try:
@@ -825,7 +827,8 @@ def built_parts_root_rows() -> None:
                 assert rc == 1 and steps[-2:] == plain[-2:], (behave, rc, steps)
             # R8: a root run that reports none, or only some, of the listed root rows fails the leg.
             for behave in ("none", "some"):
-                assert leg(ROOT_PART="3", ROOT_BEHAVE=behave)[0] == 1, f"a root run with {behave} of its rows passed"
+                rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
+                assert rc == 1 and steps[-2:] == plain[-2:], (behave, rc, steps)
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
 
