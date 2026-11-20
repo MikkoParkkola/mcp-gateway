@@ -759,10 +759,49 @@ def plan_schemata() -> tuple[str | None, dict[str, SpecMutant]]:
 
 
 def build_refusal(built: Outcome) -> str:
-    """Why a failed `--cfg mutants` build refuses the run (old rule, red stage: every arrow site in the log)."""
-    arrows = sorted({m for m in re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)})
-    where = arrows if arrows else "a site the log does not show"
-    return f"the --cfg mutants build failed at {where}; move those mutants to the patch flow and rerun the rest"
+    """Why a failed `--cfg mutants` build refuses the run. Sites come only from error-level diagnostics. A build that
+    ends with no error and no finished line, or whose compiler was killed, died (memory or time): the warning it
+    printed last is not its cause, so it is reported as BUILD DIED and blames no site."""
+    sites: set[str] = set()
+    errors: list[str] = []
+    finished = False
+    killed = "SIGKILL" in built.output or "signal: 9" in built.output
+    for line in built.output.splitlines():
+        if line.startswith("error"):
+            errors.append(line)
+            continue
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("reason") == "build-finished":
+            finished = True
+        elif msg.get("reason") == "compiler-message" and msg.get("message", {}).get("level") == "error":
+            body = msg["message"]
+            errors.append(body.get("message", ""))
+            sites.update(f"{s['file_name']}:{s['line_start']}" for s in body.get("spans", []) if s.get("is_primary"))
+    if sites:
+        return (f"the --cfg mutants build failed at {sorted(sites)}; "
+                "move those mutants to the patch flow and rerun the rest")
+    if errors and not killed:
+        return f"the --cfg mutants build failed with {len(errors)} error(s) at no source site: {errors[0]}"
+    how = f"timed out after {COMPILE_LIMIT} s" if built.timed_out else f"exit {built.exit}"
+    end = "its compiler was killed" if killed else ("it finished" if finished else "no finished line")
+    return (f"BUILD DIED: the --cfg mutants build stopped with no error at a source site ({how}; {end}"
+            f"{_available_memory()}): a memory or time death, not a mutant site; rerun the batch")
+
+
+def _available_memory() -> str:
+    """The host's available memory now, for a BUILD DIED report (Linux; empty elsewhere)."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return f"; MemAvailable now {int(line.split()[1]) // 1024} MB"
+    except (OSError, ValueError, IndexError):
+        pass
+    return ""
 
 
 def build_schemata(features: str | None, logs: Path) -> dict[str, dict]:
