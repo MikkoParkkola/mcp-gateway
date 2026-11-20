@@ -10,9 +10,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{
-    BACKEND, FixedMint, TOOL, gateway_in, gateway_named, peer, post_mcp, task_request,
-};
+use super::{BACKEND, FixedMint, TOOL, gateway_in, gateway_named, peer, post_mcp, task_request};
 
 /// The literal the live routes' refusal carries (`assert_meta_refusal`).
 const REFUSAL: &str = "this call carried none";
@@ -407,7 +405,10 @@ async fn a_read_during_another_readers_running_lease_answers_retryable() {
         }
     })
     .await;
-    assert!(reached.is_ok(), "premise: the first read's fill reached the peer");
+    assert!(
+        reached.is_ok(),
+        "premise: the first read's fill reached the peer"
+    );
     let during = gw.read_task(&id).await;
     control.hold.store(false, Ordering::SeqCst);
     let _ = holder.await;
