@@ -598,6 +598,22 @@ async fn canary_run_in(
 /// `ESRCH`: reading an exiting task's `/proc` file fails with this.
 const ESRCH: i32 = 3;
 
+/// True when a failed `/proc/<pid>/stat` read tells us nothing: any error but
+/// a missing file or ESRCH, both of which mean the process is gone or going.
+fn says_nothing(e: &std::io::Error) -> bool {
+    e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH)
+}
+
+/// The scan's read rule as a table: out of descriptors keeps a process live,
+/// a missing file or ESRCH counts it gone.
+#[test]
+fn a_failed_stat_read_keeps_a_process_live_unless_it_is_missing_or_exiting() {
+    use std::io::{Error, ErrorKind};
+    assert!(says_nothing(&Error::from_raw_os_error(24)), "EMFILE");
+    assert!(!says_nothing(&Error::from(ErrorKind::NotFound)), "NotFound");
+    assert!(!says_nothing(&Error::from_raw_os_error(ESRCH)), "ESRCH");
+}
+
 /// Every live process whose command line carries `marker` (the `unshare`, the
 /// helper and a target all carry the target's arguments).
 fn marked(marker: &str) -> Vec<u32> {
@@ -610,9 +626,7 @@ fn marked(marker: &str) -> Vec<u32> {
         // Only a missing file or ESRCH (an exiting task) means gone; a read
         // failing for another reason says nothing, so the process counts as
         // live, and the caller's wait goes on.
-        let unread = read.as_ref().is_err_and(|e| {
-            e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH)
-        });
+        let unread = read.as_ref().is_err_and(says_nothing);
         let stat = read.unwrap_or_default();
         let state = stat
             .rsplit_once(") ")

@@ -408,7 +408,7 @@ fn ended_by(mut read: impl FnMut() -> std::io::Result<String>, until: std::time:
         Err(e) => e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(ESRCH),
         Ok(stat) => stat
             .rsplit_once(')')
-            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with(['Z', 'X', 'x'])),
     };
     loop {
         if ended() {
@@ -474,21 +474,31 @@ fn ended_by_a_failed_read_that_is_not_esrch_or_missing_keeps_waiting() {
     );
 }
 
-/// Controls: a process that keeps running is not ended at the bound (the rows
-/// above stay able to fail on a kill that never lands), and a zombie is.
+/// Controls: a process that keeps running is not ended at the bound, and the
+/// wait polled until that bound rather than answering from one read (the rows
+/// above stay able to fail on a kill that never lands); a dead state is ended.
 #[test]
 fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
     let taken = std::cell::Cell::new(0);
-    let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    let bound = std::time::Duration::from_millis(200);
+    let start = std::time::Instant::now();
     assert!(!ended_by(
         reads_then(Vec::new(), || stat_in('S'), &taken),
-        until
+        start + bound
     ));
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    assert!(ended_by(
-        reads_then(Vec::new(), || stat_in('Z'), &taken),
-        until
-    ));
+    assert!(
+        start.elapsed() >= bound,
+        "the wait answered running after {:?}, before its bound",
+        start.elapsed()
+    );
+    for dead in ['Z', 'X', 'x'] {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let read = move || stat_in(dead);
+        assert!(
+            ended_by(reads_then(Vec::new(), read, &taken), until),
+            "state {dead} was not read as ended"
+        );
+    }
 }
 
 /// U-floor deadline (code review r1 fold, gpt IMPROVEMENT and muse MEDIUM),
