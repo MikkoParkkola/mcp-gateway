@@ -33,6 +33,22 @@ const WRAPPED: &[(&str, &str)] = &[
         "capabilities_egress_proxy_is_the_only_proxy_route",
     ),
     (
+        "cli_json_forms_verify",
+        "audit_verify_errors_before_a_verdict_print_no_document",
+    ),
+    (
+        "cli_json_forms_verify",
+        "audit_verify_failed_verdicts_print_their_document_with_exit_1",
+    ),
+    (
+        "cli_json_forms_verify",
+        "audit_verify_passing_logs_print_their_verdict",
+    ),
+    (
+        "cli_json_forms_verify",
+        "audit_verify_warnings_and_notes_are_in_the_document",
+    ),
+    (
         "control_plane_file_modes",
         "control_plane_missing_file_is_empty",
     ),
