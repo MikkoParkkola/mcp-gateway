@@ -581,6 +581,7 @@ def self_test() -> int:
     lib_only_swap = {**swap, "if": "startsWith(matrix.part, 'lib-')"}
     cov_part = step("python3 scripts/ci/coverage_shards.py run 4 \"$PART\"")
     full = step("cargo test --all-features")
+    itest = step("cargo test --test public_claims_validation")  # out of scope: no library build
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
         ("a build continued between cargo and test, no swap step",
@@ -598,13 +599,15 @@ def self_test() -> int:
         ("the mutant harness plan step does not compile", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" plan'}), False, 0),
         ("the repo's mutant runner path", job({"run": "python3 scripts/ci/mutants/run_mutants.py run --platform linux"}), True, 1),
         ("swap gated to lib parts leaves the int parts with none", job(lib_only_swap, cov_part), True, 1),
-        ("tripwire job, swap gated to lib parts", job(lib_only_swap, cov_part, tw), True, 2),
-        ("tripwire job, swap on hosted runners only", job({**swap, "if": "runner.environment == 'github-hosted'"}, full, tw), True, 1),
+        ("tripwire job, swap gated to lib parts", job(lib_only_swap, cov_part, tw), True, ("needs an", "runs only if")),
+        ("tripwire job, swap on hosted runners only", job({**swap, "if": "runner.environment == 'github-hosted'"}, full, tw), True, ("needs an",)),
         ("tripwire job, unconditional swap before the build", job(swap, full, tw), True, 0),
-        ("tripwire job, no library build and no swap", job(step("cargo test --test public_claims_validation"), tw), False, 1),
-        ("tripwire job, swap only after the build", job(full, swap, tw), True, 2),
+        ("tripwire job, no library build and no swap", job(itest, tw), False, ("needs an",)),
+        ("tripwire job, swap only after the build", job(full, swap, tw), True, ("needs an", "comes after the library build")),
         ("tripwire job, no library build, swap first", job(swap, tw), False, 0),
-        ("tripwire job, tripwire before the build it should measure", job(swap, tw, full), True, 1),
+        ("tripwire job, tripwire before the build it should measure", job(swap, tw, full), True, ("not the job's last",)),
+        ("tripwire job, swap after an integration build", job(itest, swap, tw), False, ("needs an",)),
+        ("tripwire job, an integration build after the tripwire", job(swap, tw, itest), False, ("not the job's last",)),
         ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
@@ -641,7 +644,11 @@ def self_test() -> int:
         print(f"{'ok   ' if ok else 'WRONG'} add-swap action, {label}: exit {rc}")
     for label, j, want_scope, want_problems in cases:
         in_scope, problems = check_job("fixture", j)
-        ok = in_scope == want_scope and len(problems) == want_problems
+        if isinstance(want_problems, tuple):  # one word per expected problem, each found in its own message
+            ok = (in_scope == want_scope and len(problems) == len(want_problems)
+                  and all(any(word in p for p in problems) for word in want_problems))
+        else:
+            ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: in scope {in_scope}, problems {problems}")
     for label, file, name, j, want_bad in memlog_cases():
