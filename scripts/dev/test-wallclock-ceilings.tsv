@@ -181,6 +181,7 @@ src/transport/websocket_tests.rs	1
 tests/common/journey.rs	1
 tests/common/mrtr7_fixture.rs	1
 tests/gateway_bin_isolation.rs	1
+tests/http_stop_with_an_open_request.rs	1
 tests/integration.rs	4
 tests/mik_7212_mrtr7_bridge_acs/bounds.rs	6
 tests/mik_7212_mrtr7_bridge_acs/cov3_run_branches.rs	3
