@@ -928,7 +928,8 @@ import json, os, subprocess, sys, time
 table = json.load(open(os.environ["FAKE_TABLE"]))
 args = sys.argv[1:]
 with open(os.environ["FAKE_CALLS"], "a") as f:
-    f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT")}) + "\n")
+    f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
+                        "exe": os.path.basename(sys.argv[0])}) + "\n")
 if args[:1] == ["--list"] and "parts" in table:
     # A part's copy is named <target>-p<K>; it lists only the names the table puts in part K.
     base = os.path.basename(sys.argv[0])
@@ -1011,14 +1012,18 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
         _, ms = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\n")
 
+        aborts: list[str] = []  # each refusal's own message, newest last
+
         def run(table: dict, mutants=ms) -> tuple[int | str, list[dict]]:
+            aborts.clear()
             (d / "calls").write_text("")
             (d / "table.json").write_text(json.dumps(table))
             try:
                 rc: int | str = execute_schemata(None, mutants, d / "out")
             except BaselineRefused:
                 rc = "refused"
-            except Abort:
+            except Abort as err:
+                aborts.append(str(err))
                 rc = "aborted"
             calls = [json.loads(l) for l in (d / "calls").read_text().splitlines()]
             return rc, calls
@@ -1091,6 +1096,30 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             others = [c["cargo"] for c in calls if "cargo" in c and "--lib" not in c["cargo"]]
             expect("R2 one non-lib build, naming only the rows' target",
                    [("itest" in a and "--test" in a and "--workspace" not in a) for a in others], [True])
+            controls = [CFG_PROBE, "mutant_scan::tests::list_mutant_sites"]
+            _, ms_a2a = parse_spec("#mutant A\nmcp_gateway\ta2a::m::t1\tsrc/x.rs:9\n")
+            a2a = {**killed, "rows": {"A a2a::m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}},
+                   "parts": {"2": ["a2a::m::t1"], "3": controls}}
+            _, calls = run(a2a, ms_a2a)
+            expect("R3 a right guess builds just that part and the controls' part",
+                   sorted(c.get("part") or "" for c in calls if "cargo" in c), ["2", "3"])
+            rc, _ = run({**killed, "parts": {"3": controls}})
+            expect("R4 a row in no part refuses the run, naming it and the parts",
+                   (rc, any("m::t1" in a and "part" in a for a in aborts)), ("aborted", True))
+            rc, _ = run({**killed, "parts": {"1": ["m::t1"], "2": ["m::t1"], "3": controls}})
+            expect("R4 a row listed in two built parts refuses the run, naming it",
+                   (rc, any("m::t1" in a and "two" in a for a in aborts)), ("aborted", True))
+            rc, _ = run({**killed, "parts": {"1": ["m::t1"]}})
+            expect("R5 a run whose controls are in no part refuses, naming them",
+                   (rc, any("mutants_build" in a and "part" in a for a in aborts)), ("aborted", True))
+            _, ms_two = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\nmcp_gateway\ta2a::m::t1\tsrc/x.rs:9\n")
+            two = {**killed, "rows": {"A m::t1": {"status": "FAILED", "panic": "src/x.rs:9"},
+                                      "A a2a::m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}},
+                   "parts": {"1": ["m::t1"], "2": ["a2a::m::t1"], "3": controls}}
+            _, calls = run(two, ms_two)
+            ran = sorted({(c["args"][1], c["exe"]) for c in calls if c.get("mutant") == "A" and "--exact" in c.get("args", [])})
+            expect("R7 each lib row runs its own part's copy",
+                   ran, [("a2a::m::t1", "mcp_gateway-p2"), ("m::t1", "mcp_gateway-p1")])
         finally:
             TEST_LIMIT = saved_limit
             os.environ["PATH"] = saved_path
