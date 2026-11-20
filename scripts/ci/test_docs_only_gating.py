@@ -430,23 +430,61 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
-def clippy_cache_errors(jobs: dict) -> list[str]:
-    """The pedantic clippy job restores its cache on every run but saves it only on a push.
+CACHE_SAVE = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
 
-    A pull request restores only caches saved on its base branch or its own ref, so the release-line
-    push is the one run whose save helps anyone; a save on every PR ref wrote a 310 MB cache per run
-    that nothing else could read, which held the repository at its 10 GB cache limit and let eviction
-    push the line's own cache out."""
+
+def cache_docs() -> dict:
+    """Every workflow file, parsed: the cache rule covers them all."""
+    folder = ROOT / ".github" / "workflows"
+    return {p.name: yaml.safe_load(p.read_text()) for p in sorted(folder.glob("*.yml"))}
+
+
+def cache_save_errors(docs: dict | None = None) -> list[str]:
+    """Every Rust cache step restores on every run but saves only on the release line.
+
+    A pull request restores only caches saved on its base branch or its own ref, so the release-line push is the one
+    run whose save helps anyone. A save on every PR ref (310-346 MB each) kept the repository at its 10 GB cache
+    limit: 36 of 38 entries were evicted within 6 h on 2026-11-20, the line's own among them, and all ten Windows
+    entries were PR-scoped. A push to any other branch (a throwaway, a tag) saves nothing anyone restores either. A
+    step that never saves says `save-if: false`."""
     out = []
-    steps = [s for s in jobs["check"]["steps"] if str(s.get("uses", "")).startswith("Swatinem/rust-cache@")]
-    if len(steps) != 1:
-        return [f"clippy cache: the check job has {len(steps)} rust-cache steps, want exactly one"]
-    save_if = str((steps[0].get("with") or {}).get("save-if", ""))
-    for label, event, want in (("a pull request", "pull_request", False), ("a push", "push", True)):
-        got = evaluate(save_if, ctx(event, "success", "false")) if save_if else True
-        if bool(got) is not want:
-            out.append(f"clippy cache: {label} {'does not save' if want else 'saves'} the cache "
-                       f"(save-if: {save_if or 'default true'})")
+    pr = dict(ctx("pull_request", "success", "false"))
+    pr["github"] = dict(pr["github"], ref="refs/pull/1/merge")
+    other = dict(ctx("push", "success", "false"))
+    other["github"] = dict(other["github"], ref="refs/heads/throwaway/x")
+    line = dict(ctx("push", "success", "false"))
+    line["github"] = dict(line["github"], ref="refs/heads/" + RELEASE_LINE)
+    for name, doc in (cache_docs() if docs is None else docs).items():
+        for job_id, job in ((doc or {}).get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                if not str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
+                    continue
+                save_if = (step.get("with") or {}).get("save-if", True)
+                where = f"cache: {name} {job_id}"
+                if save_if is False or str(save_if).strip() == "false":
+                    continue
+                for label, c, want in (("a pull request", pr, False), ("a push to another branch", other, False),
+                                       ("a push to the release line", line, True)):
+                    got = save_if if isinstance(save_if, bool) else evaluate(str(save_if), c)
+                    if bool(got) is not want:
+                        out.append(f"{where}: {label} {'does not save' if want else 'saves'} the cache "
+                                   f"(save-if: {save_if}; want {CACHE_SAVE} or false)")
+    return out
+
+
+def cache_save_self_test() -> list[str]:
+    """The rule catches a step with no save-if and Clippy's old any-push rule, and passes the two good forms."""
+    out = []
+    step = {"uses": "Swatinem/rust-cache@x"}
+    if not cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [step]}}}}):
+        out.append("cache self-test: a step with no save-if was not caught")
+    pushes = dict(step, **{"with": {"save-if": "${{ github.event_name == 'push' }}"}})
+    if not any("another branch" in e for e in cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [pushes]}}}})):
+        out.append("cache self-test: a save on any push was not caught")
+    good = dict(step, **{"with": {"save-if": CACHE_SAVE}})
+    never = dict(step, **{"with": {"save-if": False}})
+    if cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [good, never]}}}}):
+        out.append("cache self-test: the release-line rule or save-if false was refused")
     return out
 
 
@@ -538,7 +576,7 @@ def main() -> int:
     errors += macos_train_errors(jobs)
     errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
-    errors += clippy_cache_errors(jobs)
+    errors += cache_save_errors() + cache_save_self_test()
     errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
