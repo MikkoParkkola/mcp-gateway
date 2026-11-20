@@ -536,7 +536,7 @@ class JudgeNew(unittest.TestCase):
         body = '// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (why: the drain outlasts this read)\ntimeout(Duration::from_secs(1), run()).await.expect("x");'
         found, errors = self.judge(body)
         self.assertEqual([(f.line, f.rule, f.window) for f in found], [(5, "under 5 s", 1.0)], found)
-        self.assertEqual(errors, [], "the floor excuses the oracle'd line, and the 5 s rule reports it once")
+        self.assertEqual(errors, [], "the 5 s rule already reports this line, so no new-code error repeats it")
 
     def test_an_allowlisted_site_in_a_changed_span_is_still_judged_as_new(self):
         body = 'timeout(Duration::from_secs(1), run()).await.expect("x");'
