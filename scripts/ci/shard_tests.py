@@ -855,6 +855,7 @@ def built_parts_rows() -> None:
                     ' failerr) printf "kill: " >&2; echo "test m$k::b ... FAILED" ;;'
                     ' failchild) echo "test m$k::child_process ... test m$k::b ... FAILED" ;;'
                     ' dup) echo "test m$k::b ... ok"; echo "test m$k::b ... ok" ;;'
+                    ' erronly) echo "test m$k::b ... ok" >&2 ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n'
                     'case "\\$b" in red|failerr|failchild) exit 101 ;; esac\nexit 0\nEOF\n'
@@ -913,6 +914,17 @@ def built_parts_rows() -> None:
             # That stderr text still reaches the job log, uncounted.
             leg_run("lib-b", 8, BEHAVE_2="tornok")
             assert "kill: " in printed[0], printed[0][-600:]
+            # ... without gluing onto the runner's own workflow commands: a line holding `::endgroup::` is that alone.
+            glued = [x for x in printed[0].splitlines() if "::endgroup::" in x and x != "::endgroup::"]
+            assert glued == [], glued
+            leg_run("lib-b", 8, BEHAVE_2="tornurl")
+            assert "http://127.0.0.1:9/authorize?response_type=code&red" in printed[0], printed[0][-600:]
+            # A complete result on stderr only is never counted: part 2 reports b nowhere on stdout, so it is missing.
+            rc = leg_run("lib-b", 8, BEHAVE_2="erronly")[0]
+            errors = [x for x in printed[0].splitlines() if x.startswith("::error::")]
+            assert rc == 1 and len(errors) == 2, (rc, errors)
+            assert errors[0].startswith("::error::macos lib-b part 2: ran 1 ") and "['m2::b']" in errors[0], errors
+            assert errors[1].endswith(" floor of 8"), errors
             # Two results on one stdout line both count.
             assert leg_run("lib-b", 8, BEHAVE_2="twoline")[0] == 0, printed[0][-600:]
             # A FAILED behind either prefix counts as failed: the leg is red for the exit, not for a missing test.
