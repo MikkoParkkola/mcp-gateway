@@ -1,0 +1,1 @@
+src/gateway/router/helpers.rs	refusal_record_trace	1	Reads the trace a refusal record left on the response, for the web UI tool call's receipt; decides nothing

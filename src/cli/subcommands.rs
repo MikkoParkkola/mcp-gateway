@@ -26,6 +26,9 @@ pub enum CapCommand {
         /// Path to the capability YAML file to validate
         #[arg(required = true)]
         file: PathBuf,
+        /// Print one JSON document on stdout; warnings stay on stderr as well
+        #[arg(long)]
+        json: bool,
     },
 
     /// Pin a capability YAML by computing and writing its SHA-256 hash.
@@ -47,6 +50,9 @@ pub enum CapCommand {
         /// Root directory to scan for capability YAML files
         #[arg(default_value = "capabilities")]
         directory: PathBuf,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Generate capability YAML files from an `OpenAPI` 3.x or Swagger 2.0 spec
@@ -82,6 +88,9 @@ pub enum CapCommand {
         /// JSON object of arguments to pass to the capability
         #[arg(short, long, default_value = "{}")]
         args: String,
+        /// Print one JSON document on stdout (capability, arguments, result); nothing before the call
+        #[arg(long)]
+        json: bool,
     },
 
     /// Scan local configs and running processes for MCP servers
@@ -158,6 +167,9 @@ pub enum CapCommand {
         /// Root directory containing capability definitions to index
         #[arg(short = 'C', long, default_value = "capabilities")]
         capabilities: PathBuf,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Display every capability in the registry with its description and auth status
@@ -166,6 +178,9 @@ pub enum CapCommand {
         /// Root directory containing capability definitions to index
         #[arg(short = 'C', long, default_value = "capabilities")]
         capabilities: PathBuf,
+        /// Print one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 
     /// Probe a URL for an `OpenAPI` or GraphQL spec and generate capability files

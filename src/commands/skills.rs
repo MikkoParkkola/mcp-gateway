@@ -16,6 +16,9 @@
 
 use crate::cli::stdout::println;
 
+#[path = "skills_json.rs"]
+mod json;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -162,8 +165,11 @@ pub async fn run_skills_import(source: String, registry_path: Option<PathBuf>) -
     ExitCode::SUCCESS
 }
 
-/// Run `mcp-gateway skills list`.
-pub fn run_skills_list(registry_path: Option<PathBuf>) -> ExitCode {
+/// Run `mcp-gateway skills list`: text, or one document with `--json` (an empty registry gives `"skills": []`).
+pub fn run_skills_list(
+    registry_path: Option<PathBuf>,
+    render: crate::cli::output::Render,
+) -> ExitCode {
     let path = resolve_registry_path(registry_path);
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
@@ -173,6 +179,9 @@ pub fn run_skills_list(registry_path: Option<PathBuf>) -> ExitCode {
         }
     };
 
+    if render == crate::cli::output::Render::Json {
+        return crate::cli::output::print_document(json::list(&path, registry.iter()));
+    }
     if registry.is_empty() {
         println!("No skills imported. Use `mcp-gateway skills import <path>` to add one.");
         return ExitCode::SUCCESS;
@@ -187,8 +196,12 @@ pub fn run_skills_list(registry_path: Option<PathBuf>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Run `mcp-gateway skills search <query>`.
-pub fn run_skills_search(query: &str, registry_path: Option<PathBuf>) -> ExitCode {
+/// Run `mcp-gateway skills search <query>`: text, or one document with `--json` (no hit gives `"skills": []`).
+pub fn run_skills_search(
+    query: &str,
+    registry_path: Option<PathBuf>,
+    render: crate::cli::output::Render,
+) -> ExitCode {
     let path = resolve_registry_path(registry_path);
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
@@ -199,6 +212,9 @@ pub fn run_skills_search(query: &str, registry_path: Option<PathBuf>) -> ExitCod
     };
 
     let hits = registry.search(query);
+    if render == crate::cli::output::Render::Json {
+        return crate::cli::output::print_document(json::search(query, &hits));
+    }
     if hits.is_empty() {
         println!("No skills matched '{query}'.");
         return ExitCode::SUCCESS;
@@ -212,8 +228,12 @@ pub fn run_skills_search(query: &str, registry_path: Option<PathBuf>) -> ExitCod
     ExitCode::SUCCESS
 }
 
-/// Run `mcp-gateway skills show <name>`.
-pub fn run_skills_show(name: &str, registry_path: Option<PathBuf>) -> ExitCode {
+/// Run `mcp-gateway skills show <name>`: text, or one document with `--json`.
+pub fn run_skills_show(
+    name: &str,
+    registry_path: Option<PathBuf>,
+    render: crate::cli::output::Render,
+) -> ExitCode {
     let path = resolve_registry_path(registry_path);
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
@@ -229,6 +249,9 @@ pub fn run_skills_show(name: &str, registry_path: Option<PathBuf>) -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
+    if render == crate::cli::output::Render::Json {
+        return crate::cli::output::print_document(json::show(skill));
+    }
 
     println!("Name:        {}", skill.name);
     println!("Description: {}", skill.description);

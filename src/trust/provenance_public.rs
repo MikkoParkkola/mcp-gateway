@@ -590,7 +590,7 @@ pub(crate) fn configured_signer(
 
 #[path = "provenance_public_cli.rs"]
 mod cli;
-pub use cli::run_provenance_command;
+pub(crate) use cli::run_provenance_command;
 
 #[cfg(tp4)]
 #[cfg(test)]
