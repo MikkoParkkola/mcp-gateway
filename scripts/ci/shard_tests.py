@@ -785,6 +785,7 @@ def built_parts_root_rows() -> None:
                     f'cat >> "$out" <<"EOF"\ncase "${{ROOT_BEHAVE:-ok}}" in\n'
                     f'  ok) echo "test {row}1 ... ok"; echo "test {row}2 ... ok" ;;\n'
                     f'  some) echo "test {row}1 ... ok" ;;\n'
+                    f'  ignored) echo "test {row}1 ... ignored"; echo "test {row}2 ... ignored" ;;\n'
                     f'  red) echo "test {row}1 ... FAILED"; echo "test {row}2 ... ok"; exit 101 ;;\n'
                     f'  exit) echo "test {row}1 ... ok"; echo "test {row}2 ... ok"; exit 3 ;;\n'
                     f'esac\nexit 0\nEOF\n')
@@ -829,7 +830,8 @@ def built_parts_root_rows() -> None:
             os.chmod(binary, 0o755)
             expect = {"ok": ([f"{row}1 ... ok", f"{row}2 ... ok"], 0), "some": ([f"{row}1 ... ok"], 0),
                       "red": ([f"{row}1 ... FAILED", f"{row}2 ... ok"], 101),
-                      "exit": ([f"{row}1 ... ok", f"{row}2 ... ok"], 3), "none": ([], 0)}
+                      "exit": ([f"{row}1 ... ok", f"{row}2 ... ok"], 3), "none": ([], 0),
+                      "ignored": ([f"{row}1 ... ignored", f"{row}2 ... ignored"], 0)}
             for behave, (lines, code) in expect.items():
                 p = subprocess.run(["sh", priv, binary, ROOT_ROWS, "--ignored", "--test-threads=1"],
                                    env={**env, "ROOT_BEHAVE": behave}, capture_output=True, text=True)
@@ -844,14 +846,16 @@ def built_parts_root_rows() -> None:
             # The same for part 1, so a root run tied to one part number cannot pass.
             rc, steps = leg(ROOT_PART="1")
             assert (rc, steps) == (0, [*plain[:2], call.replace("-p3 ", "-p1 "), *plain[2:]]), (rc, steps)
-            # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; part 4 still builds and runs.
+            # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; the one privileged call happens in
+            # the same place as in R6, and part 4 still builds and runs.
             for behave in ("red", "exit"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
-                assert rc == 1 and call in steps and steps[-2:] == plain[-2:], (behave, rc, steps)
-            # R8: a root run that reports none, or only some, of the listed root rows fails the leg.
-            for behave in ("none", "some"):
+                assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
+            # R8: a root run that reports none, only some, or none as passed (every root row ignored, exit 0) of the
+            # listed root rows fails the leg.
+            for behave in ("none", "some", "ignored"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
-                assert rc == 1 and call in steps and steps[-2:] == plain[-2:], (behave, rc, steps)
+                assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
 
