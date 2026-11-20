@@ -646,7 +646,7 @@ fn r33_a_reported_step_maps_to_apparmor_only_when_a_mount_was_denied_there() {
                     Refusal::Step(word.to_owned())
                 };
                 assert_eq!(
-                    super::setup_refusal(step, denied, restricts),
+                    step.refusal(denied, restricts),
                     want,
                     "{step:?} denied={denied} restricts={restricts}"
                 );

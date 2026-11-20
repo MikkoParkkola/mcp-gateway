@@ -183,6 +183,17 @@ impl SetupStep {
             Self::Mounting | Self::Binding | Self::Masking | Self::Remounting | Self::Pivoting
         )
     }
+
+    /// The route's refusal when the helper reports this step refused. It names
+    /// `AppArmor` only for a mount step the kernel denied on a host whose
+    /// `AppArmor` blocks unprivileged mounts; any other case names the step.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn refusal(self, denied: bool, host_restricts: bool) -> super::Refusal {
+        match (self.mounts() && denied, host_restricts) {
+            (true, true) => super::Refusal::AppArmorRestricted,
+            _ => super::Refusal::Step(self.describe().to_owned()),
+        }
+    }
 }
 
 /// The helper's one status before it forks the target:
