@@ -347,4 +347,8 @@ async fn g3_an_older_attempts_refusal_never_lands_on_a_newer_claim() {
         Some(refused),
         "control: the newer claim's own refused settle is recorded"
     );
+    assert!(
+        backend.cold_fill_remaining(ALPHA).is_none(),
+        "control: the newer claim's refused settle ended its running fill"
+    );
 }
