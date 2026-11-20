@@ -13,6 +13,8 @@ poll-budget rules, and the short product timer.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import unittest
 from pathlib import Path
 
@@ -528,11 +530,13 @@ class JudgeNew(unittest.TestCase):
         added = {self.PATH: set(range(1, text.count("\n") + 2))}
         return guard.judge_new(found, list(rows), texts, {}, {}, added)
 
-    def test_a_well_formed_oracle_excuses_a_new_window_under_five_seconds(self):
-        body = '// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (MIK-8247)\ntimeout(Duration::from_secs(1), run()).await.expect("x");'
+    def test_an_oracle_does_not_excuse_a_window_under_five_seconds_from_the_5_s_rule(self):
+        # The oracle exempts the new-code rules only. Excusing the 5 s rule as well passed the
+        # line in its own PR and failed every PR after it merged, where no line is new.
+        body = '// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (why: the drain outlasts this read)\ntimeout(Duration::from_secs(1), run()).await.expect("x");'
         found, errors = self.judge(body)
-        self.assertEqual(errors, [], errors)
-        self.assertEqual(found, [], "the excused window must not reach the 5 s rule either")
+        self.assertEqual([(f.line, f.rule, f.seconds) for f in found], [(5, "under 5 s", 1.0)], found)
+        self.assertEqual(errors, [], "the floor excuses the oracle'd line, and the 5 s rule reports it once")
 
     def test_an_allowlisted_site_in_a_changed_span_is_still_judged_as_new(self):
         body = 'timeout(Duration::from_secs(1), run()).await.expect("x");'
@@ -542,6 +546,79 @@ class JudgeNew(unittest.TestCase):
         _, errors = self.judge(body, rows=[row])
         self.assertTrue(any(guard.FLOOR in e for e in errors), errors)
 
+
+class ModesAgree(unittest.TestCase):
+    """A changed line meets the 5 s rule as the same line does once merged: one verdict in the
+    pull-request run (`--base line --compare merge-base`, as CI runs it) and in the whole-tree run."""
+
+    REL = "tests/agree_rows.rs"
+    ORACLE = "    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total)"
+
+    def setUp(self):
+        self.scratch = ScratchGit()
+        self.addCleanup(self.scratch.close)
+        git = self.scratch.git
+        git("init", "-q", "-b", "line")
+        (self.scratch.root / "README").write_text("x\n")
+        guard.ALLOWLIST.parent.mkdir(parents=True)
+        guard.ALLOWLIST.write_text("")
+        git("add", ".")
+        git("commit", "-q", "-m", "the line")
+        git("checkout", "-q", "-b", "feature")
+
+    def run_modes(self, window, oracle):
+        """(rc, FAIL lines) of the pull-request run, then of the whole-tree run, for one window."""
+        lines = [
+            "use std::time::{Duration, Instant};",
+            "const SLACK: Duration = Duration::from_secs(2);",
+            "#[tokio::test]",
+            "async fn case() {",
+            "    let total = budget();",
+            "    let started = Instant::now();",
+            "    work().await;",
+            "    let gone = started.elapsed();",
+            self.ORACLE if oracle else "    // the chain is gone",
+            f'    assert!(gone <= {window}, "too slow");',
+            "}",
+        ]
+        rs = self.scratch.root / self.REL
+        rs.parent.mkdir(parents=True, exist_ok=True)
+        rs.write_text("\n".join(lines) + "\n")
+        self.scratch.git("add", ".")
+        self.scratch.git("commit", "-q", "-m", "the change")
+        runs = []
+        for argv in (["--base", "line", "--compare", "merge-base"], []):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = guard.main(argv)
+            runs.append((rc, [x for x in out.getvalue().splitlines() if x.startswith("FAIL")]))
+        return runs
+
+    def test_an_oracled_unresolvable_window_fails_in_both_modes(self):
+        fail = 'FAIL tests/agree_rows.rs:10 (case): unresolvable window, window ?: assert!(gone <= total + SLACK, "")'
+        self.assertEqual(self.run_modes("total + SLACK", oracle=True), [(1, [fail]), (1, [fail])])
+
+    def test_an_unresolvable_window_without_an_oracle_fails_in_both_modes(self):
+        fail = 'FAIL tests/agree_rows.rs:10 (case): unresolvable window, window ?: assert!(gone <= total + SLACK, "")'
+        self.assertEqual(self.run_modes("total + SLACK", oracle=False), [(1, [fail]), (1, [fail])])
+
+    def test_an_oracled_two_second_window_fails_in_both_modes(self):
+        fail = 'FAIL tests/agree_rows.rs:10 (case): under 5 s, window 2 s: assert!(gone <= Duration::from_secs(2), "")'
+        self.assertEqual(self.run_modes("Duration::from_secs(2)", oracle=True), [(1, [fail]), (1, [fail])])
+
+    def test_an_oracled_five_second_window_passes_in_both_modes(self):
+        # The oracle still exempts the 10 s floor: dropping it there too would fail this in PR mode.
+        self.assertEqual(self.run_modes("Duration::from_secs(5)", oracle=True), [(0, []), (0, [])])
+
+    def test_an_oracled_twelve_second_window_passes_in_both_modes(self):
+        self.assertEqual(self.run_modes("Duration::from_secs(12)", oracle=True), [(0, []), (0, [])])
+
+    def test_a_twelve_second_window_without_an_oracle_passes_in_both_modes(self):
+        self.assertEqual(self.run_modes("Duration::from_secs(12)", oracle=False), [(0, []), (0, [])])
+
+    def test_five_seconds_without_an_oracle_fails_only_the_new_code_floor(self):
+        floor = 'FAIL tests/agree_rows.rs:10 (case): under the 10 s floor, window 5 s: assert!(gone <= Duration::from_secs(5), "")'
+        self.assertEqual(self.run_modes("Duration::from_secs(5)", oracle=False), [(1, [floor]), (0, [])])
 
 class Allowlist(unittest.TestCase):
     def setUp(self):
