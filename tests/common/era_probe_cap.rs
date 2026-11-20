@@ -54,7 +54,7 @@ pub fn in_child_with_cap() -> bool {
 
 /// Fail if `binary_source` or this file sets or removes an environment
 /// variable: the cap reaches the gateway only from exec.
-pub fn assert_no_set_var(binary_source: &str) {
+pub fn assert_no_env_writes(binary_source: &str) {
     let own = include_str!("era_probe_cap.rs");
     for (what, source) in [("this binary", binary_source), ("era_probe_cap.rs", own)] {
         for needle in [concat!("set_", "var("), concat!("remove_", "var(")] {
