@@ -557,7 +557,7 @@ fn privacy_text_states_the_facts() {
         "https://telemetry.revaluator.ai/v1/heartbeat",
         "city name and a country code",
         "three months",
-        "On the 3.5 line, builds for Windows send none.",
+        "On the 3.5 line, builds for Windows send no daily heartbeat.",
         "DO_NOT_TRACK=1",
         "NO_TELEMETRY=1",
         "HTTPS_PROXY",
@@ -567,6 +567,16 @@ fn privacy_text_states_the_facts() {
     ] {
         assert!(text.contains(fact), "PRIVACY.md does not state {fact:?}");
     }
+    // The Windows exception sits in the paragraph that promises 3.5.3, so
+    // that promise is never read without it.
+    let promise = text
+        .split("\n\n")
+        .find(|p| p.contains("from 3.5.3 on the 3.5 line"))
+        .expect("the paragraph that promises 3.5.3");
+    assert!(
+        promise.contains("On the 3.5 line, builds for Windows send no daily heartbeat."),
+        "the 3.5 Windows exception left the paragraph that promises 3.5.3"
+    );
     assert!(
         !text.contains("sends nothing to its author"),
         "PRIVACY.md still promises that nothing is sent"
