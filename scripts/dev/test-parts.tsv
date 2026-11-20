@@ -1,9 +1,9 @@
 # The lib test split's directory table: <directory>TAB<part>. A test module's part is the row of the directory
 # of the file its tag sits in, else the nearest ancestor's row. N is `const N` in scripts/dev/test-parts-build.rs; the checker is
 # scripts/dev/test_parts.py. Rebalance by editing a row and running `scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py apply`.
-# Measured peaks of the lib test build per part (rustc RSS, MiB; Linux aarch64 on Spark, rustc 1.99.1, incremental
-# off, commit b65606bb60, these rows): unsplit 19393; floor (part 0) 11397; part 1 12480; part 2 10423; part 3 10545;
-# part 4 11287; part 5 13075. The five parts' test lists add up to the unsplit list: 20444, none twice.
+# Peak memory of the lib test build per part (the mcp_gateway rustc's resident set, MiB), built as CI builds it:
+# incremental off (CARGO_INCREMENTAL=0), rustc 1.99.1, Linux aarch64 on Spark, commit 1f4ee2dc53, these rows.
+# Floor (part 0) 5868; part 1 10561; part 2 10386; part 3 10177; part 4 10826; part 5 10851. 20998 tests, none twice.
 src	3
 src/a2a	2
 src/attestation	3

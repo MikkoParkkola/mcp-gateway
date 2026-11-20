@@ -63,7 +63,7 @@ Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7
 - A per-call-id ledger for stdio bursts against a client that never answers its asks: every call
   must reach exactly one terminal response, and one client's silence must not disable the capability
   for other callers. 194 calls run per PR; the ticket's 1026-call
-  burst (about 8 minutes) runs nightly and on a PR labelled `mrtr7b-full-burst`. (MIK-7479.STDIO.1)
+  burst (about 8 minutes) runs on a PR labelled `mrtr7b-full-burst` and before every release. (MIK-7479.STDIO.1)
 
 ### Changed
 

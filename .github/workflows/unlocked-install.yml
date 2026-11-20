@@ -8,9 +8,10 @@ name: Unlocked install
 # start when a known answer moves.
 #
 # Not on pull requests: it is a full build, and drift arrives with upstream
-# publishes, not with our changes. It runs on every release-line push and
-# nightly, and release.yml calls it, so `verify` (and with it every publishing
-# job) waits for it to pass at the tag itself.
+# publishes, not with our changes. It runs on every release-line push, and
+# release.yml calls it, so `verify` (and with it every publishing job) waits for
+# it to pass at the tag itself. The schedule below fires only once this file is
+# on the default branch (main): GitHub runs schedules from that branch alone.
 on:
   push:
     branches: [docs/ranking-1-release-line]

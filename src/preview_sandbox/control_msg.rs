@@ -54,12 +54,14 @@ pub(crate) enum FetchStep {
     Sweep,
     Relay,
     ProxySocket,
+    UvInstall,
+    DirectUrlCheck,
 }
 
 impl FetchStep {
     /// Every step, for the rows.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Setup,
         Self::NpmInstall,
         Self::LockCheck,
@@ -67,6 +69,8 @@ impl FetchStep {
         Self::Sweep,
         Self::Relay,
         Self::ProxySocket,
+        Self::UvInstall,
+        Self::DirectUrlCheck,
     ];
 
     /// The gateway's fixed words for the step, read after "failed at" in the
@@ -80,6 +84,8 @@ impl FetchStep {
             Self::Sweep => "the fetch's sweep",
             Self::Relay => "stopping the fetch's relay",
             Self::ProxySocket => "removing the fetch's proxy socket",
+            Self::UvInstall => "the fetch's uv install",
+            Self::DirectUrlCheck => "the fetch's direct-URL check",
         }
     }
 }

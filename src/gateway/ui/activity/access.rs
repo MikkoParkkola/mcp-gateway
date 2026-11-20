@@ -11,6 +11,8 @@
 //! of the scope a caller reads, never past it. An admin or Auditor key
 //! scoped to A reads A's calls only, and nothing gateway-wide.
 
+use serde::Serialize;
+
 use super::reader::Line;
 use super::rows::{Kind, in_scope, owned_by};
 use crate::control_plane::ControlPlaneRole;
@@ -34,7 +36,33 @@ pub(in crate::gateway::ui) enum Access {
     },
 }
 
+/// Whose calls a list answer holds, as the answer's `access` field names it:
+/// `all`, `own` or `scoped`.
+///
+/// Status reports `admin: false` for an auditor and for a backend-scoped admin,
+/// and both are served more than their own calls, so the screen reads the
+/// scope this page applied, not the admin flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::gateway::ui) enum AccessScope {
+    All,
+    Own,
+    Scoped,
+}
+
 impl Access {
+    /// The scope this access serves. Exhaustive: a new variant does not compile
+    /// until it says which scope it is.
+    pub(super) fn scope(&self) -> AccessScope {
+        match self {
+            Self::All => AccessScope::All,
+            // A scoped credential with an owner reads only that owner's calls (on its
+            // backends): whose calls they are is what the field says, so own.
+            Self::Own { .. } | Self::Scoped { owner: Some(_), .. } => AccessScope::Own,
+            Self::Scoped { owner: None, .. } => AccessScope::Scoped,
+        }
+    }
+
     /// Whether this caller reads `line`, of `kind`.
     pub(super) fn admits(&self, line: &Line, kind: Kind) -> bool {
         match self {

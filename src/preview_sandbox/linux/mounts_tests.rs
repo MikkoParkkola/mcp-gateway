@@ -76,6 +76,7 @@ fn fetch_plan(fetch: bool) -> Plan {
             control: "/run/x/control.sock".into(),
             ca: "/run/x/ca.pem".into(),
             npm: None,
+            uv: None,
         }),
     }
 }

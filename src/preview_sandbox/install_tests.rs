@@ -597,3 +597,184 @@ fn a_peer_declaration_must_be_a_registry_range() {
         check_lock(&l).expect(range);
     }
 }
+
+/// U-name (the uv fetch, design 4), kills "the raw spec names the tool env": a
+/// spec with a version pin, dots, underscores, capitals or a run of
+/// separators gives the PEP 503 name `foo-bar`, and the tool env, the
+/// metadata lookup and the console script all sit under that one name.
+#[test]
+fn u_name_every_spelling_gives_one_tool_env() {
+    let home = tempfile::tempdir().expect("home");
+    let env = home.path().join("uv-tools/foo-bar");
+    let site = env.join("lib/python3.12/site-packages/foo_bar-1.0.dist-info");
+    std::fs::create_dir_all(&site).expect("site");
+    std::fs::write(
+        site.join("entry_points.txt"),
+        "[console_scripts]\nfb = foo_bar:main\n",
+    )
+    .expect("entry points");
+    std::fs::create_dir_all(env.join("bin")).expect("bin");
+    std::fs::write(env.join("bin/fb"), "").expect("script");
+    for spec in ["Foo_Bar==1.0", "foo.bar", "FOO--bar"] {
+        assert_eq!(uv_name(spec), "foo-bar", "{spec}");
+        assert_eq!(
+            uv_tool_env(home.path(), spec),
+            home.path().join("uv-tools/foo-bar"),
+            "{spec}"
+        );
+        assert_eq!(
+            uv_entry_point(&uv_tool_env(home.path(), spec), &uv_name(spec)).expect("entry point"),
+            home.path().join("uv-tools/foo-bar/bin/fb"),
+            "{spec}"
+        );
+    }
+}
+
+/// A uv tool env under `root` whose site-packages holds a `<stem>.dist-info`
+/// directory (METADATA and RECORD inside) for each of `stems`.
+fn tool_env(root: &std::path::Path, stems: &[String]) -> std::path::PathBuf {
+    let env = root.join("uv-tools/probe-url");
+    let site = env.join("lib/python3.12/site-packages");
+    std::fs::create_dir_all(&site).expect("site");
+    for stem in stems {
+        let dir = site.join(format!("{stem}.dist-info"));
+        std::fs::create_dir(&dir).expect("dist-info");
+        std::fs::write(dir.join("METADATA"), "Metadata-Version: 2.1\n").expect("METADATA");
+        std::fs::write(dir.join("RECORD"), "").expect("RECORD");
+    }
+    env
+}
+
+fn far() -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(600)
+}
+
+fn direct_url_refusal() -> Refusal {
+    Refusal::Command("the install holds a package from a direct URL".into())
+}
+
+/// U-direct (design 7), kills m-first-only and m-skip-one: with three named
+/// dist-info dirs, tainting any ONE of them refuses, and a clean site passes
+/// having checked all three.
+#[test]
+fn u_direct_every_dist_info_is_checked() {
+    let stems: Vec<String> = ["a-1.0", "m-1.0", "z-1.0"].map(String::from).to_vec();
+    for tainted in &stems {
+        let root = tempfile::tempdir().expect("root");
+        let env = tool_env(root.path(), &stems);
+        std::fs::write(
+            env.join(format!(
+                "lib/python3.12/site-packages/{tainted}.dist-info/direct_url.json"
+            )),
+            "{\"url\": \"https://files.pythonhosted.org/direct/x.whl\"}",
+        )
+        .expect("taint");
+        assert_eq!(
+            check_direct_url(&env, far()),
+            Err(direct_url_refusal()),
+            "{tainted}"
+        );
+    }
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &stems);
+    let mut checked = check_direct_url(&env, far()).expect("a clean site passes");
+    checked.sort();
+    assert_eq!(checked, ["a-1.0", "m-1.0", "z-1.0"]);
+}
+
+/// U-direct, kills m-fail-open: a dist-info that cannot be read as a
+/// directory (a regular file: ENOTDIR for any euid), no site-packages, two
+/// site-packages, and a deadline already passed each refuse.
+#[test]
+fn u_direct_what_cannot_be_read_refuses() {
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &["a-1.0".to_owned()]);
+    std::fs::write(env.join("lib/python3.12/site-packages/x-1.0.dist-info"), "").expect("file");
+    assert!(check_direct_url(&env, far()).is_err(), "a file dist-info");
+
+    let root = tempfile::tempdir().expect("root");
+    let env = root.path().join("uv-tools/probe-url");
+    std::fs::create_dir_all(env.join("lib")).expect("lib");
+    assert!(check_direct_url(&env, far()).is_err(), "no site-packages");
+
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &["a-1.0".to_owned()]);
+    std::fs::create_dir_all(env.join("lib/python3.13/site-packages")).expect("second site");
+    assert!(check_direct_url(&env, far()).is_err(), "two site-packages");
+
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &["a-1.0".to_owned()]);
+    let past = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .expect("an instant a minute back");
+    assert!(check_direct_url(&env, past).is_err(), "a passed deadline");
+    assert!(
+        check_direct_url(&env, far()).is_ok(),
+        "the same site, in time"
+    );
+}
+
+/// U-direct, the cap on both sides (kills m-no-cap and m-stop-early): 4097
+/// entries refuse; 4096 clean ones pass; 4096 with only the one sorting last
+/// tainted refuse.
+#[test]
+fn u_direct_reads_at_most_4096_entries_and_checks_them_all() {
+    let stems = |n: usize| (0..n).map(|i| format!("p{i:04}-1.0")).collect::<Vec<_>>();
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &stems(4097));
+    assert!(check_direct_url(&env, far()).is_err(), "4097 entries");
+
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &stems(4096));
+    assert_eq!(
+        check_direct_url(&env, far()).expect("4096 pass").len(),
+        4096
+    );
+
+    let mut many = stems(4095);
+    many.push("zzzz-1.0".to_owned());
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &many);
+    std::fs::write(
+        env.join("lib/python3.12/site-packages/zzzz-1.0.dist-info/direct_url.json"),
+        "{}",
+    )
+    .expect("taint");
+    assert_eq!(check_direct_url(&env, far()), Err(direct_url_refusal()));
+}
+
+/// U-direct, a site with no dist-info at all passes the check, and D6's
+/// lookup then refuses it.
+#[test]
+fn u_direct_an_empty_site_passes_and_the_lookup_refuses() {
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &[]);
+    assert_eq!(check_direct_url(&env, far()), Ok(Vec::new()));
+    assert_eq!(
+        uv_entry_point(&env, "probe-url"),
+        Err(Refusal::Command(
+            "the package's installed metadata was not found exactly once".into()
+        ))
+    );
+}
+
+/// U-direct (code review r1, muse HIGH), kills m-utf8-skip: a dist-info
+/// whose name is not UTF-8 is checked like any other, so a tainted one
+/// refuses. Linux only: macOS file systems refuse a non-UTF-8 name.
+#[cfg(target_os = "linux")]
+#[test]
+fn u_direct_a_dist_info_named_in_raw_bytes_is_checked() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let root = tempfile::tempdir().expect("root");
+    let env = tool_env(root.path(), &["a-1.0".to_owned()]);
+    let raw = env
+        .join("lib/python3.12/site-packages")
+        .join(std::ffi::OsStr::from_bytes(b"x\xff-1.0.dist-info"));
+    std::fs::create_dir(&raw).expect("a raw-named dist-info");
+    std::fs::write(raw.join("direct_url.json"), "{}").expect("taint");
+    assert_eq!(check_direct_url(&env, far()), Err(direct_url_refusal()));
+}
+
+#[cfg(unix)]
+#[path = "install_link_tests.rs"]
+mod link_tests;
