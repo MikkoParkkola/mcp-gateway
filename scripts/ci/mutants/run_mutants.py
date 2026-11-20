@@ -1120,6 +1120,14 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             ran = sorted({(c["args"][1], c["exe"]) for c in calls if c.get("mutant") == "A" and "--exact" in c.get("args", [])})
             expect("R7 each lib row runs its own part's copy",
                    ran, [("a2a::m::t1", "mcp_gateway-p2"), ("m::t1", "mcp_gateway-p1")])
+            # MUT.6: the memory wrapper around the runner comes from the release line like the runner
+            # itself, so a tree under test cannot swap what decides the step's outcome.
+            wf = (Path(__file__).resolve().parents[3] / ".github" / "workflows" / "mutants.yml").read_text()
+            fetched = 'git show FETCH_HEAD:scripts/ci/with-memory-log.sh > "$RUNNER_TEMP/with-memory-log.sh"'
+            expect("R6 both linux jobs fetch the memory wrapper from the release line", wf.count(fetched), 2)
+            steps = [line.strip() for line in wf.splitlines() if 'run_mutants.py" run --platform linux' in line]
+            expect("R6 every linux run step calls only the fetched wrapper",
+                   [s.startswith('run: bash "$RUNNER_TEMP/with-memory-log.sh"') for s in steps], [True, True])
         finally:
             TEST_LIMIT = saved_limit
             os.environ["PATH"] = saved_path
