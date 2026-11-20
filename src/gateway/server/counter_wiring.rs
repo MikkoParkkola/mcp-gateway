@@ -26,6 +26,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(super) struct Counters {
     pub(super) store: Arc<CounterStore>,
     file: Arc<CounterFile>,
+    /// Where `file` saves (`<data_dir>/counters.json`): the root a detached
+    /// save keeps for a test while it writes (`crate::spawn_keep`).
+    path: std::path::PathBuf,
     /// The version change this start's restore marked, kept as a value for
     /// `GET /ui/api/gateway` rather than read back from marker history.
     pub(super) upgrade: Option<VersionChange>,
@@ -41,17 +44,13 @@ pub(super) fn start(
     // An unreadable clock starts coverage at the epoch; nothing is counted
     // until the clock reads again (every recorder skips on `Err`).
     let now = crate::clock::unix_secs().unwrap_or_default();
+    let path = data_dir.join("counters.json");
     let Restored {
         store,
         file,
         upgrade,
         ..
-    } = CounterFile::restore(
-        data_dir.join("counters.json"),
-        now,
-        VERSION,
-        &crate::local_day::host_zone(),
-    );
+    } = CounterFile::restore(path.clone(), now, VERSION, &crate::local_day::host_zone());
     let (store, file) = (Arc::new(store), Arc::new(file));
     meta_mcp.set_counters(Arc::clone(&store));
     let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
@@ -66,6 +65,7 @@ pub(super) fn start(
         Counters {
             store,
             file,
+            path,
             upgrade,
         },
         saver,
@@ -83,8 +83,9 @@ impl Counters {
     /// The shutdown step that writes `counters.json`.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (store, file) = (Arc::clone(&self.store), Arc::clone(&self.file));
-        (
+        ShutdownSave::new(
             "counter save (counters.json)",
+            Some(self.path.clone()),
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     file.save(&store, VERSION, now);

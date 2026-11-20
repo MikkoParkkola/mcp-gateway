@@ -244,6 +244,17 @@ pub mod test_helpers {
         config
     }
 
+    /// The OS config directory the gateway resolves, exactly what the crate's
+    /// own lookup returns, so an integration test can prove it routes to a
+    /// private home before scanning anything under it. For `tests/` only, with
+    /// no stability promise. macOS has no such lookup (the gateway uses the
+    /// home there), so neither does this.
+    #[cfg(not(target_os = "macos"))]
+    #[must_use]
+    pub fn config_dir() -> Option<std::path::PathBuf> {
+        crate::home_dir::config_dir()
+    }
+
     /// A live config for a fixture whose auth (`auth`) differs from
     /// `config.auth`: the key table and record key it judges with are
     /// `auth`'s, as a gateway's are the ones it resolved at startup.

@@ -492,6 +492,15 @@ impl Gateway {
             true,
         ));
 
+        // The daily heartbeat (docs/PRIVACY.md, "Daily heartbeat"): after the
+        // bind, so a refused start sends nothing; never awaited, and ended by
+        // the shutdown signal.
+        let _heartbeat = crate::heartbeat::start(
+            self.config.security.posture,
+            data_dir.clone(),
+            shutdown_tx.subscribe(),
+        );
+
         // After boot warm-start is scheduled, so no reload precedes it
         // (`MIK-8054`). Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the
