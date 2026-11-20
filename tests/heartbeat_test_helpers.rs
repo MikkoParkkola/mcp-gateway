@@ -11,7 +11,17 @@ use gateway_bin::Inherit;
 
 /// The builders, written out (A8): a new `pub fn ... -> Command` in the
 /// helper file must join this list, or the completeness check fails by name.
-const BUILDERS: [&str; 3] = ["command", "command_with_env_home", "wrapped"];
+const BUILDERS: [&str; 5] = [
+    "command",
+    "command_with_env_home",
+    "test_binary_with_only_env",
+    "isolated_with_env_home",
+    "wrapped",
+];
+
+/// The one builder that launches no gateway: it re-runs this test binary as a
+/// row child with only the named variables, so it carries no gateway setting.
+const NOT_A_GATEWAY: &str = "test_binary_with_only_env";
 
 /// The value the built command sets for `DO_NOT_TRACK`, if it sets one.
 fn dnt(command: &std::process::Command) -> Option<String> {
@@ -66,12 +76,25 @@ fn each_gateway_helper_sets_dnt() {
                 gateway_bin::command_with_env_home(home.path(), env_home.path(), inherit),
             ),
             (
+                "isolated_with_env_home",
+                gateway_bin::isolated_with_env_home(
+                    std::process::Command::new(gateway_bin::path()),
+                    home.path(),
+                    env_home.path(),
+                    inherit,
+                ),
+            ),
+            (
                 "wrapped",
                 gateway_bin::wrapped(&["sh", "-c", "exec \"$0\" \"$@\""], home.path(), inherit),
             ),
         ];
         let names: Vec<&str> = built.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, BUILDERS);
+        let gateway_builders: Vec<&str> = BUILDERS
+            .into_iter()
+            .filter(|name| *name != NOT_A_GATEWAY)
+            .collect();
+        assert_eq!(names, gateway_builders);
         for (name, command) in &built {
             assert_eq!(
                 dnt(command).as_deref(),
