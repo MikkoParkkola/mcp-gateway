@@ -738,6 +738,44 @@ mod start_tests {
     }
 }
 
+/// The test-only reap check the nested handover row reads for "reaped
+/// before Db". That row always has one handover, so it cannot see the empty
+/// case; this row pins all three: no handover, an unreaped give-up, a reap
+/// with an exit status.
+#[cfg(tp5)]
+#[cfg(all(test, unix))]
+mod handed_reap_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// A fresh deadline tracking one handover already in `state`.
+    fn tracking(state: Reaped) -> (StopDeadline, watch::Sender<Reaped>) {
+        let deadline = StopDeadline::default();
+        let (sender, receiver) = watch::channel(state);
+        deadline.track(receiver);
+        (deadline, sender)
+    }
+
+    #[test]
+    fn only_a_handover_reaped_with_a_status_counts_as_reaped() {
+        assert!(
+            !StopDeadline::default().handed_all_reaped(),
+            "no handover is no evidence of a reap"
+        );
+        let (gave_up, _sender) = tracking(Reaped::Done(None));
+        assert!(
+            !gave_up.handed_all_reaped(),
+            "an unreaped give-up counted as a reap"
+        );
+        let status = std::process::ExitStatus::from_raw(9);
+        let (reaped, _sender) = tracking(Reaped::Done(Some(status)));
+        assert!(
+            reaped.handed_all_reaped(),
+            "a reap with an exit status did not count"
+        );
+    }
+}
+
 /// Every caller's stop budget yields a plan that fits it, by construction.
 #[cfg(tp5)]
 #[cfg(test)]
