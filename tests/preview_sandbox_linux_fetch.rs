@@ -122,6 +122,9 @@ async fn r6b_a_helper_that_never_connects_is_refused() {
     assert!(started.is_err());
 }
 
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this.
+const ESRCH: i32 = 3;
+
 /// The pids of this process's live `unshare` children whose command line
 /// holds `marker` (a zombie is not live; rows run in parallel threads).
 fn live_unshare_children(marker: &str) -> Vec<u32> {
@@ -131,8 +134,21 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            // Only a missing file or ESRCH (an exiting task) means gone. A
+            // stat that fails for another reason says nothing, so a process
+            // carrying the marker counts as live and the caller's wait goes on.
+            Err(e)
+                if e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH) =>
+            {
+                let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                if String::from_utf8_lossy(&cmdline).contains(marker) {
+                    found.push(pid);
+                }
+                continue;
+            }
+            Err(_) => continue,
         };
         let Some((name, rest)) = stat.split_once(" (").and_then(|(_, r)| r.rsplit_once(") "))
         else {
