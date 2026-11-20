@@ -246,7 +246,10 @@ async fn test_gateway_search_tools() {
 }
 
 #[tokio::test]
-#[ignore = "requires gateway running on localhost:39400"]
+#[ignore = "opt-in: calls the live Open-Meteo API through a gateway on localhost:39400; run by hand"]
+// Out of CI on purpose: an outside outage must not redden a pull request. The cache logic itself is covered
+// in-crate through the client-swap seam; a stub cannot stand in here, because a spawned gateway refuses
+// loopback egress and a loopback-relaxed fetch never enters the cache.
 async fn test_invoke_caching() {
     if !is_gateway_running().await {
         // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
