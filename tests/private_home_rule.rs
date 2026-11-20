@@ -10,6 +10,10 @@ mod gateway_bin;
 #[path = "common/private_home.rs"]
 #[macro_use]
 mod private_home;
+// Only the Windows rows can skip (R9: a volume with 8.3 names off).
+#[cfg(windows)]
+#[path = "common/required.rs"]
+mod required;
 
 use private_home::{Expect, fresh_private_dir, literal_env_command, run_row_child};
 use std::path::Path;

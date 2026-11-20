@@ -575,7 +575,7 @@ fn wt6_symlink_record_refuses() {
     let target = private_file_in(root.path(), "target.json");
     let link = root.path().join("record.json");
     if std::os::windows::fs::symlink_file(&target, &link).is_err() {
-        println!("WT-SKIP W-T6: symlink creation is not permitted here");
+        crate::test_wait::skip_or_fail("the right to create a symlink (W-T6)");
         return;
     }
     let handle = open_file_read(&link).expect("a no-follow open of a symlink succeeds");
