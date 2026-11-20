@@ -311,6 +311,11 @@ jobs:
         run: >-
           New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
           -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        shell: pwsh
+        run: python scripts/ci/shard_tests.py export-home $env:GITHUB_ENV
       # A failed test on Windows drops that process's profile (MIK-7780), so this step
       # must end with no failure; there is no --ignore-run-fail.
       - name: Every test target

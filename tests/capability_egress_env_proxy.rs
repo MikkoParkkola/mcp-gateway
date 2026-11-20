@@ -9,10 +9,16 @@
 //!
 //! Lives in its own test binary because it sets the environment:
 //! `env::set_var` is unsafe in edition 2024, the library forbids unsafe, and
-//! this is the only test in the process, so nothing else reads the
-//! environment meanwhile.
+//! the one other test in the process, the home-routing row, holds the same
+//! lock ([`ALONE`]), so nothing else reads the environment meanwhile.
 
 #![allow(unsafe_code)] // set_var is unsafe in edition 2024
+
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,10 +62,22 @@ fn serve_recording_proxy(listener: std::net::TcpListener) -> Arc<AtomicUsize> {
     seen
 }
 
-/// Set every proxy variable to `proxy`. Called from the test's only thread,
-/// before the runtime starts, so nothing reads the environment meanwhile.
+/// The two tests here never overlap. The proxy row changes the environment,
+/// which no other thread may read meanwhile; the routing row reads it to start
+/// its child. Each holds this lock for its whole run.
+static ALONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    ALONE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Set every proxy variable to `proxy`. Called with [`ALONE`] held, before
+/// the runtime starts, so nothing reads the environment meanwhile.
 fn set_env_proxy(proxy: &str) {
-    // SAFETY: single-threaded at this point (see above).
+    // SAFETY: the caller holds ALONE and no runtime runs yet; the only other
+    // test waits on ALONE, so no thread reads the environment (see above).
     unsafe {
         for var in [
             "HTTP_PROXY",
@@ -104,6 +122,8 @@ providers:
 
 #[test]
 fn an_environment_proxy_carries_no_capability_import_or_discovery_traffic() {
+    require_private_home!();
+    let _alone = alone();
     let (listener, proxy) = bind_recording_proxy();
     set_env_proxy(&proxy);
     runtime().block_on(check_no_env_proxy_traffic(listener));
@@ -158,4 +178,14 @@ async fn check_no_env_proxy_traffic(listener: std::net::TcpListener) {
             "capability discovery went through the environment proxy"
         );
     }
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    let _alone = alone();
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

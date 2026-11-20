@@ -4,6 +4,10 @@
 //! its own headline, and no payload value, and no unescaped token, reaches
 //! a warning, an "unverified:" warning or the failure line.
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -95,6 +99,7 @@ fn assert_escaped_once(text: &str, what: &str) {
 
 #[test]
 fn a_pairing_failure_prints_its_own_headline_with_the_token_escaped() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
     write_log(
@@ -119,6 +124,7 @@ fn a_pairing_failure_prints_its_own_headline_with_the_token_escaped() {
 
 #[test]
 fn warnings_and_unverified_warnings_print_no_payload_value_and_escape_the_token() {
+    require_private_home!();
     let intent = || settle("config_save_intent", BIDI_TOKEN, &json!({}));
     let note = json!({"event": "config_write_note", "note": PLANTED});
     // An interrupted intent: a warning on a passing chain.
@@ -183,6 +189,7 @@ fn rotated_log(path: &Path, records: Vec<Value>) {
 
 #[test]
 fn an_expired_intent_note_prints_as_info_with_the_token_escaped() {
+    require_private_home!();
     // GIVEN: an outcome naming counter 1, which retention deleted, under a
     // token holding a control character
     let dir = tempfile::tempdir().unwrap();
@@ -206,4 +213,13 @@ fn an_expired_intent_note_prints_as_info_with_the_token_escaped() {
     assert!(text.contains("(token w\\u{7}1)"), "{text}");
     assert!(!text.contains(token), "raw control character: {text}");
     assert!(!text.contains(PLANTED), "payload value printed: {text}");
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }
