@@ -22,3 +22,46 @@ pub fn widen_probe_cap() {
         unsafe { std::env::set_var(PROBE_CAP_ENV, "20000") };
     });
 }
+
+/// Run the calling test again as a child of this test binary whose
+/// environment carries the cap from exec, so no test sets it while others
+/// run. True in the parent, once the child ran this one test and passed (the
+/// caller returns); false in the child (the caller runs its body). The child's
+/// output is shown only when it fails, so no nested test summary reaches the
+/// parent's log.
+#[must_use]
+pub fn in_child_with_cap() -> bool {
+    if std::env::var_os(PROBE_CAP_ENV).is_some() {
+        return false;
+    }
+    let test = std::thread::current()
+        .name()
+        .expect("a test runs on a thread named after it")
+        .to_owned();
+    let out = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([test.as_str(), "--exact", "--test-threads=1"])
+        .env(PROBE_CAP_ENV, "20000")
+        .output()
+        .expect("the child run of this test started");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "the child run of {test} did not pass:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    true
+}
+
+/// Fail if `binary_source` or this file sets or removes an environment
+/// variable: the cap reaches the gateway only from exec.
+pub fn assert_no_set_var(binary_source: &str) {
+    let own = include_str!("era_probe_cap.rs");
+    for (what, source) in [("this binary", binary_source), ("era_probe_cap.rs", own)] {
+        for needle in [concat!("set_", "var("), concat!("remove_", "var(")] {
+            assert!(
+                !source.contains(needle),
+                "{what} calls {needle}: the cap must reach the gateway from exec only"
+            );
+        }
+    }
+}

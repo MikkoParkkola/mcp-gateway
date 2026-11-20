@@ -541,3 +541,10 @@ async fn discover_4_a_slow_but_answering_peer_is_classified() {
         fixture.frames()
     );
 }
+
+/// The era probe cap reaches the gateway from exec only (each test's child
+/// run): no test in this binary, and not its cap helper, sets it in process.
+#[test]
+fn the_probe_cap_is_never_set_in_process() {
+    era_probe_cap::assert_no_set_var(include_str!("mik_7217_era_probe_acs.rs"));
+}
