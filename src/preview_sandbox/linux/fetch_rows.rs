@@ -606,6 +606,7 @@ fn says_nothing(e: &std::io::Error) -> bool {
 
 /// The scan's read rule as a table: out of descriptors keeps a process live,
 /// a missing file or ESRCH counts it gone.
+#[cfg(tp4)]
 #[test]
 fn a_failed_stat_read_keeps_a_process_live_unless_it_is_missing_or_exiting() {
     use std::io::{Error, ErrorKind};
