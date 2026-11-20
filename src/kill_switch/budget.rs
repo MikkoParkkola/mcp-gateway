@@ -43,8 +43,14 @@ impl BudgetWindow {
 
     /// Record a call outcome and evict expired entries.
     pub fn record(&mut self, success: bool) {
-        self.evict_old();
-        self.entries.push_back((Instant::now(), success));
+        self.record_at(success, Instant::now());
+    }
+
+    /// [`Self::record`] with the clock passed in, so a test can place an entry in
+    /// time instead of waiting for it to age.
+    pub(super) fn record_at(&mut self, success: bool, at: Instant) {
+        self.evict_before(at);
+        self.entries.push_back((at, success));
         if !success {
             self.failures += 1;
         }
@@ -56,7 +62,12 @@ impl BudgetWindow {
 
     /// Compute the error rate over all valid entries (0.0–1.0).
     pub fn error_rate(&mut self) -> f64 {
-        self.evict_old();
+        self.error_rate_at(Instant::now())
+    }
+
+    /// [`Self::error_rate`] judged at `now` rather than the real clock.
+    pub(super) fn error_rate_at(&mut self, now: Instant) -> f64 {
+        self.evict_before(now);
         let total = self.entries.len();
         if total == 0 {
             return 0.0;
@@ -68,7 +79,12 @@ impl BudgetWindow {
 
     /// Return `(successes, failures)` counts after eviction.
     pub fn counts(&mut self) -> (usize, usize) {
-        self.evict_old();
+        self.counts_at(Instant::now())
+    }
+
+    /// [`Self::counts`] judged at `now` rather than the real clock.
+    pub(super) fn counts_at(&mut self, now: Instant) -> (usize, usize) {
+        self.evict_before(now);
         let successes = self.entries.len() - self.failures;
         (successes, self.failures)
     }
@@ -86,9 +102,8 @@ impl BudgetWindow {
         }
     }
 
-    /// Remove entries older than `max_age`.
-    fn evict_old(&mut self) {
-        let now = Instant::now();
+    /// Remove entries older than `max_age` as seen from `now`.
+    fn evict_before(&mut self, now: Instant) {
         while let Some((ts, _)) = self.entries.front() {
             if now.duration_since(*ts) > self.max_age {
                 self.pop_oldest();
