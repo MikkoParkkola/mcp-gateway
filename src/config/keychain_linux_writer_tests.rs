@@ -86,7 +86,7 @@ fn b11_create_gates_then_stores_the_value_on_stdin_only() {
     assert!(lines[1].contains("SearchItems"), "{log}");
     assert_eq!(
         lines[2],
-        format!("secret-tool store --label={NAME} service {NAME}"),
+        format!("secret-tool store --label={NAME} -- service {NAME}"),
         "{log}"
     );
 }
@@ -138,7 +138,7 @@ fn b16_a_clear_that_leaves_the_entry_is_not_durable() {
     // Every search still finds the item, whatever clear reports.
     let keychain = keychain(dir.path(), UNLOCKED, FOUND, "exit 0", two_seconds());
     assert!(matches!(keychain.delete(NAME), Err(StoreError::Failed(_))));
-    assert!(calls(dir.path()).contains(&format!("secret-tool clear service {NAME}")));
+    assert!(calls(dir.path()).contains(&format!("secret-tool clear -- service {NAME}")));
 }
 
 #[test]
@@ -210,6 +210,22 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
     assert_eq!(store.read(name).expect("kept").as_bytes(), b" a\n");
     store.delete(name).expect("delete");
     assert_eq!(store.exists(name), Ok(false));
+    // Leading-dash names, which ADR-028 allows: stored, read back and deleted
+    // for real, so the `--` is proven on the store, not only on the argv.
+    for dash in ["--help", "-x"] {
+        assert_eq!(
+            store.create(dash, b" d\n"),
+            Ok(format!("keychain:{dash}")),
+            "{dash}"
+        );
+        assert_eq!(
+            store.read(dash).expect("read back").as_bytes(),
+            b" d\n",
+            "{dash}"
+        );
+        store.delete(dash).expect("delete");
+        assert_eq!(store.exists(dash), Ok(false), "{dash}");
+    }
     let locked = std::process::Command::new("gdbus")
         .args([
             "call",
@@ -231,6 +247,86 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
         store.create("mcp-gateway.ci-b18-locked.1.00ff", b"v"),
         Err(StoreError::Unavailable(_))
     ));
+}
+
+/// The one refusal for a name outside ADR-028's grammar; it never repeats the name.
+const INVALID_NAME: &str = "the keychain name is not valid (1-128 of A-Z, a-z, 0-9, '.', '_', '-')";
+
+/// A leading-dash name reaches `secret-tool` as the `service` value on store
+/// and clear. Without the `--`, `store --label=--help service --help` prints
+/// help and exits 0, so create would report an entry it never stored.
+#[test]
+fn f887_a_leading_dash_name_is_stored_and_cleared_as_a_value() {
+    for name in ["--help", "-x"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let creator = keychain(dir.path(), UNLOCKED, NONE, "cat > /dev/null", two_seconds());
+        assert_eq!(
+            creator.create(name, b"v"),
+            Ok(format!("keychain:{name}")),
+            "{name}"
+        );
+        let log = calls(dir.path());
+        assert!(
+            log.contains(&format!(
+                "secret-tool store --label={name} -- service {name}"
+            )),
+            "{name}: {log}"
+        );
+
+        // A search that finds the entry until clear has run, then nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cleared = dir.path().join("cleared");
+        let gdbus = stub(
+            dir.path(),
+            "gdbus",
+            &format!(
+                "case \"$*\" in *Properties.Get*) printf '%s\\n' \"{UNLOCKED}\";; *) if [ -f '{c}' ]; then printf '%s\\n' \"{NONE}\"; else printf '%s\\n' \"{FOUND}\"; fi;; esac",
+                c = cleared.display()
+            ),
+        );
+        let tool = stub(
+            dir.path(),
+            "secret-tool",
+            &format!("touch '{}'", cleared.display()),
+        );
+        let deleter = LinuxKeychain::with_programs(gdbus, tool, two_seconds());
+        assert_eq!(deleter.delete(name), Ok(()), "{name}");
+        let log = calls(dir.path());
+        assert!(
+            log.contains(&format!("secret-tool clear -- service {name}")),
+            "{name}: {log}"
+        );
+    }
+}
+
+/// A quote can end the GVariant string `search` builds, so a name outside the
+/// grammar is refused by every entry point before any process starts, each with
+/// the same sentence. `a'b`: a quote inside a name, and not text the sentence
+/// itself contains.
+#[test]
+fn f887_a_name_outside_the_grammar_is_refused_before_any_spawn() {
+    use super::super::keychain::{KeychainError, KeychainRead as _};
+    let name = "a'b";
+    assert!(!INVALID_NAME.contains(name));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = keychain(dir.path(), UNLOCKED, FOUND, "exit 0", two_seconds());
+    assert_eq!(
+        store.read(name).expect_err("read"),
+        KeychainError::Unavailable(INVALID_NAME.into())
+    );
+    assert_eq!(
+        store.exists(name),
+        Err(StoreError::Unavailable(INVALID_NAME.into()))
+    );
+    assert_eq!(
+        store.create(name, b"v"),
+        Err(StoreError::Failed(INVALID_NAME.into()))
+    );
+    assert_eq!(
+        store.delete(name),
+        Err(StoreError::Failed(INVALID_NAME.into()))
+    );
+    assert_eq!(calls(dir.path()), "", "a refused name spawned a process");
 }
 
 #[test]
