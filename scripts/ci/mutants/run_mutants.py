@@ -758,6 +758,13 @@ def plan_schemata() -> tuple[str | None, dict[str, SpecMutant]]:
     return parse_spec(rest)
 
 
+def build_refusal(built: Outcome) -> str:
+    """Why a failed `--cfg mutants` build refuses the run (old rule, red stage: every arrow site in the log)."""
+    arrows = sorted({m for m in re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)})
+    where = arrows if arrows else "a site the log does not show"
+    return f"the --cfg mutants build failed at {where}; move those mutants to the patch flow and rerun the rest"
+
+
 def build_schemata(features: str | None, logs: Path) -> dict[str, dict]:
     """One `--cfg mutants` build of every test target. Returns target name ->
     {path, sha256, kinds}. A failed build refuses the run and names its sites."""
@@ -769,9 +776,7 @@ def build_schemata(features: str | None, logs: Path) -> dict[str, dict]:
            "--target-dir", "target/mutants-cfg", *feats]
     built = run_cmd(cmd, COMPILE_LIMIT, logs / "schemata-build.log", env)
     if built.timed_out or built.exit != 0:
-        sites = sorted(set(re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)))
-        raise BaselineRefused(f"the --cfg mutants build failed at {sites or 'an unknown site'}; "
-                              "move those mutants to the patch flow and rerun the rest")
+        raise BaselineRefused(build_refusal(built))
     artifacts: dict[str, dict] = {}
     for line in built.output.splitlines():
         if not line.startswith("{"):
@@ -1184,6 +1189,35 @@ def self_test() -> int:
         result = got.result if got is not None else None
         if result != want:
             print(f"self-test: {name}: expected {want}, got {result}", file=sys.stderr)
+            rc = 1
+    # A failed --cfg mutants build: only error-level diagnostics name sites; a build that ends with no error and no
+    # finished line, or whose compiler was killed, died (memory or time) and blames no site.
+    def diag(level: str, text: str, *spans: tuple[str, int, bool]) -> str:
+        return json.dumps({"reason": "compiler-message", "message": {
+            "level": level, "message": text,
+            "rendered": f"{level}: {text}\n" + "".join(f"  --> {f}:{n}:1\n" for f, n, _ in spans),
+            "spans": [{"file_name": f, "line_start": n, "is_primary": p} for f, n, p in spans]}})
+    warn = diag("warning", "unused import", ("src/a.rs", 51, True))
+    err = diag("error", "mismatched types", ("src/b.rs", 3, True), ("src/c.rs", 9, False))
+    done = json.dumps({"reason": "build-finished", "success": False})
+    killed = "error: could not compile `x` (lib test)\n\nCaused by:\n  process didn't exit successfully (signal: 9, SIGKILL: kill)\n"
+    build_rows = [
+        ("a build that dies after a warning blames no site", build_refusal(Outcome(101, warn + "\n", False)),
+         lambda m: m.startswith("BUILD DIED") and "src/a.rs" not in m and "exit 101" in m),
+        ("a timed-out build is a death, not a site", build_refusal(Outcome(-9, warn + "\n", True)),
+         lambda m: m.startswith("BUILD DIED") and "timed out" in m and "src/a.rs" not in m),
+        ("a compiler killed by SIGKILL is a death", build_refusal(Outcome(101, warn + "\n" + killed, False)),
+         lambda m: m.startswith("BUILD DIED") and "src/a.rs" not in m),
+        ("only the error's primary site is named", build_refusal(Outcome(101, "\n".join([warn, err, done]), False)),
+         lambda m: m == ("the --cfg mutants build failed at ['src/b.rs:3']; "
+                         "move those mutants to the patch flow and rerun the rest")),
+        ("a plain-text error is not a death",
+         build_refusal(Outcome(101, warn + "\nerror: failed to run custom build command for `x`\n", False)),
+         lambda m: not m.startswith("BUILD DIED") and "failed to run custom build command" in m),
+    ]
+    for name, msg, check in build_rows:
+        if not check(msg):
+            print(f"self-test: {name}: got {msg!r}", file=sys.stderr)
             rc = 1
     if not any("assertion" in line for line in classify_test(Outcome(101, red, False)).evidence):
         print("self-test: RED evidence lost the assertion text", file=sys.stderr)
