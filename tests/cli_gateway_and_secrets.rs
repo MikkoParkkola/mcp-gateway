@@ -1,0 +1,234 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Where the remote commands send their request, and what `cap import
+//! --auth-key` accepts. The destination resolves in a fixed order: the
+//! `--gateway` flag, then `MCP_GATEWAY_URL`, then the default (the `--config`
+//! file's server address). Each order row runs the real binary against
+//! listeners that count connections, so a request reaching the wrong place is
+//! seen, not inferred.
+
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread::JoinHandle;
+
+/// A loopback listener that only counts the connections it accepts; each is
+/// dropped at once, so the client fails fast after reaching it.
+struct Counting {
+    url: String,
+    addr: SocketAddr,
+    hits: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Counting {
+    fn start() -> Self {
+        let socket = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = socket.local_addr().expect("local address");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (counter, stopping) = (Arc::clone(&hits), Arc::clone(&stop));
+        let thread = std::thread::spawn(move || {
+            while let Ok((conn, _)) = socket.accept() {
+                if stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(conn);
+            }
+        });
+        Self {
+            url: format!("http://{addr}"),
+            addr,
+            hits,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    /// Stops the listener and returns how many connections it took.
+    fn finish(mut self) -> usize {
+        self.stop.store(true, Ordering::SeqCst);
+        let _wake = TcpStream::connect(self.addr);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        self.hits.load(Ordering::SeqCst)
+    }
+}
+
+/// A gateway config whose server address is `port` on loopback.
+fn config_pointing_at(dir: &Path, port: u16) -> PathBuf {
+    let path = dir.join("gateway.yaml");
+    let yaml = format!("server:\n  host: 127.0.0.1\n  port: {port}\n");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write the config");
+    path
+}
+
+/// Runs the binary in a fresh isolated home, with a placeholder token and,
+/// when given, `MCP_GATEWAY_URL`.
+fn invoke(args: &[&str], gateway_env: Option<&str>) -> Output {
+    let sandbox = tempfile::tempdir().expect("isolated home");
+    let mut cmd = gateway_bin::command(sandbox.path(), gateway_bin::Inherit::Nothing);
+    cmd.stdin(Stdio::null());
+    cmd.env("MCP_GATEWAY_TOKEN", "placeholder");
+    cmd.env("MCP_GATEWAY_CONFIG_DIR", sandbox.path());
+    if let Some(url) = gateway_env {
+        cmd.env("MCP_GATEWAY_URL", url);
+    }
+    cmd.args(args).output().expect("start mcp-gateway")
+}
+
+/// The two resolution paths: `stats` has its own, the other four share one.
+const COMMANDS: &[&[&str]] = &[&["stats"], &["api", "GET", "/ui/api/status"]];
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn the_flag_beats_the_environment() {
+    for command in COMMANDS {
+        let (flag, env) = (Counting::start(), Counting::start());
+        let mut args = command.to_vec();
+        args.extend(["--gateway", flag.url.as_str()]);
+        let out = invoke(&args, Some(env.url.as_str()));
+        let (flag_hits, env_hits) = (flag.finish(), env.finish());
+        assert!(
+            flag_hits >= 1,
+            "{command:?}: the flag's listener saw nothing: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            env_hits, 0,
+            "{command:?}: MCP_GATEWAY_URL won over the flag"
+        );
+    }
+}
+
+#[test]
+fn the_environment_beats_the_default() {
+    for command in COMMANDS {
+        let (env, default) = (Counting::start(), Counting::start());
+        let dir = tempfile::tempdir().expect("config dir");
+        let config = config_pointing_at(dir.path(), default.port());
+        let mut args = command.to_vec();
+        args.extend(["--config", config.to_str().expect("utf-8 path")]);
+        let out = invoke(&args, Some(env.url.as_str()));
+        let (env_hits, default_hits) = (env.finish(), default.finish());
+        assert!(
+            env_hits >= 1,
+            "{command:?}: the variable's listener saw nothing: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            default_hits, 0,
+            "{command:?}: the config's address won over the variable"
+        );
+    }
+}
+
+/// Green at the tip on purpose: it guards the default against the rename,
+/// and it proves the config fixture is read (else the rows above would be
+/// failing for a broken fixture, not for the rule).
+#[test]
+fn without_flag_or_variable_the_config_address_is_used() {
+    for command in COMMANDS {
+        let default = Counting::start();
+        let dir = tempfile::tempdir().expect("config dir");
+        let config = config_pointing_at(dir.path(), default.port());
+        let mut args = command.to_vec();
+        args.extend(["--config", config.to_str().expect("utf-8 path")]);
+        let out = invoke(&args, None);
+        assert!(
+            default.finish() >= 1,
+            "{command:?}: the config's address saw nothing: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// One operation, enough for the importer to write a capability.
+const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths:\n  /ping:\n    get:\n      operationId: ping\n      responses:\n        \"200\":\n          description: ok\n";
+
+/// Imports `SPEC` with `auth_key`; returns the run and the text of every file
+/// it wrote.
+fn import_with_auth_key(auth_key: &str) -> (Output, Vec<String>) {
+    let work = tempfile::tempdir().expect("work dir");
+    let spec = work.path().join("spec.yaml");
+    std::fs::write(&spec, SPEC).expect("write spec");
+    let caps = work.path().join("caps");
+    let spec_arg = spec.to_str().expect("utf-8 path");
+    let caps_arg = caps.to_str().expect("utf-8 path");
+    let out = invoke(
+        &[
+            "cap",
+            "import",
+            spec_arg,
+            "--output",
+            caps_arg,
+            "--auth-key",
+            auth_key,
+        ],
+        None,
+    );
+    let mut written = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&caps) {
+        for entry in entries.flatten() {
+            if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                written.push(text);
+            }
+        }
+    }
+    (out, written)
+}
+
+#[test]
+fn auth_key_takes_each_reference_form() {
+    for reference in [
+        "env:API_TOKEN",
+        "keychain:probe",
+        "oauth:github",
+        "file:/run/probe.key",
+    ] {
+        let (out, written) = import_with_auth_key(reference);
+        assert_eq!(out.status.code(), Some(0), "{reference}: {}", stderr(&out));
+        assert!(
+            written.iter().any(|text| text.contains(reference)),
+            "{reference} is not in what was written: {written:?}"
+        );
+    }
+}
+
+#[test]
+fn auth_key_refuses_a_value_that_is_not_a_reference() {
+    for value in ["plain-text-not-a-reference", "vault:probe"] {
+        let (out, written) = import_with_auth_key(value);
+        assert_eq!(out.status.code(), Some(2), "{value} was accepted");
+        let said = stderr(&out);
+        for form in ["env:", "keychain:", "oauth:", "file:"] {
+            assert!(
+                said.contains(form),
+                "the refusal does not name {form}: {said}"
+            );
+        }
+        assert!(
+            !said.contains(value),
+            "the refusal repeats the value: {said}"
+        );
+        assert!(
+            written.is_empty(),
+            "{value}: files were written: {written:?}"
+        );
+    }
+}

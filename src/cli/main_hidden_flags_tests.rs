@@ -187,6 +187,39 @@ fn hidden_upgrade_and_validate_flags_still_parse() {
     assert_carries(&["validate", "a.yaml", "-s", "fail"], &["severity: Fail"]);
 }
 
+/// The five commands that talk to a running gateway take its address as
+/// `--gateway`; the old `--url` and `-u` spellings land in the same place, so
+/// a script written for either keeps working.
+#[test]
+fn the_destination_flag_and_its_old_spellings_parse() {
+    let target = "https://gw.example:1";
+    let commands: &[&[&str]] = &[
+        &["stats"],
+        &["dashboard-link"],
+        &["api", "GET", "/ui/api/status"],
+        &["events", "dead-letters", "list"],
+        &["audit", "lookup-email", "--email-stdin"],
+    ];
+    for command in commands {
+        for spelling in ["--gateway", "--url", "-u"] {
+            let mut args = command.to_vec();
+            args.extend([spelling, target]);
+            assert_carries(&args, &[target]);
+        }
+    }
+}
+
+/// `add --url` is a backend's own address, a different meaning: it keeps its
+/// name, and `add` has no `--gateway`.
+#[test]
+fn add_keeps_its_own_url_and_takes_no_gateway() {
+    use clap::Parser as _;
+    let backend = "https://backend.example/mcp";
+    assert_carries(&["add", "--url", backend, "b1"], &[backend]);
+    let refused = Cli::try_parse_from(["mcp-gateway", "add", "--gateway", backend, "b1"]);
+    assert!(refused.is_err(), "add must not take --gateway");
+}
+
 /// The words of `help` that can be a flag or a value name.
 fn help_words(path: &[&str]) -> Vec<String> {
     use clap::CommandFactory as _;
@@ -218,12 +251,22 @@ fn hidden_flags_are_left_out_of_help_and_kept_flags_stay() {
             &["--port"],
         ),
         (&["add"], &["--keep-as-text"], &["--command"]),
-        (&["api"], &["--if-match"], &["--data", "--url"]),
-        (&["audit", "lookup-email"], &["--limit"], &["--email-stdin"]),
+        (
+            &["api"],
+            &["--if-match", "--url", "-u"],
+            &["--data", "--gateway"],
+        ),
+        (&["stats"], &["--url", "-u"], &["--gateway"]),
+        (&["dashboard-link"], &["--url", "-u"], &["--gateway"]),
+        (
+            &["audit", "lookup-email"],
+            &["--limit", "--url", "-u"],
+            &["--email-stdin", "--gateway"],
+        ),
         (
             &["events", "dead-letters"],
-            &["--reason"],
-            &["--all", "--url", "--subscription"],
+            &["--reason", "--url", "-u"],
+            &["--all", "--gateway", "--subscription"],
         ),
         (
             &["identity", "grants", "grant"],
