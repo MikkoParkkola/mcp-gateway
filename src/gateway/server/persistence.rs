@@ -247,7 +247,7 @@ pub(super) struct ShutdownSave {
     /// Its name, for the log.
     step: &'static str,
     /// The file or dir the save writes: a test's temp dir holding it is kept
-    /// while the save runs (crate::spawn_keep). None for a save that writes
+    /// while the save runs (`crate::spawn_keep`). None for a save that writes
     /// nothing.
     root: Option<PathBuf>,
     /// The write.

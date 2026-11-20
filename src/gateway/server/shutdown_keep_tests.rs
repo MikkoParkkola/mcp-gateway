@@ -84,7 +84,7 @@ async fn held_then_gone(dir: &Path, release: impl FnOnce()) {
 /// K1. A save abandoned at the deadline in a kept dir (the transitions.json leak shape: a
 /// write still running when the shutdown returns) keeps the dir after the
 /// test drops its share, until the save returns.
-/// Mutant: the keep removed from run_shutdown_saves.
+/// Mutant: the keep removed from `run_shutdown_saves`.
 #[tokio::test]
 async fn an_abandoned_shutdown_save_keeps_its_dir_until_it_returns() {
     let dir = kept_tempdir();
@@ -143,7 +143,7 @@ async fn run_instant(root: &Path) {
 
 /// K3. A shutdown save in a plain temp dir is recorded once, with its kind,
 /// its root and this test.
-/// Mutant: kept_at_spawn keeps but does not report.
+/// Mutant: `kept_at_spawn` keeps but does not report.
 #[tokio::test]
 async fn a_shutdown_save_in_a_plain_temp_dir_is_recorded_with_its_kind() {
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -192,7 +192,7 @@ async fn a_kept_dir_shutdown_save_records_nothing() {
     assert_eq!(unkept.recorded(), vec![]);
 }
 
-/// Whether run_shutdown_saves started a save named `step` with `root`.
+/// Whether `run_shutdown_saves` started a save named `step` with `root`.
 fn started_with(step: &str, root: &Path) -> bool {
     STARTED_ROOTS
         .lock()

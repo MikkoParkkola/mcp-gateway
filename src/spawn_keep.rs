@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-/// The kind a shutdown save (run_shutdown_saves) reports as.
+/// The kind a shutdown save (`run_shutdown_saves`) reports as.
 pub(crate) const SHUTDOWN_SAVE: &str = "shutdown save";
 
 /// The temp dirs a detached writer keeps: test builds only.
