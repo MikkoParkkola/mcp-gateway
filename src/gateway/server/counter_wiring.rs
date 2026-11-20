@@ -90,6 +90,7 @@ impl Counters {
         let (last_store, last_file) = (Arc::clone(&self.store), Arc::clone(&self.file));
         super::stop_checkpoints::Class {
             name: "counters",
+            root: Some(self.path.clone()),
             checkpoint: Arc::new(move || {
                 crate::clock::unix_secs()
                     .is_ok_and(|now| file.save_unless_busy(&store, VERSION, now))

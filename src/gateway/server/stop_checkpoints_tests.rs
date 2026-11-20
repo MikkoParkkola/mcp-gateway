@@ -30,6 +30,7 @@ fn counting(name: &'static str) -> (Class, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let (c, l) = (Arc::clone(&checkpoints), Arc::clone(&lasts));
     let class = Class {
         name,
+        root: None,
         checkpoint: Arc::new(move || {
             c.fetch_add(1, SeqCst);
             true
@@ -116,6 +117,7 @@ async fn l_stall_a_stalled_write_holds_back_no_other_class() {
     let stall = Stall::new();
     let stalled = Class {
         name: "stalled",
+        root: None,
         checkpoint: stall.save(),
         last: Arc::new(|| true),
     };
@@ -166,6 +168,7 @@ async fn l_stall_last_the_last_pass_ends_at_its_deadline() {
     let stall = Stall::new();
     let stuck = Class {
         name: "stuck",
+        root: None,
         checkpoint: Arc::new(|| true),
         last: stall.save(),
     };
@@ -280,7 +283,7 @@ async fn l_classes_the_real_pass_set() {
         "a checkpoint recorded a clean stop"
     );
     // Both sides: the shutdown's own save records one.
-    (health.shutdown_save().1)();
+    health.shutdown_save().run_now();
     assert_eq!(
         downtime(),
         DowntimeSource::Measured,

@@ -35,6 +35,10 @@ pub(super) type Save = Arc<dyn Fn() -> bool + Send + Sync>;
 /// its file is being written) and the last pass's save (waits its turn).
 pub(super) struct Class {
     pub(super) name: &'static str,
+    /// The file or dir its saves write: the root a detached write keeps for a
+    /// test while it runs (`crate::spawn_keep`). None for a class that writes
+    /// no file.
+    pub(super) root: Option<PathBuf>,
     pub(super) checkpoint: Save,
     pub(super) last: Save,
 }
@@ -77,15 +81,15 @@ impl Checkpoints {
             .iter()
             .map(|class| {
                 let (name, save) = (class.name, Arc::clone(&class.last));
-                let write: ShutdownSave = (
+                ShutdownSave::new(
                     name,
+                    class.root.clone(),
                     Box::new(move || {
                         if save() {
                             info!("stop checkpoint saved class={name} pass=last");
                         }
                     }),
-                );
-                write
+                )
             })
             .collect();
         run_shutdown_saves(deadline, saves).await;
@@ -154,6 +158,7 @@ fn usage(ranker: Arc<SearchRanker>, path: PathBuf) -> Class {
     let (last_ranker, last_path) = (Arc::clone(&ranker), path.clone());
     Class {
         name: "usage",
+        root: Some(path.clone()),
         checkpoint: Arc::new(move || landed("usage", ranker.save_unless_busy(&path))),
         last: Arc::new(move || landed("usage", Some(last_ranker.save(&last_path)))),
     }
@@ -164,6 +169,7 @@ fn transitions(tracker: Arc<TransitionTracker>, path: PathBuf) -> Class {
     let (last_tracker, last_path) = (Arc::clone(&tracker), path.clone());
     Class {
         name: "transitions",
+        root: Some(path.clone()),
         checkpoint: Arc::new(move || landed("transitions", tracker.save_unless_busy(&path))),
         last: Arc::new(move || landed("transitions", Some(last_tracker.save(&last_path)))),
     }
@@ -176,6 +182,7 @@ fn cost((enforcer, data_dir): CostShutdown) -> Class {
     let (last_enforcer, last_dir) = (Arc::clone(&enforcer), data_dir.clone());
     Class {
         name: "cost",
+        root: Some(data_dir.clone()),
         checkpoint: Arc::new(move || save_costs_unless_busy(&enforcer, &data_dir)),
         last: Arc::new(move || save_costs(&last_enforcer, &last_dir)),
     }

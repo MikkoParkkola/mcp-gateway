@@ -243,6 +243,7 @@ impl Health {
         };
         super::stop_checkpoints::Class {
             name: "health",
+            root: self.path.clone(),
             checkpoint: save(file::Wait::SkipIfBusy),
             last: save(file::Wait::Block),
         }
