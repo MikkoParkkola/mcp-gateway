@@ -151,6 +151,9 @@ pub(crate) fn decide(snapshot: &Snapshot) -> Result<(), Skip> {
 pub(crate) enum Outcome {
     Skipped(Skip),
     NoId,
+    /// The day was already claimed. Unix only in use: the 3.5 line makes no
+    /// claim on Windows.
+    #[cfg_attr(not(unix), allow(dead_code))]
     NoClaim,
     /// The clock read before the epoch: no date, nothing claimed or sent.
     NoDate,
@@ -467,7 +470,7 @@ pub(crate) struct Resolved {
     /// True only for a target a test registered for this dir.
     pub(crate) from_seam: bool,
     /// The variables a registered target's snapshot carries (empty outside a
-    /// test): how a start-site row sets an opt-out without set_var.
+    /// test): how a start-site row sets an opt-out without `set_var`.
     pub(crate) seam_env: BTreeMap<String, String>,
 }
 
@@ -492,18 +495,16 @@ pub(crate) fn resolve(data_dir: &Path) -> Option<Resolved> {
     })
 }
 
-/// Where the heartbeat keeps its state: the gateway's data dir, resolved as
-/// 4.0 resolves it (`MCP_GATEWAY_CONFIG_DIR`, else home/.mcp-gateway), so
-/// 3.5.3 and 4.0 keep one install id. Not the 3.5 server's own data dir,
-/// which ignores that variable.
-pub(crate) fn production_root() -> PathBuf {
-    crate::config_persistence::gateway_data_dir()
-}
-
-/// The data dir the server's heartbeat uses.
+/// The data dir the server's heartbeat uses: the gateway's data dir,
+/// resolved as 4.0 resolves it (`MCP_GATEWAY_CONFIG_DIR`, else
+/// home/.mcp-gateway), so 3.5.3 and 4.0 keep one install id. Not the 3.5
+/// server's own data dir, which ignores that variable.
+// One signature with the test build's `root`, which has none when no row
+// registered one.
+#[allow(clippy::unnecessary_wraps)]
 #[cfg(not(test))]
 pub(crate) fn root() -> Option<PathBuf> {
-    Some(production_root())
+    Some(crate::config_persistence::gateway_data_dir())
 }
 
 /// In a test build only a root a row registered on this thread counts, and
@@ -513,9 +514,14 @@ pub(crate) fn root() -> Option<PathBuf> {
     seam::registered_root()
 }
 
-/// The system clock's UTC date (always one: `chrono::Utc::now`).
+/// The system clock's UTC date; `None` when the clock reads before the epoch,
+/// which sends nothing (as on 4.0, whose clock refuses such a time).
 fn utc_today() -> Option<chrono::NaiveDate> {
-    Some(chrono::Utc::now().date_naive())
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let secs = i64::try_from(since.as_secs()).ok()?;
+    chrono::DateTime::from_timestamp(secs, 0).map(|t| t.date_naive())
 }
 
 /// Start the server's heartbeat task: a check at start, then hourly, ending
@@ -629,7 +635,9 @@ pub(crate) mod seam {
     }
 
     /// Give the target registered for `dir` these variables in its snapshot
-    /// (W1', W2': an opt-out set on the start site's own input, never set_var).
+    /// (W1', W2': an opt-out set on the start site's own input, never `set_var`).
+    /// Unix only, as the start rows that use it are.
+    #[cfg(unix)]
     pub(crate) fn set_env(dir: &Path, env: &[(&str, &str)]) {
         envs().insert(
             dir.to_path_buf(),
@@ -644,8 +652,10 @@ pub(crate) mod seam {
     }
 
     /// Clears this thread's root when dropped.
+    #[cfg(unix)]
     pub(crate) struct RootGuard;
 
+    #[cfg(unix)]
     impl Drop for RootGuard {
         fn drop(&mut self) {
             ROOT.with(|r| *r.borrow_mut() = None);
@@ -653,7 +663,8 @@ pub(crate) mod seam {
     }
 
     /// Make `dir` the root a server started on this thread uses, until the
-    /// guard drops.
+    /// guard drops. Unix only, as the start rows that use it are.
+    #[cfg(unix)]
     pub(crate) fn register_root(dir: &Path) -> RootGuard {
         ROOT.with(|r| *r.borrow_mut() = Some(dir.to_path_buf()));
         RootGuard

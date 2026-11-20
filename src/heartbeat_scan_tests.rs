@@ -574,6 +574,9 @@ fn assert_planted_launch_forms() {
 /// workflows passes `DO_NOT_TRACK=1` on that launch itself; one planted
 /// launch per form, without it, fails.
 #[test]
+// The pause exemption's controls sit beside the floor and the judgement they
+// guard, so the row reads top to bottom as one proof.
+#[allow(clippy::too_many_lines)]
 fn every_image_launch_sets_dnt() {
     // The planted launch forms read no repository file, so they run in the
     // packaged crate too.
@@ -751,7 +754,7 @@ fn every_binary_spawn_sets_dnt() {
             continue;
         }
         seen.insert(path.clone(), commands.len());
-        bare.extend(commands.iter().filter(|c| !opted(*c)).map(|_| path.clone()));
+        bare.extend(commands.iter().filter(|c| !opted(c)).map(|_| path.clone()));
     }
     let floor: std::collections::BTreeMap<String, usize> = BINARY_SPAWNS
         .iter()

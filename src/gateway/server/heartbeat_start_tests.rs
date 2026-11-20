@@ -34,19 +34,16 @@ async fn wait_for(what: &str, done: impl Fn() -> bool) {
     }
 }
 
-/// Make `dir` this thread's heartbeat root and give it a target at `rx`,
-/// checking every 50 ms; `opt_out` puts `DO_NOT_TRACK=1` in the target's
-/// snapshot, the start site's own input (never set_var). `patient` swaps in
-/// a client with no timeout, for a receiver that never answers.
-fn aim(dir: &Path, rx: &Listener, opt_out: bool, patient: bool) -> (seam::RootGuard, seam::Guard) {
-    let client = if patient {
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("a client")
-    } else {
-        test_client()
-    };
+/// Make `dir` this thread's heartbeat root and give it a target at `rx`
+/// through `client`, checking every 50 ms; `env` is the target's snapshot,
+/// the start site's own input (an opt-out goes here, never through
+/// `set_var`).
+fn aim(
+    dir: &Path,
+    rx: &Listener,
+    env: &[(&str, &str)],
+    client: reqwest::Client,
+) -> (seam::RootGuard, seam::Guard) {
     let root = seam::register_root(dir);
     let target = seam::register(
         dir,
@@ -58,11 +55,21 @@ fn aim(dir: &Path, rx: &Listener, opt_out: bool, patient: bool) -> (seam::RootGu
             stall: None,
         },
     );
-    if opt_out {
-        seam::set_env(dir, &[("DO_NOT_TRACK", "1")]);
-    }
+    seam::set_env(dir, env);
     (root, target)
 }
+
+/// A client with no timeout at all: against a receiver that never answers,
+/// a start that waited on its heartbeat would never answer either.
+fn patient_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("a client")
+}
+
+/// The opt-out W1' and W2' put in the start's snapshot.
+const OPTED_OUT: &[(&str, &str)] = &[("DO_NOT_TRACK", "1")];
 
 /// A writer that hands bytes on only when flushed, as a piped stdout does: a
 /// response written but never flushed never reaches the reader.
@@ -162,7 +169,7 @@ async fn child_http_start() {
     let quiet = Listener::start(Answer::NoContent).await;
     let opted = tempfile::tempdir().expect("a dir");
     {
-        let _aimed = aim(opted.path(), &quiet, true, false);
+        let _aimed = aim(opted.path(), &quiet, OPTED_OUT, test_client());
         let http = start_http().await;
         assert_eq!(http.health, 200);
         wait_for("the opted-out check", || {
@@ -178,7 +185,7 @@ async fn child_http_start() {
     // construction, and the heartbeat reaches the receiver.
     let hang = Listener::start(Answer::Never).await;
     let open = tempfile::tempdir().expect("a dir");
-    let _aimed = aim(open.path(), &hang, false, true);
+    let _aimed = aim(open.path(), &hang, &[], patient_client());
     let http = start_http().await;
     assert_eq!(http.health, 200);
     assert!(http.took < Duration::from_secs(30), "{:?}", http.took);
@@ -264,7 +271,7 @@ async fn child_stdio_start() {
     let quiet = Listener::start(Answer::NoContent).await;
     let opted = tempfile::tempdir().expect("a dir");
     {
-        let _aimed = aim(opted.path(), &quiet, true, false);
+        let _aimed = aim(opted.path(), &quiet, OPTED_OUT, test_client());
         let mut stdio = start_stdio().await;
         assert!(stdio.ping().await, "no answer to ping");
         wait_for("the opted-out check", || {
@@ -282,7 +289,7 @@ async fn child_stdio_start() {
     let hang = Listener::start(Answer::Never).await;
     let open = tempfile::tempdir().expect("a dir");
     {
-        let _aimed = aim(open.path(), &hang, false, true);
+        let _aimed = aim(open.path(), &hang, &[], patient_client());
         let mut stdio = start_stdio().await;
         assert!(stdio.ping().await, "ping waited on the heartbeat");
         wait_for("the control's heartbeat", || hang.connections() == 1).await;
@@ -293,7 +300,7 @@ async fn child_stdio_start() {
     // the loop has ended, the same window sees no new check.
     let rx = Listener::start(Answer::NoContent).await;
     let ends = tempfile::tempdir().expect("a dir");
-    let _aimed = aim(ends.path(), &rx, false, false);
+    let _aimed = aim(ends.path(), &rx, &[], test_client());
     let mut stdio = start_stdio().await;
     assert!(stdio.ping().await, "no answer to ping");
     let count = || seam::outcomes(ends.path()).len();
