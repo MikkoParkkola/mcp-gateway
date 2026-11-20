@@ -947,10 +947,14 @@ def built_parts_root_rows() -> None:
             for k in ("MACOS_LIB_SOLO", "ROOT_PART", "ROOT_BEHAVE", "MCP_GATEWAY_TEST_HOME_DIR"):
                 os.environ.pop(k, None)
             os.environ.update({"LOG": log, **env})
+            # Run from elsewhere, so a root run that does not set its own directory shows in R6's cwd= field.
+            here = os.getcwd()
+            os.chdir(root)
             try:
                 with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
                     rc = run_built_parts("macos", "lib-b", tempfile.mkdtemp(dir=root), ("sh", build))
             finally:
+                os.chdir(here)
                 for k, v in keep.items():
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
             return rc, open(log).read().split("\n")[:-1]
@@ -1418,6 +1422,32 @@ ROOT_ROWS = "config_persistence_access_tests::root::"
 PRIVILEGE: tuple[str, ...] = ("sudo", "-E")
 
 
+def _echo_results(p: subprocess.Popen) -> dict[str, list[str]]:
+    """Pass P's output through to the job log as it comes and gather every libtest result, by test name, in order."""
+    assert p.stdout is not None
+    seen: dict[str, list[str]] = {}
+    for chunk in p.stdout:
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+        if hit := RESULT_LINE.match(ANSI.sub("", chunk.decode("utf-8", "replace").rstrip("\r\n"))):
+            seen.setdefault(hit.group(1), []).append(hit.group(2))
+    return seen
+
+
+def _run_root_rows(binary: str, roots: list[str], env: dict[str, str]) -> list[str]:
+    """ROOTS, the root rows a part lists, run again under PRIVILEGE from the repo root with the plain job env (the
+    0700 gateway dirs of private_home would block the mcpg-c child those rows start). Returns the problems: a non-zero
+    exit, and every root row whose results are anything but a single `ok`."""
+    p = subprocess.Popen([*PRIVILEGE, binary, ROOT_ROWS, "--ignored", "--test-threads=1"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
+    results = _echo_results(p)
+    rc = p.wait()
+    out = [f"root rows exited {rc}"] * (rc != 0)
+    out += [f"root row {name}: {', '.join(results.get(name, [])) or 'not reported'}"
+            for name in roots if results.get(name) != ["ok"]]
+    return out
+
+
 def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, ...] = ()) -> int:
     """Build and run LEG's lib test parts one at a time (PARTS, leg_parts): `lib-parts.sh export K DIRECTORY` builds
     part K and writes pK/lib-tests-pK and pK/list.txt; the binary runs every test with the OS skips; the names it
@@ -1442,18 +1472,17 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
             listed_names = {x[: -len(": test")] for x in open(recorded).read().splitlines() if x.endswith(": test")}
             want = {n for n in listed_names if not any(p in n for p in patterns)}
             os.chmod(binary, 0o755)
-            reported: dict[str, str] = {}
             with private_home(env, None) as home_env:
                 p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=home_env, cwd=ROOT)
-                assert p.stdout is not None
-                for raw in p.stdout:
-                    sys.stdout.buffer.write(raw)
-                    sys.stdout.buffer.flush()
-                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
-                    if m:
-                        reported[m.group(1)] = m.group(2)
+                # A name reported more than once keeps its last result, as before.
+                reported = {name: results[-1] for name, results in _echo_results(p).items()}
                 prc = p.wait()
+            # The writer's root rows, which the run above reports as ignored: once more as root, from this binary
+            # before it goes. Only a part whose own list holds them; no other part calls the prefix.
+            roots = sorted(n for n in listed_names if n.startswith(ROOT_ROWS))
+            if roots:
+                failed += [f"part {k}: {x}" for x in _run_root_rows(binary, roots, env)]
         finally:
             # The binary goes before the next part builds, also when an export or a run failed part way.
             if os.path.lexists(binary):
