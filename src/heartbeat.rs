@@ -425,7 +425,13 @@ pub(crate) fn production_builder() -> reqwest::ClientBuilder {
 /// The release client, or `None` when it cannot be built (no TLS backend):
 /// then nothing is sent, rather than a client without these limits.
 pub(crate) fn production_client() -> Option<reqwest::Client> {
-    production_builder().build().ok()
+    // `base_builder` already refuses redirects; the policy is stated again on
+    // the chain that builds, because the redirect scan (security::ssrf) reads only
+    // the function that calls `build()`.
+    production_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()
 }
 
 /// Where and how the release task sends: the literal receiver URL and the
