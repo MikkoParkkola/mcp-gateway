@@ -20,6 +20,7 @@ use crate::test_wait::wait_real_time;
 /// Real time a save thread's call may take to show.
 const SHOW: Duration = Duration::from_secs(5);
 /// Real time given to a call that must not happen.
+// limit-under-test (fires-only): an absence window; a stall can only hide a forbidden call, never fail the row
 const QUIET: Duration = Duration::from_millis(200);
 
 /// A class whose saves count their calls and report a write.
@@ -101,6 +102,7 @@ async fn l_interval_a_pass_runs_every_second() {
         tokio::time::advance(Duration::from_secs(1)).await;
         reaches(&calls, n, "a pass one second after the last").await;
     }
+    // limit-under-test (paused-clock): moves the paused clock to mid-second, between two passes
     tokio::time::advance(Duration::from_millis(500)).await;
     quiet().await;
     assert_eq!(calls.load(SeqCst), 4, "a pass ran between the seconds");
