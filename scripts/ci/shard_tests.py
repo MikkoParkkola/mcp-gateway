@@ -920,16 +920,20 @@ def built_parts_root_rows() -> None:
                     f'cat >> "$out" <<"EOF"\ncase "${{ROOT_BEHAVE:-ok}}" in\n'
                     f'  ok) echo "test {row}1 ... ok"; echo "test {row}2 ... ok" ;;\n'
                     f'  some) echo "test {row}1 ... ok" ;;\n'
+                    f'  dup) echo "test {row}1 ... ok"; echo "test {row}1 ... ok"; echo "test {row}2 ... ok" ;;\n'
                     f'  ignored) echo "test {row}1 ... ignored"; echo "test {row}2 ... ignored" ;;\n'
                     f'  red) echo "test {row}1 ... FAILED"; echo "test {row}2 ... ok"; exit 101 ;;\n'
                     f'  exit) echo "test {row}1 ... ok"; echo "test {row}2 ... ok"; exit 3 ;;\n'
                     f'esac\nexit 0\nEOF\n')
-        # Stand-in privilege: logs the binary it starts, whether that binary is still on disk, and its arguments.
+        # Stand-in privilege: logs the binary it starts, whether that binary is still on disk, the directory and
+        # manifest dir it runs in (the part's own run gets both as the repo root; tests read fixtures by them), and
+        # its arguments.
         with open(priv, "w") as f:
             f.write('#!/bin/sh\nb=$1; shift\n[ -e "$b" ] && on=present || on=gone\n'
                     # A private gateway home leaking into the root run would stop the rows' mcpg-c child.
                     '[ -n "${MCP_GATEWAY_TEST_HOME_DIR:-}" ] && on="$on private-home"\n'
-                    'echo "priv $(basename "$b") $on $*" >> "$LOG"\nexec "$b" "$@"\n')
+                    'echo "priv $(basename "$b") $on cwd=$(pwd -P) manifest=${CARGO_MANIFEST_DIR:-unset} $*" >> "$LOG"\n'
+                    'exec "$b" "$@"\n')
         # The production prefix the root run uses, pinned before the stand-in replaces it.
         assert PRIVILEGE == ("sudo", "-E"), PRIVILEGE
         # The rows below build their expected call from ROOT_ROWS, so pin its literal value here.
@@ -953,7 +957,8 @@ def built_parts_root_rows() -> None:
 
         # Each part's plain run logs `run` after its build; the root run must come after part 3's.
         plain = [x for k in range(1, 5) for x in (f"build {k}", "run")]
-        call = f"priv lib-tests-p3 present {ROOT_ROWS} --ignored --test-threads=1"
+        call = (f"priv lib-tests-p3 present cwd={os.path.realpath(ROOT)} manifest={ROOT} "
+                f"{ROOT_ROWS} --ignored --test-threads=1")
         try:
             # R9: no part lists a root row, so nothing runs under PRIVILEGE.
             assert leg() == (0, plain), leg()
@@ -964,6 +969,7 @@ def built_parts_root_rows() -> None:
             binary = os.path.join(fixture, "p3", "lib-tests-p3")
             os.chmod(binary, 0o755)
             expect = {"ok": ([f"{row}1 ... ok", f"{row}2 ... ok"], 0), "some": ([f"{row}1 ... ok"], 0),
+                      "dup": ([f"{row}1 ... ok", f"{row}1 ... ok", f"{row}2 ... ok"], 0),
                       "red": ([f"{row}1 ... FAILED", f"{row}2 ... ok"], 101),
                       "exit": ([f"{row}1 ... ok", f"{row}2 ... ok"], 3), "none": ([], 0),
                       "ignored": ([f"{row}1 ... ignored", f"{row}2 ... ignored"], 0)}
@@ -973,7 +979,8 @@ def built_parts_root_rows() -> None:
                 got = [x[len("test "):] for x in p.stdout.splitlines()]
                 assert (got, p.returncode) == (lines, code), (behave, got, p.returncode)
             p = subprocess.run(["sh", binary], env=env, capture_output=True, text=True)
-            assert p.stdout.splitlines() == ["test m3::a ... ok", f"test {row}1 ... ignored", f"test {row}2 ... ignored"], p.stdout
+            assert (p.stdout.splitlines(), p.returncode) == (
+                ["test m3::a ... ok", f"test {row}1 ... ignored", f"test {row}2 ... ignored"], 0), (p.stdout, p.returncode)
             # R6: part 3's root rows run under PRIVILEGE once, with the filter, after part 3's own run and while its
             # binary is on disk.
             rc, steps = leg(ROOT_PART="3")
@@ -987,8 +994,8 @@ def built_parts_root_rows() -> None:
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
                 assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
             # R8: a root run that reports none, only some, or none as passed (every root row ignored, exit 0) of the
-            # listed root rows fails the leg.
-            for behave in ("none", "some", "ignored"):
+            # listed root rows fails the leg, and so does one that reports a listed row twice (each runs once).
+            for behave in ("none", "some", "ignored", "dup"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
                 assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
         finally:
