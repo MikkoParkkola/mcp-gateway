@@ -83,6 +83,9 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's own cache helps no other PR and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the lib tests (part 1, which holds the live rows)
         # One part of the lib test binary, as ci.yml's lib-build legs build it (about 11 min there; the same limit).
         timeout-minutes: 25
