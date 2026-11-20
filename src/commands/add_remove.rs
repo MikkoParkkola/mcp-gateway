@@ -272,8 +272,9 @@ pub fn run_list_available_command(json: bool) -> ExitCode {
 
 // ── get ──────────────────────────────────────────────────────────────────────
 
-/// Run `mcp-gateway get`.
-pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
+/// Run `mcp-gateway get`: the backend as text, or one document with `--json` (MIK-9764.JSONF.1). Both show env and
+/// header names with the reference as written or `<set>`, never a value.
+pub fn run_get_command(name: &str, config: &Path, render: crate::cli::output::Render) -> ExitCode {
     let gateway_config = match load_existing_or_default(config) {
         Ok(config) => config,
         Err(e) => {
@@ -289,6 +290,9 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if render == crate::cli::output::Render::Json {
+        return print_get_document(name, &info, &gateway_config.backends[name]);
+    }
 
     println!("Name:        {name}");
     println!("Transport:   {}", info.transport);
@@ -317,12 +321,6 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     // a credential disclosure rather than a cosmetic issue. A
     // secret reference is shown as written (ADR-028); a value never is.
     let backend = &gateway_config.backends[name];
-    let shown = |map: &std::collections::HashMap<String, String>, key: &str| {
-        map.get(key).map_or_else(
-            || "<set>".to_owned(),
-            |v| mcp_gateway::config::secret_slot(v),
-        )
-    };
     if !info.env.is_empty() {
         println!("Environment:");
         for key in &info.env {
@@ -338,6 +336,61 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// A backend env or header entry as `get` shows it: the reference as written, `<set>` or `<empty>`, never a value.
+fn shown(map: &std::collections::HashMap<String, String>, key: &str) -> String {
+    map.get(key).map_or_else(
+        || "<set>".to_owned(),
+        |v| mcp_gateway::config::secret_slot(v),
+    )
+}
+
+/// `get --json`'s document (design 3a): names with what `shown` gives, never a value, as the text form.
+fn print_get_document(
+    name: &str,
+    info: &mcp_gateway::gateway::ui::backend_ops::BackendInfo,
+    backend: &mcp_gateway::config::BackendConfig,
+) -> ExitCode {
+    use std::collections::BTreeMap;
+    #[derive(serde::Serialize)]
+    struct Command<'a> {
+        executable: &'a str,
+        argument_count: usize,
+    }
+    #[derive(serde::Serialize)]
+    struct View<'a> {
+        name: &'a str,
+        transport: &'a str,
+        description: &'a str,
+        enabled: bool,
+        command: Option<Command<'a>>,
+        url: Option<&'a str>,
+        env: BTreeMap<&'a str, String>,
+        headers: BTreeMap<&'a str, String>,
+    }
+    let view = View {
+        name,
+        transport: &info.transport,
+        description: &info.description,
+        enabled: info.enabled,
+        command: info.command.as_ref().map(|c| Command {
+            executable: &c.executable,
+            argument_count: c.argument_count,
+        }),
+        url: info.url.as_deref(),
+        env: info
+            .env
+            .iter()
+            .map(|key| (key.as_str(), shown(&backend.env, key)))
+            .collect(),
+        headers: info
+            .headers
+            .iter()
+            .map(|key| (key.as_str(), shown(&backend.headers, key)))
+            .collect(),
+    };
+    crate::cli::output::print_document(crate::cli::output::document(&view))
 }
 
 /// `--env-file`'s entries in file order, repeats kept.
