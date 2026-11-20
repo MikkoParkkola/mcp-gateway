@@ -6,11 +6,17 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use super::limits::{
-    LOOKUP_WINDOW, LOOKUPS_PER_GATEWAY, LOOKUPS_PER_SESSION, Limits, MAX_TRACKED_KEYS, MINUTE,
-    STARTS_PER_GATEWAY, STARTS_PER_PEER,
-};
+use super::limits::Limits;
 
+// The design's numbers, written out on purpose: a row
+// that read the constant it checks would move with a changed constant and
+// stay green.
+const PER_KEY: u32 = 5;
+const PER_GATEWAY: u32 = 100;
+const MINUTE: Duration = Duration::from_secs(60);
+const TEN_MINUTES: Duration = Duration::from_secs(600);
+/// The per-key map's bound (a design choice: at least every gateway cap).
+const KEY_BOUND: usize = 128;
 const JUST: Duration = Duration::from_secs(1);
 
 fn peer(n: u32) -> IpAddr {
@@ -27,18 +33,18 @@ fn session(n: u32) -> String {
 fn starts_five_per_peer_per_minute() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for k in 1..=STARTS_PER_PEER {
+    for k in 1..=PER_KEY {
         assert!(limits.admit_start(peer(1), t0), "start {k} of peer 1");
     }
     assert!(!limits.admit_start(peer(1), t0), "the 6th start of peer 1");
-    for n in 2..=STARTS_PER_GATEWAY - STARTS_PER_PEER + 1 {
+    for n in 2..=PER_GATEWAY - PER_KEY + 1 {
         assert!(
             limits.admit_start(peer(n), t0),
             "peer {n}: the refused 6th must not have spent a gateway slot"
         );
     }
     let fresh = Limits::new();
-    for _ in 0..STARTS_PER_PEER {
+    for _ in 0..PER_KEY {
         assert!(fresh.admit_start(peer(1), t0));
     }
     assert!(
@@ -56,7 +62,7 @@ fn starts_five_per_peer_per_minute() {
 fn starts_one_hundred_per_gateway_per_minute() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for n in 1..=STARTS_PER_GATEWAY {
+    for n in 1..=PER_GATEWAY {
         assert!(limits.admit_start(peer(n), t0), "start from peer {n}");
     }
     assert!(!limits.admit_start(peer(1000), t0), "the 101st start");
@@ -75,7 +81,7 @@ fn starts_one_hundred_per_gateway_per_minute() {
 fn failed_lookups_five_per_session_per_600_seconds() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for k in 1..=LOOKUPS_PER_SESSION {
+    for k in 1..=PER_KEY {
         assert!(
             limits.may_look_up(&session(1), t0),
             "lookup {k} of session 1"
@@ -86,7 +92,7 @@ fn failed_lookups_five_per_session_per_600_seconds() {
         !limits.may_look_up(&session(1), t0),
         "session 1 after five failures"
     );
-    for n in 2..=LOOKUPS_PER_GATEWAY - LOOKUPS_PER_SESSION + 1 {
+    for n in 2..=PER_GATEWAY - PER_KEY + 1 {
         assert!(
             limits.may_look_up(&session(n), t0),
             "session {n} beside a blocked one"
@@ -94,11 +100,11 @@ fn failed_lookups_five_per_session_per_600_seconds() {
         limits.note_failed_lookup(&session(n), t0);
     }
     assert!(
-        !limits.may_look_up(&session(1), t0 + LOOKUP_WINDOW - JUST),
+        !limits.may_look_up(&session(1), t0 + TEN_MINUTES - JUST),
         "inside 600 s"
     );
     assert!(
-        limits.may_look_up(&session(1), t0 + LOOKUP_WINDOW),
+        limits.may_look_up(&session(1), t0 + TEN_MINUTES),
         "600 s have passed"
     );
 }
@@ -108,7 +114,7 @@ fn failed_lookups_five_per_session_per_600_seconds() {
 fn failed_lookups_one_hundred_per_gateway_per_600_seconds() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for n in 1..=LOOKUPS_PER_GATEWAY {
+    for n in 1..=PER_GATEWAY {
         assert!(limits.may_look_up(&session(n), t0), "session {n}");
         limits.note_failed_lookup(&session(n), t0);
     }
@@ -117,11 +123,11 @@ fn failed_lookups_one_hundred_per_gateway_per_600_seconds() {
         "a fresh session after 100 failures"
     );
     assert!(
-        !limits.may_look_up(&session(1000), t0 + LOOKUP_WINDOW - JUST),
+        !limits.may_look_up(&session(1000), t0 + TEN_MINUTES - JUST),
         "inside 600 s"
     );
     assert!(
-        limits.may_look_up(&session(1000), t0 + LOOKUP_WINDOW),
+        limits.may_look_up(&session(1000), t0 + TEN_MINUTES),
         "600 s have passed"
     );
 }
@@ -131,7 +137,7 @@ fn failed_lookups_one_hundred_per_gateway_per_600_seconds() {
 fn invalid_polls_five_per_peer_per_minute() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for k in 1..=super::limits::INVALID_POLLS_PER_PEER {
+    for k in 1..=PER_KEY {
         assert!(limits.may_poll(peer(1), t0), "poll {k} of peer 1");
         limits.note_invalid_poll(peer(1), t0);
     }
@@ -139,7 +145,7 @@ fn invalid_polls_five_per_peer_per_minute() {
         !limits.may_poll(peer(1), t0),
         "peer 1 after five invalid polls"
     );
-    for n in 2..=50 {
+    for n in 2..=PER_GATEWAY - PER_KEY + 1 {
         assert!(
             limits.may_poll(peer(n), t0),
             "peer {n} beside a blocked one"
@@ -161,7 +167,7 @@ fn invalid_polls_five_per_peer_per_minute() {
 fn invalid_polls_one_hundred_per_gateway_per_minute() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for n in 1..=super::limits::INVALID_POLLS_PER_GATEWAY {
+    for n in 1..=PER_GATEWAY {
         assert!(limits.may_poll(peer(n), t0), "peer {n}");
         limits.note_invalid_poll(peer(n), t0);
     }
@@ -187,14 +193,14 @@ fn limiter_storage_is_bounded() {
     let t0 = Instant::now();
     for minute in 0..3_u32 {
         let now = t0 + MINUTE * minute;
-        for k in 0..STARTS_PER_GATEWAY {
-            let n = minute * STARTS_PER_GATEWAY + k + 1;
+        for k in 0..PER_GATEWAY {
+            let n = minute * PER_GATEWAY + k + 1;
             assert!(
                 limits.admit_start(peer(n), now),
                 "peer {n} in minute {minute}"
             );
             assert!(
-                limits.tracked_start_peers() <= MAX_TRACKED_KEYS,
+                limits.tracked_start_peers() <= KEY_BOUND,
                 "tracked {} > bound after peer {n}",
                 limits.tracked_start_peers()
             );

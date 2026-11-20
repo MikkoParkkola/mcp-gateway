@@ -10,9 +10,17 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use super::attempts::{
-    AttemptStore, CAPACITY, CODE_ALPHABET, Draws, LIFETIME, MAX_CODE_DRAWS, PollRefused, PollState,
-    StartRefused, UserCode,
+    AttemptStore, CODE_ALPHABET, Draws, PollRefused, PollState, StartRefused, UserCode,
 };
+
+// The design's numbers, written out on purpose: a row
+// that read the constant it checks would move with a changed constant and
+// stay green.
+const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const HELD: usize = 256;
+const CODE_DRAWS: usize = 8;
+const TEN_MINUTES: Duration = Duration::from_secs(600);
+const MAX_POLLS: u32 = 120;
 
 /// How often each draw ran.
 #[derive(Default)]
@@ -99,7 +107,7 @@ fn a_code_is_ten_symbols_from_the_alphabet() {
         shown, "01234-VWXYZ",
         "the drawn symbols, hyphen after the fifth"
     );
-    assert_eq!(CODE_ALPHABET.len(), 32);
+    assert_eq!(CODE_ALPHABET, ALPHABET, "the design's 32 symbols, in order");
     assert!(
         shown
             .bytes()
@@ -188,8 +196,8 @@ fn one_collision_then_a_fresh_code_succeeds() {
 #[test]
 fn eight_collisions_refuse_without_insertion() {
     let held = distinct_code(1);
-    let mut codes = vec![held; 1 + MAX_CODE_DRAWS];
-    codes.extend(vec![held; MAX_CODE_DRAWS - 1]);
+    let mut codes = vec![held; 1 + CODE_DRAWS];
+    codes.extend(vec![held; CODE_DRAWS - 1]);
     codes.push(distinct_code(2));
     let (draws, calls) = scripted(
         codes,
@@ -207,7 +215,7 @@ fn eight_collisions_refuse_without_insertion() {
     assert_eq!(store.retained(t0), 1, "nothing inserted");
     assert_eq!(
         calls.code.load(Ordering::SeqCst),
-        1 + MAX_CODE_DRAWS,
+        1 + CODE_DRAWS,
         "exactly eight draws for B"
     );
     let c = store.start(t0).expect("seven collisions then a fresh code");
@@ -243,22 +251,22 @@ fn an_id_collision_never_aliases() {
 /// attempt is evicted for it. The store itself applies no rate limit.
 #[test]
 fn capacity_is_256() {
-    let (store, _) = store_for(CAPACITY + 1);
+    let (store, _) = store_for(HELD + 1);
     let t0 = Instant::now();
-    let held: Vec<_> = (1..=CAPACITY)
+    let held: Vec<_> = (1..=HELD)
         .map(|k| {
             store
                 .start(t0)
                 .unwrap_or_else(|e| panic!("start {k}: {e:?}"))
         })
         .collect();
-    assert_eq!(store.retained(t0), CAPACITY);
+    assert_eq!(store.retained(t0), HELD);
     assert_eq!(
         store.start(t0).err(),
         Some(StartRefused::Full),
         "the 257th start"
     );
-    assert_eq!(store.retained(t0), CAPACITY);
+    assert_eq!(store.retained(t0), HELD);
     for a in &held {
         assert_eq!(
             store.poll(a.id, &a.secret, t0),
@@ -274,16 +282,14 @@ fn capacity_is_256() {
 fn a_consumed_attempt_keeps_its_place_until_its_deadline() {
     let t0 = Instant::now();
     // (a) its place in a full store.
-    let (store, _) = store_for(CAPACITY + 1);
-    let held: Vec<_> = (0..CAPACITY)
-        .map(|_| store.start(t0).expect("fill"))
-        .collect();
+    let (store, _) = store_for(HELD + 1);
+    let held: Vec<_> = (0..HELD).map(|_| store.start(t0).expect("fill")).collect();
     assert!(store.consume(held[0].id, t0), "consume a held attempt");
-    assert_eq!(store.retained(t0), CAPACITY, "consumed still counts");
+    assert_eq!(store.retained(t0), HELD, "consumed still counts");
     assert_eq!(store.start(t0).err(), Some(StartRefused::Full));
     // (b) its code, in a fresh store.
     let mine = distinct_code(5);
-    let mut codes = vec![mine; 1 + MAX_CODE_DRAWS];
+    let mut codes = vec![mine; 1 + CODE_DRAWS];
     codes.push(mine);
     let (draws, _) = scripted(
         codes,
@@ -298,15 +304,15 @@ fn a_consumed_attempt_keeps_its_place_until_its_deadline() {
         None,
         "a consumed code is not found"
     );
-    let late = t0 + LIFETIME - Duration::from_secs(1);
+    let late = t0 + TEN_MINUTES - Duration::from_secs(1);
     assert_eq!(
         store.start(late).err(),
         Some(StartRefused::Collision),
         "the code is still held at 599 s"
     );
-    assert_eq!(store.retained(t0 + LIFETIME), 0, "gone at 600 s");
+    assert_eq!(store.retained(t0 + TEN_MINUTES), 0, "gone at 600 s");
     let b = store
-        .start(t0 + LIFETIME)
+        .start(t0 + TEN_MINUTES)
         .expect("the code is free at 600 s");
     assert_eq!(b.code, a.code);
 }
@@ -317,7 +323,7 @@ fn the_deadline_is_600_seconds_and_never_moves() {
     let (store, _) = store_for(1);
     let t0 = Instant::now();
     let a = store.start(t0).expect("A");
-    assert_eq!(a.deadline, t0 + LIFETIME);
+    assert_eq!(a.deadline, t0 + TEN_MINUTES);
     let secs = Duration::from_secs;
     assert_eq!(
         store.poll(a.id, &a.secret, t0 + secs(5)),
@@ -338,12 +344,12 @@ fn the_deadline_is_600_seconds_and_never_moves() {
         Ok(PollState::Pending)
     );
     assert_eq!(
-        store.poll(a.id, &a.secret, t0 + LIFETIME),
+        store.poll(a.id, &a.secret, t0 + TEN_MINUTES),
         Err(PollRefused::Invalid),
         "gone at 600 s"
     );
-    assert_eq!(store.lookup(&a.code, t0 + LIFETIME), None);
-    assert_eq!(store.retained(t0 + LIFETIME), 0);
+    assert_eq!(store.lookup(&a.code, t0 + TEN_MINUTES), None);
+    assert_eq!(store.retained(t0 + TEN_MINUTES), 0);
 }
 
 /// L1.10: a new store (a restart) knows no attempt of an old one.
@@ -382,7 +388,7 @@ fn unknown_expired_and_wrong_secret_polls_look_the_same() {
         .expect_err("wrong secret");
     let unknown = store.poll(id(999), &a.secret, t0).expect_err("unknown id");
     let expired = store
-        .poll(a.id, &a.secret, t0 + LIFETIME)
+        .poll(a.id, &a.secret, t0 + TEN_MINUTES)
         .expect_err("expired");
     assert_eq!(wrong, PollRefused::Invalid);
     assert_eq!(wrong, unknown);
@@ -422,7 +428,7 @@ fn an_attempt_takes_at_most_120_polls() {
     let (store, _) = store_for(1);
     let t0 = Instant::now();
     let a = store.start(t0).expect("A");
-    store.set_polls_for_test(a.id, super::attempts::MAX_POLLS - 1);
+    store.set_polls_for_test(a.id, MAX_POLLS - 1);
     assert_eq!(
         store.poll(a.id, &a.secret, t0),
         Ok(PollState::Pending),
@@ -438,14 +444,24 @@ fn an_attempt_takes_at_most_120_polls() {
 }
 
 /// Holds the first `arrivals` callers until all have come or two seconds
-/// pass; later callers go straight through.
+/// pass; later callers go straight through. Records a timeout.
 struct Gate {
     arrived: std::sync::Mutex<usize>,
     all_here: std::sync::Condvar,
     arrivals: usize,
+    timed_out: std::sync::atomic::AtomicBool,
 }
 
 impl Gate {
+    fn new(arrivals: usize) -> Self {
+        Self {
+            arrived: std::sync::Mutex::new(0),
+            all_here: std::sync::Condvar::new(),
+            arrivals,
+            timed_out: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
     fn wait(&self) {
         let mut arrived = self.arrived.lock().expect("gate lock");
         *arrived += 1;
@@ -457,6 +473,7 @@ impl Gate {
         while *arrived < self.arrivals {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                self.timed_out.store(true, Ordering::SeqCst);
                 return;
             }
             arrived = self
@@ -468,16 +485,19 @@ impl Gate {
     }
 }
 
-/// L1.11: two starts that drew the same code at the same time
-/// hold it once; the other start redraws.
+/// L1.11: two starts that drew the same code at the same time hold it once;
+/// the other start redraws.
 ///
-/// Honesty note: both threads are held after their draws until both have
-/// drawn, so both reach the store's check together. Nothing outside the
-/// store can pause it between its check and its insert, so against a store
-/// whose check and insert are not under one lock this row fails by
-/// interleaving, not by construction; 200 rounds make that likely, not
-/// certain. The gate gives up after two seconds, so a store that draws
-/// inside its lock cannot hang the row.
+/// Honesty note: each thread is held right after its first code draw, so
+/// both hold the same code before either can reserve it, whatever order the
+/// store draws its id and secret in. Nothing outside the store can pause it
+/// between its check and its insert, so against a store whose check and
+/// insert are not under one lock this row fails by interleaving, not by
+/// construction; 200 rounds make that likely, not certain. A store that
+/// draws its code inside its lock cannot be lined up from outside at all:
+/// the hold then times out after two seconds and the remaining rounds are
+/// skipped (that store serialises starts, so the race it guards against
+/// cannot occur in it).
 #[test]
 fn two_starts_with_one_code_hold_it_once() {
     for round in 0..200 {
@@ -492,18 +512,16 @@ fn two_starts_with_one_code_hold_it_once() {
         let secrets = Arc::new(Mutex::new(VecDeque::from(
             (1..=4).map(secret).collect::<Vec<_>>(),
         )));
-        let gate = Arc::new(Gate {
-            arrived: std::sync::Mutex::new(0),
-            all_here: std::sync::Condvar::new(),
-            arrivals: 2,
-        });
+        let gate = Arc::new(Gate::new(2));
+        let held = Arc::clone(&gate);
         let draws = Draws {
-            code: Box::new(move || next(&codes, "code")),
-            id: Box::new(move || next(&ids, "id")),
-            secret: Box::new(move || {
-                gate.wait();
-                next(&secrets, "secret")
+            code: Box::new(move || {
+                let drawn = next(&codes, "code");
+                held.wait();
+                drawn
             }),
+            id: Box::new(move || next(&ids, "id")),
+            secret: Box::new(move || next(&secrets, "secret")),
         };
         let store = Arc::new(AttemptStore::new(draws));
         let t0 = Instant::now();
@@ -534,5 +552,8 @@ fn two_starts_with_one_code_hold_it_once() {
             "round {round}: one id held twice"
         );
         assert_eq!(store.retained(t0), 2, "round {round}");
+        if gate.timed_out.load(Ordering::SeqCst) {
+            break;
+        }
     }
 }
