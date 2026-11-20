@@ -58,8 +58,10 @@
 1090 src/control_plane/mod.rs
 1086 src/gateway/server/warmstart.rs
 1086 src/oauth/client/tests.rs
+# Raised 1028 -> 1060: terafin #5043 bounded HTTP stop on main; the 4.0 line
+# supersedes this file at release.
+1060 src/gateway/server/support.rs
 1053 src/main_tests.rs
-1028 src/gateway/server/support.rs
 1023 src/control_plane/export.rs
 1022 tests/nfr_obs_3_era_observability.rs
 1020 tests/mik_7272_sub4_adr012_acs.rs
