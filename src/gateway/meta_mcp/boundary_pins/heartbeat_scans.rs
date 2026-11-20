@@ -493,7 +493,9 @@ fn every_image_launch_sets_dnt() {
     // Checkout-only, as PACKED.2: the unpacked crate ships `tests/` but not
     // `scripts/` or the workflows, so its walk would see a partial tree.
     if is_packaged_crate() {
-        eprintln!("skipped: the launch surfaces are not in the packaged crate");
+        crate::test_wait::skip_or_fail(
+            "the launch scripts and workflows (the packaged crate does not ship them)",
+        );
         return;
     }
     // The floor (A3/A4): the finder sees each known gateway launch, by file,
