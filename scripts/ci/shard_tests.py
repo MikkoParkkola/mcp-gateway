@@ -794,6 +794,8 @@ def built_parts_root_rows() -> None:
                     # A private gateway home leaking into the root run would stop the rows' mcpg-c child.
                     '[ -n "${MCP_GATEWAY_TEST_HOME_DIR:-}" ] && on="$on private-home"\n'
                     'echo "priv $(basename "$b") $on $*" >> "$LOG"\nexec "$b" "$@"\n')
+        # The production prefix the root run uses, pinned before the stand-in replaces it.
+        assert PRIVILEGE == ("sudo", "-E"), PRIVILEGE
         PRIVILEGE = ("sh", priv)
         SHARDS["macos"]["lib-b"] = [("parts", ["--lib"], [], 4)]
 
@@ -817,18 +819,37 @@ def built_parts_root_rows() -> None:
         try:
             # R9: no part lists a root row, so nothing runs under PRIVILEGE.
             assert leg() == (0, plain), leg()
+            # R10 (fixture): the stand-ins behave as these rows assume, run directly with no runner in between.
+            fixture = os.path.join(root, "fixture")
+            env = {**os.environ, "LOG": log, "ROOT_PART": "3"}
+            subprocess.run(["sh", build, "export", "3", fixture], env=env, check=True)
+            binary = os.path.join(fixture, "p3", "lib-tests-p3")
+            os.chmod(binary, 0o755)
+            expect = {"ok": ([f"{row}1 ... ok", f"{row}2 ... ok"], 0), "some": ([f"{row}1 ... ok"], 0),
+                      "red": ([f"{row}1 ... FAILED", f"{row}2 ... ok"], 101),
+                      "exit": ([f"{row}1 ... ok", f"{row}2 ... ok"], 3), "none": ([], 0)}
+            for behave, (lines, code) in expect.items():
+                p = subprocess.run(["sh", priv, binary, ROOT_ROWS, "--ignored", "--test-threads=1"],
+                                   env={**env, "ROOT_BEHAVE": behave}, capture_output=True, text=True)
+                got = [x[len("test "):] for x in p.stdout.splitlines()]
+                assert (got, p.returncode) == (lines, code), (behave, got, p.returncode)
+            p = subprocess.run(["sh", binary], env=env, capture_output=True, text=True)
+            assert p.stdout.splitlines() == ["test m3::a ... ok", f"test {row}1 ... ignored", f"test {row}2 ... ignored"], p.stdout
             # R6: part 3's root rows run under PRIVILEGE once, with the filter, after part 3's own run and while its
             # binary is on disk.
             rc, steps = leg(ROOT_PART="3")
             assert (rc, steps) == (0, [*plain[:6], call, *plain[6:]]), (rc, steps)
+            # The same for part 1, so a root run tied to one part number cannot pass.
+            rc, steps = leg(ROOT_PART="1")
+            assert (rc, steps) == (0, [*plain[:2], call.replace("-p3 ", "-p1 "), *plain[2:]]), (rc, steps)
             # R7: a FAILED root row, or a root run that exits non-zero, fails the leg; part 4 still builds and runs.
             for behave in ("red", "exit"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
-                assert rc == 1 and steps[-2:] == plain[-2:], (behave, rc, steps)
+                assert rc == 1 and call in steps and steps[-2:] == plain[-2:], (behave, rc, steps)
             # R8: a root run that reports none, or only some, of the listed root rows fails the leg.
             for behave in ("none", "some"):
                 rc, steps = leg(ROOT_PART="3", ROOT_BEHAVE=behave)
-                assert rc == 1 and steps[-2:] == plain[-2:], (behave, rc, steps)
+                assert rc == 1 and call in steps and steps[-2:] == plain[-2:], (behave, rc, steps)
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
 
