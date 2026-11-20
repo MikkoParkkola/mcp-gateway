@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
-use super::ui_tool_call_tests::SLOW_GATE_BOUND;
+/// The longest `slow` holds its answer for a gate that never opens. Kept here,
+/// not beside the rows, because this file compiles in every test part.
+pub(super) const SLOW_GATE_BOUND: Duration = Duration::from_secs(5);
 
 /// A backend whose `tools/list` declares `read`, `fail` and `iserr`
 /// read-only and leaves `write` and `get_x` undeclared, counting every call.

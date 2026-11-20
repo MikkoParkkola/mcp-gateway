@@ -17,10 +17,10 @@ use tower::ServiceExt;
 use super::tests::test_router_app_state_with_auth_and_config;
 use super::ui_tool_call_cell_tests::assert_refused_delivery;
 pub(super) use super::ui_tool_call_deadline_tests::{
-    POST_BOUND, SLOW_GATE_BOUND, TestDeadline, deadline_after_send, install, install_slow_gated,
+    POST_BOUND, TestDeadline, deadline_after_send, install, install_slow_gated,
 };
 use super::ui_tool_call_receipt_tests::unreceipted;
-pub(super) use super::ui_tool_call_stub::Stub;
+pub(super) use super::ui_tool_call_stub::{SLOW_GATE_BOUND, Stub};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};

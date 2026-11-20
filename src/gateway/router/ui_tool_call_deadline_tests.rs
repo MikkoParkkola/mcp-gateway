@@ -8,7 +8,9 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use serde_json::Value;
 
-use super::ui_tool_call_tests::{ADMIN, Fx, SERVER, Stub, call, fixture, post, sent};
+use super::ui_tool_call_tests::{
+    ADMIN, Fx, SERVER, SLOW_GATE_BOUND, Stub, call, fixture, post, sent,
+};
 use crate::backend::Backend;
 use crate::config::{BackendConfig, FailsafeConfig};
 
@@ -17,7 +19,6 @@ use crate::config::{BackendConfig, FailsafeConfig};
 /// shorter than the next: with the route's deadline broken, `slow` answers
 /// 200 inside the post bound, so the row fails on its 504 check, never hangs.
 pub(super) const ROW_DEADLINE: Duration = Duration::from_secs(2);
-pub(super) const SLOW_GATE_BOUND: Duration = Duration::from_secs(5);
 pub(super) const POST_BOUND: Duration = Duration::from_secs(10);
 const _: () = {
     assert!(ROW_DEADLINE.as_millis() < SLOW_GATE_BOUND.as_millis());
