@@ -14,7 +14,7 @@
 # nothing holds the step's output pipe after it ends. TERM, INT and HUP are passed on to CMD.
 # Rows: scripts/ci/test_with_memory_log.py.
 set -u
-every=${MEM_LOG_EVERY:-30}
+every=${MEM_LOG_EVERY:-10}
 case $every in '' | *[!0-9]*) every=30 ;; esac # digits only, else the default
 [ "$((10#$every))" -gt 0 ] || every=30         # all zeros ("0", "00") would sample in a tight loop
 proc=${MEM_LOG_PROC:-/proc}
@@ -38,6 +38,41 @@ sample() { # sample WHAT: one line of numbers on stderr
     "io some $(field "$proc/pressure/io" some avg10); load ${load:-n/a}; cgroup MB ${cg:-n/a} oom_kill ${oom:-n/a}" >&2
 }
 
+# Measurement branch only (never merged): peaks, two stop rules and a kill of the whole tree, so a build that would
+# starve the runner ends while the runner can still keep this step's log. Numbers and fixed words only.
+started=$(date +%s)
+peak_used=0 peak_swap=0 peak_rss=0 min_avail=999999 min_disk=999999 rises=0 last_swap=0 avail=999999 reason=
+track() { # one probe line, and the running peaks
+  local used swap rss disk
+  avail=$(free -m | awk '/^Mem:/ { print $7 }')
+  used=$(free -m | awk '/^Mem:/ { print $3 }')
+  swap=$(free -m | awk '/^Swap:/ { print $3 }')
+  rss=$(awk '/^VmRSS:/ { print $2 }' /proc/[0-9]*/status 2>/dev/null | sort -n | tail -1)
+  rss=$(( ${rss:-0} / 1024 ))
+  disk=$(df -Pm . | awk 'NR == 2 { print $4 }')
+  [ "$used" -gt "$peak_used" ] && peak_used=$used
+  [ "$swap" -gt "$peak_swap" ] && peak_swap=$swap
+  [ "$rss" -gt "$peak_rss" ] && peak_rss=$rss
+  [ "$avail" -lt "$min_avail" ] && min_avail=$avail
+  [ "$disk" -lt "$min_disk" ] && min_disk=$disk
+  if [ "$swap" -gt "$last_swap" ]; then rises=$((rises + 1)); else rises=0; fi
+  last_swap=$swap
+  echo "probe $(date -u +%T): largest-process-rss-MB $rss disk-free-MB $disk swap-rises $rises" >&2
+}
+stop_rule() { # S1: memory nearly gone while swap keeps growing; S2: 45 minutes in
+  if [ "$avail" -lt 400 ] && [ "$rises" -ge 3 ]; then echo S1
+  elif [ $(( $(date +%s) - started )) -ge 2700 ]; then echo S2; fi
+}
+kill_tree() { # SIGKILL a pid and every descendant: cargo runs in a session of its own
+  local all=$1 level=$1 next p
+  while [ -n "$level" ]; do
+    next=$(for p in $level; do pgrep -P "$p"; done)
+    all="$all $next"
+    level=$next
+  done
+  kill -KILL $all 2>/dev/null
+}
+
 [ $# -gt 0 ] || { echo "usage: with-memory-log.sh CMD [ARG...]" >&2; exit 2; }
 # `wait -n -p` needs bash 5.1. On an older bash, run CMD plainly rather than risk a loop that never ends.
 if [ "${BASH_VERSINFO[0]}" -lt 5 ] || { [ "${BASH_VERSINFO[0]}" -eq 5 ] && [ "${BASH_VERSINFO[1]}" -lt 1 ]; }; then
@@ -51,6 +86,7 @@ trap '[ -n "$cmd" ] && kill -TERM "$cmd" 2>/dev/null' TERM INT HUP
 "$@" &
 cmd=$!
 sample start
+track
 nap=
 while :; do
   # bash 5.1 and 5.2 drop a job a signal killed from the job table as soon as they notice the death, so a CMD killed
@@ -76,11 +112,23 @@ while :; do
   elif [ "${ended:-}" = "$nap" ]; then
     nap=
     sample running
+    track
+    reason=$(stop_rule)
+    if [ -n "$reason" ]; then
+      echo "probe STOP $reason: killing the build and everything under it" >&2
+      kill_tree "$cmd"
+      wait "$cmd" 2>/dev/null
+      status=137
+      break
+    fi
   fi
 done
 if [ -n "$nap" ]; then
   kill "$nap" 2>/dev/null
   wait "$nap" 2>/dev/null
 fi
+echo "probe PEAK used-MB $peak_used min-available-MB $min_avail swap-used-MB $peak_swap" \
+  "largest-process-rss-MB $peak_rss min-disk-free-MB $min_disk elapsed-s $(( $(date +%s) - started ))" \
+  "stop ${reason:-none}" >&2
 sample "end, exit $status"
 exit "$status"
