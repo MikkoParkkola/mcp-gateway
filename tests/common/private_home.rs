@@ -248,6 +248,7 @@ fn real_file_reason(_: &std::fs::Metadata, _: Option<&Path>, _: &str) -> Option<
 pub const ROW_CHILD: &str = "MCP_GW_ROW_CHILD";
 
 /// How often the parent polls its child, and how long it waits at most.
+// limit-under-test (absorbed-by: BOUND): only the poll interval; a slow runner polls more often before BOUND
 const POLL: Duration = Duration::from_millis(50);
 const BOUND: Duration = Duration::from_secs(120);
 
