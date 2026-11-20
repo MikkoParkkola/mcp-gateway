@@ -328,6 +328,10 @@ pub struct RankingEvalReport {
 pub struct SearchRanker {
     /// Usage counts per tool (key = "server:tool")
     usage_counts: DashMap<String, AtomicU64>,
+    /// One write of the usage file at a time, held from the snapshot through
+    /// the rename: the last write to land holds the newest counts, so the file
+    /// never goes back.
+    write_turn: parking_lot::Mutex<()>,
 }
 
 /// Convert a JSON search result to a `SearchResult`
