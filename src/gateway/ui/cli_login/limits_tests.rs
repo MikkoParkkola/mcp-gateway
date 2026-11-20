@@ -57,7 +57,8 @@ fn starts_five_per_peer_per_minute() {
     );
 }
 
-/// L2.2: a hundred starts per gateway per minute, each peer under its cap.
+/// L2.2: a hundred starts per gateway per minute, each peer under its cap;
+/// a start the gateway refuses spends no peer slot.
 #[test]
 fn starts_one_hundred_per_gateway_per_minute() {
     let limits = Limits::new();
@@ -70,9 +71,15 @@ fn starts_one_hundred_per_gateway_per_minute() {
         !limits.admit_start(peer(1001), t0 + MINUTE - JUST),
         "still inside the minute"
     );
+    for k in 1..=PER_KEY {
+        assert!(
+            limits.admit_start(peer(1001), t0 + MINUTE),
+            "start {k} of peer 1001 at 60 s: the gateway's refusal at 59 s spent no peer slot"
+        );
+    }
     assert!(
-        limits.admit_start(peer(1001), t0 + MINUTE),
-        "the minute has passed"
+        !limits.admit_start(peer(1001), t0 + MINUTE),
+        "the 6th start of peer 1001 at 60 s"
     );
 }
 
@@ -185,24 +192,38 @@ fn invalid_polls_one_hundred_per_gateway_per_minute() {
     );
 }
 
-/// L2.9: 300 peers over three minutes are all admitted and the per-peer map
-/// never tracks more than its bound (idle keys are shed).
+/// L2.9: 300 keys over three windows are all admitted and no per-key map
+/// (start peers, lookup sessions, invalid-poll peers) ever tracks more than
+/// its bound: idle keys are shed.
 #[test]
 fn limiter_storage_is_bounded() {
     let limits = Limits::new();
     let t0 = Instant::now();
-    for minute in 0..3_u32 {
-        let now = t0 + MINUTE * minute;
+    for round in 0..3_u32 {
+        let minute = t0 + MINUTE * round;
+        let window = t0 + TEN_MINUTES * round;
         for k in 0..PER_GATEWAY {
-            let n = minute * PER_GATEWAY + k + 1;
+            let n = round * PER_GATEWAY + k + 1;
+            assert!(limits.admit_start(peer(n), minute), "start of peer {n}");
+            assert!(limits.may_poll(peer(n), minute), "poll of peer {n}");
+            limits.note_invalid_poll(peer(n), minute);
             assert!(
-                limits.admit_start(peer(n), now),
-                "peer {n} in minute {minute}"
+                limits.may_look_up(&session(n), window),
+                "lookup of session {n}"
+            );
+            limits.note_failed_lookup(&session(n), window);
+            let [starts, lookups, polls] = limits.tracked_keys();
+            assert!(
+                starts <= KEY_BOUND,
+                "start peers: {starts} tracked after key {n}"
             );
             assert!(
-                limits.tracked_start_peers() <= KEY_BOUND,
-                "tracked {} > bound after peer {n}",
-                limits.tracked_start_peers()
+                lookups <= KEY_BOUND,
+                "lookup sessions: {lookups} tracked after key {n}"
+            );
+            assert!(
+                polls <= KEY_BOUND,
+                "invalid-poll peers: {polls} tracked after key {n}"
             );
         }
     }

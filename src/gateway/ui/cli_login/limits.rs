@@ -84,9 +84,14 @@ impl Limits {
         let _ = (peer, now);
     }
 
-    /// Keys the per-peer start cap tracks now.
+    /// Keys each per-key cap tracks now: start peers, lookup sessions,
+    /// invalid-poll peers.
     #[cfg(test)]
-    pub(crate) fn tracked_start_peers(&self) -> usize {
-        self.starts_peer.tracked()
+    pub(crate) fn tracked_keys(&self) -> [usize; 3] {
+        [
+            self.starts_peer.tracked(),
+            self.lookups_session.tracked(),
+            self.polls_peer.tracked(),
+        ]
     }
 }

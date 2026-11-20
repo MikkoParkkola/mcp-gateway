@@ -10,7 +10,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use super::attempts::{
-    AttemptStore, CODE_ALPHABET, Draws, PollRefused, PollState, StartRefused, UserCode,
+    AttemptStore, CODE_ALPHABET, Draws, PollRefused, PollState, StartRefused, Started, UserCode,
 };
 
 // The design's numbers, written out on purpose: a row
@@ -117,7 +117,9 @@ fn a_code_is_ten_symbols_from_the_alphabet() {
     );
 }
 
-/// L1.2: either case, with or without the one hyphen; nothing else.
+/// L1.2: either case, with or without the one hyphen; nothing else. The
+/// hyphen-less form is J9 L1's "case/display-hyphen variants" (j9 test plan
+/// r3:252); design :15's "that one hyphen only" bars any other hyphen.
 #[test]
 fn a_code_parses_in_either_case_with_one_hyphen() {
     let (draws, _) = scripted(
@@ -228,7 +230,9 @@ fn eight_collisions_refuse_without_insertion() {
     assert_eq!(store.retained(t0), 2);
 }
 
-/// L1.6: an id draw equal to a held id never aliases it.
+/// L1.6: an id draw equal to a held id never aliases it: B is refused, or
+/// held as a second attempt of its own that answers only to B's secret
+/// (J9 L1, "without aliasing").
 #[test]
 fn an_id_collision_never_aliases() {
     let (draws, _) = scripted(
@@ -240,11 +244,31 @@ fn an_id_collision_never_aliases() {
     let t0 = Instant::now();
     let a = store.start(t0).expect("A");
     match store.start(t0) {
-        Ok(b) => assert_ne!(b.id, a.id, "B must not alias A's id"),
-        Err(refused) => assert_eq!(refused, StartRefused::Collision),
+        Ok(b) => {
+            assert_ne!(b.id, a.id, "B must not alias A's id");
+            assert_eq!(store.retained(t0), 2, "B is held as a second attempt");
+            assert_eq!(store.lookup(&b.code, t0), Some(b.id), "B's code names B");
+            assert_eq!(
+                store.poll(b.id, &b.secret, t0),
+                Ok(PollState::Pending),
+                "B answers to its own secret"
+            );
+            assert_eq!(
+                store.poll(b.id, &a.secret, t0),
+                Err(PollRefused::Invalid),
+                "A's secret does not open B"
+            );
+        }
+        Err(refused) => {
+            assert_eq!(refused, StartRefused::Collision);
+            assert_eq!(store.retained(t0), 1, "a refused start inserts nothing");
+        }
     }
-    let held = store.retained(t0);
-    assert!((1..=2).contains(&held), "retained {held}");
+    assert_eq!(
+        store.lookup(&a.code, t0),
+        Some(a.id),
+        "A's code still names A"
+    );
     assert_eq!(
         store.poll(a.id, &a.secret, t0),
         Ok(PollState::Pending),
@@ -448,107 +472,125 @@ fn an_attempt_takes_at_most_120_polls() {
     );
 }
 
-/// Holds the first `arrivals` callers until all have come or two seconds
-/// pass; later callers go straight through.
+/// Where L1.11's two starts meet: each start thread calls `launch` just
+/// before `start`; the store's test-only pause calls `wait`.
+#[derive(Default)]
 struct Gate {
-    arrived: std::sync::Mutex<usize>,
-    all_here: std::sync::Condvar,
-    arrivals: usize,
+    counts: Mutex<Counts>,
+    changed: std::sync::Condvar,
 }
+
+#[derive(Default)]
+struct Counts {
+    launched: usize,
+    arrived: usize,
+}
+
+/// Starts in each L1.11 race.
+const RACERS: usize = 2;
 
 impl Gate {
-    fn new(arrivals: usize) -> Self {
-        Self {
-            arrived: std::sync::Mutex::new(0),
-            all_here: std::sync::Condvar::new(),
-            arrivals,
-        }
+    fn launch(&self) {
+        self.counts.lock().expect("gate lock").launched += 1;
+        self.changed.notify_all();
     }
 
+    /// In the pause: first until both threads have launched, so a thread
+    /// scheduled late cannot reach its check after the first insert and
+    /// pass a split lock; then at most two seconds for the other start to
+    /// arrive here too. Under one lock it never arrives (it waits for the
+    /// lock this start holds), so the green path spends those two seconds.
     fn wait(&self) {
-        let mut arrived = self.arrived.lock().expect("gate lock");
-        *arrived += 1;
-        if *arrived > self.arrivals {
-            return;
-        }
-        self.all_here.notify_all();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while *arrived < self.arrivals {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return;
-            }
-            arrived = self
-                .all_here
-                .wait_timeout(arrived, left)
-                .expect("gate wait")
-                .0;
-        }
+        let mut counts = self.counts.lock().expect("gate lock");
+        counts.arrived += 1;
+        self.changed.notify_all();
+        let (counts, _) = self
+            .changed
+            .wait_timeout_while(counts, Duration::from_secs(30), |c| c.launched < RACERS)
+            .expect("gate wait");
+        let _ = self
+            .changed
+            .wait_timeout_while(counts, Duration::from_secs(2), |c| c.arrived < RACERS)
+            .expect("gate wait");
     }
 }
 
-/// L1.11: two starts that drew the same code at the same time hold it once;
-/// the other start redraws.
+/// Two starts at once on a store paused by a `Gate`; the scripts hand out
+/// codes and ids in order, whichever start draws first. Returns both
+/// outcomes and the count held after.
+fn race(codes: Vec<[u8; 10]>, ids: Vec<uuid::Uuid>) -> (Vec<Result<Started, StartRefused>>, usize) {
+    let secrets = (1..=ids.len()).map(secret).collect();
+    let (draws, _) = scripted(codes, ids, secrets);
+    let gate = Arc::new(Gate::default());
+    let in_pause = Arc::clone(&gate);
+    let store = Arc::new(AttemptStore::with_pause(
+        draws,
+        Box::new(move || in_pause.wait()),
+    ));
+    let t0 = Instant::now();
+    let both = Arc::new(Barrier::new(RACERS));
+    let runs: Vec<_> = (0..RACERS)
+        .map(|_| {
+            let (store, both, gate) = (Arc::clone(&store), Arc::clone(&both), Arc::clone(&gate));
+            std::thread::spawn(move || {
+                both.wait();
+                gate.launch();
+                store.start(t0)
+            })
+        })
+        .collect();
+    let outcomes = runs
+        .into_iter()
+        .map(|run| run.join().expect("start thread"))
+        .collect();
+    (outcomes, store.retained(t0))
+}
+
+/// L1.11: two starts racing on one code, or on one id, hold it once
+/// (design :15, "one map lock atomically reserves canonical code/ID").
 ///
 /// Honesty note: the store's test-only pause (`AttemptStore::with_pause`)
-/// runs after `start` finds its code free and before it inserts. Each
-/// start waits there for the other. If the check and the insert are not
-/// under one lock, both starts find the same code free, meet in the pause
-/// and both insert it: the row fails on its one round, by construction.
-/// Under one lock the second start cannot reach its check while the first
-/// waits in the pause, which gives up after two seconds; the first inserts
-/// and the second finds the code taken and redraws. A pause placed after
-/// the insert is invisible here; code review checks its placement against
-/// the comment on the store's `pause` field.
+/// runs after `start` finds its code and its id free and before it inserts.
+/// Each start waits there for the other. If a check and the insert are not
+/// under one lock, both starts find the same value free, meet in the pause
+/// and both insert it: the round fails by construction. Under one lock the
+/// second start cannot reach its checks while the first waits in the pause,
+/// which gives up after two seconds; the first inserts and the second finds
+/// the value taken. A pause placed after the insert is invisible here; code
+/// review checks its placement against the comment on the store's `pause`
+/// field.
 #[test]
-fn two_starts_with_one_code_hold_it_once() {
-    for round in 0..1 {
-        let same = distinct_code(1);
-        let codes = Arc::new(Mutex::new(VecDeque::from(vec![
-            same,
-            same,
-            distinct_code(2),
-            distinct_code(3),
-        ])));
-        let ids = Arc::new(Mutex::new(VecDeque::from(vec![id(1), id(2), id(3), id(4)])));
-        let secrets = Arc::new(Mutex::new(VecDeque::from(
-            (1..=4).map(secret).collect::<Vec<_>>(),
-        )));
-        let draws = Draws {
-            code: Box::new(move || next(&codes, "code")),
-            id: Box::new(move || next(&ids, "id")),
-            secret: Box::new(move || next(&secrets, "secret")),
-        };
-        let gate = Arc::new(Gate::new(2));
-        let pause = Box::new(move || gate.wait());
-        let store = Arc::new(AttemptStore::with_pause(draws, pause));
-        let t0 = Instant::now();
-        let both = Arc::new(Barrier::new(2));
-        let runs: Vec<_> = (0..2)
-            .map(|_| {
-                let (store, both) = (Arc::clone(&store), Arc::clone(&both));
-                std::thread::spawn(move || {
-                    both.wait();
-                    store.start(t0)
-                })
-            })
-            .collect();
-        let started: Vec<_> = runs
-            .into_iter()
-            .map(|run| {
-                run.join()
-                    .expect("start thread")
-                    .expect("each start succeeds")
-            })
-            .collect();
-        assert_ne!(
-            started[0].code, started[1].code,
-            "round {round}: one code held twice"
-        );
-        assert_ne!(
-            started[0].id, started[1].id,
-            "round {round}: one id held twice"
-        );
-        assert_eq!(store.retained(t0), 2, "round {round}");
+fn racing_starts_hold_a_code_and_an_id_once() {
+    // Round 1: both first draw one code; the loser redraws its code.
+    let same = distinct_code(1);
+    let (outcomes, held) = race(
+        vec![same, same, distinct_code(2), distinct_code(3)],
+        (1..=4).map(id).collect(),
+    );
+    let started: Vec<_> = outcomes
+        .into_iter()
+        .map(|outcome| outcome.expect("a code collision is redrawn"))
+        .collect();
+    assert_ne!(started[0].code, started[1].code, "one code held twice");
+    assert_ne!(started[0].id, started[1].id, "round 1: one id held twice");
+    assert_eq!(held, 2, "round 1");
+
+    // Round 2: distinct codes, both first draw one id; the
+    // loser redraws its id or is refused, never shares it.
+    let (outcomes, held) = race(
+        (1..=4).map(distinct_code).collect(),
+        vec![id(1), id(1), id(2), id(3)],
+    );
+    match outcomes.as_slice() {
+        [Ok(a), Ok(b)] => {
+            assert_ne!(a.id, b.id, "round 2: one id held twice");
+            assert_eq!(held, 2, "round 2: both held");
+        }
+        [Ok(_), Err(refused)] | [Err(refused), Ok(_)] => {
+            assert_eq!(*refused, StartRefused::Collision, "round 2");
+            assert_eq!(held, 1, "round 2: the refused start inserted nothing");
+        }
+        [Err(_), Err(_)] => panic!("round 2: both starts refused; one must hold the id"),
+        _ => panic!("round 2: {RACERS} starts, other than 2 outcomes"),
     }
 }
