@@ -1,0 +1,45 @@
+name: First-paint host probe
+
+# Throwaway evidence for moving the first-paint gate onto hosted runners, never
+# merged. Five hosted copies each report whether the gate's busy check can read
+# its files, the CPU model, and how far apart the benchmark indices of 20
+# unthrottled runs of the real page are. Only a push to a
+# throwaway/first-paint-probe-* branch starts it; no other workflow listens to
+# that name. No third-party actions: plain git fetches the pushed commit and the
+# runner's own Node runs the probe, its version printed with the result.
+on:
+  push:
+    branches: ["throwaway/first-paint-probe-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Host probe ${{ matrix.copy }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4, 5]
+    steps:
+      - name: Fetch the pushed commit
+        run: |
+          git init -q probe
+          git -C probe fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+          git -C probe checkout -q FETCH_HEAD
+          git -C probe log -1 --format='probe commit %H'
+      - name: Node and the locked packages, install scripts off
+        working-directory: probe/ui-tests
+        run: |
+          echo "probe node $(node --version), npm $(npm --version)" | tee -a "$GITHUB_STEP_SUMMARY"
+          npm ci --ignore-scripts
+      - name: Chromium and its system libraries
+        working-directory: probe/ui-tests
+        run: |
+          npx playwright install chromium
+          timeout 300 npx playwright install-deps chromium || echo "::warning::system libraries not installed; relying on the image"
+      - name: Probe this host
+        working-directory: probe/ui-tests
+        run: node perf/probe-host.mjs | tee -a "$GITHUB_STEP_SUMMARY"
