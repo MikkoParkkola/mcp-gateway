@@ -19,9 +19,10 @@ use crate::test_wait::wait_real_time;
 
 /// Real time a save thread's call may take to show.
 const SHOW: Duration = Duration::from_secs(5);
-/// Real time given to a call that must not happen.
-// limit-under-test (fires-only): an absence window; a stall can only hide a forbidden call, never fail the row
-const QUIET: Duration = Duration::from_millis(200);
+/// Real time given to a call that must not happen. An absence window: a stall
+/// can only hide a wrong call, never fail the row. A deterministic signal from
+/// the save path would remove the wait.
+const QUIET: Duration = Duration::from_secs(1);
 
 /// A class whose saves count their calls and report a write.
 fn counting(name: &'static str) -> (Class, Arc<AtomicUsize>, Arc<AtomicUsize>) {
