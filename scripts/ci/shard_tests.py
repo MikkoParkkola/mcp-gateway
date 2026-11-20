@@ -784,6 +784,7 @@ def home_copies_rows() -> None:
     must not import from the tree it tests. The two copies must make the same home: the same three variables, each
     at the same place under the home, and the same mode. A deliberately drifted copy must read as different."""
     import importlib.util
+    import inspect
 
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mutants", "run_mutants.py")
     spec = importlib.util.spec_from_file_location("run_mutants_for_s3", path)
@@ -803,6 +804,14 @@ def home_copies_rows() -> None:
         drifted = shape({**child, "XDG_CONFIG_HOME": os.path.join(child["MCP_GATEWAY_TEST_HOME_DIR"], "config")})
     assert drifted != theirs, "control: the shape comparison cannot see a moved config dir"
     assert ours == theirs, f"the mutant runner's home drifted from make_home: {theirs} vs {ours}"
+    # The mode above is only this OS's branch: compare the mkdir lines too, so a drift in the Windows branch
+    # shows on a POSIX runner as well.
+    def mkdir_line(function) -> str:
+        return next(line.strip() for line in inspect.getsource(function).splitlines()
+                    if line.strip().startswith("os.mkdir("))
+
+    assert mkdir_line(make_home) == mkdir_line(runner.gateway_home), (
+        f"the two copies make the home differently: {mkdir_line(runner.gateway_home)!r}")
 
 
 def built_parts_rows() -> None:

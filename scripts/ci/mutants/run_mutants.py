@@ -1231,7 +1231,7 @@ def self_test() -> int:
     if rc == 0:
         total = (len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES + HOME_CASES
                  + schemata_cases)
-        print(f"self-test: {total} classifier, manifest, ref and release-line fetch cases as expected")
+        print(f"self-test: {total} classifier, manifest, ref, release-line fetch and private home cases as expected")
     return rc
 
 
