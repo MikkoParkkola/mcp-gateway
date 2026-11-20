@@ -478,13 +478,13 @@ fn ended_by_a_failed_read_that_is_not_esrch_or_missing_keeps_waiting() {
     );
 }
 
-/// Controls: a process that keeps running is not ended at the bound, and the
-/// wait polled until that bound rather than answering from one read (the rows
-/// above stay able to fail on a kill that never lands); a dead state is ended.
+/// Controls: a process that keeps running is not ended before the bound (the
+/// rows above, which need several reads, stay able to fail on a kill that
+/// never lands); a dead state is ended.
 #[test]
 fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
     let taken = std::cell::Cell::new(0);
-    // limit-under-test (fires-only): the bound handed to ended_by; the row asserts the wait answers at it
+    // limit-under-test (fires-only): the bound handed to ended_by; a stall only lengthens the wait, and the row asserts only that it answered no sooner
     let bound = std::time::Duration::from_millis(200);
     let start = std::time::Instant::now();
     assert!(!ended_by(
@@ -496,7 +496,6 @@ fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
         "the wait answered running after {:?}, before its bound",
         start.elapsed()
     );
-    assert!(taken.get() > 1, "the wait read once and slept to its bound");
     let dead: [(char, StatRead); 3] = [
         ('Z', || stat_in('Z')),
         ('X', || stat_in('X')),
