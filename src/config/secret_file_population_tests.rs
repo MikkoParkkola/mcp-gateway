@@ -224,6 +224,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the heartbeat's own random install id under the data directory; neither a secret nor an input to any trust decision",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/heartbeat_scans.rs",
+        "cfg(test) heartbeat scans reading the crate's own sources, the privacy page, and the launch scripts, workflows and root Makefile they check; no secret",
+    ),
+    (
         "src/transport/stdio_cache.rs",
         "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
     ),
