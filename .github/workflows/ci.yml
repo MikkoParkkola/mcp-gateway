@@ -1460,7 +1460,8 @@ jobs:
       - name: Run the tests
         if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
-        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+        # Throwaway probe only: one small target, so the job ends inside its limit and keeps its log.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --test add_keeps_comments
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
   # named test fails on a mutant and passes on the fix; that is logic, not
@@ -1525,7 +1526,8 @@ jobs:
       - name: Run the tests
         if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
-        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+        # Throwaway probe only: one small target, so the job ends inside its limit and keeps its log.
+        run: scripts/ci/with-memory-log.sh cargo test --all-features --test add_keeps_comments
 
   # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
   # shipped gws_* capability builds. `--dry-run` needs no credentials and sends
