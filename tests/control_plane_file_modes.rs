@@ -5,6 +5,12 @@
 // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
@@ -26,6 +32,7 @@ fn store(dir: &Path) -> FileControlPlaneStore {
 
 #[test]
 fn control_plane_world_writable_refused() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path());
     let grants = dir.path().join("store").join("grants.json");
@@ -42,12 +49,14 @@ fn control_plane_world_writable_refused() {
 
 #[test]
 fn control_plane_missing_file_is_empty() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     assert!(store(dir.path()).list_policies().unwrap().is_empty());
 }
 
 #[test]
 fn control_plane_readable_collection_loads() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path());
     let grants = dir.path().join("store").join("grants.json");
@@ -58,5 +67,14 @@ fn control_plane_readable_collection_loads() {
             .list_grants()
             .expect("a 0644 collection loads")
             .is_empty()
+    );
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
     );
 }
