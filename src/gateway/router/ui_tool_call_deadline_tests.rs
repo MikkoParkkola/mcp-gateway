@@ -97,9 +97,9 @@ pub(super) async fn deadline_after_send(
 
 /// The deadline row holds on a slow path to the send: the catalogue is cold
 /// and its list is released 300 ms after the call reaches it, which is after
-/// the route armed its deadline. Under a 100 ms deadline this read not_run.
+/// the route armed its deadline. Under a 100 ms deadline this read `not_run`.
 /// Mutants: the timeout removed (`slow` answers 200 after the gate bound, the
-/// 504 check fails); the disposition always not_run (the may_have_run check
+/// 504 check fails); the disposition always `not_run` (the `may_have_run` check
 /// fails).
 #[tokio::test]
 async fn the_deadline_row_survives_a_slow_path_to_the_send() {
