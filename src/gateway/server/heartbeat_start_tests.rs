@@ -65,7 +65,7 @@ fn aim(dir: &Path, rx: &Listener, opt_out: bool, patient: bool) -> (seam::RootGu
 }
 
 /// A writer that hands bytes on only when flushed, as a piped stdout does: a
-/// response written but never flushed never reaches the reader (A1 fold).
+/// response written but never flushed never reaches the reader.
 struct FlushGated<W> {
     inner: W,
     held: Vec<u8>,

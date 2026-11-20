@@ -429,7 +429,7 @@ fn pause_script_runs_only_pause(script: &str, deployment: &str, helpers: &str) -
     let values_file =
         |s: &str| s.contains(" -f ") || s.contains("--values") || s.contains("--set-file");
     // Each variable assigned once, as a whole line: a commented copy beside
-    // a later reassignment does not count (grok A2/A3 improvement).
+    // a later reassignment does not count.
     let assigned_once = |name: &str, line: &str| {
         let lines: Vec<&str> = script
             .lines()
@@ -665,7 +665,7 @@ fn every_image_launch_sets_dnt() {
                 "{PAUSE_SCRIPT} no longer runs only registry.k8s.io/pause: its launches need DO_NOT_TRACK=1"
             );
             // Only the two pause upgrades are exempt: any other launch in
-            // this file still needs the opt-out (grok A2/A3 improvement).
+            // this file still needs the opt-out.
             let unexempt = |t: &str| -> Vec<String> {
                 launches_without_dnt(path, t)
                     .into_iter()

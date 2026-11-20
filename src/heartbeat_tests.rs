@@ -232,10 +232,7 @@ fn an_empty_proxy_variable_does_not_skip() {
 #[test]
 fn a_test_build_reader_is_dev() {
     assert_eq!(Build::current(), Build::Dev);
-    assert_eq!(
-        Snapshot::from_process().build,
-        Build::Dev
-    );
+    assert_eq!(Snapshot::from_process().build, Build::Dev);
 }
 
 /// A skipped check opens no connection and creates nothing; the same

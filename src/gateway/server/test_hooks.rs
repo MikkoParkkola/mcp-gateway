@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `run`'s test-build hooks (PORT.1 amendment A2). `run` binds the configured
+//! `run`'s test-build hooks. `run` binds the configured
 //! address and stops only on Ctrl-C or SIGTERM, so a lib row can neither reach
 //! a port-0 server nor stop it. Here a row asks for the bound port and for a
 //! trigger that starts the same shutdown a signal does. Declared
@@ -139,8 +139,8 @@ async fn child_runs_the_http_server() {
     let running = tokio::spawn(Box::pin(gw.run()));
     let port = match tokio::time::timeout(Duration::from_secs(30), port_rx).await {
         Ok(Ok(p)) => p,
-        Ok(Err(_)) => panic!("no port: run ended first ({:?})", running.await),
-        Err(_) => panic!("no port within 30 s"),
+        Ok(Err(closed)) => panic!("no port ({closed}): run ended first ({:?})", running.await),
+        Err(elapsed) => panic!("no port within 30 s ({elapsed})"),
     };
     let url = format!("http://127.0.0.1:{port}/health");
     let http = reqwest::Client::builder().no_proxy().build();

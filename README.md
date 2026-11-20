@@ -516,6 +516,52 @@ This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is
 not, and that needs to be published rather than assumed.
 
+## Privacy
+
+Starting with 3.5.3, a running server sends a daily heartbeat so the project
+can count how many installs are in use. Both the HTTP server (`serve`) and the
+stdio server do this; one-off commands such as `doctor` do not. The server
+checks when it starts and every hour after that, and sends at most one POST per
+UTC day for each data directory, to
+`https://telemetry.revaluator.ai/v1/heartbeat`. The request gives up after 3
+seconds, a failure is ignored, and neither startup nor any request waits for it.
+
+The body is JSON with exactly five fields:
+
+- `project`: always `mcp-gateway`
+- `event`: always `heartbeat`
+- `version`: the mcp-gateway version
+- `runtime`: the operating system and processor architecture, for example
+  `linux/x86_64`
+- `install_id`: a random value, created by the first check that is not
+  skipped and kept in `heartbeat/install-id` inside the gateway's data
+  directory (`~/.mcp-gateway`, or `MCP_GATEWAY_CONFIG_DIR` when that is set)
+
+Nothing else goes in it: no hostname or username, no configuration, no backend
+or tool names, nothing a client sent. The connection ends at Cloudflare, which
+sees your address the way any HTTPS server does. The receiver's record holds
+the five fields, the time the heartbeat arrived, and a city name and a country
+code that Cloudflare derives from the address; the address itself is not put
+in the record. Records are kept for three months. The id stays the same until
+you delete the `heartbeat/` directory, so the heartbeats of one install can be
+linked to each other. That directory also holds one empty file per day a send
+was claimed, which never leaves your machine.
+
+No heartbeat is sent:
+
+- when `DO_NOT_TRACK=1` or `NO_TELEMETRY=1` is set (any value other than
+  empty, `0` or `false` counts);
+- in CI, when a variable such as `CI` or `GITHUB_ACTIONS` is set to anything
+  other than empty, `0` or `false`;
+- when `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` is set (in either case);
+  proxies set only in system settings are not detected;
+- from a development build (one with debug assertions); a release build you
+  compile yourself does send;
+- on Windows, where the 3.5 line sends no heartbeat at all (4.0 does);
+- from a pod the Helm chart deploys: its root filesystem is read-only and only
+  the config is mounted, so the server cannot create `heartbeat/` and sends
+  nothing.
+
 ## Contributing
 
 1. Fork and branch (`git checkout -b feature/your-feature`)

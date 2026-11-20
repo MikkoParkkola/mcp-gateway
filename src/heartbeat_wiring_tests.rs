@@ -55,10 +55,7 @@ async fn the_task_checks_at_start_and_after_a_day_and_ends_on_shutdown() {
         },
     );
     let (stop, _) = tokio::sync::broadcast::channel(1);
-    let task = start(
-        dir.path().to_path_buf(),
-        stop.subscribe(),
-    );
+    let task = start(dir.path().to_path_buf(), stop.subscribe());
     until("the start check", || rx.connections() == 1).await;
     // Two more checks finished on the same day (events, not a wait).
     until("two more checks on the 19th", || {
@@ -105,10 +102,7 @@ async fn shutdown_does_not_wait_for_a_stalled_disk() {
         },
     );
     let (stop, _) = tokio::sync::broadcast::channel(1);
-    let task = start(
-        dir.path().to_path_buf(),
-        stop.subscribe(),
-    );
+    let task = start(dir.path().to_path_buf(), stop.subscribe());
     // The check really started and is held at its first filesystem call
     // (tp-r1: without this the do-nothing stub passed).
     let at_stall =
@@ -174,7 +168,9 @@ async fn children_share_one_send_per_day() {
     let children: Vec<_> = readies
         .iter()
         .map(|ready| {
-            let mut cmd = tokio::process::Command::from(std::process::Command::new(std::env::current_exe().expect("the running test binary")));
+            let mut cmd = tokio::process::Command::from(std::process::Command::new(
+                std::env::current_exe().expect("the running test binary"),
+            ));
             cmd.args([
                 "--exact",
                 ONE_CHECK_CHILD,
@@ -244,7 +240,8 @@ fn child_prints_its_snapshot() {
 
 /// Run D8's child with every switch removed and `set` added; what it read.
 fn read_by_child(all: &[&str], set: &[(&str, &str)]) -> BTreeSet<String> {
-    let mut cmd = std::process::Command::new(std::env::current_exe().expect("the running test binary"));
+    let mut cmd =
+        std::process::Command::new(std::env::current_exe().expect("the running test binary"));
     cmd.args([
         "--exact",
         SNAPSHOT_CHILD,
@@ -324,9 +321,7 @@ const PLANTED_CHILD: &str = "heartbeat::wiring_tests::child_sends_with_planted_e
 async fn child_sends_with_planted_env() {
     let dir = std::path::PathBuf::from(std::env::var_os("HB_CHILD_DIR").expect("HB_CHILD_DIR"));
     let url = std::env::var("HB_CHILD_URL").expect("HB_CHILD_URL");
-    let snapshot = Snapshot::read(Build::Release, "linux", |n| {
-        std::env::var_os(n)
-    });
+    let snapshot = Snapshot::read(Build::Release, "linux", |n| std::env::var_os(n));
     let out = heartbeat_once(&snapshot, &dir, &test_client(), &url, nov19).await;
     println!("HBOUT={out:?}");
 }
@@ -344,7 +339,9 @@ async fn planted_host_and_config_never_reach_the_request() {
         ("USERNAME", "planted-user-7f3a"),
         ("MCP_GATEWAY_BACKEND", "planted-backend-7f3a"),
     ];
-    let mut cmd = tokio::process::Command::from(std::process::Command::new(std::env::current_exe().expect("the running test binary")));
+    let mut cmd = tokio::process::Command::from(std::process::Command::new(
+        std::env::current_exe().expect("the running test binary"),
+    ));
     // Every switch cleared, so the child's own snapshot decides to send even
     // where this process runs under CI or a proxy (tp-r2).
     for name in ["DO_NOT_TRACK", "NO_TELEMETRY"]

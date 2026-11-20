@@ -215,6 +215,8 @@ async fn a_sigterm_reaches_stop_all_while_a_request_is_still_open() {
     }
     let mut gateway = gateway
         .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        // A test run never counts as an install (README.md, "Privacy").
+        .env("DO_NOT_TRACK", "1")
         .current_dir(root)
         .arg("--config")
         .arg(&config)

@@ -23,6 +23,8 @@ fn test_tool_list_missing_dir_degrades_gracefully() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .args(["tool", "list", "-C"])
         .arg(&missing)
+        // A test run never counts as an install (README.md, "Privacy").
+        .env("DO_NOT_TRACK", "1")
         .output()
         .expect("run `mcp-gateway tool list`");
 

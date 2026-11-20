@@ -53,7 +53,7 @@ if ! docker image inspect "${IMAGE}" > /dev/null 2>&1 \
 fi
 
 run_as_gateway() {
-  docker run --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
+  docker run -e DO_NOT_TRACK=1 --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
     -c "timeout -k 10 ${1} ${2}" > "${ANSWER}" 2>&1
 }
 
@@ -151,7 +151,7 @@ ip -V > /dev/null 2>&1 || { echo "iproute2 is missing" >&2; exit 1; }
 echo "step: ran as uid $(id -u)"
 STEP
 chmod 0755 "${ROOTDIR}/steps/10-package.sh"
-docker run -d --name "${ROOT_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${ROOT_CASE}" --pull never --user root \
   -e EXTRA_APT_PACKAGES=iproute2 \
   -v "${ROOTDIR}/steps:/docker-entrypoint.d:ro" \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
@@ -189,7 +189,7 @@ mkdir -p "${FAILDIR}/steps"
 printf '#!/bin/sh\necho "step: refusing to start" >&2\nexit 7\n' \
   > "${FAILDIR}/steps/10-fail.sh"
 chmod 0755 "${FAILDIR}/steps/10-fail.sh"
-if FAIL_LOG="$(docker run --rm --user root \
+if FAIL_LOG="$(docker run -e DO_NOT_TRACK=1 --rm --user root \
       -v "${FAILDIR}/steps:/docker-entrypoint.d:ro" \
       -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
@@ -205,7 +205,7 @@ BADDIR="${WORKDIR}/smoke-full-bad-$$"
 mkdir -p "${BADDIR}"
 printf 'Types: deb\nURIs: file:/nonexistent-smoke-full\nSuites: trixie\nComponents: main\n' \
   > "${BADDIR}/empty.sources"
-if BAD_LOG="$(docker run --rm --user root \
+if BAD_LOG="$(docker run -e DO_NOT_TRACK=1 --rm --user root \
       -e EXTRA_APT_PACKAGES=iproute2 \
       -v "${BADDIR}/empty.sources:/etc/apt/sources.list.d/debian.sources:ro" \
       -v /dev/null:/etc/apt/sources.list.d/nodesource.sources:ro \
@@ -224,7 +224,7 @@ SLOWDIR="${WORKDIR}/smoke-full-slow-$$"
 mkdir -p "${SLOWDIR}/steps"
 printf '#!/bin/sh\nsleep 120\n' > "${SLOWDIR}/steps/10-slow.sh"
 chmod 0755 "${SLOWDIR}/steps/10-slow.sh"
-docker run -d --name "${STOP_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${STOP_CASE}" --pull never --user root \
   -v "${SLOWDIR}/steps:/docker-entrypoint.d:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 sleep 3
@@ -248,7 +248,7 @@ ENVSHDIR="${WORKDIR}/smoke-full-envsh-$$"
 mkdir -p "${ENVSHDIR}/steps"
 printf '#!/bin/sh\necho "step: sleeping" >&2\nsleep 120\n' > "${ENVSHDIR}/steps/10-slow.envsh"
 chmod 0755 "${ENVSHDIR}/steps/10-slow.envsh"
-docker run -d --name "${ENVSH_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${ENVSH_CASE}" --pull never --user root \
   -v "${ENVSHDIR}/steps:/docker-entrypoint.d:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 # The step is known to be running before the stop, so a step that never ran

@@ -278,10 +278,7 @@ fn spawn_heartbeat(
     tokio::task::JoinHandle<()>,
 ) {
     let (stop, _) = tokio::sync::broadcast::channel(1);
-    let task = start(
-        dir.to_path_buf(),
-        stop.subscribe(),
-    );
+    let task = start(dir.to_path_buf(), stop.subscribe());
     (stop, task)
 }
 

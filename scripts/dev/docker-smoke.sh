@@ -54,7 +54,7 @@ trap cleanup EXIT
 # credential, and the gateway refuses to serve it. The boundary here is the
 # publish above: 127.0.0.1 only, so nothing off this host reaches the port.
 # Without this the smoke exits instead of proving health and a tool call.
-docker run -d \
+docker run -e DO_NOT_TRACK=1 -d \
   --name "$container" \
   -p "127.0.0.1:$port:39400" \
   -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \

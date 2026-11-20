@@ -1299,6 +1299,12 @@ impl Gateway {
             let _ = port.send(listener.local_addr()?.port());
         }
 
+        // The daily heartbeat (README.md, "Privacy"): after the bind, so a
+        // refused start sends nothing; never awaited, ended by the shutdown
+        // broadcast.
+        let _heartbeat = crate::heartbeat::root()
+            .map(|root| crate::heartbeat::start(root, shutdown_tx.subscribe()));
+
         log_startup_banner(
             &self.config,
             &self.backends,
@@ -1562,6 +1568,13 @@ impl Gateway {
             None,
         ));
 
+        // The daily heartbeat (README.md, "Privacy"): never awaited. Stdio has
+        // no shutdown broadcast, so its stop sender lives here until the read
+        // loop ends, and the guard aborts the task on every exit path.
+        let (heartbeat_stop, heartbeat_stopped) = tokio::sync::broadcast::channel(1);
+        let heartbeat = crate::heartbeat::root()
+            .map(|root| AbortOnDrop::new(crate::heartbeat::start(root, heartbeat_stopped)));
+
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
         // ── Read → dispatch → write loop ────────────────────────────────────
@@ -1627,6 +1640,10 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
+        // The heartbeat goes with them: its guard aborts the task, then the
+        // sender it was kept open by is dropped.
+        drop(heartbeat);
+        drop(heartbeat_stop);
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it — delaying shutdown and logging

@@ -17,6 +17,8 @@ const URL_PATH_SECRET: &str = "SENTINEL_CLI_URL_PATH_c0f4";
 
 fn run_gateway(config: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        // A test run never counts as an install (README.md, "Privacy").
+        .env("DO_NOT_TRACK", "1")
         .args(args)
         .arg("--config")
         .arg(config)
@@ -108,6 +110,7 @@ fn add_keeps_an_environment_override_out_of_gateway_yaml() {
         .arg(&config)
         .env("MCP_GATEWAY_AUTH__BEARER_TOKEN", ENV_TOKEN)
         .env("MCP_GATEWAY_SERVER__PORT", "39464")
+        .env("DO_NOT_TRACK", "1")
         .output()
         .expect("run mcp-gateway");
     assert!(

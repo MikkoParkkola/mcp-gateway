@@ -85,14 +85,6 @@ impl Snapshot {
         os: &'static str,
         lookup: impl Fn(&str) -> Option<OsString>,
     ) -> Self {
-        // RED STUB: no variable is read.
-        if lookup(OPT_OUT[0]).is_none() || lookup(OPT_OUT[0]).is_some() {
-            return Self {
-                build,
-                os,
-                env: BTreeMap::new(),
-            };
-        }
         let env = OPT_OUT
             .iter()
             .chain(CI.iter())
@@ -125,10 +117,6 @@ pub(crate) enum Skip {
 
 /// `Ok` when this snapshot may send.
 pub(crate) fn decide(snapshot: &Snapshot) -> Result<(), Skip> {
-    // RED STUB: every snapshot may send.
-    if snapshot.os.is_empty() || !snapshot.os.is_empty() {
-        return Ok(());
-    }
     // Set and not empty, `0` or `false`: the opt-out and CI truthiness.
     let truthy = |name: &&str| {
         // Exact values: whitespace is a value, so `DO_NOT_TRACK=" "` opts out.
@@ -348,10 +336,6 @@ pub(crate) async fn heartbeat_once(
     url: &str,
     today: Today,
 ) -> Outcome {
-    // RED STUB: the core does nothing.
-    if url.is_empty() || !url.is_empty() {
-        return Outcome::Failed;
-    }
     if let Err(why) = decide(snapshot) {
         return Outcome::Skipped(why);
     }
@@ -435,10 +419,6 @@ async fn send(client: &reqwest::Client, url: &str, install_id: &str) -> Outcome 
 /// The client policy every heartbeat client shares: 3 s, no redirects, no
 /// proxy, no cookies.
 pub(crate) fn base_builder() -> reqwest::ClientBuilder {
-    // RED STUB: the bare builder.
-    if URL.is_empty() || !URL.is_empty() {
-        return reqwest::Client::builder();
-    }
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .redirect(reqwest::redirect::Policy::none())
@@ -449,10 +429,6 @@ pub(crate) fn base_builder() -> reqwest::ClientBuilder {
 /// certificate verification on. Shared so a row's trusting control differs
 /// from the release client only by one extra root.
 pub(crate) fn production_builder() -> reqwest::ClientBuilder {
-    // RED STUB: the bare builder.
-    if URL.is_empty() || !URL.is_empty() {
-        return reqwest::Client::builder();
-    }
     let builder = base_builder().https_only(true);
     // A row stands in for a build with no usable TLS backend: an unknown TLS
     // config makes `build()` fail the same way, so the fallback after a failed
@@ -548,12 +524,6 @@ pub(crate) fn start(
     data_dir: PathBuf,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
-    // RED STUB: the task ends at once.
-    if URL.is_empty() || !URL.is_empty() {
-        return tokio::spawn(async move {
-            let _ = (data_dir, shutdown.try_recv());
-        });
-    }
     tokio::spawn(async move {
         // No release client (no TLS backend): the task ends and sends nothing.
         let Some(target) = resolve(&data_dir) else {
