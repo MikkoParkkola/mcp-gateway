@@ -139,7 +139,10 @@ fn r32_whole_sessions_end_as_listed() {
     assert_eq!(ending(false, &[FetchStart]), None);
     // With one.
     assert_eq!(ending(true, &[FetchStart, FETCH_OK, DONE]), Some(done));
-    assert_eq!(ending(true, &[FetchStart, FETCH_OK, REFUSED]), Some(refused));
+    assert_eq!(
+        ending(true, &[FetchStart, FETCH_OK, REFUSED]),
+        Some(refused)
+    );
     assert_eq!(
         ending(true, &[FetchStart, FETCH_REFUSED]),
         Some(Ending::FetchRefused)

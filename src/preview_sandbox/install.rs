@@ -157,12 +157,20 @@ fn quoted_key(key: &str) -> &str {
         .map(|part| part.trim_end_matches('/'))
         .filter(|part| !part.is_empty())
         .all(npm_name_ok);
-    if key.is_empty() || !names_ok { "the package" } else { key }
+    if key.is_empty() || !names_ok {
+        "the package"
+    } else {
+        key
+    }
 }
 
 /// A dependency's name as a refusal may show it.
 fn quoted_dep(name: &str) -> &str {
-    if npm_name_ok(name) { name } else { "a dependency" }
+    if npm_name_ok(name) {
+        name
+    } else {
+        "a dependency"
+    }
 }
 
 /// Whether `name` is an npm registry name: at most 214 characters of

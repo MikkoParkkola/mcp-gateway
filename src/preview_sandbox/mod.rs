@@ -339,10 +339,10 @@ pub async fn availability() -> &'static Result<(), Refusal> {
     AVAILABILITY.get_or_init(probe).await
 }
 
-mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]
 mod check_tests;
+mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]
 mod seam_tests;

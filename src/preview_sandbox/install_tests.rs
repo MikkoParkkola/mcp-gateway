@@ -788,7 +788,10 @@ const TARBALL: &str = "https://registry.npmjs.org/ok/-/ok-1.0.0.tgz";
 #[test]
 fn r20_only_registry_names_are_quoted_in_a_lock_refusal() {
     let text = |lock: &Value| check_lock(lock).expect_err("refused").to_string();
-    let key = lock_with("node_modules/x y<b>", json!({"resolved": "https://elsewhere/x.tgz"}));
+    let key = lock_with(
+        "node_modules/x y<b>",
+        json!({"resolved": "https://elsewhere/x.tgz"}),
+    );
     assert_eq!(
         text(&key),
         "this command cannot be previewed: the install holds the package, which is not from the \
