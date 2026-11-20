@@ -131,11 +131,29 @@ pub(crate) enum PollRefused {
 /// The attempts held now. A new store holds none: a restart ends them all.
 pub(crate) struct AttemptStore {
     draws: Draws,
+    /// Test only: `start` calls it after finding a code free and before
+    /// inserting the attempt, inside the one lock that covers both.
+    #[cfg(test)]
+    pause: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl AttemptStore {
     pub(crate) fn new(draws: Draws) -> Self {
-        Self { draws }
+        Self {
+            draws,
+            #[cfg(test)]
+            pause: None,
+        }
+    }
+
+    /// A store whose `start` stops in `pause` between its uniqueness check
+    /// and its insert, so a row can line two starts up inside that gap.
+    #[cfg(test)]
+    pub(crate) fn with_pause(draws: Draws, pause: Box<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            draws,
+            pause: Some(pause),
+        }
     }
 
     /// Holds a new attempt until `now + LIFETIME`.

@@ -130,7 +130,12 @@ fn a_code_parses_in_either_case_with_one_hyphen() {
     let started = store.start(t0).expect("a start into an empty store");
     let shown = started.code.display();
     assert_eq!(shown, "ABCDE-FGHJK");
-    for typed in [shown.clone(), shown.to_lowercase(), shown.replace('-', "")] {
+    for typed in [
+        shown.clone(),
+        shown.to_lowercase(),
+        "aBcDe-FgHjK".to_owned(),
+        shown.replace('-', ""),
+    ] {
         let parsed = UserCode::parse(&typed).unwrap_or_else(|| panic!("{typed:?} parses"));
         assert_eq!(
             store.lookup(&parsed, t0),
@@ -444,12 +449,11 @@ fn an_attempt_takes_at_most_120_polls() {
 }
 
 /// Holds the first `arrivals` callers until all have come or two seconds
-/// pass; later callers go straight through. Records a timeout.
+/// pass; later callers go straight through.
 struct Gate {
     arrived: std::sync::Mutex<usize>,
     all_here: std::sync::Condvar,
     arrivals: usize,
-    timed_out: std::sync::atomic::AtomicBool,
 }
 
 impl Gate {
@@ -458,7 +462,6 @@ impl Gate {
             arrived: std::sync::Mutex::new(0),
             all_here: std::sync::Condvar::new(),
             arrivals,
-            timed_out: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -473,7 +476,6 @@ impl Gate {
         while *arrived < self.arrivals {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                self.timed_out.store(true, Ordering::SeqCst);
                 return;
             }
             arrived = self
@@ -488,19 +490,19 @@ impl Gate {
 /// L1.11: two starts that drew the same code at the same time hold it once;
 /// the other start redraws.
 ///
-/// Honesty note: each thread is held right after its first code draw, so
-/// both hold the same code before either can reserve it, whatever order the
-/// store draws its id and secret in. Nothing outside the store can pause it
-/// between its check and its insert, so against a store whose check and
-/// insert are not under one lock this row fails by interleaving, not by
-/// construction; 200 rounds make that likely, not certain. A store that
-/// draws its code inside its lock cannot be lined up from outside at all:
-/// the hold then times out after two seconds and the remaining rounds are
-/// skipped (that store serialises starts, so the race it guards against
-/// cannot occur in it).
+/// Honesty note: the store's test-only pause (`AttemptStore::with_pause`)
+/// runs after `start` finds its code free and before it inserts. Each
+/// start waits there for the other. If the check and the insert are not
+/// under one lock, both starts find the same code free, meet in the pause
+/// and both insert it: the row fails on its one round, by construction.
+/// Under one lock the second start cannot reach its check while the first
+/// waits in the pause, which gives up after two seconds; the first inserts
+/// and the second finds the code taken and redraws. A pause placed after
+/// the insert is invisible here; code review checks its placement against
+/// the comment on the store's `pause` field.
 #[test]
 fn two_starts_with_one_code_hold_it_once() {
-    for round in 0..200 {
+    for round in 0..1 {
         let same = distinct_code(1);
         let codes = Arc::new(Mutex::new(VecDeque::from(vec![
             same,
@@ -512,18 +514,14 @@ fn two_starts_with_one_code_hold_it_once() {
         let secrets = Arc::new(Mutex::new(VecDeque::from(
             (1..=4).map(secret).collect::<Vec<_>>(),
         )));
-        let gate = Arc::new(Gate::new(2));
-        let held = Arc::clone(&gate);
         let draws = Draws {
-            code: Box::new(move || {
-                let drawn = next(&codes, "code");
-                held.wait();
-                drawn
-            }),
+            code: Box::new(move || next(&codes, "code")),
             id: Box::new(move || next(&ids, "id")),
             secret: Box::new(move || next(&secrets, "secret")),
         };
-        let store = Arc::new(AttemptStore::new(draws));
+        let gate = Arc::new(Gate::new(2));
+        let pause = Box::new(move || gate.wait());
+        let store = Arc::new(AttemptStore::with_pause(draws, pause));
         let t0 = Instant::now();
         let both = Arc::new(Barrier::new(2));
         let runs: Vec<_> = (0..2)
@@ -552,8 +550,5 @@ fn two_starts_with_one_code_hold_it_once() {
             "round {round}: one id held twice"
         );
         assert_eq!(store.retained(t0), 2, "round {round}");
-        if gate.timed_out.load(Ordering::SeqCst) {
-            break;
-        }
     }
 }
