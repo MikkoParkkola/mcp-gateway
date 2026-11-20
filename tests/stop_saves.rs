@@ -321,7 +321,7 @@ fn state(dir: &Path) -> State {
 }
 
 /// Kill every backend the script recorded that is still alive: a stubborn one
-/// outlives a SIGKILLed gateway.
+/// outlives a gateway ended by SIGKILL.
 fn reap_backends(dir: &Path) {
     for pid in std::fs::read_to_string(dir.join("backend.pid"))
         .unwrap_or_default()
