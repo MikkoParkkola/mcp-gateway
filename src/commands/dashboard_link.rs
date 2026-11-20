@@ -87,7 +87,7 @@ pub fn dashboard_link_base(
         let ca = flags.ca_cert;
         return Ok((url, LinkTls { ca, identity }));
     }
-    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
+    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --gateway"))?;
     if let Some(port) = port_override {
         config.server.port = port;
     }
@@ -312,7 +312,7 @@ pub(crate) async fn dashboard_link_outcome(
     let render = crate::cli::output::Render::from_json_flag(args.json);
     let json = render == crate::cli::output::Render::Json;
     let (base, tls, token) = match resolved(
-        args.url,
+        args.gateway.url,
         args.tls,
         load,
         port_override,
@@ -369,7 +369,7 @@ pub(crate) async fn events_outcome(
 ) -> CliOutcome {
     use mcp_gateway::cli::events::DeadLetterAction;
     let (base, tls, token) = match resolved(
-        args.url.clone(),
+        args.gateway.url.clone(),
         args.tls.clone(),
         load,
         port_override,

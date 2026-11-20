@@ -17,6 +17,58 @@ use crate::{Error, Result};
 
 use super::CapabilityExecutor;
 
+/// The form of a credential reference as `fetch_credential` reads it; each
+/// payload borrows from the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CredentialForm<'a> {
+    /// `env:NAME`.
+    Env(&'a str),
+    /// `keychain:NAME`.
+    Keychain(&'a str),
+    /// `oauth:PROVIDER`.
+    OAuth(&'a str),
+    /// `file:PATH`.
+    File(&'a str),
+    /// `{env.NAME}`.
+    EnvTemplate(&'a str),
+    /// A bare `UPPER_SNAKE_CASE` variable name.
+    BareEnv(&'a str),
+}
+
+/// Why a key is not a credential reference. It never carries the key, so a
+/// refusal built from it cannot repeat a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotAReference {
+    /// Nothing was given.
+    Empty,
+    /// None of the forms matched.
+    Unrecognised,
+}
+
+/// The one parser of credential references: `fetch_credential`
+/// and `cap import --auth-key` both read a key through it, so the CLI accepts
+/// exactly what the resolver reads. A payload is not checked here: an empty
+/// `env:` parses, and fails at resolve time as it always has.
+pub(crate) fn credential_form(key: &str) -> std::result::Result<CredentialForm<'_>, NotAReference> {
+    if let Some(name) = key.strip_prefix("env:") {
+        Ok(CredentialForm::Env(name))
+    } else if let Some(name) = key.strip_prefix("keychain:") {
+        Ok(CredentialForm::Keychain(name))
+    } else if let Some(provider) = key.strip_prefix("oauth:") {
+        Ok(CredentialForm::OAuth(provider))
+    } else if let Some(spec) = key.strip_prefix("file:") {
+        Ok(CredentialForm::File(spec))
+    } else if key.starts_with("{env.") && key.ends_with('}') {
+        Ok(CredentialForm::EnvTemplate(&key[5..key.len() - 1]))
+    } else if key.is_empty() {
+        Err(NotAReference::Empty)
+    } else if CapabilityExecutor::looks_like_env_var_name(key) {
+        Ok(CredentialForm::BareEnv(key))
+    } else {
+        Err(NotAReference::Unrecognised)
+    }
+}
+
 impl CapabilityExecutor {
     /// Fetch credential from secure storage.
     /// Resolve a capability's `auth.account` reference into outbound headers.
@@ -229,52 +281,56 @@ impl CapabilityExecutor {
             )));
         }
 
-        if let Some(var_name) = key.strip_prefix("env:") {
-            // Empty is refused like unset, as `SecretRef::resolve` does (C4).
-            let env = self.env.get();
-            env.resolve(var_name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| {
+        match credential_form(key) {
+            Ok(CredentialForm::Env(var_name)) => {
+                // Empty is refused like unset, as `SecretRef::resolve` does (C4).
+                let env = self.env.get();
+                env.resolve(var_name)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| {
+                        Error::Config(format!(
+                            "Environment variable '{}' not set or empty (required for {}){}",
+                            var_name,
+                            auth.description,
+                            env.absent_files_hint()
+                        ))
+                    })
+            }
+            Ok(CredentialForm::Keychain(keychain_key)) => {
+                self.fetch_from_keychain(keychain_key).await
+            }
+            Ok(CredentialForm::OAuth(provider)) => {
+                self.fetch_oauth_token(provider, auth.token_endpoint.as_deref(), context)
+                    .await
+            }
+            Ok(CredentialForm::File(file_spec)) => self.fetch_from_file(file_spec),
+            Ok(CredentialForm::EnvTemplate(var_name)) => {
+                let env = self.env.get();
+                env.resolve(var_name)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| {
+                        Error::Config(format!(
+                            "Environment variable '{var_name}' not set or empty{}",
+                            env.absent_files_hint()
+                        ))
+                    })
+            }
+            Ok(CredentialForm::BareEnv(name)) => {
+                let env = self.env.get();
+                env.resolve(name).filter(|v| !v.is_empty()).ok_or_else(|| {
                     Error::Config(format!(
-                        "Environment variable '{}' not set or empty (required for {}){}",
-                        var_name,
-                        auth.description,
+                        "Environment variable '{name}' not set or empty{}. Set it with: export {name}=your_key",
                         env.absent_files_hint()
                     ))
                 })
-        } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
-            self.fetch_from_keychain(keychain_key).await
-        } else if let Some(provider) = key.strip_prefix("oauth:") {
-            self.fetch_oauth_token(provider, auth.token_endpoint.as_deref(), context)
-                .await
-        } else if let Some(file_spec) = key.strip_prefix("file:") {
-            self.fetch_from_file(file_spec)
-        } else if key.starts_with("{env.") && key.ends_with('}') {
-            let var_name = &key[5..key.len() - 1];
-            let env = self.env.get();
-            env.resolve(var_name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| {
-                    Error::Config(format!(
-                        "Environment variable '{var_name}' not set or empty{}",
-                        env.absent_files_hint()
-                    ))
-                })
-        } else if key.is_empty() {
-            Err(Error::Config("No credential key configured".to_string()))
-        } else if Self::looks_like_env_var_name(key) {
-            let env = self.env.get();
-            env.resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
-                Error::Config(format!(
-                    "Environment variable '{key}' not set or empty{}. Set it with: export {key}=your_key",
-                    env.absent_files_hint()
-                ))
-            })
-        } else {
-            Err(Error::Config(format!(
+            }
+            Err(NotAReference::Empty) => {
+                Err(Error::Config("No credential key configured".to_string()))
+            }
+            Err(NotAReference::Unrecognised) => Err(Error::Config(format!(
                 "Unknown credential format: {}. Use env:, keychain:, oauth:, file:, or set environment variable",
                 key.chars().take(20).collect::<String>()
-            )))
+            ))),
         }
     }
 
@@ -589,6 +645,11 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
 #[cfg(test)]
 #[path = "oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "credential_form_tests.rs"]
+mod credential_form_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]

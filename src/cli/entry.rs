@@ -93,9 +93,9 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             verify.as_deref(),
             crate::cli::output::Render::from_json_flag(json),
         ),
-        Some(Command::Stats { url, json }) => {
+        Some(Command::Stats { gateway, json }) => {
             let effective_url = resolve_stats_url(
-                url,
+                gateway.url,
                 config_path.as_deref(),
                 port_override,
                 host_override.as_deref(),

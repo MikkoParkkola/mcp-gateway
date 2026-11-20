@@ -23,6 +23,8 @@ mod cli_run;
 mod client;
 mod construct;
 mod credentials;
+// The one credential-reference parser, for `cap import --auth-key`.
+pub(crate) use credentials::credential_form;
 pub mod graphql;
 pub mod jsonrpc;
 mod mcp;
