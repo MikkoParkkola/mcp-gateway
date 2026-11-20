@@ -111,6 +111,8 @@ mod routes_tests;
 #[cfg(all(test, feature = "webui"))]
 mod stable_ui_routes_tests;
 mod stop_budget;
+#[cfg(test)]
+pub(crate) use stop_budget::BACKEND_RESERVE_FOR_TEST;
 /// The one constructor that turns a verified identity into a grant subject,
 /// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
 /// `router` itself becoming crate-visible. Same shape as
