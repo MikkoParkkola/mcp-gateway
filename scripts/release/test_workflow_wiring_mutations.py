@@ -40,14 +40,82 @@ CAUGHT, TOLERATED, BROKEN = "caught", "tolerated", "broken"
 STALE = "\0 workflow span not found \0"
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
 def _span(text, job, first=None, last=None):
-    """Stub: the real helper lands after its rows have run red."""
-    return STALE
+    """The text of job `job`, from the start of step `first` through the end of step `last` (default: `first`).
+
+    `first=None` starts at the job's id line; with `last=None` too, the span is the job's head alone, up to its
+    first step. A step is named by its `name:`, or, when it has none, by `uses:` and its action without the
+    `@ref` (`uses:actions/checkout`). A job runs from its `  <id>:` line under the top-level `jobs:` key up to the
+    next line at indent 2 or less; a step from its `      - ` line up to the next line at indent 6 or less, so a
+    comment above the next step and the blank lines before it belong to neither. A missing job or step, a name
+    two steps of the job share, or `last` before `first` gives STALE: a case built on it then reports stale.
+    """
+    lines = text.splitlines(keepends=True)
+    if "jobs:\n" not in lines:
+        return STALE
+    top = lines.index("jobs:\n")
+    ids = [i for i in range(top + 1, len(lines)) if lines[i] == f"  {job}:\n"]
+    if len(ids) != 1:
+        return STALE
+    start = end = ids[0]
+    end += 1
+    while end < len(lines) and (not lines[end].strip() or _indent(lines[end]) > 2):
+        end += 1
+    heads = [i for i in range(start, end) if lines[i].startswith("      - ")]
+    steps = {}  # selector -> list of (first line, end line)
+    for n, head in enumerate(heads):
+        stop = heads[n + 1] if n + 1 < len(heads) else end
+        tail = head + 1
+        while tail < stop and (not lines[tail].strip() or _indent(lines[tail]) > 6):
+            tail += 1
+        while not lines[tail - 1].strip():
+            tail -= 1
+        # Step keys start at column 8 (the `- ` line's or the next lines'); a deeper line,
+        # such as a `with:` input called `name`, keeps its extra indent and matches no key.
+        keys = [line[8:] for line in lines[head:tail]]
+        names = [k[len("name: "):].rstrip("\n") for k in keys if k.startswith("name: ")]
+        uses = [k[len("uses: "):].split("@", 1)[0].strip() for k in keys if k.startswith("uses: ")]
+        selector = names[0] if names else (f"uses:{uses[0]}" if uses else None)
+        steps.setdefault(selector, []).append((head, tail))
+
+    def pick(name):
+        found = steps.get(name, [])
+        return found[0] if len(found) == 1 else None
+
+    if first is None:
+        lo = start
+        if last is None:
+            hi = heads[0] if heads else end
+        else:
+            step = pick(last)
+            if step is None:
+                return STALE
+            hi = step[1]
+    else:
+        a, b = pick(first), pick(first if last is None else last)
+        if a is None or b is None or b[0] < a[0]:
+            return STALE
+        lo, hi = a[0], b[1]
+    return "".join(lines[lo:hi])
 
 
 def _mutate(span, *edits):
-    """Stub: the real helper lands after its rows have run red."""
-    return STALE, STALE
+    """(span, the span with each (old, new) edit applied in order), or (STALE, STALE) when the span is STALE or an
+    `old` is empty or does not occur exactly once in the span as edited so far: a missed edit must make the case
+    stale, never leave a valid anchor with a wrong mutation."""
+    if span == STALE:
+        return STALE, STALE
+    out = span
+    for old, new in edits:
+        # An empty `old` is refused here too: it occurs len(span) + 1 times.
+        if out.count(old) != 1:
+            return STALE, STALE
+        out = out.replace(old, new, 1)
+    return span, out
 
 
 # The helpers' own rows. A small workflow: an `on:` key that shares a job's id, a
@@ -77,7 +145,7 @@ _SELF_TEST_WORKFLOW = (
     "    steps:\n"
     "      - name: Compile\n"
     "        run: make release\n"
-    "      - name: Upload\n"
+    "      - uses: actions/upload-artifact@def # v2\n"
     "        with:\n"
     "          name: artifact\n"
     "      - name: Publish\n"
@@ -107,7 +175,10 @@ def _self_test():
          "      - uses: actions/checkout@abc # v1\n        with:\n          fetch-depth: 1\n"),
         ("S5b", _span(w, "build", "uses:actions/checkout@abc"), STALE),
         ("S6", _span(w, "build", "Test"), "      - if: always()\n        name: Test\n        run: make test\n"),
+        # A nameless step's `with:` input called `name` does not name the step.
         ("S6b", _span(w, "push", "artifact"), STALE),
+        ("S6c", _span(w, "push", "uses:actions/upload-artifact"),
+         "      - uses: actions/upload-artifact@def # v2\n        with:\n          name: artifact\n"),
         ("S7", _span(w, "deploy", "Compile"), STALE),
         ("S8", _span(w, "build", "Missing"), STALE),
         ("S9", _span(w, "push", "Test"), STALE),
