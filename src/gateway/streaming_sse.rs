@@ -345,8 +345,10 @@ async fn next_unless_stopped(
 ) -> Option<Result<super::SessionFrame, broadcast::error::RecvError>> {
     tokio::select! {
         biased;
-        Ok(_) = stopped.wait_for(|stop| *stop) => {
-            settle_stranded(rx);
+        Ok(_) = stopped.wait_for(|stop| *stop && mutant!("no-sse-end", false, true)) => {
+            if mutant!("no-settle", false, true) {
+                settle_stranded(rx);
+            }
             None
         }
         next = rx.recv() => Some(next),
