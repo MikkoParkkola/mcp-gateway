@@ -100,6 +100,9 @@ pub struct Listener {
     /// was last told, and the judge. A `tools/list_changed` is owed only when
     /// that view of the backend moved.
     view: Option<crate::gateway::streaming::StreamView>,
+    /// The registry's stop: once set, `recv` reports the channel
+    /// closed, so the stream takes its graceful end.
+    stopped: tokio::sync::watch::Receiver<bool>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -142,7 +145,11 @@ impl Listener {
     /// channel from a lagging reader; both end the stream, for different
     /// reasons the caller logs differently.
     pub(crate) async fn recv(&mut self) -> Result<Published, broadcast::error::RecvError> {
-        self.receiver.recv().await
+        tokio::select! {
+            biased;
+            Ok(_) = self.stopped.wait_for(|stop| *stop) => Err(broadcast::error::RecvError::Closed),
+            next = self.receiver.recv() => next,
+        }
     }
 
     /// The caller this stream's credential resolves to right now, `None` when
@@ -305,6 +312,8 @@ impl Listener {
 /// The notifications this gateway publishes, and the streams listening to them.
 pub struct SubscriptionRegistry {
     sender: broadcast::Sender<Published>,
+    /// Set once, at the stop's trigger: every listen stream ends gracefully.
+    stopped: tokio::sync::watch::Sender<bool>,
     permits: Arc<Semaphore>,
     /// The authorizer every listener is re-validated against. Required at
     /// construction, so a registry that delivers without one cannot exist.
@@ -327,6 +336,7 @@ impl SubscriptionRegistry {
         let (sender, _) = broadcast::channel(CHANNEL_DEPTH);
         Self {
             sender,
+            stopped: tokio::sync::watch::Sender::new(false),
             permits: Arc::new(Semaphore::new(capacity)),
             authorizer,
         }
@@ -353,6 +363,7 @@ impl SubscriptionRegistry {
             credential,
             authorizer: self.authorizer.clone(),
             view: None,
+            stopped: self.stopped.subscribe(),
             _permit: permit,
         })
     }
@@ -391,6 +402,12 @@ impl SubscriptionRegistry {
     /// Publish a notification only for callers who may access `backend`.
     pub fn publish_for_backend(&self, notification: Value, backend: &str) {
         self.send(notification, OwnedAudience::Backend(backend.to_owned()));
+    }
+
+    /// End every listen stream gracefully, at the stop's trigger; one opened
+    /// later ends after its acknowledgement.
+    pub(crate) fn stop_listeners(&self) {
+        self.stopped.send_replace(true);
     }
 
     /// How many more listeners may be admitted.
