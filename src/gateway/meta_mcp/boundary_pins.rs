@@ -34,6 +34,8 @@ mod fragments;
 #[cfg(tp2)]
 mod guard_tests;
 #[cfg(tp2)]
+mod heartbeat_scans;
+#[cfg(tp2)]
 mod identity_evidence;
 #[cfg(tp2)]
 mod identity_refusals;

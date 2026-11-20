@@ -668,7 +668,5 @@ mod wiring_tests;
 #[path = "heartbeat_fail_tests.rs"]
 mod fail_tests;
 
-#[cfg(tp3)]
-#[cfg(test)]
-#[path = "heartbeat_scan_tests.rs"]
-mod scan_tests;
+// The source scans (D10-D12, DOC1) live in gateway::meta_mcp::boundary_pins::heartbeat_scans,
+// beside the packaged-crate helper their repo reads need.

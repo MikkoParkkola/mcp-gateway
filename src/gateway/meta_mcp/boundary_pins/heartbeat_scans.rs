@@ -4,6 +4,14 @@
 //! called and with what, that every gateway test helper and every launch of
 //! the gateway image in our scripts and workflows opts out, and that the
 //! privacy page states the facts the code fixes.
+//!
+//! They sit among the boundary pins, not in `src/heartbeat.rs`'s test
+//! modules, for one reason: D12 reads repository files the published crate
+//! leaves out (`scripts/`, the workflows, the root `Makefile`), so it needs
+//! the packaged-crate helper here, and it names those files through
+//! [`PinnedFile`] (PACKED.2).
+
+use super::packaged::{PinnedFile, is_packaged_crate, repo_file};
 
 /// Every `.rs` file under `dir`, as (path relative to the crate, text).
 fn rust_files(dir: &std::path::Path) -> Vec<(String, String)> {
@@ -141,9 +149,9 @@ fn launch_sets_dnt(launch: &str) -> bool {
 
 /// Scripts whose gateway image arrives as their first argument (docker.yml
 /// passes the image it built), and the variable that holds it there.
-const ARG_IMAGE: [(&str, &str); 2] = [
-    ("scripts/ci/smoke-image.sh", "IMAGE"),
-    ("scripts/ci/smoke-full-image.sh", "IMAGE"),
+const ARG_IMAGE: [(PinnedFile, &str); 2] = [
+    (PinnedFile::SmokeImage, "IMAGE"),
+    (PinnedFile::SmokeFullImage, "IMAGE"),
 ];
 
 /// Whether `s` names the gateway image (`mcp-gateway:` or `mcp-gateway@`) or
@@ -160,7 +168,7 @@ fn names_image(s: &str) -> bool {
 fn image_vars(path: &str, text: &str) -> Vec<String> {
     let mut vars: Vec<String> = ARG_IMAGE
         .iter()
-        .filter(|(file, _)| *file == path)
+        .filter(|(file, _)| file.path() == path)
         .map(|(_, var)| (*var).to_owned())
         .collect();
     for line in text.lines() {
@@ -314,8 +322,12 @@ fn compose_without_dnt(text: &str) -> bool {
 fn launch_sources() -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut out = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(root.join("Makefile")) {
-        out.push(("Makefile".to_owned(), text));
+    // Reached only in a checkout (D12 skips in a packaged crate), where
+    // `repo_file` reads the root Makefile or fails. Its path is a bare name,
+    // which the walk below matches for a Makefile at any depth.
+    let makefile = PinnedFile::RootMakefile;
+    if let Some(text) = repo_file(makefile) {
+        out.push((makefile.path().to_owned(), text));
     }
     let mut todo = vec![
         root.join("scripts"),
@@ -331,7 +343,7 @@ fn launch_sources() -> Vec<(String, String)> {
                 .unwrap_or_default();
             if p.is_dir() {
                 todo.push(p);
-            } else if (name == "Makefile"
+            } else if (name == makefile.path()
                 || p.extension()
                     .is_some_and(|e| e == "sh" || e == "yml" || e == "yaml"))
                 && let Ok(text) = std::fs::read_to_string(&p)
@@ -352,12 +364,12 @@ fn launch_sources() -> Vec<(String, String)> {
 }
 
 /// Every gateway launch in our scripts today, by file: the D12 floor.
-const KNOWN_LAUNCHES: [(&str, usize); 5] = [
-    ("scripts/ci/smoke-full-image.sh", 9),
-    ("scripts/ci/smoke-image.sh", 3),
-    ("scripts/dev/docker-smoke.sh", 2),
-    ("scripts/dev/helm-kind-lifecycle.sh", 2),
-    ("scripts/dev/helm-kind-real-image.sh", 2),
+const KNOWN_LAUNCHES: [(PinnedFile, usize); 5] = [
+    (PinnedFile::SmokeFullImage, 9),
+    (PinnedFile::SmokeImage, 3),
+    (PinnedFile::DockerSmoke, 2),
+    (PinnedFile::HelmKindLifecycle, 2),
+    (PinnedFile::HelmKindRealImage, 2),
 ];
 
 /// D12's planted compose services, chart and image variables, the chart's
@@ -388,7 +400,7 @@ fn assert_planted_compose_and_variable_forms() {
     );
     let via_arg = "IMAGE=\"${1:?image}\"\ndocker run -d --name x \"${IMAGE}\"\n";
     assert_eq!(
-        launches_without_dnt("scripts/ci/smoke-image.sh", via_arg).len(),
+        launches_without_dnt(PinnedFile::SmokeImage.path(), via_arg).len(),
         1,
         "an argument image was not caught"
     );
@@ -475,6 +487,12 @@ fn assert_planted_launch_forms() {
 /// launch per form, without it, fails.
 #[test]
 fn every_image_launch_sets_dnt() {
+    // Checkout-only, as PACKED.2: the unpacked crate ships `tests/` but not
+    // `scripts/` or the workflows, so its walk would see a partial tree.
+    if is_packaged_crate() {
+        eprintln!("skipped: the launch surfaces are not in the packaged crate");
+        return;
+    }
     // The floor (A3/A4): the finder sees each known gateway launch, by file,
     // before anything is judged; a finder blind to an image form sees fewer.
     let mut seen = std::collections::BTreeMap::new();
@@ -486,7 +504,7 @@ fn every_image_launch_sets_dnt() {
     }
     let known: std::collections::BTreeMap<String, usize> = KNOWN_LAUNCHES
         .iter()
-        .map(|(f, n)| ((*f).to_owned(), *n))
+        .map(|(f, n)| (f.path().to_owned(), *n))
         .collect();
     assert_eq!(seen, known, "the gateway launches found, by file");
     let mut missing = Vec::new();
