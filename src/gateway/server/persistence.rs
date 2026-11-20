@@ -502,7 +502,7 @@ mod shutdown_deadline_tests {
     /// window decides the row.
     #[tokio::test(start_paused = true)]
     async fn the_state_saves_end_at_the_deadline_they_are_given() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (release, stuck) = std::sync::mpsc::channel::<()>();
         let stuck_save = ShutdownSave::new(
             "stuck save",
