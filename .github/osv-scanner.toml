@@ -39,3 +39,11 @@
 id = "RUSTSEC-2024-0449"
 ignoreUntil = 2027-01-10
 reason = "unsafe-libyaml is unmaintained (informational, no CVE). It arrives via serde_yaml 0.9, which figment 0.10.19 (latest, required for YAML config in src/config/mod.rs) depends on; no release removes it. Reviewed 2026-10-12."
+
+# chrono is marked unmaintained: an informational notice with no vulnerability
+# and no patched release (upstream chronotope/chrono#1768). The migration to
+# jiff or time removes this entry.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-15
+reason = "informational unmaintained notice, no vulnerability; on main chrono parses RFC 3339 text in parse_timestamp (src/commands/identity.rs, the identity CLI's own --expires-at and --revoked-at flags), AttestationValidator::restore (src/attestation/validator.rs, the gateway's own rotation checkpoint) and TokenClaims::expires_at_utc (src/attestation/token.rs, a token's expires_at claim, which validate_boundary_call parses only after verify_bytes accepts the signature), and its serde timestamps sit in the gateway's own state files; migration to jiff or time planned before this date"
