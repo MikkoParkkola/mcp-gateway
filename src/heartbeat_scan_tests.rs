@@ -786,7 +786,7 @@ fn privacy_text_states_the_facts() {
         "`HTTP_PROXY`",
         "`HTTPS_PROXY`",
         "on Windows, where the 3.5 line sends no heartbeat",
-        "root filesystem is read-only",
+        "read-only root filesystem",
         "`install_id`",
         "`runtime`",
         "`version`",
@@ -805,9 +805,10 @@ fn privacy_text_states_the_facts() {
     );
 }
 
-/// Whether the chart's pod has nowhere to keep heartbeat state, judged over
-/// every template by allow-list, so a new container or volume type cannot
-/// slip past a deny list: one container image in the whole chart; one
+/// Whether the chart's pod gives the heartbeat no place to keep its state
+/// (its data dir, not every path: a container's /dev/shm stays writable),
+/// judged over every template by allow-list, so a new container or volume
+/// type cannot slip past a deny list: one container image in the whole chart; one
 /// `readOnlyRootFilesystem` in the whole chart, set true in the container's
 /// own securityContext (a pod-level one is not honoured); one mount in the
 /// whole chart, the config, read-only at /etc/mcp-gateway; every volume entry
@@ -856,7 +857,9 @@ fn chart_pod_keeps_no_state(templates: &[(String, String)]) -> bool {
 }
 
 /// DOC2. README's claim that a pod the Helm chart deploys sends nothing rests
-/// on the chart: it holds while the pod has nowhere to write `heartbeat/`.
+/// on the chart: it holds while the heartbeat's data dir, left at the image's
+/// home because no template sets `HOME` or `MCP_GATEWAY_CONFIG_DIR`, sits on the
+/// read-only root, so `heartbeat/` cannot be created.
 /// Every file under templates/ is read, subfolders included. Controls: a
 /// writable root filesystem, a second mount, a volume that is not a
 /// configMap (of a type no list names), and a second container in another

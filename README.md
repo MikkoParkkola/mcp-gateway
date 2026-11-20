@@ -560,9 +560,10 @@ No heartbeat is sent:
 - from a development build (one with debug assertions); a release build you
   compile yourself does send;
 - on Windows, where the 3.5 line sends no heartbeat at all (4.0 does);
-- from a pod the Helm chart deploys: its root filesystem is read-only and only
-  the config is mounted, so the server cannot create `heartbeat/` and sends
-  nothing.
+- from a pod the Helm chart deploys: the heartbeat writes only under its data
+  directory, and the chart sets neither `HOME` nor `MCP_GATEWAY_CONFIG_DIR`,
+  so that directory sits in the image's home on a read-only root filesystem;
+  the server cannot create `heartbeat/` there and sends nothing.
 
 ## Contributing
 
