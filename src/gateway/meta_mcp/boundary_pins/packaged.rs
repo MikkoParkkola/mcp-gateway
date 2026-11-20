@@ -31,12 +31,21 @@ pub(super) fn is_packaged_crate() -> bool {
 /// is a skip; any other error (a directory, a permission) fails in both modes,
 /// and so does a missing file in a checkout.
 pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<String> {
+    read_if_present(root, rel, packaged).or_else(|| {
+        crate::test_wait::skip_or_fail(&format!(
+            "{rel} in the crate under test (a checkout has it; the packaged crate does not)"
+        ));
+        None
+    })
+}
+
+/// The decision without the skip: `None` only when the file is not found and
+/// the crate is the packaged one. Kept apart so the "missing in a packaged
+/// crate" row tests it whatever the required mode is.
+fn read_if_present(root: &Path, rel: &str, packaged: bool) -> Option<String> {
     match std::fs::read_to_string(root.join(rel)) {
         Ok(text) => Some(text),
-        Err(e) if packaged && e.kind() == ErrorKind::NotFound => {
-            eprintln!("skipped: {rel} is not in the packaged crate");
-            None
-        }
+        Err(e) if packaged && e.kind() == ErrorKind::NotFound => None,
         Err(e) => panic!("{rel} could not be read (packaged: {packaged}): {e}"),
     }
 }
@@ -119,7 +128,7 @@ fn a_present_file_is_read_in_both_modes() {
 #[test]
 fn a_missing_file_is_skipped_in_a_packaged_crate() {
     let root = tempfile::tempdir().expect("tempdir");
-    assert_eq!(read_or_skip(root.path(), "gone.txt", true), None);
+    assert_eq!(read_if_present(root.path(), "gone.txt", true), None);
 }
 
 /// A missing file in a checkout panics: the pin cannot pass vacuously.

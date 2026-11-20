@@ -653,9 +653,11 @@ async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {
     if std::fs::write(dir.path().join("probe"), b"").is_ok() {
         // Privileged runner: a read-only directory still takes writes, so
         // the double fault cannot be staged here.
-        eprintln!("skipped: the storage directory stays writable (privileged runner)");
         set_mode(0o700);
         server.release.notify_one();
+        crate::test_wait::skip_or_fail(
+            "a user that cannot write a read-only storage directory (this one is privileged)",
+        );
         return;
     }
     server.release.notify_one();
