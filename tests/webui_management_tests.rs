@@ -24,6 +24,10 @@
 
 // `webui_management_tests/backend_mutation.rs` and `internal_routes_served.rs`
 // name `crate::yaml`, so this crate declares the module once, here.
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/record_key.rs"]
 mod record_key;
 

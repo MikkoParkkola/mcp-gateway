@@ -201,6 +201,23 @@ class CoveragePartsWiring(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         self.test_W4_one_coverage_part_per_job()
 
+    def test_W6_whole_suite_jobs_export_a_private_home_before_their_tests(self) -> None:
+        # Tests that resolve the gateway home in-process refuse without a private one. These jobs run them with a
+        # plain cargo line, so an earlier step must put the home in the job's env (shard_tests.py export-home).
+        for workflow, job_id, test_step in (("coverage-probe.yml", "windows-grade", "Every test target"),
+                                            ("ci.yml", "test-throwaway-hosted", "Run the tests"),
+                                            ("ci.yml", "test-trusted", "Run the tests")):
+            with self.subTest(job=job_id):
+                steps = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))[
+                    "jobs"][job_id]["steps"]
+                names = [s.get("name") for s in steps]
+                self.assertIn(test_step, names, f"{workflow}:{job_id} has no step {test_step!r}")
+                exports = [i for i, s in enumerate(steps)
+                           if re.search(r"shard_tests\.py export-home \S*GITHUB_ENV", str(s.get("run", "")))]
+                self.assertTrue(exports, f"{workflow}:{job_id} never exports a private home")
+                self.assertLess(exports[0], names.index(test_step),
+                                f"{workflow}:{job_id} exports its home only after {test_step!r}")
+
     def test_W5_union_report_and_grade_wiring(self) -> None:
         source = (ROOT / ".github/workflows/coverage-probe.yml").read_text(encoding="utf-8")
         doc = yaml.safe_load(source)
