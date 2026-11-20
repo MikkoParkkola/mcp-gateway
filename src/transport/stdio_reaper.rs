@@ -740,8 +740,8 @@ mod start_tests {
 
 /// The test-only reap check the nested handover row reads for "reaped
 /// before Db". That row always has one handover, so it cannot see the empty
-/// case; this row pins all three: no handover, an unreaped give-up, a reap
-/// with an exit status.
+/// case or an any-for-all slip; this row pins no handover, an unreaped
+/// give-up, a reap with an exit status, and every handover rather than any.
 #[cfg(tp5)]
 #[cfg(all(test, unix))]
 mod handed_reap_tests {
