@@ -63,15 +63,20 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-/// Short waits, so a row about a wait finishes in well under a second.
-fn short() -> Deadlines {
+/// The one named test limit for every row that checks what a run prints and how it exits rather than a wait: 10 s
+/// per wait and 30 s overall. That leaves wide room for the stalls a loaded runner causes (the starved-printer row
+/// below holds its printer for 2 s and still passes), yet a real hang still fails in seconds. A longer stall can
+/// still pass these limits; they are finite on purpose. Rows that end at a wait use the short limits in
+/// `api_stream_wait_tests.rs`.
+fn content() -> Deadlines {
+    let (wait, total) = (Duration::from_secs(10), Duration::from_secs(30));
     Deadlines {
-        headers: ms(400),
-        stall: ms(400),
-        event: ms(400),
-        stream_total: ms(1500),
-        download_total: ms(1500),
-        fallback_total: ms(400),
+        headers: wait,
+        stall: wait,
+        event: wait,
+        stream_total: total,
+        download_total: total,
+        fallback_total: total,
     }
 }
 
@@ -108,6 +113,16 @@ async fn run_as(
     reply: Option<AdminStream>,
     token: &str,
 ) -> (Vec<u8>, CliOutcome, usize) {
+    run_within(request, reply, token, &content()).await
+}
+
+/// [`run_as`] under the given waits; a row that ends at a wait passes the short ones.
+async fn run_within(
+    request: &ApiArgs,
+    reply: Option<AdminStream>,
+    token: &str,
+    deadlines: &Deadlines,
+) -> (Vec<u8>, CliOutcome, usize) {
     let sends = AtomicUsize::new(0);
     let out = Shared::default();
     let outcome = run_streamed_with(
@@ -116,7 +131,7 @@ async fn run_as(
         &LinkTls::default(),
         |name: &str| (name == TOKEN_ENV).then(|| token.to_owned()),
         out.clone(),
-        &short(),
+        deadlines,
         |_| {
             sends.fetch_add(1, Ordering::SeqCst);
             async move {
@@ -242,6 +257,52 @@ async fn a_download_masks_the_credential_at_every_cut() {
         assert_eq!(outcome.exit(), CliExit::Ok, "cut at {at}");
         assert_eq!(text(&out), expected, "cut at {at}");
     }
+}
+
+/// Load: a printing thread the scheduler leaves idle for 2 s, as on a starved test machine, must not fail a row about
+/// content. The sink stalls its first write; the run still prints every line and exits Ok under the waits every row
+/// in this file uses.
+#[tokio::test]
+async fn a_starved_printer_does_not_fail_a_content_row() {
+    struct Starved {
+        out: Shared,
+        stalled: bool,
+    }
+    impl Write for Starved {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self.stalled {
+                self.stalled = true;
+                std::thread::sleep(ms(2000));
+            }
+            self.out.write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let out = Shared::default();
+    let reply = answer(
+        200,
+        "application/x-ndjson",
+        vec![b"one\ntwo\n".to_vec()],
+        false,
+    );
+    let request = args(EXPORT, None, false);
+    let outcome = run_streamed_with(
+        &request,
+        BASE,
+        &LinkTls::default(),
+        credential,
+        Starved {
+            out: out.clone(),
+            stalled: false,
+        },
+        &content(),
+        |_| async { Ok(reply) },
+    )
+    .await;
+    assert_eq!(outcome.exit(), CliExit::Ok, "{}", outcome.stderr());
+    assert_eq!(text(&out.bytes()), "one\ntwo\n");
 }
 
 /// R6: in an event's data, id and name, in both output modes.
@@ -453,7 +514,7 @@ async fn write_failures_follow_the_buffered_rules() {
             &LinkTls::default(),
             credential,
             Failing(kind),
-            &short(),
+            &content(),
             |_| async { Ok(reply) },
         )
         .await;
