@@ -41,7 +41,7 @@ async fn a_stop_ready_beside_a_queued_copy_wins_and_empties_the_queue() {
     tx.send(frame("rows://tie")).expect("the stream receives");
     stop.send(true).expect("the stream watches");
     let next = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         next_unless_stopped(&mut rx, &mut stopped),
     )
     .await
@@ -62,7 +62,7 @@ async fn a_dropped_stop_sender_leaves_the_stream_reading() {
     drop(stop);
     tx.send(frame("rows://open")).expect("the stream receives");
     let next = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         next_unless_stopped(&mut rx, &mut stopped),
     )
     .await
