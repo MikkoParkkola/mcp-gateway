@@ -510,7 +510,11 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("premise: a task handle: {status} {created}"))
         .to_owned();
-    let _done = gw.settled_read(&id).await;
+    let done = gw.settled_read(&id).await;
+    eprintln!(
+        "R6 second lender refusals: before the settled read {}, after it {}; it answered {}",
+        done.refusals_before, done.refusals_after, done.answer
+    );
     // The first target goes cold: the caller's slot there is evicted.
     let binding = "alpha@https://lent.internal";
     first.age_per_user_slot_for_test(binding, 400);
@@ -535,8 +539,14 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         reached.is_ok(),
         "premise: the holding reader's fill of the first target reached its peer"
     );
+    let before_read = gw.lender_refusals();
     let answer = gw.read_task(&id).await;
+    eprintln!(
+        "R6 second lender refusals around the read: {before_read} -> {}; created {created}",
+        gw.lender_refusals()
+    );
     control.hold.store(false, Ordering::SeqCst);
-    let _ = holder.await;
+    let held = holder.await;
+    eprintln!("R6 the holding reader answered {held:?}");
     assert_refusal(&answer, "R6");
 }
