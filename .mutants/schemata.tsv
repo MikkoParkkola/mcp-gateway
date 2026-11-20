@@ -1,0 +1,3 @@
+head_sha	bc6803d00c48f7966f121ee367f60b882e7c9839
+#mutant no-settle
+mcp_gateway	gateway::streaming::tests::stop_streams::s_resume_the_stop_settles_what_a_resumed_stream_holds	src/gateway/streaming_tests/stop_streams.rs:110
