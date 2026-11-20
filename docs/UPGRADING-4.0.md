@@ -2762,7 +2762,8 @@ In 4.0 both listeners stop the same way (#2147):
 - New connections are refused as soon as the signal arrives.
 - Open requests get the listener's share of `server.shutdown_timeout`: the total less the
   12.9 s kept for the saves, the backend stop and the exit (17.1 s at the 30 s default). Requests still
-  running at the deadline, including open event streams, are cut.
+  running at the deadline are cut; open event streams (`GET /mcp`, `subscriptions/listen`) end
+  at the stop signal itself.
 - The gateway then saves its state and waits, within the same total (at most 10 s, and never
   past the point where the backend stop's share begins), for any in-flight
   work the cut released, before it stops its backends.
