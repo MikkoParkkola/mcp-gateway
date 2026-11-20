@@ -1,0 +1,8 @@
+head_sha	bc6803d00c48f7966f121ee367f60b882e7c9839
+#mutant no-sse-end multi=2
+stop_saves	s_sse_a_session_stream_ends_at_the_signal	tests/stop_saves.rs:598
+mcp_gateway	gateway::streaming::tests::listen_graceful::s_sub_ends_the_stop_ends_a_listen_stream_gracefully	src/gateway/streaming_tests/listen_graceful.rs:135
+mcp_gateway	gateway::streaming::tests::stop_streams::s_late_a_stream_opened_after_the_stop_ends_after_connecting	src/gateway/streaming_tests/stop_streams.rs:56
+mcp_gateway	gateway::streaming::tests::stop_streams::s_resume_the_stop_settles_what_a_resumed_stream_holds	src/gateway/streaming_tests/stop_streams.rs:102
+#mutant no-settle
+mcp_gateway	gateway::streaming::tests::stop_streams::s_resume_the_stop_settles_what_a_resumed_stream_holds	src/gateway/streaming_tests/stop_streams.rs:110
