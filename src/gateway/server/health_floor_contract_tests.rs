@@ -217,8 +217,7 @@ async fn c4_commit_is_terminal() {
         GateState::Terminal,
         "resume reopened a committed gate"
     );
-    let (_, shutdown_save) = b.health.shutdown_save();
-    shutdown_save();
+    b.health.shutdown_save().run_now();
     assert_ne!(
         b.on_disk()["clean_stop"],
         serde_json::Value::Null,
