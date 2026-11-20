@@ -9,6 +9,8 @@ are `python3 -c` one-liners that write markers outside the clone.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -1100,10 +1102,14 @@ class GatePy(unittest.TestCase):
         with mock.patch.object(runner, "yaml_status", return_value="PyYAML ok"), \
                 mock.patch.object(runner, "resolve_base_tip", return_value="0" * 40), \
                 mock.patch.object(runner, "resolve_gate_py", return_value=(None, "setup error: GATE_PY ...")), \
-                mock.patch.object(runner, "run", side_effect=lambda *a, **k: calls.append(a)):
+                mock.patch.object(runner, "run", side_effect=lambda *a, **k: calls.append(a)), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
             rc = runner.main(["--merge-base", "HEAD"])
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [], "no row may run after the setup error")
+        errors = [line for line in out.getvalue().splitlines() if "setup error" in line]
+        self.assertEqual(len(errors), 1, f"exactly one setup error line, got {errors}")
+        self.assertIn("GATE_PY", errors[0])
 
     def test_g5_main_exports_the_resolved_interpreter_to_every_row(self):
         seen = []
@@ -1119,11 +1125,16 @@ class GatePy(unittest.TestCase):
         self.assertEqual(seen, ["/pinned/venv/bin/python"], "the rows must see the resolved interpreter")
 
     def test_g6_a_helper_that_hangs_is_the_same_setup_error(self):
+        # The helper sleeps far past the bound, so this passes only if the bound itself ends the wait: without
+        # the timeout the call would last the whole sleep and fail the elapsed check.
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "SETUP_TIMEOUT_S", 1):
-            h = self.helper(tmp, "sleep 5\n")
+            h = self.helper(tmp, "sleep 60\n")
+            started = time.monotonic()
             py_path, err = runner.resolve_gate_py(['"$GATE_PY" a.py\t1\tclosed'], pathlib.Path(tmp), {}, helper=h)
+            elapsed = time.monotonic() - started
         self.assertIsNone(py_path)
         self.assertIn("GATE_PY", err)
+        self.assertLess(elapsed, 10, "the setup bound must end a hung helper")
 
 
 if __name__ == "__main__":
