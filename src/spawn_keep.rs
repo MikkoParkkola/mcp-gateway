@@ -22,8 +22,12 @@ pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
 pub(crate) struct Kept;
 
 // A keep carries no data in a release build, so taking one costs nothing there.
+// A statement in a block: Kani's `assert!` leaves a trailing semicolon that its
+// nightly refuses in expression position.
 #[cfg(not(test))]
-const _: () = assert!(std::mem::size_of::<Kept>() == 0);
+const _: () = {
+    assert!(std::mem::size_of::<Kept>() == 0);
+};
 
 /// The kept dirs holding `path`, taken at spawn, with no report: for a writer
 /// whose own open already reports an unkept dir, or one that is awaited.
