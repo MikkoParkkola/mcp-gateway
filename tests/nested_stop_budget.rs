@@ -287,9 +287,9 @@ enum During {
     Watch,
 }
 
-/// The inner logs one of these once the outer's SIGTERM reaches it after its stdin
-/// has closed: from here it has only the nested need before the outer kills it.
-const HURRY_LINES: [&str; 2] = ["hurrying the stop", "shutdown hurried by a signal"];
+/// The inner logs this when the outer's SIGTERM reaches it. Its stdin closed earlier, so its own stop is
+/// already under way and the signal hurries it: from here it has only the nested need before the outer kills it.
+const HURRY_LINES: [&str; 1] = ["Shutdown signal received"];
 
 /// Longer than the 1.5 s nested need the outer leaves an inner after its
 /// SIGTERM, so the outer's kill lands while the inner is still frozen and
