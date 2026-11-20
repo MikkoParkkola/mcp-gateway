@@ -118,6 +118,11 @@ def _mutate(span, *edits):
     return span, out
 
 
+def _wf_span(workflow, job, first=None, last=None):
+    """_span over the workflow file as checked in; the runner mutates a copy of the same bytes."""
+    return _span((WORKFLOWS / workflow).read_text(encoding="utf-8"), job, first, last)
+
+
 # The helpers' own rows. A small workflow: an `on:` key that shares a job's id, a
 # nameless step, a step named on its second line, a comment above a step, a step
 # input called `name`, a name used in both jobs and one used twice in one job.
@@ -225,6 +230,12 @@ PUSH_STEP = (
 )
 
 # (label, workflow, before, after, expected) — `before` must occur verbatim.
+# Steps the first cases mutate, read from the workflows (each case's edit must
+# occur once inside its step, or the case reports stale).
+_SIGN_STEP = _wf_span("ci.yml", "docker-manifest", "Cosign keyless-sign the list and both children")
+_SBOM_STEP = _wf_span("ci.yml", "docker-manifest", "Generate + attest an SBOM (SPDX JSON) per published digest")
+_HOMEBREW_HEAD = _wf_span("release.yml", "homebrew-update", None, "Download checksums for the verified tag")
+
 CASES = [
     # Regressions. Each is a rewiring that publishes wrongly or verifies
     # nothing, and each was reachable while the suite stayed green.
@@ -341,14 +352,11 @@ CASES = [
     (
         "sign-step-loses-its-digest-binding",
         "ci.yml",
-        "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: github.event_name == 'push'"
-        " && startsWith(github.ref, 'refs/tags/v')\n"
-        "        env:\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n"
-        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
-        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
-        "      - name: Cosign keyless-sign the list and both children\n",
+        *_mutate(
+            _SIGN_STEP,
+            ("        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64: ${{ steps.list.outputs.amd64 }}\n          ARM64: ${{ steps.list.outputs.arm64 }}\n",
+             ''),
+        ),
         CAUGHT,
     ),
     (
@@ -451,15 +459,11 @@ CASES = [
     (
         "step-without-a-name-borrows-its-neighbours-digest",
         "ci.yml",
-        "      - name: Generate + attest an SBOM (SPDX JSON) per published digest\n"
-        "        if: github.event_name == 'push'"
-        " && startsWith(github.ref, 'refs/tags/v')\n"
-        "        env:\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n"
-        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
-        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
-        "      - id: attest\n"
-        "        name: Generate + attest an SBOM (SPDX JSON) per published digest\n",
+        *_mutate(
+            _SBOM_STEP,
+            ("      - name: Generate + attest an SBOM (SPDX JSON) per published digest\n        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64: ${{ steps.list.outputs.amd64 }}\n          ARM64: ${{ steps.list.outputs.arm64 }}\n",
+             '      - id: attest\n        name: Generate + attest an SBOM (SPDX JSON) per published digest\n'),
+        ),
         CAUGHT,
     ),
     (
@@ -495,12 +499,13 @@ CASES = [
     (
         "prerelease-skip-moved-onto-a-step",
         "release.yml",
-        "    if: needs.verify.outputs.is_prerelease != 'true'\n"
-        "    runs-on: ubuntu-latest\n\n"
-        "    steps:\n      - name: Download checksums for the verified tag\n",
-        "    runs-on: ubuntu-latest\n\n"
-        "    steps:\n      - name: Download checksums for the verified tag\n"
-        "        if: needs.verify.outputs.is_prerelease != 'true'\n",
+        *_mutate(
+            _HOMEBREW_HEAD,
+            ("    if: needs.verify.outputs.is_prerelease != 'true'\n",
+             ''),
+            ('      - name: Download checksums for the verified tag\n',
+             "      - name: Download checksums for the verified tag\n        if: needs.verify.outputs.is_prerelease != 'true'\n"),
+        ),
         CAUGHT,
     ),
     (
@@ -597,19 +602,13 @@ CASES = [
     (
         "heredoc-steps-line-hides-a-lost-digest-binding",
         "ci.yml",
-        "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: github.event_name == 'push'"
-        " && startsWith(github.ref, 'refs/tags/v')\n"
-        "        env:\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n"
-        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
-        "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
-        "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
-        "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
-        "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
-        "        run: |\n",
-        "      - name: Cosign keyless-sign the list and both children\n"
-        "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n",
+        *_mutate(
+            _SIGN_STEP,
+            ("        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64: ${{ steps.list.outputs.amd64 }}\n          ARM64: ${{ steps.list.outputs.arm64 }}\n          LIST_FULL: ${{ steps.list.outputs.list_full }}\n          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n",
+             ''),
+            ('        run: |\n',
+             "        run: |\n          cat <<'YAML'\n          steps:\n          YAML\n"),
+        ),
         CAUGHT,
     ),
     (
@@ -631,19 +630,11 @@ CASES = [
     (
         "steps-key-in-a-heredoc-hides-the-signing-step",
         "ci.yml",
-        "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: github.event_name == 'push'"
-        " && startsWith(github.ref, 'refs/tags/v')\n"
-        "        env:\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n"
-        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
-        "          ARM64: ${{ steps.list.outputs.arm64 }}\n",
-        "      - name: Describe the job\n"
-        "        run: |\n"
-        "          cat <<'EOF'\n"
-        "          steps:\n"
-        "          EOF\n"
-        "      - name: Cosign keyless-sign the list and both children\n",
+        *_mutate(
+            _SIGN_STEP,
+            ("      - name: Cosign keyless-sign the list and both children\n        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n        env:\n          LIST: ${{ steps.list.outputs.list }}\n          AMD64: ${{ steps.list.outputs.amd64 }}\n          ARM64: ${{ steps.list.outputs.arm64 }}\n",
+             "      - name: Describe the job\n        run: |\n          cat <<'EOF'\n          steps:\n          EOF\n      - name: Cosign keyless-sign the list and both children\n"),
+        ),
         CAUGHT,
     ),
     # The classification itself. Every guard above reads it from another job;
@@ -909,19 +900,13 @@ CASES = [
         # body is not a binding however much it reads like one.
         "digest-binding-printed-by-a-step-opening-with-env",
         "ci.yml",
-        "      - name: Cosign keyless-sign the list and both children\n"
-        "        if: github.event_name == 'push'"
-        " && startsWith(github.ref, 'refs/tags/v')\n"
-        "        env:\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n"
-        "          AMD64: ${{ steps.list.outputs.amd64 }}\n"
-        "          ARM64: ${{ steps.list.outputs.arm64 }}\n"
-        "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
-        "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
-        "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
-        "        run: |\n",
-        "      - env:\n          NOTE: none\n        run: |\n"
-        "          LIST: ${{ steps.list.outputs.list }}\n",
+        *_mutate(
+            _SIGN_STEP,
+            ("      - name: Cosign keyless-sign the list and both children\n        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n        env:\n",
+             '      - env:\n          NOTE: none\n        run: |\n'),
+            ('          AMD64: ${{ steps.list.outputs.amd64 }}\n          ARM64: ${{ steps.list.outputs.arm64 }}\n          LIST_FULL: ${{ steps.list.outputs.list_full }}\n          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n        run: |\n',
+             ''),
+        ),
         CAUGHT,
     ),
     # Disarmament in place. The step, its name and its text all survive the
@@ -1410,22 +1395,10 @@ CASES = [
 ]
 
 # The rehearsal verify (the rehearsal readonly verify design)
-# repeats the release verify body verbatim, so an anchor inside that body now
-# matches twice. These cases are about the release step: each anchor is widened
-# with context only that step has, so it still names one site.
-RELEASE_VERIFY_HEAD = (
-    "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@${{ github.ref }}\n"
-    "          LIST_FULL: ${{ steps.list.outputs.list_full }}\n"
-    "          AMD64_FULL: ${{ steps.list.outputs.amd64_full }}\n"
-    "          ARM64_FULL: ${{ steps.list.outputs.arm64_full }}\n"
-    "        run: |\n"
-)
-RELEASE_VERIFY_LOOP = RELEASE_VERIFY_HEAD + (
-    "          set -euo pipefail\n"
-    "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n"
-    '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
-)
-RELEASE_VERIFY_TAIL = "\n      # Only now does a release name exist."
+# repeats the release verify body verbatim, so an anchor inside that body
+# matches twice in ci.yml. These cases are about the release step: each case's
+# own text is applied as an edit inside that step's span, where it occurs once.
+_RELEASE_VERIFY = _wf_span("ci.yml", "docker-manifest", "Verify the release signature + SBOM attestation")
 IN_RELEASE_VERIFY = {
     "verify-step-deleted",
     "verify-attestation-stdout-back-in-the-log",
@@ -1441,13 +1414,7 @@ def _in_release_verify(case):
     label, workflow, before, after, expected = case
     if label not in IN_RELEASE_VERIFY:
         return case
-    if before.startswith("          set -euo pipefail"):
-        return (label, workflow, RELEASE_VERIFY_HEAD + before, RELEASE_VERIFY_HEAD + after, expected)
-    if before.startswith("            cosign verify"):
-        return (label, workflow, RELEASE_VERIFY_LOOP + before, RELEASE_VERIFY_LOOP + after, expected)
-    if before.endswith("          done\n"):
-        return (label, workflow, before + RELEASE_VERIFY_TAIL, after + RELEASE_VERIFY_TAIL, expected)
-    raise AssertionError(f"{label}: no release-verify context rule for its anchor")
+    return (label, workflow, *_mutate(_RELEASE_VERIFY, (before, after)), expected)
 
 
 CASES = [_in_release_verify(case) for case in CASES]
@@ -1462,13 +1429,8 @@ REHEARSAL_IDENTITY = (
     "          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml"
     "@refs/tags/v4.0.0-beta.2\n"
 )
-REHEARSAL_LOOP = (
-    "          ARM64_FULL: sha256:d267a3477aeec6f8702b2851e93d9e29ba8fd94cd13920dd158d8cb43e929da9\n"
-    "        run: |\n"
-    "          set -euo pipefail\n"
-    "          IMAGE=ghcr.io/mikkoparkkola/mcp-gateway\n"
-    '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
-)
+_REHEARSAL = _wf_span("ci.yml", "docker-manifest", "Rehearse the release verify against a pinned signed release")
+_REHEARSAL_FOR = '          for d in "${LIST}" "${AMD64}" "${ARM64}" "${LIST_FULL}" "${AMD64_FULL}" "${ARM64_FULL}"; do\n'
 REHEARSAL_TAIL = '"${IMAGE}@${d}" > /dev/null\n          done\n\n      - name: Install syft (SBOM)\n'
 INSTALLER_IF = (
     "        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"
@@ -1494,12 +1456,11 @@ CASES += [
      "@${{ github.ref }}\n", CAUGHT),
     ("rehearsal-gains-a-cosign-toggle", "ci.yml", REHEARSAL_IDENTITY,
      REHEARSAL_IDENTITY + '          COSIGN_EXPERIMENTAL: "1"\n', CAUGHT),
-    ("rehearsal-signs", "ci.yml", REHEARSAL_LOOP,
-     REHEARSAL_LOOP + '            cosign sign --yes "${IMAGE}@${d}"\n', CAUGHT),
-    ("rehearsal-reassigns-a-subject", "ci.yml", REHEARSAL_LOOP,
-     REHEARSAL_LOOP.replace("          for d", '          LIST="$(cat digests/amd64)"\n          for d'), CAUGHT),
-    ("rehearsal-drops-a-subject", "ci.yml", REHEARSAL_LOOP,
-     REHEARSAL_LOOP.replace(' "${ARM64_FULL}"; do', "; do"), CAUGHT),
+    ("rehearsal-signs", "ci.yml", *_mutate(
+        _REHEARSAL, (_REHEARSAL_FOR, _REHEARSAL_FOR + '            cosign sign --yes "${IMAGE}@${d}"\n')), CAUGHT),
+    ("rehearsal-reassigns-a-subject", "ci.yml", *_mutate(
+        _REHEARSAL, ("          for d", '          LIST="$(cat digests/amd64)"\n          for d')), CAUGHT),
+    ("rehearsal-drops-a-subject", "ci.yml", *_mutate(_REHEARSAL, (' "${ARM64_FULL}"; do', "; do")), CAUGHT),
     ("rehearsal-stdout-back-in-the-log-alone", "ci.yml", REHEARSAL_TAIL,
      REHEARSAL_TAIL.replace(" > /dev/null", ""), CAUGHT),
     ("rehearsal-timeout-drifts-from-the-release", "ci.yml", REHEARSAL_IF,
@@ -1518,18 +1479,14 @@ CASES += [
 
 
 # Job-handoff retention. Each anchor carries the comment line only its own
-# site has, so it names one upload and not the other two.
+# site has, so it names one upload and not the other two; ci.yml's comes from
+# its upload step's span.
 RELEASE_KEEP = (
     "          # workflow says what actually takes effect (RELEASING.md rule 4).\n"
     "          retention-days: 90\n"
 )
-CI_KEEP = (
-    "          path: digests/\n"
-    "          # Read by docker-manifest. Kept for the repository's 90-day retention\n"
-    "          # cap so a failed manifest job can be retried without rebuilding the\n"
-    "          # legs (RELEASING.md rule 4).\n"
-    "          retention-days: 90\n"
-)
+_CI_UPLOAD = _wf_span("ci.yml", "docker-build", "Upload the digests")
+_KEEP_90 = "          retention-days: 90\n"
 DOCKER_KEEP = (
     "          # Read by the manifest job. Kept for the repository's 90-day retention\n"
     "          # cap so a failed manifest job can be retried without rebuilding the\n"
@@ -1539,8 +1496,8 @@ DOCKER_KEEP = (
 CASES += [
     ("release-handoff-expires-in-a-day", "release.yml", RELEASE_KEEP,
      RELEASE_KEEP.replace(": 90", ": 1"), CAUGHT),
-    ("ci-digest-handoff-expires-in-a-day", "ci.yml", CI_KEEP,
-     CI_KEEP.replace(": 90", ": 1"), CAUGHT),
+    ("ci-digest-handoff-expires-in-a-day", "ci.yml", *_mutate(_CI_UPLOAD, (_KEEP_90, _KEEP_90.replace(": 90", ": 1"))),
+     CAUGHT),
     ("docker-digest-handoff-expires-in-a-day", "docker.yml", DOCKER_KEEP,
      DOCKER_KEEP.replace(": 90", ": 1"), CAUGHT),
     ("release-handoff-one-day-short", "release.yml", RELEASE_KEEP,
@@ -1553,10 +1510,8 @@ CASES += [
     ("release-handoff-retention-unset", "release.yml", RELEASE_KEEP,
      RELEASE_KEEP.replace("          retention-days: 90\n", ""), CAUGHT),
     # Outside `with:` the action never sees the key.
-    ("ci-digest-retention-moved-out-of-with", "ci.yml",
-     "        with:\n          name: image-digests-${{ matrix.arch }}\n" + CI_KEEP,
-     "        retention-days: 90\n        with:\n          name: image-digests-${{ matrix.arch }}\n"
-     + CI_KEEP.replace("          retention-days: 90\n", ""), CAUGHT),
+    ("ci-digest-retention-moved-out-of-with", "ci.yml", *_mutate(
+        _CI_UPLOAD, ("        with:\n", "        retention-days: 90\n        with:\n"), (_KEEP_90, "")), CAUGHT),
     # The scan must keep finding every handoff: a download it can no longer
     # match drops one silently, and the per-workflow guard is what says so.
     ("ci-digest-download-renamed", "ci.yml",
@@ -1611,6 +1566,19 @@ CASES += [
 
 # ASI04: release binaries are signed, their SBOMs written, and the draft
 # release verified before it is published.
+_PUBLISH = _wf_span("release.yml", "release", "Publish the release")
+_RECHECK = _wf_span("release.yml", "release", "Verify the published release's assets")
+_PUBLISH_THEN_RECHECK = _wf_span("release.yml", "release", "Publish the release", "Verify the published release's assets")
+
+
+def _recheck_moved_before_publish():
+    """The two steps swapped; the comment above the recheck moves with it, and the blank line goes between them."""
+    if STALE in (_PUBLISH, _RECHECK, _PUBLISH_THEN_RECHECK):
+        return STALE, STALE
+    gap = _PUBLISH_THEN_RECHECK[len(_PUBLISH):len(_PUBLISH_THEN_RECHECK) - len(_RECHECK)]
+    return _PUBLISH_THEN_RECHECK, gap.lstrip("\n") + _RECHECK + "\n" + _PUBLISH
+
+
 CASES += [
     ("release-built-without-auditable", "release.yml",
      "        run: cargo auditable build --release --target ${{ matrix.target }}\n",
@@ -1668,11 +1636,8 @@ CASES += [
     ("published-release-recheck-swallowed", "release.yml",
      "      - name: Verify the published release's assets\n",
      "      - name: Verify the published release's assets\n        continue-on-error: true\n", CAUGHT),
-    ("published-release-recheck-step-removed", "release.yml",
-     '      - name: Verify the published release\'s assets\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ needs.verify.outputs.tag }}\n          VERSION: ${{ needs.verify.outputs.version }}\n        run: |\n          set -euo pipefail\n          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-final\n          # shellcheck disable=SC2086 # BINARIES is a word list by design\n          scripts/release/verify-release-assets.sh published-final "$VERSION" $BINARIES\n', "", CAUGHT),
-    ("published-release-recheck-before-publish", "release.yml",
-     '      - name: Publish the release\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ needs.verify.outputs.tag }}\n        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false\n\n      # What the public release serves, checked once more: publishing cannot be\n      # undone here, but an asset changed between the draft check and now fails\n      # the run loudly instead of passing unseen (GH1941.SIGN.1).\n      - name: Verify the published release\'s assets\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ needs.verify.outputs.tag }}\n          VERSION: ${{ needs.verify.outputs.version }}\n        run: |\n          set -euo pipefail\n          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-final\n          # shellcheck disable=SC2086 # BINARIES is a word list by design\n          scripts/release/verify-release-assets.sh published-final "$VERSION" $BINARIES\n',
-     '      # What the public release serves, checked once more: publishing cannot be\n      # undone here, but an asset changed between the draft check and now fails\n      # the run loudly instead of passing unseen (GH1941.SIGN.1).\n      - name: Verify the published release\'s assets\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ needs.verify.outputs.tag }}\n          VERSION: ${{ needs.verify.outputs.version }}\n        run: |\n          set -euo pipefail\n          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-final\n          # shellcheck disable=SC2086 # BINARIES is a word list by design\n          scripts/release/verify-release-assets.sh published-final "$VERSION" $BINARIES\n\n      - name: Publish the release\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ needs.verify.outputs.tag }}\n        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false\n', CAUGHT),
+    ("published-release-recheck-step-removed", "release.yml", _RECHECK, "", CAUGHT),
+    ("published-release-recheck-before-publish", "release.yml", *_recheck_moved_before_publish(), CAUGHT),
     ("published-release-not-refused", "release.yml",
      '        run: scripts/release/refuse-published-release.sh "$GITHUB_REPOSITORY" "$TAG"\n',
      '        run: echo skipping\n', CAUGHT),
@@ -1698,13 +1663,7 @@ CASES += [
      "    name: Tests build from the packaged crate\n",
      "    name: Tests build from the packaged crate\n    if: github.event_name == 'push'\n", CAUGHT),
     ("package-tests-build-step-dropped", "ci.yml",
-     "      - name: Build the tests from the packaged crate\n"
-     "        # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole\n"
-     "        # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. By part it took 20.1 and\n"
-     "        # 27.6 min with nothing swapped (two samples, 2026-11-17): 45 leaves 63% over the slower. A stall ends here\n"
-     "        # with its log.\n"
-     "        timeout-minutes: 45\n"
-     "        run: scripts/ci/with-memory-log.sh scripts/ci/packaged-tests.sh build\n", "", CAUGHT),
+     _wf_span("ci.yml", "package-tests", "Build the tests from the packaged crate"), "", CAUGHT),
     ("docker-build-stops-waiting-for-package-tests", "ci.yml",
      "release-script-tests, package-tests, release-signing-checks]", "release-script-tests, release-signing-checks]", CAUGHT),
     ("packaged-suite-leaves-the-release-line", "packaged-suite.yml",
@@ -1782,6 +1741,9 @@ CASES += [
 ]
 
 # Every installed cosign stays past the verification advisories.
+# The helm job's cosign installer is the same step text as docker-manifest's,
+# so its span starts at the job's id line.
+_COSIGN_HELM = _wf_span("ci.yml", "helm-supply-chain", None, "Install cosign")
 CASES += [
     ("cosign-pin-downgraded", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
@@ -1790,9 +1752,7 @@ CASES += [
     ("cosign-pin-quoted-and-downgraded", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
-    ("cosign-pin-left-to-the-installer-default", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-left-to-the-installer-default", "ci.yml", *_mutate(_COSIGN_HELM, ('        with:\n          cosign-release: v2.6.5\n', '')), CAUGHT),
     ("cosign-pin-quoted-at-the-floor", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", TOLERATED),
@@ -1808,9 +1768,7 @@ CASES += [
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
-    ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml",
-     "        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n        with:\n          cosign-release: v2.6.4\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n', "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n"), ('          cosign-release: v2.6.5\n', '          cosign-release: v2.6.4\n')), CAUGHT),
     # The push-guard inventory must still see a quoted installer: a second,
     # unnamed one with no tag guard is found only by what it uses.
     ("cosign-installer-quoted-and-unguarded", "ci.yml",
@@ -1860,9 +1818,7 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n", TOLERATED),
     # A pin inside another input's block scalar is text the action never reads.
-    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          ignored-input: |\n            cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml", *_mutate(_COSIGN_HELM, ('          cosign-release: v2.6.5\n', '          ignored-input: |\n            cosign-release: v2.6.5\n')), CAUGHT),
     # A shell redirection or a comment is not a YAML anchor.
     ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
@@ -1888,12 +1844,8 @@ CASES += [
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
     # PyYAML keeps the last of two keys and flattens `<<`; the strict
     # loader refuses both.
-    ("cosign-pin-given-twice", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          cosign-release: v2.5.2\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
-    ("cosign-pin-through-a-merge-key", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "        with:\n          <<: { cosign-release: v2.6.5 }\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-given-twice", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n')), CAUGHT),
+    ("cosign-pin-through-a-merge-key", "ci.yml", *_mutate(_COSIGN_HELM, ('          cosign-release: v2.6.5\n', '          <<: { cosign-release: v2.6.5 }\n')), CAUGHT),
     ("release-runs-the-floor-without-its-parser", "release.yml",
      "      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != \"6.0.2\")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'\n",
      "", CAUGHT),
@@ -1902,9 +1854,7 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n", TOLERATED),
     # Under env: the input never reaches the action, which installs its default.
-    ("cosign-pin-moved-under-env", "ci.yml",
-     "        with:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
-     "        env:\n          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
+    ("cosign-pin-moved-under-env", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        env:\n')), CAUGHT),
     ("cosign-pin-moved-up-a-major", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
@@ -2017,72 +1967,17 @@ CASES += [
      CAUGHT),
 ]
 
-# Throwaway runs carry the release tooling's Python suites. The hosted job is
-# named by its runner line, the trusted one by its env block, so each anchor
-# names one job although both run the same steps.
-_HOSTED_PY = (
-    "    runs-on: ubuntu-24.04\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
-    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
-    "        with:\n          persist-credentials: false\n"
-    "      # Hosted runners only: the trusted machine sizes its own memory.\n"
-    "      - if: runner.environment == 'github-hosted'\n"
-    "        uses: ./.github/actions/add-swap\n"
-)
+# Throwaway runs carry the release tooling's Python suites. Both throwaway jobs
+# run the same steps, so the hosted job's span starts at its id line, which
+# names one job; the trusted one is named by its env block.
+_HOSTED_TO_SUITES = _wf_span("ci.yml", "test-throwaway-hosted", None, "Release tooling Python suites")
 _TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
-def _hosted_suites_span():
-    """The hosted throwaway job from its runner line (_HOSTED_PY) through the end of its Python suites step, read
-    from ci.yml, so the case drops every step from there to the suites without keeping a copy of them: those
-    steps change with every tooling fix, and a copy here went stale each time. A missing start or end gives text
-    that occurs nowhere, which the runner reports as a stale anchor."""
-    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-    start = text.find(_HOSTED_PY)
-    suites_end = '          exit "$fail"\n'
-    end = text.find(suites_end, start) if start >= 0 else -1
-    if end < 0:
-        return "\0 hosted throwaway job or its suites step not found \0"
-    return text[start:end + len(suites_end)]
-
-
-_HOSTED_PY_STEP = _hosted_suites_span()
 CASES += [
-    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_PY_STEP, _HOSTED_PY, CAUGHT),
+    # Every step after the swap step, through the suites, dropped.
+    ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_TO_SUITES,
+     _wf_span("ci.yml", "test-throwaway-hosted", None, "uses:./.github/actions/add-swap"), CAUGHT),
     ("throwaway-python-failure-swallowed", "ci.yml",
-     '          exit "$fail"\n      - if: ${{ !cancelled() }}\n        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
-     "      # Restore only: saving from throwaway runs would evict the entries the\n"
-     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - if: ${{ !cancelled() }}\n        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
-     "        with:\n          save-if: false\n"
-     "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
-     "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
-     "      - name: Private gateway home\n"
-     "        if: ${{ !cancelled() }}\n"
-     '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
-     "      # Each skip names the job that runs the test in full, and its ticket:\n"
-     "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
-     "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
-     "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - name: Run the tests\n        if: ${{ !cancelled() }}\n"
-     "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
-     "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
-     "  # Same run on the self-hosted arm64 runner.",
-     '          exit 0\n      - if: ${{ !cancelled() }}\n        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n'
-     "      # Restore only: saving from throwaway runs would evict the entries the\n"
-     "      # merge-evidence jobs rely on from the shared 10 GB repository cache.\n"
-     "      - if: ${{ !cancelled() }}\n        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n"
-     "        with:\n          save-if: false\n"
-     "      # Tests that resolve the gateway home in-process refuse to run without a private one: put a\n"
-     "      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).\n"
-     "      - name: Private gateway home\n"
-     "        if: ${{ !cancelled() }}\n"
-     '        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"\n'
-     "      # Each skip names the job that runs the test in full, and its ticket:\n"
-     "      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.\n"
-     "      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;\n"
-     "      #   release.yml `verify` needs it green on the released revision.\n"
-     "      - name: Run the tests\n        if: ${{ !cancelled() }}\n"
-     "        # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.\n"
-     "        run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n\n"
-     "  # Same run on the self-hosted arm64 runner.", CAUGHT),
+     *_mutate(_HOSTED_TO_SUITES, ('          exit "$fail"\n', "          exit 0\n")), CAUGHT),
     ("trusted-throwaway-swallows-failures", "ci.yml",
      _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
 ]
@@ -2090,15 +1985,7 @@ CASES += [
 # MIK-7850: the ranking corpus compare runs every ref and fails on a mismatch.
 _CORPUS_NAME = "      - name: Ranking corpus regenerates byte for byte (MIK-7850)\n"
 _CORPUS_CMP = '          python3 benchmarks/ranking-baseline/gen_corpus.py "$tree" | cmp - benchmarks/ranking-baseline/corpus.json\n'
-_CORPUS_STEP = (
-    _CORPUS_NAME
-    + "        run: |\n"
-    + "          set -euo pipefail\n"
-    + "          git fetch --no-tags --depth=1 origin f241b464acf6007a88ebc2b576c0825350b018a1\n"
-    + "          tree=$(mktemp -d)\n"
-    + '          git archive FETCH_HEAD capabilities | tar -x -C "$tree"\n'
-    + _CORPUS_CMP
-)
+_CORPUS_STEP = _wf_span("ci.yml", "release-script-tests", _CORPUS_NAME[len("      - name: "):-1])
 CASES += [
     ("corpus-compare-deleted", "ci.yml", _CORPUS_STEP, "", CAUGHT),
     ("corpus-compare-masked", "ci.yml", _CORPUS_CMP, _CORPUS_CMP[:-1] + " || true\n", CAUGHT),
