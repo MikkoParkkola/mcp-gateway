@@ -112,7 +112,7 @@ backend" and "fails a capability file" first.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
-| 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
+| 88 | After SIGTERM the HTTP listener waits at most its share of `server.shutdown_timeout` (the total less 12.9 s kept for the rest of the stop: 17.1 s at the 30 s default) for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` so that its listener share covers your longest request, and your orchestrator's kill timeout to at least `server.shutdown_timeout` + 1 s |
 | 89 | A remote backend that runs without signed provenance is named in a startup warning and in `doctor` | None; to verify these backends, set `require_for_remote_backends` and add signed metadata |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
@@ -192,7 +192,7 @@ backend" and "fails a capability file" first.**
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
-| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits for disk work still running only until 2 s before `server.shutdown_timeout` ends, then exits; work still running then is logged at ERROR and the exit status is 75; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running, with exit status 75, points at the storage to check |
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
@@ -2748,7 +2748,7 @@ by URL already do:
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
 
-## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
+## 88. The HTTP listener gives open requests its share of `server.shutdown_timeout`, then stops
 
 **Startup:** no notice
 
@@ -2760,12 +2760,13 @@ a fixed 30 seconds whatever the config said.
 In 4.0 both listeners stop the same way (#2147):
 
 - New connections are refused as soon as the signal arrives.
-- Open requests get `server.shutdown_timeout` (default 30 s) to finish. Requests still
+- Open requests get the listener's share of `server.shutdown_timeout`: the total less the
+  12.9 s kept for the saves, the backend stop and the exit (17.1 s at the 30 s default). Requests still
   running at the deadline, including open event streams, are cut.
-- The gateway then saves its state and waits, within the same bound, for any in-flight
+- The gateway then saves its state and waits, within the same total, for any in-flight
   work the cut released, before it stops its backends.
 
-**Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
+**Action:** if some requests run longer than the listener's share, raise `server.shutdown_timeout`. Keep the
 orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) at
 least `server.shutdown_timeout` + 1 s, so the gateway can finish its own shutdown; the
 shipped templates give 31 s (docs/DEPLOYMENT.md, Stop grace).
@@ -4475,21 +4476,30 @@ without an identity.
 An `mcp` capability with `cache:` set also keys its cached answers on that same
 per-caller name, so one caller is never served another caller's cached answer.
 
-## 168. An HTTP gateway exits within 10 seconds of finishing its shutdown
+## 168. An HTTP gateway's last wait for disk work ends inside its stop timeout
 
 **Startup:** no notice
 
-After an HTTP gateway's shutdown steps return (draining requests and closing
-the task store, under `server.shutdown_timeout`), the gateway now waits at
-most 10 more seconds for disk work still running (a task-store or
-audit write) and then exits. Before, it waited for that work without limit, so
-a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
-an orchestrator had to kill it. `serve --stdio` already exited this way.
+In 3.5.x nothing limited how long the gateway waited for leftover disk work once
+its stop was done, so one write hung on a stalled NFS or FUSE mount could keep it
+running until something outside killed it.
 
-Work that finishes within the 10 seconds completes as before. When the wait
-runs the full 10 seconds, one ERROR line says the gateway exited with blocking
-work still running. That is a timeout, not a diagnosis: check the storage
-behind the task store and the audit log.
+In 4.0 that last wait belongs to the stop timeout. When the stop's stages are over
+(requests drained, state saved, backends stopped), blocking work that is still going,
+such as a task-store or audit-log write, gets until 2 s before
+`server.shutdown_timeout` expires, counted from the stop signal. The log writer is
+then shut down by the end of the timeout, and a watchdog terminates the process
+0.5 s past it, whatever is left (the item "HTTP stop: `server.shutdown_timeout` is
+now one total" explains the shares). A write that completes during the wait is
+unaffected.
+
+Work still going when the wait ends is reported in one ERROR line,
+`shutdown reached the end of its wait with blocking work still running`, with the
+time waited and the counts of live threads and tasks, and the process exits with
+status 75 rather than 0. The line marks a write that did not return in time, not
+its cause: look first at the storage under the task store and the audit log. A
+stdio gateway (`serve --stdio`) is unchanged: its wait stays a fixed 10 s and its
+exit status is not altered.
 
 ## 169. The per-backend route seals a backend's input-round state
 
