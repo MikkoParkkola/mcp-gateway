@@ -112,6 +112,9 @@ jobs:
           toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Pinned task SDK and Redis
@@ -159,6 +162,9 @@ jobs:
           toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Run the part
@@ -295,6 +301,9 @@ jobs:
           toolchain: 1.99.1
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version ${{ env.COVERAGE_LLVM_COV }}
       - name: Allow symlink creation
