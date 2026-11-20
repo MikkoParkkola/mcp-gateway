@@ -238,10 +238,6 @@ jobs:
         # doctests; memory every 30 s (scripts/ci/with-memory-log.sh), log-only until its duration is measured.
         run: scripts/ci/with-memory-log.sh scripts/ci/lib-parts.sh run --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
-      - name: Memory tripwire
-        if: always()
-        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
-
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and
         # cargo refuses to publish against a replaced source unless the target
@@ -249,6 +245,13 @@ jobs:
         # CARGO_HOME, so overriding that does not clear it.
         # https://doc.rust-lang.org/cargo/reference/source-replacement.html
         run: cargo publish --locked --dry-run --registry crates-io
+
+      # The job's last step, so it counts every compile above, the dry-run's
+      # included (scripts/ci/check_swap_jobs.py refuses a shell step after it).
+      - name: Memory tripwire, after every compile
+        if: always()
+        # Swap-out past 2 GiB means a whole lib test build came back.
+        run: scripts/ci/memory-tripwire.sh 2048 "$RUNNER_TEMP/memory-trend.txt"
 
   build:
     needs: verify

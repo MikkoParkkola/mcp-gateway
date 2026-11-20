@@ -200,6 +200,14 @@ jobs:
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # A Python test skip that is not listed with its reason reads as a pass where the tool or right is missing.
+      - name: Every test skip is listed or goes through the required-mode helper
+        run: |
+          python3 scripts/ci/test_required_mode.py
+          python3 scripts/ci/check_python_skips.py --self-test
+          python3 scripts/ci/check_python_skips.py
+          python3 scripts/ci/check_rust_skips.py --self-test
+          python3 scripts/ci/check_rust_skips.py
       # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
       - name: Two clippy lints are found by text before a lint run
         run: |
@@ -301,6 +309,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
       # Here because this job already has the pinned compiler and is cheap:
@@ -323,6 +333,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Validate first-use smoke scripts
         # One file per `bash -n`: it checks only its first argument.
         run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
@@ -363,6 +375,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
       # would read as a missing downgrade warning, not as a missing tool.
       - name: Install and check the script's tools
@@ -583,7 +597,7 @@ jobs:
       # out the line's own cache).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # The wall clock is read only in src/clock.rs (MIK-8202 AC.9). Clippy
       # ignores a disallowed path it cannot resolve, so each clippy.toml clock
@@ -677,6 +691,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       # Every shard: the W-T6 rows can land in any of them.
@@ -784,6 +800,8 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
       # `cfg(windows)` production code is linted like the Linux job's; only
@@ -917,6 +935,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
       # locks and paths behave differently on a Mac. The two skips are the
@@ -1120,6 +1140,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Shard suite
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos int
@@ -1149,6 +1171,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the shared lib test binary
         # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
         # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
@@ -1227,6 +1251,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the gateway binary for the lib shards' sandbox rows
         timeout-minutes: 15
         run: |
@@ -1261,6 +1287,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
@@ -1427,6 +1455,12 @@ jobs:
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+      # The inventory suite parses Rust with tree-sitter, at the versions the gate env lists: read from that list,
+      # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
+      # cargo steps below still run.
+      - name: Install the gate env's tree-sitter versions
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -1437,23 +1471,27 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: ${{ !cancelled() }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
       # Tests that resolve the gateway home in-process refuse to run without a private one: put a
       # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
       - name: Private gateway home
+        if: ${{ !cancelled() }}
         run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
       - name: Run the tests
+        if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
         run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
@@ -1487,6 +1525,12 @@ jobs:
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+      # The inventory suite parses Rust with tree-sitter, at the versions the gate env lists: read from that list,
+      # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
+      # cargo steps below still run.
+      - name: Install the gate env's tree-sitter versions
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -1497,23 +1541,27 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: ${{ !cancelled() }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
       # Tests that resolve the gateway home in-process refuse to run without a private one: put a
       # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
       - name: Private gateway home
+        if: ${{ !cancelled() }}
         run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
       - name: Run the tests
+        if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
         run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
@@ -1671,6 +1719,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
       - name: Install cosign
@@ -1798,6 +1848,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the tests from the packaged crate
         # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole
         # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. By part it took 20.1 and
@@ -1839,6 +1891,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-audit
         env:
           RUSTFLAGS: ""
@@ -2053,6 +2107,8 @@ jobs:
           toolchain: 1.99.1
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
       - name: Build the shipped binary
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'

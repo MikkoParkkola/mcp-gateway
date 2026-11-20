@@ -88,13 +88,49 @@ where
     }
 }
 
+/// Whether a test that cannot run on this host must fail instead of skipping, from `TESTS_REQUIRE_ALL`: unset or
+/// `0` skips (`0` is the local opt-out), `1` requires, and any other value is an error naming it, so a typo cannot
+/// silently turn required mode off. CI sets `1` in every test shard (`scripts/ci/shard_tests.py`); the packaged-crate
+/// suite does not, and still skips what its crate lacks. The Python rule is `scripts/ci/required_mode.py`.
+pub(crate) fn required_mode(value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!(
+            "TESTS_REQUIRE_ALL must be 0 or 1 when set, got {other:?}"
+        )),
+    }
+}
+
+/// The one way a test skips because this host lacks something it needs (a user right, a loopback family, the
+/// repository files): prints `skipped: <requirement>`, or panics where required mode is on, so a feature's only check
+/// cannot pass by not running. The caller returns right after it (`scripts/ci/check_rust_skips.py` checks that).
+///
+/// # Panics
+///
+/// In required mode, and on a `TESTS_REQUIRE_ALL` value that is not `0` or `1`.
+pub(crate) fn skip_or_fail(requirement: &str) {
+    let value = match std::env::var("TESTS_REQUIRE_ALL") {
+        Ok(v) => Some(v),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("TESTS_REQUIRE_ALL is not valid unicode"),
+    };
+    match required_mode(value.as_deref()) {
+        Ok(true) => panic!("required here but unavailable on this host: {requirement}"),
+        Ok(false) => eprintln!("skipped: {requirement}"),
+        Err(message) => panic!("{message}"),
+    }
+}
+
 #[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use std::ops::ControlFlow;
     use std::time::Duration;
 
-    use super::{wait_real_time, wait_until};
+    use std::process::Output;
+
+    use super::{required_mode, wait_real_time, wait_until};
 
     /// A wait whose condition never holds gives up at its bound, with the
     /// last observation, and not later.
@@ -160,5 +196,74 @@ mod tests {
             Duration::ZERO,
             "the paused clock moved while waiting: a later interval could explain the file"
         );
+    }
+
+    const PLANTED: &str = "the planted requirement";
+
+    /// A1: unset and `0` skip (the local opt-out).
+    #[test]
+    fn a1_unset_and_zero_skip() {
+        assert_eq!(required_mode(None), Ok(false));
+        assert_eq!(required_mode(Some("0")), Ok(false));
+    }
+
+    /// A2: exactly `1` requires; every other value, empty included, is an error naming it.
+    #[test]
+    fn a2_one_requires_and_any_other_value_is_an_error() {
+        assert_eq!(required_mode(Some("1")), Ok(true));
+        for bad in ["", "yes", " 1", "true"] {
+            let err = required_mode(Some(bad)).unwrap_err();
+            assert!(err.contains(&format!("{bad:?}")), "{err}");
+        }
+    }
+
+    fn child(value: Option<&str>) -> Output {
+        let mut cmd = crate::test_home::test_binary();
+        cmd.args([
+            "--ignored",
+            "--exact",
+            "test_wait::tests::skip_child",
+            "--nocapture",
+        ]);
+        cmd.env_remove("TESTS_REQUIRE_ALL");
+        if let Some(v) = value {
+            cmd.env("TESTS_REQUIRE_ALL", v);
+        }
+        cmd.output().expect("the child runs")
+    }
+
+    /// Run only by A4, in a child with its own environment.
+    #[test]
+    #[ignore = "run by a4, in a child with its own environment"]
+    fn skip_child() {
+        super::skip_or_fail(PLANTED);
+    }
+
+    /// A4: the real helper reads the variable: unset and `0` print the skip line and pass; `1` fails naming the
+    /// requirement; any other value panics naming the value.
+    #[test]
+    fn a4_the_real_helper_reads_the_variable() {
+        for value in [None, Some("0")] {
+            let out = child(value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!("skipped: {PLANTED}")),
+                "{value:?}: {err}"
+            );
+        }
+        let out = child(Some("1"));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{err}");
+        assert!(
+            err.contains(&format!(
+                "required here but unavailable on this host: {PLANTED}"
+            )),
+            "{err}"
+        );
+        let out = child(Some("yes"));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{err}");
+        assert!(err.contains("\"yes\""), "{err}");
     }
 }

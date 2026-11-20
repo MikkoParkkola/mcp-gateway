@@ -9,9 +9,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
+import required_mode  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parent / "gate-env-python.sh"
 REPAIR = "UV_MALWARE_CHECK=1 uv sync --locked --project scripts/gate-env"
@@ -34,7 +38,7 @@ class GateEnvPython(unittest.TestCase):
 
     def test_a_project_that_is_not_synced_is_refused_and_left_alone(self):
         if shutil.which("uv") is None:
-            self.skipTest("uv is not installed: the --check path cannot be exercised here")
+            required_mode.skip_or_fail(self, "uv, to exercise the --check path")
         with tempfile.TemporaryDirectory() as td:
             project = Path(td)
             (project / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n[tool.uv]\npackage = false\n')
@@ -48,7 +52,7 @@ class GateEnvPython(unittest.TestCase):
     def test_a_synced_environment_names_its_own_interpreter(self):
         env = SCRIPT.parent.parent / "gate-env"
         if not (env / ".venv/bin/python").exists():
-            self.skipTest("the gate environment is not synced here")
+            required_mode.skip_or_fail(self, "the synced gate environment")
         done = run({})
         self.assertEqual(done.returncode, 0, done)
         self.assertEqual(done.stdout.strip(), str(env / ".venv/bin/python"))
