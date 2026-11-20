@@ -288,11 +288,12 @@ pub(crate) use egress::{fixture_hardened_signed_built_on, fixture_logged};
 pub(crate) use quota::Minting;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
-use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{
-    fixture_firewalled_budget_built, fixture_firewalled_tenant, fixture_propagating_budgeted,
+    TaskFirewall, fixture_firewalled_budget_built, fixture_firewalled_tenant,
+    fixture_propagating_budgeted, fixture_task_firewalled,
 };
+use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 pub(crate) use quota::{
     fixture_propagating, fixture_propagating_logged, fixture_propagating_signed,
 };

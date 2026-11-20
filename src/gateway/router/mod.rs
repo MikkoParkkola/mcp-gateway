@@ -495,6 +495,9 @@ pub(super) mod route_matrix_x14_nonce_tests;
 /// A withheld direct call and a missing one leave the same firewall state.
 #[cfg(all(test, feature = "firewall"))]
 mod refused_call_parity_tests;
+/// A withheld surfaced task call and a missing name leave the request firewall uncharged.
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_task_parity_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
 /// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
 #[cfg(tp1)]
