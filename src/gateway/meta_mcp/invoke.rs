@@ -532,7 +532,6 @@ impl MetaMcp {
     /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     #[allow(clippy::too_many_arguments)] // Caller context threaded explicitly (identity, keys, trace)
-    #[allow(clippy::too_many_arguments)]
     async fn invoke_tool_traced(
         &self,
         args: &Value,

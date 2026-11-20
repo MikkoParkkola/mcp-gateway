@@ -39,3 +39,11 @@
 id = "RUSTSEC-2024-0449"
 ignoreUntil = 2026-12-31
 reason = "Unmaintained unsafe-libyaml, an informational RustSec advisory with no patched release, reached through serde_yaml 0.9.34. Operator ruling 2026-10-22 (option C) and renewal 2026-11-11 (option A), to cover the 3.x line until 4.0 replaces it (4.0 has no serde_yaml). Remove this entry if the 3.x line is retired earlier. Reviewed 2026-11-11."
+
+# chrono is marked unmaintained: an informational notice with no vulnerability
+# and no patched release (upstream chronotope/chrono#1768). 4.0 carries the
+# same entry; the migration to jiff or time removes it.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-15
+reason = "informational unmaintained notice, no vulnerability; on the 3.5 line chrono parses RFC 3339 text in parse_timestamp (src/commands/identity.rs, the identity CLI's own --expires-at and --revoked-at flags), AttestationValidator::restore (src/attestation/validator.rs, the gateway's own rotation checkpoint) and TokenClaims::expires_at_utc (src/attestation/token.rs, a token's expires_at claim, which validate_boundary_call parses only after verify_bytes accepts the signature), and its serde timestamps sit in the gateway's own state files; covers the 3.x line until 4.0 replaces it"
