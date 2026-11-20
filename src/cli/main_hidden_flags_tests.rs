@@ -218,27 +218,64 @@ fn the_destination_flag_reads_exactly_mcp_gateway_url() {
     use clap::CommandFactory as _;
     let mut cli = Cli::command();
     cli.build();
-    let paths: &[&[&str]] = &[
-        &["stats"],
-        &["dashboard-link"],
-        &["api"],
-        &["events", "dead-letters"],
-        &["audit", "lookup-email"],
-    ];
-    for path in paths {
-        let mut cmd = &cli;
-        for name in *path {
-            cmd = cmd
-                .find_subcommand(name)
-                .unwrap_or_else(|| panic!("no subcommand {name:?} in {path:?}"));
-        }
-        let flag = cmd
-            .get_arguments()
-            .find(|arg| arg.get_long() == Some("gateway"))
-            .unwrap_or_else(|| panic!("{path:?} has no --gateway"));
-        let env = flag.get_env().and_then(|name| name.to_str());
+    for path in DESTINATION_PATHS {
+        let env = gateway_flag(&cli, path)
+            .get_env()
+            .and_then(|name| name.to_str());
         assert_eq!(env, Some("MCP_GATEWAY_URL"), "{path:?}");
     }
+}
+
+/// `--url` and `-u` are names of `--gateway` itself, not flags of their own
+/// (a flag of its own could parse into a field nothing reads), and help shows
+/// neither.
+#[test]
+fn the_old_spellings_are_hidden_aliases_of_the_destination_flag() {
+    use clap::CommandFactory as _;
+    let mut cli = Cli::command();
+    cli.build();
+    for path in DESTINATION_PATHS {
+        let flag = gateway_flag(&cli, path);
+        assert!(
+            flag.get_all_aliases()
+                .is_some_and(|names| names.contains(&"url")),
+            "{path:?}: --url is not a name of --gateway"
+        );
+        assert!(
+            flag.get_all_short_aliases()
+                .is_some_and(|names| names.contains(&'u')),
+            "{path:?}: -u is not a name of --gateway"
+        );
+        let words = help_words(path);
+        for old in ["--url", "-u"] {
+            assert!(
+                !words.iter().any(|w| w == old),
+                "{path:?} help still shows {old}"
+            );
+        }
+    }
+}
+
+/// The five commands that reach a running gateway, by subcommand path.
+const DESTINATION_PATHS: &[&[&str]] = &[
+    &["stats"],
+    &["dashboard-link"],
+    &["api"],
+    &["events", "dead-letters"],
+    &["audit", "lookup-email"],
+];
+
+/// The `--gateway` argument of the subcommand at `path`.
+fn gateway_flag<'a>(cli: &'a clap::Command, path: &[&str]) -> &'a clap::Arg {
+    let mut cmd = cli;
+    for name in path {
+        cmd = cmd
+            .find_subcommand(name)
+            .unwrap_or_else(|| panic!("no subcommand {name:?} in {path:?}"));
+    }
+    cmd.get_arguments()
+        .find(|arg| arg.get_long() == Some("gateway"))
+        .unwrap_or_else(|| panic!("{path:?} has no --gateway"))
 }
 
 /// `add --url` is a backend's own address, a different meaning: it keeps its
@@ -283,21 +320,17 @@ fn hidden_flags_are_left_out_of_help_and_kept_flags_stay() {
             &["--port"],
         ),
         (&["add"], &["--keep-as-text"], &["--command"]),
-        (
-            &["api"],
-            &["--if-match", "--url", "-u"],
-            &["--data", "--gateway"],
-        ),
-        (&["stats"], &["--url", "-u"], &["--gateway"]),
-        (&["dashboard-link"], &["--url", "-u"], &["--gateway"]),
+        (&["api"], &["--if-match"], &["--data", "--gateway"]),
+        (&["stats"], &[], &["--gateway"]),
+        (&["dashboard-link"], &[], &["--gateway"]),
         (
             &["audit", "lookup-email"],
-            &["--limit", "--url", "-u"],
+            &["--limit"],
             &["--email-stdin", "--gateway"],
         ),
         (
             &["events", "dead-letters"],
-            &["--reason", "--url", "-u"],
+            &["--reason"],
             &["--all", "--gateway", "--subscription"],
         ),
         (
