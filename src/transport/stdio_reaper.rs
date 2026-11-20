@@ -143,14 +143,16 @@ impl StopDeadline {
         self.handed.lock().len()
     }
 
-    /// Whether every tracked handover's tree has been reaped: after
-    /// [`Self::wait_handed`] up to a deadline, the kill landed before it.
+    /// Whether every tracked handover's tree has been reaped with an exit
+    /// status: after [`Self::wait_handed`] up to a deadline, the kill landed
+    /// and the leader was collected before it. An unreaped give-up
+    /// (`Done(None)`) does not count.
     #[cfg(all(test, unix))]
     pub(crate) fn handed_all_reaped(&self) -> bool {
         self.handed
             .lock()
             .iter()
-            .all(|receiver| *receiver.borrow() != Reaped::Pending)
+            .all(|receiver| matches!(*receiver.borrow(), Reaped::Done(Some(_))))
     }
 
     /// Wait, up to `deadline`, for every tracked handover to be ended: a tree

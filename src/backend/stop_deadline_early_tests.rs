@@ -487,6 +487,9 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
     let once = backend.stop_once.lock().await;
     let lifecycle = backend.lifecycle.write().await;
     let entry = monotonic_now();
+    // On Linux std's Instant reads CLOCK_MONOTONIC too, so the reaper's
+    // recorded kill instant maps onto the peer's marks through this pair.
+    let entry_instant = std::time::Instant::now();
     let db = tokio::time::Instant::now() + BACKEND_RESERVE;
     let mut stop = std::pin::pin!(registry.stop_all_by(db, crate::backend::Handover::AtEntry));
     assert!(
@@ -503,7 +506,7 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
         registry.stop_deadline().handed_all_reaped(),
         "the handed nested tree was not reaped before the stage deadline"
     );
-    crate::transport::signal_log::assert_term_then_kill(pid, "the nested tree's plan").await;
+    crate::transport::signal_log::assert_term_then_kill_strict(pid, "the nested tree's plan").await;
     let planned_term = entry + BACKEND_RESERVE - KILL_RESERVE_FOR_TEST - TERM_NEED;
     let eof = peer_mark(dir.path(), "eof").expect("the nested peer never saw EOF");
     assert!(
@@ -514,12 +517,24 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
     );
     let since = |name: &str| peer_mark(dir.path(), name).map(|at| at.saturating_sub(entry));
     let leaf_dead = since("leaf_dead");
+    // Harness data, one line per run: H = EOF after entry, J = the peer's
+    // SIGTERM mark past the planned instant, slack = the kill actually sent
+    // after the leaf's death (negative: the leaf outlived the kill).
+    let kill = crate::transport::signal_log::kill_sent_at(pid)
+        .map(|at| at.saturating_duration_since(entry_instant));
+    let signed = |a: Option<Duration>, b: Option<Duration>| match (a, b) {
+        (Some(a), Some(b)) => format!("{:.6}", a.as_secs_f64() - b.as_secs_f64()),
+        _ => "none".to_owned(),
+    };
+    let planned = Some(planned_term.saturating_sub(entry));
     eprintln!(
-        "B.3 marks after entry: eof {:?}, term {:?}, leaf dead {:?}; planned SIGTERM {:?}",
-        eof.saturating_sub(entry),
+        "B.3 RUN H={:.6} J={} slack={} term={:?} leaf_dead={:?} kill={:?}",
+        eof.saturating_sub(entry).as_secs_f64(),
+        signed(since("term"), planned),
+        signed(kill, leaf_dead),
         since("term"),
         leaf_dead,
-        planned_term.saturating_sub(entry)
+        kill
     );
     if leaf_dead.is_none() {
         // Never reaped by the peer, so its pid is still the leaf's own.
