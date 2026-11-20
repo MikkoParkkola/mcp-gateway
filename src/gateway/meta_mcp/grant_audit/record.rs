@@ -144,9 +144,13 @@ pub(in crate::gateway::meta_mcp) fn select_records(notes: &[GrantNote]) -> Vec<&
         .iter()
         .enumerate()
         .filter(|&(i, note)| {
-            note.trace_id.is_some()
-                || (!notes.iter().any(|n| same(n, note) && n.trace_id.is_some())
-                    && !notes[i + 1..].iter().any(|n| same(n, note)))
+            mutant!(
+                "m1",
+                true,
+                note.trace_id.is_some()
+                    || (!notes.iter().any(|n| same(n, note) && n.trace_id.is_some())
+                        && !notes[i + 1..].iter().any(|n| same(n, note)))
+            )
         })
         .map(|(_, note)| note)
         .collect()
@@ -166,8 +170,12 @@ impl Drop for SlotGuard {
         // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let best_effort =
             std::mem::take(&mut *self.slot.best_effort.lock().expect("grant slot lock"));
-        if !pending.is_empty() || !best_effort.is_empty() {
-            spawn_write(&self.logger, pending, best_effort);
+        if mutant!("m3w", false, !pending.is_empty() || !best_effort.is_empty()) {
+            spawn_write(
+                &self.logger,
+                mutant!("m3", Vec::new(), pending),
+                best_effort,
+            );
         }
     }
 }
@@ -198,7 +206,7 @@ pub(super) fn spawn_write(
         {
             tracing::error!(%error, "grant decision records could not be written");
         }
-        if !best_effort.is_empty() {
+        if mutant!("m2", false, !best_effort.is_empty()) {
             #[cfg(test)]
             seams::at_best_effort_start().await;
             let server = best_effort.first().map(|note| note.server.clone());
