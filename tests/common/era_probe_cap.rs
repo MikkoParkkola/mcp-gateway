@@ -56,24 +56,15 @@ pub fn in_child_with_cap() -> bool {
     true
 }
 
-/// Fail if the test binary whose source is `binary` (as `file!()` names it,
-/// from the crate root), or any module it includes by `#[path]` (this helper
-/// among them), sets or removes an environment variable: the cap reaches the
-/// gateway from exec only. Reading the `#[path]` lines keeps a module added
-/// later in the scan without a list to update.
+#[path = "module_sources.rs"]
+mod module_sources;
+
+/// Fail if the test binary whose root file is `binary` (as `file!()` names
+/// it, from the crate root), or any module it compiles in (this helper among
+/// them, followed through `#[path]` and `mod` lines), sets or removes an
+/// environment variable: the cap reaches the gateway from exec only.
 pub fn assert_no_env_writes(binary: &str) {
-    let main = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(binary);
-    let source = std::fs::read_to_string(&main).expect("the test binary's source");
-    let dir = main.parent().expect("the test binary's directory");
-    let mut files = vec![(main.clone(), source.clone())];
-    for line in source.lines() {
-        if let Some(rest) = line.trim().strip_prefix("#[path = \"") {
-            let module = dir.join(rest.split('"').next().expect("a quoted path"));
-            let text = std::fs::read_to_string(&module).expect("an included module's source");
-            files.push((module, text));
-        }
-    }
-    for (path, text) in &files {
+    for (path, text) in module_sources::module_sources(binary) {
         for needle in [concat!("set_", "var("), concat!("remove_", "var(")] {
             assert!(
                 !text.contains(needle),

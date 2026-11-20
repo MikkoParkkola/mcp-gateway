@@ -4,6 +4,8 @@
 
 #![allow(unsafe_code)] // Tests use set_var/remove_var which are unsafe in edition 2024
 
+#[path = "common/module_sources.rs"]
+mod module_sources;
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -97,10 +99,7 @@ fn every_test_takes_the_env_lock_first() {
         unlocked.is_empty(),
         "tests that do not take the env lock first: {unlocked:?}"
     );
-    let writes = [
-        concat!("std::env::", "set_var("),
-        concat!("std::env::", "remove_var("),
-    ];
+    let writes = [concat!("set_", "var("), concat!("remove_", "var(")];
     let raw: usize = writes
         .iter()
         .map(|needle| source.matches(needle).count())
@@ -109,13 +108,9 @@ fn every_test_takes_the_env_lock_first() {
         raw, 2,
         "set_var or remove_var outside set_env and remove_env"
     );
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
-    for line in &lines {
-        let Some(rest) = line.trim().strip_prefix("#[path = \"") else {
-            continue;
-        };
-        let module = dir.join(rest.split('"').next().expect("a quoted path"));
-        let text = std::fs::read_to_string(&module).expect("an included module's source");
+    // Every module the binary compiles in, followed through `#[path]` and
+    // `mod` lines: none may hold a test or write the environment.
+    for (module, text) in module_sources::module_sources(file!()).into_iter().skip(1) {
         assert!(
             !text.lines().any(is_test_attribute),
             "{} holds a test, which would run without the env lock",
