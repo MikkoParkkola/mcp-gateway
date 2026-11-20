@@ -65,7 +65,7 @@ impl StopBudget {
     /// The budget of an HTTP stop triggered at `t0` with `total` as
     /// `server.shutdown_timeout`; refuses a total that cannot hold every stage.
     pub(crate) fn http(t0: Instant, total: Duration) -> Result<Self, BelowMinimum> {
-        if total < HTTP_MIN_TOTAL {
+        if mutant!("m1", total < HTTP_MIN_TOTAL, total < HTTP_MIN_TOTAL) {
             return Err(BelowMinimum {
                 configured: total,
                 minimum: HTTP_MIN_TOTAL,
