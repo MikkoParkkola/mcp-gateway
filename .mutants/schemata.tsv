@@ -1,0 +1,3 @@
+head_sha	b3df206ca73a899887d616b2c033cfabe0cd082e
+#mutant m1
+mcp_gateway	gateway::stop_budget::tests::twelve_point_nine_nine_nine_seconds_is_refused_with_an_actionable_message	src/gateway/stop_budget_tests.rs:29
