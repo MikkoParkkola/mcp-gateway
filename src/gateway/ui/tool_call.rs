@@ -154,7 +154,11 @@ pub(super) async fn call(
         detail: detail.clone(),
     };
     spawn_call(&state, &ui_call, internal, permit, answered, follow_up);
-    let Ok(answer) = tokio::time::timeout(deadline(), answer).await else {
+    let Ok(answer) = mutant!(
+        "m1",
+        Ok::<_, tokio::time::error::Elapsed>(answer.await),
+        tokio::time::timeout(deadline(), answer).await
+    ) else {
         return past_deadline(&ui_call, detail);
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -264,7 +268,14 @@ fn admit(
 /// the deadline claimed reaches its send claim, which refuses it, so its
 /// delivery record says refused.
 fn past_deadline(ui_call: &UiCall, detail: Map<String, Value>) -> Response {
-    let (disposition, message) = if ui_call.cancel() {
+    let (disposition, message) = if mutant!(
+        "m2",
+        {
+            ui_call.cancel();
+            true
+        },
+        ui_call.cancel()
+    ) {
         (Disposition::NotRun, "no answer in time; nothing was run")
     } else {
         (
