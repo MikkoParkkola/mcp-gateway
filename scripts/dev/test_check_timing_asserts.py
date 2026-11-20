@@ -535,7 +535,7 @@ class JudgeNew(unittest.TestCase):
         # line in its own PR and failed every PR after it merged, where no line is new.
         body = '// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (why: the drain outlasts this read)\ntimeout(Duration::from_secs(1), run()).await.expect("x");'
         found, errors = self.judge(body)
-        self.assertEqual([(f.line, f.rule, f.seconds) for f in found], [(5, "under 5 s", 1.0)], found)
+        self.assertEqual([(f.line, f.rule, f.window) for f in found], [(5, "under 5 s", 1.0)], found)
         self.assertEqual(errors, [], "the floor excuses the oracle'd line, and the 5 s rule reports it once")
 
     def test_an_allowlisted_site_in_a_changed_span_is_still_judged_as_new(self):
@@ -566,8 +566,9 @@ class ModesAgree(unittest.TestCase):
         git("commit", "-q", "-m", "the line")
         git("checkout", "-q", "-b", "feature")
 
-    def run_modes(self, window, oracle):
-        """(rc, FAIL lines) of the pull-request run, then of the whole-tree run, for one window."""
+    def commit(self, window, oracle, tail="", message="the change"):
+        """Commit the row file: one test fn whose only window is `window`, under an oracle or a plain
+        comment on the same line number; `tail` is appended to the assert line (a comment edits it)."""
         lines = [
             "use std::time::{Duration, Instant};",
             "const SLACK: Duration = Duration::from_secs(2);",
@@ -578,21 +579,31 @@ class ModesAgree(unittest.TestCase):
             "    work().await;",
             "    let gone = started.elapsed();",
             self.ORACLE if oracle else "    // the chain is gone",
-            f'    assert!(gone <= {window}, "too slow");',
+            f'    assert!(gone <= {window}, "too slow");{tail}',
             "}",
         ]
         rs = self.scratch.root / self.REL
         rs.parent.mkdir(parents=True, exist_ok=True)
         rs.write_text("\n".join(lines) + "\n")
         self.scratch.git("add", ".")
-        self.scratch.git("commit", "-q", "-m", "the change")
+        self.scratch.git("commit", "-q", "-m", message)
+
+    def modes(self):
+        """(rc, error lines) of the pull-request run, then of the whole-tree run: every printed line
+        except the two summaries and the whole-tree notice."""
         runs = []
         for argv in (["--base", "line", "--compare", "merge-base"], []):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 rc = guard.main(argv)
-            runs.append((rc, [x for x in out.getvalue().splitlines() if x.startswith("FAIL")]))
+            said = [x for x in out.getvalue().splitlines()
+                    if not (x.startswith(("No --base:", "cfg items:")) or " timing asserts or timeouts under " in x)]
+            runs.append((rc, said))
         return runs
+
+    def run_modes(self, window, oracle):
+        self.commit(window, oracle)
+        return self.modes()
 
     def test_an_oracled_unresolvable_window_fails_in_both_modes(self):
         fail = 'FAIL tests/agree_rows.rs:10 (case): unresolvable window, window ?: assert!(gone <= total + SLACK, "")'
@@ -605,6 +616,23 @@ class ModesAgree(unittest.TestCase):
     def test_an_oracled_two_second_window_fails_in_both_modes(self):
         fail = 'FAIL tests/agree_rows.rs:10 (case): under 5 s, window 2 s: assert!(gone <= Duration::from_secs(2), "")'
         self.assertEqual(self.run_modes("Duration::from_secs(2)", oracle=True), [(1, [fail]), (1, [fail])])
+
+    def test_a_two_second_window_without_an_oracle_fails_in_both_modes(self):
+        fail = 'FAIL tests/agree_rows.rs:10 (case): under 5 s, window 2 s: assert!(gone <= Duration::from_secs(2), "")'
+        self.assertEqual(self.run_modes("Duration::from_secs(2)", oracle=False), [(1, [fail]), (1, [fail])])
+
+    def test_a_listed_window_given_an_oracle_stays_listed_in_both_modes(self):
+        # The line already holds a listed 2 s window. The change puts an oracle above it and edits the
+        # assert line (a trailing comment), so the line is new in the pull-request run.
+        git = self.scratch.git
+        git("checkout", "-q", "line")
+        self.commit("Duration::from_secs(2)", oracle=False, message="a listed window")
+        listed = guard.Row(self.REL, "case", 'assert!(gone <= Duration::from_secs(2), "")', "kept")
+        guard.ALLOWLIST.write_text(guard.format_row(listed) + "\n")
+        git("commit", "-q", "-am", "list it")
+        git("checkout", "-q", "-B", "feature")
+        self.commit("Duration::from_secs(2)", oracle=True, tail=" // edited")
+        self.assertEqual(self.modes(), [(0, []), (0, [])])
 
     def test_an_oracled_five_second_window_passes_in_both_modes(self):
         # The oracle still exempts the 10 s floor: dropping it there too would fail this in PR mode.
