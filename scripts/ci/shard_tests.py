@@ -41,6 +41,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -856,6 +857,10 @@ def built_parts_rows() -> None:
                     ' failchild) echo "test m$k::child_process ... test m$k::b ... FAILED" ;;'
                     ' dup) echo "test m$k::b ... ok"; echo "test m$k::b ... ok" ;;'
                     ' erronly) echo "test m$k::b ... ok" >&2 ;;'
+                    # More than a pipe buffer of stderr before any stdout result: a reader started late would stall.
+                    ' bigerr) head -c 70000 /dev/zero | tr -c x x >&2; echo "test m$k::b ... ok" ;;'
+                    # libtest's colour: only the result word is wrapped.
+                    ' ansi) printf "test m$k::b ... \\\\033[32mok\\\\033[0m\\\\n" ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n'
                     'case "\\$b" in red|failerr|failchild) exit 101 ;; esac\nexit 0\nEOF\n'
@@ -919,6 +924,8 @@ def built_parts_rows() -> None:
             assert glued == [], glued
             leg_run("lib-b", 8, BEHAVE_2="tornurl")
             assert "http://127.0.0.1:9/authorize?response_type=code&red" in printed[0], printed[0][-600:]
+            glued = [x for x in printed[0].splitlines() if "::endgroup::" in x and x != "::endgroup::"]
+            assert glued == [], glued
             # A complete result on stderr only is never counted: part 2 reports b nowhere on stdout, so it is missing.
             rc = leg_run("lib-b", 8, BEHAVE_2="erronly")[0]
             errors = [x for x in printed[0].splitlines() if x.startswith("::error::")]
@@ -936,6 +943,21 @@ def built_parts_rows() -> None:
             rc = leg_run("lib-b", 8, BEHAVE_2="dup")[0]
             errors = [x for x in printed[0].splitlines() if x.startswith("::error::")]
             assert (rc, errors) == (1, ["::error::macos lib-b part 2: test m2::b reported twice (ok, ok)"]), (rc, errors)
+            # 70,000 bytes of stderr before the result: the run neither stalls on a full pipe nor loses the result. A
+            # stall fails this row after 30 s instead of hanging the self-test (no SIGALRM on Windows: unguarded there).
+            def stalled(*_: object) -> None:
+                raise AssertionError("a full stderr pipe stalled the part run")
+            alarm = hasattr(signal, "SIGALRM")
+            if alarm:
+                signal.signal(signal.SIGALRM, stalled)
+                signal.alarm(30)
+            try:
+                assert leg_run("lib-b", 8, BEHAVE_2="bigerr")[0] == 0, printed[0][-300:]
+            finally:
+                if alarm:
+                    signal.alarm(0)
+            # A result whose word carries libtest's colour codes still counts.
+            assert leg_run("lib-b", 8, BEHAVE_2="ansi")[0] == 0, printed[0][-600:]
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
