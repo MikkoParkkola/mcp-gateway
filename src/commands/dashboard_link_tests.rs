@@ -35,13 +35,13 @@ fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
     assert_eq!(
         explicit.map(|(base, _)| base).as_deref(),
         Ok("http://h:1"),
-        "--url wins without a load"
+        "--gateway wins without a load"
     );
 
     let failed = dashboard_link_base(None, no_flags(), || Err("bad yaml".into()), None, None)
         .expect_err("a config that fails to load is not replaced by defaults");
     assert!(
-        failed.contains("bad yaml") && failed.contains("--url"),
+        failed.contains("bad yaml") && failed.contains("--gateway"),
         "{failed}"
     );
 
