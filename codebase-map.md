@@ -12,7 +12,7 @@ Auto-generated table of contents for `mcp-gateway/`. Scan before opening files. 
 | ------ | ----------- |
 | `benches/` | contains: gateway_benchmarks.rs |
 | `benchmarks/` | contains: public_claims.json, token_savings.py |
-| `capabilities/` | mcp-gateway currently ships **119 built-in capabilities** (marketed publicly as… |
+| `capabilities/` | mcp-gateway currently ships **118 built-in capabilities** (marketed publicly as… |
 | `crates/` | contains: lib.rs, Cargo.toml |
 | `deploy/` | contains: values.schema.json, Chart.yaml, mcpgateway.io.yaml |
 | `docs/` | contains: UPGRADING-3.0.md, ADR-008-multi-user-oauth-isolation.md, release-note… |
