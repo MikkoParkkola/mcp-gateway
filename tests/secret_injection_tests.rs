@@ -19,30 +19,46 @@ use serde_json::json;
 /// the injector reads the environment.
 static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Hold the environment for a whole test. Poison-tolerant: a failed test does
-/// not wedge the others.
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The env lock held: only `env_lock` makes one, so `set_env` and `remove_env`
+/// cannot be called while holding some other lock instead.
+struct EnvGuard {
+    _held: std::sync::MutexGuard<'static, ()>,
 }
 
-/// Set `key` while `_held` keeps every other test of this binary waiting.
-fn set_env(_held: &std::sync::MutexGuard<'static, ()>, key: &str, value: &str) {
+/// Hold the environment for a whole test. Poison-tolerant: a failed test does
+/// not wedge the others.
+fn env_lock() -> EnvGuard {
+    EnvGuard {
+        _held: ENV
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    }
+}
+
+/// Set `key` while the env lock keeps every other test of this binary waiting.
+fn set_env(_held: &EnvGuard, key: &str, value: &str) {
     // SAFETY: every test in this binary holds `ENV` for its whole body
     // (`every_test_takes_the_env_lock_first`), so no other thread of it reads
     // or writes the environment now.
     unsafe { std::env::set_var(key, value) };
 }
 
-/// Remove `key` while `_held` keeps every other test of this binary waiting.
-fn remove_env(_held: &std::sync::MutexGuard<'static, ()>, key: &str) {
+/// Remove `key` while the env lock keeps every other test of this binary waiting.
+fn remove_env(_held: &EnvGuard, key: &str) {
     // SAFETY: as in `set_env`.
     unsafe { std::env::remove_var(key) };
 }
 
+/// Whether `line` opens a test.
+fn is_test_attribute(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("#[test]") || line.starts_with("#[tokio::test")
+}
+
 /// Every test in this binary holds the env lock from its first statement, and
-/// the environment is written only through `set_env` and `remove_env`: a test
-/// that would touch the environment beside another test fails here.
+/// the environment is written only through `set_env` and `remove_env`; the
+/// modules it includes by `#[path]` hold no tests and write no environment. A
+/// test that would touch the environment beside another test fails here.
 #[test]
 fn every_test_takes_the_env_lock_first() {
     let _env = env_lock();
@@ -50,17 +66,23 @@ fn every_test_takes_the_env_lock_first() {
     let lines: Vec<&str> = source.lines().collect();
     let mut unlocked = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        let line = line.trim_start();
-        if !(line.starts_with("#[test]") || line.starts_with("#[tokio::test")) {
+        if !is_test_attribute(line) {
             continue;
         }
-        let Some(sig) = lines[i + 1..]
+        // The test's signature comes before the next test's attribute.
+        let rest = &lines[i + 1..];
+        let until = rest
             .iter()
-            .position(|l| l.trim_start().starts_with("fn "))
-        else {
+            .position(|l| is_test_attribute(l))
+            .unwrap_or(rest.len());
+        let Some(sig) = rest[..until].iter().position(|l| {
+            let l = l.trim_start();
+            l.starts_with("fn ") || l.starts_with("async fn ")
+        }) else {
+            unlocked.push(line.trim());
             continue;
         };
-        let first = lines[i + 2 + sig..]
+        let first = rest[sig + 1..]
             .iter()
             .map(|l| l.trim())
             .find(|l| !l.is_empty() && !l.starts_with("//"));
@@ -68,24 +90,45 @@ fn every_test_takes_the_env_lock_first() {
             first,
             Some("let env = env_lock();" | "let _env = env_lock();")
         ) {
-            unlocked.push(lines[i + 1 + sig].trim());
+            unlocked.push(rest[sig].trim());
         }
     }
     assert!(
         unlocked.is_empty(),
         "tests that do not take the env lock first: {unlocked:?}"
     );
-    let raw: usize = [
+    let writes = [
         concat!("std::env::", "set_var("),
         concat!("std::env::", "remove_var("),
-    ]
-    .iter()
-    .map(|needle| source.matches(needle).count())
-    .sum();
+    ];
+    let raw: usize = writes
+        .iter()
+        .map(|needle| source.matches(needle).count())
+        .sum();
     assert_eq!(
         raw, 2,
         "set_var or remove_var outside set_env and remove_env"
     );
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    for line in &lines {
+        let Some(rest) = line.trim().strip_prefix("#[path = \"") else {
+            continue;
+        };
+        let module = dir.join(rest.split('"').next().expect("a quoted path"));
+        let text = std::fs::read_to_string(&module).expect("an included module's source");
+        assert!(
+            !text.lines().any(is_test_attribute),
+            "{} holds a test, which would run without the env lock",
+            module.display()
+        );
+        for needle in writes {
+            assert!(
+                !text.contains(needle),
+                "{} calls {needle}",
+                module.display()
+            );
+        }
+    }
 }
 
 // ── glob matching ────────────────────────────────────────────────────

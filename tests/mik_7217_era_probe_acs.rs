@@ -576,5 +576,5 @@ async fn discover_4_a_slow_but_answering_peer_is_classified() {
 /// run): no test in this binary, and not its cap helper, sets it in process.
 #[test]
 fn the_probe_cap_is_never_set_in_process() {
-    era_probe_cap::assert_no_env_writes(include_str!("mik_7217_era_probe_acs.rs"));
+    era_probe_cap::assert_no_env_writes(file!());
 }

@@ -47,22 +47,38 @@ pub fn in_child_with_cap() -> bool {
         .expect("the child run of this test started");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        out.status.success()
+            && stdout.contains(&format!("test {test} ... ok"))
+            && stdout.contains("test result: ok. 1 passed"),
         "the child run of {test} did not pass:\n{stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     true
 }
 
-/// Fail if `binary_source` or this file sets or removes an environment
-/// variable: the cap reaches the gateway only from exec.
-pub fn assert_no_env_writes(binary_source: &str) {
-    let own = include_str!("era_probe_cap.rs");
-    for (what, source) in [("this binary", binary_source), ("era_probe_cap.rs", own)] {
+/// Fail if the test binary whose source is `binary` (as `file!()` names it,
+/// from the crate root), or any module it includes by `#[path]` (this helper
+/// among them), sets or removes an environment variable: the cap reaches the
+/// gateway from exec only. Reading the `#[path]` lines keeps a module added
+/// later in the scan without a list to update.
+pub fn assert_no_env_writes(binary: &str) {
+    let main = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(binary);
+    let source = std::fs::read_to_string(&main).expect("the test binary's source");
+    let dir = main.parent().expect("the test binary's directory");
+    let mut files = vec![(main.clone(), source.clone())];
+    for line in source.lines() {
+        if let Some(rest) = line.trim().strip_prefix("#[path = \"") {
+            let module = dir.join(rest.split('"').next().expect("a quoted path"));
+            let text = std::fs::read_to_string(&module).expect("an included module's source");
+            files.push((module, text));
+        }
+    }
+    for (path, text) in &files {
         for needle in [concat!("set_", "var("), concat!("remove_", "var(")] {
             assert!(
-                !source.contains(needle),
-                "{what} calls {needle}: the cap must reach the gateway from exec only"
+                !text.contains(needle),
+                "{} calls {needle}: the cap must reach the gateway from exec only",
+                path.display()
             );
         }
     }

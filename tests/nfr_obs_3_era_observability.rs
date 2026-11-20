@@ -650,5 +650,5 @@ mod reprobe_and_records;
 /// run): no test in this binary, and not its cap helper, sets it in process.
 #[test]
 fn the_probe_cap_is_never_set_in_process() {
-    era_probe_cap::assert_no_env_writes(include_str!("nfr_obs_3_era_observability.rs"));
+    era_probe_cap::assert_no_env_writes(file!());
 }
