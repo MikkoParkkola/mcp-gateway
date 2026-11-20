@@ -83,6 +83,8 @@ fi
 # and cannot trap it, so passing INT on as INT would do nothing. Set before the launch, so no signal falls between.
 cmd=
 trap '[ -n "$cmd" ] && kill -TERM "$cmd" 2>/dev/null' TERM INT HUP
+# Probe variant: at most two compiles at once, so no integration target builds beside the lib test compile.
+export CARGO_BUILD_JOBS=2
 "$@" &
 cmd=$!
 sample start
