@@ -361,7 +361,9 @@ async fn a_capability_refresh_that_cannot_be_saved_is_not_replayed() {
     let privileged = std::fs::write(dir.path().join("probe"), b"").is_ok();
     mode(0o700).unwrap();
     if privileged {
-        eprintln!("skipped: a privileged user can write a read-only directory");
+        crate::test_wait::skip_or_fail(
+            "a user that cannot write a read-only directory (this one is privileged)",
+        );
         return;
     }
 
