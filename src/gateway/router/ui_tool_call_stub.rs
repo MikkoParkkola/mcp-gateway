@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
+use super::ui_tool_call_tests::SLOW_GATE_BOUND;
+
 /// A backend whose `tools/list` declares `read`, `fail` and `iserr`
 /// read-only and leaves `write` and `get_x` undeclared, counting every call.
 pub(super) struct Stub {
@@ -20,6 +22,12 @@ pub(super) struct Stub {
     /// `tools/list` waits for this, when set: a cold catalogue is filled
     /// before the gate, so a test holds a call there for as long as it likes.
     pub(super) list_gate: Option<Arc<tokio::sync::Notify>>,
+    /// Signalled (one stored permit) as `tools/list` starts waiting on
+    /// `list_gate`, so a row can time a stall from inside the call.
+    pub(super) list_entered: Option<Arc<tokio::sync::Notify>>,
+    /// When set, `slow` answers only once this is signalled (or after
+    /// [`SLOW_GATE_BOUND`]); unset, it answers after 400 ms.
+    pub(super) slow_gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -28,6 +36,9 @@ impl Transport for Stub {
         let id = RequestId::Number(1);
         if method == "tools/list" {
             if let Some(gate) = &self.list_gate {
+                if let Some(entered) = &self.list_entered {
+                    entered.notify_one();
+                }
                 gate.notified().await;
             }
             let ro = json!({"readOnlyHint": true});
@@ -71,7 +82,14 @@ impl Transport for Stub {
                 }),
             )),
             "slow" => {
-                tokio::time::sleep(Duration::from_millis(400)).await;
+                match &self.slow_gate {
+                    // Bounded, so a row whose deadline never fires gets its
+                    // answer (and fails its 504 check) instead of hanging.
+                    Some(gate) => {
+                        let _ = tokio::time::timeout(SLOW_GATE_BOUND, gate.notified()).await;
+                    }
+                    None => tokio::time::sleep(Duration::from_millis(400)).await,
+                }
                 Ok(JsonRpcResponse::success(
                     id,
                     json!({"content": [{"type": "text", "text": "late"}], "isError": false}),

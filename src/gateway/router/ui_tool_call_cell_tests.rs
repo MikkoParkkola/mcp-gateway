@@ -357,6 +357,8 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
         calls: Arc::clone(&fx.calls),
         declares_read: true,
         list_gate: Some(Arc::clone(&gate)),
+        list_entered: None,
+        slow_gate: None,
     }));
     assert!(fx.state.backends.register(backend), "registration");
     crate::gateway::ui::DEADLINE_FOR_TEST
