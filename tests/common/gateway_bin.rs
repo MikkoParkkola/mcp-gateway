@@ -441,3 +441,17 @@ fn wait_blocking(child: &mut tokio::process::Child, bound: std::time::Duration) 
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+
+/// Runs one CLI command to completion in a fresh isolated home (also its
+/// config directory), with stdin closed and only `env` added, and returns
+/// what it printed. For commands that end on their own, not for `serve`.
+pub fn run_cli(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    let home = tempfile::tempdir().expect("isolated home for the command");
+    let mut cmd = command(home.path(), Inherit::Nothing);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
+    cmd.args(args).output().expect("start mcp-gateway")
+}

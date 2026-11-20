@@ -12,7 +12,7 @@ mod gateway_bin;
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::Output;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
@@ -75,18 +75,12 @@ fn config_pointing_at(dir: &Path, port: u16) -> PathBuf {
     path
 }
 
-/// Runs the binary in a fresh isolated home, with a placeholder token and,
+/// Runs one command through the shared runner, with a placeholder token and,
 /// when given, `MCP_GATEWAY_URL`.
 fn invoke(args: &[&str], gateway_env: Option<&str>) -> Output {
-    let sandbox = tempfile::tempdir().expect("isolated home");
-    let mut cmd = gateway_bin::command(sandbox.path(), gateway_bin::Inherit::Nothing);
-    cmd.stdin(Stdio::null());
-    cmd.env("MCP_GATEWAY_TOKEN", "placeholder");
-    cmd.env("MCP_GATEWAY_CONFIG_DIR", sandbox.path());
-    if let Some(url) = gateway_env {
-        cmd.env("MCP_GATEWAY_URL", url);
-    }
-    cmd.args(args).output().expect("start mcp-gateway")
+    let mut env = vec![("MCP_GATEWAY_TOKEN", "placeholder")];
+    env.extend(gateway_env.map(|url| ("MCP_GATEWAY_URL", url)));
+    gateway_bin::run_cli(args, &env)
 }
 
 /// The two resolution paths: `stats` has its own, the other four share one.
