@@ -1262,6 +1262,8 @@ def self_test() -> int:
          lambda m: not m.startswith("BUILD DIED") and "mentions SIGKILL" in m),
         ("an error's site wins over a compiler kill", build_refusal(Outcome(101, err + "\n" + killed, False)),
          lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
+        ("an error's site wins over a timeout", build_refusal(Outcome(-9, err + "\n", True)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
         ("an error's site is named with no finished line", build_refusal(Outcome(101, err + "\n", False)),
          lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
     ]
