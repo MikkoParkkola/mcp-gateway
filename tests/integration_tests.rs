@@ -355,9 +355,8 @@ async fn test_invoke_caching() {
         body1.get("error")
     );
 
-    // Small delay to ensure cache is written
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
+    // No wait here: the gateway writes the cache before it answers (post_dispatch's set_read runs ahead of the
+    // response), so the first answer arriving means the entry is in.
     // Second invocation - SHOULD be cached (same server, tool, arguments)
     let start2 = Instant::now();
     let response2 = client
