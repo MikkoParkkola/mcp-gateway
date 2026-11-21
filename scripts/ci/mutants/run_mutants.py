@@ -1008,6 +1008,7 @@ if args[:1] == ["--list"] and "parts" in table:
 if args[:1] == ["--list"]:
     if not table.get("no_probe"):
         print("mutant::mutants_build::only_the_named_site_switches_on: test")
+    print("mutant_scan::tests::list_mutant_sites: test")
     print("m::t1: test")
     sys.exit(0)
 if "--exact" not in args:
@@ -1034,6 +1035,15 @@ if test == "mutant_scan::tests::list_mutant_sites":
     sys.exit(0)
 key = (os.environ.get("MCP_GATEWAY_MUTANT") or "base") + " " + test
 row = table["rows"].get(key, {"status": "ok"})
+if row["status"] == "fail_first":
+    # Red on its first run only: a later row with the same name passes.
+    seen = os.environ["FAKE_CALLS"] + ".fail_first"
+    row = {"status": "ok"} if os.path.exists(seen) else {"status": "FAILED", "panic": row["panic"]}
+    open(seen, "a").close()
+if table.get("tamper") and key.startswith("base "):
+    # The executable rewrites its own bytes after the runner copied and hashed it.
+    with open(sys.argv[0], "a") as f:
+        f.write("\n# changed after its copy\n")
 if row["status"] == "hang":
     child = subprocess.Popen(["sleep", "60"])
     open(os.environ["FAKE_CHILD"], "w").write(str(child.pid))
@@ -1049,14 +1059,22 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered ou
 
 FAKE_CARGO = r'''#!/usr/bin/env python3
 import json, os, sys
+args = sys.argv[1:]
+targets = (("mcp_gateway", ["lib"]), ("itest", ["test"]))
+if args[:1] == ["metadata"]:
+    print(json.dumps({"packages": [{"targets": [{"name": n, "kind": k} for n, k in targets]}]}))
+    sys.exit(0)
 with open(os.environ["FAKE_CALLS"], "a") as f:
-    f.write(json.dumps({"cargo": sys.argv[1:], "rustflags": os.environ.get("RUSTFLAGS", ""),
+    f.write(json.dumps({"cargo": args, "rustflags": os.environ.get("RUSTFLAGS", ""),
                         "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
                         "part": os.environ.get("MCP_GATEWAY_TEST_PART")}) + "\n")
+table = json.load(open(os.environ["FAKE_TABLE"]))
 exe = os.environ["FAKE_EXE"]
-for name, kind in (("mcp_gateway", ["lib"]), ("itest", ["test"])):
-    print(json.dumps({"reason": "compiler-artifact", "executable": exe, "profile": {"test": True},
-                      "target": {"name": name, "kind": kind}}))
+for name, kind in targets:
+    # A build makes what it names: the lib with --lib, a target named after its flag, everything with --all-targets.
+    if "--all-targets" in args or (kind == ["lib"] and "--lib" in args) or (kind != ["lib"] and name in args):
+        print(json.dumps({"reason": "compiler-artifact", "executable": exe, "profile": {"test": True},
+                          "target": {"name": name, "kind": table.get("artifact_kinds", {}).get(name, kind)}}))
 '''
 
 
@@ -1085,10 +1103,12 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
         def run(table: dict, mutants=ms) -> tuple[int | str, list[dict]]:
             aborts.clear()
             (d / "calls").write_text("")
+            (d / "calls.fail_first").unlink(missing_ok=True)
             (d / "table.json").write_text(json.dumps(table))
             try:
                 rc: int | str = execute_schemata(None, mutants, d / "out")
-            except BaselineRefused:
+            except BaselineRefused as err:
+                aborts.append(str(err))
                 rc = "refused"
             except Abort as err:
                 aborts.append(str(err))
@@ -1166,17 +1186,24 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
                    [("itest" in a and "--test" in a and "--workspace" not in a) for a in others], [True])
             controls = [CFG_PROBE, "mutant_scan::tests::list_mutant_sites"]
             _, ms_a2a = parse_spec("#mutant A\nmcp_gateway\ta2a::m::t1\tsrc/x.rs:9\n")
+            # The table guesses src/a2a -> part 2 and the controls -> part 3 (the src row); the row is in part 4.
             a2a = {**killed, "rows": {"A a2a::m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}},
-                   "parts": {"2": ["a2a::m::t1"], "3": controls}}
-            _, calls = run(a2a, ms_a2a)
-            expect("R3 a right guess builds just that part and the controls' part",
-                   sorted(c.get("part") or "" for c in calls if "cargo" in c), ["2", "3"])
+                   "parts": {"4": ["a2a::m::t1"], "3": controls}}
+            rc, calls = run(a2a, ms_a2a)
+            expect("R3 a wrong guess: guessed parts, then the rest ascending until placed; part 5 unbuilt",
+                   (rc, [c.get("part") for c in calls if "cargo" in c]), (0, ["2", "3", "1", "4"]))
+            ran = sorted({c["exe"] for c in calls if "--exact" in c.get("args", [])})
+            expect("R3 the row runs in part 4's copy and the controls in part 3's",
+                   ran, ["mcp_gateway-p3", "mcp_gateway-p4"])
             rc, _ = run({**killed, "parts": {"3": controls}})
             expect("R4 a row in no part refuses the run, naming it and the parts",
                    (rc, any("m::t1" in a and "part" in a for a in aborts)), ("aborted", True))
-            rc, _ = run({**killed, "parts": {"1": ["m::t1"], "2": ["m::t1"], "3": controls}})
+            # chains:: guesses part 1, a2a:: part 2: both are built before placement, so the duplicate is seen.
+            _, ms_dup = parse_spec("#mutant A\nmcp_gateway\tchains::t1\tsrc/x.rs:9\nmcp_gateway\ta2a::m::t1\tsrc/x.rs:9\n")
+            rc, _ = run({**killed, "parts": {"1": ["chains::t1"], "2": ["chains::t1", "a2a::m::t1"], "3": controls}},
+                        ms_dup)
             expect("R4 a row listed in two built parts refuses the run, naming it",
-                   (rc, any("m::t1" in a and "two" in a for a in aborts)), ("aborted", True))
+                   (rc, any("chains::t1" in a and "two" in a for a in aborts)), ("aborted", True))
             rc, _ = run({**killed, "parts": {"1": ["m::t1"]}})
             expect("R5 a run whose controls are in no part refuses, naming them",
                    (rc, any("mutants_build" in a and "part" in a for a in aborts)), ("aborted", True))
@@ -1188,6 +1215,18 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             ran = sorted({(c["args"][1], c["exe"]) for c in calls if c.get("mutant") == "A" and "--exact" in c.get("args", [])})
             expect("R7 each lib row runs its own part's copy",
                    ran, [("a2a::m::t1", "mcp_gateway-p2"), ("m::t1", "mcp_gateway-p1")])
+            # One test name in two executables: the first row's red baseline must not be hidden by the second's pass.
+            rc, calls = run({**killed, "rows": {"base m::t1": {"status": "fail_first", "panic": "src/x.rs:9"}}},
+                            ms_mixed)
+            expect("R-BASE a red baseline row refuses even when a same-named row passes",
+                   (rc, any("mcp_gateway" in a and "m::t1" in a for a in aborts)), ("refused", True))
+            expect("R-BASE no mutant runs after it", [c for c in calls if c.get("mutant") == "A"], [])
+            rc, _ = run({**killed, "artifact_kinds": {"itest": ["bin"]}}, ms_mixed)
+            expect("R-KIND an artifact whose kind is not the flag that built it refuses",
+                   (rc, any("itest" in a and "kind" in a for a in aborts)), ("aborted", True))
+            rc, _ = run({**killed, "tamper": True})
+            expect("R-HASH a copy whose bytes change after it was hashed aborts the run",
+                   (rc, any("sha256" in a for a in aborts)), ("aborted", True))
             # MUT.6: the memory wrapper around the runner comes from the release line like the runner
             # itself, so a tree under test cannot swap what decides the step's outcome.
             wf = (Path(__file__).resolve().parents[3] / ".github" / "workflows" / "mutants.yml").read_text()
