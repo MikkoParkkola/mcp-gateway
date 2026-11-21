@@ -330,7 +330,8 @@ def private_home(base: dict[str, str] | None, tmp: str | None):
     env = dict(os.environ if base is None else base)
     env.update(values)
     # A test that skips for a missing tool or right fails here: a feature's only check must not pass by not running.
-    # Every shard runs through this home; the packaged-crate suite does not, and skips what its crate lacks.
+    # Every shard runs through this home, the packaged-crate suite's included (lib-parts.sh re-runs itself under
+    # `with-home`); a file the package leaves out on purpose skips there through test_wait::skip_unshipped.
     env.setdefault("TESTS_REQUIRE_ALL", "1")
     try:
         yield env
