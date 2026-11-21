@@ -837,6 +837,8 @@ def build_lib_parts(names: list[str], features: str | None, exe_dir: Path, logs:
                                   for a in artifacts})
         entry = keep_copy(lib["path"], exe_dir / f"{LIB_TARGET}-p{k}")
         listed = run_cmd([checked(entry), "--list", "--format", "terse"], TEST_LIMIT, logs / f"list-p{k}.log")
+        if listed.timed_out or listed.exit != 0:
+            raise Abort(f"part {k}'s test listing failed (exit {listed.exit}); see logs/list-p{k}.log")
         entry["names"] = {line[:-len(": test")] for line in listed.output.splitlines() if line.endswith(": test")}
         built[k] = entry
         for name in names:
