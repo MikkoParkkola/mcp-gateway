@@ -5,6 +5,9 @@
 
 use super::*;
 
+use super::backend_oracle::tasks::{send, tasks_meta};
+use crate::gateway::router::tests::task_execution_adapter::input_round as round;
+
 async fn token_fixture() -> (Fixture, String, String) {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
@@ -143,4 +146,127 @@ async fn a_replayed_call_records_its_token() {
     let records = invocations(&fx);
     assert_eq!(records.len(), 2, "{records:?}");
     assert_carries(&records[1], &fx, &jti);
+}
+
+/// A keyed task call of `alpha:t` as `bearer`, from a client that can answer
+/// questions; the id of the task it made.
+async fn start_task(fx: &Fixture, bearer: &str) -> String {
+    let mut meta = tasks_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("reach-task");
+    meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
+    let params = json!({"name": "gateway_invoke", "task": {}, "_meta": meta,
+                        "arguments": {"server": "alpha", "tool": "t", "arguments": {}}});
+    let (_, made) = send(fx, bearer, "tools/call", "gateway_invoke", params).await;
+    made.pointer("/result/taskId")
+        .or_else(|| made.pointer("/result/task/taskId"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned()
+}
+
+/// Wait, at most 30 s, until task `id` is no longer working and the backend
+/// has been called `sent` times; the status it rests in.
+async fn rests(fx: &Fixture, id: &str, sent: usize) -> crate::protocol::tasks::TaskStatus {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let now = fx.state.task_executor.service.store.status_for_test(id);
+        let settled = now.filter(|s| *s != crate::protocol::tasks::TaskStatus::Working);
+        if let Some(status) = settled
+            && fx.calls.load(Ordering::SeqCst) == sent
+        {
+            return status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "premise: task {id} never rested after {sent} call(s): {now:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The token id a record's decision names, if any.
+fn named_jti(record: &Value) -> Option<&str> {
+    record["decision"]["token"]["jti"].as_str()
+}
+
+/// The task worker's step carries the token its task was started with.
+#[tokio::test]
+async fn a_task_step_records_its_token() {
+    let (fx, bearer, jti) = token_fixture().await;
+    let id = start_task(&fx, &bearer).await;
+    rests(&fx, &id, 1).await;
+    let records = invocations(&fx);
+    assert!(!records.is_empty(), "premise: the step was recorded");
+    for record in &records {
+        assert_carries(record, &fx, &jti);
+    }
+}
+
+/// A task resumed with a second exchanged token records the second token for
+/// the resumed step, and never the token that started it.
+#[tokio::test]
+async fn a_resumed_task_step_records_the_resuming_token() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        key_server: true,
+        reply: Some(round::ask("confirm", "reach-round")),
+        ..Setup::default()
+    })
+    .await;
+    let ks = fx.state.key_server.as_ref().expect("fixture key server");
+    let mint = crate::key_server::issuance_row_tests::mint_for;
+    let (starter, starter_jti) = mint(ks, &["alpha"]).await;
+    let (resumer, resumer_jti) = mint(ks, &["alpha"]).await;
+    assert_ne!(starter_jti, resumer_jti, "premise: two tokens");
+    let id = start_task(&fx, &starter).await;
+    assert_eq!(
+        rests(&fx, &id, 1).await,
+        crate::protocol::tasks::TaskStatus::InputRequired,
+        "premise: the task waits for its answer"
+    );
+    let earlier = invocations(&fx).len();
+    let mut meta = tasks_meta();
+    meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
+    let resume = json!({"taskId": id, "_meta": meta,
+                        "inputResponses": {"confirm": round::answer()}});
+    send(&fx, &resumer, "tasks/update", &id, resume).await;
+    rests(&fx, &id, 2).await;
+    let later = invocations(&fx);
+    let resumed = &later[earlier..];
+    assert!(
+        !resumed.is_empty(),
+        "premise: the resumed step was recorded"
+    );
+    for record in resumed {
+        assert_ne!(named_jti(record), Some(starter_jti.as_str()), "{record}");
+    }
+    let step = resumed
+        .iter()
+        .rev()
+        .find(|record| named_jti(record) == Some(resumer_jti.as_str()))
+        .unwrap_or_else(|| panic!("no resumed record names the second token: {resumed:?}"));
+    assert_carries(step, &fx, &resumer_jti);
+}
+
+/// A Web UI tool call made with an admin exchanged token carries that token.
+#[tokio::test]
+async fn a_web_ui_tool_call_records_its_token() {
+    let (fx, _, _) = token_fixture().await;
+    // Admin for mint_for's issuer and group, and a token reaching every
+    // backend: the two things the UI route asks of an exchanged token.
+    let admin: crate::control_plane::ControlPlaneRoleRule = serde_json::from_value(
+        json!({"issuer": "https://issuer.invalid", "group": "g", "role": "admin"}),
+    )
+    .expect("an admin mapping rule");
+    fx.state
+        .live_config
+        .edit(|c| c.control_plane.role_mapping.rules = vec![admin]);
+    let ks = fx.state.key_server.as_ref().expect("fixture key server");
+    let (bearer, jti) = crate::key_server::issuance_row_tests::mint_for(ks, &["*"]).await;
+    let ask = json!({"server": "alpha", "tool": "t", "arguments": {"q": 1}, "confirm_write": true});
+    let route = crate::gateway::routes::UI_TOOLS_CALL;
+    let (status, answer) = post_bearer(&fx, route, &ask.to_string(), &bearer, false).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{answer}");
+    assert_carries(&only_invocation(&fx), &fx, &jti);
 }
