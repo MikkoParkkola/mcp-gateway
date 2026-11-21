@@ -49,6 +49,7 @@ pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
 mod issuance;
+#[cfg(tp5)]
 #[cfg(test)]
 mod issuance_expiry_tests;
 /// The row after an abrupt death, a rotation and a mark fault.

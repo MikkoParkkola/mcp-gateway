@@ -55,7 +55,6 @@ async fn minted_token_and_row(ttl: u64) -> (TemporaryToken, Value) {
 }
 
 /// The issuance row records the configured lifetime and its latest expiry bound.
-#[cfg(tp5)]
 #[tokio::test]
 async fn issued_row_records_the_ttl_and_the_expiry_bound() {
     let _clock = crate::clock::test_clock::at_secs(T);
@@ -65,7 +64,6 @@ async fn issued_row_records_the_ttl_and_the_expiry_bound() {
 }
 
 /// Increasing the configured lifetime increases the row's bound equally.
-#[cfg(tp5)]
 #[tokio::test]
 async fn a_different_ttl_moves_the_bound_by_the_same_amount() {
     let _clock = crate::clock::test_clock::at_secs(T);
@@ -75,7 +73,6 @@ async fn a_different_ttl_moves_the_bound_by_the_same_amount() {
 }
 
 /// Immediate activation expires thirty seconds before the issuance row's bound.
-#[cfg(tp5)]
 #[tokio::test]
 async fn the_token_expires_strictly_before_its_bound() {
     let _clock = crate::clock::test_clock::at_secs(T);
@@ -87,7 +84,6 @@ async fn the_token_expires_strictly_before_its_bound() {
 }
 
 /// The stored token identifies the exact issuance row written for its own jti.
-#[cfg(tp5)]
 #[tokio::test]
 async fn the_stored_token_names_its_own_issuance_row() {
     let _clock = crate::clock::test_clock::at_secs(T);
@@ -123,7 +119,6 @@ fn token(jti: &str, now: u64) -> TemporaryToken {
 }
 
 /// Clock steps can activate only before the deadline, keeping expiry below the bound.
-#[cfg(tp5)]
 #[test]
 fn activation_after_any_clock_step_stays_inside_the_bound() {
     let store = InMemoryTokenStore::new(5, 600);

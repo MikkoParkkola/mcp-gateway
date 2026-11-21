@@ -264,8 +264,7 @@ async fn exchange_token(
 struct MintReservation {
     store: Arc<dyn TokenStore>,
     id: ReservationId,
-    /// After this moment the store refuses to activate the slot; the row's
-    /// expiry bound is built from it.
+    /// Last moment the store activates the slot; the row's expiry bound starts here.
     deadline: u64,
     armed: bool,
 }
@@ -365,12 +364,8 @@ pub(super) async fn issue(
     audit::emit(&ev);
     // One read of the lifetime, used for the row's bound and for exp below.
     let ttl = ks.config.token_ttl_secs;
-    let Some(expires_by) = reservation.deadline.checked_add(ttl) else {
+    let Some(expiry) = super::issuance::RowExpiry::after(reservation.deadline, ttl) else {
         return clock_refusal();
-    };
-    let expiry = super::issuance::RowExpiry {
-        ttl_secs: ttl,
-        expires_by,
     };
     match super::issuance::record_issuance(ks, &ev, expiry).await {
         Ok(row) => token.issuance_row = row,

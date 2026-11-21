@@ -93,7 +93,6 @@ fn invoke(server: &str) -> String {
 }
 
 /// A meta call answered as JSON carries the minted token and its issuance row.
-#[cfg(tp1)]
 #[tokio::test]
 async fn a_meta_call_answered_as_json_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
@@ -103,7 +102,6 @@ async fn a_meta_call_answered_as_json_records_its_token() {
 }
 
 /// A meta call answered as a stream carries the minted token and its issuance row.
-#[cfg(tp1)]
 #[tokio::test]
 async fn a_meta_call_answered_as_a_stream_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
@@ -113,7 +111,6 @@ async fn a_meta_call_answered_as_a_stream_records_its_token() {
 }
 
 /// A direct backend call carries the minted token and its issuance row.
-#[cfg(tp1)]
 #[tokio::test]
 async fn a_direct_backend_call_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
@@ -123,7 +120,6 @@ async fn a_direct_backend_call_records_its_token() {
 }
 
 /// A backend scope refusal still records the presented token and its issuance row.
-#[cfg(tp1)]
 #[tokio::test]
 async fn a_call_refused_by_the_router_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
@@ -134,7 +130,6 @@ async fn a_call_refused_by_the_router_records_its_token() {
 }
 
 /// A replay records the token without calling the backend a second time.
-#[cfg(tp1)]
 #[tokio::test]
 async fn a_replayed_call_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;

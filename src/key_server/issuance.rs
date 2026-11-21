@@ -19,6 +19,18 @@ pub(super) struct RowExpiry {
     pub(super) expires_by: u64,
 }
 
+impl RowExpiry {
+    /// The bound for a slot whose pending deadline is `deadline`; `None` when
+    /// the sum overflows, which the caller refuses like an unreadable clock.
+    pub(super) fn after(deadline: u64, ttl_secs: u64) -> Option<Self> {
+        let expires_by = deadline.checked_add(ttl_secs)?;
+        Some(Self {
+            ttl_secs,
+            expires_by,
+        })
+    }
+}
+
 /// Write the mint's `token.issued` row and apply the log's failure policy to
 /// how that came out. An `Err` carries the refusal the caller answers with;
 /// `Ok` holds the confirmed row when there is one, for the token to point at.
