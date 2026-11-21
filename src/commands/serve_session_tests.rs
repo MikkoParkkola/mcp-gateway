@@ -100,6 +100,121 @@ async fn startup_read_only_artifact_refused() {
     }
 }
 
+/// The discovery rows run in a child test process of their own: its working directory and home
+/// are a fresh scratch folder, so a config planted at a discovery location is seen by no other
+/// test, and the account's real config is never searched.
+const SCENARIO_ENV: &str = "MCP_GATEWAY_SERVE_SESSION_SCENARIO";
+const MODULE: &str = "commands::serve_session_tests::";
+const NESTED_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn is_nested(scenario: &str) -> bool {
+    std::env::var_os(SCENARIO_ENV).is_some_and(|running| running == scenario)
+}
+
+/// Runs `scenario` in a child test process with `scratch` as its working directory and
+/// `scratch/home` as its home, and fails unless the scenario ran and passed.
+async fn run_nested(row: &str, scenario: &str, scratch: &Path) {
+    let home = scratch.join("home");
+    std::fs::create_dir_all(&home).expect("the scenario's home");
+    let filter = format!("{MODULE}{scenario}");
+    let mut child = tokio::process::Command::from(crate::test_home::test_binary());
+    child
+        .args(["--exact", &filter, "--nocapture"])
+        .env(SCENARIO_ENV, scenario)
+        .env("MCP_GATEWAY_TEST_HOME_DIR", &home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .current_dir(scratch)
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(NESTED_LIMIT, child.output())
+        .await
+        .unwrap_or_else(|_| panic!("{row}: the scenario finished within {NESTED_LIMIT:?}"))
+        .expect("run the scenario");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains(&filter) && output.status.success(),
+        "{row}: the scenario {filter} ran and passed; stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+/// WIRE.1 (lead 2026-11-21): with no `--config`, the config discovery finds is gated like a
+/// named one. An abandoned file beside it refuses the start, and nothing beside it changes.
+#[tokio::test]
+async fn discovered_config_with_abandoned_session_refuses() {
+    const ROW: &str = "discovered_config_with_abandoned_session_refuses";
+    let scratch = tempfile::tempdir().expect("scratch");
+    write_owner_only(scratch.path().join("gateway.yaml"), SERVED).expect("config");
+    write_owner_only(
+        scratch.path().join("gateway.yaml.abandoned"),
+        "left by a dead writer",
+    )
+    .expect("abandoned file");
+    let before = (
+        std::fs::read(scratch.path().join("gateway.yaml")).expect("config bytes"),
+        std::fs::read(scratch.path().join("gateway.yaml.abandoned")).expect("artifact bytes"),
+    );
+    run_nested(ROW, "discovered_abandoned_scenario", scratch.path()).await;
+    let after = (
+        std::fs::read(scratch.path().join("gateway.yaml")).expect("config bytes"),
+        std::fs::read(scratch.path().join("gateway.yaml.abandoned")).expect("artifact bytes"),
+    );
+    assert_eq!(after, before, "{ROW}: config and abandoned file unchanged");
+}
+
+#[tokio::test]
+async fn discovered_abandoned_scenario() {
+    const ROW: &str = "discovered_config_with_abandoned_session_refuses";
+    const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
+    if !is_nested("discovered_abandoned_scenario") {
+        return;
+    }
+    let discovered = crate::config::Config::fallback_config_path();
+    assert_eq!(
+        discovered.as_deref(),
+        Some(Path::new("gateway.yaml")),
+        "{ROW}: premise: discovery finds the scratch folder's config"
+    );
+    match super::load_for_serve(discovered.as_deref()).await {
+        Ok(_) => panic!("{ROW}: the serve load must refuse the discovered config"),
+        Err(error) => assert!(
+            error.to_string().contains(ABANDONED_CLASS),
+            "{ROW}: the abandoned-file refusal, got {error}"
+        ),
+    }
+}
+
+/// WIRE.1 (lead 2026-11-21): a serve that found no config never loads one that appears later.
+/// Discovery finds nothing; then a config is planted where discovery looks; the serve load still
+/// runs on the built-in defaults.
+#[tokio::test]
+async fn config_appearing_after_resolve_is_never_loaded() {
+    const ROW: &str = "config_appearing_after_resolve_is_never_loaded";
+    let scratch = tempfile::tempdir().expect("scratch");
+    run_nested(ROW, "config_appearing_scenario", scratch.path()).await;
+}
+
+#[tokio::test]
+async fn config_appearing_scenario() {
+    const ROW: &str = "config_appearing_after_resolve_is_never_loaded";
+    const PLANTED: &str = "server:\n  port: 47123\n";
+    if !is_nested("config_appearing_scenario") {
+        return;
+    }
+    let discovered = crate::config::Config::fallback_config_path();
+    assert!(
+        discovered.is_none(),
+        "{ROW}: premise: discovery finds no config, found {discovered:?}"
+    );
+    write_owner_only("gateway.yaml", PLANTED).expect("the config that appears late");
+    let evaluated = super::load_for_serve(discovered.as_deref())
+        .await
+        .unwrap_or_else(|error| panic!("{ROW}: the serve load runs on defaults: {error}"));
+    assert_ne!(
+        evaluated.config.server.port, 47123,
+        "{ROW}: the late config was not loaded"
+    );
+}
+
 /// WIRE.6 / SERVE.5: the serve load reaches the startup gate, and construction finishes it.
 #[test]
 fn serve_paths_reach_the_gate() {
