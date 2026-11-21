@@ -185,3 +185,48 @@ async fn p1_mcp_a_signing_time_policy_refusal_records_its_own_kind() {
     assert_meta_refusal(record, "denied", -32000, "kill_switch");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
 }
+
+/// S6m: S6 on `/mcp`. Under the every-call scope a `gateway_invoke` carrying
+/// both an argument nonce and a `_meta` nonce is refused early, at intake,
+/// for its shape: one `invalid` record naming `syntax`, answered as before.
+#[tokio::test]
+async fn s6m_mcp_two_nonces_record_syntax() {
+    let fx = hardened_signing().await;
+    let mut call: Value =
+        serde_json::from_str(&signed_on_mcp(1, &json!("s6m-meta"))).expect("the request parses");
+    call["params"]["arguments"]["nonce"] = json!("s6m-argument");
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+    assert_eq!(body["error"]["message"], "two signing nonces", "{body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "invalid", -32602, "syntax");
+}
+
+/// N2: the early refusal of a request whose id cannot be read (`true`):
+/// answered with no id and the nonce's own words, as before, and still
+/// recorded once (gpt r3c IMP 2, grok r3c MEDIUM: the signing wording, not
+/// the intake's).
+#[tokio::test]
+async fn n2_mcp_an_unreadable_id_early_refusal_is_recorded() {
+    let fx = hardened_signing().await;
+    let mut call: Value =
+        serde_json::from_str(&signed_on_mcp(1, &json!(5))).expect("the request parses");
+    call["id"] = json!(true);
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(
+        body["error"]["message"], "Invalid signing nonce",
+        "premise: {body}"
+    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+    assert!(body["id"].is_null(), "no id: {body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "invalid", -32602, "syntax");
+}

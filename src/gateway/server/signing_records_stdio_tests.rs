@@ -367,3 +367,21 @@ async fn w5_stdio_early_and_late_refusals_name_one_caller() {
         all[0], all[2]
     );
 }
+
+/// P3: a call with a malformed nonce AND a malformed retry field gets the
+/// nonce's refusal, as before: the early refusal keeps its place ahead of the
+/// retry-field check (gpt r3c IMP 2, precedence), and is recorded once.
+#[tokio::test]
+async fn p3_stdio_an_early_nonce_refusal_keeps_its_precedence() {
+    let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
+    let mut meta = with_nonce(&"n".repeat(257));
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(7);
+    let answer = stdio_send(&logged.meta, invoke_params(meta, None)).await;
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    assert_eq!(
+        answer["error"]["message"], "Invalid signing nonce",
+        "{answer}"
+    );
+    let record = sole_record(&logged, &answer);
+    assert_refusal_record(&record, "invalid", -32602, "syntax");
+}
