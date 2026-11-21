@@ -11,6 +11,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::NaiveDate;
+
 use super::{BackendCost, ToolCost};
 
 /// Distinct `(backend, tool)` rows one tally keeps. Later pairs add into one
@@ -111,38 +113,96 @@ impl ToolTally {
     }
 }
 
-/// `(hour, tokens, micro-USD)` per hour with spend, oldest first: at most
-/// [`BUCKET_HOURS`] + 1, the cutoff hour of a 30-day window included.
-#[derive(Debug, Default)]
-pub(crate) struct HourBuckets(VecDeque<(u64, u64, u64)>);
+/// Local dates of spend a series keeps: today and the 29 before it (ADR-017).
+pub(crate) const KEPT_DAYS: i64 = 30;
 
-impl HourBuckets {
-    /// Add spend at unix second `at`. The window ends at the latest of `now`,
-    /// `at` and the newest bucket held, so a clock stepping back never widens it.
-    pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
-        let hour = at / 3600;
-        let newest = (now / 3600).max(hour).max(self.newest_hour().unwrap_or(0));
+/// Where a bucket sits, an hour number or a local date, and when it has aged
+/// out of a window whose newest slot is `newest`.
+pub(crate) trait Slot: Copy + Ord {
+    fn expired(self, newest: Self) -> bool;
+}
+
+impl Slot for u64 {
+    /// Kept while no more than [`BUCKET_HOURS`] hours older than the newest.
+    fn expired(self, newest: u64) -> bool {
+        self + BUCKET_HOURS < newest
+    }
+}
+
+impl Slot for NaiveDate {
+    /// Kept while one of the [`KEPT_DAYS`] dates ending at the newest:
+    /// counted in calendar dates, so a 23- or 25-hour day is one.
+    fn expired(self, newest: NaiveDate) -> bool {
+        (newest - self).num_days() >= KEPT_DAYS
+    }
+}
+
+/// `(slot, tokens, micro-USD)` per slot that has spend, oldest first.
+#[derive(Debug, Clone)]
+pub(crate) struct Buckets<S>(VecDeque<(S, u64, u64)>);
+
+impl<S> Default for Buckets<S> {
+    fn default() -> Self {
+        Self(VecDeque::new())
+    }
+}
+
+/// Spend per hour number: at most [`BUCKET_HOURS`] + 1 of them, so a 30-day
+/// window keeps its partial first hour.
+pub(crate) type HourBuckets = Buckets<u64>;
+
+/// Spend per local date in the host's zone (ADR-026): at most [`KEPT_DAYS`].
+pub(crate) type DayTotals = Buckets<NaiveDate>;
+
+impl<S: Slot> Buckets<S> {
+    /// Add spend in `slot`. The newest of `floor`, `slot` and what is held
+    /// ends the window: a clock that steps back cannot widen it.
+    pub(crate) fn add_slot(&mut self, slot: S, floor: S, tokens: u64, micro: u64) {
+        let newest = self
+            .newest()
+            .map_or(floor, |held| held.max(floor))
+            .max(slot);
         // Past the window: nothing kept. Counted in the all-time tally.
-        if hour + BUCKET_HOURS < newest {
+        if slot.expired(newest) {
             return;
         }
-        // A clock that stepped back lands in its own hour, in order.
-        let at_or_before = self.0.iter().rposition(|(h, ..)| *h <= hour);
+        // A clock that stepped back lands in its own slot, in order.
+        let at_or_before = self.0.iter().rposition(|(s, ..)| *s <= slot);
         match at_or_before {
-            Some(i) if self.0[i].0 == hour => {
+            Some(i) if self.0[i].0 == slot => {
                 self.0[i].1 += tokens;
                 self.0[i].2 += micro;
             }
-            Some(i) => self.0.insert(i + 1, (hour, tokens, micro)),
-            None => self.0.push_front((hour, tokens, micro)),
+            Some(i) => self.0.insert(i + 1, (slot, tokens, micro)),
+            None => self.0.push_front((slot, tokens, micro)),
         }
-        while self
-            .0
-            .front()
-            .is_some_and(|(h, ..)| h + BUCKET_HOURS < newest)
-        {
+        while self.0.front().is_some_and(|(s, ..)| s.expired(newest)) {
             self.0.pop_front();
         }
+    }
+
+    /// The newest slot with spend, if any.
+    pub(crate) fn newest(&self) -> Option<S> {
+        self.0.back().map(|(s, ..)| *s)
+    }
+
+    /// Buckets held.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Every `(slot, tokens, micro-USD)` held, oldest first.
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> Vec<(S, u64, u64)> {
+        self.0.iter().copied().collect()
+    }
+}
+
+impl HourBuckets {
+    /// Add spend at unix second `at`; the window ends no earlier than `now`.
+    pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
+        self.add_slot(at / 3600, now / 3600, tokens, micro);
     }
 
     /// Tokens and USD from the hour holding `now - window_secs` onward.
@@ -155,16 +215,30 @@ impl HourBuckets {
             .fold((0, 0), |(t, m), (_, tok, mic)| (t + tok, m + mic));
         (tokens, usd(micro))
     }
+}
 
-    /// Buckets held.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
+/// One spend series: its hours, for the rolling windows, and its local days.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Series {
+    pub(crate) hours: HourBuckets,
+    pub(crate) days: DayTotals,
+}
+
+impl Series {
+    /// Add spend at unix second `at`, the windows ending no earlier than `now`.
+    pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
+        self.hours.add(at, now, tokens, micro);
     }
 
-    /// The newest hour with spend, if any.
-    pub(crate) fn newest_hour(&self) -> Option<u64> {
-        self.0.back().map(|(h, ..)| *h)
+    /// Add each of `other`'s rows into this series' row for the same hour or
+    /// date, so a sum of series is bounded like one series.
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for &(hour, tokens, micro) in &other.hours.0 {
+            self.hours.add_slot(hour, hour, tokens, micro);
+        }
+        for &(date, tokens, micro) in &other.days.0 {
+            self.days.add_slot(date, date, tokens, micro);
+        }
     }
 }
 

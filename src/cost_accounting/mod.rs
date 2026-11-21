@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-use tally::{HourBuckets, ToolTally};
+use tally::{Series, ToolTally};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -193,9 +193,11 @@ pub struct SessionCostSnapshot {
 pub struct KeyCost {
     /// API key name.
     pub name: String,
-    /// Hourly spend for the windows and all-time per-tool sums (MIK-8000):
-    /// bounded by the clock and the catalog, never by the call count.
-    spend: parking_lot::Mutex<(HourBuckets, ToolTally)>,
+    /// The key's hour and day series plus its lifetime per-tool sums. Their
+    /// size follows the clock and the catalog, not how often the key calls
+    /// (MIK-8000). Both series sit under this one lock, so a copy taken for a
+    /// save holds each record in both or in neither.
+    spend: parking_lot::Mutex<(Series, ToolTally)>,
     /// Unix second of the latest spend, for the idle sweep. Stored as 0
     /// when undated (a key born, or spending only, on a clock before 1970);
     /// 0 is never read as a time (MIK-8202 P4b).
@@ -241,7 +243,7 @@ impl KeyCost {
     /// cannot date the window (MIK-8202 P4b).
     fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
         let now = crate::clock::unix_secs().ok()?;
-        Some(self.spend.lock().0.totals(now, window_secs))
+        Some(self.spend.lock().0.hours.totals(now, window_secs))
     }
 
     /// Produce a serialisable snapshot with all three time windows.
@@ -352,6 +354,10 @@ pub struct CostTracker {
     sessionless: [AtomicU64; 3],
     /// Session-less spend by caller key (MIK-7653), for the caller's own report.
     per_caller: caller::CallerCosts,
+    /// Spend that carries a date but no API key. A dated call adds to one
+    /// series only, this or its key's; the gateway-wide series is computed
+    /// from them when read.
+    keyless: parking_lot::Mutex<Series>,
     /// When the next idle-key sweep may run (MIK-8000).
     next_key_sweep: AtomicU64,
 }
@@ -365,6 +371,7 @@ impl CostTracker {
             per_key: DashMap::new(),
             sessionless: <[AtomicU64; 3]>::default(),
             per_caller: caller::CallerCosts::default(),
+            keyless: parking_lot::Mutex::default(),
             next_key_sweep: AtomicU64::new(0),
         }
     }
@@ -571,8 +578,29 @@ impl CostTracker {
     pub(crate) fn key_retained(&self, key_name: &str) -> usize {
         self.per_key.get(key_name).map_or(0, |key| {
             let spend = key.spend.lock();
-            spend.0.len() + spend.1.len()
+            spend.0.hours.len() + spend.0.days.len() + spend.1.len()
         })
+    }
+
+    /// `key_name`'s series as held, `None` when the key has no entry.
+    pub(crate) fn key_series(&self, key_name: &str) -> Option<Series> {
+        self.per_key
+            .get(key_name)
+            .map(|key| key.spend.lock().0.clone())
+    }
+
+    /// The series of dated spend with no API key.
+    pub(crate) fn keyless_series(&self) -> Series {
+        self.keyless.lock().clone()
+    }
+
+    /// The gateway's series: every key's and the keyless one, summed.
+    pub(crate) fn gateway_series(&self) -> Series {
+        let mut total = self.keyless_series();
+        for key in &self.per_key {
+            total.merge(&key.spend.lock().0);
+        }
+        total
     }
 
     /// Entries `session_id` holds in memory.
@@ -613,3 +641,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cost_clock_compile_red_tests.rs"]
 mod cost_clock_compile_red_tests;
+
+#[cfg(tp2)]
+#[cfg(test)]
+mod spend_history_tests;
