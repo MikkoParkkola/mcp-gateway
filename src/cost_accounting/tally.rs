@@ -228,6 +228,11 @@ impl Series {
     /// Add spend at unix second `at`, the windows ending no earlier than `now`.
     pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
         self.hours.add(at, now, tokens, micro);
+        // Dated in the host's zone, as the budget's days are (ADR-026): a
+        // local midnight can fall inside a UTC hour.
+        let zone = crate::local_day::host_zone();
+        let date = |secs| crate::local_day::local_day(&zone, secs).date;
+        self.days.add_slot(date(at), date(now), tokens, micro);
     }
 
     /// Add each of `other`'s rows into this series' row for the same hour or

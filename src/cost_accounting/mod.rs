@@ -436,6 +436,9 @@ impl CostTracker {
             {
                 self.per_key.retain(|_, key| !key.idle(now));
             }
+        } else if let Some(at) = rec.timestamp {
+            let micro = tally::micro(rec.estimated_cost_usd);
+            self.keyless.lock().add(at, at, rec.token_count, micro);
         }
     }
 
