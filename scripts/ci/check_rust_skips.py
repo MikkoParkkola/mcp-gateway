@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Every Rust test skip goes through `crate::test_wait::skip_or_fail` and returns right after it.
+"""Every Rust test skip goes through `crate::test_wait::skip_or_fail` (or `skip_unshipped`, for a file the package
+leaves out on purpose) and returns right after it.
 
 A test that prints "skipped" and returns reads as a pass on a host that lacks what it needs. Two rules over every tracked
 `src/**/*.rs` and `tests/**/*.rs` file (comments are not code):
   1. no hand-written skip: a `println!`/`eprintln!` whose text contains "skip", followed by `return` or `None`;
-  2. every `skip_or_fail(` statement is followed, at the same indent, by `return` or `None` (the caller must return).
+  2. every `skip_or_fail(` and `skip_unshipped(` statement is followed, at the same indent, by `return` or `None` (the
+     caller must return).
 A bare early `return` with no message and no helper call cannot be told from an ordinary early return and is not found:
 the accepted residual (the census of these is by hand and in review). Exempt files, each with its reason, are in EXEMPT.
 
@@ -20,6 +22,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# The skip helpers rule 2 covers: a missing host requirement, and a file the package leaves out on purpose.
+HELPERS = ("skip_or_fail", "skip_unshipped")
 EXEMPT = {
     "src/test_wait.rs": "defines the helper and prints its skip line",
     "src/preview_sandbox/linux/fetch_uv_real_fixture.rs": (
@@ -74,9 +78,10 @@ def findings_in(rel: str, text: str) -> list[str]:
         is_print = stripped.startswith(("eprintln!(", "println!("))
         if is_print and "skip" in stripped.lower() and rel != "src/test_wait.rs" and returns_after(lines, i):
             out.append(f"{rel}:{n}: a hand-written skip (a print naming skip, then return): use crate::test_wait::skip_or_fail")
-        if "skip_or_fail(" in stripped and not stripped.startswith("pub") and "fn skip_or_fail" not in stripped:
+        helper = next((h for h in HELPERS if h + "(" in stripped), None)
+        if helper and not stripped.startswith("pub") and f"fn {helper}" not in stripped:
             if not returns_after(lines, i):
-                out.append(f"{rel}:{n}: skip_or_fail must be followed, at the same indent, by return or None")
+                out.append(f"{rel}:{n}: {helper} must be followed, at the same indent, by return or None")
     return out
 
 
@@ -107,6 +112,11 @@ def self_test() -> int:
         ("B1b a return at a deeper indent does not count", helper.replace("        return;\n", "            return;\n"), 1, "followed"),
         ("B1 an Option-returning helper site ends in None", helper.replace("        return;\n", "        None\n"), 0, ""),
         ("B1 a multi-line helper call is read to its semicolon", 'fn t() {\n    skip_or_fail(\n        &format!("{}", 1),\n    );\n    return;\n}\n', 0, ""),
+        ("B2 the unshipped-file helper followed by return passes",
+         helper.replace('skip_or_fail("uv")', 'skip_unshipped(true, "uv")'), 0, ""),
+        ("B2 the unshipped-file helper without a return is found",
+         helper.replace('skip_or_fail("uv")', 'skip_unshipped(true, "uv")').replace("        return;\n", "        work();\n"),
+         1, "skip_unshipped must be followed"),
         ("an inline test module in an ordinary src file is scanned", "mod tests {\n" + hand + "}\n", 1, "hand-written"),
     ]
     wrong = 0

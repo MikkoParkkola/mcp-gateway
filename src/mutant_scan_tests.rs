@@ -95,7 +95,7 @@ fn s9_the_walk_reaches_every_source_root() {
     // nested crates and no git metadata; the same test as
     // boundary_pins::packaged::packaged_crate_at.
     if root.join("Cargo.toml.orig").exists() && !root.join(".git").exists() {
-        crate::test_wait::skip_or_fail("a repository checkout (this is the packaged crate)");
+        crate::test_wait::skip_unshipped(true, "the nested crates and git metadata of a checkout");
         return;
     }
     let files = tracked_rs_files(root).expect("git ls-files");

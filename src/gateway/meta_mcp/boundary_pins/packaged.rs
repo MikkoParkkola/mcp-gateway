@@ -28,13 +28,12 @@ pub(super) fn is_packaged_crate() -> bool {
 
 /// A repository file a pin reads: its text, or `None` when it is not found and
 /// `packaged` says the crate is the unpacked published one. Only "not found"
-/// is a skip; any other error (a directory, a permission) fails in both modes,
-/// and so does a missing file in a checkout.
+/// is a skip, and one the package's `include` makes on purpose, so it passes in
+/// required mode too (`skip_unshipped`); any other error (a directory, a
+/// permission) fails in both modes, and so does a missing file in a checkout.
 pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<String> {
     read_if_present(root, rel, packaged).or_else(|| {
-        crate::test_wait::skip_or_fail(&format!(
-            "{rel} in the crate under test (a checkout has it; the packaged crate does not)"
-        ));
+        crate::test_wait::skip_unshipped(packaged, &format!("{rel} in the crate under test"));
         None
     })
 }

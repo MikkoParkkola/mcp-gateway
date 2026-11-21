@@ -303,9 +303,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn packed_2_no_test_reads_an_unshipped_repo_file_directly() {
     if is_packaged_crate() {
-        crate::test_wait::skip_or_fail(
-            "the repository files (the packaged crate does not ship them)",
-        );
+        crate::test_wait::skip_unshipped(true, "the repository files the rule asks about");
         return;
     }
     let root = crate_root();
