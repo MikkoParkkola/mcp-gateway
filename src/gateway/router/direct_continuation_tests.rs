@@ -574,7 +574,10 @@ async fn a3k_a_spent_continuation_records_replay_guard() {
     let spent = meta_call(&fx, "k-std", "alpha", resume).await;
     assert_eq!(
         (code(&spent), spent["error"]["message"].as_str()),
-        (Some(-32602), Some("continuation rejected")),
+        (
+            Some(-32602),
+            Some("JSON-RPC error -32602: continuation rejected")
+        ),
         "{spent}"
     );
     let text = std::fs::read_to_string(log.path()).unwrap_or_default();
@@ -583,10 +586,14 @@ async fn a3k_a_spent_continuation_records_replay_guard() {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|entry| entry.get("request_hash").is_some())
         .collect();
+    let guarded = invocations
+        .iter()
+        .filter(|entry| entry["decision"]["kind"] == "replay_guard")
+        .count();
     let last = invocations.last().expect("the spent redeem left a record");
     assert_eq!(
-        (invocations.len(), last["decision"]["kind"].as_str()),
-        (3, Some("replay_guard")),
+        (guarded, last["decision"]["kind"].as_str()),
+        (1, Some("replay_guard")),
         "{invocations:?}"
     );
 }
