@@ -87,6 +87,9 @@ async fn a_stalled_client_is_closed(buffer: u32) {
     socket
         .set_recv_buffer_size(buffer)
         .expect("receive buffer size");
+    // The kernel may clamp the request (Linux caps it at rmem_max): print what it kept beside the fill count.
+    let granted = socket.recv_buffer_size().expect("granted receive buffer");
+    println!("receive buffer: asked {buffer} bytes, granted {granted}");
     let mut client = socket.connect(addr).await.expect("connect");
     let ask =
         format!("GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {BEARER}\r\n\r\n");
@@ -135,6 +138,9 @@ async fn a_logout_closes_a_blocked_stream(buffer: u32) {
     socket
         .set_recv_buffer_size(buffer)
         .expect("receive buffer size");
+    // The kernel may clamp the request (Linux caps it at rmem_max): print what it kept beside the fill count.
+    let granted = socket.recv_buffer_size().expect("granted receive buffer");
+    println!("receive buffer: asked {buffer} bytes, granted {granted}");
     let mut client = socket.connect(addr).await.expect("connect");
     let ask = format!(
         "GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nCookie: {SESSION_COOKIE}={cookie}\r\n\r\n"
@@ -181,6 +187,9 @@ async fn a_fill_with_no_stream_open_stops_at_its_bound_and_says_so() {
     let why = fill_until_a_send_waits(&busy, hub, 5)
         .await
         .expect_err("with nothing open, no send can wait");
-    assert!(why.contains("after 5 status changes"), "{why}");
-    assert!(why.contains("0 open streams"), "{why}");
+    // One delimited match, so "10 open streams" or a nonzero waiting count cannot pass.
+    assert!(
+        why.contains("after 5 status changes: 0 open streams, 0 sends waiting"),
+        "{why}"
+    );
 }
