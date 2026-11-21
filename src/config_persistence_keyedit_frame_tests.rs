@@ -210,13 +210,20 @@ fn p10_removing_the_first_key_keeps_the_head() {
 }
 
 /// A start line that also holds part of the document (an anchor or a tag on
-/// the root, or the whole document): the file is not refused whole, an edit
-/// elsewhere keeps that line byte for byte, and one that would rewrite it is
-/// refused, naming why.
+/// the root, or the whole document) never refuses the file whole. A key is
+/// still revoked with that line kept byte for byte. A value under an
+/// anchored or tagged root is refused on its own field, as it is in a file
+/// with no start line, and an edit that would rewrite the line names why.
 #[test]
 fn p11_a_start_line_with_content_is_kept_or_refused() {
     for head in ["--- &root\n", "--- !!map\n"] {
-        frame_holds(head, "");
+        let (out, _) = revoked(&framed(head, ""), &[revoke(1)]);
+        assert_eq!(out, format!("{head}{WITHOUT_B}"));
+        let (code, why) = refused(&framed(head, ""), &[set_int("server.port", 2)]);
+        assert_eq!(code, GiveUp::NotPlainKey, "{head:?}: {why}");
+        let bare = framed(head.trim_start_matches("--- "), "");
+        let (code, why) = refused(&bare, &[set_int("server.port", 2)]);
+        assert_eq!(code, GiveUp::NotPlainKey, "{bare:?}: {why}");
     }
     assert_refused_by(
         "--- {server: {port: 1}}\n",
