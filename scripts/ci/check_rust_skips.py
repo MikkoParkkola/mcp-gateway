@@ -119,6 +119,14 @@ def self_test() -> int:
          1, "skip_unshipped must be followed"),
         ("an inline test module in an ordinary src file is scanned", "mod tests {\n" + hand + "}\n", 1, "hand-written"),
     ]
+    # Every helper fixture also runs against skip_unshipped: the return-after rule is the same for both helpers
+    # (multi-line calls, decoy returns in comments, nested or deeper returns, an Option site ending in None).
+    cases += [
+        (label + " (skip_unshipped)",
+         text.replace('skip_or_fail("uv")', 'skip_unshipped(true, "uv")').replace("skip_or_fail(\n", "skip_unshipped(\n        true,\n"),
+         want, needle)
+        for label, text, want, needle in list(cases) if "skip_or_fail(" in text
+    ]
     wrong = 0
     for label, text, want, needle in cases:
         got = findings_in("src/a.rs", text)

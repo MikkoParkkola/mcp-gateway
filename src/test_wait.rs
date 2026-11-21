@@ -316,20 +316,34 @@ mod tests {
         super::skip_unshipped(false, PLANTED);
     }
 
-    /// U4: the real helper reads the variable. Under required mode, in a packaged crate it prints the unshipped
-    /// skip line and passes; in a checkout it fails naming the file, as `skip_or_fail` does.
+    /// U4: the real helper reads the variable. In a packaged crate, unset, `0` and `1` all print the unshipped
+    /// skip line and pass; in a checkout, unset and `0` print the plain skip line and `1` fails naming the file,
+    /// as `skip_or_fail` does; a value that is not `0` or `1` fails naming it in both.
     #[test]
     fn u4_the_real_unshipped_helper_reads_the_variable() {
-        let out = child_running("test_wait::tests::unshipped_packaged_child", Some("1"));
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{err}");
-        assert!(
-            err.contains(&format!(
-                "skipped (not shipped in the packaged crate): {PLANTED}"
-            )),
-            "{err}"
-        );
-        let out = child_running("test_wait::tests::unshipped_checkout_child", Some("1"));
+        const PACKAGED: &str = "test_wait::tests::unshipped_packaged_child";
+        const CHECKOUT: &str = "test_wait::tests::unshipped_checkout_child";
+        for value in [None, Some("0"), Some("1")] {
+            let out = child_running(PACKAGED, value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!(
+                    "skipped (not shipped in the packaged crate): {PLANTED}"
+                )),
+                "{value:?}: {err}"
+            );
+        }
+        for value in [None, Some("0")] {
+            let out = child_running(CHECKOUT, value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!("skipped: {PLANTED}")),
+                "{value:?}: {err}"
+            );
+        }
+        let out = child_running(CHECKOUT, Some("1"));
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{err}");
         assert!(
@@ -338,6 +352,12 @@ mod tests {
             )),
             "{err}"
         );
+        for child in [PACKAGED, CHECKOUT] {
+            let out = child_running(child, Some("yes"));
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{child}: {err}");
+            assert!(err.contains("\"yes\""), "{child}: {err}");
+        }
     }
 
     /// Run only by A4, in a child with its own environment.
