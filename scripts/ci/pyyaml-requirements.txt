@@ -1,0 +1,16 @@
+# PyYAML for scripts/ci/check-codeql-ignore.py, which reads codeql.yml with it
+# in a code-scanning gate. Installed with `pip --require-hashes`: pip refuses
+# any file whose sha256 is not listed. The hashes are PyPI's for PyYAML 6.0.3:
+# the Linux x86_64 and aarch64 wheels for CPython 3.12 to 3.14, and the source
+# archive. To update, take every file's sha256 from PyPI's page for the new
+# version, never from a download.
+pyyaml==6.0.3 \
+    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:ee2922902c45ae8ccada2c5b501ab86c36525b883eff4255313a253a3160861c \
+    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
+    --hash=sha256:501a031947e3a9025ed4405a168e6ef5ae3126c59f90ce0cd6f2bfc477be31b7 \
+    --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5 \
+    --hash=sha256:6adc77889b628398debc7b65c073bcb99c4a0237b248cacaf3fe8a557563ef6c \
+    --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

@@ -46,7 +46,7 @@ def cfg_override_problems(text):
     read by a YAML parser, so quoting and escapes resolve as GitHub reads them; a line match would take `'-test"'`
     for `-test` and miss a key spelled with escapes. GitHub refuses a workflow with a duplicate key, so the parser's
     last-wins on duplicates never decides a run."""
-    import yaml  # the step installs PyYAML (ci.yml); imported here so the dep-info check alone needs only stdlib
+    import yaml  # hash-pinned in scripts/ci/pyyaml-requirements.txt; local, so the dep-info part stays stdlib
 
     want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
     try:
