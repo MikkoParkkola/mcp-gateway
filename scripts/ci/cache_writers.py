@@ -954,7 +954,9 @@ def self_test() -> list[str]:
     bad("15j bake split inside its word", _doc([{"run": "docker buildx ba\\\nke release"}]), contains="bake")
     bad("15l bake continued over a CRLF line end", _doc([{"run": "docker buildx \\\r\n  bake release"}]), contains="bake")
     good("15k an escaped backslash at a line end is not a continuation",
-         _doc([{"run": "echo docker \\\\\nbake-the-cake"}]))
+         _doc([{"run": "echo docker \\\\\nbake release"}]))
+    good("15m a backslash then a space at a line end is not a continuation",
+         _doc([{"run": "echo docker \\ \nbake release"}]))
     bad("15i CACHE_TO a literal '' string", _doc([{
         "name": "build",
         "run": 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .',
