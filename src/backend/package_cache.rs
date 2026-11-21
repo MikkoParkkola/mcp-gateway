@@ -376,8 +376,14 @@ async fn retire_cache_dir<F>(
 where
     F: FnOnce(&Path) -> Retired + Send + 'static,
 {
+    // Taken here, while the start (in a test, the test) still holds its share
+    // of the dir: a start that gives up leaves this task running, and the
+    // rename, the proof file and the tombstone's delete all land in that dir.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, dir);
     let target = dir.to_path_buf();
     let renamed = tokio::task::spawn_blocking(move || {
+        // First, so it drops last: after the rename and the discard's spawn.
+        let _kept = kept;
         // Locals drop in reverse order, so on a panic in `retire` the latch is
         // re-armed before `held` releases the lock, and whether or not anyone
         // still awaits this task.
