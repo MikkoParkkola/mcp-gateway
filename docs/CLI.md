@@ -46,6 +46,19 @@ What each code tells a script:
   sending it again.
 - **7** and **130** are reserved and not used yet.
 
+## Where remote commands send their request
+
+`api`, `audit lookup-email`, `dashboard-link`, `events dead-letters` and `stats` talk to a running gateway. Each
+takes the gateway's base URL from the first of these that is set:
+
+1. `--gateway URL`.
+2. The `MCP_GATEWAY_URL` environment variable.
+3. A saved login (not yet: until the CLI can sign in, this step is empty).
+4. The address in `--config` (`server.host` and `server.port`), else `http://127.0.0.1:39400` for `stats`.
+
+The old spellings `--url` and `-u` still work on these five commands. The credential is never a flag: it is the
+`MCP_GATEWAY_TOKEN` environment variable.
+
 ## Command classes
 
 Every command is in one class:
