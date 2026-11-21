@@ -166,6 +166,22 @@ impl Platform {
     }
 }
 
+#[path = "restart_advice.rs"]
+mod advice;
+
+/// The restart keys one UI answer carries (restart_advice, start_command or
+/// start_refusal), or none when no restart is pending. `refusal` is what
+/// next_start_refusal said of the config a restart would boot; `config_path`
+/// is the file this gateway was started with.
+pub(crate) fn restart_advice(
+    pending: bool,
+    refusal: Option<&str>,
+    config_path: Option<&std::path::Path>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let _ = (pending, refusal, config_path, Platform::current());
+    None
+}
+
 /// Where readiness reads the process's restart binding.
 pub(crate) enum InvocationSource {
     /// The capture taken once at CLI entry.

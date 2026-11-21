@@ -603,6 +603,10 @@ mod cli_tests;
 mod floor_tests;
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "restart_advice_route_tests.rs"]
+mod restart_advice_route_tests;
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "settings_route_secret_tests.rs"]
 mod route_secret_tests;
 #[cfg(tp3)]
