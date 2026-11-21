@@ -45,7 +45,10 @@ fn listing(dir: &Path) -> Listing {
         .expect("list the config directory")
         .map(|entry| {
             let entry = entry.expect("directory entry");
-            let plain = entry.file_type().is_ok_and(|kind| kind.is_file());
+            // The lock sidecar is never read: Windows refuses a read of a range a held lock
+            // covers, and every comparison drops the sidecar anyway.
+            let plain = entry.file_type().is_ok_and(|kind| kind.is_file())
+                && entry.file_name() != LOCK_SIDECAR;
             let bytes = plain.then(|| std::fs::read(entry.path()).expect("read an entry"));
             (entry.file_name(), bytes)
         })
