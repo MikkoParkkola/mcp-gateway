@@ -14,7 +14,7 @@ const HANG_GUARD: Duration = Duration::from_secs(30);
 /// Polls `call` once while the test holds the reload lock. Its first await is
 /// the reload-lock wait, so a call that is still pending after one poll is
 /// parked in that lock's queue: queued, with no sleep to hope it got there.
-async fn poll_into_the_queue<F: std::future::Future>(mut call: std::pin::Pin<&mut F>, what: &str) {
+async fn poll_into_the_queue<F: std::future::Future>(call: std::pin::Pin<&mut F>, what: &str) {
     assert!(
         futures::poll!(call).is_pending(),
         "{what} finished while the reload lock was held"
