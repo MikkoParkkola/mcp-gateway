@@ -74,7 +74,7 @@ pub enum CapCommand {
         prefix: Option<String>,
 
         /// Default bearer-token credential reference for all generated capabilities (e.g. `env:API_TOKEN`)
-        #[arg(long)]
+        #[arg(long, value_name = "REFERENCE")]
         auth_key: Option<String>,
     },
 

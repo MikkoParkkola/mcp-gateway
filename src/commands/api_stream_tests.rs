@@ -30,7 +30,7 @@ fn args(path: &str, limit: Option<u32>, json: bool) -> ApiArgs {
         if_match: None,
         limit,
         json,
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: DashboardLinkTls::default(),
     }
 }

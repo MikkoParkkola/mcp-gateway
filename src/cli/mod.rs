@@ -355,13 +355,11 @@ pub(crate) enum Command {
     /// Fetch live statistics from a running gateway instance
     #[command(about = "Show observed invocation counts and cache behavior")]
     Stats {
-        /// Base URL of the running gateway (without /mcp suffix).
-        ///
-        /// Defaults to the `server.host`/`server.port` of `--config` (the same
-        /// file `serve` binds to), falling back to `http://127.0.0.1:39400`
-        /// when no config is found. An explicit `--url` always overrides both.
-        #[arg(short, long)]
-        url: Option<String>,
+        /// Where to send the request; without a flag or `MCP_GATEWAY_URL`, the
+        /// `server.host`/`server.port` of `--config` (the file `serve` binds
+        /// to), else `http://127.0.0.1:39400`.
+        #[command(flatten)]
+        gateway: dashboard_link::GatewayArg,
         /// Print one JSON document on stdout instead of the text summary
         #[arg(long)]
         json: bool,
