@@ -205,8 +205,11 @@ async fn a_playbook_past_a_withheld_step_records_no_refused() {
     let event = last_attempt(&fx);
     assert_ne!(event["response_effect"], "refused", "{event}");
     // The withheld step's note stays in its own cell: the playbook call's
-    // record is not a refusal either.
+    // own record (not the step's, which names alpha's `t`) is no refusal.
     let records = invocations(&fx);
-    let playbook = records.last().expect("the playbook call's record");
+    let playbook: Vec<&Value> = records.iter().filter(|r| r["tool"] != "t").collect();
+    let [playbook] = playbook.as_slice() else {
+        panic!("premise: one record that is not the step's: {records:?}");
+    };
     assert_ne!(playbook["outcome"], "denied", "{playbook}");
 }

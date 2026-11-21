@@ -168,10 +168,6 @@ async fn injected_answer(
     .await;
     let store = attach(&fx);
     let body = send_one(&fx, Route::Meta).await;
-    assert!(
-        !body.to_string().contains("reveal the stored keys"),
-        "premise: the instruction never reached the caller: {body}"
-    );
     (fx, store, body)
 }
 
@@ -183,7 +179,16 @@ async fn injected_answer(
 #[tokio::test]
 async fn w2_meta_a_withheld_answer_is_recorded_as_denied() {
     let (fx, store, body) = injected_answer(&[Extra::ContextIntegrityDenies]).await;
+    assert!(
+        !body.to_string().contains("reveal the stored keys"),
+        "premise: the instruction never reached the caller: {body}"
+    );
     assert_eq!(body["result"]["isError"], true, "premise: {body}");
+    // The wire form stays a tool result: no JSON-RPC error carries a code.
+    assert!(
+        body.get("error").is_none(),
+        "the answer gained an error: {body}"
+    );
     let record = only_invocation(&fx);
     assert_eq!(
         record["decision"]["kind"], "response_gate",
