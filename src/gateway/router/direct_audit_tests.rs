@@ -35,10 +35,13 @@ mod composite_refusals;
 mod counting;
 #[cfg(tp1)]
 mod delivery;
+// A response gate's block is recorded as denied on both routes.
 #[cfg(tp1)]
 mod delivery_who;
 #[cfg(tp1)]
 mod empty_grant;
+#[cfg(tp1)]
+mod gate_outcomes;
 #[cfg(tp1)]
 mod late_refusals;
 #[cfg(tp1)]
