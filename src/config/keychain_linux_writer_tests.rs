@@ -213,20 +213,15 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
     // Leading-dash names, which ADR-028 allows: stored, read back and deleted
     // for real, so the `--` is proven on the store, not only on the argv.
     // `--` is the very terminator the fix inserts; `-` is the shortest dash name.
+    let mut dash_failures = Vec::new();
     for dash in ["--help", "-x", "-", "--"] {
-        assert_eq!(
-            store.create(dash, b" d\n"),
-            Ok(format!("keychain:{dash}")),
-            "{dash}"
-        );
-        assert_eq!(
-            store.read(dash).expect("read back").as_bytes(),
-            b" d\n",
-            "{dash}"
-        );
-        store.delete(dash).expect("delete");
-        assert_eq!(store.exists(dash), Ok(false), "{dash}");
+        // Every name runs its whole round trip and reports on its own; the one
+        // assertion after the loop names each name that failed and where.
+        if let Err(why) = dash_round_trip(&store, dash) {
+            dash_failures.push(format!("{dash}: {why}"));
+        }
     }
+    assert!(dash_failures.is_empty(), "{dash_failures:#?}");
     let locked = std::process::Command::new("gdbus")
         .args([
             "call",
@@ -248,6 +243,29 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
         store.create("mcp-gateway.ci-b18-locked.1.00ff", b"v"),
         Err(StoreError::Unavailable(_))
     ));
+}
+
+/// B18's round trip for one leading-dash name on the real store: created,
+/// read back byte for byte, deleted, then gone. The first step that goes wrong
+/// is returned, so the caller can report every name instead of stopping.
+fn dash_round_trip(store: &LinuxKeychain, name: &str) -> Result<(), String> {
+    use super::super::keychain::KeychainRead as _;
+    let created = store.create(name, b" d\n");
+    if created != Ok(format!("keychain:{name}")) {
+        return Err(format!("create returned {created:?}"));
+    }
+    match store.read(name) {
+        Ok(value) if value.as_bytes() == b" d\n" => {}
+        Ok(value) => return Err(format!("read back {} wrong bytes", value.as_bytes().len())),
+        Err(error) => return Err(format!("read back: {error:?}")),
+    }
+    store
+        .delete(name)
+        .map_err(|error| format!("delete: {error:?}"))?;
+    match store.exists(name) {
+        Ok(false) => Ok(()),
+        other => Err(format!("still listed after delete: {other:?}")),
+    }
 }
 
 /// The one refusal for a name outside ADR-028's grammar; it never repeats the name.
