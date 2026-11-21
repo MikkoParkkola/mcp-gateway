@@ -16,8 +16,11 @@ use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_config;
 use super::ui_tool_call_cell_tests::assert_refused_delivery;
+pub(super) use super::ui_tool_call_deadline_tests::{
+    POST_BOUND, TestDeadline, deadline_after_send, install, install_slow_gated,
+};
 use super::ui_tool_call_receipt_tests::unreceipted;
-pub(super) use super::ui_tool_call_stub::Stub;
+pub(super) use super::ui_tool_call_stub::{SLOW_GATE_BOUND, Stub};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};
@@ -174,6 +177,8 @@ async fn register_as(
         calls: Arc::clone(calls),
         declares_read,
         list_gate: None,
+        list_entered: None,
+        slow_gate: None,
     }));
     assert!(
         state.backends.register(Arc::clone(&backend)),
@@ -519,13 +524,13 @@ async fn t23_a_ui_call_is_never_served_from_the_cache() {
 /// T12: past the deadline the route answers 504 "may have run"; the sent
 /// call finishes, and its invocation record and a completion `admin_action`
 /// naming its trace still appear.
-/// Mutant: the deadline not enforced (the timeout removed).
+/// Mutant: the deadline not enforced (the timeout removed): `slow` answers
+/// 200 after [`SLOW_GATE_BOUND`] and the 504 check fails.
 #[tokio::test]
 async fn t12_a_deadline_answers_504_and_the_records_still_land() {
     let fx = fixture().await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(Duration::from_millis(100))));
-    let (status, body) = post(&fx, ADMIN, call("slow", false)).await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));
+    let gate = install_slow_gated(&fx).await;
+    let (status, body) = deadline_after_send(&fx, &gate).await;
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
     assert_eq!(body["disposition"], "may_have_run", "{body}");
     // The call runs on past the answer: wait for its completion record.
