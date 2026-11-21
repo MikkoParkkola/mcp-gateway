@@ -15,6 +15,17 @@ Stated miss: a file compiled only on another OS (cfg(windows)) is not in a
 Linux build's dep-info; it is still checked by name against the globs below
 only if a Linux build reads it.
 
+It also fails unless the analyze job's own `env:` sets
+CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES to exactly `-test`. The Rust
+extractor turns cfg(test) on by default, so without it the scan reads test
+code and skips every `#[cfg(not(test))]` product item. The action spawns
+extraction in the Analyze step with the job's environment, so the setting has
+one place, the job's env, and every other copy is refused: on the Initialize
+step it never reaches extraction, on the Analyze step it overrides the job's
+value, in the CodeQL config it is not an environment variable at all, and at
+workflow level it would reach extraction too, but the job's env is the one
+place the design pins, so there is a single copy to read and check.
+
 Usage: scripts/ci/check-codeql-ignore.py [--cargo CARGO] [--extra-glob GLOB]   (repo root)
 """
 import argparse
@@ -26,6 +37,55 @@ import sys
 
 WORKFLOW = ".github/" + "workflows/codeql.yml"
 FEATURE_SETS = ([], ["--all-features"], ["--no-default-features"])
+CFG_NAME = "CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES"
+
+
+def cfg_override_problems(text):
+    """CFG_NAME must be a key of `jobs.analyze.env` with the string value `-test`; any other key equal to it, at any
+    depth, and any string value naming it (the CodeQL `config:` block, a `run:` script) is refused. The workflow is
+    read by a YAML parser, so quoting and escapes resolve as GitHub reads them; a line match would take `'-test"'`
+    for `-test` and miss a key spelled with escapes. GitHub refuses a workflow with a duplicate key, so the parser's
+    last-wins on duplicates never decides a run. An `env:` that is not a plain mapping (an expression such as
+    `${{ fromJSON(...) }}` that builds the whole mapping at run time) is refused anywhere, since its keys cannot be
+    read here. Threat model: this stops accidental drift of the setting. A deliberate bypass means editing codeql.yml
+    or this script, and pull-request review covers both. A step that writes the variable to $GITHUB_ENV at run time
+    is out of reach; the analyze job runs only checkout and the CodeQL actions."""
+    import yaml  # hash-pinned in scripts/ci/pyyaml-requirements.txt; local, so the dep-info part stays stdlib
+
+    want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as err:
+        return [f"{WORKFLOW} does not parse as YAML ({err}); {want}"]
+    problems, found = [], []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                here = path + [str(key)]
+                if key == "env" and value is not None and not isinstance(value, dict):
+                    problems.append(f"{WORKFLOW}: the env at {'.'.join(here)} is not a plain mapping, so {CFG_NAME} "
+                                    f"in it cannot be checked; {want}, and only there")
+                if key == CFG_NAME:
+                    found.append((here, value))
+                walk(value, here)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, path + [str(index)])
+        elif isinstance(node, str) and CFG_NAME in node:
+            problems.append(f"{WORKFLOW}: {CFG_NAME} named inside a string at {'.'.join(path)}, "
+                            f"outside the analyze job's own env; {want}, and only there")
+
+    walk(doc, [])
+    for path, value in found:
+        if path[:-1] != ["jobs", "analyze", "env"]:
+            problems.append(f"{WORKFLOW}: {CFG_NAME} set at {'.'.join(path[:-1]) or 'the top level'}, "
+                            f"outside the analyze job's own env; {want}, and only there")
+        elif value != "-test":
+            problems.append(f"{WORKFLOW}: {CFG_NAME} is {value!r}; {want}")
+    if not found:
+        problems.append(f"{WORKFLOW}: {want}; it is missing, so CodeQL reads Rust with cfg(test) on")
+    return problems
 
 
 def ignore_globs(text):
@@ -188,7 +248,14 @@ def main():
     parser.add_argument("--extra-glob", action="append", default=[])
     args = parser.parse_args()
     root = os.getcwd()
-    globs = ignore_globs(open(os.path.join(root, WORKFLOW), encoding="utf-8").read())
+    with open(os.path.join(root, WORKFLOW), encoding="utf-8") as handle:
+        workflow = handle.read()
+    cfg_problems = cfg_override_problems(workflow)
+    for problem in cfg_problems:
+        print(f"FAIL {problem}")
+    if cfg_problems:
+        sys.exit(1)
+    globs = ignore_globs(workflow)
     globs += args.extra_glob
     if not globs:
         sys.exit(f"check-codeql-ignore: no paths-ignore list found in {WORKFLOW}")
