@@ -78,6 +78,14 @@ impl Gateway {
         // Before any await: in a test, this thread is the test's own.
         #[cfg(test)]
         let test_seams = test_seams::TestSeams::new();
+        // A config file means a dead writer may have left work beside it: refuse while any is
+        // there, writing nothing. Until the serve paths carry a startup session, every
+        // path-backed construction runs this sessionless check.
+        if let Some(path) = &config_path {
+            crate::config_reload::startup_settle::check_sessionless(path)
+                .await
+                .map_err(|class| Error::Config(class.to_string()))?;
+        }
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
         posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;

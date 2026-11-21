@@ -626,9 +626,7 @@ pub(crate) fn retired_path(target: &std::path::Path) -> std::path::PathBuf {
     target.with_file_name(name)
 }
 
-#[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned.rs"]
 pub(crate) mod abandoned;
-#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain.rs"]
 pub(crate) mod drain;

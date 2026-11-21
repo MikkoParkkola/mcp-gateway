@@ -638,11 +638,11 @@ pub(crate) fn lock_config_blocking_deferred(
 mod reader;
 #[cfg(test)]
 use reader::creation_blocked;
-// The startup gate, compiled for tests only until the serve paths take it, proves absence here.
-#[cfg(test)]
+// The startup gate proves absence here.
 pub(crate) use reader::absent;
 pub(crate) use reader::{
-    ReaderLock, journal_pending, no_writer_possible, reader_lock, reader_lock_deferred,
+    MANIFEST_UNREAD, ReaderLock, journal_pending, no_writer_possible, reader_lock,
+    reader_lock_deferred,
 };
 
 /// The vault lock's blocking wait: one attempt per `POLL` until `deadline`,

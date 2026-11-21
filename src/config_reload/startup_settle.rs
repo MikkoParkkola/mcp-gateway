@@ -46,6 +46,10 @@ pub(crate) enum StartError {
     AbandonedPending,
     InvalidAuditPayload,
     ArtifactCheckFailed,
+    /// A v1 replace journal met by a construction that may not write.
+    RecoveryPending,
+    /// A retired manifest, which this build cannot read yet.
+    ManifestUnread,
 }
 
 impl fmt::Display for StartError {
@@ -69,6 +73,10 @@ impl fmt::Display for StartError {
             Self::ArtifactCheckFailed => {
                 "This gateway could not confirm that no config write is pending beside the config. Fix access to the config directory, then start again."
             }
+            Self::RecoveryPending => {
+                "An interrupted config write needs recovering before this config is used. Call mcp_gateway::config_reload::recover_before_start on it, or start the gateway once with serve, then build again."
+            }
+            Self::ManifestUnread => crate::config_persistence::lock::MANIFEST_UNREAD,
         })
     }
 }
@@ -161,6 +169,55 @@ pub(crate) fn file_stage(error: DrainError) -> Result<(), StartError> {
         | DrainError::Finish
         | DrainError::RepairPending => Err(StartError::AbandonedPending),
     }
+}
+
+/// The gate for a construction with no startup session behind it. It never writes, so it never
+/// repairs or recovers: under the config lock (waiting up to [`CLI_LOCK_WAIT`]) the journal, the
+/// abandoned file and the retired manifest must all be proven absent, and each one found refuses
+/// with its class. Where the lock cannot be taken because no writer can exist, the unlocked
+/// probe decides. The lock is let go before this returns.
+pub(crate) async fn check_sessionless(config: &Path) -> Result<(), StartError> {
+    let path = config.to_path_buf();
+    let deadline = Instant::now() + CLI_LOCK_WAIT;
+    let reads: Box<dyn FnOnce() -> Result<(), Refusal> + Send> =
+        match lock_config_deferred(config, deadline).await {
+            // Moved into the worker, which lets the lock go once its reads are done.
+            Ok(held) => Box::new(move || nothing_pending(&held)),
+            Err(NotLocked::Busy) => {
+                return Err(logged(refuse(StartError::Busy, path, "Busy")));
+            }
+            Err(_) => {
+                let unheld = path.clone();
+                Box::new(move || probe(&unheld).map(drop))
+            }
+        };
+    from_worker(path, reads).await
+}
+
+// Reads only, the lock held: the first artifact that stops a sessionless construction.
+fn nothing_pending(held: &Locked) -> Result<(), Refusal> {
+    let journal = journal_path(&held.target);
+    let found = match dispatch_journal(held) {
+        Ok(None) => None,
+        Ok(Some(OpenJournal::Legacy(_))) => Some((StartError::RecoveryPending, "v1".to_owned())),
+        Ok(Some(OpenJournal::Current(_))) => Some((StartError::JournalPending, "v2".to_owned())),
+        Err(why) => Some((StartError::JournalPending, format!("{why:?}"))),
+    };
+    if let Some((class, cause)) = found {
+        return Err(refuse(class, journal, cause));
+    }
+    let beside = [
+        (abandoned_path(&held.target), StartError::AbandonedPending),
+        (retired_path(&held.target), StartError::ManifestUnread),
+    ];
+    for (artifact, class) in beside {
+        match std::fs::symlink_metadata(&artifact) {
+            Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(refuse(StartError::ArtifactCheckFailed, artifact, "unproven")),
+            Ok(_) => return Err(refuse(class, artifact, "present")),
+        }
+    }
+    Ok(())
 }
 
 // Stalled retries. Lost proves nothing about the artifacts. Every refusal, these included, is logged

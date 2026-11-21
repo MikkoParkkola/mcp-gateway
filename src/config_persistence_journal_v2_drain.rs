@@ -439,6 +439,7 @@ mod crash_tests;
 mod decide;
 #[path = "config_persistence_journal_v2_drain_deliver.rs"]
 mod deliver;
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_fault_tests.rs"]
 pub(crate) mod fault;
 #[path = "config_persistence_journal_v2_drain_file.rs"]
