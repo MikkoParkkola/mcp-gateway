@@ -412,6 +412,21 @@ impl Drop for StopWaiting {
     }
 }
 
+/// Recover a pending replace journal under a lock already held: what [`lock_config`] does while
+/// it acquires, and what a reader does once its own checks have passed. Blocks; call it off the
+/// async workers.
+fn recover_held(locked: &mut Locked) -> Result<(), NotLocked> {
+    refuse_pending_v2(locked)?;
+    locked.recovered = super::journal::recover(&locked.target).map_err(|error| match error {
+        super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
+        super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
+    })?;
+    locked.journal_pending = false;
+    // Recorded after recovery, which may restore the target.
+    locked.existed = std::fs::symlink_metadata(&locked.target).is_ok();
+    Ok(())
+}
+
 /// The wait itself, on a thread that may block. Gives up as at the deadline
 /// once `waiting` turns false. `on_wait` runs once, the first time the lock
 /// is found held.
@@ -443,14 +458,7 @@ fn acquire(
                 existed: false,
             };
             match recovery {
-                Recovery::OnAcquire => {
-                    refuse_pending_v2(&locked)?;
-                    locked.recovered =
-                        super::journal::recover(&locked.target).map_err(|error| match error {
-                            super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
-                            super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
-                        })?;
-                }
+                Recovery::OnAcquire => recover_held(&mut locked)?,
                 Recovery::Deferred => {
                     locked.journal_pending = super::journal::exists(&locked.target);
                 }
