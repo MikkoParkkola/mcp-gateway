@@ -757,16 +757,12 @@ impl Gateway {
                     .await;
                 #[cfg(feature = "cost-governance")]
                 if let Some(enforcer) = &meta_mcp.budget_enforcer {
-                    let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-                    let costs = meta_mcp.cost_tracker();
-                    stdio_shutdown::final_cost_save(
-                        shutdown_deadline,
-                        cost_saver,
-                        enforcer,
-                        costs,
-                        dir,
-                    )
-                    .await;
+                    let cost = (
+                        Arc::clone(enforcer),
+                        meta_mcp.cost_tracker(),
+                        data_dir.clone(),
+                    );
+                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, cost).await;
                 }
             }
             // Every sender gone, then the writer joined: the task drains its queue
