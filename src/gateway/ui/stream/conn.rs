@@ -116,7 +116,7 @@ impl Conn {
                         Ok(Err(_)) => return Err(End::ClientGone),
                         Err(_) => return Err(End::WriteStalled),
                     },
-                    _ = recheck.tick() => self.upkeep().await?,
+                    _ = recheck.tick() => mutant!("m1", (), self.upkeep().await?),
                 }
             }
         };
