@@ -144,8 +144,10 @@ async fn s5_mcp_a_number_nonce_records_syntax() {
 /// P1: under the invoke-only scope, the route stage passes alpha but the
 /// signing check's invocation policy refuses it: the operator killed alpha,
 /// which the route stage never reads (signing.rs `prepare_signing_invocation`
-/// runs the visible policy first). The kill switch names no rule, so the
-/// record carries the policy's own kind and no rule id.
+/// runs the visible policy first). A refusal the gateway noted records
+/// `denied` with its own code, at signing time as at dispatch (one rule, the
+/// meta writer's). The kill switch names no rule, so the record carries the
+/// policy's own kind and no rule id.
 #[tokio::test]
 async fn p1_mcp_a_signing_time_policy_refusal_records_its_own_kind() {
     let fx = fixture(Setup {
@@ -166,6 +168,6 @@ async fn p1_mcp_a_signing_time_policy_refusal_records_its_own_kind() {
     let [record] = all.as_slice() else {
         panic!("exactly one record: {all:?}");
     };
-    assert_meta_refusal(record, "error", -32000, "kill_switch");
+    assert_meta_refusal(record, "denied", -32000, "kill_switch");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
 }
