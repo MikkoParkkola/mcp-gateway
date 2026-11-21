@@ -77,6 +77,9 @@ mod capability_publish_tests;
 #[cfg(all(test, unix))]
 mod capability_snapshot_tests;
 mod run_wiring;
+#[cfg(tp4)]
+#[cfg(test)]
+mod serving_log_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
