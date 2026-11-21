@@ -335,9 +335,17 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
 /// while the directory is being removed leaves it behind, and the shard's
 /// leftover check then fails the run.
 ///
+/// Scope: a state built by [`state`], and tasks created without a short
+/// client `ttl`. Two later writes exist in the store, and neither is
+/// reachable here: a cancelled row is rewritten by the upstream-cancel claim
+/// and its retries only when a recovery adapter is installed, which only the
+/// server's startup wiring does; and expiry removes a terminal record once
+/// its TTL (24 h unless the client asks for less) has passed.
+///
 /// Opt-in: an async wait cannot run in `Drop`, and the task runtime's own
-/// shutdown is private to the crate. A test that creates a task calls this
-/// before it returns; the leftover check catches one that forgets.
+/// shutdown is private to the crate. A test that creates a task passes its
+/// id (from the creating answer's `/result/taskId`) before it returns; the
+/// leftover check catches one that forgets.
 /// Panics after 30 s with each task still open and its last read.
 pub async fn settle_tasks(state: &Arc<AppState>, ids: &[&str]) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
