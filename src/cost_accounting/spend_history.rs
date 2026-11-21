@@ -282,6 +282,10 @@ fn still_private(path: &Path) -> bool {
 #[cfg(test)]
 #[path = "spend_history_file_tests.rs"]
 mod file_tests;
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "spend_history_save_rows_tests.rs"]
+mod save_rows;
 
 /// The file's contents at `now`. The key map is walked once for its handles,
 /// so a name appears at most once; each series is copied under its own lock,
