@@ -687,6 +687,11 @@ pub(crate) fn lock_file_blocking(
 #[path = "config_persistence_lock_tests.rs"]
 mod tests;
 
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_lock_reader_gate_tests.rs"]
+mod reader_gate_tests;
+
 /// Dispatch an already held lock without recursively acquiring it.
 pub(crate) fn dispatch_journal(
     locked: &Locked,
