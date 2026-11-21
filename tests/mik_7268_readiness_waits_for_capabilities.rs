@@ -158,10 +158,10 @@ async fn url_while_loading(
             if let Ok(response) = client.get(format!("{url}/readyz")).send().await {
                 let status = response.status().as_u16();
                 let body = response.text().await.unwrap_or_default();
-                assert_ne!(status, 200, "ready while the scan is held: {}", logs());
                 if status == 503 && body == "capabilities loading" {
                     return url;
                 }
+                assert_ne!(status, 200, "ready while the scan is held: {}", logs());
             }
         }
         assert!(
