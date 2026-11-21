@@ -564,6 +564,12 @@ async fn off_runtime_in<T: Send + 'static>(
                 }
                 drop(ended);
             });
+            // After the whole run, past a caller that left: a row waits here
+            // before its plain dir drops (keyed apart from the first hold).
+            #[cfg(test)]
+            if let Some(held) = &held {
+                crate::spawn_keep::pause_if_held(&crate::spawn_keep::after_work(held));
+            }
         })
         .map_err(|_| NoResult::Lost)?;
     let mut caller = Left {

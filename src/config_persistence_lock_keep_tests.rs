@@ -112,7 +112,19 @@ async fn a_config_lock_caller_cancelled_mid_thread_is_recorded_at_the_cancel() {
         vec![("config lock", config.clone(), this_test())],
         "not recorded once at the cancel"
     );
+    // The end of the cancelled thread's run, armed before its release: the
+    // relock below starts only once that thread has done all its work, so the
+    // relock cannot win the lock first and leave it writing as the dir drops.
+    let end = crate::spawn_keep::hold_for(&crate::spawn_keep::after_work(&config));
+    let (finished, after) = end.arm();
+    let after = Release(after);
     release.now();
+    within(
+        "the cancelled thread finished its work",
+        finished.notified(),
+    )
+    .await;
+    after.now();
     let again = lock_config(&config, Instant::now() + Duration::from_secs(10)).await;
     assert!(again.is_ok(), "the cancelled thread kept the lock");
     assert_eq!(

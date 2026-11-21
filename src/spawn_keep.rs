@@ -56,6 +56,16 @@ pub(crate) fn hold_for(path: &Path) -> std::sync::Arc<crate::test_pause::Slot> {
     slot
 }
 
+/// The key a row arms with [`hold_for`] to stop a held writer once its work
+/// is done: `path` with ".returned" appended, so it never matches the hold
+/// before the work.
+#[cfg(test)]
+pub(crate) fn after_work(path: &Path) -> std::path::PathBuf {
+    let mut key = path.as_os_str().to_owned();
+    key.push(".returned");
+    key.into()
+}
+
 /// Pause here if a row armed a hold for `path` (bounded: see
 /// `Slot::pause_on_thread`). The first statement of a held writer's closure.
 #[cfg(test)]
