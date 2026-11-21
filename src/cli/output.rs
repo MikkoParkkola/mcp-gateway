@@ -235,6 +235,100 @@ fn truncate_str(s: &str, max: usize) -> String {
     truncate(s, Budget::Bytes(max), "...", Suffix::Within)
 }
 
+// ── data command forms ────────────────────────────────────────────────────────
+
+/// How a data command prints: its text form, or one JSON document (`--json`). Not [`OutputFormat`]: that enum picks
+/// one of three renderers of a tool's `Value`, and these commands have their own text and no table or plain form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Render {
+    /// The command's text form (the default).
+    Text,
+    /// One JSON document on stdout.
+    Json,
+}
+
+impl Render {
+    /// The form a `--json` flag selects.
+    pub(crate) fn from_json_flag(json: bool) -> Self {
+        if json { Self::Json } else { Self::Text }
+    }
+}
+
+/// `view` as one JSON document: `{"schema_version": 1, ...view}` on one line with a newline, printing nothing.
+///
+/// # Errors
+///
+/// The serializer's message when `view` cannot be serialized.
+pub(crate) fn document<T: serde::Serialize>(view: &T) -> Result<String, String> {
+    /// The version first, then the view's own keys in their order.
+    #[derive(serde::Serialize)]
+    struct Versioned<'a, T> {
+        schema_version: u32,
+        #[serde(flatten)]
+        view: &'a T,
+    }
+    serde_json::to_string(&Versioned {
+        schema_version: 1,
+        view,
+    })
+    .map(|mut line| {
+        line.push('\n');
+        line
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Print a built [`document`] on stdout, exit 0; when it could not be built, the reason on stderr, exit 1.
+pub(crate) fn print_document(doc: Result<String, String>) -> std::process::ExitCode {
+    match doc {
+        Ok(doc) => {
+            crate::cli::stdout::print!("{doc}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(why) => {
+            eprintln!("Error: could not print the document: {why}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// What a command prints and exits with, built before anything is written, so a row can read it and the command
+/// prints it once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Printed {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) exit: u8,
+}
+
+/// What a failed stdout write does to a [`Printed`] result: each command keeps the policy its text form has today.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OnWriteFailure {
+    /// A broken pipe ends the process with 0 and any other failure panics, as `crate::cli::stdout::print!` does.
+    ExitOnBrokenPipe,
+    /// Ignored, so the exit code stays the verdict's: a verifier piped into `head` still fails a bad input.
+    Ignore,
+}
+
+impl Printed {
+    /// Write stdout under `policy`, then stderr; the exit code.
+    pub(crate) fn emit(&self, policy: OnWriteFailure) -> std::process::ExitCode {
+        if !self.stdout.is_empty() {
+            match policy {
+                OnWriteFailure::ExitOnBrokenPipe => crate::cli::stdout::print!("{}", self.stdout),
+                OnWriteFailure::Ignore => {
+                    use std::io::Write as _;
+                    let _ = std::io::stdout().lock().write_all(self.stdout.as_bytes());
+                }
+            }
+        }
+        if !self.stderr.is_empty() {
+            eprint!("{}", self.stderr);
+        }
+        std::process::ExitCode::from(self.exit)
+    }
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(tp1)]
@@ -333,5 +427,31 @@ mod tests {
             {"name": "tool_b", "score": 2}
         ]);
         print_tool_result(&v, OutputFormat::Table);
+    }
+
+    /// U1 (MIK-9764.JSONF.1): the one document helper writes `schema_version` 1 first, then the view's own keys in
+    /// their order, on one line with one newline; a view that cannot serialize is an error, not a partial line.
+    #[test]
+    fn document_puts_schema_version_first_on_one_line() {
+        struct Refuses;
+        impl serde::Serialize for Refuses {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("refused"))
+            }
+        }
+        #[derive(serde::Serialize)]
+        struct View {
+            zeta: u8,
+            alpha: &'static str,
+        }
+        assert_eq!(
+            document(&View {
+                zeta: 7,
+                alpha: "a"
+            }),
+            Ok("{\"schema_version\":1,\"zeta\":7,\"alpha\":\"a\"}\n".to_owned())
+        );
+
+        assert!(document(&Refuses).is_err());
     }
 }

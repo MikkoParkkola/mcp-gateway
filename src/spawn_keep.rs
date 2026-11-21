@@ -70,8 +70,11 @@ pub(crate) fn pause_if_held(path: &Path) {
 }
 
 // A keep carries no data in a release build, so taking one costs nothing there.
+// Written as a statement inside a block, the form Kani's nightly accepts.
 #[cfg(not(test))]
-const _: () = assert!(std::mem::size_of::<Kept>() == 0);
+const _: () = {
+    assert!(std::mem::size_of::<Kept>() == 0);
+};
 
 /// The kept dirs holding `path`, taken at spawn, with no report: for a writer
 /// whose own open already reports an unkept dir, or one that is awaited.
@@ -104,17 +107,17 @@ pub(crate) fn kept_at_spawn(_kind: &'static str, _path: &Path) -> Kept {
     Kept
 }
 
-/// Run a detached writer's `work` while it holds `kept`, then let the keep go:
-/// the keep lives exactly as long as the work. A writer's closure ends through
-/// this, so the keep is moved into the closure and never bound unread.
+/// Run `work` on a detached writer's thread with `kept` held until it
+/// returns. Taking the keep as an argument moves it into the thread without
+/// a binding nobody reads.
 #[cfg(test)]
 pub(crate) fn holding<R>(kept: Kept, work: impl FnOnce() -> R) -> R {
-    let out = work();
+    let result = work();
     drop(kept);
-    out
+    result
 }
 
-/// Nothing is held in a release build.
+/// A release build holds nothing: `work` just runs.
 #[cfg(not(test))]
 pub(crate) fn holding<R>(Kept: Kept, work: impl FnOnce() -> R) -> R {
     work()

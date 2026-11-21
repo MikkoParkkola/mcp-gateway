@@ -22,8 +22,10 @@ FAKE_CARGO = """#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
 part = os.environ.get("MCP_GATEWAY_TEST_PART", "unset")
+home = os.environ.get("MCP_GATEWAY_TEST_HOME_DIR", "")
 with open(os.environ["FAKE_LOG"], "a") as log:
-    log.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "part": part}) + "\\n")
+    log.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "part": part, "home": home,
+                          "home_exists": os.path.isdir(home)}) + "\\n")
 phase = "part:" + part if "--lib" in argv else "doc" if "--doc" in argv else "rest" if "--bins" in argv else "other"
 sys.exit(1 if phase in os.environ.get("FAKE_FAIL", "").split(",") else 0)
 """
@@ -47,7 +49,8 @@ def expected(n: int, flags: list[str], args: list[str]) -> list[dict]:
 
 
 class Run(unittest.TestCase):
-    def run_helper(self, n: int | None, cli: list[str], fail: str = "", inherited: str | None = None):
+    def run_helper(self, n: int | None, cli: list[str], fail: str = "", inherited: str | None = None,
+                   home: str | None = None):
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         t = Path(tmp.name)
@@ -60,6 +63,9 @@ class Run(unittest.TestCase):
         env.pop("MCP_GATEWAY_TEST_PART", None)
         if inherited is not None:
             env["MCP_GATEWAY_TEST_PART"] = inherited
+        env.pop("MCP_GATEWAY_TEST_HOME_DIR", None)
+        if home is not None:
+            env["MCP_GATEWAY_TEST_HOME_DIR"] = home
         done = subprocess.run(["bash", str(HELPER), "run", *cli], cwd=work, env=env, capture_output=True, text=True)
         calls = [json.loads(line) for line in (t / "log").read_text().splitlines()] if (t / "log").exists() else []
         return done, calls, work
@@ -127,6 +133,28 @@ class Run(unittest.TestCase):
         done, calls, _ = self.run_helper(0, ["--"])
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(calls, [])
+
+    def test_r9_every_call_shares_one_private_home_that_the_run_removes(self):
+        # Integration tests that resolve the gateway home refuse to run without a private one.
+        for fail, rc in (("", 0), ("rest", 1)):
+            with self.subTest(fail=fail or "none"):
+                done, calls, work = self.run_helper(2, ["--"], fail=fail)
+                self.assertEqual(done.returncode, rc, done.stderr)
+                self.assert_sequence(calls, expected(2, [], []), work)
+                homes = {c["home"] for c in calls}
+                self.assertEqual(len(homes), 1, f"one home for the whole run, got {homes}")
+                home = homes.pop()
+                self.assertTrue(home and all(c["home_exists"] for c in calls), "every call sees an existing home")
+                self.assertFalse(os.path.exists(home), "the run removes its home")
+
+    def test_r10_a_home_the_caller_set_is_used_and_kept(self):
+        given = TemporaryDirectory()
+        self.addCleanup(given.cleanup)
+        done, calls, work = self.run_helper(2, ["--"], home=given.name)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assert_sequence(calls, expected(2, [], []), work)
+        self.assertEqual({c["home"] for c in calls}, {given.name})
+        self.assertTrue(os.path.isdir(given.name), "a home the caller set is not removed")
 
 
 PACKAGED = ROOT / "scripts" / "ci" / "packaged-tests.sh"

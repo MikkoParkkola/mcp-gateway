@@ -311,6 +311,11 @@ mod shutdown_order_tests;
 mod counter_restart_tests;
 
 #[cfg(tp4)]
+#[cfg(test)]
+#[path = "heartbeat_start_tests.rs"]
+mod heartbeat_start_tests;
+
+#[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]
 #[path = "gateway_status_start_tests.rs"]
 mod gateway_status_start_tests;

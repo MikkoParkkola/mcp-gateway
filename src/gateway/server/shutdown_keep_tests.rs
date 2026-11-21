@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::test_dir_keep::{expect_unkept, held_then_gone, kept_tempdir};
+use crate::test_dir_keep::{expect_unkept, kept_tempdir};
+
+/// How long a row waits for a dir to go after the save that kept it returns.
+const GONE_BOUND: Duration = Duration::from_secs(10);
 
 fn this_test() -> String {
     std::thread::current()
@@ -54,6 +57,30 @@ fn instant_save(root: PathBuf) -> Box<dyn FnOnce() + Send> {
     })
 }
 
+/// What is left under `dir`, for a failure message.
+fn listing(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+    )
+}
+
+/// The dir is there while its save is held, then goes once the save returns,
+/// with nothing left behind.
+async fn held_then_gone(dir: &Path, release: impl FnOnce()) {
+    assert!(
+        dir.exists(),
+        "the dir was removed while its save was still held"
+    );
+    release();
+    let gone = crate::test_wait::wait_real_time(GONE_BOUND, || !dir.exists()).await;
+    assert!(
+        gone.is_ok(),
+        "the dir stayed after its save returned; left: {:?}",
+        listing(dir)
+    );
+}
+
 /// K1. A save abandoned at the deadline in a kept dir (the transitions.json leak shape: a
 /// write still running when the shutdown returns) keeps the dir after the
 /// test drops its share, until the save returns.
@@ -63,6 +90,7 @@ async fn an_abandoned_shutdown_save_keeps_its_dir_until_it_returns() {
     let dir = kept_tempdir();
     let root = dir.path().to_path_buf();
     let (save, mut release) = stalled_save(root.join("transitions.json"));
+    // limit-under-test (fires-only): the save is stalled until the test releases it, so this deadline always passes first; a slow runner only delays it.
     let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
     run_shutdown_saves(
         deadline,
@@ -93,12 +121,12 @@ async fn a_shutdown_save_takes_its_keep_before_its_thread_runs() {
         instant_save(root.join("transitions.json")),
     )
     .gated(Arc::clone(&gate));
+    // limit-under-test (fires-only): the save's thread waits at its gate until after this deadline, so it always passes first; a slow runner only delays it.
     let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
     run_shutdown_saves(deadline, vec![save]).await;
     crate::test_pause::within("the save's thread reached its gate", reached.notified()).await;
     drop(dir);
-    let release = crate::test_pause::Release(release);
-    held_then_gone(&root, || release.now()).await;
+    held_then_gone(&root, || release.notify_one()).await;
 }
 
 /// Run one instant save into `root` and wait for it to return.
@@ -285,15 +313,38 @@ async fn the_window_seal_carries_its_data_dir_as_root() {
 /// above read: a new site fails here until it gets its own row.
 #[test]
 fn every_shutdown_save_construction_has_a_root_row() {
-    const READ_BY_A_ROW: [&str; 6] = [
+    const READ_BY_A_ROW: [&str; 7] = [
         "search ranking save",
         "transition tracking save",
         "final cost save (costs.json)",
         "counter save (counters.json)",
         "health save (health.json)",
         "protocol-revision window seal",
+        "stop checkpoint last pass (each class's root)",
     ];
-    let found = production_matches(&source_files(), "ShutdownSave::new(");
+    fn walk(dir: &Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("a source dir").flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "rs") && !name.ends_with("tests.rs")
+            {
+                let text = std::fs::read_to_string(&path).expect("a source file");
+                let code = crate::test_source_text::sanitize(
+                    &crate::test_source_text::production_text(&text),
+                );
+                for _ in code.matches("ShutdownSave::new(") {
+                    found.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
     assert_eq!(
         found.len(),
         READ_BY_A_ROW.len(),
@@ -301,40 +352,108 @@ fn every_shutdown_save_construction_has_a_root_row() {
     );
 }
 
-/// Every non-test `.rs` file under `src/`, as (path, text). Files named
-/// `*tests.rs` are test modules; test items inside other files are blanked
-/// by the shared reader.
-pub(super) fn source_files() -> Vec<(String, String)> {
-    fn walk(dir: &Path, files: &mut Vec<(String, String)>) {
-        for entry in std::fs::read_dir(dir).expect("a source dir").flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if path.is_dir() {
-                walk(&path, files);
-            } else if path.extension().is_some_and(|ext| ext == "rs") && !name.ends_with("tests.rs")
-            {
-                let text = std::fs::read_to_string(&path).expect("a source file");
-                files.push((path.display().to_string(), text));
-            }
-        }
+/// One stop checkpoint class named `name` writing `root`, whose checkpoint
+/// runs `checkpoint` and whose last pass writes nothing.
+fn checkpoint_class(
+    name: &'static str,
+    root: PathBuf,
+    checkpoint: impl Fn() -> bool + Send + Sync + 'static,
+) -> super::super::stop_checkpoints::Class {
+    super::super::stop_checkpoints::Class {
+        name,
+        root: Some(root),
+        checkpoint: Arc::new(checkpoint),
+        last: Arc::new(|| true),
     }
-    let mut files = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut files,
-    );
-    files
 }
 
-/// One entry per occurrence of `needle` in the production code of `files`
-/// (comments, strings and test-only items removed), naming its file.
-pub(super) fn production_matches(files: &[(String, String)], needle: &str) -> Vec<String> {
-    files
-        .iter()
-        .flat_map(|(path, text)| {
-            let code =
-                crate::test_source_text::sanitize(&crate::test_source_text::production_text(text));
-            vec![path.clone(); code.matches(needle).count()]
-        })
-        .collect()
+/// K10. The stop's last pass keeps each class's file.
+#[tokio::test]
+async fn the_stop_last_pass_carries_each_class_root() {
+    use super::super::stop_checkpoints::Checkpoints;
+    let dir = kept_tempdir();
+    let file = dir.path().join("usage.json");
+    let checkpoints = Checkpoints::new(vec![checkpoint_class("usage", file.clone(), || true)]);
+    checkpoints
+        .finish(tokio::time::Instant::now() + Duration::from_secs(10))
+        .await;
+    assert!(started_with("usage", &file));
+}
+
+/// K11. A stop checkpoint pass's write in a kept dir keeps the dir after the
+/// test drops its share, until the write returns (the transitions.json leak
+/// shape, on the stop's once-a-second passes).
+/// Mutant: the keep removed from the checkpoint passes.
+#[tokio::test]
+async fn a_checkpoint_pass_write_keeps_its_dir_until_it_returns() {
+    use super::super::stop_checkpoints::Checkpoints;
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let (entered, reached) = std::sync::mpsc::channel::<()>();
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let mut release = Release(Some(release));
+    // Only the first pass's write stalls; later passes return at once.
+    let (entered, held) = (
+        parking_lot::Mutex::new(Some(entered)),
+        parking_lot::Mutex::new(held),
+    );
+    let checkpoints = Checkpoints::new(vec![checkpoint_class(
+        "transitions",
+        root.join("transitions.json"),
+        move || {
+            if let Some(entered) = entered.lock().take() {
+                let _ = entered.send(());
+                let _ = held.lock().recv_timeout(Duration::from_secs(30));
+            }
+            true
+        },
+    )]);
+    checkpoints.start();
+    let started = tokio::task::spawn_blocking(move || reached.recv_timeout(GONE_BOUND))
+        .await
+        .expect("the waiter ran");
+    assert!(started.is_ok(), "the first pass never started its write");
+    // Stops the passes; the last pass writes nothing and returns before this does.
+    checkpoints
+        .finish(tokio::time::Instant::now() + Duration::from_secs(10))
+        .await;
+    drop(dir);
+    held_then_gone(&root, || release.now()).await;
+}
+
+/// K12. A stop checkpoint pass in a plain temp dir is recorded at spawn,
+/// with its kind, its root and this test, before the last pass runs.
+/// Mutant: the passes take the keep without the report.
+#[tokio::test]
+async fn a_checkpoint_pass_in_a_plain_temp_dir_is_recorded_with_its_kind() {
+    use super::super::stop_checkpoints::Checkpoints;
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let root = dir.path().join("transitions.json");
+    let unkept = expect_unkept();
+    let (wrote, landed) = std::sync::mpsc::channel::<()>();
+    let wrote = parking_lot::Mutex::new(wrote);
+    let file = root.clone();
+    let checkpoints = Checkpoints::new(vec![checkpoint_class(
+        "transitions",
+        root.clone(),
+        move || {
+            let done = std::fs::write(&file, b"[]").is_ok();
+            let _ = wrote.lock().send(());
+            done
+        },
+    )]);
+    checkpoints.start();
+    let landed = tokio::task::spawn_blocking(move || landed.recv_timeout(GONE_BOUND))
+        .await
+        .expect("the waiter ran");
+    assert!(landed.is_ok(), "the first pass never wrote");
+    let recorded = unkept.recorded();
+    checkpoints
+        .finish(tokio::time::Instant::now() + Duration::from_secs(10))
+        .await;
+    let want = ("stop checkpoint", root, this_test());
+    assert!(
+        !recorded.is_empty() && recorded.iter().all(|line| *line == want),
+        "recorded: {recorded:?}"
+    );
 }

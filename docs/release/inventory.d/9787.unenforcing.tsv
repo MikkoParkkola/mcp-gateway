@@ -1,0 +1,16 @@
+src/gateway/server/counter_wiring.rs	restore	1	Loads counters.json at startup and wraps the store and file for the server; no allow or deny.
+src/gateway/server/counter_wiring.rs	checkpoint_class	1	Pairs the counters' skip-if-busy save with their waiting save for the stop passes; scheduling only.
+src/gateway/server/health_wiring.rs	gated_save	1	Runs the health history save behind its existing gate and reports whether it wrote; the gate decides, not this.
+src/gateway/server/health_wiring.rs	checkpoint_class	1	Pairs the health save's skip and wait variants for the stop passes; scheduling only.
+src/gateway/server/stop_checkpoints.rs	new	1	Holds the classes a stop saves; constructor, no decision.
+src/gateway/server/stop_checkpoints.rs	start	1	Spawns the once-a-second save passes once per stop; scheduling only.
+src/gateway/server/stop_checkpoints.rs	finish	1	Ends the passes and runs the last save of every class before a deadline; persistence timing, no access decision.
+src/gateway/server/stop_checkpoints.rs	passes	1	Starts each class's save on its own thread every second; scheduling only.
+src/gateway/server/stop_checkpoints.rs	drains_end	1	Instant arithmetic on the stop budget: Dp minus the last pass's slice.
+src/gateway/server/stop_checkpoints.rs	drain_window	1	Caps a drain's wait at the drain cap or the time left before the drains end; arithmetic.
+src/gateway/server/stop_checkpoints.rs	last_deadline	1	Returns the stop budget's post-listener end; arithmetic.
+src/gateway/server/stop_checkpoints.rs	landed	1	Maps a save result to whether it wrote and logs a failed write; reporting only.
+src/gateway/server/stop_checkpoints.rs	usage	1	Builds the usage file's save pair for the passes; wiring.
+src/gateway/server/stop_checkpoints.rs	transitions	1	Builds the transitions file's save pair for the passes; wiring.
+src/gateway/server/stop_checkpoints.rs	cost	1	Builds today's spend save pair for the passes; wiring, the enforcer itself is unchanged.
+src/gateway/server/stop_checkpoints.rs	classes	1	Lists the state classes a stop saves in pass order; wiring.

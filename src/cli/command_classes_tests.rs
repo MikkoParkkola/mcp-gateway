@@ -72,11 +72,20 @@ const LEAVES: &[&str] = &[
     "validate",
 ];
 
-/// The reviewed members of `JSON_CAPABLE` (design D7, inventory.md).
+/// The reviewed members of `JSON_CAPABLE` (design D7, inventory.md; the 14 `--json` leaves of MIK-9764.JSONF.1).
 const WANT_JSON_CAPABLE: &[&str] = &[
     "api",
+    "audit verify",
     "cap discover",
+    "cap list",
+    "cap registry-list",
+    "cap search",
+    "cap test",
+    "cap validate",
+    "dashboard-link",
     "doctor",
+    "get",
+    "hash-key",
     "identity grants grant",
     "identity grants list",
     "identity grants revoke",
@@ -86,7 +95,12 @@ const WANT_JSON_CAPABLE: &[&str] = &[
     "kubernetes controller",
     "kubernetes plan",
     "list",
+    "provenance verify",
     "ranking eval",
+    "skills list",
+    "skills search",
+    "skills show",
+    "stats",
     "tool inspect",
     "tool invoke",
     "tool list",
@@ -97,33 +111,18 @@ const WANT_JSON_CAPABLE: &[&str] = &[
     "validate",
 ];
 
-/// The reviewed members of `JSON_DEFAULT` (design D7, inventory.md).
+/// The reviewed members of `JSON_DEFAULT` (design D7, inventory.md; `audit show` by MIK-9764.JSONF.3).
 const WANT_JSON_DEFAULT: &[&str] = &[
     "audit lookup-email",
+    "audit show",
     "events dead-letters",
     "provenance public-key",
     #[cfg(feature = "runtime-substrate")]
     "runtime compile",
 ];
 
-/// The reviewed members of `PENDING_JSON` (design D7, inventory.md).
-const WANT_PENDING_JSON: &[&str] = &[
-    "audit show",
-    "audit verify",
-    "cap list",
-    "cap registry-list",
-    "cap search",
-    "cap test",
-    "cap validate",
-    "dashboard-link",
-    "get",
-    "hash-key",
-    "provenance verify",
-    "skills list",
-    "skills search",
-    "skills show",
-    "stats",
-];
+/// The reviewed members of `PENDING_JSON`: none, since every data command has a JSON form (MIK-9764.JSONF.2).
+const WANT_PENDING_JSON: &[&str] = &[];
 
 /// The reviewed members of `ACTION` (design D7, inventory.md).
 const WANT_ACTION: &[&str] = &[
@@ -296,6 +295,12 @@ fn pending_entries_cite_their_tickets() {
             );
         }
     }
+}
+
+/// K1 (MIK-9764.JSONF.2): no data-printing leaf lacks a JSON form, so the pending list is empty in the code.
+#[test]
+fn pending_json_is_empty() {
+    assert_eq!(PENDING_JSON, &[] as &[&str]);
 }
 
 fn json_flag() -> Arg {
@@ -542,4 +547,116 @@ fn cli_reference_matches_the_code() {
         ),
         "docs/CLI.md states the JSON-default contract"
     );
+}
+
+/// The top-level keys of each JSON form MIK-9764.JSONF.1 adds, as the J rows pin them (test plan r2 D2): the CLI
+/// reference's shape column must say exactly these.
+const NEW_FORMS: &[(&str, &str, &str)] = &[
+    ("audit show", "(none)", "array of log entries"),
+    (
+        "audit verify",
+        "--json",
+        "schema_version, ok, hmac_checked, signed_entry_seen, scope, entries_checked, segments_checked, \
+         segments_expired, failed_check, failed_at_counter, error, warnings, notes",
+    ),
+    (
+        "audit verify --export",
+        "--json",
+        "schema_version, valid, reason, rows, truncated, integrity_failed, kid",
+    ),
+    (
+        "cap list",
+        "--json",
+        "schema_version, directory, capabilities",
+    ),
+    (
+        "cap registry-list",
+        "--json",
+        "schema_version, capabilities",
+    ),
+    (
+        "cap search",
+        "--json",
+        "schema_version, query, capabilities",
+    ),
+    (
+        "cap test",
+        "--json",
+        "schema_version, capability, arguments, result",
+    ),
+    (
+        "cap validate",
+        "--json",
+        "schema_version, name, description, provider, auth, warnings",
+    ),
+    ("dashboard-link", "--json", "schema_version, url"),
+    (
+        "get",
+        "--json",
+        "schema_version, name, transport, description, enabled, command, url, env, headers",
+    ),
+    ("hash-key", "--json", "schema_version, key_sha256"),
+    (
+        "provenance verify",
+        "--json",
+        "schema_version, status, accepted, kid, reason",
+    ),
+    ("skills list", "--json", "schema_version, registry, skills"),
+    ("skills search", "--json", "schema_version, query, skills"),
+    (
+        "skills show",
+        "--json",
+        "schema_version, name, description, version, effort, allowed_tools, triggers, keywords, source_path, \
+         auxiliary_files, code_blocks, body",
+    ),
+    (
+        "stats",
+        "--json",
+        "schema_version, invocations, cache_hits, cache_hit_rate, tools_discovered, tools_available, top_tools",
+    ),
+];
+
+/// D1, D2 (MIK-9764.JSONF.3, JSONF.4): the CLI reference lists every command's JSON form, one row per JSON-capable
+/// and JSON-by-default leaf (plus `audit verify --export`, its second shape), with the forms this ticket adds
+/// documented key for key; it names the JSON-by-default commands, the two outputs without `schema_version`, and the
+/// verdict rule.
+#[test]
+fn cli_reference_lists_every_json_form() {
+    let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/CLI.md"))
+        .unwrap_or_default();
+    let rows = table_rows(&doc, "## JSON forms");
+    let mut documented: Vec<&str> = rows.iter().map(|row| row[0].as_str()).collect();
+    documented.sort_unstable();
+    let mut want: Vec<&str> = WANT_JSON_CAPABLE
+        .iter()
+        .chain(WANT_JSON_DEFAULT)
+        .copied()
+        .chain(["audit verify --export"])
+        .collect();
+    if !cfg!(feature = "runtime-substrate") {
+        want.push("runtime compile");
+    }
+    want.sort_unstable();
+    assert_eq!(
+        documented, want,
+        "docs/CLI.md JSON forms table: one row per leaf"
+    );
+    for (command, flag, shape) in NEW_FORMS {
+        let row = rows
+            .iter()
+            .find(|row| row[0] == *command)
+            .unwrap_or_else(|| panic!("docs/CLI.md JSON forms: no row for {command}"));
+        assert_eq!(
+            (row[1].as_str(), row[2].as_str()),
+            (*flag, *shape),
+            "docs/CLI.md JSON forms: {command}"
+        );
+    }
+    for sentence in [
+        "A verify command prints its verdict document with `--json` whether the verdict passes or fails; the exit \
+         code is 0 for a pass and 1 for a fail.",
+        "`audit show` and `list --json` print a bare JSON array, without `schema_version`.",
+    ] {
+        assert!(doc.contains(sentence), "docs/CLI.md must say: {sentence}");
+    }
 }

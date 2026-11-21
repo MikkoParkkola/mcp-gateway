@@ -530,3 +530,19 @@ src/gateway/server/background.rs	join_mut	-	on-path, untimed: runs once per gate
 src/gateway/server/stdio_shutdown.rs	parent_pid	-	on-path, untimed: runs at gateway start and every 50 ms of a stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	orphan_watch	-	on-path, untimed: armed once per gateway stop, not per tools/call
 src/gateway/server/stdio_shutdown.rs	flush_pending	-	on-path, untimed: decides once per gateway stop, not per tools/call
+src/gateway/server/counter_wiring.rs	restore	-	startup counter restore, before serving
+src/gateway/server/counter_wiring.rs	checkpoint_class	-	built once per stop for the stop checkpoints, off the request path
+src/gateway/server/health_wiring.rs	gated_save	-	the periodic and stop-time health saves, off the request path
+src/gateway/server/health_wiring.rs	checkpoint_class	-	built once per stop for the stop checkpoints, off the request path
+src/gateway/server/stop_checkpoints.rs	new	-	once per gateway stop, off the request path
+src/gateway/server/stop_checkpoints.rs	start	-	once per gateway stop, at the signal
+src/gateway/server/stop_checkpoints.rs	finish	-	the last save pass of a stop, off the request path
+src/gateway/server/stop_checkpoints.rs	passes	-	the stop's once-a-second save loop, off the request path
+src/gateway/server/stop_checkpoints.rs	drains_end	-	stop budget arithmetic, once per stop
+src/gateway/server/stop_checkpoints.rs	drain_window	-	stop budget arithmetic, per drain during a stop
+src/gateway/server/stop_checkpoints.rs	last_deadline	-	stop budget arithmetic, once per stop
+src/gateway/server/stop_checkpoints.rs	landed	-	reads one save result during a stop, off the request path
+src/gateway/server/stop_checkpoints.rs	usage	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	transitions	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	cost	-	built once per stop, off the request path
+src/gateway/server/stop_checkpoints.rs	classes	-	built once per stop, off the request path
