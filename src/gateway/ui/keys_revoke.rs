@@ -16,7 +16,9 @@ use serde::Deserialize;
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, gate_refusal, stale, structured_error};
 use super::guard::Guard;
-use crate::config_persistence::keyedit::{Change, FieldPath, Segment, edit_in_place};
+use crate::config_persistence::keyedit::{
+    Change, ComputeRefusal, FieldPath, GiveUp, Segment, edit_in_place,
+};
 use crate::config_reload::{
     AuditPosture, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT, Replace,
     ReplaceError, Replaced, RevokeCheck, refuse_multi_user_flip, replace_audited_revoke,
@@ -98,6 +100,8 @@ pub(super) async fn revoke_key(
         Err(error) => return refused(&name, error),
     };
     let tags = Arc::new(OnceLock::new());
+    let refusal = Arc::new(OnceLock::new());
+    let kept = refusal.clone();
     let check = RevokeCheck {
         name: name.clone(),
         tags: tags.clone(),
@@ -125,7 +129,7 @@ pub(super) async fn revoke_key(
             config.auth.api_keys.retain(|key| key.name != name);
             refuse_multi_user_flip(live.running(), &config.auth)
                 .map_err(|_| "restart_required".to_owned())?;
-            let template = remove_key(text, at)?;
+            let template = remove_key(text, at, &kept)?;
             tags.set(selected)
                 .map_err(|_| "target_changed".to_owned())?;
             Ok(template)
@@ -141,13 +145,16 @@ pub(super) async fn revoke_key(
     )
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
-    revoke_response(&target_name, result)
+    revoke_response(&target_name, result, refusal.get(), &state)
 }
 
 /// Remove the selected file entry while preserving the surrounding YAML.
+/// keyedit's own refusal is kept in `refusal` for the answer; the writer still
+/// sees only `not_written`.
 fn remove_key(
     text: &str,
     at: Option<usize>,
+    refusal: &OnceLock<ComputeRefusal>,
 ) -> Result<crate::config_persistence::keyedit::Template, String> {
     let changes: Vec<_> = at
         .into_iter()
@@ -162,10 +169,58 @@ fn remove_key(
             )
         })
         .collect();
-    edit_in_place(text, &changes).map_err(|_| "not_written".to_owned())
+    edit_in_place(text, &changes).map_err(|error| {
+        // One compute per write and a refusal ends it, so the cell is empty here.
+        let _ = refusal.set(error);
+        "not_written".to_owned()
+    })
 }
 
-fn revoke_response(name: &str, result: Result<serde_json::Value, ReplaceError>) -> Response {
+/// keyedit's refusal as the operator's answer: its cause, its reason and the
+/// config file's path, plus `instructions` only for the hand-edit text of
+/// keyedit's revocation check. That text is told apart by two checks, both
+/// required: one of that check's codes (flow, anchor), and the prefix
+/// `instructions()` starts each such text with (`config_persistence_keyedit_revoke.rs`).
+/// Status, error and revoked are unchanged, so a client reading only those
+/// keeps working. keyedit's reasons name keys and lines, never a value.
+fn keyedit_refusal(code: GiveUp, reason: &str, path: &std::path::Path) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "error": "not_written",
+        "revoked": false,
+        "code": code.as_str(),
+        "reason": reason,
+        "path": path.display().to_string(),
+    });
+    if matches!(code, GiveUp::Flow | GiveUp::Anchor) && reason.starts_with("to revoke key `") {
+        body["instructions"] = reason.into();
+    }
+    body
+}
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_revoke_instructions_body_tests.rs"]
+mod keys_revoke_instructions_body_tests;
+
+/// The route's answer. A `not_written` refusal that keyedit explains answers
+/// with keyedit's cause, its reason and the config file's path.
+fn revoke_response(
+    name: &str,
+    result: Result<serde_json::Value, ReplaceError>,
+    keyedit: Option<&ComputeRefusal>,
+    state: &AppState,
+) -> Response {
+    if let Err(ReplaceError::Refused(error)) = &result
+        && error == "not_written"
+        && let Some(ComputeRefusal::Unprovable { code, reason }) = keyedit
+        && let Some(path) = state.config_path.as_deref()
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(keyedit_refusal(*code, reason, path)),
+        )
+            .into_response();
+    }
     match result {
         Ok(body) => (
             StatusCode::OK,
