@@ -1309,6 +1309,14 @@ jobs:
         # Memory every 30 s while it builds (scripts/ci/with-memory-log.sh). No step limit yet: a healthy lib-b run
         # took 52 min on 2026-11-13, so it logs only until its tail is measured (check_swap_jobs.py LOG_ONLY).
         run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
+      # The #[ignore] rows of tests/integration_tests.rs need a live gateway and an admin caller. int-a built both
+      # binaries just above, so this starts that gateway with a per-run admin key, waits for /readyz, and runs the
+      # rows in required mode (a row that cannot reach the gateway fails instead of skipping). The live-API caching
+      # row stays opt-in; the script says why.
+      - name: Ignored integration rows against a live gateway
+        if: matrix.shard == 'int-a'
+        timeout-minutes: 10
+        run: scripts/ci/ignored-integration-rows.sh
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects
