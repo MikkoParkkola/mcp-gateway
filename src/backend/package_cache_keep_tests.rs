@@ -102,3 +102,58 @@ async fn a_plain_dir_tombstone_sweep_is_recorded_with_its_kind() {
     .await;
     assert!(gone.is_ok(), "the sweep did not run");
 }
+
+/// A cache rename that is still blocked inside its task, plus the start that
+/// waited on it and gave up. The rename runs once `go` is sent.
+async fn abandoned_rename(cache: &Path) -> std::sync::mpsc::Sender<()> {
+    let guard = Arc::clone(&repair_lock(cache)).lock_owned().await;
+    let (began, began_rx) = std::sync::mpsc::channel::<()>();
+    let (go, go_rx) = std::sync::mpsc::channel::<()>();
+    let gave_up = retire_within(
+        cache,
+        guard,
+        move |_| {
+            began.send(()).expect("the row waits for the rename");
+            go_rx.recv().expect("the row lets the rename finish");
+            Retired::AlreadyGone
+        },
+        |_| {},
+        std::time::Duration::from_millis(50),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the start was meant to give up first");
+    began_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the rename task began");
+    go
+}
+
+/// K16. A rename whose start gave up keeps the test's dir after the test
+/// drops its share, and reports nothing; the dir goes once the rename returns.
+/// Mutant: `retire_cache_dir` spawning its rename without a keep.
+#[tokio::test]
+async fn a_rename_its_start_gave_up_on_is_held_until_it_returns() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_path_buf();
+    let unkept = expect_unkept();
+    let go = abandoned_rename(&root.join("cache")).await;
+    assert!(unkept.recorded().is_empty(), "a kept dir was reported");
+    drop(dir);
+    held_then_gone(&root, || go.send(()).expect("the rename is waiting")).await;
+}
+
+/// K16p. A rename in a plain temp dir is recorded once, when it is spawned,
+/// with its kind, the cache path and this test; the rename still runs.
+/// Mutant: the keep taken but not reported.
+#[tokio::test]
+async fn a_plain_dir_rename_is_recorded_with_its_kind() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let cache = dir.path().join("cache");
+    let unkept = expect_unkept();
+    let go = abandoned_rename(&cache).await;
+    assert_eq!(
+        unkept.recorded(),
+        vec![("package cache", cache.clone(), this_test())]
+    );
+    go.send(()).expect("the rename is waiting");
+}
