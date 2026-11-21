@@ -7,7 +7,7 @@
 // name, runs settingsSave on a host it adds and keeps every request it sees.
 // Mocked refusals use the exact bodies the routes send (settings.rs, errors.rs).
 import { fileURLToPath } from 'node:url';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { shellReady } from './shell.mjs';
 import { expect, test } from './base.mjs';
 
@@ -83,6 +83,11 @@ async function screen(page, { diff, save } = {}) {
   await page.route('**/ui/api/status', (r) => r.fulfill({ json: ADMIN_STATUS }));
   await page.route(DIFF_ROUTE, (r) => reply(r, (diff ?? (() => ({ json: { revision: REV1, diff: DIFF } })))(note(r).body)));
   await page.route(SAVE_ROUTE, (r) => reply(r, (save ?? (() => ({ json: SAVED })))(note(r).body)));
+  // No tab imports the module yet, so it is not in ASSETS (it joins with its
+  // first adopting tab); this harness alone serves it from the source tree.
+  const url = moduleUrl();
+  const file = new URL(`../../src/gateway/ui/shell/${url.split('/').pop()}`, import.meta.url);
+  await page.route(`**${url}`, (r) => r.fulfill({ contentType: 'text/javascript', body: readFileSync(file) }));
   await page.goto('/ui/gateway/settings');
   await shellReady(page);
   await page.evaluate(() => {
