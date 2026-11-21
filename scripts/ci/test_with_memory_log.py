@@ -76,13 +76,14 @@ def rows() -> list[tuple[str, bool, str]]:
               and "Mem total 15983 used 1502 available 14200" in lines[0] and "Swap total 11263 used 12" in lines[0]
               and "pressure mem some 1.50 full 0.75" in lines[0] and "io some 2.25" in lines[0]
               and "load 3.99" in lines[0] and "cgroup MB 9216 oom_kill 2" in lines[0])
-        out.append(("W1 an 8 s command: start, 2+ samples, end exit 0, numbers parsed", ok, se[-400:]))
+        out.append(("W1 an 8 s command: start, 2+ samples, end exit 0, numbers parsed", ok, f"rc {rc}, {se[-400:]}"))
         # W2: the command's own failure status.
         rc, so, se, t = run(f"{w} bash -c 'exit 3'", env)
-        out.append(("W2 exit 3 passes through", rc == 3 and "end, exit 3:" in se.splitlines()[-1], se[-200:]))
+        out.append(("W2 exit 3 passes through", rc == 3 and "end, exit 3:" in se.splitlines()[-1], f"rc {rc}, {se[-200:]}"))
         # W3: a signal death is reported as a status, never as a limit.
         rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env)
-        out.append(("W3 SIGKILL: exit 137, no 'limit' wording", rc == 137 and "end, exit 137" in se and "limit" not in se, se[-200:]))
+        out.append(("W3 SIGKILL: exit 137, no 'limit' wording", rc == 137 and "end, exit 137" in se and "limit" not in se,
+                    f"rc {rc}, {se[-200:]}"))
         # W4: TERM, INT and HUP sent to the wrapper reach the command as TERM; it cleans up its child and exits 42.
         # `set -m` gives the backgrounded wrapper a normal INT (without job control, & ignores INT). The command sets its
         # trap, then writes its marker; the signal is sent when the marker exists (the command's own "ready" event, not a
@@ -106,7 +107,8 @@ def rows() -> list[tuple[str, bool, str]]:
         for bad in ("abc", "00"):
             rc, so, se, t = run(f"{w} sleep 2", dict(env, MEM_LOG_EVERY=bad))
             n = sum(l.startswith("memory ") for l in se.splitlines())
-            out.append((f"W12 MEM_LOG_EVERY={bad} falls back to 30 s: start and end lines only", rc == 0 and n == 2, f"{n} lines"))
+            out.append((f"W12 MEM_LOG_EVERY={bad} falls back to 30 s: start and end lines only", rc == 0 and n == 2,
+                        f"rc {rc}, {n} lines"))
         # W6: the command's arguments never reach the wrapper's own output.
         rc, so, se, t = run(f"{w} true sk-SECRET-not-printed", env)
         out.append(("W6 no argv in the wrapper's output", "SECRET" not in se and "SECRET" not in so, se[-200:]))
@@ -121,9 +123,9 @@ def rows() -> list[tuple[str, bool, str]]:
         out.append(("W7 returns before the 60 s interval ends (no sampler left)", rc == 0, f"rc {rc}, {t:.1f}s"))
         # W8, W9: the caller shapes keep the failure status.
         rc, so, se, t = run(f"set -o pipefail; {w} false 2>&1 | tee {tmp}/x.log >/dev/null", env)
-        out.append(("W8 tee pipeline under pipefail keeps rc 1", rc == 1, ""))
+        out.append(("W8 tee pipeline under pipefail keeps rc 1", rc == 1, f"rc {rc}"))
         rc, so, se, t = run(f"bash -euo pipefail -c '{w} false'", env)
-        out.append(("W9 bash -euo pipefail -c keeps rc 1", rc == 1, ""))
+        out.append(("W9 bash -euo pipefail -c keeps rc 1", rc == 1, f"rc {rc}"))
         # W10: the command's stdout is byte-identical; samples go to stderr only.
         rc, so, se, t = run(f"{w} printf 'a\\nb c\\n'", env)
         out.append(("W10 stdout byte-identical, samples on stderr", so == "a\nb c\n" and "memory " in se, repr(so)))
@@ -131,7 +133,8 @@ def rows() -> list[tuple[str, bool, str]]:
         env = stubs(Path(d), with_free=False, with_proc=False)
         # W5: missing sources print n/a and never change the status.
         rc, so, se, t = run(f"{w} bash -c 'exit 5'", env)
-        out.append(("W5 no free, no /proc files: n/a, rc unchanged", rc == 5 and "n/a" in se and "end, exit 5" in se, se[-300:]))
+        out.append(("W5 no free, no /proc files: n/a, rc unchanged", rc == 5 and "n/a" in se and "end, exit 5" in se,
+                    f"rc {rc}, {se[-300:]}"))
     with tempfile.TemporaryDirectory() as d:
         env = stubs(Path(d))
         # W13: a command a signal kills before the wrapper first waits (here, while a slow `free` takes the start
@@ -146,12 +149,14 @@ def rows() -> list[tuple[str, bool, str]]:
 
 
 def summary(results: list[tuple[str, bool, str]]) -> str:
-    """The script's last line: the count of wrong rows, then each one's label and detail. A caller that keeps only the
-    tail of the output (the kit's cheap stage keeps 12 lines) still learns which row failed and what it saw."""
+    """The script's last line: the count of wrong rows, then each one's label and detail (cut to 200 characters, ending
+    "..." when cut). A caller that keeps only the tail of the output (the kit's cheap stage keeps 12 lines) still learns
+    which row failed and what it saw."""
     wrong = []
     for label, ok, detail in results:
         if not ok:
-            seen = " ".join(detail.split())[:200]
+            flat = " ".join(detail.split())
+            seen = flat if len(flat) <= 200 else flat[:197] + "..."
             wrong.append(f"{label} [{seen}]" if seen else label)
     return f"with-memory-log rows: {len(wrong)} wrong" + (": " + " | ".join(wrong) if wrong else "")
 
