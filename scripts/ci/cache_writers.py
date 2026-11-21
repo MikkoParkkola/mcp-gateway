@@ -9,6 +9,7 @@ A missing optional key is skipped. The job ``if`` is never read; it can only nar
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -84,6 +85,13 @@ SKIP_SCRIPT = {
 REF_RE = re.compile(r"\bgithub\.(?:head_ref|base_ref|ref)\b")
 MATRIX_RE = re.compile(r"\$\{\{\s*matrix\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}")
 FALSE_WRAP_RE = re.compile(r"\$\{\{\s*false\s*\}\}\Z", re.DOTALL)
+EMPTY_WRAP_RE = re.compile(r"\$\{\{\s*''\s*\}\}\Z", re.DOTALL)
+BAKE_RE = re.compile(r"\b(?:buildx\s+bake|docker\s+bake)\b")
+EXPORTER_MSG = (
+    "an exporter (cache-to, CACHE_TO) must be the cache-to idiom, a plain exporter under a guarded step if, "
+    "or empty; a boolean or a bare condition hands buildx a 'true' or 'false' exporter"
+)
+BAKE_MSG = "buildx bake reads cache-to from its bake file and --set flags, which this check cannot judge; classify it first"
 ACTION_RE = re.compile(r"^\./\.github/actions/([^/@\s]+)/?$")
 WORKFLOW_RE = re.compile(r"^\./\.github/workflows/([^/@\s]+)/?$")
 FORMAT_RE = re.compile(r"format\s*\(")
@@ -265,7 +273,30 @@ def is_plain_text(text: str) -> bool:
     return "${{" not in MATRIX_RE.sub("", text)
 
 
+def classify_exporter(value: object, *, absent: bool) -> Parsed:
+    """build-push-action's cache-to and the CLI's CACHE_TO hand buildx an exporter string, not a boolean:
+    only the idiom, a plain exporter (the step if must then carry the predicate), or nothing at all."""
+    if absent or value is None:
+        return Parsed(false_=True)  # no export
+    if isinstance(value, str):
+        text = value.strip()
+        if text in ("", "''") or EMPTY_WRAP_RE.fullmatch(text):
+            return Parsed(false_=True)
+        if text not in ("true", "false") and is_plain_text(text):
+            return Parsed(plain=True)
+        if text.startswith("${{"):
+            body = strip_wrapper(text)
+            ors = [index for kind, index in top_level_ops(body) if kind == "||"]
+            if len(ors) == 1 and collapse(body[ors[0] + 2:]) == "''":
+                idiom = _idiom_terms(body[: ors[0]])
+                if idiom is not None:
+                    return terms_of(idiom)
+    return Parsed(problems=[EXPORTER_MSG])
+
+
 def classify_guard(value: object, *, absent: bool, allow_idiom: bool) -> Parsed:
+    if allow_idiom:
+        return classify_exporter(value, absent=absent)
     if absent:
         return Parsed(plain=True)
     if is_literal_false(value):
@@ -378,6 +409,8 @@ def cache_to_outside(text: str) -> bool:
 
 def judge_run(step: dict, *, file: str, job: str, label: str, dangerous: bool, out: list[str]) -> None:
     run = step.get("run")
+    if isinstance(run, str) and BAKE_RE.search(run):
+        out.append(problem(file, job, label, "R9", BAKE_MSG))
     if not isinstance(run, str) or "--cache-to" not in run:
         return
     if cache_to_outside(run):
@@ -417,7 +450,9 @@ def judge_run(step: dict, *, file: str, job: str, label: str, dangerous: bool, o
 def judge_inert(name: str, step: dict, *, file: str, job: str, label: str, out: list[str]) -> None:
     inputs = with_map(step)
     if name == "docker/setup-buildx-action":
-        if "version" in inputs or (isinstance(inputs.get("driver"), str) and inputs.get("driver").strip() == "cloud"):
+        # gpt seat finding 4: an expression-valued driver can evaluate to cloud, so it counts as one.
+        driver = "" if inputs.get("driver") is None else str(inputs.get("driver")).strip()
+        if "version" in inputs or driver == "cloud" or "${{" in driver:
             out.append(problem(file, job, label, "inert", INERT_MSG))
         return
     cache = inputs.get("cache") if "cache" in inputs else None
@@ -447,6 +482,12 @@ def judge_uses(
             out.append(problem(file, job, label, "composite", f"no action.yml for ./.github/actions/{name}"))
             return
         runs = body.get("runs") if isinstance(body.get("runs"), dict) else {}
+        # gpt seat finding 3: only a composite's steps can be read; a JavaScript or Docker action runs code
+        # this check cannot see, so it is unclassified, not an empty composite.
+        if str(runs.get("using", "")).strip() != "composite":
+            out.append(problem(file, job, label, "classify",
+                               f"{CLASSIFY_MSG}: ./.github/actions/{name} runs {runs.get('using')!r}, not a composite"))
+            return
         inner = runs.get("steps") if isinstance(runs, dict) else None
         walk_steps(
             inner,
@@ -576,12 +617,18 @@ def script_problems(script_lines: list) -> list[str]:
         if not isinstance(item, tuple) or len(item) != 3:
             continue
         path, lineno, text = item
-        if not isinstance(text, str) or "--cache-to" not in text or not cache_to_outside(text):
+        if not isinstance(text, str):
             continue
-        out.append(problem(
-            str(path), "line", f"#{lineno}", "R9",
-            f"--cache-to at {path}:{lineno} is outside {CACHE_TO_FORM}; wrap every --cache-to in that form",
-        ))
+        # gpt seat findings 2 and 5: a script cannot show the guard of the step that calls it, so a
+        # --cache-to in one is refused in any form, and a bake run is refused until classified.
+        if "--cache-to" in text:
+            out.append(problem(
+                str(path), "line", f"#{lineno}", "R9",
+                f"--cache-to at {path}:{lineno}: a script cannot carry the calling step's guard; pass the flag "
+                f"from the workflow step as {CACHE_TO_FORM}",
+            ))
+        if BAKE_RE.search(text):
+            out.append(problem(str(path), "line", f"#{lineno}", "R9", f"{BAKE_MSG} ({path}:{lineno})"))
     return out
 
 
@@ -676,9 +723,12 @@ def errors(root: Path = ROOT) -> list[str]:
                     composites[directory.name] = _load_yaml(found)
                     break
     packages: list[dict] = []
-    for path in sorted(root.rglob("package.json")):
-        if "node_modules" in path.parts:
+    for directory, subdirs, names in os.walk(root):
+        # Prune what holds no project package.json and is large: git objects, installs, build output.
+        subdirs[:] = sorted(d for d in subdirs if d not in {".git", "node_modules", "target"})
+        if "package.json" not in names:
             continue
+        path = Path(directory) / "package.json"
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
@@ -698,7 +748,7 @@ def errors(root: Path = ROOT) -> list[str]:
             except (OSError, UnicodeDecodeError):
                 continue
             for lineno, line in enumerate(text.splitlines(), 1):
-                if "--cache-to" in line:
+                if "--cache-to" in line or BAKE_RE.search(line):
                     lines.append((rel, lineno, line))
     return check(docs, composites, packages, lines)
 
@@ -725,10 +775,12 @@ def self_test() -> list[str]:
     idiom = _expr(G + " && format('type=gha,scope=x-{0}', matrix.arch) || ''")
     guarded = {
         "Swatinem/rust-cache@x": {"with": {"save-if": _expr(G)}},
-        build: {"with": {"cache-to": _expr(G)}},
+        build: {"with": {"cache-to": idiom}},
         "actions/cache/save@x": {"if": _expr(G)},
         "astral-sh/setup-uv@x": {"with": {"save-cache": _expr(G)}},
     }
+    # An exporter left out exports nothing, so build-push's unguarded writer is a plain exporter.
+    unguarded = {build: {"with": {"cache-to": "type=gha,mode=max,scope=x"}}}
 
     def bad(label: str, docs: dict, composites: dict | None = None, packages: list | None = None,
             scripts: list | None = None, contains: str | None = None) -> None:
@@ -746,9 +798,13 @@ def self_test() -> list[str]:
 
     bare = {"name": "cache", "uses": "Swatinem/rust-cache@x"}
     for uses in ("Swatinem/rust-cache@x", build, "actions/cache/save@x", "astral-sh/setup-uv@x"):
-        bad(f"1 unguarded {uses.split('@')[0]}", _doc([{"uses": uses}]))
+        bad(f"1 unguarded {uses.split('@')[0]}", _doc([{"uses": uses, **unguarded.get(uses, {})}]))
         extra = guarded[uses]
         good(f"2 guarded {uses.split('@')[0]}", _doc([{"name": "cache", "uses": uses, **extra}]))
+    # gpt seat finding 1: an exporter is a string, never a boolean; absent or empty exports nothing.
+    for label, value in (("(G) as a boolean", _expr(G)), ("literal false", False), ("string false", "false")):
+        bad(f"1b exporter {label}", _doc([{"uses": build, "with": {"cache-to": value}}]), contains="exporter")
+    good("1c exporter absent or empty", _doc([{"uses": build}, {"uses": build, "with": {"cache-to": ""}}]))
 
     good("3 idiom", _doc([{"name": "build", "uses": build, "with": {"cache-to": idiom}}]))
     bad("3 else type=gha", _doc([{
@@ -846,24 +902,37 @@ def self_test() -> list[str]:
 
     bad("15 workflow --cache-to", _doc([{"name": "build", "run": "docker buildx build --cache-to type=gha ."}]))
     bad("15 composite --cache-to", _doc([{"uses": "./.github/actions/b"}]), composites={
-        "b": {"runs": {"steps": [{"name": "build", "run": "docker build --cache-to type=gha ."}]}},
-    })
+        "b": {"runs": {"using": "composite", "steps": [{"name": "build", "run": "docker build --cache-to type=gha ."}]}},
+    }, contains="R9")
+    # gpt seat finding 3: a local JavaScript or Docker action is unclassified, not an empty composite.
+    bad("15d local javascript action", _doc([{"uses": "./.github/actions/js"}]),
+        composites={"js": {"runs": {"using": "node24", "main": "index.js"}}}, contains="not a composite")
     bad("15 script --cache-to", {}, scripts=[("scripts/build.sh", 4, "docker build --cache-to type=gha .")])
     good("15 idiom form", _doc([{
         "name": "build",
         "run": 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .',
         "env": {"CACHE_TO": idiom},
     }]))
-    good("15 script form", {}, scripts=[("scripts/build.sh", 4, 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .')])
+    # gpt seat finding 2: a script cannot carry its caller's guard, so even the wrapped form is refused there.
+    bad("15 script form", {}, scripts=[("scripts/build.sh", 4, 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .')],
+        contains="cannot carry")
+    # gpt seat finding 5: bake reads cache-to from its own file and --set flags.
+    bad("15b bake in a script", {}, scripts=[("scripts/b.sh", 2, "docker buildx bake --set '*.cache-to=type=gha'")],
+        contains="bake")
+    bad("15c bake in a run step", _doc([{"run": "docker buildx bake release"}]), contains="bake")
 
     bad("16 trivy other sha", _doc([{"uses": f"aquasecurity/trivy-action@{bad_sha}"}]), contains=PIN_MSG)
     bad("16 build-push other sha", _doc([{"uses": f"docker/build-push-action@{bad_sha}", "with": {"cache-to": _expr(G)}}]), contains=PIN_MSG)
     good("16 trivy pin", _doc([{"uses": trivy}]))
-    good("16 build-push pin", _doc([{"uses": build, "with": {"cache-to": _expr(G)}}]))
+    good("16 build-push pin", _doc([{"uses": build, "with": {"cache-to": idiom}}]))
 
     good("17 buildx unguarded", _doc([{"uses": buildx}]))
     bad("17 buildx version", _doc([{"uses": buildx, "with": {"version": "latest"}}]), contains=INERT_MSG)
     bad("17 buildx driver cloud", _doc([{"uses": buildx, "with": {"driver": "cloud"}}]), contains=INERT_MSG)
+    bad("17b buildx driver expression", _doc([{"uses": buildx, "with": {"driver": "${{ 'cloud' }}"}}]),
+        contains=INERT_MSG)
+    good("17c buildx driver-opts only", _doc([{"uses": buildx, "with": {
+        "driver-opts": "image=mirror.gcr.io/moby/buildkit:buildx-stable-1"}}]))
     bad("17 buildx other sha", _doc([{"uses": f"docker/setup-buildx-action@{bad_sha}"}]), contains=PIN_MSG)
 
     good("18 setup-node unguarded", _doc([{"uses": node}]))
@@ -876,4 +945,36 @@ def self_test() -> list[str]:
         contains=INERT_MSG,
     )
     bad("18 setup-node other sha", _doc([{"uses": f"actions/setup-node@{bad_sha}"}]), contains=PIN_MSG)
+    out.extend(_loader_self_test())
     return out
+
+
+def _loader_self_test() -> list[str]:
+    """Row 19 (gpt seat improvement): errors() itself, over a real file tree, finds a writer in a .yaml
+    workflow, a --cache-to in a local composite, a bake line in a script, and a nested package.json naming a
+    package manager, and skips one under node_modules."""
+    import tempfile
+
+    found: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        files = {
+            ".github/workflows/w.yaml": "on: push\njobs:\n  j:\n    steps:\n      - uses: astral-sh/setup-uv@x\n",
+            ".github/actions/a/action.yml": "runs:\n  using: composite\n  steps:\n"
+                                           "    - run: docker build --cache-to type=gha .\n      shell: bash\n",
+            "scripts/ci/b.sh": "docker buildx bake release\n",
+            "ui/package.json": json.dumps({"packageManager": "npm@10"}),
+            "ui/node_modules/x/package.json": json.dumps({"packageManager": "pnpm@9"}),
+        }
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        got = errors(root)
+    want = {"w.yaml": "setup-uv writer in a .yaml workflow", "R9: --cache-to at .github/actions/a": "composite --cache-to",
+            "scripts/ci/b.sh:1": "bake in a script", "ui/package.json": "nested package.json"}
+    for needle, what in want.items():
+        if not any(needle in item for item in got):
+            found.append(f"self-test: 19 loader: {what} not found in {got}")
+    if any("node_modules" in item for item in got):
+        found.append(f"self-test: 19 loader: a package.json under node_modules was read: {got}")
+    return found
