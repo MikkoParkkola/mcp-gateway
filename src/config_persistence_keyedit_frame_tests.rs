@@ -180,6 +180,16 @@ fn p9_an_empty_framed_document_takes_a_new_key() {
     }
 }
 
+/// A file with no document before its `...` line, bare or after a comment,
+/// takes a new key just above that line.
+#[test]
+fn p9c_a_headless_empty_document_takes_a_new_key() {
+    for original in ["...\n", "# nothing yet\n...\n"] {
+        let out = edited(original, &[set_int("limit", 3)]);
+        assert_eq!(out, original.replace("...\n", "limit: 3\n...\n"));
+    }
+}
+
 /// Revoking the only key empties the document: the markers stay around an
 /// empty body, and the edit still proves.
 #[test]
