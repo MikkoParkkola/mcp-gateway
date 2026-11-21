@@ -109,3 +109,39 @@ pub(crate) const NO_DENIAL: Option<u64> = if cfg!(feature = "metrics") {
 } else {
     None
 };
+
+/// [`route_denials`] and, of those, the ones D4 counted under `reason`:
+/// `(all, under reason)`; `None` where the build has no exporter.
+#[cfg(feature = "metrics")]
+pub(crate) fn route_denials_as(
+    text: Option<&str>,
+    route: &str,
+    reason: &str,
+) -> Option<(u64, u64)> {
+    let labels = format!(r#"route="{route}",reason="{reason}""#);
+    let under = text.map(|text| series(text, "mcp_authz_denials_total", &labels));
+    route_denials(text, route).zip(under)
+}
+
+#[cfg(not(feature = "metrics"))]
+pub(crate) fn route_denials_as(
+    _text: Option<&str>,
+    _route: &str,
+    _reason: &str,
+) -> Option<(u64, u64)> {
+    None
+}
+
+/// What [`route_denials_as`] reads for one refusal under the asked reason.
+pub(crate) const ONE_DENIAL_AS: Option<(u64, u64)> = if cfg!(feature = "metrics") {
+    Some((1, 1))
+} else {
+    None
+};
+
+/// What [`route_denials_as`] reads for a call D4 did not count.
+pub(crate) const NO_DENIAL_AS: Option<(u64, u64)> = if cfg!(feature = "metrics") {
+    Some((0, 0))
+} else {
+    None
+};

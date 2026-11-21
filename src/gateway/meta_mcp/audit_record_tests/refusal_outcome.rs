@@ -38,10 +38,13 @@ async fn o1_a_spend_refusal_is_recorded_as_denied() {
     );
     assert_eq!(record["error_code"], json!(-32003), "{record}");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
-    let d4 = crate::security::metrics_scrape::route_denials(text.as_deref(), "meta");
+    let d4 = crate::security::metrics_scrape::route_denials_as(text.as_deref(), "meta", "other");
     assert_eq!(
         (crate::counters::test_totals::totals(&store), d4),
-        ([1, 1, 0, 0, 0], crate::security::metrics_scrape::ONE_DENIAL),
+        (
+            [1, 1, 0, 0, 0],
+            crate::security::metrics_scrape::ONE_DENIAL_AS
+        ),
         "[calls, blocks, errors, firewall, cache hits] and D4"
     );
 }

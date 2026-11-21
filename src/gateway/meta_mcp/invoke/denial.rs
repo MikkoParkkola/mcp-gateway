@@ -55,11 +55,12 @@ pub(super) fn count_meta_denial(
     };
     match class {
         Some(AuditOutcome::Denied(code)) if withheld => meta_refused(code),
-        // A gate's refusal the result alone reads as an error has no
-        // firewall or account reason of its own.
-        Some(AuditOutcome::Denied(code)) => denied(
+        // A gate's refusal the result alone reads as an error: its code is
+        // not one the reason table knows (a spend refusal's -32003 would read
+        // as `backend_scope`), so it is `other`; the record names the check.
+        Some(AuditOutcome::Denied(_)) => denied(
             DenialRoute::Meta,
-            meta_denial(result).unwrap_or(DenialReason::of(code, false, false)),
+            meta_denial(result).unwrap_or(DenialReason::Other),
         ),
         _ => {}
     }

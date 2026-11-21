@@ -8,7 +8,9 @@
 
 use super::counting::{attach, meta_invoke, totals};
 use super::*;
-use crate::security::metrics_scrape::{NO_DENIAL, ONE_DENIAL, route_denials, scrape_if_enabled};
+use crate::security::metrics_scrape::{
+    NO_DENIAL_AS, ONE_DENIAL_AS, route_denials_as, scrape_if_enabled,
+};
 
 /// The counters after one call the gateway refused: [calls 1, blocks 1,
 /// errors 0, firewall refusals 0, cache hits 0].
@@ -48,10 +50,14 @@ async fn send_one(fx: &Fixture, route: Route) -> Value {
 }
 
 /// [`send_one`] under a recorder local to the row: the answer, and the D4
-/// refusals counted on `route` (`None` without the metrics feature).
-fn send_counted(fx: &Fixture, route: Route) -> (Value, Option<u64>) {
+/// refusals counted on `route` with those under reason `other`, the reason a
+/// reclassified refusal counts under (`None` without the metrics feature).
+fn send_counted(fx: &Fixture, route: Route) -> (Value, Option<(u64, u64)>) {
     let (body, text) = scrape_if_enabled(send_one(fx, route));
-    (body, route_denials(text.as_deref(), route.spelled()))
+    (
+        body,
+        route_denials_as(text.as_deref(), route.spelled(), "other"),
+    )
 }
 
 /// A gateway where `mode` is armed and the backend answers `reply` (its
@@ -111,7 +117,7 @@ async fn o2_a_contract_block_is_recorded_as_denied() {
     assert_gate_denied(&only_invocation(&fx), Route::Meta);
     assert_eq!(
         (totals(&store), d4),
-        (ONE_GATE_REFUSAL, ONE_DENIAL),
+        (ONE_GATE_REFUSAL, ONE_DENIAL_AS),
         "{body}"
     );
 }
@@ -131,7 +137,7 @@ async fn an_anomaly_block_on(route: Route) {
     assert_gate_denied(&only_invocation(&fx), route);
     assert_eq!(
         (totals(&store), d4),
-        (ONE_GATE_REFUSAL, ONE_DENIAL),
+        (ONE_GATE_REFUSAL, ONE_DENIAL_AS),
         "{route:?}"
     );
 }
@@ -165,7 +171,7 @@ async fn d1_direct_a_spend_refusal_is_recorded_as_denied() {
     assert_eq!(record["decision"]["kind"], "cost_budget", "{record}");
     assert_eq!(record["error_code"], -32003, "{record}");
     assert_eq!(record["outcome"], "denied", "{record}");
-    assert_eq!((totals(&store), d4), (ONE_GATE_REFUSAL, ONE_DENIAL));
+    assert_eq!((totals(&store), d4), (ONE_GATE_REFUSAL, ONE_DENIAL_AS));
 }
 
 /// The backend answers a line of data and then an injected instruction; context
@@ -221,7 +227,7 @@ async fn a_withheld_answer_on(route: Route) {
     assert_eq!(record["error_code"], -32600, "{route:?}: {record}");
     assert_eq!(
         (totals(&store), d4),
-        (ONE_GATE_REFUSAL, ONE_DENIAL),
+        (ONE_GATE_REFUSAL, ONE_DENIAL_AS),
         "{route:?}"
     );
 }
@@ -277,7 +283,7 @@ async fn g2_meta_a_backend_error_result_stays_tool_error() {
     assert_eq!(record["outcome"], "tool_error", "{record}");
     assert!(record.get("error_code").is_none(), "{record}");
     assert_eq!(record["decision"]["kind"], "default_allow", "{record}");
-    assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL));
+    assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL_AS));
 }
 
 /// G1's one route: a backend's own JSON-RPC error is no gate's refusal; its
@@ -296,7 +302,7 @@ async fn a_backend_error_on(route: Route) {
     );
     assert_eq!(
         (totals(&store), d4),
-        (ONE_BACKEND_ERROR, NO_DENIAL),
+        (ONE_BACKEND_ERROR, NO_DENIAL_AS),
         "{route:?}"
     );
 }
@@ -338,7 +344,7 @@ async fn g3_meta_a_converted_backend_failure_still_counts_an_error() {
         record["decision"]["kind"], "default_allow",
         "no check refused: {record}"
     );
-    assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL));
+    assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL_AS));
 }
 
 /// R5 with no transparency log (code review r1, improvement 3): an anomaly
@@ -359,7 +365,7 @@ async fn an_unlogged_anomaly_block_on(route: Route) {
     assert!(invocations(&fx).is_empty(), "{route:?}: no log, no record");
     assert_eq!(
         (totals(&store), d4),
-        (ONE_GATE_REFUSAL, ONE_DENIAL),
+        (ONE_GATE_REFUSAL, ONE_DENIAL_AS),
         "{route:?}"
     );
 }
