@@ -8,7 +8,7 @@
 use syn::visit::Visit;
 
 /// Paths into the test-only seams, by the module names the product files use for them.
-const SEAMS: [&str; 2] = ["fault", "observe"];
+const SEAMS: [&str; 3] = ["fault", "observe", "crash_fs"];
 
 /// A predicate that holds only in a test build: `test`, or `all(...)` with `test` among its parts.
 fn test_only(attrs: &[syn::Attribute]) -> bool {

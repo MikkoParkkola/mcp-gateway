@@ -482,7 +482,6 @@ impl TransparencyLogger {
     }
 }
 
-#[cfg(test)]
 impl TransparencyLogger {
     pub(crate) async fn settle_attributed(
         self: &std::sync::Arc<Self>,

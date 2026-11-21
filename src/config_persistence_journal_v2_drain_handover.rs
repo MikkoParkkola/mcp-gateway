@@ -240,6 +240,7 @@ fn commit(
     #[cfg(test)]
     seam(&journal.target, At::AbandonFileAppended)?;
     file.sync_all().map_err(|_| HandoverError::Sync)?;
+    #[cfg(test)]
     crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
         .map_err(|_| HandoverError::Sync)?;
     #[cfg(test)]
