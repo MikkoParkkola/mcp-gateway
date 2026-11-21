@@ -215,6 +215,62 @@ async fn config_appearing_scenario() {
     );
 }
 
+/// WIRE.5: a successor started while the old process still holds the config lock (as a
+/// committed restart does) waits for it. Released within the wait: the load proceeds. Held past
+/// it: the load refuses with the Busy class after the full wait.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_overlap_waits_then_busy() {
+    const ROW: &str = "restart_overlap_waits_then_busy";
+    const BUSY: &str = "past the 30-second wait";
+    // limit-under-test (fires-only): a stall only lengthens the measured wait, never shortens it
+    const RELEASED_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("gateway.yaml");
+    write_owner_only(&config, SERVED).expect("config");
+
+    // Case A: the old process lets go during the wait.
+    let Ok(held) = lock_config_deferred(&config, Instant::now()).await else {
+        panic!("{ROW}: nothing else holds the fixture's lock yet");
+    };
+    let started = Instant::now();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(RELEASED_AFTER).await;
+        drop(held);
+    });
+    let loaded = super::load_for_serve(Some(&config)).await;
+    let waited = started.elapsed();
+    release.await.expect("the release task");
+    let evaluated = loaded.unwrap_or_else(|error| {
+        panic!("{ROW} A: the load proceeds once the lock is free: {error}")
+    });
+    drop(evaluated);
+    assert!(
+        waited >= RELEASED_AFTER,
+        "{ROW} A: the load waited for the release, took {waited:?}"
+    );
+
+    // Case B: the old process keeps holding.
+    let Ok(held) = lock_config_deferred(&config, Instant::now()).await else {
+        panic!("{ROW} B: case A left the lock free");
+    };
+    let started = Instant::now();
+    let loaded = super::load_for_serve(Some(&config)).await;
+    let waited = started.elapsed();
+    drop(held);
+    let message = match loaded {
+        Ok(_) => panic!("{ROW} B: a held lock must refuse the load, it loaded after {waited:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        message.contains(BUSY),
+        "{ROW} B: the Busy class, got {message:?}"
+    );
+    assert!(
+        (std::time::Duration::from_secs(30)..std::time::Duration::from_secs(35)).contains(&waited),
+        "{ROW} B: refused after the 30 s wait, took {waited:?}"
+    );
+}
+
 /// WIRE.6 / SERVE.5: the serve load reaches the startup gate, and construction finishes it.
 #[test]
 fn serve_paths_reach_the_gate() {
