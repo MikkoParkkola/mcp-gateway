@@ -12,8 +12,11 @@ use super::live_budget_tests::{KEY, fixture, governance, reload};
 /// One answered `gateway_invoke` of `tool` on `alpha` as [`KEY`].
 async fn invoke(fx: &super::live_budget_tests::Fx, tool: &str, session: Option<&str>) {
     let (status, body) = post_meta_invoke(fx, KEY, "alpha", tool, json!({}), None, session).await;
+    // A refused tool comes back as a result flagged isError, not a JSON-RPC
+    // error, so both shapes count as not answered.
+    let flagged = body.pointer("/result/isError") == Some(&json!(true));
     assert!(
-        status.is_success() && body.get("error").is_none(),
+        status.is_success() && body.get("error").is_none() && !flagged,
         "{tool} was not answered: {status} {body}"
     );
 }
@@ -94,10 +97,12 @@ async fn governance_turned_off_by_reload_still_records_the_charge() {
 #[tokio::test]
 async fn an_unlisted_tool_records_the_default_cost() {
     crate::test_day::same_utc_day_async(|| async {
-        let mut cfg = governance(|_| {});
+        // `read` is the fixture's answered tool; without its listed cost it
+        // is an unlisted tool and takes the default.
+        let mut cfg = governance(|c| c.tool_costs.clear());
         cfg.default_cost = 0.10;
         let fx = fixture(&cfg).await;
-        invoke(&fx, "write", None).await;
+        invoke(&fx, "read", None).await;
         close(enforcer_usd(&fx), 0.10, "enforcer key total");
         close(key_window_usd(&fx), 0.10, "key window");
     })
