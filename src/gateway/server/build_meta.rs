@@ -345,7 +345,7 @@ impl Gateway {
         if let Some(logger) = &transparency_log {
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
-                .enable_transparency_log(Arc::clone(&logger));
+                .enable_transparency_log(Arc::clone(logger));
         }
 
         // ── Runtime provenance stamping (MIK-6905) ────────────────────────────

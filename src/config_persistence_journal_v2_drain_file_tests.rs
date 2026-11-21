@@ -164,7 +164,7 @@ fn bad_files(frames: &[AbandonedFrame]) -> Vec<(&'static str, Vec<u8>)> {
     let mut roots = frames.to_vec();
     roots.push(other);
     let mut owned_record = frames.to_vec();
-    owned_record[1].owner = frames[0].owner.clone();
+    owned_record[1].owner.clone_from(&frames[0].owner);
     let mut no_decision = frames.to_vec();
     no_decision[0].owner.as_mut().expect("owner").decision = None;
     // One unfrozen token whose terminal cites an attempt the file does not hold.

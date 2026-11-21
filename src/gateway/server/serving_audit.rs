@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use super::persistence;
 use crate::config::{Config, LiveEnv};
-use crate::config_reload::startup_settle::ServingLog;
+use crate::config_reload::startup_settle::{ServingLog, StartupSession, finish_start};
 use crate::gateway::record_principal::RecordPrincipalKey;
 use crate::security::TransparencyLogger;
 use crate::{Error, Result};
@@ -24,13 +24,32 @@ pub(super) struct ServingAudit {
     pub(super) log: Option<Arc<TransparencyLogger>>,
 }
 
-/// Resolve the record key under `data_dir` and open the configured log, once. Also returns what
-/// the startup gate settles with: the open log, logging off, or a best-effort open that failed.
-pub(super) fn open(
+/// Open the serving audit, then settle the serve load's startup session with that same log
+/// before anything else of the gateway is built; the config lock goes with the session. A
+/// construction without a session has nothing to settle here.
+pub(super) async fn open_and_settle(
     config: &Config,
     env: &LiveEnv,
     data_dir: &Path,
-) -> Result<(ServingAudit, ServingLog)> {
+    session: Option<StartupSession>,
+) -> Result<ServingAudit> {
+    let (audit, log) = open(config, env, data_dir)?;
+    if let Some(session) = session {
+        #[cfg(all(test, unix))]
+        crate::config_reload::serve_seams::reached(
+            session.target(),
+            crate::config_reload::serve_seams::Point::AfterServingOpen,
+        );
+        Box::pin(finish_start(session, log))
+            .await
+            .map_err(|class| Error::Config(class.to_string()))?;
+    }
+    Ok(audit)
+}
+
+/// Resolve the record key under `data_dir` and open the configured log, once. Also returns what
+/// the startup gate settles with: the open log, logging off, or a best-effort open that failed.
+fn open(config: &Config, env: &LiveEnv, data_dir: &Path) -> Result<(ServingAudit, ServingLog)> {
     persistence::ensure_data_dir(data_dir);
     let record_key = Arc::new(crate::gateway::record_principal::resolve_key(
         config

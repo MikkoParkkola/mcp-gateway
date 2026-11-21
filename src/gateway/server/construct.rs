@@ -85,9 +85,11 @@ impl Gateway {
         if session.is_none()
             && let Some(path) = &config_path
         {
-            crate::config_reload::startup_settle::check_sessionless(path)
-                .await
-                .map_err(|class| Error::Config(class.to_string()))?;
+            Box::pin(crate::config_reload::startup_settle::check_sessionless(
+                path,
+            ))
+            .await
+            .map_err(|class| Error::Config(class.to_string()))?;
         }
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
@@ -115,17 +117,11 @@ impl Gateway {
                 super::persistence::standard_data_dir()
             }
         };
-        let (serving_audit, serving_log) = super::serving_audit::open(&config, &env, &data_dir)?;
-        if let Some(session) = session {
-            #[cfg(test)]
-            crate::config_reload::serve_seams::reached(
-                session.target(),
-                crate::config_reload::serve_seams::Point::AfterServingOpen,
-            );
-            crate::config_reload::startup_settle::finish_start(session, serving_log)
-                .await
-                .map_err(|class| Error::Config(class.to_string()))?;
-        }
+        // Boxed: the startup gate's future would otherwise sit inline in every constructor's.
+        let serving_audit = Box::pin(super::serving_audit::open_and_settle(
+            &config, &env, &data_dir, session,
+        ))
+        .await?;
 
         // The one resolver every backend's `secrets:` values go through, over
         // the same env this config was validated against; each backend

@@ -126,7 +126,9 @@ fn product_files() -> Vec<(String, String)> {
         .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
         .filter(|name| {
             name.starts_with("config_persistence_journal_v2")
-                && name.ends_with(".rs")
+                && std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext == "rs")
                 && !name.ends_with("_tests.rs")
         })
         .map(|name| format!("src/{name}"))

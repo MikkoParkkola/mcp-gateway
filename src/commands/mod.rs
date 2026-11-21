@@ -687,10 +687,11 @@ pub(crate) async fn load_for_serve(
     let Some(path) = path else {
         return mcp_gateway::config::Config::load_evaluated_defaults();
     };
-    let session = crate::config_reload::startup_settle::prepare_start(path)
+    // Boxed: the gate's future would otherwise sit inline in both serve paths' futures.
+    let session = Box::pin(crate::config_reload::startup_settle::prepare_start(path))
         .await
         .map_err(|class| mcp_gateway::Error::Config(class.to_string()))?;
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     crate::config_reload::serve_seams::reached(
         session.target(),
         crate::config_reload::serve_seams::Point::AfterPrepare,

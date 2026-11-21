@@ -92,8 +92,10 @@ fn persisted_recovery_token(path: &Path, row: &str) -> String {
         .attempts
         .iter()
         .find(|attempt| attempt.intent.role == Role::RecoveryIntent)
-        .map(|attempt| attempt.intent_id.0.clone())
-        .unwrap_or_else(|| panic!("{row}: the killed start persisted a recovery attempt"))
+        .map_or_else(
+            || panic!("{row}: the killed start persisted a recovery attempt"),
+            |attempt| attempt.intent_id.0.clone(),
+        )
 }
 
 /// Runs the child half of `row` against the config folder `resolved` and returns its status.
@@ -115,7 +117,7 @@ async fn run_child(row: &str, resolved: &Path) -> std::process::ExitStatus {
         .expect("run the child")
 }
 
-/// crash_s1: a served start is killed after its repair step has persisted the recovery attempt
+/// `crash_s1`: a served start is killed after its repair step has persisted the recovery attempt
 /// and before the restore. The next served start restores the original, keeps the attempt the
 /// killed start chose, and delivers every owed record once.
 #[tokio::test(flavor = "multi_thread")]
@@ -159,9 +161,7 @@ async fn crash_s1_child() {
     let _ = crate::commands::load_for_serve(Some(&path)).await;
 }
 
-/// crash_s3: delivery fails at a boundary while a served gateway is built. No gateway is built,
-/// and the next served start delivers what was owed, each terminal record once.
-/// crash_s2: a served start is killed after it opened the serving log and before it settled the
+/// `crash_s2`: a served start is killed after it opened the serving log and before it settled the
 /// session. The next served start settles with the same log: the config is the original, and the
 /// attempt the killed start chose is settled once, with no duplicate record.
 #[tokio::test(flavor = "multi_thread")]
@@ -202,6 +202,8 @@ async fn crash_s2_child() {
     let _ = serve_start("crash_s2_child", &path).await;
 }
 
+/// `crash_s3`: delivery fails at a boundary while a served gateway is built. No gateway is
+/// built, and the next served start delivers what was owed, each terminal record once.
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_s3() {
     const ROW: &str = "crash_s3";

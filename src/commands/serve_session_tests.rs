@@ -455,9 +455,11 @@ fn serve_paths_reach_the_gate() {
         load.contains("prepare_start"),
         "{ROW}: load_for_serve runs prepare_start"
     );
+    // Construction settles the session through the serving audit it opens.
     let construct = read("src/gateway/server/construct.rs");
+    let audit = read("src/gateway/server/serving_audit.rs");
     assert!(
-        construct.contains("finish_start("),
+        construct.contains("serving_audit::open_and_settle(") && audit.contains("finish_start("),
         "{ROW}: construction runs finish_start"
     );
 }
