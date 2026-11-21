@@ -162,6 +162,11 @@ test('T4 Cancel in the confirm sends nothing', async ({ page }) => {
   await expect(box(page)).toHaveCount(0);
   expect(saves(seen)).toHaveLength(0);
   await expect(host(page).locator('pre.diff')).toBeVisible();
+  // A kept dialog ends nothing: the flow is still open and the next Save sends exactly once.
+  expect(await results(page)).toEqual([]);
+  await host(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await action(page).click();
+  await expect.poll(() => saves(seen).length).toBe(1);
 });
 
 test('T5 a patch answer: no Save, the reasons and the patch, an announced banner, and Copy puts the patch on the clipboard', async ({ page, context }) => {
@@ -357,6 +362,25 @@ test('T12 the diff block is reachable by its name and holds the diff', async ({ 
   const figure = page.getByRole('figure', { name: 'Proposed change to gateway.yaml' });
   await expect(figure).toHaveCount(1);
   await expect(figure.locator('pre.diff')).toContainText('+  log_level: debug');
+  // A line wider than the block stays reachable from the keyboard.
+  await expect(figure.locator('pre.diff')).toHaveAttribute('tabindex', '0');
+});
+
+test('T22 a call without object or key throws before the host is latched', async ({ page }) => {
+  const seen = await screen(page);
+  const thrown = await page.evaluate(async (url) => {
+    const { settingsSave } = await import(url);
+    const host = document.getElementById('ss-a');
+    const out = [];
+    for (const spec of [{ host, fields: [], key: 'k' }, { host, fields: [], object: 'Gateway settings' }]) {
+      try { settingsSave(spec); out.push('returned'); } catch (err) { out.push(err instanceof TypeError ? 'TypeError' : String(err)); }
+    }
+    return out;
+  }, moduleUrl());
+  expect(thrown).toEqual(['TypeError', 'TypeError']);
+  expect(seen).toHaveLength(0);
+  await start(page);
+  await expect(host(page).locator('pre.diff')).toBeVisible();
 });
 
 test('T13 the confirm names the changed settings first, then that everything else stays', async ({ page }) => {

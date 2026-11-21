@@ -93,7 +93,8 @@ function line(text, cls = 'settingsave-line') {
 
 /** The server's unified diff, one element per line, inserted as text. File headers stay unstyled. */
 function diffFigure(diff) {
-  const pre = el('pre', { class: 'diff' });
+  // Focusable, so a keyboard can scroll a line wider than the block.
+  const pre = el('pre', { class: 'diff', tabindex: '0' });
   for (const text of String(diff).split('\n')) {
     const header = text.startsWith('--- a/') || text.startsWith('+++ b/');
     const cls = header ? null : text.startsWith('@@') ? 'hunk' : text.startsWith('+') ? 'add' : text.startsWith('-') ? 'del' : null;
@@ -161,6 +162,9 @@ function defaultReason(err) {
 export function settingsSave({ host, fields, object, key, opener = null } = {}) {
   if (!(host instanceof Element)) throw new TypeError('settingsSave: host is required');
   if (!Array.isArray(fields)) throw new TypeError('settingsSave: fields must be a list');
+  // The confirm needs both; checked here so a bad call throws before the host is latched.
+  if (typeof object !== 'string' || !object) throw new TypeError('settingsSave: object is required');
+  if (typeof key !== 'string' || !key) throw new TypeError('settingsSave: key is required');
   if (open.has(host)) return Promise.resolve({ outcome: 'declined' });
   if (held) {
     host.replaceChildren(line(WORDS.held));
