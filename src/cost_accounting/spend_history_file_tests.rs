@@ -833,6 +833,10 @@ fn a_full_file_stays_within_its_stated_size_and_restores() {
         bytes <= u64::try_from(bound).expect("fits"),
         "{bytes} > {bound}"
     );
+    // The measured size, pinned so a passing run states it: 512 key rows of
+    // 38,679 bytes plus the two other series and the frame (worked out from
+    // the row shapes; a failure prints the real count).
+    assert_eq!(bytes, 19_881_195, "spend-history.json at its bounds");
 
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let (back, warnings) =
