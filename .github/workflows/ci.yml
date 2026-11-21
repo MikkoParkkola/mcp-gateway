@@ -133,6 +133,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -1019,6 +1020,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -1218,6 +1220,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -1991,6 +1994,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment (the inventory check reads Rust with tree-sitter)
         env:
           UV_MALWARE_CHECK: "1"
@@ -2267,6 +2271,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2317,6 +2322,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2391,6 +2397,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2574,7 +2581,9 @@ jobs:
           # Scoped per arch: an unscoped scope has both legs writing one cache
           # entry, so each run thrashes the other's layers.
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          # Written only on the release line or main, the refs every PR can restore; a PR or tag entry
+          # would be restored by nothing and only push the line's entries toward eviction.
+          cache-to: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-{0}', matrix.arch) || '' }}
 
       - name: Pull the pushed digest
         env:
@@ -2602,6 +2611,9 @@ jobs:
 
       - name: Build and push the full variant by digest (no tag)
         id: build_full
+        env:
+          # Empty off the release line and main: the expansion below then adds no --cache-to.
+          CACHE_TO: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-full-{0}', matrix.arch) || '' }}
         run: |
           set -euo pipefail
           META="${RUNNER_TEMP}/full-build-meta.json"
@@ -2613,7 +2625,7 @@ jobs:
             --build-arg "APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}" \
             --cache-from "type=gha,scope=docker-${{ matrix.arch }}" \
             --cache-from "type=gha,scope=docker-full-${{ matrix.arch }}" \
-            --cache-to "type=gha,mode=max,scope=docker-full-${{ matrix.arch }}" \
+            ${CACHE_TO:+--cache-to "$CACHE_TO"} \
             --output "type=image,name=ghcr.io/mikkoparkkola/mcp-gateway,push-by-digest=true,name-canonical=true,push=true" \
             .
           DIGEST="$(jq -r '."containerimage.digest"' "${META}")"
