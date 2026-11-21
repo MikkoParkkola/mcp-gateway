@@ -383,6 +383,33 @@ pub(crate) fn run_before_first_fs_call() {
     }
 }
 
+/// What is left under `dir`, for a failure message.
+pub(crate) fn listing(dir: &Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+    )
+}
+
+/// A kept dir outlives the test's share while a detached write holds it:
+/// `dir` is there now, `release` lets the write finish, and then the dir
+/// goes, with nothing left behind (bounded wait, real time).
+pub(crate) async fn held_then_gone(dir: &Path, release: impl FnOnce()) {
+    assert!(
+        dir.exists(),
+        "the dir was removed while its write was still held"
+    );
+    release();
+    let gone =
+        crate::test_wait::wait_real_time(std::time::Duration::from_secs(30), || !dir.exists())
+            .await;
+    assert!(
+        gone.is_ok(),
+        "the dir stayed after its write returned; left: {:?}",
+        listing(dir)
+    );
+}
+
 #[cfg(tp3)]
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
