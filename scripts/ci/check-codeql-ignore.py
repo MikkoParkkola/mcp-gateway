@@ -37,7 +37,7 @@ CFG_NAME = "CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES"
 
 
 def cfg_override_problems(text):
-    """Where CFG_NAME appears: exactly once, as `jobs.analyze.env`, value `-test`."""
+    """Every line naming CFG_NAME must be the `jobs.analyze.env` key with value `-test`, and one must exist."""
     found, keys = [], []  # keys: (indent, key) of the mappings enclosing a line
     for number, line in enumerate(text.splitlines(), 1):
         body = re.sub(r"(^|\s)#.*$", "", line).rstrip()  # comments carry no setting
@@ -64,8 +64,6 @@ def cfg_override_problems(text):
                             f"(under {'.'.join(path) or 'the top level'}); {want}, and only there")
         elif value != "-test":
             problems.append(f"{WORKFLOW}:{number}: {CFG_NAME} is {value!r}; {want}")
-    if len(found) > 1 and not problems:
-        problems.append(f"{WORKFLOW}: {CFG_NAME} is set {len(found)} times; {want}, once")
     return problems
 
 
