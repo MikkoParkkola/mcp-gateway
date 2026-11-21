@@ -19,7 +19,10 @@
 //! Limits: bindings match by name with no scope analysis (a shadowed binding
 //! resolves to the first one); only `include_str!`, `include_bytes!` and
 //! `concat!` macro bodies are seen; `include_*!` paths resolve against the
-//! source file's directory.
+//! source file's directory. A `concat!` joins only its direct string
+//! arguments, in order: a macro inside it (`env!`, a nested `concat!`) is left
+//! out, not expanded. An `include_*!` whose path is built that way is not seen
+//! here; the packaged build on every pull request fails on it instead.
 
 use std::path::{Path, PathBuf};
 
