@@ -385,3 +385,25 @@ async fn p3_stdio_an_early_nonce_refusal_keeps_its_precedence() {
     let record = sole_record(&logged, &answer);
     assert_refusal_record(&record, "invalid", -32602, "syntax");
 }
+
+/// N2c: N2a on stdio. A message with no id and a malformed nonce is refused
+/// early, before the message is parsed; it is answered with no id and the
+/// nonce's own words, and recorded once.
+#[tokio::test]
+async fn n2c_stdio_an_id_less_early_refusal_is_recorded() {
+    let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
+    let params = invoke_params(with_nonce(&"n".repeat(257)), None);
+    let request = json!({ "jsonrpc": "2.0", "method": "tools/call", "params": params });
+    let policy = crate::security::ToolPolicyConfig::default();
+    let answer = super::stdio_send_raw(&logged.meta, &request, &policy)
+        .await
+        .expect("the early refusal is answered");
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    assert_eq!(
+        answer["error"]["message"], "Invalid signing nonce",
+        "{answer}"
+    );
+    assert!(answer["id"].is_null(), "no id: {answer}");
+    let record = sole_record(&logged, &answer);
+    assert_refusal_record(&record, "invalid", -32602, "syntax");
+}

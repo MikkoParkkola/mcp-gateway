@@ -127,19 +127,30 @@ async fn stdio_send_under(
     params: Value,
     policy: &crate::security::ToolPolicyConfig,
 ) -> Value {
+    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
+    stdio_send_raw(gateway_meta, &request, policy)
+        .await
+        .expect("a request is answered")
+}
+
+/// One stdio message exactly as given (a row may leave out its id), under
+/// the tool policy `policy`; `None` when no answer is due.
+async fn stdio_send_raw(
+    gateway_meta: &Arc<MetaMcp>,
+    request: &Value,
+    policy: &crate::security::ToolPolicyConfig,
+) -> Option<Value> {
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
     super::Gateway::dispatch_single(
         gateway_meta,
         &crate::gateway::authz::test_line(gateway_meta, policy),
         &mtls,
-        &request,
+        request,
         "stdio-matrix",
     )
     .await
-    .expect("a request is answered")
 }
 
 /// The params of `gateway_invoke alpha read` with `args`.

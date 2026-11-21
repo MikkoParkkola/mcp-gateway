@@ -206,16 +206,16 @@ async fn s6m_mcp_two_nonces_record_syntax() {
     assert_meta_refusal(record, "invalid", -32602, "syntax");
 }
 
-/// N2: the early refusal of a request whose id cannot be read (`true`):
-/// answered with no id and the nonce's own words, as before, and still
-/// recorded once (gpt r3c IMP 2, grok r3c MEDIUM: the signing wording, not
-/// the intake's).
+/// N2a: a request with no id at all reaches the early nonce refusal
+/// (restore has no id to check, and `/mcp` asks for one only later, in
+/// parse_request_ref): answered with no id and the nonce's own words, as
+/// before, and recorded once.
 #[tokio::test]
-async fn n2_mcp_an_unreadable_id_early_refusal_is_recorded() {
+async fn n2a_mcp_an_id_less_early_refusal_is_recorded() {
     let fx = hardened_signing().await;
     let mut call: Value =
         serde_json::from_str(&signed_on_mcp(1, &json!(5))).expect("the request parses");
-    call["id"] = json!(true);
+    call.as_object_mut().expect("an object").remove("id");
     let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
     assert_eq!(
         body["error"]["message"], "Invalid signing nonce",
@@ -229,4 +229,23 @@ async fn n2_mcp_an_unreadable_id_early_refusal_is_recorded() {
         panic!("exactly one record: {all:?}");
     };
     assert_meta_refusal(record, "invalid", -32602, "syntax");
+}
+
+/// N2b, a guard: an id of the wrong type never reaches the nonce check.
+/// The signing envelope refuses it first, as before (restore, "Invalid
+/// signing request ID"), so this row pins that answer and nothing about a
+/// nonce record.
+#[tokio::test]
+async fn n2b_mcp_a_wrong_type_id_is_refused_by_the_envelope_first() {
+    let fx = hardened_signing().await;
+    let mut call: Value =
+        serde_json::from_str(&signed_on_mcp(1, &json!(5))).expect("the request parses");
+    call["id"] = json!(true);
+    let (_, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(body["error"]["code"], -32600, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Invalid signing request ID",
+        "{body}"
+    );
+    assert!(body["id"].is_null(), "no id: {body}");
 }
