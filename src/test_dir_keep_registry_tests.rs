@@ -172,8 +172,15 @@ fn a_log_in_the_test_home_is_not_named() {
     let mut neighbour = home.file_name().expect("a named home").to_owned();
     neighbour.push("-next-door");
     let next_door = parent.join(neighbour).join("audit.jsonl");
+    let in_home = home.join(".mcp-gateway").join("audit.jsonl");
+    // A parent's kept-dir list would also hide this log, and then the row
+    // could not tell the home rule apart from it.
+    assert!(
+        !super::is_external(&in_home),
+        "the home is already kept by a parent process; this row proves nothing here"
+    );
     let guard = expect_unkept();
-    report_unkept(AUDIT_LOG, &home.join(".mcp-gateway").join("audit.jsonl"));
+    report_unkept(AUDIT_LOG, &in_home);
     report_unkept(AUDIT_LOG, &next_door);
     let seen = guard.recorded();
     assert_eq!(seen.len(), 1, "the home's log was named too: {seen:?}");
