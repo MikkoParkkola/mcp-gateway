@@ -329,5 +329,43 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
 /// `tasks/get`, so the task store has committed its last record before the
 /// caller drops the directory [`state`] returned.
 ///
-/// Stub for the red row (tests/task_settle_teardown.rs): it returns at once.
-pub async fn settle_tasks(_state: &Arc<AppState>, _ids: &[&str]) {}
+/// The store writes a task's record before it publishes the status that record
+/// holds, and a terminal record is not written again, so a terminal read means
+/// no record write is left to race the directory's removal. A write that lands
+/// while the directory is being removed leaves it behind, and the shard's
+/// leftover check then fails the run.
+///
+/// Opt-in: an async wait cannot run in `Drop`, and the task runtime's own
+/// shutdown is private to the crate. A test that creates a task calls this
+/// before it returns; the leftover check catches one that forgets.
+/// Panics after 30 s with each task still open and its last read.
+pub async fn settle_tasks(state: &Arc<AppState>, ids: &[&str]) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut open: Vec<(&str, Value)> = ids.iter().map(|id| (*id, Value::Null)).collect();
+    loop {
+        for (id, last) in &mut open {
+            *last = task_status(state, id).await;
+        }
+        open.retain(|(_, status)| {
+            !matches!(status.as_str(), Some("completed" | "failed" | "cancelled"))
+        });
+        if open.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tasks still not terminal after 30 s (id, last read): {open:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// One task's status as `tasks/get` reports it, or the whole answer when it
+/// carries none (an error), so a stuck wait shows what the gateway said.
+async fn task_status(state: &Arc<AppState>, id: &str) -> Value {
+    let mut read = modern("tasks/get", json!({ "taskId": id }));
+    read["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+    let (_, answer) = post(state, read, &[("mcp-name", id)]).await;
+    answer.pointer("/result/status").cloned().unwrap_or(answer)
+}
