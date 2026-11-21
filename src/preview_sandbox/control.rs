@@ -53,10 +53,17 @@ pub(crate) fn peer_is_helper(status: &str, unshare_pid: u32, uid: u32) -> Result
             _ => Err(refuse("has no readable parentage")),
         }
     };
-    let parent: u32 = field("PPid:")?
-        .trim()
-        .parse()
-        .map_err(|_| refuse("has no readable parentage"))?;
+    let parent: u32 = mutant!(
+        "q17-unreadable-parentage-matches",
+        field("PPid:")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(unshare_pid),
+        field("PPid:")?
+            .trim()
+            .parse()
+            .map_err(|_| refuse("has no readable parentage"))?
+    );
     // Real, effective, saved and filesystem uid: all four are the gateway's.
     let uids = field("Uid:")?
         .split_whitespace()

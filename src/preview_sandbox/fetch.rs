@@ -61,13 +61,21 @@ pub(crate) fn plan(target: &Target) -> Result<Phases, Refusal> {
     let spec = spec
         .to_str()
         .ok_or_else(|| refuse("not a registry package: a non-UTF-8 argument"))?;
-    if spec.starts_with('-') {
+    if mutant!("q7-option-before-spec", false, spec.starts_with('-')) {
         return Err(refuse("an npx/uvx option before the package"));
     }
     let fetch = if npm {
-        npm_spec(spec).map(|()| Fetch::Npm(spec.to_owned()))
+        mutant!(
+            "q8-npm-non-registry",
+            Ok(Fetch::Npm(spec.to_owned())),
+            npm_spec(spec).map(|()| Fetch::Npm(spec.to_owned()))
+        )
     } else {
-        pypi_spec(spec).map(|()| Fetch::Uv(spec.to_owned()))
+        mutant!(
+            "q8-pypi-non-registry",
+            Ok(Fetch::Uv(spec.to_owned())),
+            pypi_spec(spec).map(|()| Fetch::Uv(spec.to_owned()))
+        )
     }?;
     Ok(Phases {
         fetch: Some(fetch),
@@ -138,7 +146,7 @@ fn pypi_spec(spec: &str) -> Result<(), Refusal> {
         Some((name, version)) => (name, Some(version)),
         None => (spec, None),
     };
-    if name.contains('[') {
+    if mutant!("q16-extras-accepted", false, name.contains('[')) {
         return Err(refuse("PyPI extras are not previewed"));
     }
     let ok = name.starts_with(|c: char| c.is_ascii_alphanumeric())
