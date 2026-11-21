@@ -216,6 +216,7 @@ const ID_CALLERS: &[(&str, usize)] = &[
     ("src/gateway/streaming.rs", 1),
     ("src/gateway/trace.rs", 1),
     ("src/gateway/webhooks/mod.rs", 1),
+    ("src/heartbeat.rs", 1),
     ("src/identity_grants/journal.rs", 1),
     ("src/identity_propagation/mod.rs", 1),
     ("src/identity_propagation/token_exchange.rs", 1),

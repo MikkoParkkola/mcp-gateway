@@ -71,9 +71,18 @@ pub(super) fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthS
     }
 }
 
+/// How the server closes a listen stream.
+#[derive(Clone, Copy)]
+enum Close {
+    /// The registry, holding the only sender, is dropped.
+    Drop,
+    /// The stop's trigger ends it while the registry lives on.
+    Stop,
+}
+
 /// The whole body of a listen stream admitted while its token was live, whose
-/// token is revoked when `revoke`, and which the server then closes.
-async fn closed_listen_body(revoke: bool) -> String {
+/// token is revoked when `revoke`, and which the server then closes by `close`.
+async fn closed_listen_body(revoke: bool, close: Close) -> String {
     use crate::gateway::outbound::{RejectionAudit, StreamJudge};
     use crate::gateway::subscription_registry::SubscriptionRegistry;
     use crate::protocol::subscriptions::{ListenRequest, SubscriptionId};
@@ -114,7 +123,10 @@ async fn closed_listen_body(revoke: bool) -> String {
         assert!(key_server.store.revoke_by_jti(&jti).await);
     }
     // The registry holds the only sender: dropping it is the server closing.
-    drop(registry);
+    match close {
+        Close::Drop => drop(registry),
+        Close::Stop => registry.stop_listeners(),
+    }
     let bytes = tokio::time::timeout(
         Duration::from_secs(5),
         axum::body::to_bytes(response.into_body(), usize::MAX),
@@ -127,17 +139,30 @@ async fn closed_listen_body(revoke: bool) -> String {
 
 #[tokio::test]
 async fn a_closed_listen_ends_gracefully_only_for_a_live_credential() {
-    let live = closed_listen_body(false).await;
+    let live = closed_listen_body(false, Close::Drop).await;
     assert_eq!(
         live.matches("data: ").count(),
         2,
         "a live credential reads the acknowledgement and the graceful end: {live}"
     );
 
-    let dead = closed_listen_body(true).await;
+    let dead = closed_listen_body(true, Close::Drop).await;
     assert_eq!(
         dead.matches("data: ").count(),
         1,
         "a revoked credential reads only the acknowledgement it was sent while live: {dead}"
+    );
+}
+
+/// S-sub-ends (D3): the stop's trigger ends an open listen stream
+/// through its graceful path while the registry still lives: a live credential
+/// reads the acknowledgement and the graceful end, and the body ends.
+#[tokio::test]
+async fn s_sub_ends_the_stop_ends_a_listen_stream_gracefully() {
+    let live = closed_listen_body(false, Close::Stop).await;
+    assert_eq!(
+        live.matches("data: ").count(),
+        2,
+        "a live credential reads the acknowledgement and the graceful end: {live}"
     );
 }
