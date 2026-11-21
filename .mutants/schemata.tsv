@@ -1,0 +1,9 @@
+head_sha	191eba3dcb17d42d03999368f3cbfd53df902151
+#mutant m17
+mcp_gateway	config_persistence::lock::reader_gate_tests::reload_gate_matrix	src/config_persistence_lock_reader_gate_tests.rs:148
+#mutant m18
+mcp_gateway	config_persistence::lock::reader_gate_tests::reload_gate_matrix	src/config_persistence_lock_reader_gate_tests.rs:148
+#mutant m20
+mcp_gateway	config_persistence::lock::reader_gate_tests::reload_skips_before_recovery	src/config_persistence_lock_reader_gate_tests.rs:209
+#mutant m21
+mcp_gateway	config_persistence::lock::reader_gate_tests::reload_gate_matrix	src/config_persistence_lock_reader_gate_tests.rs:148
