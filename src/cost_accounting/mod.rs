@@ -295,8 +295,9 @@ pub struct WindowStats {
 pub struct KeyCostSnapshot {
     /// API key name.
     pub api_key_name: String,
-    /// Spend in the past 24 hours. Held in memory: the 24 h, 7 d and 30 d
-    /// windows start again at zero after a restart.
+    /// Spend in the past 24 hours. With cost governance built, the 24 h, 7 d
+    /// and 30 d windows survive a restart through `spend-history.json`; the
+    /// time the gateway was down stays a gap.
     pub window_24h: WindowStats,
     /// Spend in the past 7 days.
     pub window_7d: WindowStats,
@@ -310,7 +311,9 @@ pub struct KeyCostSnapshot {
     /// Always `"Ok"`, for the same reason as `hard_limit_usd`: it judges no
     /// limit. Read the budget enforcer for a key's real standing.
     pub budget_status: String,
-    /// All-time per-tool breakdown; tools past the row cap share `(other)`.
+    /// Per-tool breakdown since this process started (never saved, so it
+    /// starts at zero after a restart); tools past the row cap share
+    /// `(other)`.
     pub by_tool: Vec<ToolCost>,
 }
 
