@@ -82,7 +82,7 @@ fn a_signed_record_written_between_the_passes_refuses_the_run() {
 #[cfg(tp2)]
 #[test]
 fn a_signed_record_written_between_the_passes_refuses_the_json_run() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     append(&logger(&log, ""), 3);
     let config = keyless_config(dir.path());

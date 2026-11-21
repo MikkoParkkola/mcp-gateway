@@ -274,6 +274,16 @@ pub(crate) fn is_external_in(external: &[std::path::PathBuf], path: &Path) -> bo
     external.iter().any(|dir| contains(&norm(dir), &path))
 }
 
+/// Whether `path` lies in this process's test home. That home outlives every
+/// test in the process: the harness that set the override removes it only
+/// after the process exits, and a private one is never removed. On a host
+/// whose temp dir holds the home (Windows runners), a gateway a test starts
+/// writes its logs there, and none of them is a test-made temp dir.
+/// Boundary: a temp dir a test makes inside the home is not named either.
+fn in_test_home(path: &Path) -> bool {
+    crate::home_dir::home_dir().is_some_and(|home| contains(&norm(&home), &norm(path)))
+}
+
 /// Whether this process's parent keeps the dir `path` lies in.
 fn is_external(path: &Path) -> bool {
     static EXTERNAL: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
@@ -312,7 +322,7 @@ std::thread_local! {
 /// outside the temp dir or a parent process keeps its dir. Inside an
 /// `expect_unkept` scope it is recorded there instead.
 pub(crate) fn report_unkept(kind: &'static str, path: &Path) {
-    if !under_temp_root(path) || is_external(path) {
+    if !under_temp_root(path) || is_external(path) || in_test_home(path) {
         return;
     }
     let creator = crate::test_late_write::Creator::default();
