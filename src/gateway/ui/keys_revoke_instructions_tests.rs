@@ -106,7 +106,9 @@ fn ri2b_a_shared_expiry_keeps_keyedits_unchecked_warning() {
 #[test]
 fn ri3_an_anchored_list_gives_expiry_only() {
     let entry = format!("    - name: target\n{}", digest_line());
-    let text = yaml_of(&[root_item(), entry]).replace("  api_keys:\n", "  api_keys: &all\n");
+    let anchored = yaml_of(&[root_item(), entry]).replace("  api_keys:\n", "  api_keys: &all\n");
+    // An alias elsewhere names the list, so no hand deletion can be checked.
+    let text = format!("{anchored}x-mirror: *all\n");
     let (_, answer) = refused_answer(on_file(text));
     let reason = instructed(&answer, "anchor");
     assert!(
