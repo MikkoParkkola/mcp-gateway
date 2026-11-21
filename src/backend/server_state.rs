@@ -106,6 +106,16 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
             None,
         );
     }
+    // A live start refuses a plan that needs a confirmation and nothing can
+    // grant one, so the server stays down until its settings change: say that,
+    // never the start-failed retry promise below.
+    if !inputs.confirmations.is_empty() {
+        return view(
+            ServerState::Refused,
+            held_reason(&inputs.confirmations),
+            None,
+        );
+    }
     if inputs.auth_wait {
         return view(
             ServerState::NeedsSignIn,
@@ -188,6 +198,31 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
         "Not started yet; it starts on the first call.".to_owned(),
         None,
     )
+}
+
+/// The settings a held server's runtime plan asks for, each named once in
+/// plain words (an id this list does not know is shown as itself), in the
+/// sentence its state gives.
+fn held_reason(ids: &[String]) -> String {
+    let mut named: Vec<&str> = Vec::new();
+    for id in ids {
+        let words = match id.as_str() {
+            "filesystem.host_mount" => "a host mount",
+            "network.full_egress" => "full network access",
+            "runtime.privileged" => "privileged mode",
+            "environment.guarded_names" => "guarded environment names",
+            other => other,
+        };
+        if !named.contains(&words) {
+            named.push(words);
+        }
+    }
+    let list = match named.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    format!("Its runtime settings ask for {list}; it will not start until those settings change.")
 }
 
 #[cfg(tp3)]
