@@ -693,6 +693,8 @@ pub(crate) async fn load_for_serve(
     mcp_gateway::config::Config::load_evaluated(path)
 }
 
+#[cfg(test)]
+pub(crate) mod serve_fixture;
 #[cfg(tp2)]
 #[cfg(test)]
 mod serve_load_tests;

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config_persistence::lock::{NotLocked, lock_config_deferred};
-use crate::gateway::Gateway;
 use crate::gateway::test_helpers::write_owner_only;
 
 const SERVED: &str = "server:\n  port: 9\n";
@@ -35,18 +34,14 @@ async fn startup_lock_span() {
     let config = dir.path().join("gateway.yaml");
     write_owner_only(&config, SERVED).expect("config");
 
-    let mut evaluated = super::load_for_serve(Some(&config))
-        .await
-        .unwrap_or_else(|error| panic!("{ROW}: the serve load succeeds: {error}"));
+    let mut evaluated = super::serve_fixture::serve_load(ROW, &config).await;
     assert!(held_elsewhere(&config).await, "{ROW}: held after the load");
     let env = Arc::new(evaluated.live_env());
     assert!(
         held_elsewhere(&config).await,
         "{ROW}: held after the environment hand-over"
     );
-    let gateway = Gateway::new_evaluated(evaluated.config, env, Some(config.clone()))
-        .await
-        .unwrap_or_else(|error| panic!("{ROW}: the gateway builds: {error}"));
+    let gateway = super::serve_fixture::serve_build(ROW, evaluated, env, &config).await;
     assert!(
         !held_elsewhere(&config).await,
         "{ROW}: free once the gateway is built"
