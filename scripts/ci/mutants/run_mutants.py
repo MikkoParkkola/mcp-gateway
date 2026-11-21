@@ -526,6 +526,10 @@ CFG_PROBE = "mutant::mutants_build::only_the_named_site_switches_on"
 # produces other libraries' test executables (crates/gateway-core), and the
 # probe and the site listing live only in this one.
 LIB_TARGET = "mcp_gateway"
+# The lib test split: the build script turns PART_ENV=K into cfg(tpK); the table guesses a part.
+PART_ENV = "MCP_GATEWAY_TEST_PART"
+PART_TABLE = "scripts/dev/test-parts.tsv"
+PART_BUILD = "scripts/dev/test-parts-build.rs"
 MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
 LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
 SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
@@ -699,11 +703,11 @@ def mutant_verdict(row_results: list[str]) -> str:
     return "KILLED"
 
 
-def check_baseline(row_results: dict[str, str]) -> None:
-    """Every expected row must pass with no mutant on, or the batch is refused."""
-    bad = [f"{name}: {r}" for name, r in row_results.items() if r != "PASSED"]
-    if bad:
-        raise BaselineRefused("the baseline did not pass: " + "; ".join(bad))
+def check_baseline(executable: str, test: str, result: str) -> None:
+    """Every expected row must pass with no mutant on, or the batch is refused at the first row that does not:
+    rows are not collected by test name, so a same-named row's pass cannot hide a red one (R-BASE)."""
+    if result != "PASSED":
+        raise BaselineRefused(f"the baseline did not pass: {executable} {test}: {result}")
 
 
 def schemata_exit(mutants: dict[str, SpecMutant], verdicts: list[tuple[str, str]]) -> int:
@@ -758,38 +762,143 @@ def plan_schemata() -> tuple[str | None, dict[str, SpecMutant]]:
     return parse_spec(rest)
 
 
-def build_schemata(features: str | None, logs: Path) -> dict[str, dict]:
-    """One `--cfg mutants` build of every test target. Returns target name ->
-    {path, sha256, kinds}. A failed build refuses the run and names its sites."""
+def mutants_env(features: str | None) -> tuple[dict, list[str]]:
+    """The environment and feature flags of every `--cfg mutants` build."""
     env = dict(os.environ)
     env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " --cfg mutants").strip()
     env.pop(MUTANT_ENV, None)
-    feats = ["--features", features] if features else ["--all-features"]
-    cmd = ["cargo", "test", "--workspace", "--all-targets", "--no-run", "--message-format=json",
-           "--target-dir", "target/mutants-cfg", *feats]
-    built = run_cmd(cmd, COMPILE_LIMIT, logs / "schemata-build.log", env)
+    env.pop(PART_ENV, None)
+    return env, (["--features", features] if features else ["--all-features"])
+
+
+def cargo_build(args: list[str], env: dict, logs: Path, tag: str) -> list[dict]:
+    """One `cargo test --no-run` into the mutants target dir; its test executables' artifact messages. A failed
+    build refuses the run and names its sites."""
+    cmd = ["cargo", "test", *args, "--no-run", "--message-format=json", "--target-dir", "target/mutants-cfg"]
+    built = run_cmd(cmd, COMPILE_LIMIT, logs / f"{tag}.log", env)
     if built.timed_out or built.exit != 0:
         sites = sorted(set(re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)))
         raise BaselineRefused(f"the --cfg mutants build failed at {sites or 'an unknown site'}; "
                               "move those mutants to the patch flow and rerun the rest")
-    artifacts: dict[str, dict] = {}
-    for line in built.output.splitlines():
-        if not line.startswith("{"):
+    msgs = [json.loads(line) for line in built.output.splitlines() if line.startswith("{")]
+    return [m for m in msgs if m.get("reason") == "compiler-artifact" and m.get("executable") and m["profile"].get("test")]
+
+
+def keep_copy(src: str, dest: Path) -> dict:
+    """Copy an executable out of target/ (a later build reuses cargo's file name) and hash the copy."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    return {"path": str(dest), "sha256": sha256(dest)}
+
+
+def checked(entry: dict) -> str:
+    """The copy's path, after its bytes are compared with the hash taken at copy time (R-HASH)."""
+    if sha256(Path(entry["path"])) != entry["sha256"]:
+        raise Abort(f"{entry['path']} changed after it was copied: its sha256 no longer matches; nothing is judged")
+    return entry["path"]
+
+
+def part_table() -> tuple[list[tuple[str, int]], int]:
+    """The lib test split's directory table and part count, read from the checkout. Only a guess and a bound: the
+    listing of each built part decides where a test is, so a wrong table costs build time, never a wrong verdict."""
+    rows = []
+    for line in Path(PART_TABLE).read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            directory, part = line.split("\t")
+            rows.append((directory.strip(), int(part)))
+    m = re.search(r"const N: u32 = (\d+);", Path(PART_BUILD).read_text(encoding="utf-8"))
+    if not m:
+        raise Abort(f"{PART_BUILD} has no `const N: u32 = <n>;`")
+    return rows, int(m.group(1))
+
+
+def guess_part(test: str, table: list[tuple[str, int]]) -> int | None:
+    """The part of the nearest table row at or above the test's module path (src/ + its module segments)."""
+    known = dict(table)
+    segments = test.split("::")[:-1]
+    for n in range(len(segments), -1, -1):
+        part = known.get("/".join(["src", *segments[:n]]))
+        if part is not None:
+            return part
+    return None
+
+
+def build_lib_parts(names: list[str], features: str | None, exe_dir: Path, logs: Path) -> tuple[dict, dict]:
+    """Build the lib test crate one part at a time until every required name is placed (MUT.5 steps 1-3).
+    Returns (part -> copy entry, name -> part). A name in no part, or in two built parts, refuses the run."""
+    env, feats = mutants_env(features)
+    table, n_parts = part_table()
+    built: dict[int, dict] = {}
+    where: dict[str, int] = {}
+
+    def build(k: int) -> None:
+        artifacts = cargo_build(["--lib", *feats], {**env, PART_ENV: str(k)}, logs, f"build-p{k}")
+        lib = library_executable({a["target"]["name"]: {"path": a["executable"], "kinds": a["target"]["kind"]}
+                                  for a in artifacts})
+        entry = keep_copy(lib["path"], exe_dir / f"{LIB_TARGET}-p{k}")
+        listed = run_cmd([checked(entry), "--list", "--format", "terse"], TEST_LIMIT, logs / f"list-p{k}.log")
+        entry["names"] = {line[:-len(": test")] for line in listed.output.splitlines() if line.endswith(": test")}
+        built[k] = entry
+        for name in names:
+            if name in entry["names"]:
+                if name in where:
+                    raise Abort(f"{name} is listed in two built parts ({where[name]} and {k}): the split is broken")
+                where[name] = k
+
+    for k in sorted({g for name in names if (g := guess_part(name, table)) is not None}):
+        build(k)
+    for k in range(1, n_parts + 1):
+        if all(name in where for name in names):
+            break
+        if k not in built:
+            build(k)
+    missing = [name for name in names if name not in where]
+    if missing:
+        raise Abort(f"no built part lists {', '.join(missing)} (parts built: {sorted(built)} of 1..={n_parts})")
+    return built, where
+
+
+TARGET_FLAGS = {"test": "--test", "bin": "--bin", "example": "--example"}
+
+
+def build_other_targets(targets: list[str], features: str | None, exe_dir: Path, logs: Path) -> dict:
+    """One build naming exactly the spec's non-lib targets (MUT.5 step 4); target -> copy entry. The flag comes
+    from cargo metadata; the artifact's own kind must agree with it (R-KIND)."""
+    if not targets:
+        return {}
+    meta = run_cmd(["cargo", "metadata", "--format-version", "1", "--no-deps"], COMPILE_LIMIT, logs / "metadata.log")
+    if meta.exit != 0:
+        raise Abort("cargo metadata failed")
+    kinds = {t["name"]: t["kind"] for p in json.loads(meta.output)["packages"] for t in p["targets"]}
+    absent = [t for t in targets if t not in kinds]
+    if absent:
+        raise Abort(f"spec executables the build did not produce: {absent}")
+    odd = [t for t in targets if len(kinds[t]) != 1 or kinds[t][0] not in TARGET_FLAGS]
+    if odd:
+        raise Abort(f"spec executables of a kind no row can run: {[(t, kinds[t]) for t in odd]}")
+    env, feats = mutants_env(features)
+    args = [a for t in targets for a in (TARGET_FLAGS[kinds[t][0]], t)]
+    found: dict[str, dict] = {}
+    for a in cargo_build([*args, *feats], env, logs, "build-targets"):
+        name = a["target"]["name"]
+        if name not in targets:
             continue
-        msg = json.loads(line)
-        if msg.get("reason") == "compiler-artifact" and msg.get("executable") and msg["profile"].get("test"):
-            path = Path(msg["executable"])
-            artifacts[msg["target"]["name"]] = {"path": str(path), "sha256": sha256(path),
-                                                "kinds": msg["target"]["kind"]}
-    return artifacts
+        if a["target"]["kind"] != kinds[name]:
+            raise Abort(f"{name} was built by {TARGET_FLAGS[kinds[name][0]]} but its artifact's kind is "
+                        f"{a['target']['kind']}")
+        found[name] = keep_copy(a["executable"], exe_dir / name)
+    absent = [t for t in targets if t not in found]
+    if absent:
+        raise Abort(f"spec executables the build did not produce: {absent}")
+    return found
 
 
-def run_row(exe: str, test: str, mutant: str | None, logs: Path, tag: str) -> tuple[Outcome, float, list[str]]:
+def run_row(entry: dict, test: str, mutant: str | None, logs: Path, tag: str) -> tuple[Outcome, float, list[str]]:
     env = dict(os.environ)
     env.pop(MUTANT_ENV, None)
     if mutant is not None:
         env[MUTANT_ENV] = mutant
-    cmd = [exe, "--exact", test, "--test-threads=1"]
+    cmd = [checked(entry), "--exact", test, "--test-threads=1"]
     start = time.monotonic()
     outcome = run_cmd(cmd, TEST_LIMIT, logs / f"{tag}.log", env)
     return outcome, round(time.monotonic() - start, 2), cmd
@@ -809,50 +918,54 @@ def library_executable(artifacts: dict[str, dict]) -> dict:
     return lib
 
 
+LIST_TEST = "mutant_scan::tests::list_mutant_sites"
+
+
 def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: Path) -> int:
-    """Build, prove the cfg, reconcile, baseline, then each mutant (after plan)."""
-    logs = out / "logs"
-    artifacts = build_schemata(features, logs)
-    named = sorted({r.executable for m in mutants.values() for r in m.rows})
-    absent = [e for e in named if e not in artifacts]
-    if absent:
-        raise Abort(f"spec executables the build did not produce: {absent}")
-    lib = library_executable(artifacts)
-    listed = run_cmd([lib["path"], "--list", "--format", "terse"], TEST_LIMIT, logs / "list.log")
-    if f"{CFG_PROBE}: test" not in listed.output.splitlines():
-        raise Abort("the build has no --cfg mutants (the probe test is absent); check RUSTFLAGS")
+    """Build what the rows need, prove the cfg, reconcile, baseline, then each mutant (after plan)."""
+    logs, exe_dir = out / "logs", out / "exe"
+    rows = [(m, r) for m in mutants.values() for r in m.rows]
+    lib_names = list(dict.fromkeys([CFG_PROBE, LIST_TEST] + [r.test for _, r in rows if r.executable == LIB_TARGET]))
+    parts, where = build_lib_parts(lib_names, features, exe_dir, logs)
+    others = build_other_targets(sorted({r.executable for _, r in rows if r.executable != LIB_TARGET}),
+                                 features, exe_dir, logs)
+    # One map for the run, keyed by (target, part): a lib row runs its own part's copy, a non-lib row its target's.
+    executables = {f"{LIB_TARGET}-p{k}": {"path": e["path"], "sha256": e["sha256"]} for k, e in parts.items()}
+    executables.update(others)
+
+    def key(r: SpecRow) -> str:
+        return f"{LIB_TARGET}-p{where[r.test]}" if r.executable == LIB_TARGET else r.executable
+
     env = dict(os.environ, MCP_GATEWAY_MUTANT_LIST="1")
     env.pop(MUTANT_ENV, None)
-    listing = run_cmd([lib["path"], "--exact", "mutant_scan::tests::list_mutant_sites", "--nocapture"],
+    listing = run_cmd([checked(executables[f"{LIB_TARGET}-p{where[LIST_TEST]}"]), "--exact", LIST_TEST, "--nocapture"],
                       TEST_LIMIT, logs / "sites.log", env)
     reconcile(mutants, parse_sites(listing.output))
     print(f"{len(mutants)} mutants to run", flush=True)
     records: list[dict] = []
-    baseline: dict[str, str] = {}
-    rows = [(m, r) for m in mutants.values() for r in m.rows]
     for i, (m, r) in enumerate(rows):
-        outcome, secs, cmd = run_row(artifacts[r.executable]["path"], r.test, None, logs, f"baseline-{i}")
-        baseline[r.test] = classify_row(outcome, r.test, r.location)
-        records.append({"mutant": "baseline", "test": r.test, "command": cmd, "exit": outcome.exit,
-                        "seconds": secs, "result": baseline[r.test], "log": f"logs/baseline-{i}.log"})
-    check_baseline(baseline)
+        outcome, secs, cmd = run_row(executables[key(r)], r.test, None, logs, f"baseline-{i}")
+        result = classify_row(outcome, r.test, r.location)
+        records.append({"mutant": "baseline", "test": r.test, "executable": key(r), "command": cmd,
+                        "exit": outcome.exit, "seconds": secs, "result": result, "log": f"logs/baseline-{i}.log"})
+        check_baseline(key(r), r.test, result)
     verdicts: list[tuple[str, str]] = []
     for m in mutants.values():
         results = []
         for j, r in enumerate(m.rows):
-            outcome, secs, cmd = run_row(artifacts[r.executable]["path"], r.test, m.id, logs, f"{m.id}-{j}")
+            outcome, secs, cmd = run_row(executables[key(r)], r.test, m.id, logs, f"{m.id}-{j}")
             res = classify_row(outcome, r.test, r.location)
             results.append(res)
-            records.append({"mutant": m.id, "test": r.test, "command": cmd, "exit": outcome.exit,
-                            "seconds": secs, "result": res, "location": r.location,
-                            "executable_sha256": artifacts[r.executable]["sha256"], "log": f"logs/{m.id}-{j}.log"})
+            records.append({"mutant": m.id, "test": r.test, "executable": key(r), "command": cmd,
+                            "exit": outcome.exit, "seconds": secs, "result": res, "location": r.location,
+                            "executable_sha256": executables[key(r)]["sha256"], "log": f"logs/{m.id}-{j}.log"})
         verdicts.append((m.id, mutant_verdict(results)))
         print(f"{m.id}: {verdicts[-1][1]} ({'; '.join(results)})", flush=True)
     out.mkdir(parents=True, exist_ok=True)
     (out / "mutants-schemata.json").write_text(json.dumps({
         "head_sha": git("rev-parse", "HEAD^", check=False), "batch_sha": git("rev-parse", "HEAD", check=False),
         "run_id": os.environ.get("GITHUB_RUN_ID", ""), "queue_wait_seconds": os.environ.get("MUTANTS_QUEUE_WAIT", ""),
-        "executables": artifacts, "verdicts": dict(verdicts), "rows": records}, indent=2), encoding="utf-8")
+        "executables": executables, "verdicts": dict(verdicts), "rows": records}, indent=2), encoding="utf-8")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
@@ -921,7 +1034,7 @@ def schemata_self_test() -> tuple[int, list[str]]:
            [("A", "src/x.rs:3")])
     n += 1
     try:
-        check_baseline({t: classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)})
+        check_baseline("lib", t, classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc))
         failures.append("R10/R24 a failing baseline row was accepted")
     except BaselineRefused:
         pass
@@ -930,11 +1043,11 @@ def schemata_self_test() -> tuple[int, list[str]]:
                           ("R27 baseline row twice", Outcome(0, out(t, "ok") + out(t, "ok"), False))]:
         n += 1
         try:
-            check_baseline({t: classify_row(outcome, t, loc)})
+            check_baseline("lib", t, classify_row(outcome, t, loc))
             failures.append(f"{name}: accepted")
         except BaselineRefused:
             pass
-    expect("baseline passes", check_baseline({t: classify_row(Outcome(0, out(t, "ok"), False), t, loc)}), None)
+    expect("baseline passes", check_baseline("lib", t, classify_row(Outcome(0, out(t, "ok"), False), t, loc)), None)
     killed = classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)
     expect("R11 failed at the spec location", killed, "FAILED_AT_SPEC")
     expect("R11 KILLED", mutant_verdict([killed]), "KILLED")
@@ -998,18 +1111,15 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_CALLS"], "a") as f:
     f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
                         "exe": os.path.basename(sys.argv[0])}) + "\n")
-if args[:1] == ["--list"] and "parts" in table:
-    # A part's copy is named <target>-p<K>; it lists only the names the table puts in part K.
+if args[:1] == ["--list"]:
+    # A part's copy is named <target>-p<K>; it lists only the names the table puts in part K (by default
+    # part 3, where src/ puts the control tests and m::t1).
     base = os.path.basename(sys.argv[0])
     part = base.rsplit("-p", 1)[-1] if "-p" in base else ""
-    for name in table["parts"].get(part, []):
+    probe = [] if table.get("no_probe") else ["mutant::mutants_build::only_the_named_site_switches_on"]
+    default = {"3": probe + ["mutant_scan::tests::list_mutant_sites", "m::t1"]}
+    for name in table.get("parts", default).get(part, []):
         print(name + ": test")
-    sys.exit(0)
-if args[:1] == ["--list"]:
-    if not table.get("no_probe"):
-        print("mutant::mutants_build::only_the_named_site_switches_on: test")
-    print("mutant_scan::tests::list_mutant_sites: test")
-    print("m::t1: test")
     sys.exit(0)
 if "--exact" not in args:
     # libtest without --exact: the name is a substring filter, so the sibling
@@ -1235,6 +1345,14 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             steps = [line.strip() for line in wf.splitlines() if 'run_mutants.py" run --platform linux' in line]
             expect("R6 every linux run step calls only the fetched wrapper",
                    [s.startswith('run: bash "$RUNNER_TEMP/with-memory-log.sh"') for s in steps], [True, True])
+            # Any other line naming the copy (a cp of the checkout's wrapper over it, say) fails the row.
+            def stray_wrapper_lines(text: str) -> list[str]:
+                runs = [line.strip() for line in text.splitlines() if 'run_mutants.py" run --platform linux' in line]
+                return [line.strip() for line in text.splitlines() if '"$RUNNER_TEMP/with-memory-log.sh"' in line
+                        and line.strip() != fetched and line.strip() not in runs]
+            expect("R6 nothing else writes or runs the wrapper copy", stray_wrapper_lines(wf), [])
+            planted = wf.replace(fetched, fetched + '\n  cp scripts/ci/with-memory-log.sh "$RUNNER_TEMP/with-memory-log.sh"', 1)
+            expect("R6 a cp of the checkout's wrapper over the copy is caught", len(stray_wrapper_lines(planted)), 1)
         finally:
             TEST_LIMIT = saved_limit
             os.environ["PATH"] = saved_path
