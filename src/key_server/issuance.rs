@@ -42,7 +42,7 @@ pub(super) async fn record_issuance(
     ks: &KeyServer,
     event: &AuditEvent,
     expiry: RowExpiry,
-) -> Result<Option<IssuanceRow>, axum::response::Response> {
+) -> Result<Option<IssuanceRow>, Box<axum::response::Response>> {
     use crate::security::audit::{AuditEnvelope, AuditFailurePolicy};
     use crate::security::transparency_log::issuance::IssuanceWrite;
     let Some(log) = ks.issuance_log.as_ref() else {
@@ -82,7 +82,7 @@ pub(super) async fn record_issuance(
             axum::http::header::RETRY_AFTER,
             axum::http::HeaderValue::from_static("1"),
         );
-        return Err(refusal);
+        return Err(Box::new(refusal));
     }
     warn!(
         status,

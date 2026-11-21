@@ -4667,16 +4667,6 @@ A client whose requests `/mcp` accepts sees no change. Only `hardened` still
 refuses a plain legacy request on this route that is not an `initialize`
 declaring elicitation, as before.
 
-## 176. Token stores return the pending deadline with the reservation id
-
-Downstream `TokenStore` implementations must return `Reserved::new(id, deadline)`
-from `reserve`, where `deadline` is the pending deadline in Unix seconds, the
-instant after which activation is refused. Callers use `.id` where they previously
-used the returned reservation id.
-
-`TemporaryToken` is now `#[non_exhaustive]`: stop building it by struct literal.
-Downstream code can continue reading its public fields.
-
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`

@@ -202,7 +202,7 @@ async fn post_modern_as(
 struct Setup {
     auth: Option<AuthConfig>,
     /// A key server whose issuance rows go to the same log.
-    key_server: bool,
+    key_server: Exchange,
     /// T21: whether either route has a transparency log.
     log: Log,
     fail_closed: bool,
@@ -242,6 +242,15 @@ struct Setup {
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
     /// `security.sanitize_input` on both routes (MIK-8387 N1).
     sanitize: Sanitize,
+}
+
+/// Whether the gateway runs a key server that exchanges tokens (only with
+/// `auth` set).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Exchange {
+    #[default]
+    Off,
+    On,
 }
 
 /// Whether both routes sanitize input (`security.sanitize_input`).
@@ -339,7 +348,7 @@ fn sanitizing(state: &super::AppState, on: bool) {
 async fn fixture(setup: Setup) -> Fixture {
     let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
-        Some(auth) if setup.key_server => {
+        Some(auth) if setup.key_server == Exchange::On => {
             let ks = Arc::new(
                 crate::key_server::KeyServer::new(
                     crate::config::KeyServerConfig::default(),

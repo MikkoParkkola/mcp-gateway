@@ -11,7 +11,7 @@ use crate::gateway::router::tests::task_execution_adapter::input_round as round;
 async fn token_fixture() -> (Fixture, String, String) {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
-        key_server: true,
+        key_server: Exchange::On,
         ..Setup::default()
     })
     .await;
@@ -208,7 +208,7 @@ async fn a_task_step_records_its_token() {
 async fn a_resumed_task_step_records_the_resuming_token() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
-        key_server: true,
+        key_server: Exchange::On,
         reply: Some(round::ask("confirm", "reach-round")),
         ..Setup::default()
     })

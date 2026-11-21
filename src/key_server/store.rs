@@ -86,6 +86,7 @@ impl std::fmt::Debug for TemporaryToken {
             .field("iat", &self.iat)
             .field("exp", &self.exp)
             .field("client_ip", &self.client_ip)
+            .field("issuance_row", &self.issuance_row)
             .finish()
     }
 }

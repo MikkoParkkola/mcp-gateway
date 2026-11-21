@@ -370,7 +370,7 @@ pub(super) async fn issue(
     match super::issuance::record_issuance(ks, &ev, expiry).await {
         Ok(row) => token.issuance_row = row,
         // Dropping the reservation releases the slot: no bearer exists.
-        Err(refusal) => return refusal,
+        Err(refusal) => return *refusal,
     }
 
     let Ok(now) = crate::clock::unix_secs() else {
