@@ -11,7 +11,7 @@ use super::*;
 struct Logged {
     meta: Arc<MetaMcp>,
     path: std::path::PathBuf,
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
 }
 
 /// A stdio Meta-MCP serving `alpha` with signing on: `scope` from the
