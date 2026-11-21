@@ -216,6 +216,8 @@ mod live_sections_tests;
 mod owner_reload_tests;
 
 // The config-write startup gate: path-backed constructors run it now; the serve paths next.
+#[cfg(test)]
+pub(crate) mod serve_seams;
 pub(crate) mod startup_settle;
 
 mod apply;
