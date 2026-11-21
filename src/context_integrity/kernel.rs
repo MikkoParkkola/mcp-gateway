@@ -695,5 +695,10 @@ mod tests;
 
 #[cfg(tp4)]
 #[cfg(test)]
+#[path = "strip_lines_tests.rs"]
+mod strip_lines_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
 #[path = "kernel_memo_tests.rs"]
 mod memo_tests;
