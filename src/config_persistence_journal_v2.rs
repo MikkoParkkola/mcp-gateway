@@ -4,17 +4,14 @@
 
 #[cfg(test)]
 use std::io::Write as _;
-#[cfg(test)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::Journal;
-#[cfg(test)]
 use crate::config_persistence::commit::CommitToken;
 use crate::config_persistence::commit::{Action, FileRevision};
 use crate::config_persistence::lock::Locked;
-#[cfg(test)]
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Attribution, Reason, Role};
@@ -138,11 +135,8 @@ pub(crate) enum JournalError {
     Unreadable,
     InvalidState,
     UnsupportedVersion,
-    #[cfg(test)]
     ChangedDecision,
-    #[cfg(test)]
     Persist,
-    #[cfg(test)]
     Finish,
 }
 
@@ -202,7 +196,6 @@ pub(crate) fn create_intended(
 
 /// Which file a session's state lives in. The delivery core is shared; only `persist` and
 /// `finish` look at this.
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backing {
     /// The config's write journal.
@@ -211,7 +204,6 @@ pub(crate) enum Backing {
     Abandoned,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct JournalSession {
     target: PathBuf,
@@ -219,7 +211,6 @@ pub(crate) struct JournalSession {
     backing: Backing,
 }
 
-#[cfg(test)]
 impl JournalSession {
     /// The abandoned file's persist: the whole state rewritten atomically, then its directory
     /// synced, never above the file cap and never at the journal's path.
@@ -400,7 +391,6 @@ impl JournalV2 {
         codec::decode(bytes)
     }
 
-    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         self.validate()?;
         codec::encode(self)
@@ -408,7 +398,6 @@ impl JournalV2 {
 
     /// Whether `finish` would accept this journal: the one check, so a caller that must know
     /// beforehand cannot drift from it.
-    #[cfg(test)]
     pub(crate) fn finish_ready(&self) -> Result<(), JournalError> {
         self.validate()?;
         if self.pending.is_some()
@@ -528,7 +517,6 @@ impl JournalDecision {
     }
 }
 
-#[cfg(test)]
 impl TokenState {
     /// Done for its journal: never while parked; a handed-over token is the file's to settle.
     fn finished(&self, attempts: &[TokenState]) -> bool {
