@@ -8,6 +8,7 @@ use crate::yaml::{Mapping, Value};
 
 use super::super::eol::split_ending;
 
+use super::frame::{blank_or_comment, frame};
 use super::{Change, FieldPath, Segment};
 
 #[path = "config_persistence_keyedit_shape_value.rs"]
@@ -152,6 +153,13 @@ impl Lines {
 
     pub(super) fn len(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Whether original line `n` is still here, byte for byte.
+    pub(super) fn keeps(&self, n: usize) -> bool {
+        self.lines
+            .iter()
+            .any(|(_, origin)| *origin == Origin::Kept(n))
     }
 
     /// The line holding byte `at` of [`Self::text`].
@@ -359,12 +367,19 @@ use crate::yaml::{Node, Shape, Step};
 
 use super::{ComputeRefusal, GiveUp, give_up, unprovable};
 
-/// A file with no content: blank lines and comments only.
+/// A file with no content: blank lines and comments only, around the
+/// document's frame. One leading byte order mark is not content.
 pub(super) fn no_content(text: &str) -> bool {
-    text.lines().all(|l| {
-        let l = l.trim();
-        l.is_empty() || l.starts_with('#')
-    })
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(frame) = frame(text) else {
+        return false;
+    };
+    frame.shared_start.is_none()
+        && text
+            .lines()
+            .take(frame.body.end)
+            .skip(frame.body.start)
+            .all(blank_or_comment)
 }
 
 /// The stable code for a field the parser refused to edit in place.
@@ -481,6 +496,16 @@ fn new_lines(rest: &[Segment], mut col: usize, value: &str) -> Result<Vec<String
     Ok(out)
 }
 
+/// The line a new root key follows in a file with no content of `len`
+/// lines: the one above its `...` line (`None`, the start, when that is the
+/// first line), or the last line when there is no `...` line.
+fn empty_root_anchor(text: &str, len: usize) -> Option<usize> {
+    match frame(text) {
+        Some(frame) if frame.body.end < len => frame.body.end.checked_sub(1),
+        _ => len.checked_sub(1),
+    }
+}
+
 /// Set the field at `path` to the rendered `value`: in place when it exists,
 /// else inserted with its missing parents.
 pub(super) fn place(
@@ -514,8 +539,9 @@ pub(super) fn place(
         .unwrap_or((0, None));
     let rest = &path[depth..];
     let (col, after) = match anchor {
-        // An empty file: the root mapping starts at column 0.
-        None if nodes.is_empty() => (0, lines.len().checked_sub(1)),
+        // An empty file: the root mapping starts at column 0, just above the
+        // document's end line when there is one, else after the last line.
+        None if nodes.is_empty() => (0, empty_root_anchor(&text, lines.len())),
         None => return Err(unprovable("the file has no root mapping")),
         Some(node) => {
             if let Some(refusal) = attach_refusal(&nodes, node, &rest[0]) {
