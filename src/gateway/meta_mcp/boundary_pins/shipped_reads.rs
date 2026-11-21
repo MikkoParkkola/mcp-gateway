@@ -772,9 +772,8 @@ fn guard1_a_slash_led_concat_tail_names_a_crate_path() {
 fn guard1_a_slash_led_literal_off_the_list_or_off_the_tree_is_not_flagged() {
     let (root, patterns) = scratch();
     for tail in ["/docs/a.md", "/etc/hosts", "/no/such/file.txt"] {
-        let source = format!(
-            "fn f() {{ let _ = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"{tail}\"); }}"
-        );
+        let source =
+            format!("fn f() {{ let _ = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"{tail}\"); }}");
         assert!(
             offenders(root.path(), &patterns, FILE, &source).is_empty(),
             "{tail}"
