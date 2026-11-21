@@ -46,14 +46,17 @@ pub(super) fn save_with_logging<F, E>(
     save: F,
     error_message: &'static str,
     success_message: &'static str,
-) where
+) -> bool
+where
     F: FnOnce(&Path) -> Result<(), E>,
     E: Display,
 {
     if let Err(e) = save(path) {
         warn!(error = %e, "{error_message}");
+        false
     } else {
         info!("{success_message}");
+        true
     }
 }
 
@@ -105,11 +108,11 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 pub(super) const PROTOCOL_TELEMETRY_SAVE_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
 
-/// Save today's spend to `<data_dir>/costs.json`.
+/// Save today's spend to `<data_dir>/costs.json`. Returns whether it wrote.
 #[cfg(feature = "cost-governance")]
-pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
     let turn = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    write_costs(enforcer, data_dir, &turn);
+    write_costs(enforcer, data_dir, &turn)
 }
 
 /// One `costs.json` write at a time, each snapshotting the spend under the
@@ -125,10 +128,14 @@ static COST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SKIPPED_SAVES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(feature = "cost-governance")]
-fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::MutexGuard<'_, ()>) {
+fn write_costs(
+    enforcer: &BudgetEnforcer,
+    data_dir: &Path,
+    _turn: &std::sync::MutexGuard<'_, ()>,
+) -> bool {
     let Ok(snapshot) = enforcer.snapshot_for_save() else {
         tracing::warn!("Clock reads before 1970; cost save skipped, the last saved spend stands");
-        return;
+        return false;
     };
     let persisted = super::support::build_persisted_costs(&snapshot);
     save_with_logging(
@@ -136,17 +143,18 @@ fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::Mu
         |path| crate::cost_accounting::persistence::save(path, &persisted),
         "Failed to save cost governance data",
         "Saved cost governance data",
-    );
+    )
 }
 
 /// The periodic save: skipped while an earlier write still holds the file
-/// (stuck on a stalled mount), so stuck writes never pile up.
+/// (stuck on a stalled mount), so stuck writes never pile up. Returns whether
+/// it wrote.
 #[cfg(feature = "cost-governance")]
-fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
+pub(super) fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
     match COST_WRITE.try_lock() {
         Ok(turn) => write_costs(enforcer, data_dir, &turn),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            write_costs(enforcer, data_dir, &poisoned.into_inner());
+            write_costs(enforcer, data_dir, &poisoned.into_inner())
         }
         Err(std::sync::TryLockError::WouldBlock) => {
             warn!("periodic cost save skipped: the previous costs.json write has not finished");
@@ -155,6 +163,7 @@ fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(data_dir.to_path_buf());
+            false
         }
     }
 }
@@ -397,7 +406,9 @@ pub(super) async fn save_state_on_shutdown(
         saves.push(ShutdownSave::new(
             COST_SAVE_STEP,
             Some(data_dir.clone()),
-            Box::new(move || save_costs(&enforcer, &data_dir)),
+            Box::new(move || {
+                save_costs(&enforcer, &data_dir);
+            }),
         ));
     }
     #[cfg(not(feature = "cost-governance"))]
