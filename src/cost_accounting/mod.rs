@@ -361,6 +361,15 @@ pub struct CostTracker {
     /// series only, this or its key's; the gateway-wide series is computed
     /// from them when read.
     keyless: parking_lot::Mutex<Series>,
+    /// Restored spend no key of this run holds: rows folded past the key cap
+    /// in an earlier run, and keys since removed or renamed. Set by the
+    /// restore and never by a save, so a fold is never counted twice.
+    #[cfg(feature = "cost-governance")]
+    carried: parking_lot::Mutex<Series>,
+    /// Set when a refused history file could not be set aside: this run then
+    /// never saves over it.
+    #[cfg(feature = "cost-governance")]
+    history_off: std::sync::atomic::AtomicBool,
     /// When the next idle-key sweep may run (MIK-8000).
     next_key_sweep: AtomicU64,
 }
@@ -375,6 +384,10 @@ impl CostTracker {
             sessionless: <[AtomicU64; 3]>::default(),
             per_caller: caller::CallerCosts::default(),
             keyless: parking_lot::Mutex::default(),
+            #[cfg(feature = "cost-governance")]
+            carried: parking_lot::Mutex::default(),
+            #[cfg(feature = "cost-governance")]
+            history_off: std::sync::atomic::AtomicBool::new(false),
             next_key_sweep: AtomicU64::new(0),
         }
     }
@@ -600,12 +613,15 @@ impl CostTracker {
         self.keyless.lock().clone()
     }
 
-    /// The gateway's series: every key's and the keyless one, summed.
+    /// The gateway's series: the sum of the keyless one, every key's and,
+    /// with cost governance built, the carried overflow.
     pub(crate) fn gateway_series(&self) -> Series {
         let mut total = self.keyless_series();
         for key in &self.per_key {
             total.merge(&key.spend.lock().0);
         }
+        #[cfg(feature = "cost-governance")]
+        total.merge(&self.carried.lock());
         total
     }
 
@@ -630,6 +646,8 @@ pub mod enforcer;
 pub mod persistence;
 #[cfg(feature = "cost-governance")]
 pub mod registry;
+#[cfg(feature = "cost-governance")]
+pub(crate) mod spend_history;
 #[cfg(feature = "cost-governance")]
 pub mod suggestions;
 

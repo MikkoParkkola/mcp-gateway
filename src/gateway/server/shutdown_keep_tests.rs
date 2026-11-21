@@ -240,7 +240,11 @@ async fn the_final_cost_save_carries_its_data_dir_as_root() {
         dir.path().join("ranker.json"),
         Arc::new(crate::transition::TransitionTracker::new()),
         dir.path().join("transitions.json"),
-        Some((enforcer, dir.path().to_path_buf())),
+        Some((
+            enforcer,
+            Arc::new(crate::cost_accounting::CostTracker::new()),
+            dir.path().to_path_buf(),
+        )),
         vec![],
         tokio::time::Instant::now() + Duration::from_secs(10),
     )

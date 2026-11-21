@@ -219,6 +219,7 @@ impl Gateway {
         let cost_saver = meta_mcp.budget_enforcer.as_ref().map(|enforcer| {
             AbortOnDrop::new(persistence::spawn_cost_saver(
                 Arc::clone(enforcer),
+                meta_mcp.cost_tracker(),
                 data_dir.clone(),
                 persistence::COST_SAVE_INTERVAL,
                 None,
@@ -757,8 +758,15 @@ impl Gateway {
                 #[cfg(feature = "cost-governance")]
                 if let Some(enforcer) = &meta_mcp.budget_enforcer {
                     let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir)
-                        .await;
+                    let costs = meta_mcp.cost_tracker();
+                    stdio_shutdown::final_cost_save(
+                        shutdown_deadline,
+                        cost_saver,
+                        enforcer,
+                        costs,
+                        dir,
+                    )
+                    .await;
                 }
             }
             // Every sender gone, then the writer joined: the task drains its queue

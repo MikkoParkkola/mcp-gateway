@@ -13,19 +13,19 @@ use crate::local_day::test_zone;
 
 /// Unix seconds of local `day` at `hh:mm` in `tz`; the instant must exist
 /// and be unambiguous.
-fn local(tz: Tz, day: NaiveDate, (hh, mm): (u32, u32)) -> u64 {
+pub(super) fn local(tz: Tz, day: NaiveDate, (hh, mm): (u32, u32)) -> u64 {
     let wall = day.and_hms_opt(hh, mm, 0).expect("a wall time");
     let at = tz.from_local_datetime(&wall).single();
     let at = at.unwrap_or_else(|| panic!("{tz}: {wall} is not one instant"));
     u64::try_from(at.timestamp()).expect("after the epoch")
 }
 
-fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+pub(super) fn date(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).expect("a date")
 }
 
 /// One call costing `n` tokens and `n` micro-USD at `at`, as `key`.
-fn spend(tracker: &CostTracker, key: Option<&str>, at: u64, n: u64) {
+pub(super) fn spend(tracker: &CostTracker, key: Option<&str>, at: u64, n: u64) {
     let _clock = at_secs(at);
     tracker.record("", key, "srv", "t", n, 1.0);
 }

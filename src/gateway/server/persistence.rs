@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::{
-    config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
+    CostTracker, config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
 };
 use std::sync::Arc;
 
@@ -110,9 +110,13 @@ pub(super) const PROTOCOL_TELEMETRY_SAVE_INTERVAL: std::time::Duration =
 
 /// Save today's spend to `<data_dir>/costs.json`. Returns whether it wrote.
 #[cfg(feature = "cost-governance")]
-pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
+pub(super) fn save_costs(
+    enforcer: &BudgetEnforcer,
+    tracker: &CostTracker,
+    data_dir: &Path,
+) -> bool {
     let turn = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    write_costs(enforcer, data_dir, &turn)
+    write_costs(enforcer, tracker, data_dir, &turn)
 }
 
 /// One `costs.json` write at a time, each snapshotting the spend under the
@@ -130,6 +134,7 @@ static SKIPPED_SAVES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec
 #[cfg(feature = "cost-governance")]
 fn write_costs(
     enforcer: &BudgetEnforcer,
+    tracker: &CostTracker,
     data_dir: &Path,
     _turn: &std::sync::MutexGuard<'_, ()>,
 ) -> bool {
@@ -138,23 +143,33 @@ fn write_costs(
         return false;
     };
     let persisted = super::support::build_persisted_costs(&snapshot);
-    save_with_logging(
+    let wrote = save_with_logging(
         &data_dir.join("costs.json"),
         |path| crate::cost_accounting::persistence::save(path, &persisted),
         "Failed to save cost governance data",
         "Saved cost governance data",
-    )
+    );
+    // The history follows in this same turn. A history that fails to write
+    // is logged by its saver and leaves this result alone.
+    if let Ok(now) = crate::clock::unix_secs() {
+        crate::cost_accounting::spend_history::save(tracker, data_dir, now);
+    }
+    wrote
 }
 
 /// The periodic save: skipped while an earlier write still holds the file
 /// (stuck on a stalled mount), so stuck writes never pile up. Returns whether
 /// it wrote.
 #[cfg(feature = "cost-governance")]
-pub(super) fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
+pub(super) fn save_costs_unless_busy(
+    enforcer: &BudgetEnforcer,
+    tracker: &CostTracker,
+    data_dir: &Path,
+) -> bool {
     match COST_WRITE.try_lock() {
-        Ok(turn) => write_costs(enforcer, data_dir, &turn),
+        Ok(turn) => write_costs(enforcer, tracker, data_dir, &turn),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            write_costs(enforcer, data_dir, &poisoned.into_inner())
+            write_costs(enforcer, tracker, data_dir, &poisoned.into_inner())
         }
         Err(std::sync::TryLockError::WouldBlock) => {
             warn!("periodic cost save skipped: the previous costs.json write has not finished");
@@ -173,12 +188,13 @@ pub(super) fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path)
 #[cfg(feature = "cost-governance")]
 pub(super) fn spawn_cost_saver(
     enforcer: Arc<BudgetEnforcer>,
+    tracker: Arc<CostTracker>,
     data_dir: PathBuf,
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
 ) -> tokio::task::JoinHandle<()> {
     spawn_periodic_save("cost save", every, shutdown, move || {
-        save_costs_unless_busy(&enforcer, &data_dir);
+        save_costs_unless_busy(&enforcer, &tracker, &data_dir);
     })
 }
 
@@ -354,10 +370,11 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
     }
 }
 
-/// What the final cost save needs: the enforcer and the data directory.
+/// What the final cost save needs: the enforcer, the tracker (its history
+/// file) and the data directory.
 /// Uninhabited without cost governance.
 #[cfg(feature = "cost-governance")]
-pub(super) type CostShutdown = (Arc<BudgetEnforcer>, PathBuf);
+pub(super) type CostShutdown = (Arc<BudgetEnforcer>, Arc<CostTracker>, PathBuf);
 #[cfg(not(feature = "cost-governance"))]
 pub(super) type CostShutdown = std::convert::Infallible;
 
@@ -402,12 +419,12 @@ pub(super) async fn save_state_on_shutdown(
         ),
     ];
     #[cfg(feature = "cost-governance")]
-    if let Some((enforcer, data_dir)) = cost {
+    if let Some((enforcer, costs, data_dir)) = cost {
         saves.push(ShutdownSave::new(
             COST_SAVE_STEP,
             Some(data_dir.clone()),
             Box::new(move || {
-                save_costs(&enforcer, &data_dir);
+                save_costs(&enforcer, &costs, &data_dir);
             }),
         ));
     }
@@ -459,6 +476,11 @@ mod tests;
 #[cfg(test)]
 #[path = "shutdown_keep_tests.rs"]
 mod shutdown_keep_tests;
+
+#[cfg(tp4)]
+#[cfg(all(test, feature = "cost-governance"))]
+#[path = "spend_history_save_tests.rs"]
+mod spend_history_save_tests;
 
 // Stays inline: its timing windows are checked as new code at any new path.
 #[cfg(tp4)]

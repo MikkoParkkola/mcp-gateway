@@ -176,8 +176,9 @@ impl<S: Slot> Buckets<S> {
         let at_or_before = self.0.iter().rposition(|(s, ..)| *s <= slot);
         match at_or_before {
             Some(i) if self.0[i].0 == slot => {
-                self.0[i].1 += tokens;
-                self.0[i].2 += micro;
+                // Saturating: a restored file's numbers are not trusted.
+                self.0[i].1 = self.0[i].1.saturating_add(tokens);
+                self.0[i].2 = self.0[i].2.saturating_add(micro);
             }
             Some(i) => self.0.insert(i + 1, (slot, tokens, micro)),
             None => self.0.push_front((slot, tokens, micro)),
@@ -199,9 +200,23 @@ impl<S: Slot> Buckets<S> {
     }
 
     /// Every `(slot, tokens, micro-USD)` held, oldest first.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "cost-governance"))]
     pub(crate) fn rows(&self) -> Vec<(S, u64, u64)> {
         self.0.iter().copied().collect()
+    }
+
+    /// Drop the slots a window ending at `newest` no longer holds.
+    #[cfg(feature = "cost-governance")]
+    pub(crate) fn age(&mut self, newest: S) {
+        self.0.retain(|(s, ..)| !s.expired(newest));
+    }
+
+    /// The micro-USD summed over every slot held.
+    #[cfg(feature = "cost-governance")]
+    pub(crate) fn micro_total(&self) -> u64 {
+        self.0
+            .iter()
+            .fold(0, |sum, (.., micro)| sum.saturating_add(*micro))
     }
 }
 
@@ -238,8 +253,16 @@ impl Series {
             .add_slot(local_date(at), local_date(now), tokens, micro);
     }
 
+    /// Drop every hour past `hour`'s window and every date past `date`'s.
+    #[cfg(feature = "cost-governance")]
+    pub(crate) fn age(&mut self, hour: u64, date: NaiveDate) {
+        self.hours.age(hour);
+        self.days.age(date);
+    }
+
     /// Add each of `other`'s rows into this series' row for the same hour or
     /// date, so a sum of series is bounded like one series.
+    #[cfg(any(test, feature = "cost-governance"))]
     pub(crate) fn merge(&mut self, other: &Self) {
         for &(hour, tokens, micro) in &other.hours.0 {
             self.hours.add_slot(hour, hour, tokens, micro);
