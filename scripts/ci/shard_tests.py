@@ -161,7 +161,8 @@ RUNNING = re.compile(r"^running (\d+) tests?$")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
 # test_dir_keep.rs report_unkept: "<kind> at <path> is in a temp dir no test kept; created by <test>",
 # on raw stderr, so it can start mid-line. The kind is read, never listed: a new writer's kind fails too.
-UNKEPT = re.compile(r"([a-z][a-z -]*) at (\S+) is in a temp dir no test kept; created by (\S+)")
+# The path runs to the report's fixed suffix, so a path with spaces is read whole.
+UNKEPT = re.compile(r"([a-z][a-z -]*) at (.+?) is in a temp dir no test kept; created by (\S+)")
 
 
 def unkept(lines: list[str]) -> list[str]:
@@ -420,6 +421,8 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
                 failed.append(f"{step}: cargo exited {rc}")
             if n < floor:
                 failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+            # One failure per distinct report, even when two steps print the same one.
+            failed += [u for u in unkept(lines) if u not in failed]
         if EXAMPLES.get(os_kind) == shard:
             rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
             if rc != 0:
@@ -1317,6 +1320,7 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
     failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
+    failed += unkept(lines)
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return n, failed
@@ -1416,6 +1420,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
             want = {n for n in listed_names if not any(p in n for p in patterns)}
             os.chmod(binary, 0o755)
             reported: dict[str, str] = {}
+            part_lines: list[str] = []
             with private_home(env, None) as home_env:
                 p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=home_env, cwd=ROOT)
@@ -1423,7 +1428,8 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
                 for raw in p.stdout:
                     sys.stdout.buffer.write(raw)
                     sys.stdout.buffer.flush()
-                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    part_lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    m = RESULT_LINE.match(part_lines[-1])
                     if m:
                         reported[m.group(1)] = m.group(2)
                 prc = p.wait()
@@ -1436,6 +1442,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
         print(f"::notice::{os_kind} {leg} part {k}: ran {len(reported)}, its list less the skips {len(want)}")
         if prc != 0:
             failed.append(f"part {k}: test binary exited {prc}")
+        failed += [f"part {k}: {u}" for u in unkept(part_lines)]
         if set(reported) != want:
             failed.append(f"part {k}: ran {len(reported)} tests, its list less the skips is {len(want)} "
                           f"(missing e.g. {sorted(want - set(reported))[:3]}, extra e.g. {sorted(set(reported) - want)[:3]})")
