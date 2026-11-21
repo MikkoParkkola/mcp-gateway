@@ -1002,6 +1002,8 @@ def _loader_self_test() -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         files = {
+            # A rust-cache step that saves on every ref, in a workflow GitHub runs from its .yaml name.
+            ".github/workflows/rust.yaml": "on: pull_request\njobs:\n  j:\n    steps:\n      - uses: Swatinem/rust-cache@x\n",
             ".github/workflows/w.yaml": "on: push\njobs:\n  j:\n    steps:\n      - uses: astral-sh/setup-uv@x\n",
             ".github/actions/a/action.yml": "runs:\n  using: composite\n  steps:\n"
                                            "    - run: docker build --cache-to type=gha .\n      shell: bash\n",
@@ -1016,7 +1018,7 @@ def _loader_self_test() -> list[str]:
         got = errors(root)
     want = {"w.yaml": "setup-uv writer in a .yaml workflow", "R9: --cache-to at .github/actions/a": "composite --cache-to",
             "scripts/ci/b.sh:1": "bake in a script", "scripts/ci/c.sh:2": "bake split over continued lines in a script",
-            "ui/package.json": "nested package.json"}
+            "ui/package.json": "nested package.json", "rust.yaml": "saving rust-cache step in a .yaml workflow"}
     for needle, what in want.items():
         if not any(needle in item for item in got):
             found.append(f"self-test: 19 loader: {what} not found in {got}")
