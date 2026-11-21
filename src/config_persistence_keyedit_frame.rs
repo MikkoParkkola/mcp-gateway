@@ -15,11 +15,9 @@ pub(super) fn blank_or_comment(line: &str) -> bool {
 /// `---` line) and the tail after it (one `...` line, then comments and blank
 /// lines) are its frame.
 pub(super) struct Frame {
-    /// The document's lines.
+    /// The document's lines. A `---` line that also holds document content
+    /// is the head's last line and the body's first.
     pub(super) body: std::ops::Range<usize>,
-    /// The `---` line, when it also holds document content: then it is the
-    /// head's last line and the body's first.
-    pub(super) shared_start: Option<usize>,
 }
 
 /// The rest of `line` after the marker `mark` (`---` or `...`), trimmed,
@@ -68,8 +66,5 @@ pub(super) fn frame(text: &str) -> Option<Frame> {
     let stray = inside
         .iter()
         .any(|l| l.starts_with("---") || l.starts_with("...") || l.starts_with('%'));
-    (!directive && !stray && start <= end).then_some(Frame {
-        body: start..end,
-        shared_start,
-    })
+    (!directive && !stray && start <= end).then_some(Frame { body: start..end })
 }

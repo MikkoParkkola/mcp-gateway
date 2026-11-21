@@ -323,15 +323,6 @@ fn edit_unmarked(
     } else {
         Vec::new()
     };
-    // A `---` line that also holds document content is the frame's and the
-    // body's: it stays byte for byte or the edit is refused.
-    if let Some(n) = frame::frame(original).and_then(|found| found.shared_start)
-        && !lines.keeps(n)
-    {
-        return Err(unprovable(
-            "the document start line also holds content: edit that line by hand",
-        ));
-    }
     if !lines.bytes_hold(original) {
         return Err(unprovable("an untouched line changed"));
     }

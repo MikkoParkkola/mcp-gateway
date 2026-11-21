@@ -155,13 +155,6 @@ impl Lines {
         self.lines.len()
     }
 
-    /// Whether original line `n` is still here, byte for byte.
-    pub(super) fn keeps(&self, n: usize) -> bool {
-        self.lines
-            .iter()
-            .any(|(_, origin)| *origin == Origin::Kept(n))
-    }
-
     /// The line holding byte `at` of [`Self::text`].
     pub(super) fn line_of(&self, at: usize) -> usize {
         let mut start = 0;
@@ -374,12 +367,10 @@ pub(super) fn no_content(text: &str) -> bool {
     let Some(frame) = frame(text) else {
         return false;
     };
-    frame.shared_start.is_none()
-        && text
-            .lines()
-            .take(frame.body.end)
-            .skip(frame.body.start)
-            .all(blank_or_comment)
+    text.lines()
+        .take(frame.body.end)
+        .skip(frame.body.start)
+        .all(blank_or_comment)
 }
 
 /// The stable code for a field the parser refused to edit in place.
