@@ -386,7 +386,6 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
 // The session drops here, on the worker, including when the caller was cancelled.
 async fn drain_locked(mut session: DrainSession, serving: ServingLog) -> Result<(), Refusal> {
     let log = serving.logger();
-    let journal = journal_path(session.target());
     let abandoned = abandoned_path(session.target());
     if session
         .journal()
@@ -397,6 +396,8 @@ async fn drain_locked(mut session: DrainSession, serving: ServingLog) -> Result<
             Err(failure) => {
                 let error = failure.error();
                 let cause = format!("{error:?}");
+                // Named from the failed session itself; dropping it lets the lock go.
+                let journal = journal_path(failure.target());
                 drop(failure);
                 // `journal_stage` refuses every variant. Ok would skip the file, so it refuses too.
                 let class = match journal_stage(error) {

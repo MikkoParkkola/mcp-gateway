@@ -15,7 +15,7 @@ use super::super::{Fact, JournalV2};
 use super::fault::{self, At, Fault};
 use super::fixtures::{Live, WRITER, records_at, replace_bytes, staged, state};
 use super::startup_tests::expect_staged_owed;
-use crate::commands::serve_fixture::{serve_build, serve_load};
+use crate::commands::serve_fixture::serve_load;
 use crate::config_persistence::commit::FileRevision;
 use crate::config_persistence::journal;
 use crate::security::transparency_log::settle::Role;

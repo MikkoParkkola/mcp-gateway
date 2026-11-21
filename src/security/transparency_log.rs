@@ -391,10 +391,6 @@ impl TransparencyLogger {
     /// The log's identity: reused from the log's own records on open, minted
     /// (and recorded once) only when it has none.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the settle step, which binds to it")
-    )]
     pub(crate) fn log_id(&self) -> identity::LogId {
         // A poisoned lock still holds the last id a rebuild adopted.
         let inner = self

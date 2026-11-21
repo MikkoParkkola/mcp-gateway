@@ -54,8 +54,12 @@ impl DrainSession {
 
 pub(crate) struct JournalDrain;
 
+// The report's contents are read only by the repair rows: the one product caller (startup)
+// needs the repair's effect on disk, not this summary. A runtime repair's caller would read it.
 pub(crate) struct RepairReport {
+    #[cfg(test)]
     recovered: Recovered,
+    #[cfg(test)]
     reload_owed: bool,
 }
 
@@ -68,6 +72,11 @@ impl DrainFailure {
     /// Why the drain stopped.
     pub(crate) fn error(&self) -> DrainError {
         self.error
+    }
+
+    /// The config whose journal the failed drain held, still locked until this is dropped.
+    pub(crate) fn target(&self) -> &std::path::Path {
+        self.session.target()
     }
 }
 
@@ -352,8 +361,12 @@ impl JournalDrain {
 }
 
 fn report(recovered: Recovered, at_start: bool) -> RepairReport {
+    #[cfg(not(test))]
+    let _ = (recovered, at_start);
     RepairReport {
+        #[cfg(test)]
         recovered,
+        #[cfg(test)]
         reload_owed: !at_start && recovered == Recovered::RolledBack,
     }
 }
