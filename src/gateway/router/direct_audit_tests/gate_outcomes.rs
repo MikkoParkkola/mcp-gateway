@@ -312,3 +312,31 @@ async fn g1_meta_a_backend_error_still_records_error() {
 async fn g1_direct_a_backend_error_still_records_error() {
     a_backend_error_on(Route::Direct).await;
 }
+
+/// G3: the backend's transport fails and the meta route converts that into
+/// a tool result flagged as an error (its converted-failure arm, first and
+/// final). No gate refused, so the record keeps `error` with the failure's
+/// own code, and R5's reordering counts it as before: an error, never a
+/// block, and no D4 denial (gpt r4b 2, kimi r4b IMP 1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g3_meta_a_converted_backend_failure_still_counts_an_error() {
+    let fx = fixture(Setup {
+        backend_fail: Some(|| crate::Error::Transport("connection reset".into())),
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    let (body, d4) = send_counted(&fx, Route::Meta);
+    assert_eq!(
+        body["result"]["isError"], true,
+        "premise: converted: {body}"
+    );
+    let record = only_invocation(&fx);
+    assert_eq!(record["outcome"], "error", "{record}");
+    assert_eq!(record["error_code"], -32000, "{record}");
+    assert_eq!(
+        record["decision"]["kind"], "default_allow",
+        "no check refused: {record}"
+    );
+    assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL));
+}
