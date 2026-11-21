@@ -129,8 +129,8 @@ async fn create_held_task(state: &Arc<AppState>) -> String {
     frames
         .iter()
         .find_map(|frame| frame.pointer("/result/taskId").and_then(Value::as_str))
-        .map(str::to_owned)
         .unwrap_or_else(|| panic!("the creating answer has no taskId: {text}"))
+        .to_owned()
 }
 
 /// The status in the task's record file, `<store>/tasks/<id>.json`, whose
