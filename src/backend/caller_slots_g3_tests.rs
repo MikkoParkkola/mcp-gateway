@@ -306,3 +306,49 @@ async fn g3_a_superseded_release_keeps_a_newer_claims_lease() {
         "an older claim's release dropped the newer claim's lease"
     );
 }
+
+/// R7: a refusal settles only onto its own claim. An older attempt whose
+/// lender refused settles after a newer claim (won once the older lease
+/// ran out) is still running: the newer slot shows no refusal and keeps
+/// running, so a stored read there answers the lease's retry. The newer
+/// claim's own refused settle is then recorded (control).
+#[tokio::test(start_paused = true)]
+async fn g3_an_older_attempts_refusal_never_lands_on_a_newer_claim() {
+    let backend = per_user_backend("g3-refusal");
+    let super::ColdClaim::Won(older) = backend.claim_cold_view(ALPHA, Duration::ZERO, true) else {
+        panic!("premise: the first claim wins");
+    };
+    let super::ColdClaim::Won(newer) =
+        backend.claim_cold_view(ALPHA, Duration::from_secs(60), true)
+    else {
+        panic!("premise: the older lease ran out, so a newer claim wins");
+    };
+    assert_ne!(older, newer, "premise: two generations");
+    let refused = super::LendRefusal {
+        code: -32001,
+        status: 403,
+        message: "the lender refused this fill".to_owned(),
+    };
+
+    backend.settle_cold_attempt(ALPHA, older, Some(refused.clone()));
+
+    assert_eq!(
+        backend.cold_refusal(ALPHA),
+        None,
+        "the older attempt's refusal landed on the newer claim"
+    );
+    assert!(
+        backend.cold_fill_remaining(ALPHA).is_some(),
+        "the older attempt's settle ended the newer claim's running fill"
+    );
+    backend.settle_cold_attempt(ALPHA, newer, Some(refused.clone()));
+    assert_eq!(
+        backend.cold_refusal(ALPHA),
+        Some(refused),
+        "control: the newer claim's own refused settle is recorded"
+    );
+    assert!(
+        backend.cold_fill_remaining(ALPHA).is_none(),
+        "control: the newer claim's refused settle ended its running fill"
+    );
+}
