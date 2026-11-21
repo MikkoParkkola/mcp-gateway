@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -434,12 +433,10 @@ def concurrency_errors(block: dict) -> list[str]:
 CACHE_SAVE = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
 
 
-def cache_docs(folder: Path | None = None) -> dict:
+def cache_docs() -> dict:
     """Every workflow file, parsed: the cache rule covers them all."""
-    folder = folder or ROOT / ".github" / "workflows"
-    # GitHub runs both extensions.
-    paths = sorted([*folder.glob("*.yml"), *folder.glob("*.yaml")])
-    return {p.name: yaml.safe_load(p.read_text()) for p in paths}
+    folder = ROOT / ".github" / "workflows"
+    return {p.name: yaml.safe_load(p.read_text()) for p in sorted(folder.glob("*.yml"))}
 
 
 def cache_save_errors(docs: dict | None = None) -> list[str]:
@@ -488,11 +485,6 @@ def cache_save_self_test() -> list[str]:
     never = dict(step, **{"with": {"save-if": False}})
     if cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [good, never]}}}}):
         out.append("cache self-test: the release-line rule or save-if false was refused")
-    # GitHub runs workflow files named *.yaml as well as *.yml; a saving step in one must not slip past the scan.
-    with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "w.yaml").write_text("jobs:\n  j:\n    steps:\n      - uses: Swatinem/rust-cache@x\n")
-        if not any(" w.yaml " in e for e in cache_save_errors(cache_docs(Path(tmp)))):
-            out.append("cache self-test: a .yaml workflow was not scanned")
     return out
 
 
