@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Arguments of `mcp-gateway events dead-letters` (MIK-7630 I6).
 
-use super::dashboard_link::DashboardLinkTls;
+use super::dashboard_link::{DashboardLinkTls, GatewayArg};
 
 /// Arguments of `mcp-gateway events`.
 #[derive(clap::Args, Debug, Clone)]
@@ -46,9 +46,9 @@ pub struct DeadLettersArgs {
     /// Only dead letters with this reason (`list`).
     #[arg(hide = true, long)]
     pub reason: Option<String>,
-    /// Gateway base URL (default as for `dashboard-link`).
-    #[arg(short, long)]
-    pub url: Option<String>,
+    /// Where to send the request.
+    #[command(flatten)]
+    pub gateway: GatewayArg,
     /// TLS material to present and trust.
     #[command(flatten)]
     pub tls: DashboardLinkTls,

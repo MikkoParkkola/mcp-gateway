@@ -35,13 +35,13 @@ fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
     assert_eq!(
         explicit.map(|(base, _)| base).as_deref(),
         Ok("http://h:1"),
-        "--url wins without a load"
+        "--gateway wins without a load"
     );
 
     let failed = dashboard_link_base(None, no_flags(), || Err("bad yaml".into()), None, None)
         .expect_err("a config that fails to load is not replaced by defaults");
     assert!(
-        failed.contains("bad yaml") && failed.contains("--url"),
+        failed.contains("bad yaml") && failed.contains("--gateway"),
         "{failed}"
     );
 
@@ -241,12 +241,14 @@ async fn answering(status: u16, body: String) -> String {
 /// What `dashboard-link` and `events dead-letters` (a list) print against `base`, through their entry points.
 async fn both(base: &str, token: &str) -> [(&'static str, CliOutcome); 2] {
     let link = mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-        url: Some(base.to_string()),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg {
+            url: Some(base.to_string()),
+        },
         tls: no_flags(),
         json: false,
     };
     let mut list = dead_letters(mcp_gateway::cli::events::DeadLetterAction::List);
-    list.url = Some(base.to_string());
+    list.gateway.url = Some(base.to_string());
     let unused = || Err("not loaded".to_string());
     [
         (
@@ -402,7 +404,7 @@ fn dead_letters(
         all: false,
         subscription: None,
         reason: None,
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
     }
 }
@@ -414,7 +416,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     let token = "tok-IN-CONFIG-9679";
     let load = || Err(format!("bad bearer_token value {token}"));
     let args = || mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
         json: false,
     };
@@ -450,7 +452,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
 async fn usage_and_marker_edge_tokens_are_never_printed() {
     let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
     let mut replay = dead_letters(mcp_gateway::cli::events::DeadLetterAction::Replay);
-    replay.url = Some(base.clone());
+    replay.gateway.url = Some(base.clone());
     let unused = || Err("not loaded".to_string());
     let usage = super::events_outcome(&replay, unused, None, None, Ok("replay".to_string())).await;
     printed_nowhere("events", "replay", &usage);
@@ -572,7 +574,7 @@ async fn the_print_step_carries_the_json_form() {
         let base = base.clone();
         async move {
             let args = mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-                url: Some(base),
+                gateway: mcp_gateway::cli::dashboard_link::GatewayArg { url: Some(base) },
                 tls: no_flags(),
                 json,
             };
