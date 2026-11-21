@@ -16,10 +16,28 @@ struct Logged {
     _dir: Arc<tempfile::TempDir>,
 }
 
+/// The transparency log a stdio row's gateway runs with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StdioLog {
+    FailClosed,
+    BestEffort,
+    /// None configured; the row's log file is never written.
+    Off,
+}
+
+/// [`signing_stdio_with`] with a log that fails closed.
+async fn signing_stdio(posture: crate::security::SecurityPosture, required: bool) -> Logged {
+    signing_stdio_with(posture, required, StdioLog::FailClosed).await
+}
+
 /// A stdio Meta-MCP serving `alpha` with signing on: `scope` from the
 /// posture, `required` deciding whether a call with no nonce is refused,
-/// and a transparency log.
-async fn signing_stdio(posture: crate::security::SecurityPosture, required: bool) -> Logged {
+/// and the transparency log `mode` names.
+async fn signing_stdio_with(
+    posture: crate::security::SecurityPosture,
+    required: bool,
+    mode: StdioLog,
+) -> Logged {
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log_path = path.to_string_lossy().into_owned();
@@ -37,12 +55,18 @@ async fn signing_stdio(posture: crate::security::SecurityPosture, required: bool
             },
         ))
         .expect("the log opens")
-        .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed),
+        .with_failure_policy(if mode == StdioLog::BestEffort {
+            crate::security::audit::AuditFailurePolicy::BestEffort
+        } else {
+            crate::security::audit::AuditFailurePolicy::FailClosed
+        }),
     );
     let kept = Arc::clone(&log);
     let meta = stdio_meta(
         move |meta| {
-            meta.enable_transparency_log(kept);
+            if mode != StdioLog::Off {
+                meta.enable_transparency_log(kept);
+            }
             meta.enable_message_signing(
                 crate::security::message_signing::MessageSigner::new(
                     b"stdio-signing-records-key-32byte".to_vec(),
@@ -112,20 +136,28 @@ fn sole_record(logged: &Logged, answer: &Value) -> Value {
 }
 
 /// T2: the same nonce twice on stdio; the replay's record names
-/// `replay_guard`, beside the first call's own record.
-#[tokio::test]
+/// `replay_guard`, beside the first call's own record, and is counted once
+/// on the counters and in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn t2_stdio_a_replayed_nonce_records_replay_guard() {
     let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
-    let first = stdio_send(&logged.meta, invoke_params(with_nonce("t2-nonce"), None)).await;
-    assert!(first.get("result").is_some(), "premise: delivered: {first}");
-    let second = stdio_send(&logged.meta, invoke_params(with_nonce("t2-nonce"), None)).await;
+    let (second, counted, d4) = replay_counted(&logged, "t2-nonce", false).await;
     assert_eq!(second["error"]["code"], -32001, "{second}");
     assert_eq!(
         second["error"]["message"], "Nonce replay detected",
         "{second}"
     );
     let all = invocation_records(&logged);
-    assert_eq!(all.len(), 2, "one record for each call: {all:?}");
+    // One assert, so a red run shows every count at once.
+    assert_eq!(
+        (all.len(), counted, d4),
+        (
+            2,
+            ONE_SERVED_ONE_REFUSED,
+            crate::security::metrics_scrape::ONE_DENIAL
+        ),
+        "one record for each call: {all:?}"
+    );
     assert_refusal_record(&all[1], "denied", -32001, "replay_guard");
 }
 
@@ -215,4 +247,88 @@ async fn p2_stdio_a_signing_time_policy_refusal_records_its_own_kind() {
     let record = sole_record(&logged, &answer);
     assert_refusal_record(&record, "error", -32000, "kill_switch");
     assert!(record["decision"].get("rule_id").is_none(), "{record}");
+}
+
+/// The stdio replay rows' counters: `[calls, blocks, errors, firewall
+/// refusals, cache hits]` after one delivered call and one refused replay.
+const ONE_SERVED_ONE_REFUSED: [u64; 5] = [2, 1, 0, 0, 0];
+
+/// One delivered call, then its nonce replayed under a counter store and a
+/// recorder local to the row: the replay's answer, the counters and D4's
+/// meta-route refusals.
+async fn replay_counted(
+    logged: &Logged,
+    nonce: &str,
+    fail_appends: bool,
+) -> (Value, [u64; 5], Option<u64>) {
+    let store = Arc::new(crate::counters::CounterStore::new(
+        crate::clock::unix_secs().expect("a readable clock"),
+    ));
+    logged.meta.set_counters(Arc::clone(&store));
+    let first = stdio_send(&logged.meta, invoke_params(with_nonce(nonce), None)).await;
+    assert!(first.get("result").is_some(), "premise: delivered: {first}");
+    logged.log.set_append_failure_for_test(fail_appends);
+    let (second, text) = crate::security::metrics_scrape::scrape_if_enabled(stdio_send(
+        &logged.meta,
+        invoke_params(with_nonce(nonce), None),
+    ));
+    let d4 = crate::security::metrics_scrape::meta_denials(text.as_deref(), "gateway_refusal");
+    (second, crate::counters::test_totals::totals(&store), d4)
+}
+
+/// The replay's answer as stdio always gave it.
+fn assert_stdio_replay_answer(answer: &Value) {
+    assert_eq!(answer["error"]["code"], -32001, "{answer}");
+    assert_eq!(
+        answer["error"]["message"], "Nonce replay detected",
+        "{answer}"
+    );
+}
+
+/// B2: the log is best-effort and its append fails: the replay is answered as
+/// before, leaves no record, and is counted once on the counters and in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn b2_stdio_a_failed_refusal_write_keeps_the_answer_when_best_effort() {
+    let logged = signing_stdio_with(
+        crate::security::SecurityPosture::Hardened,
+        false,
+        StdioLog::BestEffort,
+    )
+    .await;
+    let (answer, counted, d4) = replay_counted(&logged, "b2-nonce", true).await;
+    assert_stdio_replay_answer(&answer);
+    let all = invocation_records(&logged);
+    assert_eq!(all.len(), 1, "only the delivered call's record: {all:?}");
+    assert_eq!(
+        (counted, d4),
+        (
+            ONE_SERVED_ONE_REFUSED,
+            crate::security::metrics_scrape::ONE_DENIAL
+        )
+    );
+}
+
+/// L2: no transparency log at all: the replay is answered as before and
+/// counted once on the counters and in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l2_stdio_with_no_log_a_refused_replay_is_answered_and_counted() {
+    let logged = signing_stdio_with(
+        crate::security::SecurityPosture::Hardened,
+        false,
+        StdioLog::Off,
+    )
+    .await;
+    let (answer, counted, d4) = replay_counted(&logged, "l2-nonce", false).await;
+    assert_stdio_replay_answer(&answer);
+    assert!(
+        invocation_records(&logged).is_empty(),
+        "no log was configured"
+    );
+    assert_eq!(
+        (counted, d4),
+        (
+            ONE_SERVED_ONE_REFUSED,
+            crate::security::metrics_scrape::ONE_DENIAL
+        )
+    );
 }

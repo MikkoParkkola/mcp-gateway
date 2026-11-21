@@ -9,6 +9,7 @@
 use super::counting::{attach, meta_invoke, totals};
 use super::signing_records::signed;
 use super::*;
+use crate::security::metrics_scrape::{ONE_DENIAL, meta_denials, scrape_if_enabled};
 
 /// `[calls, blocks, errors, firewall refusals, cache hits]` after one
 /// delivered call and one refused replay.
@@ -41,16 +42,17 @@ fn assert_replay_answer(status: StatusCode, body: &Value) {
 }
 
 /// T1 counts: the delivered call and the refused replay each move the
-/// counters once; the replay as a block.
-#[tokio::test]
+/// counters once; the replay as a block, and once in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn t1_counts_a_refused_replay_once_as_a_block() {
     let fx = signing_gateway(Log::On, false).await;
     let store = attach(&fx);
     let (_, first) = send_signed(&fx, 1, "count-nonce").await;
     assert!(first.get("result").is_some(), "premise: delivered: {first}");
-    let (status, second) = send_signed(&fx, 2, "count-nonce").await;
+    let ((status, second), text) = scrape_if_enabled(send_signed(&fx, 2, "count-nonce"));
     assert_replay_answer(status, &second);
-    assert_eq!(totals(&store), ONE_SERVED_ONE_REFUSED);
+    let d4 = meta_denials(text.as_deref(), "gateway_refusal");
+    assert_eq!((totals(&store), d4), (ONE_SERVED_ONE_REFUSED, ONE_DENIAL));
 }
 
 /// F1: the log fails closed and its append fails: the refused replay is
@@ -70,29 +72,32 @@ async fn f1_a_failed_refusal_write_answers_503_when_the_log_fails_closed() {
 }
 
 /// B1: the log is best-effort and its append fails: the refused replay is
-/// answered as before and counted once.
-#[tokio::test]
+/// answered as before and counted once, on the counters and in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn b1_a_failed_refusal_write_keeps_the_answer_when_best_effort() {
     let fx = signing_gateway(Log::On, false).await;
     let store = attach(&fx);
     let (_, first) = send_signed(&fx, 1, "effort-nonce").await;
     assert!(first.get("result").is_some(), "premise: delivered: {first}");
     fx.log.set_append_failure_for_test(true);
-    let (status, second) = send_signed(&fx, 2, "effort-nonce").await;
+    let ((status, second), text) = scrape_if_enabled(send_signed(&fx, 2, "effort-nonce"));
     assert_replay_answer(status, &second);
-    assert_eq!(totals(&store), ONE_SERVED_ONE_REFUSED);
+    let d4 = meta_denials(text.as_deref(), "gateway_refusal");
+    assert_eq!((totals(&store), d4), (ONE_SERVED_ONE_REFUSED, ONE_DENIAL));
 }
 
-/// L1: no transparency log at all: answered as before, counted once.
-#[tokio::test]
+/// L1: no transparency log at all: answered as before, counted once, on the
+/// counters and in D4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn l1_with_no_log_a_refused_replay_is_answered_and_counted() {
     let fx = signing_gateway(Log::Off, false).await;
     let store = attach(&fx);
     let (_, first) = send_signed(&fx, 1, "nolog-nonce").await;
     assert!(first.get("result").is_some(), "premise: delivered: {first}");
-    let (status, second) = send_signed(&fx, 2, "nolog-nonce").await;
+    let ((status, second), text) = scrape_if_enabled(send_signed(&fx, 2, "nolog-nonce"));
     assert_replay_answer(status, &second);
-    assert_eq!(totals(&store), ONE_SERVED_ONE_REFUSED);
+    let d4 = meta_denials(text.as_deref(), "gateway_refusal");
+    assert_eq!((totals(&store), d4), (ONE_SERVED_ONE_REFUSED, ONE_DENIAL));
 }
 
 /// N1: recording a refusal gives nothing back: the same nonce a third time
