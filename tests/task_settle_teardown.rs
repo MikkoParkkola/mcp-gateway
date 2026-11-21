@@ -12,9 +12,9 @@
 //! a terminal status through `tasks/get` leaves nothing in flight.
 //!
 //! The backend here holds its answer until a release file appears. The test
-//! polls the helper once while the answer is held, and releases it only if the
-//! helper is still waiting. A helper that returned without waiting would leave
-//! the record on disk `working`.
+//! polls the helper once while the answer is held, requires that poll to be
+//! pending, and only then releases the answer. A helper that returned without
+//! waiting fails that check.
 
 mod common;
 #[path = "common/windows_paths.rs"]
@@ -174,16 +174,18 @@ async fn a_settled_task_has_its_terminal_record_on_disk() {
 
     // Poll the helper once while the peer still holds its answer. A helper that
     // waits is pending here; only then is the answer released, and the same wait
-    // runs on to the end. A helper that returns at once is ready, the answer is
-    // never released, and the record is still `working` below. No clock decides
-    // which branch runs.
+    // runs on to the end. A helper that returns at once is ready, which fails
+    // here even if the record happens to be terminal already (a task that failed
+    // early, say). No clock decides the outcome.
     let ids = [id.as_str()];
     let mut settle = pin!(common::settle_tasks(&state, &ids));
     let mut probe = Context::from_waker(Waker::noop());
-    if settle.as_mut().poll(&mut probe).is_pending() {
-        std::fs::write(&release, b"go").expect("the release file is written");
-        settle.await;
-    }
+    assert!(
+        settle.as_mut().poll(&mut probe).is_pending(),
+        "settle_tasks returned while the peer still held the task's answer"
+    );
+    std::fs::write(&release, b"go").expect("the release file is written");
+    settle.await;
 
     let on_disk = status_on_disk(store_dir.path(), &id);
     assert!(
@@ -199,9 +201,8 @@ fn is_terminal(status: &str) -> bool {
 
 /// Two tasks, the first already finished and the second held at its peer. A
 /// helper that settles only some of its ids (the first, say) is ready on its
-/// first poll, the held answer is never released, and the second record is
-/// still `working` below; a helper that waits for every id is pending, so the
-/// answer is released and both records end terminal.
+/// first poll and fails the pending check; a helper that waits for every id is
+/// pending, so the held answer is released and both records end terminal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_settle_of_two_tasks_waits_for_the_one_still_held() {
     let home = hostile_home();
@@ -232,10 +233,12 @@ async fn a_settle_of_two_tasks_waits_for_the_one_still_held() {
     let ids = [done.as_str(), held.as_str()];
     let mut settle = pin!(common::settle_tasks(&state, &ids));
     let mut probe = Context::from_waker(Waker::noop());
-    if settle.as_mut().poll(&mut probe).is_pending() {
-        std::fs::write(&held_release, b"go").expect("the second release file is written");
-        settle.await;
-    }
+    assert!(
+        settle.as_mut().poll(&mut probe).is_pending(),
+        "settle_tasks returned while the second peer still held its task's answer"
+    );
+    std::fs::write(&held_release, b"go").expect("the second release file is written");
+    settle.await;
 
     for id in [&done, &held] {
         let on_disk = status_on_disk(store_dir.path(), id);
