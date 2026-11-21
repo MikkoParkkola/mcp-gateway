@@ -95,7 +95,6 @@ mod tests {
     async fn the_call_s_own_miss_is_its_denial() {
         with_visibility_memo(async {
             let args = serde_json::json!({"server": "gone", "tool": "t"});
-            let missed: Result<Value> = Err(crate::Error::BackendNotFound("gone".into()));
             assert_eq!(
                 withheld(&args, true),
                 Some(crate::security::audit::AuditOutcome::Denied(-32001))
@@ -112,7 +111,6 @@ mod tests {
         with_visibility_memo(async {
             crate::gateway::meta_mcp::visible::memo::note_denial_code("gone", "t", -32003, None);
             let args = serde_json::json!({"server": "gone", "tool": "t"});
-            let missed: Result<Value> = Err(crate::Error::BackendNotFound("gone".into()));
             assert_eq!(
                 withheld(&args, true),
                 Some(crate::security::audit::AuditOutcome::Denied(-32003))
