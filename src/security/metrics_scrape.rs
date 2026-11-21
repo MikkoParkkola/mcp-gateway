@@ -88,3 +88,24 @@ pub(crate) const ONE_DENIAL: Option<u64> = if cfg!(feature = "metrics") {
 } else {
     None
 };
+
+/// Every refusal D4 counted on `route` (`meta` or `direct`) in `text`, whatever
+/// its reason, as [`scrape_if_enabled`] returned it: `None` where the build has
+/// no exporter.
+#[cfg(feature = "metrics")]
+pub(crate) fn route_denials(text: Option<&str>, route: &str) -> Option<u64> {
+    let needle = format!(r#"route="{route}""#);
+    text.map(|text| sum_where(text, "mcp_authz_denials_total", &needle))
+}
+
+#[cfg(not(feature = "metrics"))]
+pub(crate) fn route_denials(_text: Option<&str>, _route: &str) -> Option<u64> {
+    None
+}
+
+/// What [`route_denials`] reads for a call D4 did not count, in this build.
+pub(crate) const NO_DENIAL: Option<u64> = if cfg!(feature = "metrics") {
+    Some(0)
+} else {
+    None
+};
