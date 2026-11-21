@@ -232,6 +232,23 @@ fn p11_a_start_line_with_content_is_kept_or_refused() {
     }
 }
 
+/// A plain key written on the start line itself is not YAML a reader
+/// accepts as one document, so no edit may reach that line: setting the
+/// key's value, and removing the only key, are both refused.
+#[test]
+fn p13_a_plain_key_on_the_start_line_takes_no_edit() {
+    let cases = [
+        ("--- port: 1\n", (path("port"), Change::Remove)),
+        ("--- port: 1\n", set_int("port", 2)),
+        ("--- server:\n  port: 1\n", set_int("server.port", 2)),
+        ("--- server:\n  port: 1\n", (path("server"), Change::Remove)),
+    ];
+    for (text, change) in cases {
+        let got = edit_in_place(text, &[change]);
+        assert!(got.is_err(), "{text:?} took an edit: {got:?}");
+    }
+}
+
 /// The proofs alone keep the frame: any frame line deleted outside the
 /// plan is refused, and a key written after the end line is refused.
 #[test]
