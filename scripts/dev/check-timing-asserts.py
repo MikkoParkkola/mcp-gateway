@@ -37,9 +37,11 @@ a timeout-named builder or call (`.with_x_timeout(1 s)`), a timeout-named field
 (`timeout: 300 ms`), or a `timeout(W, ..)` whose result is asserted `is_ok`.
 A `// timing:` tag from the closed set, a `timing-oracle: vs <timer> (<ticket>)`
 (`(why: <reason>)` in place of the ticket on new lines), or a paused clock
-exempts a site. For an elapsed bound, the paused clock exempts it only when
-the instant measured is tokio's: a `std::time::Instant` reads real time on a
-paused clock too (MIK-8360).
+exempts a site from these new-code rules. Only the paused clock also exempts
+it from the 5 s rule, in every mode; a tag or an oracle does not, so a changed
+line meets the 5 s rule exactly as it will after merge. For an elapsed bound,
+the paused clock exempts it only when the instant measured is tokio's: a
+`std::time::Instant` reads real time on a paused clock too (MIK-8360).
 
 Stated misses: `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result
 first consumed over 2000 characters later; a fn that pauses the clock partway,
@@ -128,7 +130,6 @@ from check_timing_asserts_newcode import (
     TAG,
     TIMER,
     fn_spans,
-    oracle_covers,
     scan_new,
 )
 from check_timing_asserts_carry import carried_rows, make_revision
@@ -210,21 +211,19 @@ def read_base(ref: str) -> list[Row] | None:
 
 
 def judge_new(found, rows, texts, consts, includers, added, carried=frozenset()):
-    """(findings left for the 5 s rule, new-code errors), given added lines.
+    """(findings for the 5 s rule, new-code errors), given added lines.
 
-    A window on a changed line that carries a well-formed `timing-oracle:` is
-    excused from the 5 s rule too (C), so an oracle under 5 s is possible. A
-    new-code error is dropped only where the 5 s rule already reports the
-    same line as an error; an allowlisted line in a changed span is still
-    judged as new, so the allowlist never covers new code (#3746 review).
+    The 5 s rule's findings pass through unchanged: a changed line meets that
+    rule exactly as it will once merged, when no line is new. A `timing:` tag
+    or a `timing-oracle:` exempts a site from the new-code rules only; excusing
+    the 5 s rule as well passed a line in its own pull request and failed every
+    pull request after it. A new-code error is dropped only where the 5 s rule
+    already reports the same line as an error; an allowlisted line in a
+    changed span is still judged as new, so the allowlist never covers new
+    code (#3746 review).
     """
-    kept = [
-        f
-        for f in found
-        if not (f.line in added.get(f.path, ()) and oracle_covers(texts[f.path], f.line, f.assertion))
-    ]
     listed = {r[:3] for r in rows}
-    reported = {(f.path, f.line) for f in kept if (f.path, f.fn, f.assertion) not in listed}
+    reported = {(f.path, f.line) for f in found if (f.path, f.fn, f.assertion) not in listed}
     errors = [
         str(f)
         for path, lines in sorted(added.items())
@@ -232,7 +231,7 @@ def judge_new(found, rows, texts, consts, includers, added, carried=frozenset())
         for f in scan_new(path, texts[path], consts, includers, lines, carried=carried)
         if (f.path, f.line) not in reported
     ]
-    return kept, errors
+    return found, errors
 
 
 def _pinned_base(ref: str) -> str:
