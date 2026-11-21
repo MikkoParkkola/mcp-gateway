@@ -57,6 +57,13 @@ impl CostRecord {
     pub fn new(backend: &str, tool: &str, token_count: u64, price_per_million: f64) -> Self {
         #[allow(clippy::cast_precision_loss)]
         let estimated_cost_usd = token_count as f64 * price_per_million / 1_000_000.0;
+        Self::charged(backend, tool, token_count, estimated_cost_usd)
+    }
+
+    /// A record priced by the caller: `cost_usd` is what the call was charged,
+    /// dated now as every record is.
+    pub(crate) fn charged(backend: &str, tool: &str, token_count: u64, cost_usd: f64) -> Self {
+        let estimated_cost_usd = cost_usd;
         Self {
             timestamp: crate::clock::unix_secs().ok(),
             backend: backend.to_string(),
@@ -381,7 +388,18 @@ impl CostTracker {
         price_per_million: f64,
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
+        self.record_charged(session_id, api_key_name, &rec);
+    }
 
+    /// [`Self::record`] for a record its caller priced: the dispatch passes
+    /// the USD the budget enforcer charged, so these totals and the limits
+    /// count one figure per call.
+    pub(crate) fn record_charged(
+        &self,
+        session_id: &str,
+        api_key_name: Option<&str>,
+        rec: &CostRecord,
+    ) {
         // Per-session. An empty id is no session (a 2026-07-28 request has
         // none): keying on it would pool every such caller into one bucket.
         if session_id.is_empty() {
@@ -395,7 +413,7 @@ impl CostTracker {
                 .or_insert_with(|| {
                     Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
                 })
-                .record(&rec);
+                .record(rec);
         }
 
         // Per-key (if we have a key name)
@@ -403,7 +421,7 @@ impl CostTracker {
             self.per_key
                 .entry(key_name.to_string())
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name)))
-                .record(&rec, rec.timestamp);
+                .record(rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
             // Housekeeping skips its pass when the record is undated (MIK-8202).
             if let Some(now) = rec.timestamp
@@ -426,7 +444,12 @@ impl CostTracker {
         price_per_million: f64,
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
-        self.per_caller.record(caller_key, &rec, rec.timestamp);
+        self.record_caller_charged(caller_key, &rec);
+    }
+
+    /// [`Self::record_caller`] for a record its caller priced.
+    pub(crate) fn record_caller_charged(&self, caller_key: &str, rec: &CostRecord) {
+        self.per_caller.record(caller_key, rec, rec.timestamp);
     }
 
     /// `caller_key`'s session-less breakdown, `None` when it has none.
