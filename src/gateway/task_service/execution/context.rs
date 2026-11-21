@@ -172,6 +172,13 @@ impl OwnedCallerContext {
     }
 
     /// What the caller proved at submit, to find its own catalogue slot.
+    /// The exchanged token the creating request was made with: each step's
+    /// dispatch reopens it as the call's token, since a task-local does not
+    /// reach the spawned worker.
+    pub(crate) fn token(&self) -> Option<&TokenOnCall> {
+        self.token.as_ref()
+    }
+
     pub(crate) fn verified_identity(&self) -> Option<&VerifiedIdentity> {
         self.verified_identity.as_ref()
     }

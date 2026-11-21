@@ -251,49 +251,55 @@ async fn run_dispatched(
     // `input_required` round from it before anything is committed.
     let meta = state.meta_mcp();
     // The pin covers the readmission as well as the dispatch.
-    let dispatch = meta.with_surfaced_pin(&call.tool, recorded, async {
-        if let Some(refused) = key_refused {
-            return *refused;
-        }
-        // A task whose intake judged nothing (sanitising was off, or nothing
-        // was exempt) is re-admitted under this step's generation, as a resume
-        // is, so one admitted while sanitising was off is sanitised if a reload
-        // turned it on (ADR-023). One whose intake judged an exemption keeps
-        // that judgement: the dispatch compares against it and refuses a
-        // change. A refusal is the dispatch's answer, and nothing is sent.
-        let readmitted = if intent.owned.judged().is_empty() {
-            state
-                .readmit(&call, &caller, (session_id.as_deref(), &generation))
-                .await
-        } else {
-            // The intake's own judgement, which the dispatch compares against;
-            // it also stands as the enclosing scope's, so an empty inner one
-            // would keep the same guards (`with_judged`).
-            Ok((call.arguments.clone(), intent.owned.judged()))
-        };
-        let (arguments, judged) = match readmitted {
-            Ok(readmitted) => readmitted,
-            Err(refused) => return *refused,
-        };
-        // The test seam a reload lands in between a re-admission's judgement
-        // and the run (the C2e6 row). A task whose intake judged something
-        // was not re-admitted, so it does not fire.
-        #[cfg(test)]
-        if intent.owned.judged().is_empty() {
-            crate::gateway::meta_mcp::visible::seams::readmitted();
-        }
-        crate::gateway::meta_mcp::visible::memo::with_judged(
-            judged,
-            meta.dispatch_below_gate_native_result(
-                RequestId::Number(0),
-                &call.tool,
-                arguments,
-                session_id.as_deref(),
-                &caller,
-            ),
-        )
-        .await
-    });
+    // The worker runs in its own spawned task, so the creating request's token
+    // scope is reopened here from the task's own context.
+    let token = intent.owned.token().cloned();
+    let dispatch = crate::security::decision_record::with_token(
+        token,
+        meta.with_surfaced_pin(&call.tool, recorded, async {
+            if let Some(refused) = key_refused {
+                return *refused;
+            }
+            // A task whose intake judged nothing (sanitising was off, or nothing
+            // was exempt) is re-admitted under this step's generation, as a resume
+            // is, so one admitted while sanitising was off is sanitised if a reload
+            // turned it on (ADR-023). One whose intake judged an exemption keeps
+            // that judgement: the dispatch compares against it and refuses a
+            // change. A refusal is the dispatch's answer, and nothing is sent.
+            let readmitted = if intent.owned.judged().is_empty() {
+                state
+                    .readmit(&call, &caller, (session_id.as_deref(), &generation))
+                    .await
+            } else {
+                // The intake's own judgement, which the dispatch compares against;
+                // it also stands as the enclosing scope's, so an empty inner one
+                // would keep the same guards (`with_judged`).
+                Ok((call.arguments.clone(), intent.owned.judged()))
+            };
+            let (arguments, judged) = match readmitted {
+                Ok(readmitted) => readmitted,
+                Err(refused) => return *refused,
+            };
+            // The test seam a reload lands in between a re-admission's judgement
+            // and the run (the C2e6 row). A task whose intake judged something
+            // was not re-admitted, so it does not fire.
+            #[cfg(test)]
+            if intent.owned.judged().is_empty() {
+                crate::gateway::meta_mcp::visible::seams::readmitted();
+            }
+            crate::gateway::meta_mcp::visible::memo::with_judged(
+                judged,
+                meta.dispatch_below_gate_native_result(
+                    RequestId::Number(0),
+                    &call.tool,
+                    arguments,
+                    session_id.as_deref(),
+                    &caller,
+                ),
+            )
+            .await
+        }),
+    );
     let dispatch = async {
         match submission.as_ref() {
             Some(submission) => {
