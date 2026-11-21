@@ -174,7 +174,8 @@ async fn a_settled_task_has_its_terminal_record_on_disk() {
     // runs on to the end. A helper that returns at once is ready, the answer is
     // never released, and the record is still `working` below. No clock decides
     // which branch runs.
-    let mut settle = pin!(common::settle_tasks(&state, &[id.as_str()]));
+    let ids = [id.as_str()];
+    let mut settle = pin!(common::settle_tasks(&state, &ids));
     let mut probe = Context::from_waker(Waker::noop());
     if settle.as_mut().poll(&mut probe).is_pending() {
         std::fs::write(&release, b"go").expect("the release file is written");
