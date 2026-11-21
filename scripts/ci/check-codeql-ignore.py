@@ -41,33 +41,43 @@ CFG_NAME = "CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES"
 
 
 def cfg_override_problems(text):
-    """Every line naming CFG_NAME must be the `jobs.analyze.env` key with value `-test`, and one must exist."""
-    found, keys = [], []  # keys: (indent, key) of the mappings enclosing a line
-    for number, line in enumerate(text.splitlines(), 1):
-        body = re.sub(r"(^|\s)#.*$", "", line).rstrip()  # comments carry no setting
-        stripped = body.strip()
-        if not stripped:
-            continue
-        indent = len(body) - len(body.lstrip())
-        while keys and keys[-1][0] >= indent:
-            keys.pop()
-        item = stripped.startswith("- ")
-        key = stripped[2:] if item else stripped
-        name = key.split(":", 1)[0].strip().strip("'\"")
-        if CFG_NAME in stripped:
-            value = key.split(":", 1)[1].strip().strip("'\"") if ":" in key else None
-            found.append((number, [k for _, k in keys], name == CFG_NAME and not item, value))
-        keys.append((indent, "-" if item else name))
+    """CFG_NAME must be a key of `jobs.analyze.env` with the string value `-test`; any other key equal to it, at any
+    depth, and any string value naming it (the CodeQL `config:` block, a `run:` script) is refused. The workflow is
+    read by a YAML parser, so quoting and escapes resolve as GitHub reads them; a line match would take `'-test"'`
+    for `-test` and miss a key spelled with escapes. GitHub refuses a workflow with a duplicate key, so the parser's
+    last-wins on duplicates never decides a run."""
+    import yaml  # the step installs PyYAML (ci.yml); imported here so the dep-info check alone needs only stdlib
+
     want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
-    if not found:
-        return [f"{WORKFLOW}: {want}; it is missing, so CodeQL reads Rust with cfg(test) on"]
-    problems = []
-    for number, path, is_key, value in found:
-        if not is_key or path != ["jobs", "analyze", "env"]:
-            problems.append(f"{WORKFLOW}:{number}: {CFG_NAME} outside the analyze job's own env "
-                            f"(under {'.'.join(path) or 'the top level'}); {want}, and only there")
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as err:
+        return [f"{WORKFLOW} does not parse as YAML ({err}); {want}"]
+    problems, found = [], []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                here = path + [str(key)]
+                if key == CFG_NAME:
+                    found.append((here, value))
+                walk(value, here)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, path + [str(index)])
+        elif isinstance(node, str) and CFG_NAME in node:
+            problems.append(f"{WORKFLOW}: {CFG_NAME} named inside a string at {'.'.join(path)}, "
+                            f"outside the analyze job's own env; {want}, and only there")
+
+    walk(doc, [])
+    for path, value in found:
+        if path[:-1] != ["jobs", "analyze", "env"]:
+            problems.append(f"{WORKFLOW}: {CFG_NAME} set at {'.'.join(path[:-1]) or 'the top level'}, "
+                            f"outside the analyze job's own env; {want}, and only there")
         elif value != "-test":
-            problems.append(f"{WORKFLOW}:{number}: {CFG_NAME} is {value!r}; {want}")
+            problems.append(f"{WORKFLOW}: {CFG_NAME} is {value!r}; {want}")
+    if not found:
+        problems.append(f"{WORKFLOW}: {want}; it is missing, so CodeQL reads Rust with cfg(test) on")
     return problems
 
 

@@ -1412,7 +1412,8 @@ class CodeqlCfg(unittest.TestCase):
 
     # G2
     def test_g2_another_value_is_refused(self):
-        for value in ('"test"', "-test,foo", '""'):
+        # '-test"' is the string -test" to YAML; a quote-stripping line match read it as -test.
+        for value in ('"test"', "-test,foo", '""', "'-test\"'"):
             with self.subTest(value=value):
                 self.refused(self.insert("    runs-on: ubuntu-latest\n", f"    env:\n      {CFG_NAME}: {value}\n"), value, VALUE)
 
@@ -1432,6 +1433,13 @@ class CodeqlCfg(unittest.TestCase):
         analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
         self.refused(self.insert(analyze, f'        env:\n          {CFG_NAME}: ""\n', self.with_job_env()),
                      "Analyze step beside the job", OUTSIDE)
+
+    def test_g2_a_key_spelled_with_escapes_is_refused(self):
+        # YAML reads "\x43ODEQL..." as the variable's name, though the line never spells it.
+        analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
+        hidden = '"\\x43' + CFG_NAME[1:] + '"'
+        self.refused(self.insert(analyze, f'        env:\n          {hidden}: ""\n', self.with_job_env()),
+                     "escaped key on the Analyze step", OUTSIDE)
 
 
 if __name__ == "__main__":
