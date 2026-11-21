@@ -175,12 +175,13 @@ async fn t1_meta_allowed_tools() {
     };
     let (meta, sent) = table_meta(&dir, config);
     // The gate answers a withheld tool as an absent one, an `isError` result
-    // (`gate.rs:300`); a tool result reads as `tool_error`, with no code
-    // (`audit.rs:68-70`).
+    // (`gate.rs:300`). The gate noted the refusal, so the record says `denied`
+    // with the code a gate-withheld tool result records, -32600
+    // (`Noted::refused_outcome`).
     let withheld = Refusal {
         form: Form::IsErrorResult,
-        outcome: "tool_error",
-        code: None,
+        outcome: "denied",
+        code: Some(-32600),
     };
     let decision = refused(&meta, &dir, "alpha", withheld).await;
     assert_eq!(
@@ -208,11 +209,12 @@ async fn c1_meta_capability_disabled() {
         meta.kill_switch.is_capability_disabled("alpha", "read"),
         "premise: the capability is disabled"
     );
-    // `Error::gateway_refused(-32000, ..)` (`dispatch_guards.rs:308`), an
-    // error that reads as `error` with its own code (`audit.rs:94`).
+    // `Error::gateway_refused(-32000, ..)` (`dispatch_guards.rs:308`); the gate
+    // noted it, so the record says `denied` with that code
+    // (`Noted::refused_outcome`).
     let disabled = Refusal {
         form: Form::RpcError,
-        outcome: "error",
+        outcome: "denied",
         code: Some(-32000),
     };
     let decision = refused(&meta, &dir, "alpha", disabled).await;
