@@ -267,6 +267,169 @@ async fn restart_overlap_waits_then_busy() {
 }
 
 /// WIRE.6 / SERVE.5: the serve load reaches the startup gate, and construction finishes it.
+/// WIRE.1 (kimi r3 I2 order): only the first environment taken from a serve load holds its
+/// session. That construction finishes and lets the lock go; then an abandoned file is planted,
+/// and every other construction (a clone of the load from before or after the hand-over, and a
+/// second hand-over) has no session, so it meets the sessionless gate and refuses. The log is
+/// opened once, by the first construction.
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_session_take_once() {
+    use crate::security::transparency_log::open_attempts;
+    const ROW: &str = "startup_session_take_once";
+    const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("gateway.yaml");
+    let log = dir.path().join("audit.jsonl");
+    let text = format!(
+        "security:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
+        log.display()
+    );
+    write_owner_only(&config, text).expect("config");
+
+    let mut evaluated = super::serve_fixture::serve_load(ROW, &config).await;
+    let before = evaluated.clone();
+    let env = Arc::new(evaluated.live_env());
+    let after = evaluated.clone();
+    let second = Arc::new(evaluated.live_env());
+    let gateway = super::serve_fixture::serve_build(ROW, evaluated, env, &config).await;
+    drop(gateway);
+    assert!(
+        !held_elsewhere(&config).await,
+        "{ROW}: premise: the first construction let the lock go"
+    );
+    write_owner_only(
+        dir.path().join("gateway.yaml.abandoned"),
+        "left by a dead writer",
+    )
+    .expect("abandoned file");
+
+    let mut others = vec![("second hand-over", before.config.clone(), second)];
+    for (name, mut copy) in [("clone before", before), ("clone after", after)] {
+        let env = Arc::new(copy.live_env());
+        others.push((name, copy.config, env));
+    }
+    for (name, copied, env) in others {
+        let built = crate::gateway::Gateway::new_evaluated(copied, env, Some(config.clone())).await;
+        match built {
+            Ok(_) => panic!("{ROW} {name}: a construction without the session must refuse"),
+            Err(error) => assert!(
+                error.to_string().contains(ABANDONED_CLASS),
+                "{ROW} {name}: the sessionless gate's abandoned-file refusal, got {error}"
+            ),
+        }
+    }
+    assert_eq!(
+        open_attempts::at(&log),
+        1,
+        "{ROW}: only the first construction opened the log"
+    );
+}
+
+/// K1: the config served is the one the startup gate checked. The config is a link to A; once
+/// the gate has resolved and checked A, the link is pointed at B before the load: A is served.
+#[cfg(unix)]
+#[tokio::test]
+async fn serve_loads_the_gated_target() {
+    use crate::config_reload::serve_seams::{self, Point};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const ROW: &str = "serve_loads_the_gated_target";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = dir.path().join("a.yaml");
+    let b = dir.path().join("b.yaml");
+    write_owner_only(&a, "server:\n  port: 11\n").expect("config A");
+    write_owner_only(&b, "server:\n  port: 12\n").expect("config B");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&a, &link).expect("the link to A");
+    let checked = std::fs::canonicalize(&a).expect("A resolved");
+    let repointed = Arc::new(AtomicBool::new(false));
+    let _armed = {
+        let (link, b, repointed) = (link.clone(), b.clone(), Arc::clone(&repointed));
+        serve_seams::arm(&checked, Point::AfterPrepare, move || {
+            std::fs::remove_file(&link).expect("drop the link");
+            std::os::unix::fs::symlink(&b, &link).expect("the link to B");
+            repointed.store(true, Ordering::SeqCst);
+        })
+    };
+    let evaluated = super::serve_fixture::serve_load(ROW, &link).await;
+    assert!(
+        repointed.load(Ordering::SeqCst),
+        "{ROW}: premise: the link moved between the gate and the load"
+    );
+    assert_eq!(
+        evaluated.config.server.port, 11,
+        "{ROW}: the config the gate checked (A) is served"
+    );
+}
+
+/// WIRE.3 control: a config in a directory no writer can use, with no artifact beside it, starts
+/// without the lock, and nothing is created there. The HTTP and stdio entry points both start
+/// through this load and build (cli/entry.rs:547, :606).
+#[cfg(unix)]
+#[tokio::test]
+async fn startup_read_only_starts_unlocked() {
+    const ROW: &str = "startup_read_only_starts_unlocked";
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("gateway.yaml");
+    write_owner_only(&config, SERVED).expect("config");
+    seal(dir.path(), true);
+    let mut evaluated = super::serve_fixture::serve_load(ROW, &config).await;
+    let env = Arc::new(evaluated.live_env());
+    let built =
+        crate::gateway::Gateway::new_evaluated(evaluated.config, env, Some(config.clone())).await;
+    let listed = std::fs::read_dir(dir.path()).expect("list").count();
+    seal(dir.path(), false);
+    built.unwrap_or_else(|error| panic!("{ROW}: the start proceeds unlocked: {error}"));
+    assert_eq!(
+        listed, 1,
+        "{ROW}: only the config is there, no lock sidecar"
+    );
+}
+
+/// WIRE.4 / Q2: an abandoned file is accepted for later only when logging is off. With logging
+/// on and its best-effort open failed (auth off), a served start refuses it; the same start with
+/// no artifact warns and serves.
+#[tokio::test]
+async fn failed_log_refuses_abandoned() {
+    const ROW: &str = "failed_log_refuses_abandoned";
+    const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
+    for artifact in [true, false] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
+        let config = dir.path().join("gateway.yaml");
+        let text = format!(
+            "auth:\n  enabled: false\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
+            blocker.join("audit.jsonl").display()
+        );
+        write_owner_only(&config, text).expect("config");
+        if artifact {
+            write_owner_only(
+                dir.path().join("gateway.yaml.abandoned"),
+                "left by a dead writer",
+            )
+            .expect("abandoned file");
+        }
+        let mut evaluated = super::serve_fixture::serve_load(ROW, &config).await;
+        let env = Arc::new(evaluated.live_env());
+        let built =
+            crate::gateway::Gateway::new_evaluated(evaluated.config, env, Some(config.clone()))
+                .await;
+        match (artifact, built) {
+            (true, Ok(_)) => panic!("{ROW}: a failed log must not let the abandoned file through"),
+            (true, Err(error)) => assert!(
+                error.to_string().contains(ABANDONED_CLASS),
+                "{ROW}: the abandoned-file refusal, got {error}"
+            ),
+            (false, built) => {
+                built.unwrap_or_else(|error| panic!("{ROW}: no artifact, so it serves: {error}"));
+            }
+        }
+    }
+}
+
 #[test]
 fn serve_paths_reach_the_gate() {
     const ROW: &str = "serve_paths_reach_the_gate";

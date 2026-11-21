@@ -161,6 +161,47 @@ async fn crash_s1_child() {
 
 /// crash_s3: delivery fails at a boundary while a served gateway is built. No gateway is built,
 /// and the next served start delivers what was owed, each terminal record once.
+/// crash_s2: a served start is killed after it opened the serving log and before it settled the
+/// session. The next served start settles with the same log: the config is the original, and the
+/// attempt the killed start chose is settled once, with no duplicate record.
+#[tokio::test(flavor = "multi_thread")]
+async fn crash_s2() {
+    use std::os::unix::process::ExitStatusExt as _;
+    const ROW: &str = "crash_s2";
+    let left = crashed_write(ROW);
+    let status = run_child(ROW, &left.resolved).await;
+    assert_eq!(
+        status.signal(),
+        Some(6),
+        "{ROW}: the served start was killed after opening its log, got {status}"
+    );
+    let token = persisted_recovery_token(&left.path, ROW);
+    let gateway = serve_start(ROW, &left.path)
+        .await
+        .unwrap_or_else(|error| panic!("{ROW}: the next served start builds: {error}"));
+    drop(gateway);
+    assert_eq!(
+        std::fs::read(&left.path).expect("config bytes"),
+        left.original,
+        "{ROW}: the config is the original"
+    );
+    expect_staged_owed(&records_at(&left.log_path), &token, ROW);
+    drop(left.dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crash_s2_child() {
+    use crate::config_reload::serve_seams::{self, Point};
+    let Some(resolved) = std::env::var_os(CHILD_DIR) else {
+        return;
+    };
+    let path = PathBuf::from(resolved).join("gateway.yaml");
+    let _armed = serve_seams::arm(&path, Point::AfterServingOpen, || {
+        std::process::abort();
+    });
+    let _ = serve_start("crash_s2_child", &path).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_s3() {
     const ROW: &str = "crash_s3";
