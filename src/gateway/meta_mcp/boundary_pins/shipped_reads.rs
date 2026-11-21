@@ -748,3 +748,33 @@ fn drift3_a_hash_inside_quotes_is_kept() {
         ["a#b", "c"]
     );
 }
+
+/// MIK-9921.GUARD.1 (red first): the tail of a `concat!` after
+/// `CARGO_MANIFEST_DIR` starts with `/`, yet names a path from the crate root.
+/// `docs/CLI.md` reached the release line this way unshipped, and the
+/// packaged suite went red on it.
+#[test]
+fn guard1_a_slash_led_concat_tail_names_a_crate_path() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/b.md")); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["docs/b.md".to_owned()]
+    );
+}
+
+/// MIK-9921.GUARD.1 control: a slash-led literal naming a shipped file, or a
+/// path the crate root does not hold, stays unflagged.
+#[test]
+fn guard1_a_slash_led_literal_off_the_list_or_off_the_tree_is_not_flagged() {
+    let (root, patterns) = scratch();
+    for tail in ["/docs/a.md", "/etc/hosts", "/no/such/file.txt"] {
+        let source = format!(
+            "fn f() {{ let _ = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"{tail}\"); }}"
+        );
+        assert!(
+            offenders(root.path(), &patterns, FILE, &source).is_empty(),
+            "{tail}"
+        );
+    }
+}
