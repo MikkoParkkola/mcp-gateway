@@ -69,6 +69,26 @@ pub(crate) fn scrape_if_enabled<F: std::future::Future>(f: F) -> (F::Output, Opt
     (out, None)
 }
 
+/// The meta route's refusals D4 counted under `reason` in `text`, as
+/// [`scrape_if_enabled`] returned it: `None` where the build has no exporter.
+#[cfg(feature = "metrics")]
+pub(crate) fn meta_denials(text: Option<&str>, reason: &str) -> Option<u64> {
+    let labels = format!(r#"route="meta",reason="{reason}""#);
+    text.map(|text| series(text, "mcp_authz_denials_total", &labels))
+}
+
+#[cfg(not(feature = "metrics"))]
+pub(crate) fn meta_denials(_text: Option<&str>, _reason: &str) -> Option<u64> {
+    None
+}
+
+/// What [`meta_denials`] reads for one refusal in this build.
+pub(crate) const ONE_DENIAL: Option<u64> = if cfg!(feature = "metrics") {
+    Some(1)
+} else {
+    None
+};
+
 /// Every refusal D4 counted on `route` (`meta` or `direct`) in `text`, whatever
 /// its reason, as [`scrape_if_enabled`] returned it: `None` where the build has
 /// no exporter.
