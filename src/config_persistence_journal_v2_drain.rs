@@ -472,6 +472,11 @@ mod tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_sessionless_tests.rs"]
 mod unsessioned_build_tests;
+// Unix only: crash_s1 kills a child process at the repair step.
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+#[path = "config_persistence_journal_v2_drain_serve_crash_tests.rs"]
+mod serve_crash_tests;
 
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_fixtures_tests.rs"]
