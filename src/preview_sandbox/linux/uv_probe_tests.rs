@@ -371,8 +371,9 @@ fn u_uv_place_uv_binds_its_real_file_alone() {
 }
 
 /// Whether the process whose pid `pid_file` holds has ended. It waits on the
-/// event itself, polling until the pid is gone from /proc or a zombie ('Z'
-/// after the command name's ')'): SIGKILL lands asynchronously, and a loaded
+/// event itself through `ended_by`, which stops at the first read that shows
+/// the process ended (no stat file, ESRCH as it exits, or a Z, X or x state)
+/// and answers with that read. A kill takes effect asynchronously, and a loaded
 /// host can take seconds to end and reap the process. The 120 s bound is set
 /// by the failure mode, not by a run's timing: the rows' processes sleep
 /// 300 s, so a missing kill still leaves the process alive at the bound and
@@ -400,15 +401,16 @@ const ESRCH: i32 = 3;
 /// Polls `read` (one read of a process's `/proc/<pid>/stat`) every 50 ms
 /// until it shows the process ended or `until` passes, and answers whether it
 /// ended. A seam, so the rows below can feed it the reads an exiting task
-/// gives. Only a missing file or ESRCH says the process ended; any other
-/// failed read says nothing, so the wait goes on. The answer is the read that
-/// ended the wait: an exiting task can read as running once more after ESRCH.
+/// gives. The process ended when a read shows a dead state (zombie `Z`, or
+/// dead `X` or `x`) or fails with a missing file or ESRCH; any other failed
+/// read says nothing, so the wait goes on. The answer is the read that ended
+/// the wait: an exiting task can read as running once more after ESRCH.
 fn ended_by(mut read: impl FnMut() -> std::io::Result<String>, until: std::time::Instant) -> bool {
     let mut ended = || match read() {
         Err(e) => e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(ESRCH),
         Ok(stat) => stat
             .rsplit_once(')')
-            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with(['Z', 'X', 'x'])),
     };
     loop {
         if ended() {
@@ -427,11 +429,14 @@ fn stat_in(state: char) -> std::io::Result<String> {
     Ok(format!("4242 (sleep) {state} 1 4242 4242 0 -1"))
 }
 
+/// One `/proc/<pid>/stat` read, as the rows feed it to `ended_by`.
+type StatRead = fn() -> std::io::Result<String>;
+
 /// The reads in `reads`, then `last` for every read after them; the count of
 /// reads taken is kept in `taken`.
 fn reads_then(
     reads: Vec<std::io::Result<String>>,
-    last: fn() -> std::io::Result<String>,
+    last: StatRead,
     taken: &std::cell::Cell<usize>,
 ) -> impl FnMut() -> std::io::Result<String> + '_ {
     let mut reads = reads.into_iter();
@@ -474,22 +479,36 @@ fn ended_by_a_failed_read_that_is_not_esrch_or_missing_keeps_waiting() {
     );
 }
 
-/// Controls: a process that keeps running is not ended at the bound (the rows
-/// above stay able to fail on a kill that never lands), and a zombie is.
+/// Controls: a process that keeps running is not ended before the bound (the
+/// rows above, which need several reads, stay able to fail on a kill that
+/// never lands); a dead state is ended.
 #[test]
 fn ended_by_a_running_process_is_not_ended_and_a_zombie_is() {
     let taken = std::cell::Cell::new(0);
-    // limit-under-test (fires-only): the bound handed to ended_by; the row asserts the wait answers at it
-    let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    // limit-under-test (fires-only): the bound handed to ended_by; a stall only lengthens the wait, and the row asserts only that it answered no sooner
+    let bound = std::time::Duration::from_millis(200);
+    let start = std::time::Instant::now();
     assert!(!ended_by(
         reads_then(Vec::new(), || stat_in('S'), &taken),
-        until
+        start + bound
     ));
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    assert!(ended_by(
-        reads_then(Vec::new(), || stat_in('Z'), &taken),
-        until
-    ));
+    assert!(
+        start.elapsed() >= bound,
+        "the wait answered running after {:?}, before its bound",
+        start.elapsed()
+    );
+    let dead: [(char, StatRead); 3] = [
+        ('Z', || stat_in('Z')),
+        ('X', || stat_in('X')),
+        ('x', || stat_in('x')),
+    ];
+    for (state, read) in dead {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        assert!(
+            ended_by(reads_then(Vec::new(), read, &taken), until),
+            "state {state} was not read as ended"
+        );
+    }
 }
 
 /// U-floor deadline (code review r1 fold, gpt IMPROVEMENT and muse MEDIUM),
