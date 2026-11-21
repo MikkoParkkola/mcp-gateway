@@ -81,6 +81,42 @@ impl fmt::Display for StartError {
     }
 }
 
+/// The serving audit log a start settles with. Off and failed are different answers: a config
+/// with logging off may leave an abandoned file for later, while a log that should have opened
+/// and did not must not let one through.
+pub(crate) enum ServingLog {
+    /// Logging is configured off.
+    Off,
+    /// Logging is configured on, and the best-effort open failed.
+    Failed,
+    /// The serving log, open.
+    Open(Arc<TransparencyLogger>),
+}
+
+impl ServingLog {
+    fn logger(&self) -> Option<Arc<TransparencyLogger>> {
+        match self {
+            Self::Open(log) => Some(Arc::clone(log)),
+            Self::Off | Self::Failed => None,
+        }
+    }
+}
+
+/// An open log, or none meaning logging off (the rows' spelling of the two cases they use).
+impl From<Option<Arc<TransparencyLogger>>> for ServingLog {
+    fn from(log: Option<Arc<TransparencyLogger>>) -> Self {
+        log.map_or(Self::Off, Self::Open)
+    }
+}
+
+impl fmt::Debug for StartupSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StartupSession")
+            .field("target", &self.target())
+            .finish_non_exhaustive()
+    }
+}
+
 impl StartupSession {
     /// The resolved config the gate checked. The caller loads the config, and derives the serving
     /// logger, from this path only.
@@ -122,12 +158,13 @@ pub(crate) async fn prepare_start_within(
     }
 }
 
-/// Settle what `prepare_start` left owed, with the logger the gateway will serve with (`None`:
-/// logging is configured off), then release the lock.
+/// Settle what `prepare_start` left owed, with the serving log the gateway will serve with, then
+/// release the lock.
 pub(crate) async fn finish_start(
     session: StartupSession,
-    log: Option<Arc<TransparencyLogger>>,
+    log: impl Into<ServingLog>,
 ) -> Result<(), StartError> {
+    let log = log.into();
     let named = session.target().to_path_buf();
     match session.state {
         StartupState::ArtifactFreeUnlocked { configured, target } => {
@@ -347,10 +384,8 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
 }
 
 // The session drops here, on the worker, including when the caller was cancelled.
-async fn drain_locked(
-    mut session: DrainSession,
-    log: Option<Arc<TransparencyLogger>>,
-) -> Result<(), Refusal> {
+async fn drain_locked(mut session: DrainSession, serving: ServingLog) -> Result<(), Refusal> {
+    let log = serving.logger();
     let journal = journal_path(session.target());
     let abandoned = abandoned_path(session.target());
     if session
@@ -374,6 +409,14 @@ async fn drain_locked(
     }
     let outcome = drain_abandoned(&mut session, log).await.or_else(|error| {
         let cause = format!("{error:?}");
+        // No logger accepts the file only when logging is off, never when its open failed.
+        if error == DrainError::NoLogger && matches!(serving, ServingLog::Failed) {
+            return Err(refuse(
+                StartError::AbandonedPending,
+                abandoned,
+                "log open failed",
+            ));
+        }
         file_stage(error).map_err(|class| refuse(class, abandoned, cause))
     });
     drop(session);

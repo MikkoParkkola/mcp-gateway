@@ -77,6 +77,7 @@ mod capability_publish_tests;
 #[cfg(all(test, unix))]
 mod capability_snapshot_tests;
 mod run_wiring;
+mod serving_audit;
 #[cfg(tp4)]
 #[cfg(test)]
 mod serving_log_tests;
@@ -258,6 +259,9 @@ pub struct Gateway {
     /// its plan here once it fixes its budget. `None` for a gateway built in
     /// memory, whose stop then leaves the process exit to its caller.
     retire: Option<crate::retire::RetireCell>,
+    /// The record key and the serving log, opened once at construction and shared by every
+    /// metadata build (WIRE.4).
+    serving_audit: serving_audit::ServingAudit,
     /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
     test_seams: test_seams::TestSeams,

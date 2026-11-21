@@ -675,22 +675,29 @@ mod admin_credential_tests {
     }
 }
 
-/// The serve paths' first load of the config. A byte write a crash left
-/// behind is recovered first ([`mcp_gateway::config_reload::recover_before_start`]),
-/// so the gateway never starts on bytes no reload accepted; an unresolvable
-/// one refuses the start. Read-only commands load without it.
-#[allow(
-    clippy::unused_async,
-    reason = "scaffold: the startup gate is awaited here once the serve paths take a startup session"
-)]
+/// The serve paths' first load of the config, given the one path config resolution found. The
+/// startup gate runs first: it takes the config lock (or proves none is needed), repairs what a
+/// crashed write left and refuses what it cannot settle. The config is then loaded from the path
+/// the gate checked, and the session rides in the result, still holding the lock, to the
+/// construction that finishes it. With no path, the built-in defaults load and nothing is
+/// searched for. Read-only commands load without the gate.
 pub(crate) async fn load_for_serve(
     path: Option<&std::path::Path>,
 ) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
-    if let Some(path) = path {
-        mcp_gateway::config_reload::recover_before_start(path)
-            .map_err(mcp_gateway::Error::Config)?;
-    }
-    mcp_gateway::config::Config::load_evaluated(path)
+    let Some(path) = path else {
+        return mcp_gateway::config::Config::load_evaluated_defaults();
+    };
+    let session = crate::config_reload::startup_settle::prepare_start(path)
+        .await
+        .map_err(|class| mcp_gateway::Error::Config(class.to_string()))?;
+    #[cfg(test)]
+    crate::config_reload::serve_seams::reached(
+        session.target(),
+        crate::config_reload::serve_seams::Point::AfterPrepare,
+    );
+    let mut evaluated = mcp_gateway::config::Config::load_evaluated(Some(session.target()))?;
+    evaluated.startup_session = crate::config::StartupSlot::holding(session);
+    Ok(evaluated)
 }
 
 #[cfg(test)]

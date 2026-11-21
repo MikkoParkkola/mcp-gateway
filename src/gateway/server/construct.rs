@@ -78,10 +78,13 @@ impl Gateway {
         // Before any await: in a test, this thread is the test's own.
         #[cfg(test)]
         let test_seams = test_seams::TestSeams::new();
-        // A config file means a dead writer may have left work beside it: refuse while any is
-        // there, writing nothing. Until the serve paths carry a startup session, every
-        // path-backed construction runs this sessionless check.
-        if let Some(path) = &config_path {
+        // The serve load's startup session, if this is a served start: finished below. Any other
+        // path-backed construction may meet work a dead writer left beside the config, so it
+        // refuses while any is there, writing nothing.
+        let session = env.take_startup_session();
+        if session.is_none()
+            && let Some(path) = &config_path
+        {
             crate::config_reload::startup_settle::check_sessionless(path)
                 .await
                 .map_err(|class| Error::Config(class.to_string()))?;
@@ -98,6 +101,31 @@ impl Gateway {
             crate::config::SignatureChainConfig::resolve_section(chain, &overlay)?;
         }
         posture::log_startup(&config);
+
+        // The record key and the serving log, opened once for the life of this gateway (WIRE.4).
+        // A served start then settles what a dead writer left with that same log, before any
+        // backend registers or any call can arrive; the config lock is released only then.
+        let data_dir = {
+            #[cfg(test)]
+            {
+                test_seams.data_dir()
+            }
+            #[cfg(not(test))]
+            {
+                super::persistence::standard_data_dir()
+            }
+        };
+        let (serving_audit, serving_log) = super::serving_audit::open(&config, &env, &data_dir)?;
+        if let Some(session) = session {
+            #[cfg(test)]
+            crate::config_reload::serve_seams::reached(
+                session.target(),
+                crate::config_reload::serve_seams::Point::AfterServingOpen,
+            );
+            crate::config_reload::startup_settle::finish_start(session, serving_log)
+                .await
+                .map_err(|class| Error::Config(class.to_string()))?;
+        }
 
         // The one resolver every backend's `secrets:` values go through, over
         // the same env this config was validated against; each backend
@@ -191,6 +219,7 @@ impl Gateway {
             // exactly what it was for a caller building a Config in memory.
             custody: None,
             retire: None,
+            serving_audit,
         })
     }
 
