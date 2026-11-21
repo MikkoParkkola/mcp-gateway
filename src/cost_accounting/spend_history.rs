@@ -234,7 +234,7 @@ fn save_with(
     let same = last
         .as_ref()
         .is_some_and(|(at, sum)| *at == path && *sum == digest);
-    if same && path.exists() {
+    if same && still_private(&path) {
         return true;
     }
     let written = crate::config_persistence::write_atomic_checked(
@@ -253,6 +253,28 @@ fn save_with(
             tracing::warn!(error = %e, path = %path.display(), "Spend history not saved");
             false
         }
+    }
+}
+
+/// Whether `path` is still what a private write leaves there: a plain file,
+/// not a link, owned by this process's user, with no group or other bit. A
+/// save that would skip an unchanged state writes anyway when it is not, so
+/// the skip never keeps a widened file. Windows keeps no such mode bits and
+/// its access list is not re-read here, so there every save writes.
+fn still_private(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let mine = meta.uid() == rustix::process::geteuid().as_raw();
+        meta.file_type().is_file() && mine && meta.mode() & 0o077 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
     }
 }
 

@@ -503,23 +503,25 @@ fn a_save_stopped_before_its_rename_leaves_the_previous_file() {
     assert_eq!(left, 1, "no scratch file is left");
 }
 
-/// The file's identity on disk: its modification time and, on unix, its
-/// inode (each write renames a new file into place, so a write moves it).
+/// The file's identity on disk: its modification time and its inode (each
+/// write renames a new file into place, so a write moves it).
+#[cfg(unix)]
 fn stamp(path: &Path) -> (std::time::SystemTime, u64) {
     let meta = std::fs::metadata(path).expect("the file");
-    #[cfg(unix)]
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
-    #[cfg(not(unix))]
-    let inode = 0;
     (meta.modified().expect("an mtime"), inode)
 }
 
 /// Lead 2026-11-21: a save of an unchanged state writes nothing, so an idle
 /// gateway rewrites and syncs nothing; a changed state writes once; a file
-/// removed meanwhile is written again. Red before the skip: the second save
-/// renames a new file into place.
+/// removed meanwhile is written again, and so is one widened to 0644 while
+/// nothing changed, which comes back 0600. Red before the skip: the second
+/// save renames a new file into place. Unix only: elsewhere every save
+/// writes.
+#[cfg(unix)]
 #[test]
 fn an_unchanged_state_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join(FILE_NAME);
     let tracker = CostTracker::new();
@@ -541,6 +543,18 @@ fn an_unchanged_state_writes_nothing() {
         saved_micro(&again["keys"][0]),
         (7, 7),
         "a removed file stays gone"
+    );
+
+    let kept = stamp(&path);
+    let wide = std::fs::Permissions::from_mode(0o644);
+    std::fs::set_permissions(&path, wide).expect("chmod");
+    saved(&tracker, dir.path(), T0 + 180);
+    let bits = std::fs::metadata(&path).expect("file").permissions().mode() & 0o777;
+    assert_eq!(bits, 0o600, "a widened file was left as it was");
+    assert_ne!(
+        stamp(&path).1,
+        kept.1,
+        "a widened file was not written again"
     );
 }
 
