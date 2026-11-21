@@ -33,6 +33,8 @@ mod snapshot;
 mod sums;
 #[cfg(any(test, feature = "webui"))]
 mod view;
+#[cfg(test)]
+pub(crate) mod test_totals;
 
 pub(crate) use latency::End;
 #[cfg(test)]

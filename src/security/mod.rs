@@ -58,6 +58,8 @@ pub mod response_scanner;
 pub(crate) mod rule_id;
 pub mod sanitize;
 pub mod scope_collision;
+#[cfg(all(test, feature = "metrics"))]
+pub(crate) mod metrics_scrape;
 pub(crate) mod security_metrics;
 mod severity;
 // Emission and strip are wired (ASI07 increment 2); chain verification has
