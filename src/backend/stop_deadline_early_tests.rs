@@ -466,7 +466,8 @@ fn peer_mark(dir: &std::path::Path, name: &str) -> Option<Duration> {
 /// reaper's record holds its SIGTERM before its kill; the tree was reaped
 /// before Db. The peer's `term` and `leaf_dead` marks are harness data: a
 /// loaded host may not run its handler in the gap, so they are printed, not
-/// asserted, and a leaf the handler never ended is killed here and noted.
+/// asserted. A leaf the handler never ended is not signalled by the row: it
+/// ends by itself after 120 s (see `nesting_peer`).
 /// Linux only: the marks and the entry share `CLOCK_MONOTONIC`.
 #[cfg(target_os = "linux")]
 #[tokio::test]
