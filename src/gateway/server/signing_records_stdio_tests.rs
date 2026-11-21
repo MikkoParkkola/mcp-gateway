@@ -333,3 +333,37 @@ async fn l2_stdio_with_no_log_a_refused_replay_is_answered_and_counted() {
         )
     );
 }
+
+/// W5: an early refusal (a nonce too long, refused at intake under the
+/// every-call scope) and a late one (a replay, refused at the signing check)
+/// name the same caller: their records' `who` is one value, so the two ways
+/// the stdio writer is handed its caller cannot drift apart.
+#[tokio::test]
+async fn w5_stdio_early_and_late_refusals_name_one_caller() {
+    let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
+    let long = "n".repeat(257);
+    let early = stdio_send(&logged.meta, invoke_params(with_nonce(&long), None)).await;
+    assert_eq!(
+        early["error"]["code"], -32602,
+        "premise: refused early: {early}"
+    );
+    let first = stdio_send(&logged.meta, invoke_params(with_nonce("w5-nonce"), None)).await;
+    assert!(first.get("result").is_some(), "premise: delivered: {first}");
+    let late = stdio_send(&logged.meta, invoke_params(with_nonce("w5-nonce"), None)).await;
+    assert_eq!(
+        late["error"]["code"], -32001,
+        "premise: refused late: {late}"
+    );
+    let all = invocation_records(&logged);
+    assert_eq!(all.len(), 3, "early, delivered, late: {all:?}");
+    assert!(
+        all[0]["who"].is_object(),
+        "the early record names a caller: {}",
+        all[0]
+    );
+    assert_eq!(
+        all[0]["who"], all[2]["who"],
+        "early {} / late {}",
+        all[0], all[2]
+    );
+}
