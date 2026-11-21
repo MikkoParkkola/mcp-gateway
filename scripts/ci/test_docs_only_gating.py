@@ -23,6 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
+import cache_writers  # noqa: E402
 
 SKIPPED = {
     "check", "kani", "fmt", "audit",
@@ -430,64 +431,6 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
-CACHE_SAVE = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
-
-
-def cache_docs() -> dict:
-    """Every workflow file, parsed: the cache rule covers them all."""
-    folder = ROOT / ".github" / "workflows"
-    return {p.name: yaml.safe_load(p.read_text()) for p in sorted(folder.glob("*.yml"))}
-
-
-def cache_save_errors(docs: dict | None = None) -> list[str]:
-    """Every Rust cache step restores on every run but saves only on the release line.
-
-    A pull request restores only caches saved on its base branch or its own ref, so the release-line push is the one
-    run whose save helps anyone. A save on every PR ref (310-346 MB each) kept the repository at its 10 GB cache
-    limit: 36 of 38 entries were evicted within 6 h on 2026-11-20, the line's own among them, and all ten Windows
-    entries were PR-scoped. A push to any other branch (a throwaway, a tag) saves nothing anyone restores either. A
-    step that never saves says `save-if: false`."""
-    out = []
-    pr = dict(ctx("pull_request", "success", "false"))
-    pr["github"] = dict(pr["github"], ref="refs/pull/1/merge")
-    other = dict(ctx("push", "success", "false"))
-    other["github"] = dict(other["github"], ref="refs/heads/throwaway/x")
-    line = dict(ctx("push", "success", "false"))
-    line["github"] = dict(line["github"], ref="refs/heads/" + RELEASE_LINE)
-    for name, doc in (cache_docs() if docs is None else docs).items():
-        for job_id, job in ((doc or {}).get("jobs") or {}).items():
-            for step in job.get("steps") or []:
-                if not str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
-                    continue
-                save_if = (step.get("with") or {}).get("save-if", True)
-                where = f"cache: {name} {job_id}"
-                if save_if is False or str(save_if).strip() == "false":
-                    continue
-                for label, c, want in (("a pull request", pr, False), ("a push to another branch", other, False),
-                                       ("a push to the release line", line, True)):
-                    got = save_if if isinstance(save_if, bool) else evaluate(str(save_if), c)
-                    if bool(got) is not want:
-                        out.append(f"{where}: {label} {'does not save' if want else 'saves'} the cache "
-                                   f"(save-if: {save_if}; want {CACHE_SAVE} or false)")
-    return out
-
-
-def cache_save_self_test() -> list[str]:
-    """The rule catches a step with no save-if and Clippy's old any-push rule, and passes the two good forms."""
-    out = []
-    step = {"uses": "Swatinem/rust-cache@x"}
-    if not cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [step]}}}}):
-        out.append("cache self-test: a step with no save-if was not caught")
-    pushes = dict(step, **{"with": {"save-if": "${{ github.event_name == 'push' }}"}})
-    if not any("another branch" in e for e in cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [pushes]}}}})):
-        out.append("cache self-test: a save on any push was not caught")
-    good = dict(step, **{"with": {"save-if": CACHE_SAVE}})
-    never = dict(step, **{"with": {"save-if": False}})
-    if cache_save_errors({"t.yml": {"jobs": {"j": {"steps": [good, never]}}}}):
-        out.append("cache self-test: the release-line rule or save-if false was refused")
-    return out
-
-
 def ui_tests_apt_errors() -> list[str]:
     """The UI tests job must not fail because an Ubuntu mirror is down.
 
@@ -576,7 +519,7 @@ def main() -> int:
     errors += macos_train_errors(jobs)
     errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
-    errors += cache_save_errors() + cache_save_self_test()
+    errors += cache_writers.errors() + cache_writers.self_test()
     errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
