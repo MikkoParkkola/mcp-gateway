@@ -97,9 +97,9 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
     drop(guard);
     handed_to_the_queued_call(&ctx, "the first reload");
 
-    // Both run on from here, polled together as two callers would be: a lock
-    // released before the first reload published would let the second read
-    // the stale config while the first is still applying.
+    // Both run on from here, polled together as two callers would be. The
+    // second stays queued behind the lock the first now holds; the checks
+    // below show it read the config the first published, not the old one.
     let (first, second) = tokio::time::timeout(HANG_GUARD, async { tokio::join!(first, second) })
         .await
         .expect("hang guard: the reloads never finished");
