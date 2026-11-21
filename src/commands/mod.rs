@@ -696,3 +696,6 @@ pub(crate) async fn load_for_serve(
 #[cfg(tp2)]
 #[cfg(test)]
 mod serve_load_tests;
+#[cfg(tp2)]
+#[cfg(test)]
+mod serve_session_tests;
