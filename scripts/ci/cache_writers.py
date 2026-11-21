@@ -87,6 +87,25 @@ MATRIX_RE = re.compile(r"\$\{\{\s*matrix\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}")
 FALSE_WRAP_RE = re.compile(r"\$\{\{\s*false\s*\}\}\Z", re.DOTALL)
 EMPTY_WRAP_RE = re.compile(r"\$\{\{\s*''\s*\}\}\Z", re.DOTALL)
 BAKE_RE = re.compile(r"\b(?:buildx|docker)\b.*\bbake\b")
+
+
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    """Shell lines with backslash continuations joined, each with the number of its first physical line, so a command
+    split over several lines (kimi seat: `docker buildx \\` then `bake ...`) is matched as the one command it is."""
+    out: list[tuple[int, str]] = []
+    start, parts = 1, []
+    for n, line in enumerate(text.splitlines(), 1):
+        if not parts:
+            start = n
+        if line.endswith("\\"):
+            parts.append(line[:-1])
+            continue
+        parts.append(line)
+        out.append((start, " ".join(parts)))
+        parts = []
+    if parts:
+        out.append((start, " ".join(parts)))
+    return out
 EXPORTER_MSG = (
     "an exporter (cache-to, CACHE_TO) must be the cache-to idiom, a plain exporter under a guarded step if, "
     "or empty; a boolean or a bare condition hands buildx a 'true' or 'false' exporter"
@@ -276,8 +295,10 @@ def classify_exporter(value: object, *, absent: bool) -> Parsed:
         return Parsed(false_=True)  # no export
     if isinstance(value, str):
         text = value.strip()
-        if text in ("", "''") or EMPTY_WRAP_RE.fullmatch(text):
+        if text == "" or EMPTY_WRAP_RE.fullmatch(text):
             return Parsed(false_=True)
+        if set(text) <= {"'", '"'}:
+            return Parsed(problems=[EXPORTER_MSG])  # kimi seat: a quotes-only value reaches buildx as a nonempty exporter
         if text not in ("true", "false") and is_plain_text(text):
             return Parsed(plain=True)
         if text.startswith("${{"):
@@ -405,7 +426,7 @@ def cache_to_outside(text: str) -> bool:
 
 def judge_run(step: dict, *, file: str, job: str, label: str, dangerous: bool, out: list[str]) -> None:
     run = step.get("run")
-    if isinstance(run, str) and BAKE_RE.search(run):
+    if isinstance(run, str) and any(BAKE_RE.search(line) for _, line in logical_lines(run)):
         out.append(problem(file, job, label, "R9", BAKE_MSG))
     if not isinstance(run, str) or "--cache-to" not in run:
         return
@@ -743,7 +764,7 @@ def errors(root: Path = ROOT) -> list[str]:
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            for lineno, line in enumerate(text.splitlines(), 1):
+            for lineno, line in logical_lines(text):
                 if "--cache-to" in line or BAKE_RE.search(line):
                     lines.append((rel, lineno, line))
     return check(docs, composites, packages, lines)
@@ -798,7 +819,8 @@ def self_test() -> list[str]:
         extra = guarded[uses]
         good(f"2 guarded {uses.split('@')[0]}", _doc([{"name": "cache", "uses": uses, **extra}]))
     # gpt seat finding 1: an exporter is a string, never a boolean; absent or empty exports nothing.
-    for label, value in (("(G) as a boolean", _expr(G)), ("literal false", False), ("string false", "false")):
+    for label, value in (("(G) as a boolean", _expr(G)), ("literal false", False), ("string false", "false"),
+                         ("a literal '' string", "''")):
         bad(f"1b exporter {label}", _doc([{"uses": build, "with": {"cache-to": value}}]), contains="exporter")
     good("1c exporter absent or empty", _doc([{"uses": build}, {"uses": build, "with": {"cache-to": ""}},
                                             {"uses": build, "with": {"cache-to": "${{ '' }}"}}]))
@@ -921,6 +943,13 @@ def self_test() -> list[str]:
     bad("15c bake in a run step", _doc([{"run": "docker buildx bake release"}]), contains="bake")
     bad("15e bake after a builder flag", _doc([{"run": "docker buildx --builder ci bake release"}]), contains="bake")
     bad("15g bake after a docker global flag", _doc([{"run": "docker --context ci bake release"}]), contains="bake")
+    bad("15h bake split over continued lines", _doc([{"run": "docker buildx \\\n  --builder ci \\\n  bake release"}]),
+        contains="bake")
+    bad("15i CACHE_TO a literal '' string", _doc([{
+        "name": "build",
+        "run": 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .',
+        "env": {"CACHE_TO": "''"},
+    }]), contains="exporter")
     good("15f buildx build is not bake", _doc([{"run": "docker buildx build --load -t baked-image ."}]))
 
     bad("16 trivy other sha", _doc([{"uses": f"aquasecurity/trivy-action@{bad_sha}"}]), contains=PIN_MSG)
@@ -965,6 +994,7 @@ def _loader_self_test() -> list[str]:
             ".github/actions/a/action.yml": "runs:\n  using: composite\n  steps:\n"
                                            "    - run: docker build --cache-to type=gha .\n      shell: bash\n",
             "scripts/ci/b.sh": "docker buildx bake release\n",
+            "scripts/ci/c.sh": "set -e\ndocker buildx \\\n  bake release\n",
             "ui/package.json": json.dumps({"packageManager": "npm@10"}),
             "ui/node_modules/x/package.json": json.dumps({"packageManager": "pnpm@9"}),
         }
@@ -973,7 +1003,8 @@ def _loader_self_test() -> list[str]:
             (root / rel).write_text(text)
         got = errors(root)
     want = {"w.yaml": "setup-uv writer in a .yaml workflow", "R9: --cache-to at .github/actions/a": "composite --cache-to",
-            "scripts/ci/b.sh:1": "bake in a script", "ui/package.json": "nested package.json"}
+            "scripts/ci/b.sh:1": "bake in a script", "scripts/ci/c.sh:2": "bake split over continued lines in a script",
+            "ui/package.json": "nested package.json"}
     for needle, what in want.items():
         if not any(needle in item for item in got):
             found.append(f"self-test: 19 loader: {what} not found in {got}")
