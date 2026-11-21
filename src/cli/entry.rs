@@ -89,15 +89,22 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         Some(Command::Accounts(accounts_cmd)) => {
             commands::run_accounts_command(&accounts_cmd, config_path.as_deref())
         }
-        Some(Command::HashKey { verify }) => commands::run_hash_key_command(verify.as_deref()),
-        Some(Command::Stats { url }) => {
+        Some(Command::HashKey { verify, json }) => commands::run_hash_key_command(
+            verify.as_deref(),
+            crate::cli::output::Render::from_json_flag(json),
+        ),
+        Some(Command::Stats { url, json }) => {
             let effective_url = resolve_stats_url(
                 url,
                 config_path.as_deref(),
                 port_override,
                 host_override.as_deref(),
             );
-            commands::run_stats_command(&effective_url).await
+            commands::run_stats_command(
+                &effective_url,
+                crate::cli::output::Render::from_json_flag(json),
+            )
+            .await
         }
         #[cfg(feature = "webui")]
         Some(Command::DashboardLink(args)) => {
@@ -172,15 +179,27 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         Some(Command::Skills(SkillsCommand::Import { source, registry })) => {
             commands::run_skills_import(source, registry).await
         }
-        Some(Command::Skills(SkillsCommand::List { registry })) => {
-            commands::run_skills_list(registry)
+        Some(Command::Skills(SkillsCommand::List { registry, json })) => {
+            commands::run_skills_list(registry, crate::cli::output::Render::from_json_flag(json))
         }
-        Some(Command::Skills(SkillsCommand::Search { query, registry })) => {
-            commands::run_skills_search(&query, registry)
-        }
-        Some(Command::Skills(SkillsCommand::Show { name, registry })) => {
-            commands::run_skills_show(&name, registry)
-        }
+        Some(Command::Skills(SkillsCommand::Search {
+            query,
+            registry,
+            json,
+        })) => commands::run_skills_search(
+            &query,
+            registry,
+            crate::cli::output::Render::from_json_flag(json),
+        ),
+        Some(Command::Skills(SkillsCommand::Show {
+            name,
+            registry,
+            json,
+        })) => commands::run_skills_show(
+            &name,
+            registry,
+            crate::cli::output::Render::from_json_flag(json),
+        ),
         Some(Command::Skills(SkillsCommand::Remove { name, registry })) => {
             commands::run_skills_remove(&name, registry)
         }
@@ -292,15 +311,19 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Get { name }) => {
+        Some(Command::Get { name, json }) => {
             let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
-                commands::run_get_command(&name, &config)
+                commands::run_get_command(
+                    &name,
+                    &config,
+                    crate::cli::output::Render::from_json_flag(json),
+                )
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (name, config);
+                let _ = (name, config, json);
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }

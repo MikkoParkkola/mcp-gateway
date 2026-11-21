@@ -11,6 +11,9 @@
 mod gateway_bin;
 #[path = "common/preview_sandbox.rs"]
 mod preview_sandbox_common;
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -88,6 +91,7 @@ async fn finish(mut child: tokio::process::Child) -> Output {
 /// preview's target runs, and only once `start_fetching` has returned.
 #[tokio::test]
 async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
+    require_private_home!();
     let Some(Started { mut child, .. }) = fetching("echo ran").await else {
         return;
     };
@@ -101,6 +105,7 @@ async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
 /// waiting forever": a "helper" that exits at once is refused, not awaited.
 #[tokio::test]
 async fn r6b_a_helper_that_never_connects_is_refused() {
+    require_private_home!();
     let started = tokio::time::timeout(
         FETCH_GUARD,
         start_fetching_with_helper(
@@ -117,6 +122,9 @@ async fn r6b_a_helper_that_never_connects_is_refused() {
     assert!(started.is_err());
 }
 
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this.
+const ESRCH: i32 = 3;
+
 /// The pids of this process's live `unshare` children whose command line
 /// holds `marker` (a zombie is not live; rows run in parallel threads).
 fn live_unshare_children(marker: &str) -> Vec<u32> {
@@ -126,8 +134,21 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            // Only a missing file or ESRCH (an exiting task) means gone. A
+            // stat that fails for another reason says nothing, so a process
+            // carrying the marker counts as live and the caller's wait goes on.
+            Err(e)
+                if e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH) =>
+            {
+                let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                if String::from_utf8_lossy(&cmdline).contains(marker) {
+                    found.push(pid);
+                }
+                continue;
+            }
+            Err(_) => continue,
         };
         let Some((name, rest)) = stat.split_once(" (").and_then(|(_, r)| r.rsplit_once(") "))
         else {
@@ -155,6 +176,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
     use std::future::Future as _;
     use std::task::Poll;
     const MARKER: &str = "r6b-dropped-start";
+    require_private_home!();
     let target = shell(&format!("sleep 30 # {MARKER}"));
     let mut start = Box::pin(start_fetching_with_helper(
         Path::new(gateway_bin::path()),
@@ -183,6 +205,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
 #[tokio::test]
 async fn f2_t1_the_unshares_only_child_is_the_helper() {
     use tokio::io::AsyncBufReadExt as _;
+    require_private_home!();
     let Some(Started { mut child, .. }) =
         fetching("(sleep 30 &); (sleep 30 &); echo up; sleep 30").await
     else {
@@ -206,6 +229,7 @@ async fn f2_t1_the_unshares_only_child_is_the_helper() {
 /// nothing the target can list is a socket.
 #[tokio::test]
 async fn f2_t2_the_run_child_holds_no_control_connection() {
+    require_private_home!();
     let Some(Started { mut child, .. }) =
         fetching("ls -l /proc/self/fd/; ls -l /proc/1/fd/ 2>&1; true").await
     else {
@@ -223,6 +247,7 @@ async fn f2_t2_the_run_child_holds_no_control_connection() {
 /// empty, and nothing can be added beside them.
 #[tokio::test]
 async fn ca_files_are_read_only_from_the_run_child() {
+    require_private_home!();
     let script = "d=/etc/mcp-gateway-preview
         test -f $d/ca.pem && echo ca-present
         (echo x > $d/ca.pem) 2>/dev/null && echo ca-writable
@@ -259,6 +284,7 @@ async fn ca_files_are_read_only_from_the_run_child() {
 /// staging" fails; this fails loudly if the temp dir is not `/tmp`.
 #[tokio::test]
 async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
+    require_private_home!();
     let Some(Started { mut child, .. }) = fetching("sleep 30").await else {
         return;
     };
@@ -267,4 +293,13 @@ async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
     let text = String::from_utf8_lossy(&cmdline).into_owned();
     let _ = child.kill().await;
     assert!(text.contains("\"ca\":\"/tmp/"), "{text}");
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

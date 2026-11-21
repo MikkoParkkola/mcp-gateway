@@ -447,6 +447,7 @@ async fn b5_the_deadline_both_orders() {
     let fx = fixture().await;
     let gate = Arc::new(tokio::sync::Notify::new());
     install_stub(&fx, Some(Arc::clone(&gate)));
+    // limit-under-test (fires-only): the gated list holds dispatch, so the deadline ends the call
     crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(Duration::from_millis(50))));
     let (status, early) = post(&fx, ADMIN, call("read", false)).await;
     crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));

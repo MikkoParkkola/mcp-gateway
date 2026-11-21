@@ -9,6 +9,8 @@ are `python3 -c` one-liners that write markers outside the clone.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -1061,6 +1063,78 @@ def dead_within(pid, timeout_s=2.0):
             return False
         time.sleep(0.05)
     return True
+
+
+class GatePy(unittest.TestCase):
+    """Rows written as "$GATE_PY" <script> need the gates' pinned interpreter. The runner resolves it as the
+    pre-push hook does (scripts/dev/gate-env-python.sh); when it cannot, it stops with one setup error instead
+    of letting every such row fail with "command not found" and read as a block of check failures."""
+
+    def helper(self, tmp, body):
+        p = pathlib.Path(tmp) / "helper.sh"
+        p.write_text("#!/usr/bin/env bash\n" + body)
+        return str(p)
+
+    def test_g1_an_unready_gate_env_is_one_setup_error_naming_gate_py(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = self.helper(tmp, 'echo "FAIL: the gate environment is missing" >&2\nexit 1\n')
+            py_path, err = runner.resolve_gate_py(['"$GATE_PY" scripts/x.py\t1\tclosed'], pathlib.Path(tmp), {}, helper=h)
+        self.assertIsNone(py_path)
+        self.assertIn("GATE_PY", err)
+        self.assertIn("the gate environment is missing", err)
+
+    def test_g2_a_ready_gate_env_gives_its_interpreter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = self.helper(tmp, "echo /pinned/venv/bin/python\n")
+            self.assertEqual(runner.resolve_gate_py(['"$GATE_PY" a.py\t1\tclosed'], pathlib.Path(tmp), {}, helper=h),
+                             ("/pinned/venv/bin/python", None))
+
+    def test_g3_a_set_gate_py_or_no_row_naming_it_asks_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = self.helper(tmp, "exit 1\n")  # would fail if it were called
+            repo = pathlib.Path(tmp)
+            self.assertEqual(runner.resolve_gate_py(['"$GATE_PY" a.py\t1\tclosed'], repo, {"GATE_PY": "/x/python"}, helper=h),
+                             (None, None))
+            self.assertEqual(runner.resolve_gate_py(["python3 a.py\t1\tclosed"], repo, {}, helper=h), (None, None))
+
+    def test_g4_main_stops_before_any_row_on_the_setup_error(self):
+        calls = []
+        with mock.patch.object(runner, "yaml_status", return_value="PyYAML ok"), \
+                mock.patch.object(runner, "resolve_base_tip", return_value="0" * 40), \
+                mock.patch.object(runner, "resolve_gate_py", return_value=(None, "setup error: GATE_PY ...")), \
+                mock.patch.object(runner, "run", side_effect=lambda *a, **k: calls.append(a)), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = runner.main(["--merge-base", "HEAD"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [], "no row may run after the setup error")
+        errors = [line for line in out.getvalue().splitlines() if "setup error" in line]
+        self.assertEqual(len(errors), 1, f"exactly one setup error line, got {errors}")
+        self.assertIn("GATE_PY", errors[0])
+
+    def test_g5_main_exports_the_resolved_interpreter_to_every_row(self):
+        seen = []
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(runner, "yaml_status", return_value="PyYAML ok"), \
+                mock.patch.object(runner, "resolve_base_tip", return_value="0" * 40), \
+                mock.patch.object(runner, "resolve_gate_py", return_value=("/pinned/venv/bin/python", None)), \
+                mock.patch.object(runner, "run", side_effect=lambda *a, **k: seen.append(os.environ.get("GATE_PY"))
+                                  or runner.Report(text="", rc=0)):
+            os.environ.pop("GATE_PY", None)
+            rc = runner.main(["--merge-base", "HEAD"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen, ["/pinned/venv/bin/python"], "the rows must see the resolved interpreter")
+
+    def test_g6_a_helper_that_hangs_is_the_same_setup_error(self):
+        # The helper sleeps far past the bound, so this passes only if the bound itself ends the wait: without
+        # the timeout the call would last the whole sleep and fail the elapsed check.
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "SETUP_TIMEOUT_S", 1):
+            h = self.helper(tmp, "sleep 60\n")
+            started = time.monotonic()
+            py_path, err = runner.resolve_gate_py(['"$GATE_PY" a.py\t1\tclosed'], pathlib.Path(tmp), {}, helper=h)
+            elapsed = time.monotonic() - started
+        self.assertIsNone(py_path)
+        self.assertIn("GATE_PY", err)
+        self.assertLess(elapsed, 10, "the setup bound must end a hung helper")
 
 
 if __name__ == "__main__":

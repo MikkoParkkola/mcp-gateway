@@ -55,7 +55,7 @@ if ! docker image inspect "${IMAGE}" > /dev/null 2>&1 \
 fi
 
 run_as_gateway() {
-  docker run --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
+  docker run -e DO_NOT_TRACK=1 --rm --user 1001:1001 --pull never --entrypoint sh "${IMAGE}" \
     -c "timeout -k 10 ${1} ${2}" > "${ANSWER}" 2>&1
 }
 
@@ -153,7 +153,7 @@ ip -V > /dev/null 2>&1 || { echo "iproute2 is missing" >&2; exit 1; }
 echo "step: ran as uid $(id -u)"
 STEP
 chmod 0755 "${ROOTDIR}/steps/10-package.sh"
-docker run -d --name "${ROOT_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${ROOT_CASE}" --pull never --user root \
   -e EXTRA_APT_PACKAGES=iproute2 \
   -v "${ROOTDIR}/steps:/docker-entrypoint.d:ro" \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
@@ -191,7 +191,7 @@ mkdir -p "${FAILDIR}/steps"
 printf '#!/bin/sh\necho "step: refusing to start" >&2\nexit 7\n' \
   > "${FAILDIR}/steps/10-fail.sh"
 chmod 0755 "${FAILDIR}/steps/10-fail.sh"
-if FAIL_LOG="$(docker run --rm --user root \
+if FAIL_LOG="$(docker run -e DO_NOT_TRACK=1 --rm --user root \
       -v "${FAILDIR}/steps:/docker-entrypoint.d:ro" \
       -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
@@ -207,7 +207,7 @@ BADDIR="${WORKDIR}/smoke-full-bad-$$"
 mkdir -p "${BADDIR}"
 printf 'Types: deb\nURIs: file:/nonexistent-smoke-full\nSuites: trixie\nComponents: main\n' \
   > "${BADDIR}/empty.sources"
-if BAD_LOG="$(docker run --rm --user root \
+if BAD_LOG="$(docker run -e DO_NOT_TRACK=1 --rm --user root \
       -e EXTRA_APT_PACKAGES=iproute2 \
       -v "${BADDIR}/empty.sources:/etc/apt/sources.list.d/debian.sources:ro" \
       -v /dev/null:/etc/apt/sources.list.d/nodesource.sources:ro \
@@ -226,7 +226,7 @@ SLOWDIR="${WORKDIR}/smoke-full-slow-$$"
 mkdir -p "${SLOWDIR}/steps"
 printf '#!/bin/sh\nsleep 120\n' > "${SLOWDIR}/steps/10-slow.sh"
 chmod 0755 "${SLOWDIR}/steps/10-slow.sh"
-docker run -d --name "${STOP_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${STOP_CASE}" --pull never --user root \
   -v "${SLOWDIR}/steps:/docker-entrypoint.d:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 sleep 3
@@ -250,7 +250,7 @@ ENVSHDIR="${WORKDIR}/smoke-full-envsh-$$"
 mkdir -p "${ENVSHDIR}/steps"
 printf '#!/bin/sh\necho "step: sleeping" >&2\nsleep 120\n' > "${ENVSHDIR}/steps/10-slow.envsh"
 chmod 0755 "${ENVSHDIR}/steps/10-slow.envsh"
-docker run -d --name "${ENVSH_CASE}" --pull never --user root \
+docker run -e DO_NOT_TRACK=1 -d --name "${ENVSH_CASE}" --pull never --user root \
   -v "${ENVSHDIR}/steps:/docker-entrypoint.d:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 # The step is known to be running before the stop, so a step that never ran
@@ -285,11 +285,11 @@ docker rm -f "${ENVSH_CASE}" > /dev/null
 # an owner-only config on any host, not only where the runner is UID 1001.
 call_log_tail() { docker logs --tail 30 "${CALL_CASE}" 2>&1 || true; }
 in_volume() {
-  docker run --rm -i --pull never --user 1001:1001 --entrypoint sh \
+  docker run -e DO_NOT_TRACK=1 --rm -i --pull never --user 1001:1001 --entrypoint sh \
     -v "${CALL_VOLUME}:/case" "${IMAGE}" -c "$1"
 }
 docker volume create "${CALL_VOLUME}" > /dev/null
-docker run --rm --pull never --user 0 --entrypoint sh -v "${CALL_VOLUME}:/case" \
+docker run -e DO_NOT_TRACK=1 --rm --pull never --user 0 --entrypoint sh -v "${CALL_VOLUME}:/case" \
   "${IMAGE}" -c 'chown 1001:1001 /case && chmod 0700 /case'
 in_volume 'cat > /case/slow.js' <<'JS'
 const { spawn } = require('child_process');
@@ -338,7 +338,7 @@ backends:
 YAML
 in_volume 'test ! -e /case/started && test ! -e /case/release && test ! -e /case/done' \
   || fail "the call case's volume holds a marker before the gateway started"
-docker run -d --name "${CALL_CASE}" --pull never -p "127.0.0.1::39400" \
+docker run -e DO_NOT_TRACK=1 -d --name "${CALL_CASE}" --pull never -p "127.0.0.1::39400" \
   -v "${CALL_VOLUME}:/case" "${IMAGE}" --config /case/gateway.yaml > /dev/null
 CALL_PORT="$(docker port "${CALL_CASE}" 39400/tcp | head -1 | sed 's/.*://')"
 [ -n "${CALL_PORT}" ] || fail "docker published no host port for 39400/tcp: $(call_log_tail)"

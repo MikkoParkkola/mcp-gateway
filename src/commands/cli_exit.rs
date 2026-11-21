@@ -82,9 +82,10 @@ impl CliOutcome {
         let token = secrets.first().copied().unwrap_or_default();
         if rule == StdoutRule::RefuseToken
             && !token.is_empty()
-            && stdout
+            && (stdout
                 .windows(token.len())
                 .any(|window| window == token.as_bytes())
+                || (json && decoded_holds(&stdout, token)))
         {
             return CliError::new(
                 CliExit::LocalFailure,
@@ -195,6 +196,23 @@ pub(crate) const UNSAFE_BODY_MESSAGE: &str = "The response could not be printed 
 pub(crate) const UNSAFE_BODY_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
 pub(crate) const PROTOCOL_MESSAGE: &str = "The gateway returned an invalid response.";
 pub(crate) const PROTOCOL_REMEDY: &str = "Check the gateway response against UI API 1.";
+
+/// Whether `stdout`, read as one JSON document, holds `token` in any string or object key once decoded: JSON
+/// escaping turns a `"` or `\` in a token into two bytes, so the byte search alone can miss it (MIK-9764.JSONF.1,
+/// design D9). A stdout that is not JSON decodes to nothing; the byte search still covers it.
+fn decoded_holds(stdout: &[u8], token: &str) -> bool {
+    fn walk(value: &serde_json::Value, token: &str) -> bool {
+        match value {
+            serde_json::Value::String(text) => text.contains(token),
+            serde_json::Value::Array(items) => items.iter().any(|item| walk(item, token)),
+            serde_json::Value::Object(map) => map
+                .iter()
+                .any(|(key, item)| key.contains(token) || walk(item, token)),
+            _ => false,
+        }
+    }
+    serde_json::from_slice::<serde_json::Value>(stdout).is_ok_and(|value| walk(&value, token))
+}
 
 /// The secrets that can be printed against: an empty value hides nothing.
 fn owned(secrets: &[&str]) -> Vec<String> {
