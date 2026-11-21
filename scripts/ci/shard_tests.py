@@ -162,7 +162,9 @@ RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignor
 # test_dir_keep.rs report_unkept: "<kind> at <path> is in a temp dir no test kept; created by <test>",
 # on raw stderr, so it can start mid-line. The kind is read, never listed: a new writer's kind fails too.
 # The path runs to the report's fixed suffix, so a path with spaces is read whole.
-UNKEPT = re.compile(r"([a-z][a-z -]*) at (.+?) is in a temp dir no test kept; created by (\S+)")
+# The kind is one or two lowercase words (every writer's kind is), and the path holds no " at ", so lowercase
+# words or an earlier " at " that raw stderr put before the report on the same line are not read into either.
+UNKEPT = re.compile(r"\b([a-z]+(?: [a-z]+)?) at ((?:(?! at ).)+?) is in a temp dir no test kept; created by (\S+)")
 
 
 def unkept(lines: list[str]) -> list[str]:
@@ -802,6 +804,14 @@ def unkept_rows() -> None:
     for path in ("/tmp/with space/.tmpAb12Cd/audit.jsonl", r"C:\Users\Jane Doe\AppData\Local\Temp\.tmpAb12Cd\skills"):
         line = f"test a::b::row ... audit log at {path} is in a temp dir no test kept; created by a::b::row"
         assert unkept([line]) == [f"unkept temp dir: audit log at {path}; created by a::b::row"], unkept([line])
+    # Raw stderr ahead of the report on one line: lowercase words, and a panic message with its own " at ",
+    # are read into neither the kind nor the path.
+    tail = "audit log at /tmp/.tmpZz9Yy8/a.jsonl is in a temp dir no test kept; created by a::b::row"
+    want = ["unkept temp dir: audit log at /tmp/.tmpZz9Yy8/a.jsonl; created by a::b::row"]
+    for noise in ("warning some text ", "thread 'x' panicked at src/a.rs:1:2: oops "):
+        assert unkept([noise + tail]) == want, unkept([noise + tail])
+
+
 def with_home_rows() -> None:
     """S1: `with-home -- CMD` runs CMD in a private gateway home, hands back its exit code, and
     removes the home afterwards, also when CMD fails."""
