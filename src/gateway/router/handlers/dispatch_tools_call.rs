@@ -466,8 +466,8 @@ pub(super) async fn tools_call(
                 state,
                 tool_name,
                 (
-                    Some(id.clone()),
-                    crate::gateway::router::meta_refusal_audit::SigningSite::Check,
+                    crate::gateway::router::AnswerId::Present(id.clone()),
+                    crate::gateway::router::SigningSite::Check,
                 ),
                 error,
             )

@@ -80,6 +80,9 @@ mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
+#[cfg(tp4)]
+#[cfg(test)]
+mod signing_writer_tests;
 mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
@@ -361,7 +364,7 @@ pub(super) enum Unprepared {
     Answered(serde_json::Value),
     /// A malformed nonce refused early, under the every-call scope and ahead
     /// of every gate, with the request's id: recorded before it is answered.
-    MalformedNonce(Option<crate::protocol::RequestId>, crate::Error),
+    MalformedNonce(crate::gateway::router::AnswerId, crate::Error),
 }
 
 /// Every other early stop is answered as it stands.

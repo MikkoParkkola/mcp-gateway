@@ -71,6 +71,28 @@ async fn f1_a_failed_refusal_write_answers_503_when_the_log_fails_closed() {
     assert_eq!(totals(&store), ONE_SERVED_ONE_REFUSED);
 }
 
+/// F1n: F1 for a request with no id at all, refused at the early nonce site.
+/// A signing refusal fails closed whatever its id: 503 and the log's
+/// unavailability code, still with no id, never the nonce refusal it could
+/// not record.
+#[tokio::test]
+async fn f1n_an_id_less_unrecordable_signing_refusal_answers_503() {
+    let fx = signing_gateway(Log::On, true).await;
+    fx.log.set_append_failure_for_test(true);
+    let invoke = meta_invoke("alpha", "t", &json!({}));
+    let mut no_id: Value =
+        serde_json::from_str(&signed(&invoke, 3, &json!(7))).expect("the request parses");
+    if let Some(call) = no_id.as_object_mut() {
+        call.remove("id");
+    }
+    let (status, body) = post_to(&fx, "/mcp", &no_id.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_i64(), body["id"].is_null()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some(-32005), true),
+        "{body}"
+    );
+}
+
 /// B1: the log is best-effort and its append fails: the refused replay is
 /// answered as before and counted once, on the counters and in D4.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

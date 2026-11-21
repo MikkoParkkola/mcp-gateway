@@ -52,7 +52,7 @@ pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
 // Stdio records its signing refusals with the same writer as `/mcp`.
 pub(crate) use meta_refusal_audit::{
-    SigningSite, answer_stdio_signing_refusal, call_name_and_arguments,
+    AnswerId, SigningSite, answer_stdio_signing_refusal, call_name_and_arguments,
 };
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the

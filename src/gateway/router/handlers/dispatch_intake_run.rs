@@ -240,6 +240,8 @@ pub(in crate::gateway::router::handlers) async fn intake(
     );
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    // The same id as the refusal writer states it: present, absent or unreadable.
+    let answer_id = crate::gateway::router::AnswerId::of(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // MIK-8382 intake: judged on the request as sent, before signing capture
@@ -285,7 +287,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
             state,
             &request,
             (client.as_ref(), grant_subject.as_ref()),
-            (raw_id, &session_id),
+            (answer_id, &session_id),
             &error,
         )
         .await);
@@ -374,7 +376,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
         let (refused, called, _) = intake_refused(state, &request, caller, &session_id);
         let site = crate::gateway::router::meta_refusal_audit::SigningSite::Intake;
         return Err(refused
-            .answer_signing(state, called, (raw_id, site), error)
+            .answer_signing(state, called, (answer_id, site), error)
             .await);
     }
 
@@ -755,7 +757,7 @@ async fn answer_intake(
         Option<&AuthenticatedClient>,
         Option<&crate::identity_grants::GrantSubject>,
     ),
-    (id, session_id): (Option<crate::protocol::RequestId>, &str),
+    (id, session_id): (crate::gateway::router::AnswerId, &str),
     error: &crate::Error,
 ) -> axum::response::Response {
     let (refused, name, arguments) =

@@ -3,6 +3,7 @@
 //! Stdio request dispatch: the relay, tools/call, signing, parsing and the caller context (moved from `server/mod.rs`, MIK-8144).
 
 use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
+use crate::gateway::router::{AnswerId, SigningSite};
 use std::sync::Arc;
 
 use tracing::debug;
@@ -317,9 +318,8 @@ impl Gateway {
                 .map_err(|error| refuse(None, &error))?;
         }
         if let Some(context) = signing_context.as_ref() {
-            context
-                .refuse_malformed_nonce_early()
-                .map_err(|error| Unprepared::MalformedNonce(raw_id, error))?;
+            let early = context.refuse_malformed_nonce_early();
+            early.map_err(|error| Unprepared::MalformedNonce(AnswerId::of(request), error))?;
         }
         Ok((signing_context, chain_nonce))
     }
@@ -647,7 +647,7 @@ impl Gateway {
                 // Recorded before it is answered, as on `/mcp`.
                 let request = (arguments.as_ref(), tool_name.as_str(), session_id);
                 let who = crate::security::audit::AuditWho::from_caller(&caller);
-                let site = (Some(id), crate::gateway::router::SigningSite::Check);
+                let site = (AnswerId::Present(id), SigningSite::Check);
                 let answer = crate::gateway::router::answer_stdio_signing_refusal(
                     meta_mcp, who, request, site, error,
                 );
