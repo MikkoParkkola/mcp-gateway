@@ -461,7 +461,9 @@ pub(super) async fn tools_call(
     {
         delivery_facts::outlet(&error);
         // Recorded before it is answered, as every pre-admission refusal is.
-        return Err(refused.answer_signing(state, tool_name, id, error).await);
+        return Err(refused
+            .answer_signing(state, tool_name, id.clone(), error)
+            .await);
     }
     caller.signing = signing_context.as_ref();
     let admission = state.meta_mcp.admit_meta_sync(
