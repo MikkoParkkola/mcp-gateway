@@ -129,29 +129,23 @@ async fn create_held_task(state: &Arc<AppState>) -> String {
         .unwrap_or_else(|| panic!("the creating answer has no taskId: {text}"))
 }
 
-/// The status in the task's record file under the store directory, or a
-/// panic naming what the directory holds.
+/// The status in the task's record file, `<store>/tasks/<id>.json`, whose
+/// `model` holds the task snapshot with the task itself under `task`.
 fn status_on_disk(store: &Path, id: &str) -> String {
-    let tasks = store.join("tasks");
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(&tasks).expect("the store has a tasks directory") {
-        let path = entry.expect("a directory entry").path();
-        names.push(path.display().to_string());
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(record) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        if record.pointer("/model/taskId").and_then(Value::as_str) == Some(id) {
-            return record
-                .pointer("/model/status")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("the record has no model status: {text}"))
-                .to_owned();
-        }
-    }
-    panic!("no record for task {id} among {names:?}")
+    let path = store.join("tasks").join(format!("{id}.json"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the task's record {} reads: {e}", path.display()));
+    let record: Value = serde_json::from_str(&text).expect("a task record is JSON");
+    assert_eq!(
+        record.pointer("/model/task/taskId").and_then(Value::as_str),
+        Some(id),
+        "the record is this task's: {text}"
+    );
+    record
+        .pointer("/model/task/status")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the record carries no task status: {text}"))
+        .to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
