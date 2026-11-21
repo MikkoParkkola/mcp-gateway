@@ -318,7 +318,7 @@ fn f887_a_leading_dash_name_is_stored_and_cleared_as_a_value() {
     }
 }
 
-/// A quote can end the GVariant string `search` builds, so a name outside the
+/// A quote can end the `GVariant` string `search` builds, so a name outside the
 /// grammar is refused by every entry point before any process starts, each with
 /// the same sentence. `a'b`: a quote inside a name, and not text the sentence
 /// itself contains.

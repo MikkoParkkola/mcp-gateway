@@ -40,7 +40,7 @@ const LIMIT: usize = 8_192;
 const INVALID_NAME: &str = "the keychain name is not valid (1-128 of A-Z, a-z, 0-9, '.', '_', '-')";
 
 /// A name in ADR-028's grammar, checked by each entry point before anything
-/// is spawned: a quote could end the GVariant string `search` builds.
+/// is spawned: a quote could end the `GVariant` string `search` builds.
 fn checked(name: &str) -> Result<(), KeychainError> {
     if super::secret_ref::is_keychain_name(name) {
         Ok(())
