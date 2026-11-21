@@ -4,9 +4,11 @@
 //! enforcer charges for each answered call, so a view and the limits read
 //! one figure. Every row dispatches through the real `gateway_invoke` route.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::direct_guards_fixture::{Answer, fixture_built, initialize, post_meta_invoke};
+use super::direct_guards_fixture::{
+    Answer, WITH_ADMIN, fixture_built, initialize, post_meta_invoke, send,
+};
 use super::live_budget_tests::{KEY, fixture, governance, reload};
 
 /// One answered `gateway_invoke` of `tool` on `alpha` as [`KEY`].
@@ -37,14 +39,52 @@ fn close(got: f64, want: f64, what: &str) {
     assert!((got - want).abs() < 1e-9, "{what}: {got}, want {want}");
 }
 
+/// The `caller` part of [`KEY`]'s own `gateway_cost_report`, asked with no
+/// session: its session-less spend, read through the MCP route.
+async fn own_caller_report(fx: &super::live_budget_tests::Fx) -> Value {
+    let params = json!({"name": "gateway_cost_report", "arguments": {}});
+    let (status, body) = send(fx, "/mcp", KEY, "tools/call", params, None).await;
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no report text: {status} {body}"));
+    let report: Value = serde_json::from_str(text).expect("the report is JSON");
+    report["caller"].clone()
+}
+
+/// `uri` read as the fixture's admin key: the operator's HTTP costs view.
+async fn admin_get(fx: &super::live_budget_tests::Fx, uri: &str) -> Value {
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("authorization", "Bearer k-admin")
+        .body(axum::body::Body::empty())
+        .expect("request");
+    let response = fx.router.clone().oneshot(request).await.expect("response");
+    assert!(
+        response.status().is_success(),
+        "{uri}: {}",
+        response.status()
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("JSON")
+}
+
 /// Two calls in a session and one without, each priced 0.25: the key, the
-/// session and the aggregate report the charged figure, and tokens stay 0.
+/// session, the caller's own session-less report and the aggregate report the
+/// charged figure, through the tracker and through the HTTP and MCP views,
+/// and tokens stay 0.
 #[tokio::test]
 async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
     crate::test_day::same_utc_day_async(|| async {
         let mut cfg = governance(|_| {});
         cfg.tool_costs.insert("read".to_owned(), 0.25);
+        // With the admin key `k-admin`, which the HTTP costs view needs.
+        WITH_ADMIN.with(|s| s.set(true));
         let fx = fixture(&cfg).await;
+        WITH_ADMIN.with(|s| s.set(false));
         let session = initialize(&fx, KEY).await;
         invoke(&fx, "read", Some(&session)).await;
         invoke(&fx, "read", Some(&session)).await;
@@ -64,6 +104,20 @@ async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
         assert_eq!(all.total_calls, 3);
         assert_eq!(all.total_tokens, 0);
         close(all.total_cost_usd, 0.75, "aggregate");
+
+        // The caller's own report holds only the session-less call.
+        let own = own_caller_report(&fx).await;
+        assert_eq!(own["call_count"], 1, "{own}");
+        assert_eq!(own["total_tokens"], 0, "{own}");
+        close(
+            own["total_cost_usd"].as_f64().unwrap_or(-1.0),
+            0.25,
+            "caller",
+        );
+        // The operator's HTTP view reports the same key total.
+        let by_key = admin_get(&fx, &format!("/api/costs?key={KEY}")).await;
+        let usd = by_key["window_24h"]["cost_usd"].as_f64().unwrap_or(-1.0);
+        close(usd, 0.75, "/api/costs key window");
     })
     .await;
 }
