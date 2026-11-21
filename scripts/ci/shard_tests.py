@@ -511,6 +511,10 @@ def self_test() -> int:
         "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
         "if os.environ.get('PLANT_LEAK'):\n"
         "    open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()\n"
+        "if os.environ.get('PLANT_UNKEPT'):\n"
+        "    import sys\n"
+        "    sys.stderr.write('shutdown save at /tmp/.tmpZz9Yy8/s.json is in a temp dir no test kept;'\n"
+        "                     ' created by a::b::row\\n')\n"
     ))
     os.environ["PLANT_LEAK"] = "1"
     try:
@@ -531,6 +535,15 @@ def self_test() -> int:
         assert contents(leftover, None).endswith(
             f"{os.path.join('tasks', 'task-d.json')} 2B"), contents(leftover, None)
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
+    # K6 on a cargo shard's run path: a report a test printed (raw stderr, merged into the step's
+    # output) fails the shard once, by its test, beside the control run above that stays green.
+    os.environ["PLANT_UNKEPT"] = "1"
+    try:
+        reported = run_steps("linux", "lib-a", fake)
+    finally:
+        del os.environ["PLANT_UNKEPT"]
+    assert reported == ["unkept temp dir: shutdown save at /tmp/.tmpZz9Yy8/s.json; created by a::b::row"], \
+        f"a cargo shard whose test printed an unkept report did not fail on it: {reported}"
     assert unexpected({"a": ["x"], "b": ["x"]}, [("[ab]", "x", 1, "one allowed")]) == ["b"], \
         "the count bounds a source"
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
@@ -781,6 +794,11 @@ def unkept_rows() -> None:
     for kind, path, creator in sized:
         line = f"{kind} at {path} is in a temp dir no test kept; created by {creator}"
         assert unkept([line]) == [f"unkept temp dir: {kind} at {path}; created by {creator}"], line
+    # A path with a space is read whole: the report's fixed suffix ends it, so a spaced temp dir and a Windows
+    # user name with a space both fail the shard with the whole path.
+    for path in ("/tmp/with space/.tmpAb12Cd/audit.jsonl", r"C:\Users\Jane Doe\AppData\Local\Temp\.tmpAb12Cd\skills"):
+        line = f"test a::b::row ... audit log at {path} is in a temp dir no test kept; created by a::b::row"
+        assert unkept([line]) == [f"unkept temp dir: audit log at {path}; created by a::b::row"], unkept([line])
 def with_home_rows() -> None:
     """S1: `with-home -- CMD` runs CMD in a private gateway home, hands back its exit code, and
     removes the home afterwards, also when CMD fails."""
@@ -895,6 +913,8 @@ def built_parts_rows() -> None:
                     'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
                     ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
                     ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
+                    ' unkept) echo "test m$k::b ... ok"; echo "skill bundle at /tmp/.tmpQq1Ww2/skills is in a temp dir'
+                    ' no test kept; created by m$k::b" >&2 ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
@@ -940,6 +960,9 @@ def built_parts_rows() -> None:
             # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
             assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
+            # K6 on the built-parts path: a part whose tests all ran and passed still fails the leg when one
+            # printed an unkept report.
+            assert leg_run("lib-b", 8, BEHAVE_2="unkept")[0] == 1, "a part whose test printed an unkept report passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
@@ -987,6 +1010,17 @@ def prebuilt_rows() -> None:
         said = out.buffer.getvalue().decode()
         assert rc == 1 and f"::error::linux lib-a left in TMPDIR: {LIB_TARGET}/stray-file" in said, \
             f"a Linux leg that left a temp file did not fail as `run` does: rc {rc}"
+        # K6 on the prebuilt path: a report the binary's test printed on stderr fails the leg by its test, as
+        # it does a cargo shard, even when nothing is left in TMPDIR.
+        binary(lok + '; echo "shutdown save at /tmp/.tmpPb4Qr5/s.json is in a temp dir no test kept;'
+               ' created by gateway::a" >&2')
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out):
+            rc = run_prebuilt("linux", "lib-a", fake)
+        out.flush()
+        said = out.buffer.getvalue().decode()
+        want = "::error::linux lib-a unkept temp dir: shutdown save at /tmp/.tmpPb4Qr5/s.json; created by gateway::a"
+        assert rc == 1 and want in said, f"a prebuilt leg whose test printed an unkept report passed: rc {rc}"
         # Only the shared-build legs run from the binary on Linux: an integration shard compiles its own.
         assert main(["shard_tests.py", "run-prebuilt", "linux", "int-a", fake]) == 2, "int-a ran prebuilt"
         # export-lib copies the executable cargo names, and fails when cargo names none.
