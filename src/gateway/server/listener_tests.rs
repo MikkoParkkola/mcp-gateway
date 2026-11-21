@@ -78,7 +78,9 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
             }
         }),
     );
-    let grace = Duration::from_millis(100);
+    // A whole second, so a server that let go at the signal itself could pass
+    // the lower bound below only through a scheduling stall that long.
+    let grace = Duration::from_secs(1);
     let (addr, stop, server) = start(app, grace).await;
     let client = tokio::spawn(reqwest::get(format!("http://{addr}/hang")));
     timeout(HANG_STOP, started_rx)
@@ -89,11 +91,19 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
     // The request never ends, so only the shutdown deadline can return the
     // server: returning inside the hang guard is the oracle, not how long it
     // took against the grace (MIK-8222).
+    let signalled = std::time::Instant::now();
     stop.send(()).expect("server is running");
     let outcome = timeout(HANG_STOP, server)
         .await
         .expect("the server did not return within 5 s while a request was open");
     outcome.expect("server task").expect("serve");
+    // Nor early: the open request keeps its whole grace before it is dropped.
+    let open_for = signalled.elapsed();
+    // timing: lower-bound
+    assert!(
+        open_for >= grace,
+        "request dropped after {open_for:?}, grace was {grace:?}"
+    );
     // The deadline cancels the open request, so its in-flight permit is
     // released and nothing it holds outlives the listener.
     timeout(HANG_STOP, dropped_rx)
