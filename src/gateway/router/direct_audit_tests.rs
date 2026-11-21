@@ -76,6 +76,9 @@ mod sealed_refusal;
 #[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod session_less;
+// Signing refusals and the chain check, as their records name them.
+#[cfg(tp1)]
+mod signing_records;
 #[cfg(feature = "firewall")]
 mod slot_release;
 #[cfg(feature = "firewall")]

@@ -33,6 +33,9 @@ mod playbook_drivers;
 pub(crate) mod read_verdict;
 #[path = "route_matrix_driver_response_tests.rs"]
 pub(crate) mod response;
+/// Signing refusals on stdio, as their records name them.
+#[path = "signing_records_stdio_tests.rs"]
+mod signing_records;
 pub(crate) use playbook_drivers::{
     playbook_of, stdio_params_counted, stdio_params_over, stdio_playbook_flaky, stdio_playbook_runs,
 };

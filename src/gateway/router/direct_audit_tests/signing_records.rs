@@ -1,0 +1,218 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Signing refusals and the signature-chain check, as the invocation record
+//! names them. A refused nonce on `/mcp` leaves exactly one record before it
+//! is answered; a replayed nonce is named `replay_guard`, a malformed one
+//! `syntax`; a backend answer whose chain does not verify is named
+//! `signature_chain`, on both routes.
+
+use super::*;
+
+/// The `_meta` key a hardened `tools/call` carries its nonce under.
+const NONCE_KEY: &str = "io.mcp-gateway/nonce";
+
+/// Signing on under `security.posture: hardened`: every `tools/call` on
+/// either route must carry a nonce.
+async fn hardened_signing() -> Fixture {
+    fixture(Setup {
+        extras: &[Extra::Signing, Extra::Hardened],
+        ..Setup::default()
+    })
+    .await
+}
+
+/// A JSON-RPC `tools/call` request naming `tool` with `arguments`, and
+/// `meta` as its `_meta` member when one is given.
+fn call_request(id: u64, tool: &str, arguments: Value, meta: Option<Value>) -> String {
+    let mut params = serde_json::Map::new();
+    params.insert("name".to_owned(), json!(tool));
+    params.insert("arguments".to_owned(), arguments);
+    if let Some(meta) = meta {
+        params.insert("_meta".to_owned(), meta);
+    }
+    let mut request = serde_json::Map::new();
+    request.insert("jsonrpc".to_owned(), json!("2.0"));
+    request.insert("id".to_owned(), json!(id));
+    request.insert("method".to_owned(), json!("tools/call"));
+    request.insert("params".to_owned(), Value::Object(params));
+    Value::Object(request).to_string()
+}
+
+/// What a `gateway_invoke` of alpha's `t` passes as its arguments.
+fn alpha_t() -> Value {
+    let mut target = serde_json::Map::new();
+    target.insert("server".to_owned(), json!("alpha"));
+    target.insert("tool".to_owned(), json!("t"));
+    target.insert("arguments".to_owned(), json!({}));
+    Value::Object(target)
+}
+
+/// The `_meta` member carrying `nonce` as the signing nonce.
+fn nonce_meta(nonce: &Value) -> Value {
+    let mut meta = serde_json::Map::new();
+    meta.insert(NONCE_KEY.to_owned(), nonce.clone());
+    Value::Object(meta)
+}
+
+/// On `/mcp`: alpha's `t` through `gateway_invoke`, signed with `nonce`.
+fn signed_on_mcp(id: u64, nonce: &Value) -> String {
+    call_request(id, "gateway_invoke", alpha_t(), Some(nonce_meta(nonce)))
+}
+
+/// On `/mcp/alpha`: `t` called by name, signed with `nonce`.
+fn signed_direct(id: u64, nonce: &Value) -> String {
+    call_request(id, "t", json!({"q": 1}), Some(nonce_meta(nonce)))
+}
+
+/// The invocation records, oldest first; none at all fails with `answer`.
+fn records_after(fx: &Fixture, answer: &Value) -> Vec<Value> {
+    let all = invocations(fx);
+    assert!(!all.is_empty(), "no invocation record; answer {answer}");
+    all
+}
+
+/// The assertions every recorded signing refusal on `/mcp` shares: the
+/// target as the request names it, the meta route, a fresh decision.
+fn assert_meta_refusal(record: &Value, outcome: &str, code: i64, kind: &str) {
+    assert_eq!(record["route"], "meta", "{record}");
+    assert_eq!(record["server"], "alpha", "{record}");
+    assert_eq!(record["tool"], "t", "{record}");
+    assert_eq!(record["outcome"], outcome, "{record}");
+    assert_eq!(record["error_code"], code, "{record}");
+    assert_eq!(record["decision"]["kind"], kind, "{record}");
+    assert_eq!(record["decision"]["decided"], "fresh", "{record}");
+    assert!(record["decision"].get("rule_id").is_none(), "{record}");
+}
+
+/// T1: the same nonce twice on `/mcp`. The first call is delivered and
+/// recorded; the second is refused as a replay, answered as before, and
+/// leaves its own record naming `replay_guard`.
+#[tokio::test]
+async fn t1_mcp_a_replayed_nonce_records_replay_guard() {
+    let fx = hardened_signing().await;
+    let nonce = json!("t1-nonce");
+    let (_, first) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Anonymous).await;
+    assert!(first.get("result").is_some(), "premise: delivered: {first}");
+    assert_eq!(
+        invocations(&fx).len(),
+        1,
+        "premise: the first call's record"
+    );
+    let (status, second) =
+        post_to(&fx, "/mcp", &signed_on_mcp(2, &nonce), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{second}");
+    assert_eq!(second["error"]["code"], -32001, "{second}");
+    assert_eq!(
+        second["error"]["message"], "Nonce replay detected",
+        "{second}"
+    );
+    let all = records_after(&fx, &second);
+    assert_eq!(all.len(), 2, "one record for each call: {all:?}");
+    assert_meta_refusal(&all[1], "denied", -32001, "replay_guard");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "the replay never sent");
+}
+
+/// T6: the same nonce twice on the direct route: the refused replay's
+/// record names `replay_guard`.
+#[tokio::test]
+async fn t6_direct_a_replayed_nonce_records_replay_guard() {
+    let fx = hardened_signing().await;
+    let nonce = json!("t6-nonce");
+    let (_, first) = post(&fx, "alpha", &signed_direct(1, &nonce), &Caller::Anonymous).await;
+    assert!(first.get("result").is_some(), "premise: delivered: {first}");
+    let (status, second) = post(&fx, "alpha", &signed_direct(2, &nonce), &Caller::Anonymous).await;
+    assert_eq!(second["error"]["code"], -32001, "{status} {second}");
+    assert_eq!(
+        second["error"]["message"], "Nonce replay detected",
+        "{second}"
+    );
+    let all = records_after(&fx, &second);
+    assert_eq!(all.len(), 2, "one record for each call: {all:?}");
+    let replay = &all[1];
+    assert_eq!(replay["route"], "direct", "{replay}");
+    assert_eq!(replay["error_code"], -32001, "{replay}");
+    assert_eq!(replay["decision"]["kind"], "replay_guard", "{replay}");
+}
+
+/// S1: a nonce longer than the store accepts is the request's shape: one
+/// `invalid` record naming `syntax`, answered as before.
+#[tokio::test]
+async fn s1_mcp_an_over_long_nonce_records_syntax() {
+    let fx = hardened_signing().await;
+    let nonce = json!("n".repeat(257));
+    let (status, body) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+    assert_eq!(body["error"]["message"], "Invalid signing nonce", "{body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "invalid", -32602, "syntax");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
+}
+
+/// S5: a nonce that is not a string is refused before the store sees it;
+/// it notes `syntax` too, and leaves one record.
+#[tokio::test]
+async fn s5_mcp_a_number_nonce_records_syntax() {
+    let fx = hardened_signing().await;
+    let (status, body) = post_to(
+        &fx,
+        "/mcp",
+        &signed_on_mcp(1, &json!(5)),
+        &Caller::Anonymous,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+    assert_eq!(body["error"]["message"], "Invalid signing nonce", "{body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "invalid", -32602, "syntax");
+}
+
+/// Backends that must answer with a verified signature chain; the scripted
+/// backend answers with none.
+async fn chain_required() -> Fixture {
+    fixture(Setup {
+        chain: crate::config::ChainMode::Require,
+        ..Setup::default()
+    })
+    .await
+}
+
+/// The one record of a call the chain check refused, once `answer` shows
+/// that refusal's code.
+fn chain_refusal_record(fx: &Fixture, answer: &Value) -> Value {
+    assert_eq!(
+        answer["error"]["code"], -32001,
+        "premise: the chain check refused the answer: {answer}"
+    );
+    only_invocation(fx)
+}
+
+/// C1 on `/mcp`: an answer with no chain does not verify under `require`;
+/// its record names `signature_chain`.
+#[tokio::test]
+async fn c1_meta_an_unverified_chain_records_signature_chain() {
+    let fx = chain_required().await;
+    let call = call_request(9, "gateway_invoke", alpha_t(), None);
+    let (_, answer) = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
+    let record = chain_refusal_record(&fx, &answer);
+    assert_eq!(record["route"], "meta", "{record}");
+    assert_eq!(record["decision"]["kind"], "signature_chain", "{record}");
+}
+
+/// C1 on the direct route: the same check, the same kind.
+#[tokio::test]
+async fn c1_direct_an_unverified_chain_records_signature_chain() {
+    let fx = chain_required().await;
+    let call = call_request(9, "t", json!({"q": 1}), None);
+    let (_, answer) = post(&fx, "alpha", &call, &Caller::Anonymous).await;
+    let record = chain_refusal_record(&fx, &answer);
+    assert_eq!(record["route"], "direct", "{record}");
+    assert_eq!(record["decision"]["kind"], "signature_chain", "{record}");
+}
