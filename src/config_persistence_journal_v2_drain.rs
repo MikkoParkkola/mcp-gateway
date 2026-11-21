@@ -445,7 +445,6 @@ mod deliver;
 pub(crate) mod fault;
 #[path = "config_persistence_journal_v2_drain_file.rs"]
 pub(crate) mod file;
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
@@ -474,27 +473,22 @@ mod tests;
 #[path = "config_persistence_journal_v2_drain_sessionless_tests.rs"]
 mod unsessioned_build_tests;
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_fixtures_tests.rs"]
 mod crash_fixtures;
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_torn_tests.rs"]
 mod torn_cases;
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_assertions_tests.rs"]
 mod crash_assertions;
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_delivery_cases_tests.rs"]
 mod delivery_cases;
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_cases_tests.rs"]
 mod crash_cases;
