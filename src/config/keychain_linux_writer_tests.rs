@@ -212,7 +212,8 @@ fn b18_the_real_secret_service_round_trips_then_refuses_locked() {
     assert_eq!(store.exists(name), Ok(false));
     // Leading-dash names, which ADR-028 allows: stored, read back and deleted
     // for real, so the `--` is proven on the store, not only on the argv.
-    for dash in ["--help", "-x"] {
+    // `--` is the very terminator the fix inserts; `-` is the shortest dash name.
+    for dash in ["--help", "-x", "-", "--"] {
         assert_eq!(
             store.create(dash, b" d\n"),
             Ok(format!("keychain:{dash}")),
