@@ -1207,9 +1207,34 @@ impl MetaMcp {
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
+        // The closing half of the `tool invoked` line logged in
+        // `invoke_tool_traced`. Both carry `trace_id`, so one call can be
+        // followed from arrival to the response this gateway handed back; with
+        // only the opening line, a request that completed and a response the
+        // caller never saw are indistinguishable in the log.
+        let trace_id_for_exit = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
-                .await
+            let started = std::time::Instant::now();
+            let outcome = self
+                .invoke_tool_traced(args, session_id, caller, &trace_id_clone)
+                .await;
+            let elapsed_ms = started.elapsed().as_millis();
+            match &outcome {
+                Ok(_) => tracing::info!(
+                    trace_id = %trace_id_for_exit,
+                    session_id = session_id.unwrap_or("-"),
+                    elapsed_ms = elapsed_ms,
+                    "tool response returned"
+                ),
+                Err(error) => tracing::warn!(
+                    trace_id = %trace_id_for_exit,
+                    session_id = session_id.unwrap_or("-"),
+                    elapsed_ms = elapsed_ms,
+                    error = %error,
+                    "tool response returned"
+                ),
+            }
+            outcome
                 // Single delivery boundary: unwrap the guard-sealed result.
                 .map(GuardedValue::into_inner)
         })
@@ -1897,10 +1922,11 @@ impl MetaMcp {
         // back to the calling agent without post-processing.
         let agent_label = agent_id.unwrap_or("anonymous");
         tracing::info!(
-            agent_id = %agent_label,
-            server   = %server,
-            tool     = %tool,
-            trace_id = %trace_id,
+            agent_id   = %agent_label,
+            server     = %server,
+            tool       = %tool,
+            trace_id   = %trace_id,
+            session_id = session_id.unwrap_or("-"),
             "tool invoked"
         );
         // ADR-014 §3: the audit line, on the stream of the request that asked
