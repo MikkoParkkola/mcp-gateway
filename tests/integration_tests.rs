@@ -55,9 +55,38 @@ impl JsonRpcRequest {
     }
 }
 
+/// The admin key a CI step generates for the gateway it starts (random per run, never a repo
+/// secret). Read here only: `gateway_get_stats` is admin-only, so the rows that call it need an
+/// admin caller.
+fn admin_key() -> Option<String> {
+    std::env::var("MCP_GATEWAY_TEST_ADMIN_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+}
+
+/// What a stats row needs and names when it cannot run.
+const ADMIN_KEY_NEEDED: &str = "MCP_GATEWAY_TEST_ADMIN_KEY (stats answer only an admin caller)";
+
+/// A client that sends the admin key as a bearer when one is set. The gateway admits admin
+/// meta-tools only for an authenticated caller with gateway admin standing; without a key the
+/// rows talk to an auth-off gateway.
+fn test_client() -> Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(key) = admin_key() {
+        let mut value = reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+            .expect("an admin key is visible ASCII");
+        value.set_sensitive(true);
+        headers.insert(reqwest::header::AUTHORIZATION, value);
+    }
+    Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("an HTTP client")
+}
+
 /// Check if gateway is running
 async fn is_gateway_running() -> bool {
-    let client = Client::new();
+    let client = test_client();
     client
         .post(GATEWAY_URL)
         .json(&JsonRpcRequest::new("tools/list", json!({})))
@@ -84,15 +113,19 @@ fn parse_tool_response(response: &Value) -> Result<Value, String> {
 }
 
 #[tokio::test]
-#[ignore = "requires gateway running on localhost:39400"]
+#[ignore = "requires a gateway on localhost:39400 and an admin key (MCP_GATEWAY_TEST_ADMIN_KEY)"]
 async fn test_gateway_get_stats() {
     if !is_gateway_running().await {
-        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        // No gateway: fail under TESTS_REQUIRE_ALL instead of passing unrun.
         required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
+    if admin_key().is_none() {
+        required::skip_or_fail(ADMIN_KEY_NEEDED);
+        return;
+    }
 
-    let client = Client::new();
+    let client = test_client();
 
     // Call gateway_get_stats via MCP JSON-RPC
     let request = JsonRpcRequest::tools_call("gateway_get_stats", &json!({}));
@@ -167,12 +200,12 @@ async fn test_gateway_get_stats() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_search_tools() {
     if !is_gateway_running().await {
-        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        // No gateway: fail under TESTS_REQUIRE_ALL instead of passing unrun.
         required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
-    let client = Client::new();
+    let client = test_client();
 
     // Search for "weather" tools
     let request = JsonRpcRequest::tools_call(
@@ -246,18 +279,23 @@ async fn test_gateway_search_tools() {
 }
 
 #[tokio::test]
-#[ignore = "opt-in: calls the live Open-Meteo API through a gateway on localhost:39400; run by hand"]
-// Out of CI on purpose: an outside outage must not redden a pull request. The cache logic itself is covered
-// in-crate through the client-swap seam; a stub cannot stand in here, because a spawned gateway refuses
-// loopback egress and a loopback-relaxed fetch never enters the cache.
+#[ignore = "opt-in: calls the live Open-Meteo API through a gateway on :39400; run by hand"]
+// Out of CI on purpose: an outside outage must not redden a pull request. The cache logic
+// itself is covered in-crate through the client-swap seam; a stub cannot stand in here,
+// because a spawned gateway refuses loopback egress and a loopback-relaxed fetch never enters
+// the cache.
 async fn test_invoke_caching() {
     if !is_gateway_running().await {
-        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        // No gateway: fail under TESTS_REQUIRE_ALL instead of passing unrun.
         required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
+    if admin_key().is_none() {
+        required::skip_or_fail(ADMIN_KEY_NEEDED);
+        return;
+    }
 
-    let client = Client::new();
+    let client = test_client();
 
     // First, get stats to establish baseline
     let stats_request = JsonRpcRequest::tools_call("gateway_get_stats", &json!({}));
@@ -367,12 +405,12 @@ async fn test_invoke_caching() {
 #[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_list_servers() {
     if !is_gateway_running().await {
-        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        // No gateway: fail under TESTS_REQUIRE_ALL instead of passing unrun.
         required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
 
-    let client = Client::new();
+    let client = test_client();
 
     // Call gateway_list_servers
     let request = JsonRpcRequest::tools_call("gateway_list_servers", &json!({}));
@@ -474,8 +512,9 @@ async fn test_gateway_list_servers() {
 
 #[tokio::test]
 async fn test_cap_registry_list() {
-    // The binary cargo built for this test crate, so it always exists and the row needs no skip; spawned through
-    // the shared helper so it runs with an isolated home, never the developer's.
+    // The binary cargo built for this test crate, so it always exists and the row needs no
+    // skip; spawned through the shared helper so it runs with an isolated home, never the
+    // developer's.
     let home = tempfile::tempdir().expect("temp home");
     let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["cap", "registry-list"])
@@ -491,9 +530,8 @@ async fn test_cap_registry_list() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Output should contain capability names from registry/index.json
-    // Expected capabilities: stripe_list_charges, yahoo_stock_quote, ecb_exchange_rates,
-    // gmail_send_email, slack_post_message, weather_current, wikipedia_search, github_create_issue
+    // Output should contain capability names from the capabilities directory. wikipedia_search
+    // left the list with the duplicate-YAML cleanup (0d66c80f88); the rest are still shipped.
 
     let expected_capabilities = [
         "stripe_list_charges",
@@ -502,7 +540,6 @@ async fn test_cap_registry_list() {
         "gmail_send_email",
         "slack_post_message",
         "weather_current",
-        "wikipedia_search",
         "github_create_issue",
     ];
 
@@ -517,15 +554,19 @@ async fn test_cap_registry_list() {
 }
 
 #[tokio::test]
-#[ignore = "requires gateway running on localhost:39400"]
+#[ignore = "requires a gateway on localhost:39400 and an admin key (MCP_GATEWAY_TEST_ADMIN_KEY)"]
 async fn test_gateway_integration_flow() {
     if !is_gateway_running().await {
-        // A row that cannot reach its gateway fails under TESTS_REQUIRE_ALL instead of passing unrun.
+        // No gateway: fail under TESTS_REQUIRE_ALL instead of passing unrun.
         required::skip_or_fail(&format!("a gateway answering on {GATEWAY_URL}"));
         return;
     }
+    if admin_key().is_none() {
+        required::skip_or_fail(ADMIN_KEY_NEEDED);
+        return;
+    }
 
-    let client = Client::new();
+    let client = test_client();
 
     // 1. List servers
     let list_servers_req = JsonRpcRequest::tools_call("gateway_list_servers", &json!({}));
