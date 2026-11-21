@@ -311,16 +311,29 @@ struct Walker<'s, 'p> {
     kept: bool,
 }
 
+impl Walker<'_, '_> {
+    /// Walk `body` as code that runs inside a held keep, then restore the
+    /// state the walk had before it.
+    fn in_keep<'ast>(&mut self, body: &'ast syn::Expr) {
+        let before = std::mem::replace(&mut self.kept, true);
+        <Self as syn::visit::Visit<'ast>>::visit_expr(self, body);
+        self.kept = before;
+    }
+}
+
 impl<'ast> syn::visit::Visit<'ast> for Walker<'_, '_> {
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let syn::Expr::Path(func) = &*call.func {
             let path = self.scan.resolve(&self.module, &segments(&func.path));
             if path.join("::") == KEPT_BLOCKING {
-                let outer = std::mem::replace(&mut self.kept, true);
+                // Only a closure literal's body runs while the keep is held. Any
+                // other argument is evaluated before the call, outside the keep.
                 for arg in &call.args {
-                    self.visit_expr(arg);
+                    match arg {
+                        syn::Expr::Closure(closure) => self.in_keep(&closure.body),
+                        eager => self.visit_expr(eager),
+                    }
                 }
-                self.kept = outer;
                 return;
             }
         }
@@ -400,7 +413,15 @@ fn no_install_path_filesystem_call_bypasses_kept_blocking() {
 #[test]
 fn every_planted_bypass_of_kept_blocking_is_named() {
     let installer = "crate::skills::installer".to_owned();
-    let cases: [(&str, Planted, &str); 6] = [
+    let cases: [(&str, Planted, &str); 7] = [
+        (
+            "an eager write in kept_blocking's argument",
+            Planted::from([(installer.clone(), installer_with(
+                "",
+                "kept_blocking(keep, { std::fs::write(&bundle_dir, b\"x\")?; move || Ok(()) }).await?;",
+            ))]),
+            "crate::skills::installer::install_bundle_kept: std::fs::write",
+        ),
         (
             "the tokio fs alias",
             Planted::from([(installer.clone(), installer_with("use tokio::fs;", "let _ = fs::write(&bundle_dir, b\"x\");"))]),

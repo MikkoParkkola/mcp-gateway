@@ -61,7 +61,6 @@ src/security/transparency_log_rotation.rs	open_after_seal	open-create	1	no-secre
 src/security/transparency_log_segments.rs	ensure_reserve	file-create	1	no-secret	audit log reserve file
 src/security/transparency_log_segments.rs	write_hwm	open-create	1	no-secret	audit log high-water mark
 src/skills/installer.rs	copy_dir_recursive	fs-copy	1	no-secret	skill files; public
-src/skills/installer.rs	install_bundle	fs-write	3	no-secret	skill files; public
 src/skills/registry.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/trust/claim_capture.rs	open	open-create	1	no-secret	append-only claim log
 src/validator/cli_handler.rs	run_validate_command	fs-write	1	no-secret	validation report output

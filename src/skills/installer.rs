@@ -128,7 +128,10 @@ pub(crate) struct Seams {
     pub(crate) crust_after: std::sync::Arc<crate::test_pause::Slot>,
     pub(crate) link_before: std::sync::Arc<crate::test_pause::Slot>,
     pub(crate) link_after: std::sync::Arc<crate::test_pause::Slot>,
+    // Read only by the copy fallback, which is not built on Unix.
+    #[cfg(not(unix))]
     pub(crate) copy_mid: std::sync::Arc<crate::test_pause::Slot>,
+    #[cfg(not(unix))]
     pub(crate) copy_done: std::sync::Arc<crate::test_pause::Slot>,
 }
 
