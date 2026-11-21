@@ -462,6 +462,7 @@ mod tests {
                 ks.store.as_ref(),
                 ks.config.token_ttl_secs,
                 TemporaryToken {
+                    issuance_row: None,
                     jti: format!("jti-{bearer}"),
                     token: bearer.to_string(),
                     identity: identity(subject, "u@corp.invalid", issuer),
@@ -488,6 +489,7 @@ mod tests {
             crate::key_server::email_hash::EmailHashKey::for_test(),
         );
         let token = TemporaryToken {
+            issuance_row: None,
             jti: "jti-empty".to_string(),
             token: "mcpgw_empty_backends".to_string(),
             identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
@@ -518,6 +520,7 @@ mod tests {
             ks.store.as_ref(),
             ks.config.token_ttl_secs,
             TemporaryToken {
+                issuance_row: None,
                 jti: "jti-runtime".to_string(),
                 token: text.to_string(),
                 identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),

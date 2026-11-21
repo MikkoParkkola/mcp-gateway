@@ -14,7 +14,7 @@ use crate::config::KeyServerConfig;
 use crate::key_server::email_hash::EmailHashKey;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::key_server::store::{
-    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError,
+    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError, Reserved,
     TemporaryToken, TokenScopes, TokenStore,
 };
 use crate::security::audit::AuditFailurePolicy;
@@ -217,11 +217,7 @@ struct RowFirst {
 
 #[async_trait::async_trait]
 impl TokenStore for RowFirst {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.inner.reserve(request, now)
     }
     fn activate(
@@ -310,11 +306,7 @@ struct Revoking(Arc<InMemoryTokenStore>);
 
 #[async_trait::async_trait]
 impl TokenStore for Revoking {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.0.reserve(request, now)
     }
     fn activate(

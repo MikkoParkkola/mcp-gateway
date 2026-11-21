@@ -104,6 +104,10 @@ pub(crate) enum Coverage {
 /// The decision object as written and as read back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Decision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<crate::security::transparency_log::issuance::TokenOnCall>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub token_unavailable: bool,
     pub v: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_revision: Option<String>,
@@ -351,6 +355,7 @@ impl Noted {
         decided: Decided,
         refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
+        _credential_kind: crate::security::audit::CredentialKind,
     ) -> Decision {
         let ((kind, rule_id), grant_id) = match (self.refusal(), refused) {
             (Some(refusal), _) => (refusal.clone(), None),
@@ -400,6 +405,8 @@ impl Noted {
                 .map(|applied| coverage_of(applied.capability_part()))
         });
         Decision {
+            token: None,
+            token_unavailable: false,
             v: DECISION_VERSION,
             config_revision,
             config_revision_capabilities,

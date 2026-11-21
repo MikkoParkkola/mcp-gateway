@@ -289,6 +289,7 @@ pub(super) async fn key_server_credential(
         client,
         KeyServerSubject {
             facts: CredentialFacts {
+                issuance_row: None,
                 expires_at,
                 jti,
                 issued_at,
@@ -317,6 +318,8 @@ pub(super) enum KsCredential {
 /// token itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CredentialFacts {
+    /// The temporary token's issuance row, when recorded.
+    pub issuance_row: Option<crate::security::transparency_log::issuance::IssuanceRow>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub jti: Option<String>,
     /// A delegated bearer's `iat`, re-checked against the running max age.
@@ -467,6 +470,7 @@ mod tests {
             .unwrap()
             .as_secs();
         crate::key_server::TemporaryToken {
+            issuance_row: None,
             jti: InMemoryTokenStore::generate_jti(),
             token: InMemoryTokenStore::generate_bearer(),
             identity: VerifiedIdentity::for_test(

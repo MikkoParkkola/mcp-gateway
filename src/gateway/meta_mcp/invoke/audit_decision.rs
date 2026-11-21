@@ -185,12 +185,16 @@ impl DispatchNotes {
                 decided,
                 crate::security::decision_record::Refused::No,
                 live.as_deref(),
+                // kind wired in the next change
+                crate::security::audit::CredentialKind::None,
             )
         } else {
             self.decision.decision(
                 Decided::Fresh,
                 crate::security::decision_record::Refused::of(outcome),
                 live.as_deref(),
+                // kind wired in the next change
+                crate::security::audit::CredentialKind::None,
             )
         }
     }

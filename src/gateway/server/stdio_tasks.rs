@@ -308,6 +308,7 @@ impl StdioTasks {
             Some(session_id.to_owned()),
             protocol_revision.map(str::to_owned),
             attestation,
+            None,
         )
     }
 

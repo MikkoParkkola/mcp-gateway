@@ -148,6 +148,7 @@ pub(super) fn task_intent_for_call(
                 .map(str::to_owned),
             req.protocol_revision.map(str::to_owned),
             req.retry.attestation.clone(),
+            None,
         )
         .with_caller_key(Some(caller_key))
         .with_surface_request(req.surface_request),
@@ -496,6 +497,7 @@ fn update_caller(
         // No classifier revision: a resumed result is never response-cached.
         None,
         RetryFields::from_params(params).attestation,
+        None,
     )
     // The resuming request's own key, as everything else here (G4).
     .with_caller_key(Some(resume_key))

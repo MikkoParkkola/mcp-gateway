@@ -275,7 +275,7 @@ impl MintReservation {
         request: ReservationRequest,
         now: u64,
     ) -> Result<Self, ReserveError> {
-        let id = store.reserve(request, now)?;
+        let id = store.reserve(request, now)?.id;
         Ok(Self {
             store: Arc::clone(store),
             id,
@@ -346,6 +346,7 @@ pub(super) async fn issue(
     };
 
     let mut token = TemporaryToken {
+        issuance_row: None,
         jti,
         token: InMemoryTokenStore::generate_bearer(),
         identity,
@@ -726,6 +727,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let token = TemporaryToken {
+            issuance_row: None,
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
             identity: VerifiedIdentity::for_test(
@@ -760,6 +762,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let token = TemporaryToken {
+            issuance_row: None,
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
             identity: VerifiedIdentity::for_test(

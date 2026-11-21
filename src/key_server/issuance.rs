@@ -36,7 +36,7 @@ pub(super) async fn record_issuance(
     let error_kind = write.error_kind();
     telemetry_metrics::counter!("mcp_key_server_issuance_rows_total", "status" => status)
         .increment(1);
-    if matches!(write, IssuanceWrite::Confirmed) {
+    if matches!(write, IssuanceWrite::Confirmed(_)) {
         return None;
     }
     if log.failure_policy() == AuditFailurePolicy::FailClosed {
