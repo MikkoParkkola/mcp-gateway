@@ -622,16 +622,15 @@ impl Drop for Left {
             return;
         }
         self.abandoned.0.fetch_add(1, SeqCst);
-        if self
+        let left = self
             .state
             .compare_exchange(RUNNING, LEFT, SeqCst, SeqCst)
-            .is_err()
-        {
+            .is_ok();
+        if !left {
             self.abandoned.0.fetch_sub(1, SeqCst);
-            return;
         }
         #[cfg(test)]
-        if let Some(root) = &self.unkept_root {
+        if left && let Some(root) = &self.unkept_root {
             crate::test_dir_keep::report_unkept(crate::spawn_keep::CONFIG_LOCK, root);
         }
     }

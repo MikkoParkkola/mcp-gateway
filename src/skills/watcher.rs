@@ -237,10 +237,10 @@ impl SkillsWatcher {
             keep.seams.clone_from(&source.seams);
         }
         tokio::spawn(async move {
+            const DEBOUNCE_MS: u64 = 500;
             // Move all of `source` into the task, not only the fields read below:
             // its test-only drop signal must end with this future, not earlier.
             let source = source;
-            const DEBOUNCE_MS: u64 = 500;
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
             loop {

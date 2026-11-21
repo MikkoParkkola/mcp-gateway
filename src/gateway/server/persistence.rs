@@ -216,8 +216,7 @@ pub(super) fn spawn_periodic_save(
     // one line, not one per tick. The saver holds it between ticks, so a test
     // that dropped its share cannot lose the dir before the next tick writes.
     let kept = root
-        .as_deref()
-        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, root))
+        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, &root))
         .unwrap_or_default();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
