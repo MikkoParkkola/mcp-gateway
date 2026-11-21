@@ -197,6 +197,9 @@ async fn recovery_record(mut meta: MetaMcp, result: Value) -> Value {
 async fn a_recovered_task_records_its_rewrite_on_the_settlement() {
     let rewritten = Box::pin(recovery_record(stripping(), answer(INJECTED))).await;
     assert_eq!(rewritten["response_effect"], "rewritten", "{rewritten}");
+    // A strip notes no refusal: with the gate's real notes the settlement
+    // still says `ok`.
+    assert_eq!(rewritten["outcome"], "ok", "{rewritten}");
     let clean = Box::pin(recovery_record(
         stripping(),
         answer("Quarterly figures attached."),
@@ -214,6 +217,12 @@ async fn a_recovered_task_records_its_rewrite_on_the_settlement() {
 async fn a_withheld_recovered_answer_settles_denied() {
     let meta = gate(ContextIntegrityDecisionKind::Deny);
     let record = Box::pin(recovery_record(meta, answer(INJECTED))).await;
+    // Premise: the task committed a result, not an error (a failed one has
+    // no response hash), so only the isError arm can make it `denied`.
+    assert!(
+        record["response_hash"].is_string(),
+        "premise: a result: {record}"
+    );
     assert_eq!(record["outcome"], "denied", "{record}");
     assert_eq!(record["error_code"], -32600, "{record}");
 }
