@@ -1441,6 +1441,13 @@ class CodeqlCfg(unittest.TestCase):
         self.refused(self.insert(analyze, f'        env:\n          {hidden}: ""\n', self.with_job_env()),
                      "escaped key on the Analyze step", OUTSIDE)
 
+    def test_g2_an_env_built_by_an_expression_is_refused(self):
+        # GitHub expands the expression into the step's env at run time; the JSON escape hides the name from a search.
+        analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
+        expr = "${{ fromJSON('{\"\\u0043" + CFG_NAME[1:] + "\":\"\"}') }}"
+        self.refused(self.insert(analyze, f"        env: {expr}\n", self.with_job_env()),
+                     "env expression on the Analyze step", "is not a plain mapping")
+
 
 if __name__ == "__main__":
     unittest.main()

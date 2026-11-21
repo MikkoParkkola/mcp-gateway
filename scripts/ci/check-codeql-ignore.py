@@ -45,7 +45,10 @@ def cfg_override_problems(text):
     depth, and any string value naming it (the CodeQL `config:` block, a `run:` script) is refused. The workflow is
     read by a YAML parser, so quoting and escapes resolve as GitHub reads them; a line match would take `'-test"'`
     for `-test` and miss a key spelled with escapes. GitHub refuses a workflow with a duplicate key, so the parser's
-    last-wins on duplicates never decides a run."""
+    last-wins on duplicates never decides a run. An `env:` that is not a plain mapping (an expression such as
+    `${{ fromJSON(...) }}` that builds the whole mapping at run time) is refused anywhere, since its keys cannot be
+    read here. Out of reach, by design: a step that writes the variable to $GITHUB_ENV at run time under a spelling
+    a text search cannot see; the analyze job runs only checkout and the CodeQL actions."""
     import yaml  # hash-pinned in scripts/ci/pyyaml-requirements.txt; local, so the dep-info part stays stdlib
 
     want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
@@ -59,6 +62,9 @@ def cfg_override_problems(text):
         if isinstance(node, dict):
             for key, value in node.items():
                 here = path + [str(key)]
+                if key == "env" and value is not None and not isinstance(value, dict):
+                    problems.append(f"{WORKFLOW}: the env at {'.'.join(here)} is not a plain mapping, so {CFG_NAME} "
+                                    f"in it cannot be checked; {want}, and only there")
                 if key == CFG_NAME:
                     found.append((here, value))
                 walk(value, here)
