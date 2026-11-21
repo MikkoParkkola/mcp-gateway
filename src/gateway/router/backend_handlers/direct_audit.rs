@@ -362,6 +362,9 @@ pub(super) async fn record(
     {
         notes.refused_by_memo(refusal);
     }
+    // The meta writer's refusal rule, before either count, so
+    // the counters, the metric and the record take one class.
+    let outcome = notes.outcome(outcome);
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")

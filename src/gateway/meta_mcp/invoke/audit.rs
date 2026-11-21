@@ -362,10 +362,22 @@ impl DispatchNotes {
     }
 
     /// The outcome of a call whose result read as `outcome`: a backend failure
-    /// delivered as a tool result is still an `error`.
+    /// delivered as a tool result is still an `error`; a gate's noted refusal
+    /// is `denied`, however it was answered. A backend's own error
+    /// notes no refusal, so its class stands.
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (outcome, self.failure) {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
+            // R1: a refusal some gate noted, answered with an error code.
+            (AuditOutcome::Error(code), _) if self.decision.has_refusal() => {
+                AuditOutcome::Denied(code)
+            }
+            // R6: such a refusal answered as an error-flagged tool result
+            // instead; it carries the code an outright response-gate refusal
+            // answers, since the wire answer has none.
+            (AuditOutcome::ToolError, None) if self.decision.has_refusal() => {
+                AuditOutcome::Denied(crate::Error::ResponseFirewallRefused.to_rpc_code())
+            }
             (outcome, _) => outcome,
         }
     }
@@ -592,15 +604,20 @@ impl MetaMcp {
         mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
-        let withheld = super::denial::count_meta_denial(args, &result, notes.not_found);
-        self.count_invocation(args, caller, &result, &notes, withheld);
+        // The record's class is worked out once, the refusal
+        // rule applied, and both counts take it.
+        let withheld = super::denial::withheld(args, notes.not_found);
+        let class = withheld
+            .or_else(|| AuditOutcome::from_result(&result))
+            .map(|outcome| notes.outcome(outcome));
+        super::denial::count_meta_denial(withheld.is_some(), class, &result);
+        self.count_invocation(args, caller, &result, &notes, class);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
-        let Some(outcome) = withheld.or_else(|| AuditOutcome::from_result(&result)) else {
+        let Some(outcome) = class else {
             return result;
         };
-        let outcome = notes.outcome(outcome);
         // A withheld target's record carries the memo's code, so its check.
         if withheld.is_some()
             && let Some(refusal) = args
