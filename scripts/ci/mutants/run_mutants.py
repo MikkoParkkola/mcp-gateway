@@ -835,7 +835,7 @@ def build_lib_parts(names: list[str], features: str | None, exe_dir: Path, logs:
         artifacts = cargo_build(["--lib", *feats], {**env, PART_ENV: str(k)}, logs, f"build-p{k}")
         lib = library_executable({a["target"]["name"]: {"path": a["executable"], "kinds": a["target"]["kind"]}
                                   for a in artifacts})
-        entry = keep_copy(lib["path"], exe_dir / f"{LIB_TARGET}-p{k}")
+        entry = keep_copy(lib["path"], exe_dir / "lib" / f"{LIB_TARGET}-p{k}")
         listed = run_cmd([checked(entry), "--list", "--format", "terse"], TEST_LIMIT, logs / f"list-p{k}.log")
         if listed.timed_out or listed.exit != 0:
             raise Abort(f"part {k}'s test listing failed (exit {listed.exit}); see logs/list-p{k}.log")
@@ -890,7 +890,7 @@ def build_other_targets(targets: list[str], features: str | None, exe_dir: Path,
         if a["target"]["kind"] != kinds[name]:
             raise Abort(f"{name} was built by {TARGET_FLAGS[kinds[name][0]]} but its artifact's kind is "
                         f"{a['target']['kind']}")
-        found[name] = keep_copy(a["executable"], exe_dir / name)
+        found[name] = keep_copy(a["executable"], exe_dir / "targets" / name)
     absent = [t for t in targets if t not in found]
     if absent:
         raise Abort(f"spec executables the build did not produce: {absent}")
@@ -925,6 +925,11 @@ def library_executable(artifacts: dict[str, dict]) -> dict:
 LIST_TEST = "mutant_scan::tests::list_mutant_sites"
 
 
+def lib_key(part: int) -> str:
+    """The map key of the lib test executable built for `part`."""
+    return f"{LIB_TARGET}@p{part}"
+
+
 def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: Path) -> int:
     """Build what the rows need, prove the cfg, reconcile, baseline, then each mutant (after plan)."""
     logs, exe_dir = out / "logs", out / "exe"
@@ -934,15 +939,17 @@ def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: 
     others = build_other_targets(sorted({r.executable for _, r in rows if r.executable != LIB_TARGET}),
                                  features, exe_dir, logs)
     # One map for the run, keyed by (target, part): a lib row runs its own part's copy, a non-lib row its target's.
-    executables = {f"{LIB_TARGET}-p{k}": {"path": e["path"], "sha256": e["sha256"]} for k, e in parts.items()}
+    # A lib key holds `@`, which no cargo target name can, and the copies live in separate folders, so a target
+    # named like a part's copy (`mcp_gateway-p3`) can replace neither the copy nor its entry.
+    executables = {lib_key(k): {"path": e["path"], "sha256": e["sha256"]} for k, e in parts.items()}
     executables.update(others)
 
     def key(r: SpecRow) -> str:
-        return f"{LIB_TARGET}-p{where[r.test]}" if r.executable == LIB_TARGET else r.executable
+        return lib_key(where[r.test]) if r.executable == LIB_TARGET else r.executable
 
     env = dict(os.environ, MCP_GATEWAY_MUTANT_LIST="1")
     env.pop(MUTANT_ENV, None)
-    listing = run_cmd([checked(executables[f"{LIB_TARGET}-p{where[LIST_TEST]}"]), "--exact", LIST_TEST, "--nocapture"],
+    listing = run_cmd([checked(executables[lib_key(where[LIST_TEST])]), "--exact", LIST_TEST, "--nocapture"],
                       TEST_LIMIT, logs / "sites.log", env)
     reconcile(mutants, parse_sites(listing.output))
     print(f"{len(mutants)} mutants to run", flush=True)
@@ -1110,16 +1117,17 @@ def schemata_self_test() -> tuple[int, list[str]]:
 FAKE_TEST_BINARY = r'''#!/usr/bin/env python3
 """A stand-in libtest executable: answers from a scripted table."""
 import json, os, subprocess, sys, time
+PART = ""  # the fake cargo bakes a lib part's number here when it builds that part
 table = json.load(open(os.environ["FAKE_TABLE"]))
 args = sys.argv[1:]
 with open(os.environ["FAKE_CALLS"], "a") as f:
     f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
-                        "exe": os.path.basename(sys.argv[0])}) + "\n")
+                        "exe": os.path.basename(sys.argv[0]), "part": PART,
+                        "dir": os.path.basename(os.path.dirname(sys.argv[0]))}) + "\n")
 if args[:1] == ["--list"]:
-    # A part's copy is named <target>-p<K>; it lists only the names the table puts in part K (by default
-    # part 3, where src/ puts the control tests and m::t1).
-    base = os.path.basename(sys.argv[0])
-    part = base.rsplit("-p", 1)[-1] if "-p" in base else ""
+    # A lib part's build lists only the names the table puts in its baked part (by default part 3, where src/
+    # puts the control tests and m::t1); a non-lib build has no part and lists nothing.
+    part = PART
     probe = [] if table.get("no_probe") else ["mutant::mutants_build::only_the_named_site_switches_on"]
     default = {"3": probe + ["mutant_scan::tests::list_mutant_sites", "m::t1"]}
     for name in table.get("parts", default).get(part, []):
@@ -1174,7 +1182,8 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered ou
 FAKE_CARGO = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
-targets = (("mcp_gateway", ["lib"]), ("itest", ["test"]))
+table = json.load(open(os.environ["FAKE_TABLE"]))
+targets = [("mcp_gateway", ["lib"]), ("itest", ["test"])] + [(n, ["test"]) for n in table.get("extra_targets", [])]
 if args[:1] == ["metadata"]:
     print("warning: `package.homepage` is redundant with `package.repository`", file=sys.stderr, flush=True)
     print(json.dumps({"packages": [{"targets": [{"name": n, "kind": k} for n, k in targets]}]}))
@@ -1183,12 +1192,18 @@ with open(os.environ["FAKE_CALLS"], "a") as f:
     f.write(json.dumps({"cargo": args, "rustflags": os.environ.get("RUSTFLAGS", ""),
                         "mutant": os.environ.get("MCP_GATEWAY_MUTANT"),
                         "part": os.environ.get("MCP_GATEWAY_TEST_PART")}) + "\n")
-table = json.load(open(os.environ["FAKE_TABLE"]))
 exe = os.environ["FAKE_EXE"]
 for name, kind in targets:
     # A build makes what it names: the lib with --lib, a target named after its flag, everything with --all-targets.
     if "--all-targets" in args or (kind == ["lib"] and "--lib" in args) or (kind != ["lib"] and name in args):
-        print(json.dumps({"reason": "compiler-artifact", "executable": exe, "profile": {"test": True},
+        path, part = exe, os.environ.get("MCP_GATEWAY_TEST_PART")
+        if kind == ["lib"] and part:
+            # A part's build is its own file with the part baked in, so a copy taken from the wrong build shows.
+            path = f"{exe}-built-p{part}"
+            with open(exe) as src, open(path, "w") as dst:
+                dst.write(src.read().replace('PART = ""', f'PART = "{part}"', 1))
+            os.chmod(path, 0o755)
+        print(json.dumps({"reason": "compiler-artifact", "executable": path, "profile": {"test": True},
                           "target": {"name": name, "kind": table.get("artifact_kinds", {}).get(name, kind)}}))
 '''
 
@@ -1342,6 +1357,13 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             expect("R-BASE a red baseline row refuses even when a same-named row passes",
                    (rc, any("mcp_gateway" in a and "m::t1" in a for a in aborts)), ("refused", True))
             expect("R-BASE no mutant runs after it", [c for c in calls if c.get("mutant") == "A"], [])
+            expect("R-BASE the second baseline row never runs",
+                   len([c for c in calls if c.get("mutant") is None and c.get("args", [])[:2] == ["--exact", "m::t1"]]), 1)
+            # A non-lib target named like a part's copy must not replace that copy or its map entry.
+            _, ms_clash = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\nmcp_gateway-p3\tm::t1\tsrc/x.rs:9\n")
+            rc, calls = run({**killed, "extra_targets": ["mcp_gateway-p3"]}, ms_clash)
+            expect("R-KEY a target named like a part's copy: the lib row runs part 3's build, the target its own",
+                   (rc, sorted({c["part"] for c in calls if c.get("args", [])[:2] == ["--exact", "m::t1"]})), (0, ["", "3"]))
             rc, _ = run({**killed, "artifact_kinds": {"itest": ["bin"]}}, ms_mixed)
             expect("R-KIND an artifact whose kind is not the flag that built it refuses",
                    (rc, any("itest" in a and "kind" in a for a in aborts)), ("aborted", True))
