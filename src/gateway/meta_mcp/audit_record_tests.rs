@@ -476,6 +476,8 @@ mod replay_effects;
 mod rule_ids;
 // A call to a backend that does not exist records not_found.
 mod not_found;
+// A refusal the gateway decided records `denied`, whatever its wire code.
+mod refusal_outcome;
 // The decision fixture table's meta-route refusal rows.
 mod fixture_rows;
 // The decision fixture table's meta-route allow rows.
