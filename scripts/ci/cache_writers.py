@@ -90,21 +90,25 @@ BAKE_RE = re.compile(r"\b(?:buildx|docker)\b.*\bbake\b")
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
-    """Shell lines with backslash continuations joined, each with the number of its first physical line, so a command
-    split over several lines (kimi seat: `docker buildx \\` then `bake ...`) is matched as the one command it is."""
+    """Shell lines with backslash-newline continuations removed the way the shell removes them (the fragments join with
+    no space added), each with the number of its first physical line, so a command split over several lines (kimi seat:
+    `docker buildx \\` then `bake ...`; gpt seat: `ba\\` then `ke`) is matched as the one command it is. A line ending
+    in an even number of backslashes ends in literal backslashes and is not continued. Quoting is not tracked: a
+    trailing backslash inside single quotes or a quoted heredoc is taken as a continuation too, which can only refuse
+    more (fail closed)."""
     out: list[tuple[int, str]] = []
     start, parts = 1, []
     for n, line in enumerate(text.splitlines(), 1):
         if not parts:
             start = n
-        if line.endswith("\\"):
+        if (len(line) - len(line.rstrip("\\"))) % 2:
             parts.append(line[:-1])
             continue
         parts.append(line)
-        out.append((start, " ".join(parts)))
+        out.append((start, "".join(parts)))
         parts = []
     if parts:
-        out.append((start, " ".join(parts)))
+        out.append((start, "".join(parts)))
     return out
 EXPORTER_MSG = (
     "an exporter (cache-to, CACHE_TO) must be the cache-to idiom, a plain exporter under a guarded step if, "
@@ -945,6 +949,12 @@ def self_test() -> list[str]:
     bad("15g bake after a docker global flag", _doc([{"run": "docker --context ci bake release"}]), contains="bake")
     bad("15h bake split over continued lines", _doc([{"run": "docker buildx \\\n  --builder ci \\\n  bake release"}]),
         contains="bake")
+    # gpt seat on the kimi fold: the shell joins continued fragments with no space; CRLF endings; an even run of
+    # trailing backslashes is literal, not a continuation.
+    bad("15j bake split inside its word", _doc([{"run": "docker buildx ba\\\nke release"}]), contains="bake")
+    bad("15l bake continued over a CRLF line end", _doc([{"run": "docker buildx \\\r\n  bake release"}]), contains="bake")
+    good("15k an escaped backslash at a line end is not a continuation",
+         _doc([{"run": "echo docker \\\\\nbake-the-cake"}]))
     bad("15i CACHE_TO a literal '' string", _doc([{
         "name": "build",
         "run": 'docker buildx build ${CACHE_TO:+--cache-to "$CACHE_TO"} .',
