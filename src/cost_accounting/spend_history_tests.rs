@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The tracker's local-day totals and its keyless series.
+//! The tracker's local-day totals, its keyless series and the idle sweep.
 //! Each spend fixes this thread's clock and zone, so the dates come from the
 //! zone database and never from where the test runs.
 
 use chrono::{NaiveDate, TimeZone};
-use chrono_tz::{Asia, Europe, Tz};
+use chrono_tz::{Asia, Europe, Pacific, Tz};
 
 use super::CostTracker;
 use crate::clock::test_clock::at_secs;
@@ -101,4 +101,65 @@ fn spend_with_no_key_is_in_the_keyless_series_and_the_gateway_total() {
     let gateway = tracker.gateway_series();
     assert_eq!(gateway.hours.rows(), vec![(at / 3600, 9, 9)]);
     assert_eq!(gateway.days.rows(), vec![(date(2026, 11, 21), 9, 9)]);
+}
+
+/// Whether `k` still has an entry after a sweep at `at`. `setup` runs on a
+/// fresh tracker; the sweep is then armed and a record on another key at
+/// `at` runs it.
+fn kept_after_sweep_at(at: u64, setup: impl FnOnce(&CostTracker)) -> bool {
+    let tracker = CostTracker::new();
+    setup(&tracker);
+    tracker
+        .next_key_sweep
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    spend(&tracker, Some("poke"), at, 1);
+    tracker.key_snapshot("k").is_some()
+}
+
+/// S15: in Pacific/Chatham, April 2026 has a 25-hour day (the DST change on
+/// the 5th), so the thirty local dates from April 1st span 721 hours. One
+/// spend at 00:01 local on April 1st: its hour leaves the window before its
+/// date does, and the entry must stay until both have gone. Red with the
+/// 30-day sweep (gone from 10:16 UTC on the 30th), with an hour-only sweep
+/// (gone from 11:00 UTC) and with one date past the cut (kept at midnight).
+#[test]
+fn the_sweep_keeps_a_key_until_its_day_window_expires_too() {
+    let tz = Pacific::Chatham;
+    let _zone = test_zone(tz);
+    let spent = local(tz, date(2026, 4, 1), (0, 1));
+    let midnight = local(tz, date(2026, 5, 1), (0, 0));
+    let first = local(tz, date(2026, 4, 1), (0, 0));
+    assert_eq!(midnight - first, 721 * 3600, "premise: 721 hours");
+    assert!(
+        midnight / 3600 > spent / 3600 + 720,
+        "premise: the hour cut comes first"
+    );
+
+    let spend_k = |tracker: &CostTracker| spend(tracker, Some("k"), spent, 1);
+    assert!(
+        kept_after_sweep_at(midnight - 1, spend_k),
+        "the last second of April 30th (local) swept a key whose date is still held"
+    );
+    assert!(
+        !kept_after_sweep_at(midnight, spend_k),
+        "local midnight of May 1st kept a key with both windows expired"
+    );
+}
+
+/// S18: a key is born active. An entry with no spend yet survives a sweep at
+/// its creation instant and one an hour later. Red with a rule that sweeps
+/// keys whose windows are empty.
+#[test]
+fn a_key_just_created_is_not_swept() {
+    let born = local(Tz::UTC, date(2026, 11, 21), (12, 0));
+    let insert = |tracker: &CostTracker| {
+        let _clock = at_secs(born);
+        let key = std::sync::Arc::new(super::KeyCost::new("k"));
+        tracker.per_key.insert("k".to_owned(), key);
+    };
+    assert!(kept_after_sweep_at(born, insert), "swept at birth");
+    assert!(
+        kept_after_sweep_at(born + 3600, insert),
+        "swept an hour later"
+    );
 }
