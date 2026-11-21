@@ -262,8 +262,8 @@ for (const way of UNCONFIRMED_WAYS) {
     expect(seen.length).toBe(before);
     await expect(host(page, 'ss-b')).toContainText(HELD);
     await expect(host(page, 'ss-b').locator('pre.diff')).toHaveCount(0);
-    // While sign-in shows, the shell's announcer keeps only sign-in's own messages (shell.js pump),
-    // so after a 401 the held line is on the host but not heard; every other way hears it.
+    // While sign-in shows, the shell keeps only sign-in's own messages (shell.js pump), so the 401 run
+    // hears the held line only after sign-in closes; T9c proves that it is heard then.
     if (way.name !== 'a 401') await expect.poll(() => heard(page)).toContain(HELD);
     await page.reload();
     await shellReady(page);
@@ -272,6 +272,25 @@ for (const way of UNCONFIRMED_WAYS) {
     await expect.poll(() => diffs(seen).length).toBe(2);
   });
 }
+
+test('T9c a not-confirmed or held line shown while sign-in hides the page is heard once sign-in closes, once each', async ({ page }) => {
+  await screen(page, { save: () => ({ status: 401, json: { error: 'Authentication required' } }) });
+  await toConfirm(page);
+  await action(page).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(host(page)).toContainText(UNCONFIRMED);
+  await start(page, { id: 'ss-b' });
+  await expect(host(page, 'ss-b')).toContainText(HELD);
+  expect(await heard(page)).not.toContain(UNCONFIRMED);
+  await page.locator('#signin-key').fill('mcpgw_test_key');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+  await expect.poll(() => heard(page)).toContain(UNCONFIRMED);
+  await expect.poll(() => heard(page)).toContain(HELD);
+  const said = (await page.evaluate(() => window.__writes)).join('\n');
+  expect(said.split(UNCONFIRMED).length - 1).toBe(1);
+  expect(said.split(HELD).length - 1).toBe(1);
+});
 
 test('T9b held reaches an open review: Save on host B after host A came back unconfirmed shows the held line and sends nothing', async ({ page }) => {
   const seen = await screen(page, { save: () => ({ status: 500, json: { error: 'failed', message: 'the save failed' } }) });

@@ -60,9 +60,34 @@ function previewFields(fields) {
     : item));
 }
 
+/** Lines shown while sign-in hides the page, owed to the screen reader until sign-in closes. */
+const owed = [];
+let signInWatch = null;
+
+/**
+ * Say `text`. While sign-in shows, the shell keeps only sign-in's own messages,
+ * so a line shown then is said once sign-in closes instead. It is not tied to
+ * the page: signing in renders the page again, and the line is still true.
+ */
+function say(text) {
+  if (!document.body.classList.contains('signed-out')) {
+    announce(text);
+    return;
+  }
+  if (!owed.includes(text)) owed.push(text);
+  if (signInWatch) return;
+  signInWatch = new MutationObserver(() => {
+    if (document.body.classList.contains('signed-out')) return;
+    signInWatch.disconnect();
+    signInWatch = null;
+    for (const t of owed.splice(0)) announce(t, { subject: 'settingsave' });
+  });
+  signInWatch.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
 /** A status line the host shows and the screen reader hears once focus is back on the page. */
 function line(text, cls = 'settingsave-line') {
-  announce(text);
+  say(text);
   return el('p', { class: cls, tabindex: '-1' }, text);
 }
 
