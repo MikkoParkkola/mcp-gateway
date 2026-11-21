@@ -86,7 +86,7 @@ REF_RE = re.compile(r"\bgithub\.(?:head_ref|base_ref|ref)\b")
 MATRIX_RE = re.compile(r"\$\{\{\s*matrix\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}")
 FALSE_WRAP_RE = re.compile(r"\$\{\{\s*false\s*\}\}\Z", re.DOTALL)
 EMPTY_WRAP_RE = re.compile(r"\$\{\{\s*''\s*\}\}\Z", re.DOTALL)
-BAKE_RE = re.compile(r"\bbuildx\b.*\bbake\b|\bdocker\s+bake\b")
+BAKE_RE = re.compile(r"\b(?:buildx|docker)\b.*\bbake\b")
 EXPORTER_MSG = (
     "an exporter (cache-to, CACHE_TO) must be the cache-to idiom, a plain exporter under a guarded step if, "
     "or empty; a boolean or a bare condition hands buildx a 'true' or 'false' exporter"
@@ -920,6 +920,7 @@ def self_test() -> list[str]:
         contains="bake")
     bad("15c bake in a run step", _doc([{"run": "docker buildx bake release"}]), contains="bake")
     bad("15e bake after a builder flag", _doc([{"run": "docker buildx --builder ci bake release"}]), contains="bake")
+    bad("15g bake after a docker global flag", _doc([{"run": "docker --context ci bake release"}]), contains="bake")
     good("15f buildx build is not bake", _doc([{"run": "docker buildx build --load -t baked-image ."}]))
 
     bad("16 trivy other sha", _doc([{"uses": f"aquasecurity/trivy-action@{bad_sha}"}]), contains=PIN_MSG)
