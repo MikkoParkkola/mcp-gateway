@@ -63,6 +63,36 @@ pub(crate) async fn mint(ks: &crate::key_server::KeyServer) -> axum::response::R
     issue(ks, identity, TokenScopes::default(), None).await
 }
 
+pub(crate) async fn mint_for(
+    ks: &crate::key_server::KeyServer,
+    backends: &[&str],
+) -> (String, String) {
+    let identity = VerifiedIdentity::for_test(
+        "sub",
+        EMAIL,
+        Some("Planted Person".to_owned()),
+        vec!["g".into()],
+        ISS,
+    );
+    let scopes = TokenScopes {
+        backends: backends
+            .iter()
+            .map(|backend| (*backend).to_owned())
+            .collect(),
+        ..TokenScopes::default()
+    };
+    let response = issue(ks, identity, scopes, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    (
+        body["access_token"].as_str().expect("a bearer").to_owned(),
+        body["jti"].as_str().expect("a token id").to_owned(),
+    )
+}
+
 fn has_row(dir: &tempfile::TempDir, jti: Option<&str>) -> bool {
     log_contains_entry(
         &dir.path().join("audit.jsonl"),

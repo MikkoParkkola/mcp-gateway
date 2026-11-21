@@ -55,6 +55,8 @@ mod one_record;
 mod one_record_meta;
 #[cfg(tp1)]
 mod one_record_replay;
+#[cfg(tp1)]
+mod token_reach;
 // A call to a backend that does not exist records not_found.
 #[cfg(tp1)]
 mod not_found;
@@ -199,6 +201,8 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
+    /// A key server whose issuance rows go to the same log.
+    key_server: bool,
     /// T21: whether either route has a transparency log.
     log: Log,
     fail_closed: bool,
@@ -335,6 +339,16 @@ fn sanitizing(state: &super::AppState, on: bool) {
 async fn fixture(setup: Setup) -> Fixture {
     let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
+        Some(auth) if setup.key_server => {
+            let ks = Arc::new(
+                crate::key_server::KeyServer::new(
+                    crate::config::KeyServerConfig::default(),
+                    crate::key_server::email_hash::EmailHashKey::for_test(),
+                )
+                .with_issuance_log(Arc::clone(&log)),
+            );
+            super::tests::test_router_app_state_with_auth_and_key_server(auth, Some(ks)).await
+        }
         Some(auth) => super::tests::test_router_app_state_with_auth(auth).await,
         None => super::tests::test_router_app_state().await,
     };

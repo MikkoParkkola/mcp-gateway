@@ -279,6 +279,19 @@ struct NotedChecks {
     effect: Option<(Effect, EffectSource)>,
 }
 
+/// The token reference a decision records for a caller of `kind`, and
+/// whether its absence is marked. Placeholder until the scope is wired: it
+/// records nothing and marks nothing.
+pub(crate) fn token_on_decision(
+    _kind: crate::security::audit::CredentialKind,
+    _scope: Option<crate::security::transparency_log::issuance::TokenOnCall>,
+) -> (
+    Option<crate::security::transparency_log::issuance::TokenOnCall>,
+    bool,
+) {
+    (None, false)
+}
+
 impl Noted {
     /// A call answered without deciding it again (a replay, a cache hit).
     pub(crate) fn not_redecided() -> Self {
@@ -460,6 +473,11 @@ mod read_tests;
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "decision_token_tests.rs"]
+mod token_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]
