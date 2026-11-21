@@ -463,6 +463,9 @@ mod startup_tests;
 #[cfg(tp3)]
 #[path = "config_persistence_journal_v2_drain_tests.rs"]
 mod tests;
+#[cfg(tp3)]
+#[path = "config_persistence_journal_v2_drain_sessionless_tests.rs"]
+mod unsessioned_build_tests;
 
 #[cfg(tp3)]
 #[path = "config_persistence_journal_v2_crash_fixtures_tests.rs"]
