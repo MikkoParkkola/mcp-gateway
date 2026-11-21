@@ -208,6 +208,30 @@ fn exactly_five_callers_start_a_periodic_saver() {
     );
 }
 
+/// K11c. The stdio protocol-telemetry saver names its data dir as the dir to
+/// keep, so a tick's save in a test cannot outlive that test's dir. The saver
+/// starts inside the stdio loop, so this reads the call rather than running
+/// a stdio gateway.
+/// Mutant: `stdio_loop.rs` passing `None` as that argument.
+#[test]
+fn the_stdio_telemetry_saver_names_its_data_dir_to_keep() {
+    let files = super::shutdown_keep_tests::source_files();
+    let (_, text) = files
+        .iter()
+        .find(|(path, _)| path.ends_with("stdio_loop.rs"))
+        .expect("the stdio loop's source");
+    let call = text
+        .split("spawn_periodic_save(")
+        .nth(1)
+        .expect("the stdio loop starts a periodic saver");
+    let args: Vec<&str> = call.split(',').take(4).map(str::trim).collect();
+    assert_eq!(
+        args.get(3).copied(),
+        Some("Some(data_dir.clone())"),
+        "the stdio saver's dir to keep: {args:?}"
+    );
+}
+
 /// K11b. The counter saver keeps counters.json's dir while a tick's save runs.
 #[tokio::test(start_paused = true)]
 async fn the_counter_saver_keeps_its_dir_through_a_tick() {
