@@ -78,8 +78,11 @@ fn test_client() -> Client {
         value.set_sensitive(true);
         headers.insert(reqwest::header::AUTHORIZATION, value);
     }
+    // A hang guard, well above any row's work: a stalled request fails as this row's error, not as the CI step's
+    // 10-minute limit.
     Client::builder()
         .default_headers(headers)
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .expect("an HTTP client")
 }
@@ -252,6 +255,12 @@ async fn test_gateway_search_tools() {
     let matches = results["matches"]
         .as_array()
         .expect("matches should be array");
+    // The repository ships weather_current (capabilities/knowledge/weather_current.yaml, the gateway's capability
+    // directory in CI): an empty or wrongly loaded catalogue must not pass on structure alone.
+    assert!(
+        matches.iter().any(|m| m["tool"] == "weather_current"),
+        "the shipped weather_current capability is not among the matches: {matches:?}"
+    );
 
     // Each match should have server, tool, description
     for m in matches {
