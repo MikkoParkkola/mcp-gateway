@@ -152,7 +152,7 @@ impl JournalDrain {
         at_start: bool,
     ) -> Result<RepairReport, DrainError> {
         let Some(journal) = &session.journal else {
-            return Ok(report(Recovered::Nothing, at_start));
+            return Ok(report(&session.locked.target, Recovered::Nothing, at_start));
         };
         if journal
             .state
@@ -188,7 +188,7 @@ impl JournalDrain {
             _ => Recovered::Nothing,
         };
         decide_missing(journal)?;
-        Ok(report(recovered, at_start))
+        Ok(report(&session.locked.target, recovered, at_start))
     }
 
     pub(crate) async fn run(
@@ -360,9 +360,16 @@ impl JournalDrain {
     }
 }
 
-fn report(recovered: Recovered, at_start: bool) -> RepairReport {
-    #[cfg(not(test))]
-    let _ = (recovered, at_start);
+// A recovery is the one moment the config on disk changes without a writer: say so.
+fn report(target: &std::path::Path, recovered: Recovered, at_start: bool) -> RepairReport {
+    if recovered != Recovered::Nothing {
+        tracing::info!(
+            journal = %crate::config_persistence::journal::journal_path(target).display(),
+            ?recovered,
+            at_start,
+            "recovered a config write a crashed writer left"
+        );
+    }
     RepairReport {
         #[cfg(test)]
         recovered,
