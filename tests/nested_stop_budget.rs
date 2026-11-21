@@ -70,7 +70,6 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     .expect("config");
     path
 }
-}
 fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
     std::fs::write(root.join("leaf.py"), fixtures::LEAF_SCRIPT).expect("leaf script");
     let mut config = base_config(root, "inner");

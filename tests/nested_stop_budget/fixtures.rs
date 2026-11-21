@@ -83,3 +83,4 @@ pub(super) async fn http_floor_from_binary() -> Duration {
         "the refusal's floor is not given in seconds\n{said}"
     );
     Duration::from_secs_f64(secs)
+}
