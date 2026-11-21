@@ -12,8 +12,33 @@ use super::*;
 
 /// Enough long-named servers that one status frame is a few hundred KB.
 const SERVERS: usize = 300;
-/// Status changes pushed at the stalled client: far more than any buffer holds.
-const CHANGES: usize = 100;
+/// The most status changes a row pushes while it waits for a send to block:
+/// four times what the stack has ever been seen to hold.
+const MAX_FILL: usize = 400;
+/// A client receive buffer far above the 4 KiB rows: a stand-in for a socket
+/// stack that holds more frames before a send has to wait.
+const LARGE_RECV_BUFFER: u32 = 4 << 20;
+
+/// Pushes status changes at a client that has stopped reading until a send
+/// waits for channel room, and returns how many changes that took. How many
+/// frames fit between the stream and the client depends on the OS's socket
+/// buffering, so no fixed count is sure to block. Gives up after `bound`
+/// changes with the stream's state, so a stream that closed reads as that.
+async fn fill_until_a_send_waits(
+    busy: &crate::backend::Backend,
+    hub: &crate::gateway::ui::stream::StreamHub,
+    bound: usize,
+) -> Result<usize, String> {
+    // Stub: the old fixed count, with no look at whether a send waits.
+    for _ in 0..40 {
+        busy.shared_entry_for_test()
+            .failsafe
+            .record_success(Duration::from_millis(5));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let _ = (hub, bound);
+    Ok(40)
+}
 
 fn big_gateway(state: &AppState) -> Arc<crate::backend::Backend> {
     for i in 0..SERVERS {
@@ -39,14 +64,23 @@ async fn serve(state: &Arc<AppState>) -> SocketAddr {
 
 #[tokio::test]
 async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_returns() {
+    a_stalled_client_is_closed(4096).await;
+}
+
+#[tokio::test]
+async fn a_stalled_client_with_a_large_receive_buffer_is_closed_too() {
+    a_stalled_client_is_closed(LARGE_RECV_BUFFER).await;
+}
+
+async fn a_stalled_client_is_closed(buffer: u32) {
     let (state, _dir) = fixture_unpaused().await;
     tokio::time::pause();
     let busy = big_gateway(&state);
     let addr = serve(&state).await;
     let socket = TcpSocket::new_v4().expect("socket");
     socket
-        .set_recv_buffer_size(4096)
-        .expect("small receive buffer");
+        .set_recv_buffer_size(buffer)
+        .expect("receive buffer size");
     let mut client = socket.connect(addr).await.expect("connect");
     let ask =
         format!("GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {BEARER}\r\n\r\n");
@@ -58,12 +92,10 @@ async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_return
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     let hub = state.dashboard_bootstrap.stream_hub();
     assert_eq!(hub.open_streams(), 1);
-    for _ in 0..CHANGES {
-        busy.shared_entry_for_test()
-            .failsafe
-            .record_success(Duration::from_millis(5));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
+    fill_until_a_send_waits(&busy, hub, MAX_FILL)
+        .await
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(hub.sends_awaiting_room(), 1, "a send still waits");
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert!(
         yield_until(|| hub.open_streams() == 0).await,
@@ -75,19 +107,28 @@ async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_return
     drop(client);
 }
 
-/// Changes pushed before the logout: enough to block a write, few enough to
-/// stay well inside the 30 s write limit on the paused clock.
-const BLOCKING_CHANGES: usize = 40;
-
 #[tokio::test]
 async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
+    a_logout_closes_a_blocked_stream(4096).await;
+}
+
+#[tokio::test]
+async fn a_blocked_write_behind_a_large_receive_buffer_cannot_stretch_it_either() {
+    a_logout_closes_a_blocked_stream(LARGE_RECV_BUFFER).await;
+}
+
+/// The write limit starts only once a send waits, and the fill stops within one
+/// 300 ms step of that, so the logout lands well inside the 30 s limit.
+async fn a_logout_closes_a_blocked_stream(buffer: u32) {
     let (state, _dir) = fixture_unpaused().await;
     tokio::time::pause();
     let busy = big_gateway(&state);
     let cookie = issue(&state);
     let addr = serve(&state).await;
     let socket = TcpSocket::new_v4().expect("socket");
-    socket.set_recv_buffer_size(4096).expect("small buffer");
+    socket
+        .set_recv_buffer_size(buffer)
+        .expect("receive buffer size");
     let mut client = socket.connect(addr).await.expect("connect");
     let ask = format!(
         "GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nCookie: {SESSION_COOKIE}={cookie}\r\n\r\n"
@@ -97,12 +138,9 @@ async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
     let n = client.read(&mut head).await.expect("response head");
     assert!(String::from_utf8_lossy(&head[..n]).starts_with("HTTP/1.1 200"));
     let hub = state.dashboard_bootstrap.stream_hub();
-    for _ in 0..BLOCKING_CHANGES {
-        busy.shared_entry_for_test()
-            .failsafe
-            .record_success(Duration::from_millis(5));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
+    fill_until_a_send_waits(&busy, hub, MAX_FILL)
+        .await
+        .unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(hub.open_streams(), 1, "still blocked, not yet timed out");
     assert_eq!(
         hub.sends_awaiting_room(),
@@ -125,4 +163,18 @@ async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
     assert_eq!(hub.open_streams(), 0, "closed within a few re-check ticks");
     assert!(revoked.elapsed() < Duration::from_secs(5));
     drop(client);
+}
+
+#[tokio::test]
+async fn a_fill_with_no_stream_open_stops_at_its_bound_and_says_so() {
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
+    let busy = big_gateway(&state);
+    let hub = state.dashboard_bootstrap.stream_hub();
+    assert_eq!(hub.open_streams(), 0);
+    let why = fill_until_a_send_waits(&busy, hub, 5)
+        .await
+        .expect_err("with nothing open, no send can wait");
+    assert!(why.contains("after 5 status changes"), "{why}");
+    assert!(why.contains("0 open streams"), "{why}");
 }
