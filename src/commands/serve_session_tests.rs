@@ -112,6 +112,16 @@ fn serve_paths_reach_the_gate() {
         .nth(1)
         .expect("load_for_serve is defined");
     let load = load.split("\n}\n").next().expect("its body");
+    // The scaffold commit carried a temporary allow above the function; the head must not.
+    let above = commands
+        .split("fn load_for_serve")
+        .next()
+        .expect("text before load_for_serve");
+    let attrs = above.rsplit("\n\n").next().unwrap_or_default();
+    assert!(
+        !attrs.contains("unused_async"),
+        "{ROW}: load_for_serve carries no unused_async allow"
+    );
     assert!(
         load.contains("prepare_start"),
         "{ROW}: load_for_serve runs prepare_start"
