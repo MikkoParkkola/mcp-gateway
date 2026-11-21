@@ -1,0 +1,4 @@
+head_sha	453c27849bedb3db154964041caf159d9ab066dc
+#mutant m1
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_blocked_write_cannot_stretch_the_credential_recheck	src/gateway/router/ui_stream_tests/backpressure.rs:175
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_blocked_write_behind_a_large_receive_buffer_cannot_stretch_it_either	src/gateway/router/ui_stream_tests/backpressure.rs:175
