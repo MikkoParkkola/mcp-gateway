@@ -254,7 +254,11 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
         .iter()
         .map(|lit| lit.replace('\\', "/"))
         .collect();
-    let norm = |l: &str| l.trim_end_matches('/').to_owned();
+    // A literal is read from the crate root with its leading `/` dropped: the
+    // tail of `concat!(env!("CARGO_MANIFEST_DIR"), "/docs/x.md")` starts with
+    // one. A path outside the crate (`/etc/hosts`) then names
+    // nothing under the root and stays out.
+    let norm = |l: &str| l.trim_start_matches('/').trim_end_matches('/').to_owned();
     let direct = |lit: &str| {
         let used = all.iter().filter(|l| norm(l) == lit).count();
         let through_helper = covered.iter().filter(|l| norm(l) == lit).count();
@@ -264,12 +268,11 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
         .iter()
         .filter(|lit| {
             lit.len() >= 3
-                && !lit.starts_with('/')
                 && lit
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
         })
-        .map(|lit| lit.trim_end_matches('/').to_owned())
+        .map(|lit| norm(lit))
         .filter(|lit| !NOT_REPO.contains(&lit.split('/').next().unwrap_or("")))
         .filter(|lit| {
             let path = root.join(lit);
