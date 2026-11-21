@@ -373,6 +373,10 @@ pub struct CostTracker {
     /// never saves over it.
     #[cfg(feature = "cost-governance")]
     history_off: std::sync::atomic::AtomicBool,
+    /// Where the history was last written and the SHA-256 of what was
+    /// written, so a save of an unchanged state writes nothing.
+    #[cfg(feature = "cost-governance")]
+    history_last: parking_lot::Mutex<Option<(std::path::PathBuf, String)>>,
     /// When the next idle-key sweep may run (MIK-8000).
     next_key_sweep: AtomicU64,
 }
@@ -391,6 +395,8 @@ impl CostTracker {
             carried: parking_lot::Mutex::default(),
             #[cfg(feature = "cost-governance")]
             history_off: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "cost-governance")]
+            history_last: parking_lot::Mutex::new(None),
             next_key_sweep: AtomicU64::new(0),
         }
     }

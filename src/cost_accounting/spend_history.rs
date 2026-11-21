@@ -201,7 +201,10 @@ fn set_aside(tracker: &CostTracker, path: &Path, now: u64, why: &str) {
 }
 
 /// Write `tracker`'s series to `<data_dir>/spend-history.json` at unix second
-/// `now`. Returns whether it wrote; a failure is logged.
+/// `now`. Returns whether the file now holds them; a failure is logged. When
+/// they encode to the bytes this tracker last wrote there and the file is
+/// still in place, nothing is written: an idle gateway rewrites and syncs
+/// nothing.
 pub(crate) fn save(tracker: &CostTracker, data_dir: &Path, now: u64) -> bool {
     save_with(tracker, data_dir, now, &mut || {}, || Ok(()))
 }
@@ -226,6 +229,14 @@ fn save_with(
             return false;
         }
     };
+    let digest = crate::hashing::sha256_hex(&bytes);
+    let mut last = tracker.history_last.lock();
+    let same = last
+        .as_ref()
+        .is_some_and(|(at, sum)| *at == path && *sum == digest);
+    if same && path.exists() {
+        return true;
+    }
     let written = crate::config_persistence::write_atomic_checked(
         &path,
         &bytes,
@@ -234,7 +245,10 @@ fn save_with(
         before_rename,
     );
     match written {
-        Ok(()) => true,
+        Ok(()) => {
+            *last = Some((path, digest));
+            true
+        }
         Err(e) => {
             tracing::warn!(error = %e, path = %path.display(), "Spend history not saved");
             false
