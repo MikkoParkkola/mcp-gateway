@@ -66,6 +66,7 @@ impl HostLimiter {
 
     /// Whether `admit` would let `host` in at `now`, recording nothing: for
     /// limits that count only failures, checked before the work is done.
+    #[cfg(feature = "webui")] // only the UI's CLI login limits use it
     pub(crate) fn would_admit(&self, host: &str, now: Instant) -> bool {
         let live = |t: &Instant| now.duration_since(*t) < self.window;
         let hosts = self.hosts.lock();
@@ -82,7 +83,7 @@ impl HostLimiter {
     }
 
     /// Keys in the map now, live or not yet shed.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn tracked(&self) -> usize {
         self.hosts.lock().len()
     }
