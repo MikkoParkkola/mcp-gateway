@@ -25,6 +25,23 @@ use crate::security::transparency_log::CorrelationKey;
 use super::AppState;
 use super::helpers::build_error_response;
 
+/// The called name and its arguments as a `tools/call` request carries
+/// them, read before the request is parsed: no name and empty arguments
+/// when absent, as every intake refusal records them.
+pub(crate) fn call_name_and_arguments(request: &Value) -> (&str, &Value) {
+    static EMPTY: std::sync::LazyLock<Value> =
+        std::sync::LazyLock::new(|| Value::Object(serde_json::Map::new()));
+    let params = request.get("params");
+    let name = params
+        .and_then(|params| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params
+        .and_then(|params| params.get("arguments"))
+        .unwrap_or(&EMPTY);
+    (name, arguments)
+}
+
 /// The target a pre-dispatch refusal records, spelled as the request names
 /// it: a `gateway_invoke`'s own server and tool, otherwise no server and the
 /// called name. A surfaced name stays unmapped: mapping it touches the
@@ -40,17 +57,36 @@ pub(super) fn request_target<'t>(arguments: &'t Value, called: &'t str) -> (&'t 
     )
 }
 
-/// What a signing refusal records: the outcome its error maps to, and the
-/// target as the request names it. No unnoted kind: the signing check notes
-/// its own, so a refusal reaching here unnoted records `unrecorded`.
-fn signing_refusal<'t>(error: crate::Error, (server, tool): (&'t str, &'t str)) -> Refusal<'t> {
+/// Where a signing refusal was decided, which says who names its kind.
+#[derive(Clone, Copy)]
+pub(crate) enum SigningSite {
+    /// The signing check, inside the route's note scope: its check noted
+    /// the kind, so a refusal reaching the writer unnoted is `unrecorded`.
+    Check,
+    /// The intake's early refusal of a malformed nonce under the every-call
+    /// scope, before any note scope opens: only a nonce's shape is
+    /// refused there, so it is `syntax`, as the check notes the same refusal.
+    Intake,
+}
+
+/// What a signing refusal records: the outcome its error maps to, the
+/// target as the request names it, and the kind `site` implies when no
+/// check noted one.
+fn signing_refusal<'t>(
+    error: crate::Error,
+    (server, tool): (&'t str, &'t str),
+    site: SigningSite,
+) -> Refusal<'t> {
     let code = error.to_rpc_code();
     Refusal {
         outcome: AuditOutcome::from_result(&Err(error)).unwrap_or(AuditOutcome::Error(code)),
         server,
         tool: Some(tool),
         tenants: BTreeSet::new(),
-        unnoted: None,
+        unnoted: match site {
+            SigningSite::Check => None,
+            SigningSite::Intake => Some(crate::security::decision_record::DecisionKind::Syntax),
+        },
     }
 }
 
@@ -61,19 +97,19 @@ fn signing_refusal<'t>(error: crate::Error, (server, tool): (&'t str, &'t str)) 
 /// could not be written.
 pub(crate) async fn answer_stdio_signing_refusal(
     meta: &crate::gateway::meta_mcp::MetaMcp,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    who: AuditWho,
     (arguments, called, session_id): (&Value, &str, &str),
-    id: RequestId,
+    (id, site): (Option<RequestId>, SigningSite),
     error: crate::Error,
 ) -> crate::protocol::JsonRpcResponse {
     use crate::protocol::JsonRpcResponse;
     let code = error.to_rpc_code();
     let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
-    let refusal = signing_refusal(error, request_target(arguments, called));
+    let refusal = signing_refusal(error, request_target(arguments, called), site);
     crate::security::security_metrics::meta_refused(code);
     let refused = Refused {
         arguments,
-        who: AuditWho::from_caller(caller),
+        who,
         session_id,
         firewall: false,
         trace: None,
@@ -85,17 +121,13 @@ pub(crate) async fn answer_stdio_signing_refusal(
         Some(Err(failed)) if fails_closed => {
             tracing::error!(error = %failed, "stdio signing refusal record failed; answering unavailable");
             let unavailable = crate::Error::AuditUnavailable;
-            JsonRpcResponse::gateway_error(
-                Some(id),
-                unavailable.to_rpc_code(),
-                unavailable.to_string(),
-            )
+            JsonRpcResponse::gateway_error(id, unavailable.to_rpc_code(), unavailable.to_string())
         }
         Some(Err(failed)) => {
             tracing::warn!(error = %failed, "Transparency log write failed (non-fatal)");
-            JsonRpcResponse::gateway_error(Some(id), code, message)
+            JsonRpcResponse::gateway_error(id, code, message)
         }
-        _ => JsonRpcResponse::gateway_error(Some(id), code, message),
+        _ => JsonRpcResponse::gateway_error(id, code, message),
     }
 }
 
@@ -238,20 +270,9 @@ impl<'a> Refused<'a> {
         // The predicate needs an `id` member; an unrecognised one is still
         // answered, with no id, and recorded.
         let Some(id) = id else {
-            crate::security::security_metrics::meta_refused(code);
-            if let Some(Err(error)) = self
-                .write(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
-                .await
-            {
-                tracing::warn!(%error, "Transparency log write failed (non-fatal)");
-            }
-            return build_error_response(
-                None,
-                code,
-                error.to_string(),
-                self.session_id,
-                StatusCode::BAD_REQUEST,
-            );
+            return self
+                .answer_without_id(state, refusal, code, error.to_string())
+                .await;
         };
         self.record(
             state,
@@ -264,6 +285,32 @@ impl<'a> Refused<'a> {
         .await
     }
 
+    /// A refusal of a request with no usable id: counted, recorded best-effort,
+    /// and answered with no id and the caller's own `message` (intake words
+    /// it from the error, a signing site as it always has).
+    async fn answer_without_id(
+        self,
+        state: &AppState,
+        refusal: Refusal<'_>,
+        code: i32,
+        message: String,
+    ) -> axum::response::Response {
+        crate::security::security_metrics::meta_refused(code);
+        if let Some(Err(error)) = self
+            .write(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
+            .await
+        {
+            tracing::warn!(%error, "Transparency log write failed (non-fatal)");
+        }
+        build_error_response(
+            None,
+            code,
+            message,
+            self.session_id,
+            StatusCode::BAD_REQUEST,
+        )
+    }
+
     /// A signing refusal decided before admission (a nonce, or the invocation
     /// policy run at signing time): recorded with the code and outcome its
     /// error carries and the kind its check noted, then answered as before,
@@ -272,12 +319,15 @@ impl<'a> Refused<'a> {
         self,
         state: &AppState,
         called: &str,
-        id: RequestId,
+        (id, site): (Option<RequestId>, SigningSite),
         error: crate::Error,
     ) -> axum::response::Response {
         let code = error.to_rpc_code();
         let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
-        let refusal = signing_refusal(error, request_target(self.arguments, called));
+        let refusal = signing_refusal(error, request_target(self.arguments, called), site);
+        let Some(id) = id else {
+            return self.answer_without_id(state, refusal, code, message).await;
+        };
         self.record(state, refusal, id, code, message, StatusCode::BAD_REQUEST)
             .await
     }

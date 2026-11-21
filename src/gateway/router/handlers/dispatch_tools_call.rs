@@ -462,7 +462,15 @@ pub(super) async fn tools_call(
         delivery_facts::outlet(&error);
         // Recorded before it is answered, as every pre-admission refusal is.
         return Err(refused
-            .answer_signing(state, tool_name, id.clone(), error)
+            .answer_signing(
+                state,
+                tool_name,
+                (
+                    Some(id.clone()),
+                    crate::gateway::router::meta_refusal_audit::SigningSite::Check,
+                ),
+                error,
+            )
             .await);
     }
     caller.signing = signing_context.as_ref();
