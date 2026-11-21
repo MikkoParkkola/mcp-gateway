@@ -44,6 +44,8 @@ src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: ope
 src/config_persistence.rs	sync_dir_for	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config_persistence_commit.rs	open_target	.open	1	read-only	Windows: the commit primitive's read-back handle on gateway.yaml, opened read-write without write or delete sharing so the file flushed is the file hashed; reads to hash, writes nothing
 src/config_persistence_commit.rs	open_target	open_nonblocking	1	read-only	hashes gateway.yaml's bytes just written by the commit primitive, or the revision the replace journal records, and compares the digest; never parsed, writes nothing; only a regular file is hashed
+src/config_persistence_journal_v2_drain_handover.rs	open_guarded	.open	2	not-config	the abandoned config-write file beside the config (audit frames, not gateway.yaml): the handover opens it without following a link, to check, extend and re-read it
+src/config_persistence_journal_v2_drain_handover.rs	seal	open_nonblocking	1	no-content	opens the abandoned file's path only to compare its identity with the handle just written; never read
 src/config_persistence_lock.rs	keep_private	.open	1	no-content	opens the config lock sidecar to hold the lock; its bytes are never read
 src/config_persistence_scratch.rs	create_new_private	.open	1	write-only	creates an owner-only file (create_new); reads nothing
 src/config_persistence_scratch.rs	create_private_replacing	.open	1	write-only	creates an owner-only file over an old one; reads nothing

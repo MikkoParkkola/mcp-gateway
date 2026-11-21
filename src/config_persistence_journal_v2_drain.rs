@@ -433,6 +433,7 @@ fn restore(
 }
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_tests.rs"]
 mod crash_tests;
 #[path = "config_persistence_journal_v2_drain_decide.rs"]
@@ -445,45 +446,55 @@ pub(crate) mod fault;
 #[path = "config_persistence_journal_v2_drain_file.rs"]
 pub(crate) mod file;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
 #[path = "config_persistence_journal_v2_drain_handover.rs"]
 pub(crate) mod handover;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_repair_tests.rs"]
 mod repair_tests;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_root_tests.rs"]
 mod root_tests;
 // Unix only: the abandoned-file fixtures come from a handover, and off Unix `hand_over` refuses
 // the donor as foreign before the startup gate is reached.
 #[cfg(tp3)]
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_startup_tests.rs"]
 mod startup_tests;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_tests.rs"]
 mod tests;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_sessionless_tests.rs"]
 mod unsessioned_build_tests;
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_fixtures_tests.rs"]
 mod crash_fixtures;
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_torn_tests.rs"]
 mod torn_cases;
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_assertions_tests.rs"]
 mod crash_assertions;
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_delivery_cases_tests.rs"]
 mod delivery_cases;
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_cases_tests.rs"]
 mod crash_cases;
