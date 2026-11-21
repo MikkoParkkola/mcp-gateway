@@ -11,6 +11,15 @@ use sha2::Digest as _;
 const ORIGINAL: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 const CANDIDATE: &str = "backends: [not: yaml\n";
 
+/// The serve load, driven to completion on its own runtime so these rows stay plain tests.
+fn serve_load(path: Option<&Path>) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+    runtime.block_on(super::load_for_serve(path))
+}
+
 /// Write `text` owner-only, as the loader requires of a config (a bare
 /// `fs::write` inherits an ACL the Windows loader refuses).
 fn write_private(path: &Path, text: &str) {
@@ -52,7 +61,7 @@ fn a_starting_gateway_recovers_a_crashed_write_before_loading() {
     let config = dir.path().join("gateway.yaml");
     let journal = crashed_write(&config);
 
-    let evaluated = super::load_for_serve(Some(&config)).expect("recovered, then loaded");
+    let evaluated = serve_load(Some(&config)).expect("recovered, then loaded");
 
     assert!(evaluated.config.backends.contains_key("a"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), ORIGINAL);
@@ -67,7 +76,7 @@ fn a_start_without_a_journal_writes_nothing() {
     let config = dir.path().join("gateway.yaml");
     write_private(&config, ORIGINAL);
 
-    super::load_for_serve(Some(&config)).expect("loads");
+    serve_load(Some(&config)).expect("loads");
 
     let names: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -106,7 +115,7 @@ fn an_unwritable_directory_without_a_journal_starts() {
         return;
     }
 
-    let loaded = super::load_for_serve(Some(&config));
+    let loaded = serve_load(Some(&config));
 
     writable(dir.path());
     loaded.expect("no journal, so the start goes ahead");
@@ -124,7 +133,7 @@ fn an_unwritable_directory_with_a_journal_refuses_to_start() {
         return;
     }
 
-    let refused = super::load_for_serve(Some(&config));
+    let refused = serve_load(Some(&config));
 
     writable(dir.path());
     let message = match refused {
@@ -182,7 +191,7 @@ fn serve_refuses_auth_on_with_the_audit_log_off() {
             "auth:\n  enabled: true\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\nsecurity:\n  transparency_log:\n    enabled: false\n"
         ),
     );
-    let refused = super::load_for_serve(Some(&path))
+    let refused = serve_load(Some(&path))
         .expect_err("serve refuses auth on without an audit log")
         .to_string();
     assert!(
@@ -248,7 +257,7 @@ fn nothing_recovered(config: &Path, journal: &Path, candidate: &str) {
 
 /// The refusal of a start whose recovery cannot be audited.
 fn refused_start(config: &Path) -> String {
-    match super::load_for_serve(Some(config)) {
+    match serve_load(Some(config)) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("a recovery that cannot be audited must refuse the start"),
     }
@@ -267,7 +276,7 @@ fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
     let candidate = logged(&log_b);
     let journal = crashed_write_as(&config, &original, &candidate, "staged");
 
-    super::load_for_serve(Some(&config)).expect("recovered, then loaded");
+    serve_load(Some(&config)).expect("recovered, then loaded");
 
     let intents = recovery_intents(&log_a);
     assert_eq!(
@@ -288,7 +297,7 @@ fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
     // A second crashed write recovered by a second start reopens the same
     // log: the first start let its lease go and left a chain that opens.
     crashed_write_as(&config, &original, &candidate, "staged");
-    super::load_for_serve(Some(&config)).expect("the log opens again");
+    serve_load(Some(&config)).expect("the log opens again");
     assert_eq!(
         recovery_intents(&log_a).len(),
         2,
@@ -306,7 +315,7 @@ fn a_kept_write_records_its_recovery_in_the_new_files_log() {
     let candidate = logged(&log_b);
     let journal = crashed_write_as(&config, &logged(&log_a), &candidate, "all_renamed");
 
-    super::load_for_serve(Some(&config)).expect("recovered, then loaded");
+    serve_load(Some(&config)).expect("recovered, then loaded");
 
     assert_eq!(
         recovery_intents(&log_b).len(),

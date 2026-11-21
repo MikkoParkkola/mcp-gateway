@@ -679,7 +679,11 @@ mod admin_credential_tests {
 /// behind is recovered first ([`mcp_gateway::config_reload::recover_before_start`]),
 /// so the gateway never starts on bytes no reload accepted; an unresolvable
 /// one refuses the start. Read-only commands load without it.
-pub(crate) fn load_for_serve(
+#[allow(
+    clippy::unused_async,
+    reason = "scaffold: the startup gate is awaited here once the serve paths take a startup session"
+)]
+pub(crate) async fn load_for_serve(
     path: Option<&std::path::Path>,
 ) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
     if let Some(path) = path {
