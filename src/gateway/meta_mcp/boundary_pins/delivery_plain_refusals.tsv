@@ -90,7 +90,7 @@ src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	1	no-record	st
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/construct.rs	new_evaluated_inner	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/construct.rs	new_with_env	Error::Config(..)	1	no-record	start-up: a construction from a config path refuses while a config-write artifact is beside the config; no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	1no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	4	no-record	start-up: the gateway refuses to start, no call exists
