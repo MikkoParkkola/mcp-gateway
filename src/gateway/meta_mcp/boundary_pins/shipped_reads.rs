@@ -780,3 +780,16 @@ fn guard1_a_slash_led_literal_off_the_list_or_off_the_tree_is_not_flagged() {
         );
     }
 }
+
+/// MIK-9921.GUARD.1: a rooted `concat!` split across string pieces names the
+/// path they spell together, in order: keeping only the first piece (`/docs/`)
+/// or only the last (`b.md`) names nothing unshipped, so either loses the read.
+#[test]
+fn guard1_a_rooted_concat_joins_its_string_pieces_in_order() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/", "b.md"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["docs/b.md".to_owned()]
+    );
+}
