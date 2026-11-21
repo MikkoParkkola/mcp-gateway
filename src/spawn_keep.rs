@@ -25,6 +25,7 @@ pub(crate) const SKILL_BUNDLE: &str = "skill bundle";
 pub(crate) const PACKAGE_CACHE: &str = "package cache";
 
 /// The kind the config lock's detached thread reports as, for the config path.
+#[cfg(test)]
 pub(crate) const CONFIG_LOCK: &str = "config lock";
 
 /// The temp dirs a detached writer keeps: test builds only.
