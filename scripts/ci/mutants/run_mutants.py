@@ -869,9 +869,11 @@ def build_other_targets(targets: list[str], features: str | None, exe_dir: Path,
     if not targets:
         return {}
     meta = run_cmd(["cargo", "metadata", "--format-version", "1", "--no-deps"], COMPILE_LIMIT, logs / "metadata.log")
-    if meta.exit != 0:
-        raise Abort("cargo metadata failed")
-    kinds = {t["name"]: t["kind"] for p in json.loads(meta.output)["packages"] for t in p["targets"]}
+    # run_cmd merges stderr into the output, so cargo's own warnings (a manifest lint) sit beside the JSON line.
+    doc = next((json.loads(line) for line in meta.output.splitlines() if line.startswith("{")), None)
+    if meta.exit != 0 or doc is None:
+        raise Abort("cargo metadata failed or printed no JSON; see logs/metadata.log")
+    kinds = {t["name"]: t["kind"] for p in doc["packages"] for t in p["targets"]}
     absent = [t for t in targets if t not in kinds]
     if absent:
         raise Abort(f"spec executables the build did not produce: {absent}")
@@ -1174,6 +1176,7 @@ import json, os, sys
 args = sys.argv[1:]
 targets = (("mcp_gateway", ["lib"]), ("itest", ["test"]))
 if args[:1] == ["metadata"]:
+    print("warning: `package.homepage` is redundant with `package.repository`", file=sys.stderr, flush=True)
     print(json.dumps({"packages": [{"targets": [{"name": n, "kind": k} for n, k in targets]}]}))
     sys.exit(0)
 with open(os.environ["FAKE_CALLS"], "a") as f:
@@ -1193,10 +1196,11 @@ for name, kind in targets:
 def schemata_driver_self_test() -> tuple[int, list[str]]:
     """(cases run, failures) for the driver (D1-D3, D6-D9, R9, R23), with a fake
     cargo and a fake test executable on PATH."""
-    global TEST_LIMIT
+    global TEST_LIMIT, PART_TABLE, PART_BUILD
     failures: list[str] = []
     n = 0
     saved_path, saved_limit = os.environ.get("PATH", ""), TEST_LIMIT
+    saved_table, saved_build = PART_TABLE, PART_BUILD
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         exe, cargo = d / "fake-test", d / "cargo"
@@ -1208,6 +1212,10 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
                           FAKE_CALLS=str(d / "calls"), FAKE_TABLE=str(d / "table.json"),
                           FAKE_CHILD=str(d / "child.pid"), RUSTFLAGS="--cap-lints=warn")
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        # A fixed split, so rebalancing the live table never moves these rows' expected parts.
+        (d / "parts.tsv").write_text("# fixture\nsrc\t3\nsrc/a2a\t2\nsrc/chains\t1\n")
+        (d / "parts-build.rs").write_text("fn main() {\n    const N: u32 = 5;\n}\n")
+        PART_TABLE, PART_BUILD = str(d / "parts.tsv"), str(d / "parts-build.rs")
         _, ms = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\n")
 
         aborts: list[str] = []  # each refusal's own message, newest last
@@ -1295,7 +1303,8 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             _, calls = run(parted, ms_mixed)
             others = [c["cargo"] for c in calls if "cargo" in c and "--lib" not in c["cargo"]]
             expect("R2 one non-lib build, naming only the rows' target",
-                   [("itest" in a and "--test" in a and "--workspace" not in a) for a in others], [True])
+                   [("itest" in a and "--test" in a and not {"--workspace", "--all-targets", "--lib"} & set(a))
+                    for a in others], [True])
             controls = [CFG_PROBE, "mutant_scan::tests::list_mutant_sites"]
             _, ms_a2a = parse_spec("#mutant A\nmcp_gateway\ta2a::m::t1\tsrc/x.rs:9\n")
             # The table guesses src/a2a -> part 2 and the controls -> part 3 (the src row); the row is in part 4.
@@ -1357,6 +1366,7 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             expect("R6 a cp of the checkout's wrapper over the copy is caught", len(stray_wrapper_lines(planted)), 1)
         finally:
             TEST_LIMIT = saved_limit
+            PART_TABLE, PART_BUILD = saved_table, saved_build
             os.environ["PATH"] = saved_path
     return n, failures
 
