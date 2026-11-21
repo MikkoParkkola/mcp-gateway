@@ -9,7 +9,8 @@ use super::counting::meta_invoke;
 use super::*;
 
 /// Signing on under `security.posture: hardened`: every `tools/call` on
-/// either route must carry a nonce.
+/// either route must carry a nonce, and every caller a per-caller identity
+/// (hardened_identity.rs), so the rows call as [`Caller::Oidc`].
 async fn hardened_signing() -> Fixture {
     fixture(Setup {
         extras: &[Extra::Signing, Extra::Hardened],
@@ -64,15 +65,14 @@ fn assert_meta_refusal(record: &Value, outcome: &str, code: i64, kind: &str) {
 async fn t1_mcp_a_replayed_nonce_records_replay_guard() {
     let fx = hardened_signing().await;
     let nonce = json!("t1-nonce");
-    let (_, first) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Anonymous).await;
+    let (_, first) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Oidc).await;
     assert!(first.get("result").is_some(), "premise: delivered: {first}");
     assert_eq!(
         invocations(&fx).len(),
         1,
         "premise: the first call's record"
     );
-    let (status, second) =
-        post_to(&fx, "/mcp", &signed_on_mcp(2, &nonce), &Caller::Anonymous).await;
+    let (status, second) = post_to(&fx, "/mcp", &signed_on_mcp(2, &nonce), &Caller::Oidc).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{second}");
     assert_eq!(second["error"]["code"], -32001, "{second}");
     assert_eq!(
@@ -91,9 +91,9 @@ async fn t1_mcp_a_replayed_nonce_records_replay_guard() {
 async fn t6_direct_a_replayed_nonce_records_replay_guard() {
     let fx = hardened_signing().await;
     let nonce = json!("t6-nonce");
-    let (_, first) = post(&fx, "alpha", &signed_direct(1, &nonce), &Caller::Anonymous).await;
+    let (_, first) = post(&fx, "alpha", &signed_direct(1, &nonce), &Caller::Oidc).await;
     assert!(first.get("result").is_some(), "premise: delivered: {first}");
-    let (status, second) = post(&fx, "alpha", &signed_direct(2, &nonce), &Caller::Anonymous).await;
+    let (status, second) = post(&fx, "alpha", &signed_direct(2, &nonce), &Caller::Oidc).await;
     assert_eq!(second["error"]["code"], -32001, "{status} {second}");
     assert_eq!(
         second["error"]["message"], "Nonce replay detected",
@@ -113,7 +113,7 @@ async fn t6_direct_a_replayed_nonce_records_replay_guard() {
 async fn s1_mcp_an_over_long_nonce_records_syntax() {
     let fx = hardened_signing().await;
     let nonce = json!("n".repeat(257));
-    let (status, body) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Anonymous).await;
+    let (status, body) = post_to(&fx, "/mcp", &signed_on_mcp(1, &nonce), &Caller::Oidc).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], -32602, "{body}");
     assert_eq!(body["error"]["message"], "Invalid signing nonce", "{body}");
@@ -130,13 +130,7 @@ async fn s1_mcp_an_over_long_nonce_records_syntax() {
 #[tokio::test]
 async fn s5_mcp_a_number_nonce_records_syntax() {
     let fx = hardened_signing().await;
-    let (status, body) = post_to(
-        &fx,
-        "/mcp",
-        &signed_on_mcp(1, &json!(5)),
-        &Caller::Anonymous,
-    )
-    .await;
+    let (status, body) = post_to(&fx, "/mcp", &signed_on_mcp(1, &json!(5)), &Caller::Oidc).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], -32602, "{body}");
     assert_eq!(body["error"]["message"], "Invalid signing nonce", "{body}");

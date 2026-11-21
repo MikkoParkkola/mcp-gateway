@@ -203,12 +203,13 @@ async fn s4_stdio_a_missing_required_nonce_records_syntax() {
     assert_eq!(record["decision"]["kind"], "syntax", "{record}");
 }
 
-/// S6: under the invoke-only scope, a `gateway_invoke` carrying both an
-/// argument nonce and a `_meta` nonce has two replay identities: refused as
-/// the request's shape, after the invocation policy.
+/// S6: under the every-call scope (hardened), the only scope that reads a
+/// `_meta` nonce on `gateway_invoke` (signing.rs `capture_scoped`), a call carrying
+/// both an argument nonce and a `_meta` nonce has two replay identities:
+/// refused as the request's shape, after the invocation policy.
 #[tokio::test]
 async fn s6_stdio_two_nonces_record_syntax() {
-    let logged = signing_stdio(crate::security::SecurityPosture::Standard, false).await;
+    let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
     let params = invoke_params(with_nonce("s6-meta"), Some("s6-argument"));
     let answer = stdio_send(&logged.meta, params).await;
     assert_eq!(answer["error"]["code"], -32602, "{answer}");
