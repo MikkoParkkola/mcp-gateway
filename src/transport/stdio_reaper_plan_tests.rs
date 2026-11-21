@@ -247,22 +247,23 @@ fn a_backend_stage_budget_keeps_its_eof_and_term_phases() {
 #[test]
 fn the_allocator_plan_across_its_edges() {
     let ms = Duration::from_millis;
+    let less = |a: Duration, b: Duration| a.checked_sub(b).expect("an edge below zero");
     let (n, m) = (NESTED_TERM_NEED, MIN_PHASE);
     let graceful = |eof, term| Ending::Graceful { eof, term };
     let edges = [
         ("no waits", Duration::ZERO, Ending::Now),
-        ("just under one minimum phase", m - ms(1), Ending::Now),
+        ("just under one minimum phase", less(m, ms(1)), Ending::Now),
         ("one minimum phase", m, Ending::Now),
         (
             "SIGTERM's share under a minimum phase",
             m + m / 2,
             graceful(m, Duration::ZERO),
         ),
-        ("the nested need alone", n, graceful(m, n - m)),
+        ("the nested need alone", n, graceful(m, less(n, m))),
         (
             "one step short of need plus phase",
-            n + m - ms(1),
-            graceful(m, n - ms(1)),
+            less(n + m, ms(1)),
+            graceful(m, less(n, ms(1))),
         ),
         ("need plus one minimum phase", n + m, graceful(m, n)),
         (

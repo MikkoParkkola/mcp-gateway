@@ -476,7 +476,11 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
     let dir = tempfile::tempdir().expect("temp dir");
     let registry = BackendRegistry::new();
     let backend = stays(dir.path(), "nested", registry.stop_deadline());
-    let peer = nesting_peer(TERM_NEED - TERM_MARGIN);
+    let peer = nesting_peer(
+        TERM_NEED
+            .checked_sub(TERM_MARGIN)
+            .expect("the margin is under the need"),
+    );
     std::fs::write(dir.path().join("peer.py"), peer).expect("write the nesting peer");
     let _end = EndOnDrop(Arc::clone(&backend));
     assert!(registry.register(Arc::clone(&backend)), "registered");
@@ -507,7 +511,10 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
         "the handed nested tree was not reaped before the stage deadline"
     );
     crate::transport::signal_log::assert_term_then_kill_strict(pid, "the nested tree's plan").await;
-    let planned_term = entry + BACKEND_RESERVE - KILL_RESERVE_FOR_TEST - TERM_NEED;
+    let planned_term = entry
+        + BACKEND_RESERVE
+            .checked_sub(KILL_RESERVE_FOR_TEST + TERM_NEED)
+            .expect("the backend reserve holds the kill reserve and the term need");
     let eof = peer_mark(dir.path(), "eof").expect("the nested peer never saw EOF");
     assert!(
         eof < planned_term,
