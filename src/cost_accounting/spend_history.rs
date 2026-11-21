@@ -150,7 +150,6 @@ impl History {
 /// `counters.json` is, and the tracker starts empty with one warning; when it
 /// cannot be set aside, this run saves no history, so its bytes survive.
 pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[String], now: u64) {
-    return; // RED: not restored yet
     let path = data_dir.join(FILE_NAME);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
@@ -216,7 +215,6 @@ fn save_with(
     after_copy: &mut dyn FnMut(),
     before_rename: impl FnOnce() -> std::io::Result<()>,
 ) -> bool {
-    return false; // RED: not saved yet
     if tracker.history_off.load(Ordering::Relaxed) {
         return false;
     }
