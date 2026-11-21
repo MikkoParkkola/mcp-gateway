@@ -327,9 +327,17 @@ async fn test_invoke_caching() {
         }),
     );
 
+    // A response is cached only for a request whose protocol revision is known (docs/UPGRADING-4.0.md
+    // section 6): this bare POST runs no initialize, so both invocations name the revision in the
+    // header, or the second one never reaches the cache.
+    let revision = (
+        "MCP-Protocol-Version",
+        mcp_gateway::protocol::PROTOCOL_VERSION,
+    );
     let start1 = Instant::now();
     let response1 = client
         .post(GATEWAY_URL)
+        .header(revision.0, revision.1)
         .json(&invoke_request)
         .send()
         .await
@@ -354,6 +362,7 @@ async fn test_invoke_caching() {
     let start2 = Instant::now();
     let response2 = client
         .post(GATEWAY_URL)
+        .header(revision.0, revision.1)
         .json(&invoke_request)
         .send()
         .await
