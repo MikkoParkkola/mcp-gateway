@@ -154,6 +154,12 @@ pub(crate) type HourBuckets = Buckets<u64>;
 /// Spend per local date in the host's zone (ADR-026): at most [`KEPT_DAYS`].
 pub(crate) type DayTotals = Buckets<NaiveDate>;
 
+/// Unix second `secs` as a date in the host's zone, the way the budget
+/// dates its days (ADR-026).
+pub(crate) fn local_date(secs: u64) -> NaiveDate {
+    crate::local_day::local_day(&crate::local_day::host_zone(), secs).date
+}
+
 impl<S: Slot> Buckets<S> {
     /// Add spend in `slot`. The newest of `floor`, `slot` and what is held
     /// ends the window: a clock that steps back cannot widen it.
@@ -228,11 +234,8 @@ impl Series {
     /// Add spend at unix second `at`, the windows ending no earlier than `now`.
     pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
         self.hours.add(at, now, tokens, micro);
-        // Dated in the host's zone, as the budget's days are (ADR-026): a
-        // local midnight can fall inside a UTC hour.
-        let zone = crate::local_day::host_zone();
-        let date = |secs| crate::local_day::local_day(&zone, secs).date;
-        self.days.add_slot(date(at), date(now), tokens, micro);
+        self.days
+            .add_slot(local_date(at), local_date(now), tokens, micro);
     }
 
     /// Add each of `other`'s rows into this series' row for the same hour or

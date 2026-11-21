@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-use tally::{Series, ToolTally};
+use tally::{Series, Slot, ToolTally};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -76,8 +76,7 @@ impl CostRecord {
 
 // ── Report windows ────────────────────────────────────────────────────────────
 
-/// A rolling time window of the per-key cost report, and the idle-key sweep's
-/// horizon. Reporting only: no limit is enforced over these windows; the
+/// A rolling time window of the per-key cost report. Reporting only: no limit is enforced over these windows; the
 /// enforced caps are the budget enforcer's daily ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BudgetWindow {
@@ -231,12 +230,16 @@ impl KeyCost {
         }
     }
 
-    /// True when the key has had no spend for the 30-day window: every window
-    /// it reports would read zero. A key with no dated spend is never idle
+    /// True once nothing the key holds is dated after its windows: its last
+    /// spend is out of the hour buckets and the local dates. A key with no dated spend is never idle
     /// (MIK-8202 P4b).
     fn idle(&self, now: u64) -> bool {
         let last = self.last_spend.load(Ordering::Relaxed);
-        last != 0 && last + BudgetWindow::Month.secs() < now
+        // Both cuts the series age by: with a 25-hour day in the month the
+        // dates outlast the hours, and the entry must outlast both.
+        last != 0
+            && (last / 3600).expired(now / 3600)
+            && tally::local_date(last).expired(tally::local_date(now))
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock
