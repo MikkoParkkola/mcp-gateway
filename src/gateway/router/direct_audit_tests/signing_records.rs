@@ -146,3 +146,32 @@ async fn s5_mcp_a_number_nonce_records_syntax() {
     };
     assert_meta_refusal(record, "invalid", -32602, "syntax");
 }
+
+/// P1: under the invoke-only scope, the route stage passes alpha but the
+/// signing check's invocation policy refuses it: the operator killed alpha,
+/// which the route stage never reads (signing.rs `prepare_signing_invocation`
+/// runs the visible policy first). The kill switch names no rule, so the
+/// record carries the policy's own kind and no rule id.
+#[tokio::test]
+async fn p1_mcp_a_signing_time_policy_refusal_records_its_own_kind() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Signing],
+        ..Setup::default()
+    })
+    .await;
+    fx.state.meta_mcp.kill_switch().kill("alpha");
+    let request = signed_on_mcp(1, &json!("p1-nonce"));
+    let (status, body) = post_to(&fx, "/mcp", &request, &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32000, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Server 'alpha' is currently disabled by operator kill switch",
+        "{body}"
+    );
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "error", -32000, "kill_switch");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
+}

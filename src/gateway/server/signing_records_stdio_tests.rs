@@ -197,3 +197,22 @@ async fn f2_stdio_a_failed_refusal_write_answers_unavailable() {
     let second = stdio_send(&logged.meta, invoke_params(with_nonce("f2-nonce"), None)).await;
     assert_eq!(second["error"]["code"], -32005, "{second}");
 }
+
+/// P2: P1 on stdio. Under the invoke-only scope the operator killed alpha;
+/// the signing check's invocation policy refuses it, answered as before, and
+/// recorded with the policy's own kind and no rule id (the kill switch names
+/// none).
+#[tokio::test]
+async fn p2_stdio_a_signing_time_policy_refusal_records_its_own_kind() {
+    let logged = signing_stdio(crate::security::SecurityPosture::Standard, false).await;
+    logged.meta.kill_switch().kill("alpha");
+    let answer = stdio_send(&logged.meta, invoke_params(with_nonce("p2-nonce"), None)).await;
+    assert_eq!(answer["error"]["code"], -32000, "{answer}");
+    assert_eq!(
+        answer["error"]["message"], "Server 'alpha' is currently disabled by operator kill switch",
+        "{answer}"
+    );
+    let record = sole_record(&logged, &answer);
+    assert_refusal_record(&record, "error", -32000, "kill_switch");
+    assert!(record["decision"].get("rule_id").is_none(), "{record}");
+}
