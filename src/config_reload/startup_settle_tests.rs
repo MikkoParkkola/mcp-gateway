@@ -727,6 +727,10 @@ fn start_error_texts() {
             StartError::ArtifactCheckFailed => {
                 "This gateway could not confirm that no config write is pending beside the config. Fix access to the config directory, then start again."
             }
+            // Not in the list above: the sessionless constructor rows pin these two in full.
+            StartError::RecoveryPending | StartError::ManifestUnread => {
+                unreachable!("start_error_texts: {error:?} is pinned by the sessionless rows")
+            }
         };
         assert_eq!(
             error.to_string(),
