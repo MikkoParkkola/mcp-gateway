@@ -382,8 +382,6 @@ where
     let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, dir);
     let target = dir.to_path_buf();
     let renamed = tokio::task::spawn_blocking(move || {
-        // First, so it drops last: after the rename and the discard's spawn.
-        let _kept = kept;
         // Locals drop in reverse order, so on a panic in `retire` the latch is
         // re-armed before `held` releases the lock, and whether or not anyone
         // still awaits this task.
@@ -396,7 +394,8 @@ where
             Retired::Refused => arm_again(&target),
             Retired::AlreadyGone => {}
         }
-        (retired, held)
+        // Held to the task's last step: after the rename and the discard's spawn.
+        crate::spawn_keep::holding(kept, || (retired, held))
     });
     match renamed.await {
         Ok((retired, held)) => (retired, Some(held)),
