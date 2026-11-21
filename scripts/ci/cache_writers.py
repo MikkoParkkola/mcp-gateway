@@ -995,16 +995,18 @@ def self_test() -> list[str]:
 def _loader_self_test() -> list[str]:
     """Row 19 (gpt seat improvement): errors() itself, over a real file tree, finds a writer in a .yaml
     workflow, a --cache-to in a local composite, a bake line in a script, and a nested package.json naming a
-    package manager, and skips one under node_modules. A saving rust-cache step in a .yaml workflow fails on
-    the unguarded-writer rule (R2)."""
+    package manager, and skips one under node_modules. An unguarded rust-cache step fails on rule R2 in a
+    .yaml and in a .yml workflow alike."""
     import tempfile
 
     found: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        # The same pull-request workflow, its rust-cache saving unconditionally, under both extensions GitHub runs.
+        unguarded_rust = "on: pull_request\njobs:\n  j:\n    steps:\n      - uses: Swatinem/rust-cache@x\n"
         files = {
-            # A rust-cache step that saves on every ref, in a workflow GitHub runs from its .yaml name.
-            ".github/workflows/rust.yaml": "on: pull_request\njobs:\n  j:\n    steps:\n      - uses: Swatinem/rust-cache@x\n",
+            ".github/workflows/rust.yaml": unguarded_rust,
+            ".github/workflows/rust.yml": unguarded_rust,
             ".github/workflows/w.yaml": "on: push\njobs:\n  j:\n    steps:\n      - uses: astral-sh/setup-uv@x\n",
             ".github/actions/a/action.yml": "runs:\n  using: composite\n  steps:\n"
                                            "    - run: docker build --cache-to type=gha .\n      shell: bash\n",
@@ -1025,7 +1027,8 @@ def _loader_self_test() -> list[str]:
             found.append(f"self-test: 19 loader: {what} not found in {got}")
     if any("node_modules" in item for item in got):
         found.append(f"self-test: 19 loader: a package.json under node_modules was read: {got}")
-    # The .yaml rust-cache step must fail on the unguarded-writer rule itself, not on any other error in that file.
-    if not any(item.startswith("cache: rust.yaml ") and ": R2: " in item for item in got):
-        found.append(f"self-test: 19 loader: saving rust-cache step in a .yaml workflow not caught by R2 in {got}")
+    # Each copy must fail on the unguarded-writer rule itself, so dropping either extension from the loader shows.
+    for name in ("rust.yaml", "rust.yml"):
+        if not any(item.startswith(f"cache: {name} ") and ": R2: " in item for item in got):
+            found.append(f"self-test: 19 loader: unguarded rust-cache in {name} not caught by R2 in {got}")
     return found
