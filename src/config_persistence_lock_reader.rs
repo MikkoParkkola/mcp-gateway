@@ -30,6 +30,11 @@ fn artifact_blocks(target: &Path) -> Option<&'static str> {
         (abandoned_path(target), ABANDONED_PENDING),
         (retired_path(target), MANIFEST_UNREAD),
     ] {
+        if mutant!("m17", found == ABANDONED_PENDING, false)
+            || mutant!("m18", found == MANIFEST_UNREAD, false)
+        {
+            continue;
+        }
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(_) => return Some(ARTIFACT_UNPROVEN),
@@ -80,7 +85,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
             // The lock moves into the worker and back, so a cancelled caller never leaves a
             // recovery running unlocked.
             let checked = off_runtime(move || {
-                if let Some(why) = artifact_blocks(&locked.target) {
+                if let Some(why) = mutant!("m20", None, artifact_blocks(&locked.target)) {
                     return Err(why.to_owned());
                 }
                 let mut locked = locked;
@@ -89,6 +94,11 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
                         NotLocked::Busy => "the config lock was lost during recovery".to_owned(),
                         NotLocked::Failed(why) | NotLocked::Refused(why) => why,
                     })?;
+                }
+                if mutant!("m20", true, false)
+                    && let Some(why) = artifact_blocks(&locked.target)
+                {
+                    return Err(why.to_owned());
                 }
                 Ok(locked)
             })
@@ -114,7 +124,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
                 Probe {
                     no_writer: no_writer_possible(&target),
                     pending: journal_pending(&target),
-                    blocked: artifact_blocks(&target),
+                    blocked: mutant!("m21", None, artifact_blocks(&target)),
                     target,
                     journal,
                 }
