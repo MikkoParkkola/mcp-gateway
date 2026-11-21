@@ -71,28 +71,17 @@ fn invocation_records(logged: &Logged) -> Vec<Value> {
 /// `gateway_invoke alpha read` whose `_meta` is `meta`, and whose own
 /// arguments carry `argument_nonce` when given.
 fn invoke_params(meta: Value, argument_nonce: Option<&str>) -> Value {
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("server".to_owned(), json!("alpha"));
-    arguments.insert("tool".to_owned(), json!("read"));
-    arguments.insert("arguments".to_owned(), json!({}));
+    let mut params = invoke_read(&json!({}));
     if let Some(nonce) = argument_nonce {
-        arguments.insert("nonce".to_owned(), json!(nonce));
+        params["arguments"]["nonce"] = json!(nonce);
     }
-    let mut params = serde_json::Map::new();
-    params.insert("name".to_owned(), json!("gateway_invoke"));
-    params.insert("arguments".to_owned(), Value::Object(arguments));
-    params.insert("_meta".to_owned(), meta);
-    Value::Object(params)
+    params["_meta"] = meta;
+    params
 }
 
 /// The `_meta` member carrying `nonce` as the signing nonce.
 fn with_nonce(nonce: &str) -> Value {
-    let mut meta = serde_json::Map::new();
-    meta.insert(
-        crate::gateway::meta_mcp::signing::NONCE_META.to_owned(),
-        json!(nonce),
-    );
-    Value::Object(meta)
+    json!({ (crate::gateway::meta_mcp::signing::NONCE_META): nonce })
 }
 
 /// The fields every recorded stdio signing refusal shares.

@@ -6,11 +6,9 @@
 //! as before. Its delivery record joins its invocation record, and a nonce
 //! refused once stays refused.
 
-use super::counting::{attach, totals};
+use super::counting::{attach, meta_invoke, totals};
+use super::signing_records::signed;
 use super::*;
-
-/// The `_meta` key a hardened `tools/call` carries its nonce under.
-const NONCE_KEY: &str = "io.mcp-gateway/nonce";
 
 /// `[calls, blocks, errors, firewall refusals, cache hits]` after one
 /// delivered call and one refused replay.
@@ -30,28 +28,9 @@ async fn signing_gateway(log: Log, fail_closed: bool) -> Fixture {
 
 /// One `/mcp` `gateway_invoke` of alpha's `t` signed with `nonce`.
 async fn send_signed(fx: &Fixture, id: u64, nonce: &str) -> (StatusCode, Value) {
-    let mut target = serde_json::Map::new();
-    target.insert("server".to_owned(), json!("alpha"));
-    target.insert("tool".to_owned(), json!("t"));
-    target.insert("arguments".to_owned(), json!({}));
-    let mut meta = serde_json::Map::new();
-    meta.insert(NONCE_KEY.to_owned(), json!(nonce));
-    let mut params = serde_json::Map::new();
-    params.insert("name".to_owned(), json!("gateway_invoke"));
-    params.insert("arguments".to_owned(), Value::Object(target));
-    params.insert("_meta".to_owned(), Value::Object(meta));
-    let mut request = serde_json::Map::new();
-    request.insert("jsonrpc".to_owned(), json!("2.0"));
-    request.insert("id".to_owned(), json!(id));
-    request.insert("method".to_owned(), json!("tools/call"));
-    request.insert("params".to_owned(), Value::Object(params));
-    post_to(
-        fx,
-        "/mcp",
-        &Value::Object(request).to_string(),
-        &Caller::Anonymous,
-    )
-    .await
+    let invoke = meta_invoke("alpha", "t", &json!({}));
+    let request = signed(&invoke, id, &json!(nonce));
+    post_to(fx, "/mcp", &request, &Caller::Anonymous).await
 }
 
 /// The replay's answer as it has always been: 400, -32001.

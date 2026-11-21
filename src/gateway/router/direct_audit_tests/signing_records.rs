@@ -1,15 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Signing refusals and the signature-chain check, as the invocation record
-//! names them. A refused nonce on `/mcp` leaves exactly one record before it
-//! is answered; a replayed nonce is named `replay_guard`, a malformed one
-//! `syntax`; a backend answer whose chain does not verify is named
-//! `signature_chain`, on both routes.
+//! Signing refusals in the invocation record: a nonce refused on `/mcp`
+//! leaves one record before it is answered, a replay named `replay_guard`
+//! and a malformed nonce `syntax`. The chain check's own kind is pinned on
+//! the both-routes row in `late_refusals`.
 
+use super::counting::meta_invoke;
 use super::*;
-
-/// The `_meta` key a hardened `tools/call` carries its nonce under.
-const NONCE_KEY: &str = "io.mcp-gateway/nonce";
 
 /// Signing on under `security.posture: hardened`: every `tools/call` on
 /// either route must carry a nonce.
@@ -21,47 +18,23 @@ async fn hardened_signing() -> Fixture {
     .await
 }
 
-/// A JSON-RPC `tools/call` request naming `tool` with `arguments`, and
-/// `meta` as its `_meta` member when one is given.
-fn call_request(id: u64, tool: &str, arguments: Value, meta: Option<Value>) -> String {
-    let mut params = serde_json::Map::new();
-    params.insert("name".to_owned(), json!(tool));
-    params.insert("arguments".to_owned(), arguments);
-    if let Some(meta) = meta {
-        params.insert("_meta".to_owned(), meta);
-    }
-    let mut request = serde_json::Map::new();
-    request.insert("jsonrpc".to_owned(), json!("2.0"));
-    request.insert("id".to_owned(), json!(id));
-    request.insert("method".to_owned(), json!("tools/call"));
-    request.insert("params".to_owned(), Value::Object(params));
-    Value::Object(request).to_string()
+/// The fixture's own serialized `request`, renumbered `id` and carrying
+/// `nonce` in its `_meta`, where a hardened call is signed.
+pub(super) fn signed(request: &str, id: u64, nonce: &Value) -> String {
+    let mut call: Value = serde_json::from_str(request).expect("the fixture's request parses");
+    call["id"] = json!(id);
+    call["params"]["_meta"] = json!({ (crate::gateway::meta_mcp::signing::NONCE_META): nonce });
+    call.to_string()
 }
 
-/// What a `gateway_invoke` of alpha's `t` passes as its arguments.
-fn alpha_t() -> Value {
-    let mut target = serde_json::Map::new();
-    target.insert("server".to_owned(), json!("alpha"));
-    target.insert("tool".to_owned(), json!("t"));
-    target.insert("arguments".to_owned(), json!({}));
-    Value::Object(target)
-}
-
-/// The `_meta` member carrying `nonce` as the signing nonce.
-fn nonce_meta(nonce: &Value) -> Value {
-    let mut meta = serde_json::Map::new();
-    meta.insert(NONCE_KEY.to_owned(), nonce.clone());
-    Value::Object(meta)
-}
-
-/// On `/mcp`: alpha's `t` through `gateway_invoke`, signed with `nonce`.
+/// Alpha's `t` through `/mcp`'s `gateway_invoke`, signed.
 fn signed_on_mcp(id: u64, nonce: &Value) -> String {
-    call_request(id, "gateway_invoke", alpha_t(), Some(nonce_meta(nonce)))
+    signed(&meta_invoke("alpha", "t", &json!({})), id, nonce)
 }
 
-/// On `/mcp/alpha`: `t` called by name, signed with `nonce`.
+/// Alpha's `t` on its own route, signed.
 fn signed_direct(id: u64, nonce: &Value) -> String {
-    call_request(id, "t", json!({"q": 1}), Some(nonce_meta(nonce)))
+    signed(&tools_call("t"), id, nonce)
 }
 
 /// The invocation records, oldest first; none at all fails with `answer`.
@@ -172,47 +145,4 @@ async fn s5_mcp_a_number_nonce_records_syntax() {
         panic!("exactly one record: {all:?}");
     };
     assert_meta_refusal(record, "invalid", -32602, "syntax");
-}
-
-/// Backends that must answer with a verified signature chain; the scripted
-/// backend answers with none.
-async fn chain_required() -> Fixture {
-    fixture(Setup {
-        chain: crate::config::ChainMode::Require,
-        ..Setup::default()
-    })
-    .await
-}
-
-/// The one record of a call the chain check refused, once `answer` shows
-/// that refusal's code.
-fn chain_refusal_record(fx: &Fixture, answer: &Value) -> Value {
-    assert_eq!(
-        answer["error"]["code"], -32001,
-        "premise: the chain check refused the answer: {answer}"
-    );
-    only_invocation(fx)
-}
-
-/// C1 on `/mcp`: an answer with no chain does not verify under `require`;
-/// its record names `signature_chain`.
-#[tokio::test]
-async fn c1_meta_an_unverified_chain_records_signature_chain() {
-    let fx = chain_required().await;
-    let call = call_request(9, "gateway_invoke", alpha_t(), None);
-    let (_, answer) = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
-    let record = chain_refusal_record(&fx, &answer);
-    assert_eq!(record["route"], "meta", "{record}");
-    assert_eq!(record["decision"]["kind"], "signature_chain", "{record}");
-}
-
-/// C1 on the direct route: the same check, the same kind.
-#[tokio::test]
-async fn c1_direct_an_unverified_chain_records_signature_chain() {
-    let fx = chain_required().await;
-    let call = call_request(9, "t", json!({"q": 1}), None);
-    let (_, answer) = post(&fx, "alpha", &call, &Caller::Anonymous).await;
-    let record = chain_refusal_record(&fx, &answer);
-    assert_eq!(record["route"], "direct", "{record}");
-    assert_eq!(record["decision"]["kind"], "signature_chain", "{record}");
 }
