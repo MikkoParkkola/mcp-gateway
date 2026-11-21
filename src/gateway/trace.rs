@@ -68,6 +68,37 @@ where
     TRACE_ID.scope(trace_id, future).await
 }
 
+/// Log the closing half of a `tool invoked` line.
+///
+/// The gateway logs `tool invoked` when a call arrives. Without a matching line
+/// when the response is produced, a request the gateway answered and a response
+/// the caller never received read alike in the log. This emits the closing line,
+/// carrying the same `trace_id` as the opening one so a single call can be
+/// followed from arrival to the response handed back.
+pub fn log_response_returned(
+    trace_id: &str,
+    session_id: Option<&str>,
+    elapsed_ms: u128,
+    error: Option<&(dyn std::error::Error + 'static)>,
+) {
+    let session_id = session_id.unwrap_or("-");
+    match error {
+        Some(error) => tracing::warn!(
+            trace_id = %trace_id,
+            session_id = %session_id,
+            elapsed_ms = elapsed_ms,
+            error = %error,
+            "tool response returned"
+        ),
+        None => tracing::info!(
+            trace_id = %trace_id,
+            session_id = %session_id,
+            elapsed_ms = elapsed_ms,
+            "tool response returned"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

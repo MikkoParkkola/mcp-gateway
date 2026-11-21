@@ -1207,9 +1207,22 @@ impl MetaMcp {
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
+        let trace_id_for_exit = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
-                .await
+            let started = std::time::Instant::now();
+            let outcome = self
+                .invoke_tool_traced(args, session_id, caller, &trace_id_clone)
+                .await;
+            trace::log_response_returned(
+                &trace_id_for_exit,
+                session_id,
+                started.elapsed().as_millis(),
+                outcome
+                    .as_ref()
+                    .err()
+                    .map(|e| e as &(dyn std::error::Error + 'static)),
+            );
+            outcome
                 // Single delivery boundary: unwrap the guard-sealed result.
                 .map(GuardedValue::into_inner)
         })
@@ -1897,10 +1910,11 @@ impl MetaMcp {
         // back to the calling agent without post-processing.
         let agent_label = agent_id.unwrap_or("anonymous");
         tracing::info!(
-            agent_id = %agent_label,
-            server   = %server,
-            tool     = %tool,
-            trace_id = %trace_id,
+            agent_id   = %agent_label,
+            server     = %server,
+            tool       = %tool,
+            trace_id   = %trace_id,
+            session_id = session_id.unwrap_or("-"),
             "tool invoked"
         );
         // ADR-014 §3: the audit line, on the stream of the request that asked
