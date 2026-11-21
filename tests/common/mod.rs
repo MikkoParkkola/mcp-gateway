@@ -324,3 +324,10 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     }
 }
+
+/// Wait until every task in `ids` reads as terminal through the router's
+/// `tasks/get`, so the task store has committed its last record before the
+/// caller drops the directory [`state`] returned.
+///
+/// Stub for the red row (tests/task_settle_teardown.rs): it returns at once.
+pub async fn settle_tasks(_state: &Arc<AppState>, _ids: &[&str]) {}
