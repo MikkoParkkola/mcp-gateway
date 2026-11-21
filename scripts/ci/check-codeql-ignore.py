@@ -47,8 +47,9 @@ def cfg_override_problems(text):
     for `-test` and miss a key spelled with escapes. GitHub refuses a workflow with a duplicate key, so the parser's
     last-wins on duplicates never decides a run. An `env:` that is not a plain mapping (an expression such as
     `${{ fromJSON(...) }}` that builds the whole mapping at run time) is refused anywhere, since its keys cannot be
-    read here. Out of reach, by design: a step that writes the variable to $GITHUB_ENV at run time under a spelling
-    a text search cannot see; the analyze job runs only checkout and the CodeQL actions."""
+    read here. Threat model: this stops accidental drift of the setting. A deliberate bypass means editing codeql.yml
+    or this script, and pull-request review covers both. A step that writes the variable to $GITHUB_ENV at run time
+    is out of reach; the analyze job runs only checkout and the CodeQL actions."""
     import yaml  # hash-pinned in scripts/ci/pyyaml-requirements.txt; local, so the dep-info part stays stdlib
 
     want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
