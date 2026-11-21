@@ -35,7 +35,6 @@ EXEMPT = {
     "tests/preview_sandbox_linux_fetch.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "src/preview_sandbox/linux/fetch_rows.rs": "the preview-sandbox suite's own required switch (PREVIEW_SANDBOX_REQUIRED)",
     "tests/heygen_connector_tests.rs": "#[ignore] plus a secret: a manual check by design",
-    "tests/integration_tests.rs": "#[ignore]: the rows run by hand until the ignored-rows follow-up",
 }
 
 
