@@ -250,6 +250,7 @@ fn save_with(
             true
         }
         Err(e) => {
+            drop(last);
             tracing::warn!(error = %e, path = %path.display(), "Spend history not saved");
             false
         }
