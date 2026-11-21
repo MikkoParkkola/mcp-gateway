@@ -406,8 +406,10 @@ async fn a_stdio_backend_leads_its_own_process_group() {
 /// [`PEER`] as a nested gateway: it starts a leaf in its own session (beyond
 /// the outer group's kill, as a nested gateway's leaf is), and its SIGTERM
 /// handler waits `wait` (the inner's slowest hurried path) before it kills
-/// and reaps the leaf. Every step writes a `CLOCK_MONOTONIC` mark file: `eof`
-/// in place of PEER's post-EOF SIGTERM ignore, then `term` and `leaf_dead`.
+/// and reaps the leaf through its own handle. The leaf ends by itself after
+/// 120 s, so a red row leaks nothing and the row never signals a pid. Every
+/// step writes a `CLOCK_MONOTONIC` mark file: `eof` in place of PEER's
+/// post-EOF SIGTERM ignore, then `term` and `leaf_dead`.
 #[cfg(target_os = "linux")]
 fn nesting_peer(wait: Duration) -> String {
     const POST_EOF_IGNORE: &str = "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n";
@@ -416,13 +418,13 @@ fn nesting_peer(wait: Duration) -> String {
          def mark(name):\n\
          \x20   with open(name, \"w\") as out:\n\
          \x20       out.write(repr(time.clock_gettime(time.CLOCK_MONOTONIC)))\n\
-         leaf = subprocess.Popen([sys.executable, \"-c\", \"import time\\nwhile True: time.sleep(1)\"], start_new_session=True)\n\
+         leaf = subprocess.Popen([sys.executable, \"-c\", \"import time\\ntime.sleep(120)\"], start_new_session=True)\n\
          open(\"leaf.pid\", \"w\").write(str(leaf.pid))\n\
          def hurried(*_):\n\
          \x20   mark(\"term\")\n\
          \x20   time.sleep({})\n\
-         \x20   os.killpg(leaf.pid, signal.SIGKILL)\n\
-         \x20   os.waitpid(leaf.pid, 0)\n\
+         \x20   leaf.kill()\n\
+         \x20   leaf.wait()\n\
          \x20   mark(\"leaf_dead\")\n\
          signal.signal(signal.SIGTERM, hurried)\n",
         wait.as_secs_f64()
@@ -543,17 +545,6 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
         leaf_dead,
         kill
     );
-    if leaf_dead.is_none() {
-        // Never reaped by the peer, so its pid is still the leaf's own.
-        let leaf: i32 = std::fs::read_to_string(dir.path().join("leaf.pid"))
-            .expect("the leaf's pid")
-            .trim()
-            .parse()
-            .expect("a pid");
-        let group = Pid::from_raw(leaf).expect("a non-zero pid");
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-        eprintln!("B.3 note: the peer's handler did not end its leaf; the row killed it");
-    }
     drop((once, lifecycle));
     tokio::time::timeout(Duration::from_secs(30), stop)
         .await
