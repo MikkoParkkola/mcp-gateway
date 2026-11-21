@@ -118,6 +118,7 @@ async fn abandoned_rename(cache: &Path) -> std::sync::mpsc::Sender<()> {
             Retired::AlreadyGone
         },
         |_| {},
+        // limit-under-test (fires-only): the start must give up while the rename is held
         std::time::Duration::from_millis(50),
     )
     .await;
