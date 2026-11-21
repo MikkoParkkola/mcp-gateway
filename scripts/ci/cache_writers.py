@@ -559,13 +559,15 @@ def callers_of(docs: dict) -> dict[str, set[str]]:
     return found
 
 
-def dangerous_for(name: str, triggers: dict[str, set[str]], callers: dict[str, set[str]]) -> bool:
+def dangerous_for(name: str, triggers: dict[str, set[str]], callers: dict[str, set[str]],
+                  seen: frozenset[str] = frozenset()) -> bool:
+    """Reachable from pull_request_target or workflow_run, through any chain of workflow_call callers."""
     own = triggers.get(name, set())
     if own & DANGEROUS:
         return True
-    if "workflow_call" not in own:
+    if "workflow_call" not in own or name in seen:
         return False
-    return any(triggers.get(caller, set()) & DANGEROUS for caller in callers.get(name, ()))
+    return any(dangerous_for(caller, triggers, callers, seen | {name}) for caller in callers.get(name, ()))
 
 
 def script_problems(script_lines: list) -> list[str]:
@@ -619,7 +621,17 @@ def check(docs: dict, composites: dict, package_jsons: list, script_lines: list)
         if not isinstance(jobs, dict):
             continue
         for job_id, job in jobs.items():
-            if not isinstance(job, dict) or isinstance(job.get("uses"), str):
+            if not isinstance(job, dict):
+                continue
+            if isinstance(job.get("uses"), str):
+                # A local reusable workflow is checked as a file of its own; one from another
+                # repository cannot be read here, so it is outside the closed world.
+                if not WORKFLOW_RE.match(job["uses"].strip()):
+                    out.append(problem(
+                        str(name), str(job_id), "uses", "classify",
+                        f"{CLASSIFY_MSG}: reusable workflow {job['uses'].strip()} lives in another repository, "
+                        "so its cache writes cannot be read",
+                    ))
                 continue
             walk_steps(
                 job.get("steps"),
@@ -817,6 +829,16 @@ def self_test() -> list[str]:
             "jobs": {"c": {"uses": "./.github/workflows/callee.yml"}},
         },
         "callee.yml": {"on": "workflow_call", "jobs": {"j": {"steps": [rust_g]}}},
+    })
+    # Self-QA rows: the danger follows a chain of workflow_call callers, and a reusable workflow from
+    # another repository is outside the closed world.
+    bad("12c called through a middle workflow", {
+        "top.yml": {"on": "pull_request_target", "jobs": {"c": {"uses": "./.github/workflows/mid.yml"}}},
+        "mid.yml": {"on": "workflow_call", "jobs": {"c": {"uses": "./.github/workflows/leaf.yml"}}},
+        "leaf.yml": {"on": "workflow_call", "jobs": {"j": {"steps": [rust_g]}}},
+    })
+    bad("12d remote reusable workflow", {
+        "r.yml": {"on": "push", "jobs": {"c": {"uses": "someone/else/.github/workflows/w.yml@0123456789abcdef"}}},
     })
 
     bad("13 unclassified", _doc([{"uses": "someorg/custom-action@v1"}]), contains=CLASSIFY_MSG)
