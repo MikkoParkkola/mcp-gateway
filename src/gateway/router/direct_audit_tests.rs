@@ -282,6 +282,10 @@ enum MetaMode {
     InvokeHidden,
     /// A fail-closed response contract with none declared refuses every answer.
     ContractRefuses,
+    /// A daily spend limit below what one call of `t` costs, so the spend
+    /// budget refuses every call before it is sent.
+    #[cfg(feature = "cost-governance")]
+    SpendCapped,
 }
 
 impl MetaMode {
@@ -289,6 +293,8 @@ impl MetaMode {
     fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
         match self {
             Self::Plain => {}
+            #[cfg(feature = "cost-governance")]
+            Self::SpendCapped => return meta.with_spend_refusing_for_test("t"),
             #[cfg(feature = "firewall")]
             Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
             Self::Idempotent => meta.enable_idempotency(
