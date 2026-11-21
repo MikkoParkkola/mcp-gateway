@@ -155,6 +155,25 @@ test('T3 a confirmed save sends one JSON request with the reviewed revision and 
   });
 });
 
+test('T23 the save sends the fields as they were when the flow started, whatever the caller changes later', async ({ page }) => {
+  const seen = await screen(page);
+  await page.evaluate(async ({ url, fields }) => {
+    const { settingsSave } = await import(url);
+    window.__fields = fields;
+    settingsSave({ host: document.getElementById('ss-a'), fields: window.__fields, object: 'Gateway settings', key: 'settings-test' });
+  }, { url: moduleUrl(), fields: SECRET_FIELDS });
+  await expect(host(page).locator('pre.diff')).toBeVisible();
+  // The caller edits its own list after the review is on screen: a nested secret and a new item.
+  await page.evaluate(() => {
+    window.__fields[0].value.secret = 'changed-after-review';
+    window.__fields.push({ field: 'server.port', value: { set: 1 } });
+  });
+  await host(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await action(page).click();
+  await expect.poll(() => saves(seen).length).toBe(1);
+  expect(saves(seen)[0].body.fields).toEqual(SECRET_FIELDS);
+});
+
 test('T4 Cancel in the confirm sends nothing', async ({ page }) => {
   const seen = await screen(page);
   await toConfirm(page);
