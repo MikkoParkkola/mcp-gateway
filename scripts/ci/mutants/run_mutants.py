@@ -762,6 +762,53 @@ def plan_schemata() -> tuple[str | None, dict[str, SpecMutant]]:
     return parse_spec(rest)
 
 
+def build_refusal(built: Outcome) -> str:
+    """Why a failed `--cfg mutants` build refuses the run. Sites come only from error-level diagnostics. A build that
+    ends with no error and no finished line, or whose compiler was killed, died (memory or time): the warning it
+    printed last is not its cause, so it is reported as BUILD DIED and blames no site."""
+    sites: set[str] = set()
+    errors: list[str] = []
+    finished = False
+    killed = any(("SIGKILL" in line or "signal: 9" in line) and "exit successfully" in line
+                 for line in built.output.splitlines())  # cargo's own cause line, not a quoted mention
+    for line in built.output.splitlines():
+        if line.startswith("error"):
+            errors.append(line)
+            continue
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("reason") == "build-finished":
+            finished = True
+        elif msg.get("reason") == "compiler-message" and msg.get("message", {}).get("level") == "error":
+            body = msg["message"]
+            errors.append(body.get("message", ""))
+            sites.update(f"{s['file_name']}:{s['line_start']}" for s in body.get("spans", []) if s.get("is_primary"))
+    if sites:
+        return (f"the --cfg mutants build failed at {sorted(sites)}; "
+                "move those mutants to the patch flow and rerun the rest")
+    if errors and not killed and not built.timed_out:
+        return f"the --cfg mutants build failed with {len(errors)} error(s) at no source site: {errors[0]}"
+    how = f"timed out after {COMPILE_LIMIT} s" if built.timed_out else f"exit {built.exit}"
+    end = "its compiler was killed" if killed else ("it finished" if finished else "no finished line")
+    return (f"BUILD DIED: the --cfg mutants build stopped with no error at a source site ({how}; {end}"
+            f"{_available_memory()}): a memory or time death, not a mutant site; rerun the batch")
+
+
+def _available_memory() -> str:
+    """The host's available memory now, for a BUILD DIED report (Linux; empty elsewhere)."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return f"; MemAvailable now {int(line.split()[1]) // 1024} MB"
+    except (OSError, ValueError, IndexError):
+        pass
+    return ""
+
+
 def mutants_env(features: str | None) -> tuple[dict, list[str]]:
     """The environment and feature flags of every `--cfg mutants` build."""
     env = dict(os.environ)
@@ -777,9 +824,7 @@ def cargo_build(args: list[str], env: dict, logs: Path, tag: str) -> list[dict]:
     cmd = ["cargo", "test", *args, "--no-run", "--message-format=json", "--target-dir", "target/mutants-cfg"]
     built = run_cmd(cmd, COMPILE_LIMIT, logs / f"{tag}.log", env)
     if built.timed_out or built.exit != 0:
-        sites = sorted(set(re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)))
-        raise BaselineRefused(f"the --cfg mutants build failed at {sites or 'an unknown site'}; "
-                              "move those mutants to the patch flow and rerun the rest")
+        raise BaselineRefused(build_refusal(built))
     msgs = [json.loads(line) for line in built.output.splitlines() if line.startswith("{")]
     return [m for m in msgs if m.get("reason") == "compiler-artifact" and m.get("executable") and m["profile"].get("test")]
 
@@ -1437,6 +1482,47 @@ def self_test() -> int:
         result = got.result if got is not None else None
         if result != want:
             print(f"self-test: {name}: expected {want}, got {result}", file=sys.stderr)
+            rc = 1
+    # A failed --cfg mutants build: only error-level diagnostics name sites; a build that ends with no error and no
+    # finished line, or whose compiler was killed, died (memory or time) and blames no site.
+    def diag(level: str, text: str, *spans: tuple[str, int, bool]) -> str:
+        return json.dumps({"reason": "compiler-message", "message": {
+            "level": level, "message": text,
+            "rendered": f"{level}: {text}\n" + "".join(f"  --> {f}:{n}:1\n" for f, n, _ in spans),
+            "spans": [{"file_name": f, "line_start": n, "is_primary": p} for f, n, p in spans]}})
+    warn = diag("warning", "unused import", ("src/a.rs", 51, True))
+    err = diag("error", "mismatched types", ("src/b.rs", 3, True), ("src/c.rs", 9, False))
+    done = json.dumps({"reason": "build-finished", "success": False})
+    killed = "error: could not compile `x` (lib test)\n\nCaused by:\n  process didn't exit successfully (signal: 9, SIGKILL: kill)\n"
+    build_rows = [
+        ("a build that dies after a warning blames no site", build_refusal(Outcome(101, warn + "\n", False)),
+         lambda m: m.startswith("BUILD DIED") and "src/a.rs" not in m and "exit 101" in m),
+        ("a timed-out build is a death, not a site", build_refusal(Outcome(-9, warn + "\n", True)),
+         lambda m: m.startswith("BUILD DIED") and "timed out" in m and "src/a.rs" not in m),
+        ("a compiler killed by SIGKILL is a death", build_refusal(Outcome(101, warn + "\n" + killed, False)),
+         lambda m: m.startswith("BUILD DIED") and "src/a.rs" not in m),
+        ("only the error's primary site is named", build_refusal(Outcome(101, "\n".join([warn, err, done]), False)),
+         lambda m: m == ("the --cfg mutants build failed at ['src/b.rs:3']; "
+                         "move those mutants to the patch flow and rerun the rest")),
+        ("a plain-text error is not a death",
+         build_refusal(Outcome(101, warn + "\nerror: failed to run custom build command for `x`\n", False)),
+         lambda m: not m.startswith("BUILD DIED") and "failed to run custom build command" in m),
+        ("a timed-out build is a death even beside a plain-text error",
+         build_refusal(Outcome(-9, "error: could not compile `x` (lib test)\n", True)),
+         lambda m: m.startswith("BUILD DIED") and "timed out" in m),
+        ("a SIGKILL quoted outside cargo's cause line is not a kill",
+         build_refusal(Outcome(101, "error: test message mentions SIGKILL in passing\n", False)),
+         lambda m: not m.startswith("BUILD DIED") and "mentions SIGKILL" in m),
+        ("an error's site wins over a compiler kill", build_refusal(Outcome(101, err + "\n" + killed, False)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
+        ("an error's site wins over a timeout", build_refusal(Outcome(-9, err + "\n", True)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
+        ("an error's site is named with no finished line", build_refusal(Outcome(101, err + "\n", False)),
+         lambda m: m.startswith("the --cfg mutants build failed at ['src/b.rs:3']")),
+    ]
+    for name, msg, check in build_rows:
+        if not check(msg):
+            print(f"self-test: {name}: got {msg!r}", file=sys.stderr)
             rc = 1
     if not any("assertion" in line for line in classify_test(Outcome(101, red, False)).evidence):
         print("self-test: RED evidence lost the assertion text", file=sys.stderr)
