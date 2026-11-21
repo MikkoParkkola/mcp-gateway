@@ -29,15 +29,21 @@ async fn fill_until_a_send_waits(
     hub: &crate::gateway::ui::stream::StreamHub,
     bound: usize,
 ) -> Result<usize, String> {
-    // Stub: the old fixed count, with no look at whether a send waits.
-    for _ in 0..40 {
+    for pushed in 1..=bound {
         busy.shared_entry_for_test()
             .failsafe
             .record_success(Duration::from_millis(5));
         tokio::time::sleep(Duration::from_millis(300)).await;
+        if hub.sends_awaiting_room() == 1 {
+            println!("a send waited for room after {pushed} status changes");
+            return Ok(pushed);
+        }
     }
-    let _ = (hub, bound);
-    Ok(40)
+    Err(format!(
+        "no send waited for room after {bound} status changes: {} open streams, {} sends waiting",
+        hub.open_streams(),
+        hub.sends_awaiting_room()
+    ))
 }
 
 fn big_gateway(state: &AppState) -> Arc<crate::backend::Backend> {
