@@ -204,4 +204,9 @@ async fn a_playbook_past_a_withheld_step_records_no_refused() {
     );
     let event = last_attempt(&fx);
     assert_ne!(event["response_effect"], "refused", "{event}");
+    // The withheld step's note stays in its own cell: the playbook call's
+    // record is not a refusal either.
+    let records = invocations(&fx);
+    let playbook = records.last().expect("the playbook call's record");
+    assert_ne!(playbook["outcome"], "denied", "{playbook}");
 }
