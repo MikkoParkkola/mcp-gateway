@@ -368,17 +368,7 @@ impl DispatchNotes {
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (outcome, self.failure) {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
-            // R1: a refusal some gate noted, answered with an error code.
-            (AuditOutcome::Error(code), _) if self.decision.has_refusal() => {
-                AuditOutcome::Denied(code)
-            }
-            // R6: such a refusal answered as an error-flagged tool result
-            // instead; it carries the code an outright response-gate refusal
-            // answers, since the wire answer has none.
-            (AuditOutcome::ToolError, None) if self.decision.has_refusal() => {
-                AuditOutcome::Denied(crate::Error::ResponseFirewallRefused.to_rpc_code())
-            }
-            (outcome, _) => outcome,
+            (outcome, _) => self.decision.refused_outcome(outcome),
         }
     }
 
