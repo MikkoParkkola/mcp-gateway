@@ -385,6 +385,15 @@ impl<'a> Refused<'a> {
         log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
         refusal: Refusal<'_>,
     ) -> Option<Result<String, crate::Error>> {
+        let mut noted = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
+        if !noted.has_refusal()
+            && let Some(kind) = refusal.unnoted
+        {
+            noted.refused(kind, None);
+        }
+        // The class every writer gives a refusal the gateway noted (the
+        // meta writer's rule), so the counters and the record agree.
+        let outcome = noted.refused_outcome(refusal.outcome);
         // Every router refusal is written here, with or without a
         // log, so the web UI's counters move here once per refused call.
         meta.count_call(
@@ -392,7 +401,7 @@ impl<'a> Refused<'a> {
             refusal.tool,
             &self.who,
             crate::counters::Outcome::Audited {
-                outcome: refusal.outcome,
+                outcome,
                 firewall: self.firewall,
                 cache_hit: false,
             },
@@ -415,7 +424,7 @@ impl<'a> Refused<'a> {
         let envelope = AuditEnvelope {
             trace_id: Some(trace_id.clone()),
             otel_trace_id: otel_trace_id.clone(),
-            outcome: refusal.outcome,
+            outcome,
             who: self.who.clone(),
         };
         let request_hash = format!(
@@ -425,15 +434,9 @@ impl<'a> Refused<'a> {
         let server = refusal.server.to_string();
         let tool = refusal.tool.map(str::to_string);
         let attribution = DispatchNotes::default().attribution(meta, refusal.tenants, None);
-        let mut noted = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
-        if !noted.has_refusal()
-            && let Some(kind) = refusal.unnoted
-        {
-            noted.refused(kind, None);
-        }
         let decision = Box::new(noted.decision(
             crate::security::decision_record::Decided::Fresh,
-            crate::security::decision_record::Refused::of(refusal.outcome),
+            crate::security::decision_record::Refused::of(outcome),
             meta.live_config().as_deref(),
         ));
         let session = self.session_id.to_string();
