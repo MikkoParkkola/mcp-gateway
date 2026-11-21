@@ -35,6 +35,17 @@ pub(super) fn signed(request: &str, id: u64, nonce: &Value) -> String {
     call.to_string()
 }
 
+/// [`signed`] with its `_meta` nonce taken out again: the era fields stay,
+/// so the call differs from a signed one only by the missing nonce.
+fn unsigned(request: &str, id: u64) -> Value {
+    let mut call: Value =
+        serde_json::from_str(&signed(request, id, &Value::Null)).expect("the call parses");
+    if let Some(meta) = call["params"]["_meta"].as_object_mut() {
+        meta.remove(crate::gateway::meta_mcp::signing::NONCE_META);
+    }
+    call
+}
+
 /// Alpha's `t` through `/mcp`'s `gateway_invoke`, signed.
 fn signed_on_mcp(id: u64, nonce: &Value) -> String {
     signed(&meta_invoke("alpha", "t", &json!({})), id, nonce)
@@ -153,6 +164,77 @@ async fn s5_mcp_a_number_nonce_records_syntax() {
         panic!("exactly one record: {all:?}");
     };
     assert_meta_refusal(record, "invalid", -32602, "syntax");
+}
+
+/// S3: S4 on `/mcp`. Signing required and a meta tool called by name with
+/// no nonce: refused as the request's shape with the missing nonce's code,
+/// and recorded under the name as called, with no server.
+#[tokio::test]
+async fn s3_mcp_a_missing_required_nonce_records_syntax() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Signing, Extra::Hardened, Extra::NonceRequired],
+        ..Setup::default()
+    })
+    .await;
+    let by_name = json!({"jsonrpc": "2.0", "method": "tools/call",
+                         "params": {"name": "gateway_list_servers", "arguments": {}}});
+    let call = unsigned(&by_name.to_string(), 4);
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_i64()),
+        (StatusCode::BAD_REQUEST, Some(-32001)),
+        "{body}"
+    );
+    let all = records_after(&fx, &body);
+    let [only] = all.as_slice() else {
+        panic!("one record expected: {all:?}");
+    };
+    let target = (
+        only["route"].as_str(),
+        only["server"].as_str().unwrap_or_default(),
+        only["tool"].as_str(),
+    );
+    assert_eq!(
+        target,
+        (Some("meta"), "", Some("gateway_list_servers")),
+        "{only}"
+    );
+    let decided = (
+        only["outcome"].as_str(),
+        only["error_code"].as_i64(),
+        only["decision"]["kind"].as_str(),
+    );
+    assert_eq!(
+        decided,
+        (Some("denied"), Some(-32001), Some("syntax")),
+        "{only}"
+    );
+}
+
+/// S5i: S5 under the invoke-only scope, where no early site runs and only
+/// the argument nonce counts. A number there reaches the signing check,
+/// which notes `syntax` itself; the record carries that noted kind.
+#[tokio::test]
+async fn s5i_mcp_a_late_malformed_argument_nonce_records_syntax() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Signing],
+        ..Setup::default()
+    })
+    .await;
+    let mut call = unsigned(&meta_invoke("alpha", "t", &json!({})), 9);
+    call["params"]["arguments"]["nonce"] = json!(42);
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_i64()),
+        (StatusCode::BAD_REQUEST, Some(-32602)),
+        "{body}"
+    );
+    let all = records_after(&fx, &body);
+    let [only] = all.as_slice() else {
+        panic!("one record expected: {all:?}");
+    };
+    assert_meta_refusal(only, "invalid", -32602, "syntax");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
 }
 
 /// P1: under the invoke-only scope, the route stage passes alpha but the

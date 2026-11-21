@@ -220,7 +220,8 @@ async fn s6_stdio_two_nonces_record_syntax() {
 
 /// F2: the log fails closed and its append now fails. A replayed nonce is
 /// not answered as an unrecorded refusal: stdio answers that the audit log
-/// is unavailable (-32005), as `/mcp` answers 503.
+/// is unavailable (-32005), as `/mcp` answers 503. A guard: the late site
+/// already failed closed before this change; F2e pins the early one.
 #[tokio::test]
 async fn f2_stdio_a_failed_refusal_write_answers_unavailable() {
     let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
@@ -229,6 +230,18 @@ async fn f2_stdio_a_failed_refusal_write_answers_unavailable() {
     logged.log.set_append_failure_for_test(true);
     let second = stdio_send(&logged.meta, invoke_params(with_nonce("f2-nonce"), None)).await;
     assert_eq!(second["error"]["code"], -32005, "{second}");
+}
+
+/// F2e: F2 at the early site, which refuses an over-long nonce under the
+/// every-call scope before any gate. Its record cannot be written, so it
+/// is answered as the log being unavailable.
+#[tokio::test]
+async fn f2e_stdio_an_unrecordable_early_refusal_answers_unavailable() {
+    let row = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
+    row.log.set_append_failure_for_test(true);
+    let too_long = with_nonce(&"e".repeat(300));
+    let refused = stdio_send(&row.meta, invoke_params(too_long, None)).await;
+    assert_eq!(refused["error"]["code"], -32005, "{refused}");
 }
 
 /// P2: P1 on stdio. Under the invoke-only scope the operator killed alpha;
