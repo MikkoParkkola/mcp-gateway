@@ -95,11 +95,13 @@ def rows() -> list[tuple[str, bool, str]]:
             rc, so, se, t = run(cmd, env)
             child = marker.read_text().strip() if marker.exists() else ""
             gone = bool(child) and subprocess.run(["kill", "-0", child], capture_output=True).returncode != 0
-            out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone, se[-200:]))
+            out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone,
+                        f"rc {rc}, {t:.1f}s, child {'gone' if gone else 'still there or never written'}, {se[-200:]}"))
         # W11: a command that ignores the forwarded TERM keeps running and its own later status is the result.
         cmd = (f"set -m; {w} bash -c 'trap \"\" TERM; sleep 2; exit 7' & wp=$!; sleep 0.5; kill -TERM $wp; wait $wp")
         rc, so, se, t = run(cmd, env)
-        out.append(("W11 TERM ignored by the command: it finishes, rc 7", rc == 7 and "end, exit 7:" in se and t >= 1.8, se[-200:]))
+        out.append(("W11 TERM ignored by the command: it finishes, rc 7", rc == 7 and "end, exit 7:" in se and t >= 1.8,
+                    f"rc {rc}, {t:.1f}s, {se[-200:]}"))
         # W12: a bad interval falls back to the default (30 s) instead of sampling in a tight loop.
         for bad in ("abc", "00"):
             rc, so, se, t = run(f"{w} sleep 2", dict(env, MEM_LOG_EVERY=bad))
@@ -139,20 +141,30 @@ def rows() -> list[tuple[str, bool, str]]:
         (Path(d) / "bin" / "free").write_text("#!/bin/sh\nsleep 1\n" + FREE.split("\n", 1)[1])
         rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env, timeout=60)
         out.append(("W13 a command killed before the first wait: exit 137, no hang",
-                    rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]!r}"))
+                    rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]}"))
     return out
+
+
+def summary(results: list[tuple[str, bool, str]]) -> str:
+    """The script's last line: the count of wrong rows, then each one's label and detail. A caller that keeps only the
+    tail of the output (the kit's cheap stage keeps 12 lines) still learns which row failed and what it saw."""
+    wrong = []
+    for label, ok, detail in results:
+        if not ok:
+            seen = " ".join(detail.split())[:200]
+            wrong.append(f"{label} [{seen}]" if seen else label)
+    return f"with-memory-log rows: {len(wrong)} wrong" + (": " + " | ".join(wrong) if wrong else "")
 
 
 def main() -> int:
     if not WRAPPER.is_file():
         print(f"WRONG {WRAPPER.relative_to(ROOT)} is missing")
         return 1
-    wrong = 0
-    for label, ok, detail in rows():
-        wrong += not ok
+    results = rows()
+    for label, ok, detail in results:
         print(f"{'ok   ' if ok else 'WRONG'} {label}" + ("" if ok else f"\n      {detail!r}"))
-    print(f"with-memory-log rows: {wrong} wrong")
-    return 1 if wrong else 0
+    print(summary(results))
+    return 0 if all(ok for _, ok, _ in results) else 1
 
 
 if __name__ == "__main__":
