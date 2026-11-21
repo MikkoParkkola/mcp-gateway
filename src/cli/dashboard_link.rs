@@ -4,12 +4,31 @@
 
 use std::path::PathBuf;
 
+/// Where a remote command sends its request: the one destination flag of
+/// the five commands that talk to a running gateway.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct GatewayArg {
+    /// The gateway to send to, as a base URL. Order: this flag, then
+    /// `MCP_GATEWAY_URL`, then the address in `--config` (`server.host` and
+    /// `server.port`).
+    // `--url` and `-u` are the old spellings: hidden aliases, so scripts
+    // written for them keep working.
+    #[arg(
+        long = "gateway",
+        alias = "url",
+        short_alias = 'u',
+        env = "MCP_GATEWAY_URL",
+        value_name = "URL"
+    )]
+    pub url: Option<String>,
+}
+
 /// Arguments of `mcp-gateway dashboard-link`.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct DashboardLinkArgs {
-    /// Gateway base URL (default as for `stats`).
-    #[arg(short, long)]
-    pub url: Option<String>,
+    /// Where to send the request.
+    #[command(flatten)]
+    pub gateway: GatewayArg,
     /// TLS material to present and trust.
     #[command(flatten)]
     pub tls: DashboardLinkTls,

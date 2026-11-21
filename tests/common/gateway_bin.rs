@@ -147,6 +147,9 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         // real keychain. A test that wants another setting passes it through
         // `checked_env`, which is applied after this.
         .env("MCP_GATEWAY_SECRETS__STORE", "files")
+        // A release-profile test run spawns a binary that is not a dev build:
+        // it must never send the daily heartbeat (docs/PRIVACY.md).
+        .env("DO_NOT_TRACK", "1")
         .env("APPDATA", home.join("AppData").join("Roaming"))
         .env("LOCALAPPDATA", home.join("AppData").join("Local"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
@@ -440,4 +443,30 @@ fn wait_blocking(child: &mut tokio::process::Child, bound: std::time::Duration) 
     while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+/// Starts the CLI in a throwaway isolated home, which is also where it looks
+/// for configuration, adds just the given variables, waits for it to exit and
+/// hands back its output. Given bytes are piped to stdin and the pipe closed;
+/// with none, stdin is closed from the start. Not for `serve`, which runs on.
+pub fn run_cli(args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> std::process::Output {
+    use std::io::Write as _;
+    let home = tempfile::tempdir().expect("isolated home for the command");
+    let mut cmd = command(home.path(), Inherit::Nothing);
+    cmd.stdin(if stdin.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    });
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
+    let mut child = cmd.args(args).spawn().expect("start mcp-gateway");
+    if let (Some(mut pipe), Some(bytes)) = (child.stdin.take(), stdin) {
+        let _ = pipe.write_all(bytes);
+    }
+    child.wait_with_output().expect("wait for mcp-gateway")
 }

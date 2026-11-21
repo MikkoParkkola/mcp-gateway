@@ -55,6 +55,7 @@ src/gateway/server/persistence.rs	spawn_periodic_save	spawn	1	outside-calls	peri
 src/gateway/server/run.rs	run	spawn	1	outside-calls	waits for shutdown and cancels the reload token
 src/gateway/server/run_steps.rs	start_capability_watcher	spawn	1	outside-calls	start-up capability scan run in the background; refusals only logged
 src/gateway/server/stdio_loop.rs	run_stdio_on	spawn	1	no-refusal-inside	stdio stdout writer: writes already-decided answer frames from the queue to stdout
+src/gateway/server/stop_checkpoints.rs	start	spawn	1	no-refusal-inside	the stop's checkpoint loop: one pass a second until the last pass aborts it; each write runs on its own thread and only logs
 src/gateway/server/tools_changed.rs	spawn_drain	spawn	1	no-refusal-inside	tools/list_changed notification fan-out for HTTP sessions
 src/gateway/server/tools_changed/stdio.rs	start	spawn	2	no-refusal-inside	stdio tools-changed announcer: decides and queues list_changed notifications, plus the send-when-ready task
 src/gateway/server/warmstart.rs	spawn	spawn	1	outside-calls	warm-start task that fills a backend's tool cache
@@ -92,6 +93,7 @@ src/gateway/ui/settings_unused.rs	list_unused	spawn-blocking	1	no-refusal-inside
 src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
 src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
 src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal
+src/heartbeat.rs	start	spawn	1	outside-calls	the heartbeat task: a check at start, then hourly, until shutdown; neither startup nor a request awaits it
 src/idempotency/guard.rs	spawn_cleanup_task	spawn	1	outside-calls	idempotency cache cleanup timer
 src/identity_grants.rs	write_identity_grants_file	spawn-blocking	1	no-refusal-inside	atomic write of the identity grants file
 src/identity_grants/journal.rs	acquire_lock	spawn-blocking	1	outside-calls	takes the grant journal lock for a CLI identity grant change

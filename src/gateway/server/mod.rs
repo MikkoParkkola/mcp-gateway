@@ -105,6 +105,7 @@ mod stdio_writer;
 #[cfg(tp4)]
 #[cfg(test)]
 mod stop_budget_start_tests;
+mod stop_checkpoints;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;

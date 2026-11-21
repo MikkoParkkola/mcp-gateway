@@ -16,12 +16,14 @@ use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_config;
 use super::ui_tool_call_cell_tests::assert_refused_delivery;
+pub(super) use super::ui_tool_call_deadline_tests::{
+    POST_BOUND, TestDeadline, deadline_after_send, install, install_slow_gated,
+};
 use super::ui_tool_call_receipt_tests::unreceipted;
+pub(super) use super::ui_tool_call_stub::{SLOW_GATE_BOUND, Stub};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};
-use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::transport::Transport;
 
 const ROUTE: &str = "/ui/api/tools/call";
 pub(super) const ADMIN: &str = "k-admin";
@@ -29,100 +31,6 @@ pub(super) const USER: &str = "k-user";
 /// An admin key denied `write` by policy.
 const ADMIN_DENIED: &str = "k-admin-deny";
 pub(super) const SERVER: &str = "alpha";
-
-/// A backend whose `tools/list` declares `read`, `fail` and `iserr`
-/// read-only and leaves `write` and `get_x` undeclared, counting every call.
-pub(super) struct Stub {
-    pub(super) calls: Arc<AtomicUsize>,
-    /// Declare `read` read-only (false: a replacement that does not).
-    pub(super) declares_read: bool,
-    /// `tools/list` waits for this, when set: a cold catalogue is filled
-    /// before the gate, so a test holds a call there for as long as it likes.
-    pub(super) list_gate: Option<Arc<tokio::sync::Notify>>,
-}
-
-#[async_trait::async_trait]
-impl Transport for Stub {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
-        let id = RequestId::Number(1);
-        if method == "tools/list" {
-            if let Some(gate) = &self.list_gate {
-                gate.notified().await;
-            }
-            let ro = json!({"readOnlyHint": true});
-            let read = if self.declares_read {
-                ro.clone()
-            } else {
-                json!({})
-            };
-            let tool = |name: &str, annotations: &Value| json!({"name": name, "inputSchema": {"type": "object"}, "annotations": annotations});
-            return Ok(JsonRpcResponse::success(
-                id,
-                json!({"tools": [
-                    tool("read", &read),
-                    tool("fail", &ro),
-                    tool("iserr", &ro),
-                    tool("slow", &ro),
-                    tool("ask", &ro),
-                    tool("flaky", &ro),
-                    tool("write", &json!({})),
-                    tool("get_x", &json!({})),
-                ]}),
-            ));
-        }
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let name = params
-            .as_ref()
-            .and_then(|p| p["name"].as_str())
-            .unwrap_or_default()
-            .to_owned();
-        match name.as_str() {
-            // A tool that stops to ask the user a question (elicitation).
-            "ask" => Ok(JsonRpcResponse::success(
-                id,
-                json!({
-                    "resultType": "input_required",
-                    "inputRequests": {"k1": {
-                        "method": "elicitation/create",
-                        "params": {"message": "Which account?", "requestedSchema": {"type": "object"}},
-                    }},
-                    "requestState": "backend-state-1",
-                }),
-            )),
-            "slow" => {
-                tokio::time::sleep(Duration::from_millis(400)).await;
-                Ok(JsonRpcResponse::success(
-                    id,
-                    json!({"content": [{"type": "text", "text": "late"}], "isError": false}),
-                ))
-            }
-            // Times out once (the request may have reached it), then cannot be
-            // reached: a retry that ends in a connect failure.
-            "flaky" if self.calls.load(Ordering::SeqCst) == 1 => {
-                Err(crate::Error::BackendTimeout("stub timed out".into()))
-            }
-            "flaky" => Err(crate::Error::TransportConnect("stub unreachable".into())),
-            "fail" => Err(crate::Error::BackendTimeout("stub timed out".into())),
-            "iserr" => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "no"}], "isError": true}),
-            )),
-            _ => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "done"}], "isError": false}),
-            )),
-        }
-    }
-    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
-        Ok(())
-    }
-    fn is_connected(&self) -> bool {
-        true
-    }
-    async fn close(&self) -> crate::Result<()> {
-        Ok(())
-    }
-}
 
 fn key(name: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -269,6 +177,8 @@ async fn register_as(
         calls: Arc::clone(calls),
         declares_read,
         list_gate: None,
+        list_entered: None,
+        slow_gate: None,
     }));
     assert!(
         state.backends.register(Arc::clone(&backend)),
@@ -614,13 +524,13 @@ async fn t23_a_ui_call_is_never_served_from_the_cache() {
 /// T12: past the deadline the route answers 504 "may have run"; the sent
 /// call finishes, and its invocation record and a completion `admin_action`
 /// naming its trace still appear.
-/// Mutant: the deadline not enforced (the timeout removed).
+/// Mutant: the deadline not enforced (the timeout removed): `slow` answers
+/// 200 after [`SLOW_GATE_BOUND`] and the 504 check fails.
 #[tokio::test]
 async fn t12_a_deadline_answers_504_and_the_records_still_land() {
     let fx = fixture().await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(Duration::from_millis(100))));
-    let (status, body) = post(&fx, ADMIN, call("slow", false)).await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));
+    let gate = install_slow_gated(&fx).await;
+    let (status, body) = deadline_after_send(&fx, &gate).await;
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
     assert_eq!(body["disposition"], "may_have_run", "{body}");
     // The call runs on past the answer: wait for its completion record.
