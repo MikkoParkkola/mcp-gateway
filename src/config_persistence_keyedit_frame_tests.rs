@@ -213,7 +213,8 @@ fn p10_removing_the_first_key_keeps_the_head() {
 /// the root, or the whole document) never refuses the file whole. A key is
 /// still revoked with that line kept byte for byte. A value under an
 /// anchored or tagged root is refused on its own field, as it is in a file
-/// with no start line, and an edit that would rewrite the line names why.
+/// with no start line; a whole document written on the start line is a
+/// flow collection, refused on its field as a flow root is without one.
 #[test]
 fn p11_a_start_line_with_content_is_kept_or_refused() {
     for head in ["--- &root\n", "--- !!map\n"] {
@@ -225,11 +226,10 @@ fn p11_a_start_line_with_content_is_kept_or_refused() {
         let (code, why) = refused(&bare, &[set_int("server.port", 2)]);
         assert_eq!(code, GiveUp::NotPlainKey, "{bare:?}: {why}");
     }
-    assert_refused_by(
-        "--- {server: {port: 1}}\n",
-        &[set_int("server.port", 2)],
-        "the document start line also holds content",
-    );
+    for text in ["--- {server: {port: 1}}\n", "{server: {port: 1}}\n"] {
+        let (code, why) = refused(text, &[set_int("server.port", 2)]);
+        assert_eq!(code, GiveUp::Flow, "{text:?}: {why}");
+    }
 }
 
 /// The proofs alone keep the frame: any frame line deleted outside the
