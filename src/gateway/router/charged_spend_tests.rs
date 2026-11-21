@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 use super::direct_guards_fixture::{
-    Answer, WITH_ADMIN, fixture_built, initialize, post_meta_invoke, send,
+    Answer, WITH_ADMIN, fixture_built, initialize, post_meta_invoke,
 };
 use super::live_budget_tests::{KEY, fixture, governance, reload};
 
@@ -39,18 +39,6 @@ fn close(got: f64, want: f64, what: &str) {
     assert!((got - want).abs() < 1e-9, "{what}: {got}, want {want}");
 }
 
-/// The `caller` part of [`KEY`]'s own `gateway_cost_report`, asked with no
-/// session: its session-less spend, read through the MCP route.
-async fn own_caller_report(fx: &super::live_budget_tests::Fx) -> Value {
-    let params = json!({"name": "gateway_cost_report", "arguments": {}});
-    let (status, body) = send(fx, "/mcp", KEY, "tools/call", params, None).await;
-    let text = body["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no report text: {status} {body}"));
-    let report: Value = serde_json::from_str(text).expect("the report is JSON");
-    report["caller"].clone()
-}
-
 /// `uri` read as the fixture's admin key: the operator's HTTP costs view.
 async fn admin_get(fx: &super::live_budget_tests::Fx, uri: &str) -> Value {
     use tower::ServiceExt;
@@ -73,9 +61,10 @@ async fn admin_get(fx: &super::live_budget_tests::Fx, uri: &str) -> Value {
 }
 
 /// Two calls in a session and one without, each priced 0.25: the key, the
-/// session, the caller's own session-less report and the aggregate report the
-/// charged figure, through the tracker and through the HTTP and MCP views,
-/// and tokens stay 0.
+/// session and the aggregate report the charged figure, through the tracker
+/// and the operator's HTTP view, and tokens stay 0. Over `/mcp` a request with
+/// no session header still runs under a session of its own, so the third
+/// call is in the aggregate but never in a session-less caller breakdown.
 #[tokio::test]
 async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
     crate::test_day::same_utc_day_async(|| async {
@@ -99,22 +88,12 @@ async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
         let held = tracker.session_snapshot(&session).expect("session report");
         assert_eq!(held.call_count, 2);
         close(held.total_cost_usd, 0.50, "session");
-        // The aggregate is the session plus the session-less call.
+        // The aggregate is both sessions: the shared one and the third call's.
         let all = tracker.aggregate();
         assert_eq!(all.total_calls, 3);
         assert_eq!(all.total_tokens, 0);
         close(all.total_cost_usd, 0.75, "aggregate");
 
-        // The caller's own report holds only the session-less call.
-        let own = own_caller_report(&fx).await;
-        assert_eq!(own["call_count"], 1, "{own}");
-        assert_eq!(own["total_tokens"], 0, "{own}");
-        let usd = own["total_cost_usd"].as_f64();
-        close(
-            usd.unwrap_or_else(|| panic!("no USD: {own}")),
-            0.25,
-            "caller",
-        );
         // The operator's HTTP view reports the same key total, for this key:
         // 0.75 is also the gateway total here, so the name is checked too.
         let by_key = admin_get(&fx, &format!("/api/costs?key={KEY}")).await;
