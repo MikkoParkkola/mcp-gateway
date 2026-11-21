@@ -228,6 +228,7 @@ impl JournalSession {
         let path = abandoned_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
         drain::fault::file_rewritten(&self.target)?;
         sync_dir_of(&path).map_err(|_| JournalError::Persist)
     }
@@ -588,6 +589,10 @@ mod codec_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_fixtures_tests.rs"]
 mod fixtures;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_gating_tests.rs"]
+mod gating_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_observe_tests.rs"]
 mod observe;
