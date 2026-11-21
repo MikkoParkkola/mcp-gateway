@@ -31,7 +31,7 @@ async fn signing_gateway(log: Log, fail_closed: bool) -> Fixture {
 async fn send_signed(fx: &Fixture, id: u64, nonce: &str) -> (StatusCode, Value) {
     let invoke = meta_invoke("alpha", "t", &json!({}));
     let request = signed(&invoke, id, &json!(nonce));
-    post_to(fx, "/mcp", &request, &Caller::Oidc).await
+    post_to(fx, "/mcp", &request, &Caller::ModernOidc).await
 }
 
 /// The replay's answer as it has always been: 400, -32001.
