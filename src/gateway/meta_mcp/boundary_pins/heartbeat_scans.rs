@@ -492,8 +492,10 @@ fn every_image_launch_sets_dnt() {
     assert_planted_launch_forms();
     // Checkout-only, as PACKED.2: the unpacked crate ships `tests/` but not
     // `scripts/` or the workflows, so its walk would see a partial tree.
-    if is_packaged_crate() {
-        crate::test_wait::skip_unshipped(true, "the launch scripts and workflows");
+    // The detector's own answer, not a literal: a dropped guard fails in required mode instead of skipping.
+    let packaged = is_packaged_crate();
+    if packaged {
+        crate::test_wait::skip_unshipped(packaged, "the launch scripts and workflows");
         return;
     }
     // The floor (A3/A4): the finder sees each known gateway launch, by file,

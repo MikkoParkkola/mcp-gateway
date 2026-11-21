@@ -112,9 +112,10 @@ fn require_all_value() -> Option<String> {
     }
 }
 
-/// The one way a test skips because this host lacks something it needs (a user right, a loopback family, the
-/// repository files): prints `skipped: <requirement>`, or panics where required mode is on, so a feature's only check
-/// cannot pass by not running. The caller returns right after it (`scripts/ci/check_rust_skips.py` checks that).
+/// The one way a test skips because this host lacks something it needs (a user right, a loopback family, a file a
+/// checkout should have): prints `skipped: <requirement>`, or panics where required mode is on, so a feature's only
+/// check cannot pass by not running. A file the package leaves out on purpose goes through [`skip_unshipped`]
+/// instead. The caller returns right after it (`scripts/ci/check_rust_skips.py` checks that).
 ///
 /// # Panics
 ///

@@ -302,8 +302,11 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// sources but not the repo files whose existence the rule asks about.
 #[test]
 fn packed_2_no_test_reads_an_unshipped_repo_file_directly() {
-    if is_packaged_crate() {
-        crate::test_wait::skip_unshipped(true, "the repository files the rule asks about");
+    // The detector's own answer, not a literal: if this guard is ever dropped, a checkout takes skip_or_fail's
+    // path and fails in required mode instead of skipping.
+    let packaged = is_packaged_crate();
+    if packaged {
+        crate::test_wait::skip_unshipped(packaged, "the repository files the rule asks about");
         return;
     }
     let root = crate_root();

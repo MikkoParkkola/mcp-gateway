@@ -130,6 +130,39 @@ fn a_missing_file_is_skipped_in_a_packaged_crate() {
     assert_eq!(read_if_present(root.path(), "gone.txt", true), None);
 }
 
+/// Run only by `a_missing_packaged_file_passes_in_required_mode`, in a child with its own environment.
+#[test]
+#[ignore = "run by a_missing_packaged_file_passes_in_required_mode, in a child"]
+fn read_or_skip_packaged_child() {
+    let root = tempfile::tempdir().expect("tempdir");
+    assert_eq!(read_or_skip(root.path(), "gone.txt", true), None);
+}
+
+/// `read_or_skip`'s own skip path, the one that failed the packaged suite, passes under
+/// `TESTS_REQUIRE_ALL=1` in a packaged crate and says why. A child process, so the variable is
+/// its own; the checkout side is `a_missing_file_in_a_checkout_panics`.
+#[test]
+fn a_missing_packaged_file_passes_in_required_mode() {
+    let out = crate::test_home::test_binary()
+        .args([
+            "--ignored",
+            "--exact",
+            "gateway::meta_mcp::boundary_pins::packaged::read_or_skip_packaged_child",
+            "--nocapture",
+        ])
+        .env("TESTS_REQUIRE_ALL", "1")
+        .output()
+        .expect("the child runs");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains(
+            "skipped (not shipped in the packaged crate): gone.txt in the crate under test"
+        ),
+        "{err}"
+    );
+}
+
 /// A missing file in a checkout panics: the pin cannot pass vacuously.
 #[test]
 #[should_panic(expected = "gone.txt")]
