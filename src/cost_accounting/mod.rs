@@ -388,7 +388,7 @@ impl CostTracker {
         price_per_million: f64,
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
-        self.record_charged(session_id, api_key_name, rec);
+        self.record_charged(session_id, api_key_name, &rec);
     }
 
     /// [`Self::record`] for a record its caller priced: the dispatch passes
@@ -398,7 +398,7 @@ impl CostTracker {
         &self,
         session_id: &str,
         api_key_name: Option<&str>,
-        rec: CostRecord,
+        rec: &CostRecord,
     ) {
         // Per-session. An empty id is no session (a 2026-07-28 request has
         // none): keying on it would pool every such caller into one bucket.
@@ -413,7 +413,7 @@ impl CostTracker {
                 .or_insert_with(|| {
                     Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
                 })
-                .record(&rec);
+                .record(rec);
         }
 
         // Per-key (if we have a key name)
@@ -421,7 +421,7 @@ impl CostTracker {
             self.per_key
                 .entry(key_name.to_string())
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name)))
-                .record(&rec, rec.timestamp);
+                .record(rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
             // Housekeeping skips its pass when the record is undated (MIK-8202).
             if let Some(now) = rec.timestamp

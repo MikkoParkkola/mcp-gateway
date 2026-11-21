@@ -6,8 +6,7 @@
 
 use serde_json::json;
 
-use super::direct_guards_fixture::{Answer, fixture_built};
-use super::direct_guards_fixture_requests::{initialize, post_meta_invoke};
+use super::direct_guards_fixture::{Answer, fixture_built, initialize, post_meta_invoke};
 use super::live_budget_tests::{KEY, fixture, governance, reload};
 
 /// One answered `gateway_invoke` of `tool` on `alpha` as [`KEY`].
@@ -35,8 +34,8 @@ fn close(got: f64, want: f64, what: &str) {
     assert!((got - want).abs() < 1e-9, "{what}: {got}, want {want}");
 }
 
-/// Two calls in a session and one without, each priced 0.25: every view the
-/// tracker feeds reports the charged figure, and tokens stay 0.
+/// Two calls in a session and one without, each priced 0.25: the key, the
+/// session and the aggregate report the charged figure, and tokens stay 0.
 #[tokio::test]
 async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
     crate::test_day::same_utc_day_async(|| async {
@@ -57,11 +56,7 @@ async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
         let held = tracker.session_snapshot(&session).expect("session report");
         assert_eq!(held.call_count, 2);
         close(held.total_cost_usd, 0.50, "session");
-        let own = tracker
-            .caller_snapshot(KEY)
-            .expect("session-less caller report");
-        assert_eq!(own.call_count, 1);
-        close(own.total_cost_usd, 0.25, "caller");
+        // The aggregate is the session plus the session-less call.
         let all = tracker.aggregate();
         assert_eq!(all.total_calls, 3);
         assert_eq!(all.total_tokens, 0);

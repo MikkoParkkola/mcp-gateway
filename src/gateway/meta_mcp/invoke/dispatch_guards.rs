@@ -378,7 +378,7 @@ impl MetaMcp {
             self.cost_tracker.record_caller_charged(key, &rec);
         }
         self.cost_tracker
-            .record_charged(session, call.cost_key, rec);
+            .record_charged(session, call.cost_key, &rec);
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             self.judged_by(enforcer, call.generation, |governance| {
