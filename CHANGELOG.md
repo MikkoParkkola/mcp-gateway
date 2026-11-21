@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A daily anonymous heartbeat.** A running server, HTTP or stdio, sends at
+  most one small POST a day per data directory so the project can count the
+  installs in use. It carries five fields and nothing else: `project`,
+  `event`, `version`, `runtime` (operating system and architecture) and a
+  random `install_id`. Set `DO_NOT_TRACK=1` or `NO_TELEMETRY=1` to turn it
+  off. It is also skipped in CI, when a proxy variable is set, in debug
+  builds, on Windows, and in pods the Helm chart deploys. Neither startup nor
+  a request waits for it. README.md, "Privacy", says exactly what is sent and
+  what the receiver keeps.
+
 ## [3.5.2] - 2026-10-26
 
 ### Added

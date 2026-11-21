@@ -50,6 +50,8 @@ pub mod failsafe;
 mod fs_lock;
 pub mod gateway;
 mod hashing;
+// The daily anonymous heartbeat (README.md, "Privacy").
+mod heartbeat;
 pub mod idempotency;
 pub mod identity_grants;
 pub mod identity_propagation;
@@ -79,6 +81,9 @@ pub mod session_sandbox;
 pub mod simhash;
 pub mod skills;
 pub mod stats;
+// A loopback HTTPS server under a fresh CA, for the heartbeat's client rows.
+#[cfg(test)]
+mod test_tls;
 #[cfg(feature = "tool-profiles")]
 pub mod tool_profiles;
 pub mod tool_registry;

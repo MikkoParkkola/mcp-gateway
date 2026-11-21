@@ -12,6 +12,13 @@ mod support;
 // what the NEXT START does with the file, which is the startup check itself —
 // the same function the bind path calls, named here for the caller.
 pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
+// The test build's hooks into `run` (port 0, a shutdown trigger).
+#[cfg(test)]
+mod test_hooks;
+// The heartbeat at the real start sites (unix: the 3.5 line sends nothing on
+// Windows, so no sending control exists there).
+#[cfg(all(test, unix))]
+mod heartbeat_start_tests;
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -306,6 +313,10 @@ pub struct Gateway {
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    /// The test build's hooks into `run` (the bound port, a shutdown
+    /// trigger); absent from a release build.
+    #[cfg(test)]
+    test_hooks: test_hooks::TestHooks,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -422,6 +433,8 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
+            #[cfg(test)]
+            test_hooks: test_hooks::TestHooks::default(),
         })
     }
 
@@ -1280,6 +1293,17 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        // A test that asked for port 0 learns the port here.
+        #[cfg(test)]
+        if let Some(port) = self.test_hooks.bound_port.take() {
+            let _ = port.send(listener.local_addr()?.port());
+        }
+
+        // The daily heartbeat (README.md, "Privacy"): after the bind, so a
+        // refused start sends nothing; never awaited, ended by the shutdown
+        // broadcast.
+        let _heartbeat = crate::heartbeat::root()
+            .map(|root| crate::heartbeat::start(root, shutdown_tx.subscribe()));
 
         log_startup_banner(
             &self.config,
@@ -1358,10 +1382,16 @@ impl Gateway {
         // Kept for a listener that fails before any signal: the background
         // tasks still need the broadcast before the teardown runs.
         let on_listener_error = shutdown_tx.clone();
+        #[cfg(test)]
+        let trigger = self.test_hooks.shutdown.take();
         let shutdown = {
             let fired = Arc::clone(&fired);
             async move {
+                #[cfg(not(test))]
                 shutdown_signal(shutdown_tx).await;
+                // A test build also stops on a test's trigger.
+                #[cfg(test)]
+                test_hooks::signal_or_trigger(shutdown_tx, trigger).await;
                 let _ = fired.set(tokio::time::Instant::now());
             }
         };
@@ -1468,8 +1498,19 @@ impl Gateway {
     /// # Panics
     ///
     /// Panics if RSA key pair generation fails on all retry attempts.
-    #[allow(clippy::too_many_lines)]
     pub async fn run_stdio(self) -> Result<()> {
+        // Boxed: the loop's future is large (main.rs boxes run_stdio itself).
+        Box::pin(self.run_stdio_on(tokio::io::stdin(), tokio::io::stdout())).await
+    }
+
+    /// [`Self::run_stdio`] with its request source and answer sink passed in:
+    /// the process's stdin and stdout for the binary, a pipe for a test.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn run_stdio_on<R, W>(self, input: R, output: W) -> Result<()>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
         info!(
             version = env!("CARGO_PKG_VERSION"),
             "Starting MCP Gateway (stdio mode)"
@@ -1527,13 +1568,18 @@ impl Gateway {
             None,
         ));
 
+        // The daily heartbeat (README.md, "Privacy"): never awaited. Stdio has
+        // no shutdown broadcast, so its stop sender lives here until the read
+        // loop ends, and the guard aborts the task on every exit path.
+        let (heartbeat_stop, heartbeat_stopped) = tokio::sync::broadcast::channel(1);
+        let heartbeat = crate::heartbeat::root()
+            .map(|root| AbortOnDrop::new(crate::heartbeat::start(root, heartbeat_stopped)));
+
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
         // ── Read → dispatch → write loop ────────────────────────────────────
-        let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
-        let mut reader = BufReader::new(stdin).lines();
-        let mut stdout = stdout;
+        let mut reader = BufReader::new(input).lines();
+        let mut stdout = output;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = "stdio-session";
@@ -1594,6 +1640,10 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
+        // The heartbeat goes with them: its guard aborts the task, then the
+        // sender it was kept open by is dropped.
+        drop(heartbeat);
+        drop(heartbeat_stop);
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it — delaying shutdown and logging
@@ -1605,7 +1655,10 @@ impl Gateway {
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
-    async fn write_response(stdout: &mut tokio::io::Stdout, value: &serde_json::Value) {
+    async fn write_response(
+        stdout: &mut (impl tokio::io::AsyncWrite + Unpin),
+        value: &serde_json::Value,
+    ) {
         let serialized = match serde_json::to_string(value) {
             Ok(s) => s,
             Err(e) => {

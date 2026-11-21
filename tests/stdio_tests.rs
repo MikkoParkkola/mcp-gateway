@@ -489,6 +489,7 @@ fn test_stdio_stdout_carries_only_jsonrpc() {
         .arg(&cfg_path)
         .env("RUST_LOG", "info") // guarantee startup logs are emitted
         .env("NO_COLOR", "1") // determinism; logs must still land on stderr
+        .env("DO_NOT_TRACK", "1") // a test run never counts as an install
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Discard stderr: the gateway emits hundreds of startup log lines there.

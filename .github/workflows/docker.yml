@@ -76,4 +76,4 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Smoke the image
-        run: docker run --rm ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan --version
+        run: docker run -e DO_NOT_TRACK=1 --rm ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan --version
