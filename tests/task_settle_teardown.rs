@@ -53,11 +53,13 @@ while IFS= read -r line; do
 done
 "#;
 
-/// Register the held peer; returns (the file it marks on a call, its release file).
-fn add_held_server(state: &Arc<AppState>, dir: &Path) -> (PathBuf, PathBuf) {
-    let seen = dir.join("seen.log");
-    let release = dir.join("release");
-    let peer = dir.join("held.sh");
+/// Register a held peer named `name`; returns (the file it marks on a call, its
+/// release file). Each peer runs alone and has its own files, so two peers'
+/// answers are released independently.
+fn add_held_server(state: &Arc<AppState>, dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let seen = dir.join(format!("{name}-seen.log"));
+    let release = dir.join(format!("{name}-release"));
+    let peer = dir.join(format!("{name}.sh"));
     let script = HELD_PEER
         .replace("__SEEN__", &sh_path(&seen))
         .replace("__RELEASE__", &sh_path(&release));
@@ -73,7 +75,7 @@ fn add_held_server(state: &Arc<AppState>, dir: &Path) -> (PathBuf, PathBuf) {
         ..BackendConfig::default()
     };
     let server = Backend::new(
-        SERVER,
+        name,
         config,
         &FailsafeConfig::default(),
         Duration::from_secs(60),
@@ -85,21 +87,22 @@ fn add_held_server(state: &Arc<AppState>, dir: &Path) -> (PathBuf, PathBuf) {
     (seen, release)
 }
 
-/// Create a task for the held tool and return its id.
-async fn create_held_task(state: &Arc<AppState>) -> String {
+/// Create a task for the held tool on peer `server` and return its id.
+async fn create_held_task(state: &Arc<AppState>, server: &str) -> String {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
         "params": {
             "name": "gateway_invoke",
-            "arguments": {"server": SERVER, "tool": TOOL, "arguments": {}},
+            "arguments": {"server": server, "tool": TOOL, "arguments": {}},
             "task": {},
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientCapabilities":
                     {"extensions": {"io.modelcontextprotocol/tasks": {}}},
-                "io.mcp-gateway/idempotency-key": "settle-row",
+                // One key per peer: a shared key would hand back the first task.
+                "io.mcp-gateway/idempotency-key": format!("settle-row-{server}"),
             },
         },
     });
@@ -156,9 +159,9 @@ fn status_on_disk(store: &Path, id: &str) -> String {
 async fn a_settled_task_has_its_terminal_record_on_disk() {
     let home = hostile_home();
     let (state, store_dir) = common::state(Fixture::default()).await;
-    let (seen, release) = add_held_server(&state, home.path());
+    let (seen, release) = add_held_server(&state, home.path(), SERVER);
 
-    let id = create_held_task(&state).await;
+    let id = create_held_task(&state, SERVER).await;
     let mut parked = false;
     for _ in 0..400 {
         if seen.exists() {
@@ -188,4 +191,57 @@ async fn a_settled_task_has_its_terminal_record_on_disk() {
         "settle_tasks came back while the task's last record was not yet written \
          (on disk: {on_disk:?}); a write that late can race the removal of the store dir"
     );
+}
+
+fn is_terminal(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Two tasks, the first already finished and the second held at its peer. A
+/// helper that settles only some of its ids (the first, say) is ready on its
+/// first poll, the held answer is never released, and the second record is
+/// still `working` below; a helper that waits for every id is pending, so the
+/// answer is released and both records end terminal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settle_of_two_tasks_waits_for_the_one_still_held() {
+    let home = hostile_home();
+    let (state, store_dir) = common::state(Fixture::default()).await;
+    let (_, done_release) = add_held_server(&state, home.path(), "done");
+    std::fs::write(&done_release, b"go").expect("the first peer is released up front");
+    let (held_seen, held_release) = add_held_server(&state, home.path(), SERVER);
+
+    let done = create_held_task(&state, "done").await;
+    let held = create_held_task(&state, SERVER).await;
+    let mut ready = false;
+    for _ in 0..400 {
+        let done_path = store_dir.path().join("tasks").join(format!("{done}.json"));
+        if held_seen.exists()
+            && done_path.exists()
+            && is_terminal(&status_on_disk(store_dir.path(), &done))
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        ready,
+        "the first task never finished, or the second never reached its peer"
+    );
+
+    let ids = [done.as_str(), held.as_str()];
+    let mut settle = pin!(common::settle_tasks(&state, &ids));
+    let mut probe = Context::from_waker(Waker::noop());
+    if settle.as_mut().poll(&mut probe).is_pending() {
+        std::fs::write(&held_release, b"go").expect("the second release file is written");
+        settle.await;
+    }
+
+    for id in [&done, &held] {
+        let on_disk = status_on_disk(store_dir.path(), id);
+        assert!(
+            is_terminal(&on_disk),
+            "settle_tasks came back while task {id} still read {on_disk:?} on disk"
+        );
+    }
 }

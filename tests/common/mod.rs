@@ -352,7 +352,12 @@ pub async fn settle_tasks(state: &Arc<AppState>, ids: &[&str]) {
     let mut open: Vec<(&str, Value)> = ids.iter().map(|id| (*id, Value::Null)).collect();
     loop {
         for (id, last) in &mut open {
-            *last = task_status(state, id).await;
+            // The bound covers each read too, so a router call that never answers fails here.
+            *last = tokio::time::timeout_at(deadline, task_status(state, id))
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("tasks/get for {id} did not answer within 30 s; its last read: {last:?}")
+                });
         }
         open.retain(|(_, status)| {
             !matches!(status.as_str(), Some("completed" | "failed" | "cancelled"))
