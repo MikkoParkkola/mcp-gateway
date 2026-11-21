@@ -120,7 +120,7 @@ mod stop_budget;
 /// (the reload loop) is what gives it a production caller.
 #[cfg(test)]
 pub(crate) use router::grant_subject_from_verified_identity;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) use stop_budget::BACKEND_RESERVE_FOR_TEST;
 pub(crate) mod search_disclosure;
 mod server;
