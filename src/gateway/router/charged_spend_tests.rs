@@ -173,7 +173,7 @@ async fn a_priced_calls_charge_comes_back_from_the_spend_history() {
     let run = || async {
         let fx = fixture(&priced).await;
         invoke(&fx, "read", None).await;
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let now = crate::clock::unix_secs().expect("a clock");
         let live = fx.state.meta_mcp.cost_tracker();
         assert!(spend_history::save(&live, dir.path(), now), "saved");

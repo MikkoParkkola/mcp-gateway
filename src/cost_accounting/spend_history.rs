@@ -77,7 +77,7 @@ impl Rows {
     /// Why these rows cannot be replayed, if they cannot: a series over its
     /// row caps, an hour whose start second does not fit, or a repeated hour
     /// or date.
-    fn refusal(&self, what: &str) -> Option<String> {
+    fn flaw(&self, what: &str) -> Option<String> {
         let max_hours = usize::try_from(BUCKET_HOURS + 1).unwrap_or(usize::MAX);
         let max_days = usize::try_from(KEPT_DAYS).unwrap_or(usize::MAX);
         if self.hours.len() > max_hours || self.days.len() > max_days {
@@ -114,7 +114,7 @@ impl Rows {
 
 impl History {
     /// Why the file must not be restored, if it must not.
-    fn refusal(&self) -> Option<String> {
+    fn flaw(&self) -> Option<String> {
         if self.keys.len() > MAX_KEYS {
             return Some(format!("more than {MAX_KEYS} keys"));
         }
@@ -139,7 +139,7 @@ impl History {
         series
             .into_iter()
             .chain(self.keys.iter().map(|k| (&k.rows, "a key")))
-            .find_map(|(rows, what)| rows.refusal(what))
+            .find_map(|(rows, what)| rows.flaw(what))
     }
 }
 
@@ -160,7 +160,7 @@ pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[Strin
         Ok(history) => history,
         Err(e) => return set_aside(tracker, &path, now, &e.to_string()),
     };
-    if let Some(why) = history.refusal() {
+    if let Some(why) = history.flaw() {
         return set_aside(tracker, &path, now, &why);
     }
     let by_fp: HashMap<String, &String> = key_names.iter().map(|n| (fingerprint(n), n)).collect();

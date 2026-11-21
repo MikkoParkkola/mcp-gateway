@@ -153,7 +153,7 @@ fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
 #[test]
 fn every_test_binary_spawn_goes_through_test_binary() {
     const OWN: (&str, &str) = ("src/test_home.rs", "test_binary");
-    const SHELL_WRAPPED: [(&str, &str); 5] = [
+    const SHELL_WRAPPED: [(&str, &str); 6] = [
         ("src/file_mode_inherit_tests.rs", "in_child"),
         (
             "src/identity_propagation/audit_fail_closed_tests.rs",
@@ -168,6 +168,11 @@ fn every_test_binary_spawn_goes_through_test_binary() {
             "mint_write_failure_is_fail_closed",
         ),
         ("src/home_dir_probe_tests.rs", "spawn_r1a_child"),
+        // umask 022 for the spend history's mode rows.
+        (
+            "src/gateway/server/spend_history_save_tests.rs",
+            "under_umask_022",
+        ),
     ];
     const PRODUCTION: [(&str, &str); 3] = [
         ("src/preview_sandbox/mod.rs", "start"),

@@ -178,6 +178,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cost ledger; no secret",
     ),
     (
+        "src/cost_accounting/spend_history.rs",
+        "spend history: hourly and daily spend per API key name; no secret",
+    ),
+    (
         "src/counters/persist.rs",
         "call counters and markers; no secret",
     ),
