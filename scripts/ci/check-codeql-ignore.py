@@ -15,6 +15,13 @@ Stated miss: a file compiled only on another OS (cfg(windows)) is not in a
 Linux build's dep-info; it is still checked by name against the globs below
 only if a Linux build reads it.
 
+It also fails unless the analyze job's own `env:` sets CFG_NAME to exactly
+`-test`. The Rust extractor turns cfg(test) on by default, so without it the
+scan reads test code and skips every `#[cfg(not(test))]` product item. The
+action spawns extraction in the Analyze step with the job's environment; a
+copy on a step, at workflow level or in the CodeQL config is refused, since
+it would either never reach extraction or override the job's value.
+
 Usage: scripts/ci/check-codeql-ignore.py [--cargo CARGO] [--extra-glob GLOB]   (repo root)
 """
 import argparse
@@ -26,6 +33,40 @@ import sys
 
 WORKFLOW = ".github/" + "workflows/codeql.yml"
 FEATURE_SETS = ([], ["--all-features"], ["--no-default-features"])
+CFG_NAME = "CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES"
+
+
+def cfg_override_problems(text):
+    """Where CFG_NAME appears: exactly once, as `jobs.analyze.env`, value `-test`."""
+    found, keys = [], []  # keys: (indent, key) of the mappings enclosing a line
+    for number, line in enumerate(text.splitlines(), 1):
+        body = re.sub(r"(^|\s)#.*$", "", line).rstrip()  # comments carry no setting
+        stripped = body.strip()
+        if not stripped:
+            continue
+        indent = len(body) - len(body.lstrip())
+        while keys and keys[-1][0] >= indent:
+            keys.pop()
+        item = stripped.startswith("- ")
+        key = stripped[2:] if item else stripped
+        name = key.split(":", 1)[0].strip().strip("'\"")
+        if CFG_NAME in stripped:
+            value = key.split(":", 1)[1].strip().strip("'\"") if ":" in key else None
+            found.append((number, [k for _, k in keys], name == CFG_NAME and not item, value))
+        keys.append((indent, "-" if item else name))
+    want = f"the analyze job's env must set {CFG_NAME}: \"-test\""
+    if not found:
+        return [f"{WORKFLOW}: {want}; it is missing, so CodeQL reads Rust with cfg(test) on"]
+    problems = []
+    for number, path, is_key, value in found:
+        if not is_key or path != ["jobs", "analyze", "env"]:
+            problems.append(f"{WORKFLOW}:{number}: {CFG_NAME} outside the analyze job's own env "
+                            f"(under {'.'.join(path) or 'the top level'}); {want}, and only there")
+        elif value != "-test":
+            problems.append(f"{WORKFLOW}:{number}: {CFG_NAME} is {value!r}; {want}")
+    if len(found) > 1 and not problems:
+        problems.append(f"{WORKFLOW}: {CFG_NAME} is set {len(found)} times; {want}, once")
+    return problems
 
 
 def ignore_globs(text):
@@ -188,7 +229,14 @@ def main():
     parser.add_argument("--extra-glob", action="append", default=[])
     args = parser.parse_args()
     root = os.getcwd()
-    globs = ignore_globs(open(os.path.join(root, WORKFLOW), encoding="utf-8").read())
+    with open(os.path.join(root, WORKFLOW), encoding="utf-8") as handle:
+        workflow = handle.read()
+    cfg_problems = cfg_override_problems(workflow)
+    for problem in cfg_problems:
+        print(f"FAIL {problem}")
+    if cfg_problems:
+        sys.exit(1)
+    globs = ignore_globs(workflow)
     globs += args.extra_glob
     if not globs:
         sys.exit(f"check-codeql-ignore: no paths-ignore list found in {WORKFLOW}")
