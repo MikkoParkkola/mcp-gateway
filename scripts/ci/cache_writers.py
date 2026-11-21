@@ -995,7 +995,8 @@ def self_test() -> list[str]:
 def _loader_self_test() -> list[str]:
     """Row 19 (gpt seat improvement): errors() itself, over a real file tree, finds a writer in a .yaml
     workflow, a --cache-to in a local composite, a bake line in a script, and a nested package.json naming a
-    package manager, and skips one under node_modules."""
+    package manager, and skips one under node_modules. A saving rust-cache step in a .yaml workflow fails on
+    the unguarded-writer rule (R2)."""
     import tempfile
 
     found: list[str] = []
@@ -1018,10 +1019,13 @@ def _loader_self_test() -> list[str]:
         got = errors(root)
     want = {"w.yaml": "setup-uv writer in a .yaml workflow", "R9: --cache-to at .github/actions/a": "composite --cache-to",
             "scripts/ci/b.sh:1": "bake in a script", "scripts/ci/c.sh:2": "bake split over continued lines in a script",
-            "ui/package.json": "nested package.json", "rust.yaml": "saving rust-cache step in a .yaml workflow"}
+            "ui/package.json": "nested package.json"}
     for needle, what in want.items():
         if not any(needle in item for item in got):
             found.append(f"self-test: 19 loader: {what} not found in {got}")
     if any("node_modules" in item for item in got):
         found.append(f"self-test: 19 loader: a package.json under node_modules was read: {got}")
+    # The .yaml rust-cache step must fail on the unguarded-writer rule itself, not on any other error in that file.
+    if not any(item.startswith("cache: rust.yaml ") and ": R2: " in item for item in got):
+        found.append(f"self-test: 19 loader: saving rust-cache step in a .yaml workflow not caught by R2 in {got}")
     return found
