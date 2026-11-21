@@ -178,7 +178,23 @@ fn periodic_callers(files: &[(String, String)]) -> Vec<String> {
 fn exactly_five_callers_start_a_periodic_saver() {
     let files = super::shutdown_keep_tests::source_files();
     let callers = periodic_callers(&files);
-    assert_eq!(callers.len(), 5, "periodic saver callers: {callers:?}");
+    let mut names: Vec<&str> = callers
+        .iter()
+        .filter_map(|c| std::path::Path::new(c).file_name()?.to_str())
+        .collect();
+    names.sort_unstable();
+    // By file, so a caller swapped for an uncovered one fails too, not only a sixth.
+    assert_eq!(
+        names,
+        [
+            "counter_wiring.rs",
+            "health_wiring.rs",
+            "health_wiring.rs",
+            "persistence.rs",
+            "stdio_loop.rs"
+        ],
+        "periodic saver callers: {callers:?}"
+    );
     let mut planted = files;
     planted.push((
         "planted/sixth.rs".to_owned(),
