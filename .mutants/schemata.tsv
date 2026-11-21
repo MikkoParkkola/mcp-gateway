@@ -1,0 +1,11 @@
+head_sha	1fdd323ae54d8f9018d5d2a9f9796699f3565417
+#mutant q7-option-before-spec
+mcp_gateway	preview_sandbox::fetch::tests::an_option_before_the_package_refuses	src/preview_sandbox/fetch_tests.rs:72
+#mutant q8-npm-non-registry
+mcp_gateway	preview_sandbox::fetch::tests::npm_non_registry_specs_refuse	src/preview_sandbox/fetch_tests.rs:23
+#mutant q8-pypi-non-registry
+mcp_gateway	preview_sandbox::fetch::tests::pypi_non_registry_specs_refuse	src/preview_sandbox/fetch_tests.rs:23
+#mutant q16-extras-accepted
+mcp_gateway	preview_sandbox::fetch::tests::pypi_extras_are_not_previewed	src/preview_sandbox/fetch_tests.rs:215
+#mutant q17-unreadable-parentage-matches
+mcp_gateway	preview_sandbox::control::tests::t8_unreadable_parentage_is_refused	src/preview_sandbox/control_tests.rs:58
