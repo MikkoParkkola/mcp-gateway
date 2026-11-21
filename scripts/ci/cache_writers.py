@@ -86,7 +86,7 @@ REF_RE = re.compile(r"\bgithub\.(?:head_ref|base_ref|ref)\b")
 MATRIX_RE = re.compile(r"\$\{\{\s*matrix\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}")
 FALSE_WRAP_RE = re.compile(r"\$\{\{\s*false\s*\}\}\Z", re.DOTALL)
 EMPTY_WRAP_RE = re.compile(r"\$\{\{\s*''\s*\}\}\Z", re.DOTALL)
-BAKE_RE = re.compile(r"\b(?:buildx\s+bake|docker\s+bake)\b")
+BAKE_RE = re.compile(r"\bbuildx\b.*\bbake\b|\bdocker\s+bake\b")
 EXPORTER_MSG = (
     "an exporter (cache-to, CACHE_TO) must be the cache-to idiom, a plain exporter under a guarded step if, "
     "or empty; a boolean or a bare condition hands buildx a 'true' or 'false' exporter"
@@ -252,19 +252,15 @@ def _idiom_terms(left: str) -> list[str] | None:
     return terms[:-1]
 
 
-def classify_expr(text: str, *, allow_idiom: bool) -> Parsed:
+def classify_expr(text: str) -> Parsed:
+    """A boolean condition: a conjunction of terms. The cache-to idiom is an exporter, judged by
+    classify_exporter, so any top-level || here is unanalysable."""
     body = strip_wrapper(text)
     if collapse(body) == BARE_G:
         return Parsed(problems=[PAREN_MSG])
-    ors = [index for kind, index in top_level_ops(body) if kind == "||"]
-    if not ors:
-        return terms_of(split_and(body))
-    if allow_idiom and len(ors) == 1 and collapse(body[ors[0] + 2:]) == "''":
-        idiom = _idiom_terms(body[: ors[0]])
-        if idiom is not None:
-            # The format() term is the idiom's vehicle; the other terms carry the rules.
-            return terms_of(idiom)
-    return Parsed(problems=[OR_MSG])
+    if any(kind == "||" for kind, _ in top_level_ops(body)):
+        return Parsed(problems=[OR_MSG])
+    return terms_of(split_and(body))
 
 
 def is_plain_text(text: str) -> bool:
@@ -308,7 +304,7 @@ def classify_guard(value: object, *, absent: bool, allow_idiom: bool) -> Parsed:
     text = value.strip()
     if is_plain_text(text):
         return Parsed(plain=True)
-    return classify_expr(text, allow_idiom=allow_idiom)
+    return classify_expr(text)
 
 
 def classify_step_if(value: object, *, absent: bool) -> Parsed:
@@ -323,7 +319,7 @@ def classify_step_if(value: object, *, absent: bool) -> Parsed:
             # Design amendment A2: ANDed with the guard, a disjunction that names no ref
             # can only narrow the write, so the whole `if` is one narrowing term.
             return Parsed()
-        return classify_expr(value.strip(), allow_idiom=False)
+        return classify_expr(value.strip())
     if value is True:
         return Parsed()
     return Parsed(problems=["unanalysable step if"])
@@ -804,7 +800,10 @@ def self_test() -> list[str]:
     # gpt seat finding 1: an exporter is a string, never a boolean; absent or empty exports nothing.
     for label, value in (("(G) as a boolean", _expr(G)), ("literal false", False), ("string false", "false")):
         bad(f"1b exporter {label}", _doc([{"uses": build, "with": {"cache-to": value}}]), contains="exporter")
-    good("1c exporter absent or empty", _doc([{"uses": build}, {"uses": build, "with": {"cache-to": ""}}]))
+    good("1c exporter absent or empty", _doc([{"uses": build}, {"uses": build, "with": {"cache-to": ""}},
+                                            {"uses": build, "with": {"cache-to": "${{ '' }}"}}]))
+    good("1d plain exporter under a guarded step if", _doc([{
+        "uses": build, "if": _expr(G), "with": {"cache-to": "type=gha,mode=max,scope=x-${{ matrix.arch }}"}}]))
 
     good("3 idiom", _doc([{"name": "build", "uses": build, "with": {"cache-to": idiom}}]))
     bad("3 else type=gha", _doc([{
@@ -920,6 +919,8 @@ def self_test() -> list[str]:
     bad("15b bake in a script", {}, scripts=[("scripts/b.sh", 2, "docker buildx bake --set '*.cache-to=type=gha'")],
         contains="bake")
     bad("15c bake in a run step", _doc([{"run": "docker buildx bake release"}]), contains="bake")
+    bad("15e bake after a builder flag", _doc([{"run": "docker buildx --builder ci bake release"}]), contains="bake")
+    good("15f buildx build is not bake", _doc([{"run": "docker buildx build --load -t baked-image ."}]))
 
     bad("16 trivy other sha", _doc([{"uses": f"aquasecurity/trivy-action@{bad_sha}"}]), contains=PIN_MSG)
     bad("16 build-push other sha", _doc([{"uses": f"docker/build-push-action@{bad_sha}", "with": {"cache-to": _expr(G)}}]), contains=PIN_MSG)
