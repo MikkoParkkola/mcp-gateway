@@ -11,15 +11,19 @@
 //! commits a record before it publishes the status, so a helper that waits for
 //! a terminal status through `tasks/get` leaves nothing in flight.
 //!
-//! The backend here holds its answer until a release file appears, and the
-//! release comes only after `settle_tasks` has started. A helper that returned
-//! without waiting would find the record on disk still `working`.
+//! The backend here holds its answer until a release file appears. The test
+//! polls the helper once while the answer is held, and releases it only if the
+//! helper is still waiting. A helper that returned without waiting would leave
+//! the record on disk `working`.
 
 mod common;
 #[path = "common/windows_paths.rs"]
 mod windows_paths;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
+use std::task::{Context, Waker};
 use std::time::Duration;
 
 use common::{AppState, Arc, Body, Fixture, Request, ServiceExt, Value, create_router, json};
@@ -165,18 +169,22 @@ async fn a_settled_task_has_its_terminal_record_on_disk() {
     }
     assert!(parked, "the task call never reached the held peer");
 
-    // The answer is released only after the helper has started waiting.
-    let releaser = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
+    // Poll the helper once while the peer still holds its answer. A helper that
+    // waits is pending here; only then is the answer released, and the same wait
+    // runs on to the end. A helper that returns at once is ready, the answer is
+    // never released, and the record is still `working` below. No clock decides
+    // which branch runs.
+    let mut settle = pin!(common::settle_tasks(&state, &[id.as_str()]));
+    let mut probe = Context::from_waker(Waker::noop());
+    if settle.as_mut().poll(&mut probe).is_pending() {
         std::fs::write(&release, b"go").expect("the release file is written");
-    });
-    common::settle_tasks(&state, &[id.as_str()]).await;
+        settle.await;
+    }
 
-    let status = status_on_disk(store_dir.path(), &id);
+    let on_disk = status_on_disk(store_dir.path(), &id);
     assert!(
-        matches!(status.as_str(), "completed" | "failed" | "cancelled"),
-        "when settle_tasks returns, the task's record on disk must already be terminal, \
-         so no record write is left to race the store directory's removal; it is {status:?}"
+        matches!(on_disk.as_str(), "completed" | "failed" | "cancelled"),
+        "settle_tasks came back while the task's last record was not yet written \
+         (on disk: {on_disk:?}); a write that late can race the removal of the store dir"
     );
-    releaser.await.expect("the releaser finishes");
 }
