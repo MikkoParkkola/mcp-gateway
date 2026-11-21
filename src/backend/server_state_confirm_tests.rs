@@ -1,0 +1,145 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A server whose runtime plan needs a confirmation never starts, because a
+//! live start refuses such a plan and nothing can grant one. Its state says
+//! so: Refused, naming the settings in plain words, with no retry promised.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use super::tests::fresh;
+use super::{ServerState, StateInputs, StateView, decide};
+use crate::runtime::RuntimeDenyReason;
+
+/// A fixed instant, so no answer depends on the clock.
+fn at() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(2_000_000_000)
+}
+
+/// The fixture backend, holding the given confirmation ids.
+fn held(ids: &[&str]) -> StateInputs {
+    StateInputs {
+        confirmations: ids.iter().map(|id| (*id).to_owned()).collect(),
+        ..fresh()
+    }
+}
+
+/// The answer a held server must give, with `settings` as the reason names them.
+fn refused(settings: &str) -> StateView {
+    StateView {
+        state: ServerState::Refused,
+        reason: format!(
+            "Its runtime settings ask for {settings}; it will not start until those settings change."
+        ),
+        next_retry_at: None,
+    }
+}
+
+#[test]
+fn each_confirmation_is_named_in_plain_words() {
+    for (id, words) in [
+        ("filesystem.host_mount", "a host mount"),
+        ("network.full_egress", "full network access"),
+        ("runtime.privileged", "privileged mode"),
+        ("environment.guarded_names", "guarded environment names"),
+    ] {
+        assert_eq!(decide(&held(&[id]), at()), refused(words), "{id}");
+    }
+}
+
+#[test]
+fn two_confirmations_are_both_named() {
+    let inputs = held(&["filesystem.host_mount", "network.full_egress"]);
+    assert_eq!(
+        decide(&inputs, at()),
+        refused("a host mount and full network access")
+    );
+}
+
+#[test]
+fn a_repeated_confirmation_is_named_once() {
+    let inputs = held(&["filesystem.host_mount", "filesystem.host_mount"]);
+    assert_eq!(decide(&inputs, at()), refused("a host mount"));
+}
+
+#[test]
+fn a_confirmation_outside_the_known_four_is_shown_as_its_id() {
+    let inputs = held(&["runtime.other_gate"]);
+    assert_eq!(decide(&inputs, at()), refused("runtime.other_gate"));
+}
+
+#[test]
+fn the_held_reason_wins_over_a_failed_start() {
+    let inputs = StateInputs {
+        start_failed: true,
+        ..held(&["network.full_egress"])
+    };
+    assert_eq!(decide(&inputs, at()), refused("full network access"));
+}
+
+#[test]
+fn the_held_reason_wins_over_a_sign_in_wait() {
+    let inputs = StateInputs {
+        auth_wait: true,
+        ..held(&["runtime.privileged"])
+    };
+    assert_eq!(decide(&inputs, at()), refused("privileged mode"));
+}
+
+/// Already true before the change; kept so the held check stays below it.
+#[test]
+fn a_policy_denial_still_wins_over_a_confirmation() {
+    let inputs = StateInputs {
+        denied: true,
+        denial_reasons: vec![RuntimeDenyReason::ForbiddenMount],
+        ..held(&["filesystem.host_mount"])
+    };
+    let view = decide(&inputs, at());
+    assert_eq!(view.state, ServerState::Refused);
+    assert!(
+        view.reason.starts_with("Refused by the runtime policy"),
+        "{}",
+        view.reason
+    );
+}
+
+/// Already true before the change; kept so nothing else moves.
+#[test]
+fn no_confirmation_leaves_the_answer_as_it_was() {
+    assert_eq!(decide(&held(&[]), at()).state, ServerState::Dormant);
+}
+
+/// The ids reach the state through a real backend built from a planned
+/// profile, not only through hand-made inputs.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_backend_whose_plan_needs_full_network_reads_refused() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::runtime::{
+        RuntimeAvailability, RuntimeIntent, RuntimeNetworkEgress, RuntimePlanner,
+    };
+
+    let mut intent = RuntimeIntent::named("held");
+    intent.image = Some("ghcr.io/example/held:1".to_owned());
+    intent.requested_egress = RuntimeNetworkEgress::Full;
+    let plan = RuntimePlanner::new(RuntimeAvailability::with_docker()).plan(&intent);
+    assert!(
+        plan.requires_confirmation() && !plan.is_denied(),
+        "premise: {plan:?}"
+    );
+    let backend = Backend::new_with_runtime_plan(
+        "held",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+        Some(plan),
+    );
+    let view = backend.server_state(at());
+    assert_eq!(view.state, ServerState::Refused, "{}", view.reason);
+    assert_eq!(view.next_retry_at, None);
+    assert!(
+        view.reason.contains("full network access"),
+        "{}",
+        view.reason
+    );
+}

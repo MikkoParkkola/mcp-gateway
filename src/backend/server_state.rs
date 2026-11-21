@@ -72,6 +72,9 @@ pub(crate) struct StateInputs {
     /// Its recent p95 and its usual (baseline) p95 in ms, when the recent
     /// one is far over the usual; `None` while the baseline is still warming.
     pub slow: Option<crate::failsafe::Slow>,
+    /// The ids of the runtime plan's confirmations. A live start refuses a
+    /// plan that has any, and nothing in the product can grant one.
+    pub confirmations: Vec<String>,
 }
 
 /// [`decide`]'s answer.
@@ -191,3 +194,8 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
 #[cfg(test)]
 #[path = "server_state_tests.rs"]
 mod tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "server_state_confirm_tests.rs"]
+mod confirm_tests;
