@@ -14,14 +14,14 @@ use std::{
     time::Duration,
 };
 use tokio::{io::AsyncWriteExt as _, time::Instant};
+#[path = "nested_stop_budget/fixtures.rs"]
+mod fixtures;
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "common/pids.rs"]
 mod pids;
 #[path = "common/yaml.rs"]
 mod yaml;
-#[path = "nested_stop_budget/fixtures.rs"]
-mod fixtures;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
