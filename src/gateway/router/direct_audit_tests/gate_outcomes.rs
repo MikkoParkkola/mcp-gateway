@@ -340,3 +340,40 @@ async fn g3_meta_a_converted_backend_failure_still_counts_an_error() {
     );
     assert_eq!((totals(&store), d4), (ONE_BACKEND_ERROR, NO_DENIAL));
 }
+
+/// R5 with no transparency log (code review r1, improvement 3): an anomaly
+/// block the rule reclassifies is still counted as a block, and once in D4,
+/// before the writer's no-log return, on either route.
+#[cfg(feature = "firewall")]
+async fn an_unlogged_anomaly_block_on(route: Route) {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::InspectionBlocks,
+        reply: Some(planted_key_answer()),
+        log: Log::Off,
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    let (body, d4) = send_counted(&fx, route);
+    assert_eq!(body["error"]["code"], -32603, "{route:?} premise: {body}");
+    assert!(invocations(&fx).is_empty(), "{route:?}: no log, no record");
+    assert_eq!(
+        (totals(&store), d4),
+        (ONE_GATE_REFUSAL, ONE_DENIAL),
+        "{route:?}"
+    );
+}
+
+/// The no-log block on `/mcp`.
+#[cfg(feature = "firewall")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn o5_meta_an_unlogged_anomaly_block_counts_a_block() {
+    an_unlogged_anomaly_block_on(Route::Meta).await;
+}
+
+/// The no-log block on the direct route.
+#[cfg(feature = "firewall")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn o5_direct_an_unlogged_anomaly_block_counts_a_block() {
+    an_unlogged_anomaly_block_on(Route::Direct).await;
+}
