@@ -204,12 +204,14 @@ async fn a_playbook_past_a_withheld_step_records_no_refused() {
     );
     let event = last_attempt(&fx);
     assert_ne!(event["response_effect"], "refused", "{event}");
-    // The withheld step's note stays in its own cell: the playbook call's
-    // own record (not the step's, which names alpha's `t`) is no refusal.
+    // The playbook writes no invocation record of its own; the one record is
+    // the withheld step's. The gateway refused that step's answer, so the
+    // step's record is a refusal, while the playbook's delivery is not.
     let records = invocations(&fx);
-    let playbook: Vec<&Value> = records.iter().filter(|r| r["tool"] != "t").collect();
-    let [playbook] = playbook.as_slice() else {
-        panic!("premise: one record that is not the step's: {records:?}");
+    let [step] = records.as_slice() else {
+        panic!("premise: the step's record only: {records:?}");
     };
-    assert_ne!(playbook["outcome"], "denied", "{playbook}");
+    assert_eq!(step["tool"], "t", "premise: {step}");
+    assert_eq!(step["decision"]["kind"], "response_gate", "premise: {step}");
+    assert_eq!(step["outcome"], "denied", "{step}");
 }
