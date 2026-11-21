@@ -213,7 +213,13 @@ fn nothing_pending(held: &Locked) -> Result<(), Refusal> {
     for (artifact, class) in beside {
         match std::fs::symlink_metadata(&artifact) {
             Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(refuse(StartError::ArtifactCheckFailed, artifact, "unproven")),
+            Err(_) => {
+                return Err(refuse(
+                    StartError::ArtifactCheckFailed,
+                    artifact,
+                    "unproven",
+                ));
+            }
             Ok(_) => return Err(refuse(class, artifact, "present")),
         }
     }
