@@ -264,7 +264,12 @@ async fn an_unavailable_audit_log_classes_and_counts_nothing() {
         super::super::audit::DispatchNotes::default(),
     ));
     assert!(matches!(result, Err(Error::AuditUnavailable)), "{result:?}");
-    let records = std::fs::read_to_string(&path).unwrap_or_default();
+    // No file is no record; any other read error must not pass as one.
+    let records = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("the audit log is unreadable: {error}"),
+    };
     assert!(
         !records.contains("request_hash"),
         "no invocation record: {records}"
