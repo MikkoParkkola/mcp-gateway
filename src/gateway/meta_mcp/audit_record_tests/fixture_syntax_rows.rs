@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Decision fixture table part 3b-1, the in-process meta route: the `syntax`
 //! sites in the invocation policy (`invoke/policy.rs:42` and `:50` at
-//! e6df0d013e).
+//! e6df0d013e), the signing nonce (`signing.rs:680`, `:687`) and the web UI
+//! call (`ui_call.rs:208`).
 //!
 //! Each row's decision carries the same values as part 3a's refusal rows: no
 //! rule id (every site here notes `(Syntax, None)`), no grant id, findings not run
@@ -134,4 +135,130 @@ impl crate::transport::Transport for ListsDotted {
     fn is_connected(&self) -> bool {
         true
     }
+}
+
+/// A table gateway with message signing armed; `require_nonce` as given.
+fn signing_meta(
+    dir: &Arc<tempfile::TempDir>,
+    require_nonce: bool,
+) -> crate::gateway::meta_mcp::MetaMcp {
+    let (mut meta, _sent) = table_meta(dir, BackendConfig::default());
+    let signer = crate::security::message_signing::MessageSigner::new(
+        b"syntax-rows-signing-key-0123456789abcdef".to_vec(),
+        None,
+        "hardened".into(),
+    );
+    meta.enable_message_signing(signer, std::time::Duration::from_secs(300), require_nonce);
+    meta
+}
+
+/// The nonce admission's answer to `nonce`, and the pair it noted.
+async fn admitted(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    nonce: Option<&str>,
+) -> (
+    crate::Result<Option<std::time::Instant>>,
+    Option<crate::security::decision_record::Refusal>,
+) {
+    use crate::gateway::meta_mcp::invoke::audit::{take_refusal, with_route_scope};
+    with_route_scope(async {
+        let answer = meta.admit_signing_nonce(nonce, "syntax-rows");
+        (answer, take_refusal())
+    })
+    .await
+}
+
+/// S15 (unit row): a nonce the store refuses as malformed (257 characters)
+/// notes `(Syntax, None)` (`signing.rs:676-684`, from the `INVALID_PARAMS`
+/// refusal of `message_signing.rs:246`).
+///
+/// Both meta transports reach the site, but each answers the refusal before
+/// the call is recorded (`dispatch_tools_call.rs:455-470`,
+/// `stdio_dispatch.rs:637-650`), so no record carries the pair yet; recording
+/// it is MIK-9219.KINDS.2, whose rows pin the record. Until then the noted
+/// pair is pinned here.
+#[tokio::test]
+async fn s15_signing_malformed_nonce() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let meta = signing_meta(&dir, true);
+    let (answer, noted) = admitted(&meta, Some(&"n".repeat(257))).await;
+    let Err(error) = answer else {
+        panic!("premise: a 257-character nonce is admitted");
+    };
+    assert_eq!(
+        noted,
+        Some((DecisionKind::Syntax, None)),
+        "the noted pair: {error:?}"
+    );
+    assert_eq!(error.to_rpc_code(), -32602, "the refusal's code: {error:?}");
+    // Control: a well-formed nonce is admitted and notes nothing.
+    let (answer, noted) = admitted(&meta, Some("syntax-rows-nonce-1")).await;
+    assert!(
+        answer.is_ok(),
+        "control: a well-formed nonce refused: {answer:?}"
+    );
+    assert_eq!(noted, None, "control: a pair noted for an admitted nonce");
+}
+
+/// S16a (unit row): no nonce where one is required notes `(Syntax, None)`
+/// (`signing.rs:686-691`) and refuses with -32001. Unrecorded on both meta
+/// transports for now, as for S15.
+#[tokio::test]
+async fn s16a_signing_nonce_required() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let (answer, noted) = admitted(&signing_meta(&dir, true), None).await;
+    let Err(error) = answer else {
+        panic!("premise: a missing nonce is admitted where one is required");
+    };
+    assert_eq!(
+        noted,
+        Some((DecisionKind::Syntax, None)),
+        "the noted pair: {error:?}"
+    );
+    assert_eq!(error.to_rpc_code(), -32001, "the refusal's code: {error:?}");
+    // Control: with no nonce required, the same call is admitted.
+    let (answer, noted) = admitted(&signing_meta(&dir, false), None).await;
+    assert!(
+        answer.is_ok(),
+        "control: refused with no nonce required: {answer:?}"
+    );
+    assert_eq!(noted, None, "control: a pair noted for an admitted call");
+}
+
+/// S18 (unit row): a task-augmented call under a web UI call is refused by
+/// `task_refused` (`ui_call.rs:207-209`), which notes `(Syntax, None)` and
+/// returns `Error::Forbidden { code: -32600, status: 403 }` through
+/// `ui_call_refused` (`ui_call.rs:297-305`).
+///
+/// No external path reaches it. Its one caller refuses a call that carries a
+/// task inside a UI call's scope (`call_dispatch.rs:341-343`), and the UI's
+/// own request names `gateway_invoke` with no task (`ui/tool_call.rs:442-458`).
+/// So this row pins the pair the site notes, as for S1.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn s18_ui_call_refuses_a_task() {
+    use crate::gateway::meta_mcp::invoke::audit::{take_refusal, with_route_scope};
+    let (error, noted) = with_route_scope(async {
+        let error = crate::gateway::ui_call::task_refused();
+        (error, take_refusal())
+    })
+    .await;
+    assert_eq!(
+        noted,
+        Some((DecisionKind::Syntax, None)),
+        "the noted pair: {error:?}"
+    );
+    let crate::Error::Forbidden { code, status, .. } = error else {
+        panic!("premise: the refusal is a forbidden error: {error:?}");
+    };
+    assert_eq!(
+        (code, status),
+        (-32600, 403),
+        "the refusal's code and status"
+    );
+    // Control: outside a UI call nothing refuses a task.
+    assert!(
+        !crate::gateway::ui_call::refuses_task(),
+        "control: a task refused outside a UI call"
+    );
 }
