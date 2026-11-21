@@ -109,14 +109,18 @@ async fn a_priced_call_shows_the_charged_usd_in_every_costs_view() {
         let own = own_caller_report(&fx).await;
         assert_eq!(own["call_count"], 1, "{own}");
         assert_eq!(own["total_tokens"], 0, "{own}");
+        let usd = own["total_cost_usd"].as_f64();
         close(
-            own["total_cost_usd"].as_f64().unwrap_or(-1.0),
+            usd.unwrap_or_else(|| panic!("no USD: {own}")),
             0.25,
             "caller",
         );
-        // The operator's HTTP view reports the same key total.
+        // The operator's HTTP view reports the same key total, for this key:
+        // 0.75 is also the gateway total here, so the name is checked too.
         let by_key = admin_get(&fx, &format!("/api/costs?key={KEY}")).await;
-        let usd = by_key["window_24h"]["cost_usd"].as_f64().unwrap_or(-1.0);
+        assert_eq!(by_key["api_key_name"], KEY, "{by_key}");
+        let usd = by_key["window_24h"]["cost_usd"].as_f64();
+        let usd = usd.unwrap_or_else(|| panic!("no USD: {by_key}"));
         close(usd, 0.75, "/api/costs key window");
     })
     .await;
