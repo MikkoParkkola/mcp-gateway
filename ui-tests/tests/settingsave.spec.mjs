@@ -249,8 +249,9 @@ for (const way of UNCONFIRMED_WAYS) {
     await toConfirm(page);
     await action(page).click();
     if (way.clock) await page.clock.runFor(30_001);
-    const close = box(page).getByRole('button', { name: 'Close' });
-    if (await close.isVisible()) await close.click();
+    // A 401 hands over to sign-in and the shell closes the dialog itself; every other way waits on Close.
+    if (way.name === 'a 401') await expect(box(page)).toHaveCount(0);
+    else await box(page).getByRole('button', { name: 'Close' }).click();
     await expect(host(page)).toContainText(UNCONFIRMED);
     if (way.sentence) await expect(host(page)).toContainText(way.sentence);
     await expect.poll(async () => (await results(page)).map((r) => r?.outcome)).toEqual(['unconfirmed']);
@@ -261,7 +262,9 @@ for (const way of UNCONFIRMED_WAYS) {
     expect(seen.length).toBe(before);
     await expect(host(page, 'ss-b')).toContainText(HELD);
     await expect(host(page, 'ss-b').locator('pre.diff')).toHaveCount(0);
-    await expect.poll(() => heard(page)).toContain(HELD);
+    // While sign-in shows, the shell's announcer keeps only sign-in's own messages (shell.js pump),
+    // so after a 401 the held line is on the host but not heard; every other way hears it.
+    if (way.name !== 'a 401') await expect.poll(() => heard(page)).toContain(HELD);
     await page.reload();
     await shellReady(page);
     await page.evaluate(() => document.getElementById('content').append(Object.assign(document.createElement('section'), { id: 'ss-a' })));
