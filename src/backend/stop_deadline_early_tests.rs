@@ -406,7 +406,7 @@ async fn a_stdio_backend_leads_its_own_process_group() {
 /// [`PEER`] as a nested gateway: it starts a leaf in its own session (beyond
 /// the outer group's kill, as a nested gateway's leaf is), and its SIGTERM
 /// handler waits `wait` (the inner's slowest hurried path) before it kills
-/// and reaps the leaf. Every step writes a CLOCK_MONOTONIC mark file: `eof`
+/// and reaps the leaf. Every step writes a `CLOCK_MONOTONIC` mark file: `eof`
 /// in place of PEER's post-EOF SIGTERM ignore, then `term` and `leaf_dead`.
 #[cfg(target_os = "linux")]
 fn nesting_peer(wait: Duration) -> String {
@@ -465,7 +465,7 @@ fn peer_mark(dir: &std::path::Path, name: &str) -> Option<Duration> {
 /// before Db. The peer's `term` and `leaf_dead` marks are harness data: a
 /// loaded host may not run its handler in the gap, so they are printed, not
 /// asserted, and a leaf the handler never ended is killed here and noted.
-/// Linux only: the marks and the entry share CLOCK_MONOTONIC.
+/// Linux only: the marks and the entry share `CLOCK_MONOTONIC`.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() {
