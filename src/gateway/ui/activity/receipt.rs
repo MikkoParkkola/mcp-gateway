@@ -21,6 +21,20 @@ use crate::security::transparency_log::recompute_entry_hash;
 /// What a receipt says for evidence this gateway version does not record.
 pub(super) const NOT_RECORDED: &str = "not recorded by this gateway version";
 
+/// What a receipt says for a call whose exchanged token's issuance row the
+/// log does not hold: rotated out, or never written by a best-effort mint.
+pub(super) const NOT_FOUND: &str = "not found in the activity log";
+
+/// The reach a call's receipt shows. PLACEHOLDER for the red rows: today's
+/// value for every call; the join lands in the next commit.
+fn receipt_reach(
+    _log: &Path,
+    _decision: Option<&Decision>,
+    _reads: &mut Reads,
+) -> std::io::Result<Value> {
+    Ok(NOT_RECORDED.into())
+}
+
 /// A row id: which log, the counter, and the first 16 hex of its hash.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RowId {
@@ -221,6 +235,12 @@ pub(super) fn receipt(
         }),
     );
     add_evidence(&mut body, kind, e);
+    // Only the receipt resolves a call's reach: it may seek one more row.
+    if kind == Kind::Call {
+        let decision = read::decision_evidence(e);
+        let reach = receipt_reach(log, decision.as_ref(), &mut reads)?;
+        body.insert("reach".into(), reach);
+    }
     if let Some(s) = &scanned {
         if let Some(Value::Object(chain)) = body.get_mut("chain") {
             let window = if s.chain_broken { "broken" } else { "intact" };
@@ -241,3 +261,8 @@ pub(super) fn receipt(
 #[cfg(test)]
 #[path = "receipt_tests.rs"]
 mod tests;
+
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "receipt_reach_tests.rs"]
+mod reach_tests;
