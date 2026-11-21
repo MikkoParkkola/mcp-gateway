@@ -49,10 +49,11 @@ fn each_confirmation_is_named_in_plain_words() {
 
 #[test]
 fn two_confirmations_are_both_named() {
-    let inputs = held(&["filesystem.host_mount", "network.full_egress"]);
+    // Not in sorted order, so a sort in place of first-seen order fails here.
+    let inputs = held(&["network.full_egress", "filesystem.host_mount"]);
     assert_eq!(
         decide(&inputs, at()),
-        refused("a host mount and full network access")
+        refused("full network access and a host mount")
     );
 }
 
@@ -168,8 +169,9 @@ async fn a_backend_whose_plan_needs_full_network_reads_refused() {
     intent.image = Some("ghcr.io/example/held:1".to_owned());
     intent.requested_egress = RuntimeNetworkEgress::Full;
     let plan = RuntimePlanner::new(RuntimeAvailability::with_docker()).plan(&intent);
+    let ids: Vec<&str> = plan.confirmations.iter().map(|c| c.id.as_str()).collect();
     assert!(
-        plan.requires_confirmation() && !plan.is_denied(),
+        ids == ["network.full_egress"] && !plan.is_denied(),
         "premise: {plan:?}"
     );
     let backend = Backend::new_with_runtime_plan(
@@ -179,12 +181,5 @@ async fn a_backend_whose_plan_needs_full_network_reads_refused() {
         Duration::from_secs(60),
         Some(plan),
     );
-    let view = backend.server_state(at());
-    assert_eq!(view.state, ServerState::Refused, "{}", view.reason);
-    assert_eq!(view.next_retry_at, None);
-    assert!(
-        view.reason.contains("full network access"),
-        "{}",
-        view.reason
-    );
+    assert_eq!(backend.server_state(at()), refused("full network access"));
 }
