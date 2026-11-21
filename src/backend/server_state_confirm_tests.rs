@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::tests::fresh;
 use super::{ServerState, StateInputs, StateView, decide};
+use crate::failsafe::CircuitState;
 use crate::runtime::RuntimeDenyReason;
 
 /// A fixed instant, so no answer depends on the clock.
@@ -55,6 +56,22 @@ fn two_confirmations_are_both_named() {
     );
 }
 
+/// Three or more settings: commas, then "and" before the last, in the order
+/// first seen, with a later repeat dropped wherever it falls.
+#[test]
+fn several_confirmations_keep_first_seen_order_and_drop_a_later_repeat() {
+    let inputs = held(&[
+        "runtime.privileged",
+        "environment.guarded_names",
+        "runtime.privileged",
+        "filesystem.host_mount",
+    ]);
+    assert_eq!(
+        decide(&inputs, at()),
+        refused("privileged mode, guarded environment names and a host mount")
+    );
+}
+
 #[test]
 fn a_repeated_confirmation_is_named_once() {
     let inputs = held(&["filesystem.host_mount", "filesystem.host_mount"]);
@@ -83,6 +100,34 @@ fn the_held_reason_wins_over_a_sign_in_wait() {
         ..held(&["runtime.privileged"])
     };
     assert_eq!(decide(&inputs, at()), refused("privileged mode"));
+}
+
+/// Every branch below the held check that would promise a retry: an open
+/// breaker, a half-open one, and an unhealthy server that is still running.
+#[test]
+fn the_held_reason_wins_over_every_retrying_signal() {
+    let signals = [
+        StateInputs {
+            breaker: CircuitState::Open,
+            retry_after: Duration::from_secs(30),
+            healthy: false,
+            consecutive_failures: 4,
+            ..held(&["network.full_egress"])
+        },
+        StateInputs {
+            breaker: CircuitState::HalfOpen,
+            ..held(&["network.full_egress"])
+        },
+        StateInputs {
+            healthy: false,
+            running: true,
+            consecutive_failures: 2,
+            ..held(&["network.full_egress"])
+        },
+    ];
+    for inputs in signals {
+        assert_eq!(decide(&inputs, at()), refused("full network access"));
+    }
 }
 
 /// Already true before the change; kept so the held check stays below it.
