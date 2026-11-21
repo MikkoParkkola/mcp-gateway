@@ -10,6 +10,8 @@ use super::*;
 /// Where the transparency log of one row lives.
 struct Logged {
     meta: Arc<MetaMcp>,
+    /// Fails closed; a row may make its appends fail.
+    log: Arc<crate::security::TransparencyLogger>,
     path: std::path::PathBuf,
     _dir: Arc<tempfile::TempDir>,
 }
@@ -25,18 +27,22 @@ async fn signing_stdio(posture: crate::security::SecurityPosture, required: bool
         calls: Arc::new(AtomicUsize::new(0)),
         answer: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
     });
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log_path,
+                key_id: "stdio-signing".to_owned(),
+                ..Default::default()
+            },
+        ))
+        .expect("the log opens")
+        .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed),
+    );
+    let kept = Arc::clone(&log);
     let meta = stdio_meta(
         move |meta| {
-            let log = crate::security::TransparencyLogger::open(Arc::new(
-                crate::security::transparency_log::TransparencyLogConfig {
-                    enabled: true,
-                    path: log_path,
-                    key_id: "stdio-signing".to_owned(),
-                    ..Default::default()
-                },
-            ))
-            .expect("the log opens");
-            meta.enable_transparency_log(Arc::new(log));
+            meta.enable_transparency_log(kept);
             meta.enable_message_signing(
                 crate::security::message_signing::MessageSigner::new(
                     b"stdio-signing-records-key-32byte".to_vec(),
@@ -53,6 +59,7 @@ async fn signing_stdio(posture: crate::security::SecurityPosture, required: bool
     .await;
     Logged {
         meta,
+        log,
         path,
         _dir: dir,
     }
@@ -176,4 +183,17 @@ async fn s6_stdio_two_nonces_record_syntax() {
     assert_eq!(answer["error"]["message"], "two signing nonces", "{answer}");
     let record = sole_record(&logged, &answer);
     assert_refusal_record(&record, "invalid", -32602, "syntax");
+}
+
+/// F2: the log fails closed and its append now fails. A replayed nonce is
+/// not answered as an unrecorded refusal: stdio answers that the audit log
+/// is unavailable (-32005), as `/mcp` answers 503.
+#[tokio::test]
+async fn f2_stdio_a_failed_refusal_write_answers_unavailable() {
+    let logged = signing_stdio(crate::security::SecurityPosture::Hardened, false).await;
+    let first = stdio_send(&logged.meta, invoke_params(with_nonce("f2-nonce"), None)).await;
+    assert!(first.get("result").is_some(), "premise: delivered: {first}");
+    logged.log.set_append_failure_for_test(true);
+    let second = stdio_send(&logged.meta, invoke_params(with_nonce("f2-nonce"), None)).await;
+    assert_eq!(second["error"]["code"], -32005, "{second}");
 }
