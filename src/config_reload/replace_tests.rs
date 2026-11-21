@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
-#[cfg(unix)]
 use super::replace_test_support::context;
 use super::replace_test_support::{
     NEXT, START, WAIT, names, read, running_has_b, setup, setup_refusing_reload, to,
