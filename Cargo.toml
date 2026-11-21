@@ -82,6 +82,7 @@ include = [
     "deploy/kubernetes/enterprise-alpha/values.enterprise.example.yaml",
     "deploy/single-node/docker-compose.yaml",
     "Dockerfile",
+    "docs/CLI.md",
     "docs/CLIENTS.md",
     "docs/DEPLOYMENT.md",
     "docs/identity_grants.md",
