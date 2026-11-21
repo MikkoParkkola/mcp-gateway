@@ -264,6 +264,9 @@ async fn exchange_token(
 struct MintReservation {
     store: Arc<dyn TokenStore>,
     id: ReservationId,
+    /// After this moment the store refuses to activate the slot; the row's
+    /// expiry bound is built from it.
+    deadline: u64,
     armed: bool,
 }
 
@@ -275,10 +278,11 @@ impl MintReservation {
         request: ReservationRequest,
         now: u64,
     ) -> Result<Self, ReserveError> {
-        let id = store.reserve(request, now)?.id;
+        let reserved = store.reserve(request, now)?;
         Ok(Self {
             store: Arc::clone(store),
-            id,
+            id: reserved.id,
+            deadline: reserved.deadline,
             armed: true,
         })
     }
@@ -359,15 +363,24 @@ pub(super) async fn issue(
     // The issuance attempt: it names the JTI, never a validity window.
     let ev = AuditEvent::issued(&token, &ks.email_key);
     audit::emit(&ev);
-    if let Some(refusal) = super::issuance::record_issuance(ks, &ev).await {
+    // One read of the lifetime, used for the row's bound and for exp below.
+    let ttl = ks.config.token_ttl_secs;
+    let Some(expires_by) = reservation.deadline.checked_add(ttl) else {
+        return clock_refusal();
+    };
+    let expiry = super::issuance::RowExpiry {
+        ttl_secs: ttl,
+        expires_by,
+    };
+    match super::issuance::record_issuance(ks, &ev, expiry).await {
+        Ok(row) => token.issuance_row = row,
         // Dropping the reservation releases the slot: no bearer exists.
-        return refusal;
+        Err(refusal) => return refusal,
     }
 
     let Ok(now) = crate::clock::unix_secs() else {
         return clock_refusal();
     };
-    let ttl = ks.config.token_ttl_secs;
     let Some(exp) = now.checked_add(ttl) else {
         return clock_refusal();
     };
