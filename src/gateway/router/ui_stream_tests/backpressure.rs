@@ -68,6 +68,70 @@ async fn serve(state: &Arc<AppState>) -> SocketAddr {
     addr
 }
 
+// TEMPORARY measurement for the redesign, removed before review: per status change, how
+// many sends wait for room and whether the stream is open, so the Windows shard log
+// (which prints passing tests' output) shows what a stall that lasts looks like there.
+#[tokio::test]
+async fn measure_the_waiting_state_per_status_change_at_4_kib() {
+    measure_the_waiting_state(4096).await;
+}
+
+#[tokio::test]
+async fn measure_the_waiting_state_per_status_change_at_4_mib() {
+    measure_the_waiting_state(LARGE_RECV_BUFFER).await;
+}
+
+async fn measure_the_waiting_state(buffer: u32) {
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
+    let busy = big_gateway(&state);
+    let addr = serve(&state).await;
+    let socket = TcpSocket::new_v4().expect("socket");
+    socket
+        .set_recv_buffer_size(buffer)
+        .expect("receive buffer size");
+    let granted = socket.recv_buffer_size().expect("granted receive buffer");
+    let mut client = socket.connect(addr).await.expect("connect");
+    let ask =
+        format!("GET {STREAM} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {BEARER}\r\n\r\n");
+    client.write_all(ask.as_bytes()).await.expect("request");
+    let mut head = [0u8; 512];
+    let n = client.read(&mut head).await.expect("response head");
+    assert!(String::from_utf8_lossy(&head[..n]).starts_with("HTTP/1.1 200"));
+    let hub = state.dashboard_bootstrap.stream_hub();
+    // One token per step: waiting sends then open streams, e.g. "1/1".
+    let mut trace = Vec::new();
+    for _ in 0..150 {
+        busy.shared_entry_for_test()
+            .failsafe
+            .record_success(Duration::from_millis(5));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        trace.push(format!(
+            "{}/{}",
+            hub.sends_awaiting_room(),
+            hub.open_streams()
+        ));
+    }
+    println!(
+        "measure {buffer} (granted {granted}) per step waiting/open: {}",
+        trace.join(" ")
+    );
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    let after_idle = (hub.sends_awaiting_room(), hub.open_streams());
+    let closed_soon = yield_until(|| hub.open_streams() == 0).await;
+    let mut more = 0;
+    while hub.open_streams() != 0 && more < 20_000 {
+        tokio::task::yield_now().await;
+        more += 1;
+    }
+    println!(
+        "measure {buffer}: after 120 s idle waiting/open {after_idle:?}; closed within 200 yields {closed_soon}; \
+         open after {more} more yields {}",
+        hub.open_streams()
+    );
+    drop(client);
+}
+
 #[tokio::test]
 async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_returns() {
     a_stalled_client_is_closed(4096).await;
