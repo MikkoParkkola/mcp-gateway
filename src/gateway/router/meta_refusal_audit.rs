@@ -25,6 +25,80 @@ use crate::security::transparency_log::CorrelationKey;
 use super::AppState;
 use super::helpers::build_error_response;
 
+/// The target a pre-dispatch refusal records, spelled as the request names
+/// it: a `gateway_invoke`'s own server and tool, otherwise no server and the
+/// called name. A surfaced name stays unmapped: mapping it touches the
+/// backend, which these refusals come before.
+pub(super) fn request_target<'t>(arguments: &'t Value, called: &'t str) -> (&'t str, &'t str) {
+    if called != "gateway_invoke" {
+        return ("", called);
+    }
+    let named = |key: &str| arguments.get(key).and_then(Value::as_str);
+    (
+        named("server").unwrap_or_default(),
+        named("tool").unwrap_or_default(),
+    )
+}
+
+/// What a signing refusal records: the outcome its error maps to, and the
+/// target as the request names it. No unnoted kind: the signing check notes
+/// its own, so a refusal reaching here unnoted records `unrecorded`.
+fn signing_refusal<'t>(error: crate::Error, (server, tool): (&'t str, &'t str)) -> Refusal<'t> {
+    let code = error.to_rpc_code();
+    Refusal {
+        outcome: AuditOutcome::from_result(&Err(error)).unwrap_or(AuditOutcome::Error(code)),
+        server,
+        tool: Some(tool),
+        tenants: BTreeSet::new(),
+        unnoted: None,
+    }
+}
+
+/// A stdio signing refusal, written by the writer `/mcp` uses. Stdio has no
+/// router state, so the meta layer and its own log stand in for it. Counted
+/// once like any refused call, then answered as before: the error's code and
+/// words, or the log's unavailability when it fails closed and the record
+/// could not be written.
+pub(crate) async fn answer_stdio_signing_refusal(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    (arguments, called, session_id): (&Value, &str, &str),
+    id: RequestId,
+    error: crate::Error,
+) -> crate::protocol::JsonRpcResponse {
+    use crate::protocol::JsonRpcResponse;
+    let code = error.to_rpc_code();
+    let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
+    let refusal = signing_refusal(error, request_target(arguments, called));
+    crate::security::security_metrics::meta_refused(code);
+    let refused = Refused {
+        arguments,
+        who: AuditWho::from_caller(caller),
+        session_id,
+        firewall: false,
+        trace: None,
+    };
+    let log = meta.transparency_logger.as_ref();
+    let fails_closed =
+        log.is_some_and(|log| log.failure_policy() == AuditFailurePolicy::FailClosed);
+    match refused.write(meta, log, refusal).await {
+        Some(Err(failed)) if fails_closed => {
+            tracing::error!(error = %failed, "stdio signing refusal record failed; answering unavailable");
+            let unavailable = crate::Error::AuditUnavailable;
+            JsonRpcResponse::gateway_error(
+                Some(id),
+                unavailable.to_rpc_code(),
+                unavailable.to_string(),
+            )
+        }
+        Some(Err(failed)) => {
+            tracing::warn!(error = %failed, "Transparency log write failed (non-fatal)");
+            JsonRpcResponse::gateway_error(Some(id), code, message)
+        }
+        _ => JsonRpcResponse::gateway_error(Some(id), code, message),
+    }
+}
+
 /// A meta-route call about to be refused before dispatch.
 pub(super) struct Refused<'a> {
     /// The `tools/call` arguments as sent: the object the meta writer hashes
@@ -165,7 +239,10 @@ impl<'a> Refused<'a> {
         // answered, with no id, and recorded.
         let Some(id) = id else {
             crate::security::security_metrics::meta_refused(code);
-            if let Some(Err(error)) = self.write(state, refusal).await {
+            if let Some(Err(error)) = self
+                .write(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
+                .await
+            {
                 tracing::warn!(%error, "Transparency log write failed (non-fatal)");
             }
             return build_error_response(
@@ -185,6 +262,24 @@ impl<'a> Refused<'a> {
             StatusCode::BAD_REQUEST,
         )
         .await
+    }
+
+    /// A signing refusal decided before admission (a nonce, or the invocation
+    /// policy run at signing time): recorded with the code and outcome its
+    /// error carries and the kind its check noted, then answered as before,
+    /// with the error's own code and words and HTTP 400.
+    pub(super) async fn answer_signing(
+        self,
+        state: &AppState,
+        called: &str,
+        id: RequestId,
+        error: crate::Error,
+    ) -> axum::response::Response {
+        let code = error.to_rpc_code();
+        let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
+        let refusal = signing_refusal(error, request_target(self.arguments, called));
+        self.record(state, refusal, id, code, message, StatusCode::BAD_REQUEST)
+            .await
     }
 
     /// MIK-8361: record a requested target the caller may not see, refused
@@ -209,7 +304,10 @@ impl<'a> Refused<'a> {
             unnoted: None,
         };
         crate::security::security_metrics::meta_refused(code);
-        let error = match self.write(state, refusal).await? {
+        let error = match self
+            .write(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
+            .await?
+        {
             Ok(trace) => return Some(trace),
             Err(error) => error,
         };
@@ -238,7 +336,10 @@ impl<'a> Refused<'a> {
         // D4: every meta-route refusal decided before dispatch is counted
         // here, with or without a log; the meta layer never sees it.
         crate::security::security_metrics::meta_refused(code);
-        let Some(written) = self.write(state, refusal).await else {
+        let Some(written) = self
+            .write(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
+            .await
+        else {
             return build_error_response(Some(id), code, message, self.session_id, status);
         };
         let failure_policy = state
@@ -280,12 +381,13 @@ impl<'a> Refused<'a> {
     /// transparency log.
     async fn write(
         &self,
-        state: &AppState,
+        meta: &crate::gateway::meta_mcp::MetaMcp,
+        log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
         refusal: Refusal<'_>,
     ) -> Option<Result<String, crate::Error>> {
         // Every router refusal is written here, with or without a
         // log, so the web UI's counters move here once per refused call.
-        state.meta_mcp.count_call(
+        meta.count_call(
             refusal.server,
             refusal.tool,
             &self.who,
@@ -297,7 +399,7 @@ impl<'a> Refused<'a> {
             // A router refusal: no send began.
             None,
         );
-        let log = state.transparency_log.as_ref()?;
+        let log = log?;
         let otel_trace_id = self
             .arguments
             .get("_meta")
@@ -322,8 +424,7 @@ impl<'a> Refused<'a> {
         );
         let server = refusal.server.to_string();
         let tool = refusal.tool.map(str::to_string);
-        let attribution =
-            DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
+        let attribution = DispatchNotes::default().attribution(meta, refusal.tenants, None);
         let mut noted = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
         if !noted.has_refusal()
             && let Some(kind) = refusal.unnoted
@@ -333,7 +434,7 @@ impl<'a> Refused<'a> {
         let decision = Box::new(noted.decision(
             crate::security::decision_record::Decided::Fresh,
             crate::security::decision_record::Refused::of(refusal.outcome),
-            state.meta_mcp.live_config().as_deref(),
+            meta.live_config().as_deref(),
         ));
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();

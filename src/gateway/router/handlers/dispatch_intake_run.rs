@@ -766,20 +766,7 @@ async fn answer_intake(
     let arguments = params
         .and_then(|params| params.get("arguments"))
         .unwrap_or(&empty);
-    // ponytail: the target as the request spells it, `gateway_invoke`'s
-    // server and tool else the called name; a surfaced name is recorded
-    // unmapped, since mapping is the backend-touching step this precedes.
-    let field = |key: &str| {
-        arguments
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    };
-    let target = if name == "gateway_invoke" {
-        (field("server"), field("tool"))
-    } else {
-        ("", name)
-    };
+    let target = crate::gateway::router::meta_refusal_audit::request_target(arguments, name);
     crate::gateway::router::meta_refusal_audit::Refused::of(
         arguments,
         client,

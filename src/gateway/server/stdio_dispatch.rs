@@ -644,11 +644,12 @@ impl Gateway {
                 )
             {
                 crate::gateway::delivery_facts::outlet(&error);
-                break 'tool_call JsonRpcResponse::gateway_error(
-                    Some(id),
-                    error.to_rpc_code(),
-                    super::super::meta_mcp::signing::wire_error_message(&error),
+                // Recorded before it is answered, as on `/mcp`.
+                let request = (arguments.as_ref(), tool_name.as_str(), session_id);
+                let answer = crate::gateway::router::answer_stdio_signing_refusal(
+                    meta_mcp, &caller, request, id, error,
                 );
+                break 'tool_call Box::pin(answer).await;
             }
             caller.signing = signing_context.as_ref();
             // Nothing has acted yet (MIK-8353): the witness every later step
