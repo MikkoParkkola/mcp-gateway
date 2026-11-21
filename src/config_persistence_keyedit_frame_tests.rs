@@ -348,3 +348,28 @@ fn p8_markers_past_the_frame_still_refuse() {
         );
     }
 }
+
+// The frame reader on its own, as a caller with no parser in front of it
+// reaches it: each shape past the frame is refused by the reader itself.
+
+#[test]
+fn p14_frame_refuses_content_after_the_end_line() {
+    assert!(super::super::frame::frame("port: 1\n... x\n").is_none());
+}
+
+#[test]
+fn p15_frame_refuses_a_directive_inside_the_document() {
+    assert!(super::super::frame::frame("port: 1\n%x\n").is_none());
+}
+
+#[test]
+fn p16_frame_refuses_a_directive_with_no_start_line() {
+    assert!(super::super::frame::frame("%YAML 1.2\nport: 1\n").is_none());
+}
+
+/// A byte order mark is not content: a marked file holding only its frame
+/// is empty to the emptiness test as well.
+#[test]
+fn p17_a_marked_file_of_only_frame_lines_has_no_content() {
+    assert!(super::super::shape::no_content("\u{feff}---\n...\n"));
+}
