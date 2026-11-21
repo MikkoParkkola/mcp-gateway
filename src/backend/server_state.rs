@@ -87,7 +87,7 @@ pub(crate) struct StateView {
 
 /// First match wins, worst first, so a real failure is never shown as a
 /// gentler state.
-pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
+fn decide_by_signals(inputs: &StateInputs, now: SystemTime) -> StateView {
     let view = |state, reason: String, next_retry_at| StateView {
         state,
         reason,
@@ -103,16 +103,6 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
         return view(
             ServerState::Refused,
             format!("Refused by the runtime policy: {}.", codes.join(", ")),
-            None,
-        );
-    }
-    // A live start refuses a plan that needs a confirmation and nothing can
-    // grant one, so the server stays down until its settings change: say that,
-    // never the start-failed retry promise below.
-    if !inputs.confirmations.is_empty() {
-        return view(
-            ServerState::Refused,
-            held_reason(&inputs.confirmations),
             None,
         );
     }
@@ -198,6 +188,21 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
         "Not started yet; it starts on the first call.".to_owned(),
         None,
     )
+}
+
+/// The state for `inputs`. A plan the runtime policy denies keeps that answer.
+/// Next, ahead of every other signal, a plan that needs a confirmation is
+/// refused: a live start turns it away and nothing can grant one, so the
+/// server stays down until its settings change, with no retry promised.
+pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
+    if inputs.denied || inputs.confirmations.is_empty() {
+        return decide_by_signals(inputs, now);
+    }
+    StateView {
+        state: ServerState::Refused,
+        reason: held_reason(&inputs.confirmations),
+        next_retry_at: None,
+    }
 }
 
 /// The settings a held server's runtime plan asks for, each named once in
