@@ -20,6 +20,8 @@ mod gateway_bin;
 mod pids;
 #[path = "common/yaml.rs"]
 mod yaml;
+#[path = "nested_stop_budget/fixtures.rs"]
+mod fixtures;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
@@ -39,37 +41,6 @@ const HTTP_MINIMUM: Duration = Duration::from_secs(13);
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
 /// host. A 45 s bound sat on the typical path (30 s drain, about 5 s teardown, 10 s runtime).
 const STDIO_SIGTERM_EXIT_BOUND: Duration = Duration::from_secs(75);
-const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
-name = sys.argv[1]
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-with open("leaf-" + name + ".pid", "w") as f:
-    f.write(str(os.getpid()))
-# A descendant in the leaf's process group. It inherits the ignored SIGTERM,
-# so only the gateway's kill of the whole group ends it.
-grandchild = subprocess.Popen(["sleep", "600"])
-with open("leaf-" + name + ".grandchild.pid", "w") as f:
-    f.write(str(grandchild.pid))
-for line in sys.stdin:
-    msg = json.loads(line)
-    if "id" not in msg:
-        continue
-    method = msg.get("method")
-    if method == "initialize":
-        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
-                  "serverInfo": {"name": name, "version": "1"}}
-    elif method == "tools/list":
-        result = {"tools": [{"name": "hold", "inputSchema": {"type": "object"},
-                             "annotations": {"readOnlyHint": True}}]}
-    elif method == "tools/call" and msg["params"]["name"] == "hold":
-        open("called-" + name, "w").close()
-        time.sleep(600)
-        continue
-    else:
-        result = {}
-    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
-time.sleep(600)
-"#;
-
 fn base_config(root: &Path, name: &str) -> Config {
     let mut config = Config::default();
     config.auth.enabled = false;
@@ -99,57 +70,9 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     .expect("config");
     path
 }
-/// The floor this binary puts under an HTTP stop total, as its own refusal of a
-/// one-second total states it. A row that runs at this value follows the
-/// product when the floor moves, where a copied number would quietly test a
-/// larger budget.
-async fn http_floor_from_binary() -> Duration {
-    let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path();
-    let mut config = base_config(root, "probe");
-    config.server.host = "127.0.0.1".into();
-    config.server.port = gateway_bin::ANY_PORT;
-    config.server.shutdown_timeout = Duration::from_secs(1);
-    let path = save(root, "probe.yaml", &config);
-    let out = tokio::process::Command::from(gateway_bin::command(
-        &root.join("home"),
-        gateway_bin::Inherit::Environment,
-    ))
-    .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-    .current_dir(root)
-    .arg("--config")
-    .arg(path)
-    .output()
-    .await
-    .expect("the probe start ran");
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        !out.status.success(),
-        "a one-second stop total was accepted\n{said}"
-    );
-    let tail = said
-        .split("set it to at least ")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the refusal names no floor\n{said}"));
-    let digits: String = tail
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let secs: f64 = digits
-        .parse()
-        .unwrap_or_else(|_| panic!("the refusal's floor does not read as seconds\n{said}"));
-    assert!(
-        tail[digits.len()..].starts_with('s'),
-        "the refusal's floor is not given in seconds\n{said}"
-    );
-    Duration::from_secs_f64(secs)
 }
 fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
-    std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
+    std::fs::write(root.join("leaf.py"), fixtures::LEAF_SCRIPT).expect("leaf script");
     let mut config = base_config(root, "inner");
     config.server.shutdown_timeout = inner_stop;
     for name in leaves {
@@ -470,8 +393,14 @@ const PARENT_30S: Duration = Duration::from_secs(30);
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
-    let floor = http_floor_from_binary().await;
-    let stop = run(floor, Duration::from_secs(8), &["leaf"]).await;
+    // The row runs at the floor the binary states; a constant keeps the windows
+    // below readable to the timing check, and this pin keeps it from going stale.
+    assert_eq!(
+        fixtures::http_floor_from_binary().await,
+        HTTP_MINIMUM,
+        "the binary's HTTP stop floor moved: HTTP_MINIMUM must follow it"
+    );
+    let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
     let gone = stop.gone_at.duration_since(stop.sent);
     // Every recorded pid of the tree (inner, leaf, the leaf's own child) must
     // be gone before a supervisor's kill one second past the total, which
@@ -479,9 +408,9 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
     // only see the end late, so a pass is never early.
     // timing-oracle: vs EXTERNAL_KILL_AFTER (why: the kill a supervisor sends past the total reaches the outer gateway only)
     assert!(
-        gone <= floor + EXTERNAL_KILL_AFTER,
+        gone <= HTTP_MINIMUM + EXTERNAL_KILL_AFTER,
         "the chain outlived an external kill at the total plus {EXTERNAL_KILL_AFTER:?}: \
-         {gone:?} against a {floor:?} total\n{}",
+         {gone:?} against a {HTTP_MINIMUM:?} total\n{}",
         stop.logs
     );
     // P4 (RETIRE.4): a full-budget stop, measured to the outer process's exit, ends inside
@@ -489,8 +418,8 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
     let exited = stop.exited_at.duration_since(stop.sent);
     // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the process exits inside the stop total, short of the watchdog's slack)
     assert!(
-        exited <= floor + Duration::from_millis(200),
-        "the gateway exited {exited:?} after its SIGTERM, past its {floor:?} total\n{}",
+        exited <= HTTP_MINIMUM + Duration::from_millis(200),
+        "the gateway exited {exited:?} after its SIGTERM, past its {HTTP_MINIMUM:?} total\n{}",
         stop.logs
     );
 }
