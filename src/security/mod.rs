@@ -50,6 +50,8 @@ pub(crate) type ReplayCalls = Vec<(Option<u32>, String, String)>;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
 pub use posture::{HardenedConfig, SecurityPosture, unhardened_multi_user_warning};
+#[cfg(test)]
+pub(crate) mod metrics_scrape;
 pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;
@@ -58,8 +60,6 @@ pub mod response_scanner;
 pub(crate) mod rule_id;
 pub mod sanitize;
 pub mod scope_collision;
-#[cfg(test)]
-pub(crate) mod metrics_scrape;
 pub(crate) mod security_metrics;
 mod severity;
 // Emission and strip are wired (ASI07 increment 2); chain verification has
