@@ -15,12 +15,16 @@ Stated miss: a file compiled only on another OS (cfg(windows)) is not in a
 Linux build's dep-info; it is still checked by name against the globs below
 only if a Linux build reads it.
 
-It also fails unless the analyze job's own `env:` sets CFG_NAME to exactly
-`-test`. The Rust extractor turns cfg(test) on by default, so without it the
-scan reads test code and skips every `#[cfg(not(test))]` product item. The
-action spawns extraction in the Analyze step with the job's environment; a
-copy on a step, at workflow level or in the CodeQL config is refused, since
-it would either never reach extraction or override the job's value.
+It also fails unless the analyze job's own `env:` sets
+CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES to exactly `-test`. The Rust
+extractor turns cfg(test) on by default, so without it the scan reads test
+code and skips every `#[cfg(not(test))]` product item. The action spawns
+extraction in the Analyze step with the job's environment, so the setting has
+one place, the job's env, and every other copy is refused: on the Initialize
+step it never reaches extraction, on the Analyze step it overrides the job's
+value, in the CodeQL config it is not an environment variable at all, and at
+workflow level it would reach extraction too, but the job's env is the one
+place the design pins, so there is a single copy to read and check.
 
 Usage: scripts/ci/check-codeql-ignore.py [--cargo CARGO] [--extra-glob GLOB]   (repo root)
 """
