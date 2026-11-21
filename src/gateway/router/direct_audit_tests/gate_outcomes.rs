@@ -6,25 +6,16 @@
 //! already names; the wire answer is unchanged. A backend's own error, which
 //! no gate decided, still records `error`.
 
+use super::counting::{attach, meta_invoke, totals};
 use super::*;
 
-/// A `/mcp` `gateway_invoke` of alpha's `t` with no arguments, built field
-/// by field.
-fn meta_invoke() -> String {
-    let mut target = serde_json::Map::new();
-    target.insert("server".to_owned(), json!("alpha"));
-    target.insert("tool".to_owned(), json!("t"));
-    target.insert("arguments".to_owned(), json!({}));
-    let mut params = serde_json::Map::new();
-    params.insert("name".to_owned(), json!("gateway_invoke"));
-    params.insert("arguments".to_owned(), Value::Object(target));
-    let mut call = serde_json::Map::new();
-    call.insert("jsonrpc".to_owned(), json!("2.0"));
-    call.insert("id".to_owned(), json!(3));
-    call.insert("method".to_owned(), json!("tools/call"));
-    call.insert("params".to_owned(), Value::Object(params));
-    Value::Object(call).to_string()
-}
+/// The counters after one call the gateway refused: [calls 1, blocks 1,
+/// errors 0, firewall refusals 0, cache hits 0].
+const ONE_GATE_REFUSAL: [u64; 5] = [1, 1, 0, 0, 0];
+
+/// The counters after one call the backend failed: [calls 1, blocks 0,
+/// errors 1, firewall refusals 0, cache hits 0].
+const ONE_BACKEND_ERROR: [u64; 5] = [1, 0, 1, 0, 0];
 
 /// Which route a row sends its one call down.
 #[derive(Clone, Copy, Debug)]
@@ -46,7 +37,10 @@ impl Route {
 /// One anonymous call of alpha's `t` down `route`; the answer body.
 async fn send_one(fx: &Fixture, route: Route) -> Value {
     let answered = match route {
-        Route::Meta => post_to(fx, "/mcp", &meta_invoke(), &Caller::Anonymous).await,
+        Route::Meta => {
+            let call = meta_invoke("alpha", "t", &json!({}));
+            post_to(fx, "/mcp", &call, &Caller::Anonymous).await
+        }
         Route::Direct => post_to(fx, "/mcp/alpha", &tools_call("t"), &Caller::Anonymous).await,
     };
     answered.1
@@ -94,7 +88,9 @@ fn message_of(body: &Value) -> &str {
 #[tokio::test]
 async fn o2_a_contract_block_is_recorded_as_denied() {
     let fx = gateway(MetaMode::ContractRefuses, None, None).await;
+    let store = attach(&fx);
     let body = send_one(&fx, Route::Meta).await;
+    assert_eq!(totals(&store), ONE_GATE_REFUSAL, "{body}");
     assert_eq!(body["error"]["code"], -32603, "premise: {body}");
     assert!(
         message_of(&body).contains("blocked by contract gate"),
@@ -108,32 +104,61 @@ async fn o2_a_contract_block_is_recorded_as_denied() {
     assert_gate_denied(&only_invocation(&fx), Route::Meta);
 }
 
-/// O4: anomaly screening blocks an answer with a critical finding, on each
-/// route; both records say `denied`.
+/// O4's one route: anomaly screening blocks an answer with a critical
+/// finding; the record says `denied` and the counters count a block.
 #[cfg(feature = "firewall")]
-#[tokio::test]
-async fn o4_an_anomaly_block_is_recorded_as_denied_on_both_routes() {
-    for route in [Route::Meta, Route::Direct] {
-        let fx = gateway(MetaMode::InspectionBlocks, Some(planted_key_answer()), None).await;
-        let body = send_one(&fx, route).await;
-        assert_eq!(body["error"]["code"], -32603, "{route:?} premise: {body}");
-        assert!(
-            message_of(&body).contains("blocked by anomaly screening"),
-            "{route:?} premise: {body}"
-        );
-        assert_gate_denied(&only_invocation(&fx), route);
-    }
+async fn an_anomaly_block_on(route: Route) {
+    let fx = gateway(MetaMode::InspectionBlocks, Some(planted_key_answer()), None).await;
+    let store = attach(&fx);
+    let body = send_one(&fx, route).await;
+    assert_eq!(body["error"]["code"], -32603, "{route:?} premise: {body}");
+    assert!(
+        message_of(&body).contains("blocked by anomaly screening"),
+        "{route:?} premise: {body}"
+    );
+    assert_gate_denied(&only_invocation(&fx), route);
+    assert_eq!(totals(&store), ONE_GATE_REFUSAL, "{route:?}");
 }
 
-/// G1: a backend's own JSON-RPC error is no gate's refusal; on both routes
-/// its record keeps `error`, with the backend's code.
+/// O4 on `/mcp`.
+#[cfg(feature = "firewall")]
 #[tokio::test]
-async fn g1_a_backend_error_still_records_error_on_both_routes() {
-    for route in [Route::Meta, Route::Direct] {
-        let fx = gateway(MetaMode::Plain, None, Some(-32001)).await;
-        let body = send_one(&fx, route).await;
-        let record = only_invocation(&fx);
-        assert_eq!(record["error_code"], -32001, "{route:?}: {body} {record}");
-        assert_eq!(record["outcome"], "error", "{route:?}: {record}");
-    }
+async fn o4_meta_an_anomaly_block_is_recorded_as_denied() {
+    an_anomaly_block_on(Route::Meta).await;
+}
+
+/// O4 on the direct route.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn o4_direct_an_anomaly_block_is_recorded_as_denied() {
+    an_anomaly_block_on(Route::Direct).await;
+}
+
+/// G1's one route: a backend's own JSON-RPC error is no gate's refusal; its
+/// record keeps `error` with the backend's code and no refusing check, and
+/// the counters count an error.
+async fn a_backend_error_on(route: Route) {
+    let fx = gateway(MetaMode::Plain, None, Some(-32001)).await;
+    let store = attach(&fx);
+    let body = send_one(&fx, route).await;
+    let record = only_invocation(&fx);
+    assert_eq!(record["error_code"], -32001, "{route:?}: {body} {record}");
+    assert_eq!(record["outcome"], "error", "{route:?}: {record}");
+    assert_eq!(
+        record["decision"]["kind"], "default_allow",
+        "{route:?}: no check refused: {record}"
+    );
+    assert_eq!(totals(&store), ONE_BACKEND_ERROR, "{route:?}");
+}
+
+/// G1 on `/mcp`.
+#[tokio::test]
+async fn g1_meta_a_backend_error_still_records_error() {
+    a_backend_error_on(Route::Meta).await;
+}
+
+/// G1 on the direct route.
+#[tokio::test]
+async fn g1_direct_a_backend_error_still_records_error() {
+    a_backend_error_on(Route::Direct).await;
 }
