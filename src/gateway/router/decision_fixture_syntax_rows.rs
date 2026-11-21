@@ -29,7 +29,7 @@ fn sends(fx: &Fx) -> usize {
 /// that refusal's code and pair (`gate.rs:459`) and answers the withheld
 /// name as an absent one, an `isError` result on a 200; the record is
 /// `denied` with the kept -32600 (`denial.rs:45-48`) and the kept pair
-/// (`audit.rs:604-613`). Reached on the meta route only: on the direct route
+/// (`meta_mcp/invoke/audit.rs:604-615`). Reached on the meta route only: on the direct route
 /// `backend_handlers.rs:140-142` (S6) refuses the name first.
 #[tokio::test]
 async fn s3_meta_invalid_tool_name_at_the_authorizer() {
@@ -89,6 +89,16 @@ async fn s17_meta_malformed_retry_fields() {
     };
     assert_eq!(record["outcome"], "invalid", "{body}: {record}");
     assert_eq!(record["error_code"], -32602, "{body}: {record}");
+    // Refused before any target was resolved: the record names none, and no
+    // tenant was attributed.
+    assert_eq!(
+        record["server"].as_str().unwrap_or_default(),
+        "",
+        "{record}"
+    );
+    assert!(record.get("tool").is_none_or(Value::is_null), "{record}");
+    assert!(record.get("tenants").is_none(), "{record}");
+    assert!(record.get("tenants_total").is_none(), "{record}");
     assert_row(
         &record["decision"],
         &syntax("s17_meta_malformed_retry_fields"),

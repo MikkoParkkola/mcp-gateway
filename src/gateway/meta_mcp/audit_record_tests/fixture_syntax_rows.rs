@@ -66,8 +66,8 @@ async fn s1_policy_missing_tool() {
 
 /// S2: `gateway_invoke` naming `read.v2`, a name `alpha` itself lists. The
 /// catalogue keeps listed names as given (no name check on ingestion), so
-/// the fill check finds it; an unlisted one would be answered absent there
-/// first (`fill_check.rs:442-445`). `AllowAll` admits every target
+/// the fill check finds it; an unlisted one would get the fill check's
+/// absent-tool answer first (its text at `fill_check.rs:442-445`). `AllowAll` admits every target
 /// (`authz.rs:483-485`) and nothing withholds the name, so the name check at
 /// `policy.rs:47-51` decides: `.` is outside `[A-Za-z0-9_-]`
 /// (`scope_collision.rs:54-66`). The refusal is `Error::Protocol`, answered
@@ -172,11 +172,12 @@ async fn admitted(
 /// notes `(Syntax, None)` (`signing.rs:676-684`, from the `INVALID_PARAMS`
 /// refusal of `message_signing.rs:246`).
 ///
-/// Both meta transports reach the site, but each answers the refusal before
-/// the call is recorded (`dispatch_tools_call.rs:455-470`,
-/// `stdio_dispatch.rs:637-650`), so no record carries the pair yet; recording
-/// it is MIK-9219.KINDS.2, whose rows pin the record. Until then the noted
-/// pair is pinned here.
+/// No wire call reaches this arm with an over-long nonce: the capture turns
+/// a nonce longer than 256 characters into an invalid one
+/// (`signing.rs:136-139`), which `nonce_value` refuses with the same code
+/// before the store is asked (`signing.rs:323`). So this row calls the
+/// admission directly and pins the pair its own arm notes; the wire path's
+/// kind and record are pinned by the signing refusal rows that follow.
 #[tokio::test]
 async fn s15_signing_malformed_nonce() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -238,11 +239,18 @@ async fn s16a_signing_nonce_required() {
 #[tokio::test]
 async fn s18_ui_call_refuses_a_task() {
     use crate::gateway::meta_mcp::invoke::audit::{take_refusal, with_route_scope};
-    let (error, noted) = with_route_scope(async {
-        let error = crate::gateway::ui_call::task_refused();
-        (error, take_refusal())
-    })
-    .await;
+    use crate::gateway::ui_call::{Confirm, UiCall, refuses_task};
+    // Inside a UI call's scope, as its one caller runs: the predicate holds
+    // there, so the site is the one a real call would reach.
+    let ui = UiCall::new("alpha", "read", "s18-principal", Confirm::Confirmed);
+    let (refused, error, noted) = ui
+        .scope(with_route_scope(async {
+            let refused = refuses_task();
+            let error = crate::gateway::ui_call::task_refused();
+            (refused, error, take_refusal())
+        }))
+        .await;
+    assert!(refused, "premise: a task is refused inside a UI call");
     assert_eq!(
         noted,
         Some((DecisionKind::Syntax, None)),
