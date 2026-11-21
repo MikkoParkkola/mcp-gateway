@@ -14,8 +14,8 @@ use crate::identity_grants::journal::resolved;
 
 /// Why a reload skipped: an abandoned config-write file was found.
 pub(crate) const ABANDONED_PENDING: &str = "An abandoned config-write file sits beside the config \
-     and holds audit records this gateway cannot deliver; the running config stays until the file \
-     is settled or moved aside.";
+     and holds audit records this gateway cannot deliver. The running config stays until the log \
+     the file names is configured, or until the file is moved aside by hand and kept as evidence.";
 /// Why a reload skipped: a retired manifest was found, which this build cannot read yet.
 pub(crate) const MANIFEST_UNREAD: &str = "This build cannot read the retired config-write manifest \
      beside the config. It stays as evidence: move it aside by hand, or use a build that reads it.";
