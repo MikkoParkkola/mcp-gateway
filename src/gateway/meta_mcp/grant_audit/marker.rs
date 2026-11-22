@@ -53,6 +53,7 @@ pub(crate) fn stamp_refused(server: &str, tool: &str, trace_id: &str) {
 /// Puts `trace` on the open slot's last untraced note for `(server, tool)`.
 pub(super) fn stamp_untraced(server: &str, tool: &str, trace: String) {
     let _ = super::GRANT_SLOT.try_with(|slot| {
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let mut notes = slot.notes.lock().expect("grant slot lock");
         if let Some(note) = notes
             .iter_mut()
