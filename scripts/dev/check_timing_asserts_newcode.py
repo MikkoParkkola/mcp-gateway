@@ -73,14 +73,19 @@ class Budgets(NamedTuple):
 def budgets_of(texts: dict[str, str]) -> Budgets:
     timers: dict[str, list[tuple[str, int, float]]] = {}
     for name, defs in tree_consts(texts).items():
-        for where in sorted({p for p, expr in defs if ONE_DURATION.fullmatch(expr)} - {""}):
-            if name == "HANG_BOUND":
-                break
+        if name == "HANG_BOUND":
+            continue
+        for where in sorted({p for p, _ in defs}):
+            # Every definition of the name in this file must be the same one
+            # duration, as `resolve` would accept it; else it names nothing.
+            forms = {expr for p, expr in defs if p == where}
+            if len(forms) != 1 or not ONE_DURATION.fullmatch(form := forms.pop()):
+                continue
+            seconds = resolve(form, Scope(where, {}, {}, {}, {}))[0]
             code, tested = blank_strings_and_comments(texts[where]), test_lines(where, texts[where])
-            for spot in re.finditer(rf"\bconst\s+{name}\s*:\s*[^=;]+=\s*([^;]+);", code):
-                line = code.count("\n", 0, spot.start()) + 1
-                if line not in tested and (value := resolve(spot.group(1), Scope(where, {}, {}, {}, {}))):
-                    timers.setdefault(name, []).append((where, line, value[0]))
+            for spot in re.finditer(rf"\bconst\s+{name}\s*:", code):
+                if (line := code.count("\n", 0, spot.start()) + 1) not in tested:
+                    timers.setdefault(name, []).append((where, line, seconds))
     product_fns = set()
     for path, text in texts.items():
         code, tested = blank_strings_and_comments(text), test_lines(path, text)
@@ -207,32 +212,56 @@ def named_budgets(expr: str, at: int, code: str, scope: Scope, budgets: Budgets,
     return timers, passed
 
 
-def carrier(future: str, at: int, code: str, budgets: Budgets, depth: int = 0) -> tuple[str, str] | None:
-    """(fn, its arguments) when awaiting `future` is what runs a product
-    `*_within` call: the call itself, an `async` block making it, a spawn of
-    either, or a plain name whose visible let holds one of these. A bare
-    `{ .. }` block runs before any future is built, so it never carries."""
-    shape = re.sub(r"^&\s*(?:mut\s+)?", "", future.strip())
-    if depth > 3:
-        return None
-    if call := re.match(r"(?:(?:\w+::)*\w+\s*\.\s*)*(\w+_within)\s*\(", shape):
-        args, past = call_args(shape, call.end() - 1)
-        return (call.group(1), args) if call.group(1) in budgets.within and not shape[past:].strip() else None
-    if block := re.match(r"async\s+(?:move\s+)?\{", shape):
-        inner = next((c for c in WITHIN.finditer(shape, block.end()) if c.group(1) in budgets.within), None)
-        return None if inner is None else (inner.group(1), call_args(shape, inner.end() - 1)[0])
-    if spawn := re.match(r"(?:\w+::)*spawn\s*\(", shape):
-        return carrier(call_args(shape, spawn.end() - 1)[0], at, code, budgets, depth + 1)
-    if re.fullmatch(r"\w+", shape) and (local := visible_binding(code, shape, at)) is not None:
-        rhs = right_side(code, local)
-        return None if rhs is None else carrier(rhs[0], rhs[1], code, budgets, depth + 1)
-    return None
+CARRIED_CALL = re.compile(r"(?:(?:\w+::)*\w+\s*\.\s*)*(?:\w+::)*(\w+_within)\s*\(")
+
+
+def carriers(code: str, start: int, end: int, budgets: Budgets, own_future: bool = True):
+    """([(fn, argument text, offset of its `(`)], lines) for the product
+    `*_within` calls that awaiting the future `code[start:end]` runs: the call
+    itself (any path or receiver before it), the calls in the body of an
+    `async` block, or those of a spawn whose argument is one of these two.
+    Only the timeout's own future may be a plain name; its visible let is
+    read, and that let's lines are returned so an edit inside it counts as
+    new. A bare `{ .. }` block runs before any future is built: never a carrier."""
+    lead = re.compile(r"\s*(?:&\s*(?:mut\s+)?)?").match(code, start, end).end()
+    tail = end - (len(code[lead:end]) - len(code[lead:end].rstrip()))
+    if call := CARRIED_CALL.match(code, lead, tail):
+        args, past = call_args(code, call.end() - 1)
+        whole = past >= tail and call.group(1) in budgets.within
+        return ([(call.group(1), args, call.end() - 1)] if whole else []), set()
+    if block := re.compile(r"async\s+(?:move\s+)?\{").match(code, lead, tail):
+        close = block_end(code, block.end() - 1)
+        inside = [c for c in WITHIN.finditer(code, block.end(), close) if c.group(1) in budgets.within]
+        return [(c.group(1), call_args(code, c.end() - 1)[0], c.end() - 1) for c in inside], set()
+    if spawn := re.compile(r"(?:\w+::)*spawn\s*\(").match(code, lead, tail):
+        past = call_args(code, spawn.end() - 1)[1]
+        return carriers(code, spawn.end(), past - 1, budgets, own_future=False)[0], set()
+    name = re.compile(r"\w+").fullmatch(code, lead, tail)
+    if own_future and name and (local := visible_binding(code, name.group(), start)) is not None:
+        if rhs := right_side(code, local):
+            calls, _ = carriers(code, rhs[1], rhs[1] + len(rhs[0]), budgets, own_future=False)
+            first, last = code.count("\n", 0, local) + 1, code.count("\n", 0, rhs[1] + len(rhs[0])) + 1
+            return calls, set(range(first, last + 1))
+    return [], set()
 
 
 def line_offset(code: str, line: int) -> int:
     """Offset of the first non-blank character of 1-based `line`."""
     begin = sum(len(row) + 1 for row in code.split("\n")[: line - 1])
     return begin + len(code[begin:]) - len(code[begin:].lstrip(" \t"))
+
+
+def _written_at(code: str, at: int, window: str) -> int:
+    """Where to read an assert's window: at the `Instant::now() + W` of the
+    deadline let it compares against, when it comes from one; else the assert."""
+    args = call_args(code, code.index("(", at))[0]
+    for name in set(re.findall(r"\b[a-z_]\w*\b", args)):
+        local = visible_binding(code, name, at)
+        rhs = right_side(code, local) if local is not None else None
+        plus = re.match(rf"\s*{NOW}\s*\+\s*", rhs[0]) if rhs else None
+        if plus and rhs[0][plus.end() :].strip() == window:
+            return rhs[1] + plus.end()
+    return at
 
 
 def _scope_at(path: str, code: str, at: int, consts) -> Scope:
@@ -251,29 +280,39 @@ def budget_sites(path: str, text: str, consts, includers, budgets: Budgets):
     scan_timeouts(path, text, consts, includers, float("inf"), sites=sites)
     asserts: list = []
     scan_text(path, text, consts, float("inf"), sites=asserts)
-    timed = [(f, at, split_top(args, (",",))) for f, at, args in sites]
-    windows = [(f, at, parts[0][1].strip(), parts[1][1] if len(parts) > 1 else "") for f, at, parts in timed]
-    windows += [(f, at, expr.strip(), "") for f, at, expr in asserts if f.line in tested]
+    windows = []
+    for f, at, args in sites:
+        opened = TIMEOUT.match(code, at).end()
+        parts = split_top(args, (",",))
+        future = (opened + len(parts[0][1]) + 1, opened + len(parts[0][1]) + 1 + len(parts[1][1])) if len(parts) > 1 else None
+        windows.append((f, at, at, parts[0][1].strip(), future))
+    windows += [(f, at, _written_at(code, at, expr.strip()), expr.strip(), None) for f, at, expr in asserts if f.line in tested]
     out = []
-    for f, at, window, future in windows:
+    for f, at, read_at, window, future in windows:
         if HANG_BOUND.fullmatch(window):
             continue
-        scope = _scope_at(path, code, at, consts)
-        timers, chain = named_budgets(window, at, code, scope, budgets)
+        scope = _scope_at(path, code, read_at, consts)
+        timers, chain = named_budgets(window, read_at, code, scope, budgets)
         if timers:
             t = timers[0]
             source = f"{t.name} (def {t.path}:{t.line}, {t.seconds:g} s)"
             out.append((f, at, f"{PRODUCT_BUDGET} the bound is written from {source}: {ADVICE}", chain, f"named {source}"))
             continue
         bound = resolve(window, scope)
-        held = carrier(future, at, code, budgets) if future else None
-        if held and bound is not None:
-            given = [v[0] for _, a in split_top(held[1], (",",)) if not HANG_BOUND.search(a) and (v := resolve(a.strip(), scope)) and v[1]]
-            if given and bound[0] <= min(given):
-                passed = f"{min(given):g} s passed to {held[0]} at :{f.line}"
-                rule = f"{PRODUCT_BUDGET} the bound is at most the explicit budget {passed}: {ADVICE}"
-                out.append((f, at, rule, set(), f"<= explicit budget passed to {held[0]} at :{f.line} ({min(given):g} s)"))
-                continue
+        calls, held_lines = carriers(code, *future, budgets) if future else ([], set())
+        # Every Duration handed to every carried call counts; each is resolved
+        # where its call is written.
+        given = [
+            (v[0], fn)
+            for fn, args, paren in calls
+            for _, a in split_top(args, (",",))
+            if not HANG_BOUND.search(a) and (v := resolve(a.strip(), _scope_at(path, code, paren, consts))) and v[1]
+        ]
+        if bound is not None and given and bound[0] <= max(given)[0]:
+            longest, fn = max(given)
+            rule = f"{PRODUCT_BUDGET} the bound is at most the explicit budget {longest:g} s passed to {fn} at :{f.line}: {ADVICE}"
+            out.append((f, at, rule, held_lines, f"<= explicit budget passed to {fn} at :{f.line} ({longest:g} s)"))
+            continue
         if bound is None or not ONE_DURATION.fullmatch(window) or bound[0] >= FLOOR_S:
             continue
         imported = imports_of(code)
@@ -289,6 +328,8 @@ def budget_sites(path: str, text: str, consts, includers, budgets: Budgets):
 def budget_list(path, text, consts, includers, budgets) -> list[str]:
     """The whole-tree audit lines: every site of each shape, old or new."""
     return [f"BUDGET LIST {f.path}:{f.line} ({f.fn}): {what}" for f, _, _, _, what in budget_sites(path, text, consts, includers, budgets)]
+
+
 # MIK-8360 R3a: `.with_x_timeout(D)` / `.set_x_timeout(D)`, and any other
 # call named for a timeout given a literal Duration (not `timeout(` itself,
 # which the floor already judges, nor `timeout_at`).
@@ -338,12 +379,9 @@ def oracle_covers(text: str, line: int, expr: str) -> bool:
 
 
 def statement_end(code: str, line: int) -> int:
-    """The line of the `;` that ends the statement starting on `line`."""
-    at = 0
-    for _ in range(line - 1):
-        at = code.index("\n", at) + 1
-    end = code.find(";", at)
-    return code.count("\n", 0, end if end >= 0 else len(code)) + 1
+    """The line where the statement starting on `line` ends (`statement_close`:
+    its own `;`, past any block or call it opens)."""
+    return code.count("\n", 0, statement_close(code, line_offset(code, line))) + 1
 
 
 def oracle_malformed(m: re.Match) -> bool:
