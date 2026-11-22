@@ -39,3 +39,11 @@ async fn restore(State(_state): State<Arc<AppState>>, guard: Guard) -> Response 
     }
     flat_error(StatusCode::NOT_IMPLEMENTED, "not built yet").into_response()
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_history_restore_tests.rs"]
+mod restore_tests;
+#[cfg(test)]
+#[path = "config_history_support_tests.rs"]
+mod support_tests;
