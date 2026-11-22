@@ -59,6 +59,9 @@ async fn served_in_the_middle() -> (Rig, [String; 3]) {
     let mut third = rig.kept(&b);
     third.revision = "rv-third-by-hand".into();
     third.at += 10;
+    third.source = Source::Ui {
+        who: "someone".into(),
+    };
     rig.store.record(
         applied_by("someone", &third.revision, third.at),
         Some(third.clone()),

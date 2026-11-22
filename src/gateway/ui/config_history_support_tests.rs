@@ -129,8 +129,12 @@ impl Rig {
     ) -> Self {
         let config = dir.path().join(CONFIG_FILE);
         crate::gateway::test_helpers::write_owner_only(&config, text).expect("gateway.yaml");
-        let loaded =
+        let mut loaded =
             crate::config::Config::load_evaluated(Some(&config)).expect("the start config loads");
+        // As a serving gateway starts: one live env, whose startup inputs the
+        // first version records and which every later reload re-reads.
+        let env = Arc::new(loaded.live_env());
+        let started = env.take_startup_inputs().expect("the startup inputs");
         let store = Arc::new(ConfigHistory::open(dir.path(), bounds, 1));
         let (mut state, fixtures) =
             crate::gateway::router::tests::audience_state(&loaded.config.auth, (None, None), |m| m)
@@ -147,7 +151,7 @@ impl Rig {
         };
         let live = Arc::new(live.with_startup_revision(
             &crate::gateway::record_principal::test_record_key(),
-            Some(loaded.inputs),
+            Some(started),
         ));
         let ctx = Arc::new(
             ReloadContext::new(
@@ -157,7 +161,8 @@ impl Rig {
                 crate::config::FailsafeConfig::default(),
                 Duration::from_secs(30),
             )
-            .expect("a reload context"),
+            .expect("a reload context")
+            .with_env(Arc::clone(&env)),
         );
         let only = Arc::get_mut(&mut state).expect("the state is not shared yet");
         only.config_path = Some(config);
