@@ -96,7 +96,10 @@ impl Conn {
     /// revocation.
     pub(super) async fn send(&self, bytes: Bytes) -> Result<(), End> {
         self.require_entitled().await?;
-        let room = tokio::time::timeout(WRITE_TIMEOUT, self.tx.reserve());
+        let room = tokio::time::timeout(
+            mutant!("m2", std::time::Duration::from_secs(3600), WRITE_TIMEOUT),
+            self.tx.reserve(),
+        );
         tokio::pin!(room);
         // A fixed cadence: a slow lookup delays one tick, never the schedule.
         let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
@@ -116,7 +119,7 @@ impl Conn {
                         Ok(Err(_)) => return Err(End::ClientGone),
                         Err(_) => return Err(End::WriteStalled),
                     },
-                    _ = recheck.tick() => self.upkeep().await?,
+                    _ = recheck.tick() => mutant!("m1", (), self.upkeep().await?),
                 }
             }
         };
