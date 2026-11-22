@@ -603,3 +603,8 @@ pub(crate) async fn stdio_keyed_calls() -> ([Value; 3], usize) {
 #[cfg(tp4)]
 #[path = "stdio_question_key_tests.rs"]
 mod stdio_question_key;
+
+// Part 3b-1 of the decision fixture table: the syntax row on stdio.
+#[cfg(tp4)]
+#[path = "route_matrix_driver_syntax_tests.rs"]
+mod syntax_rows;
