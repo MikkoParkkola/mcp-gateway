@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::super::{Fact, JournalV2};
+use super::super::abandoned::{encode_frame, frames_of, marked};
+use super::super::{Fact, JournalV2, Phase};
 use super::fault::{self, At, Fault};
-use super::fixtures::{Live, WRITER, records_at, replace_bytes, staged, state};
+use super::fixtures::{Live, WRITER, decided, records_at, replace_bytes, staged, state};
 use super::startup_tests::expect_staged_owed;
 use crate::commands::serve_fixture::serve_load;
 use crate::config_persistence::commit::FileRevision;
@@ -24,10 +25,11 @@ use crate::security::transparency_log::settle::Role;
 const CHILD_DIR: &str = "MCP_GATEWAY_SERVE_CRASH_DIR";
 const CHILD_LIMIT: Duration = Duration::from_secs(60);
 
-/// Config bytes that name the fixture's audit log, so a served start opens that log.
+/// Config bytes that name the fixture's audit log, so a served start opens that log. The one
+/// backend lets a row see whether a start got as far as registering backends.
 fn served_bytes(port: u16, log: &Path) -> Vec<u8> {
     format!(
-        "server:\n  port: {port}\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n    key_id: s6a2-fixture\n",
+        "server:\n  port: {port}\nbackends:\n  probe:\n    http_url: \"http://127.0.0.1:9/mcp\"\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n    key_id: s6a2-fixture\n",
         log.display()
     )
     .into_bytes()
@@ -217,8 +219,11 @@ async fn crash_s3() {
     const ROW: &str = "crash_s3";
     for at in [At::IntentAppended, At::OutcomeAppended] {
         let left = crashed_write(ROW);
+        // Counted on this thread, which runs both starts' construction.
+        let (counting, registered) = crate::test_log_capture::live_count("Registered backend");
         let armed = fault::arm(&left.path, Fault::Fail(at));
         let built = Box::pin(serve_start(ROW, &left.path)).await;
+        let before_refusal = *registered.borrow();
         let fired = fault::fired(&left.path);
         drop(armed);
         assert!(fired > 0, "{ROW} {at:?}: the delivery reached the boundary");
@@ -226,12 +231,22 @@ async fn crash_s3() {
             built.is_err(),
             "{ROW} {at:?}: a failed delivery builds no gateway"
         );
+        assert_eq!(
+            before_refusal, 0,
+            "{ROW} {at:?}: no backend registers before the start has settled"
+        );
         drop(built);
 
         let gateway = Box::pin(serve_start(ROW, &left.path))
             .await
             .unwrap_or_else(|error| panic!("{ROW} {at:?}: the next served start builds: {error}"));
         drop(gateway);
+        assert_eq!(
+            *registered.borrow(),
+            1,
+            "{ROW} {at:?}: the count sees the next start register its one backend"
+        );
+        drop(counting);
         let records = records_at(&left.log_path);
         assert_eq!(
             outcomes_for(&records, WRITER),
@@ -255,5 +270,58 @@ async fn crash_s3() {
             "{ROW} {at:?}: the journal is gone once settled"
         );
         drop(left.dir);
+    }
+}
+
+/// WIRE.4 / Q2 on a well-formed abandoned file, which the drain reads all the way to the point
+/// where it needs a logger. Logging off: the start keeps the file for later and serves. Logging
+/// on but its open failed: the start refuses. Neither start touches the file.
+#[tokio::test]
+async fn a_failed_serving_log_refuses_a_readable_abandoned_file() {
+    use crate::commands::serve_fixture::{ABANDONED_CLASS, failed_log_config};
+    use crate::gateway::test_helpers::write_owner_only;
+    const ROW: &str = "a_failed_serving_log_refuses_a_readable_abandoned_file";
+    for open_failed in [false, true] {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = scratch.path().canonicalize().expect("canonical root");
+        let mut donor = state(&root);
+        decided(&mut donor);
+        staged(&mut donor);
+        donor.phase = Phase::Accepted;
+        let frames = frames_of(&marked(&donor)).expect("a bound donor yields frames");
+        let wire: Vec<u8> = frames
+            .iter()
+            .flat_map(|frame| encode_frame(frame).expect("encodable"))
+            .collect();
+        let config = root.join("gateway.yaml");
+        let yaml = if open_failed {
+            failed_log_config(&root)
+        } else {
+            String::from("auth:\n  enabled: false\n")
+        };
+        write_owner_only(&config, yaml).expect("write the config");
+        let left_behind = journal::v2::abandoned_path(&config);
+        write_owner_only(&left_behind, &wire).expect("plant the abandoned file");
+
+        let outcome = Box::pin(serve_start(ROW, &config)).await;
+        if open_failed {
+            let refusal = outcome
+                .err()
+                .unwrap_or_else(|| panic!("{ROW}: with its log unopened the start must refuse"));
+            assert!(
+                refusal.to_string().contains(ABANDONED_CLASS),
+                "{ROW}: refused for the pending file, not for something else: {refusal}"
+            );
+        } else {
+            let gateway = outcome.unwrap_or_else(|error| {
+                panic!("{ROW}: with logging off the start serves: {error}")
+            });
+            drop(gateway);
+        }
+        assert_eq!(
+            std::fs::read(&left_behind).expect("the planted file is still there"),
+            wire,
+            "{ROW} open_failed={open_failed}: the planted file is byte-identical"
+        );
     }
 }

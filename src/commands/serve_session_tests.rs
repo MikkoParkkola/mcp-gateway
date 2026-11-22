@@ -181,6 +181,13 @@ async fn discovered_abandoned_scenario() {
     // Load, then build: the gate settles at construction, with the serving log (D-LOG).
     let started = match super::load_for_serve(discovered.as_deref()).await {
         Ok(mut evaluated) => {
+            // The discovered path is gated like a named one: its session holds the lock from the
+            // load on. The sessionless gate at construction would refuse the file too, but it
+            // takes no session, so only this proves the serve load gated it.
+            assert!(
+                held_elsewhere(Path::new("gateway.yaml")).await,
+                "{ROW}: the load's session holds the lock"
+            );
             let env = Arc::new(evaluated.live_env());
             let built = crate::gateway::Gateway::new_evaluated(evaluated.config, env, discovered);
             Box::pin(built).await.map(drop)
@@ -416,17 +423,11 @@ async fn startup_read_only_starts_unlocked() {
 #[tokio::test]
 async fn failed_log_refuses_abandoned() {
     const ROW: &str = "failed_log_refuses_abandoned";
-    const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
     for artifact in [true, false] {
         let dir = tempfile::tempdir().expect("tempdir");
-        let blocker = dir.path().join("not-a-dir");
-        std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
         let config = dir.path().join("gateway.yaml");
-        let text = format!(
-            "auth:\n  enabled: false\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
-            blocker.join("audit.jsonl").display()
-        );
-        write_owner_only(&config, text).expect("config");
+        write_owner_only(&config, super::serve_fixture::failed_log_config(dir.path()))
+            .expect("config");
         if artifact {
             write_owner_only(
                 dir.path().join("gateway.yaml.abandoned"),
@@ -442,7 +443,9 @@ async fn failed_log_refuses_abandoned() {
         match (artifact, built) {
             (true, Ok(_)) => panic!("{ROW}: a failed log must not let the abandoned file through"),
             (true, Err(error)) => assert!(
-                error.to_string().contains(ABANDONED_CLASS),
+                error
+                    .to_string()
+                    .contains(super::serve_fixture::ABANDONED_CLASS),
                 "{ROW}: the abandoned-file refusal, got {error}"
             ),
             (false, built) => {
@@ -488,5 +491,44 @@ fn serve_paths_reach_the_gate() {
     assert!(
         construct.contains("serving_audit::open_and_settle(") && audit.contains("finish_start("),
         "{ROW}: construction runs finish_start"
+    );
+}
+
+/// The session, and with it the config lock, lives until construction settles with the serving
+/// log: at that point a second attempt at the lock finds it held. A session dropped earlier in
+/// construction would leave the settle unreached, or reached with the lock free.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lock_is_held_while_construction_settles() {
+    use crate::config_reload::serve_seams::{self, Point};
+    const ROW: &str = "the_lock_is_held_while_construction_settles";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("gateway.yaml");
+    write_owner_only(&config, SERVED).expect("config");
+    // The gate keys its stops by the resolved config.
+    let target = std::fs::canonicalize(&config).expect("resolved config");
+    let seen: Arc<std::sync::Mutex<Option<bool>>> = Arc::default();
+    let record = Arc::clone(&seen);
+    let probe = target.clone();
+    let _armed = serve_seams::arm(&target, Point::AfterServingOpen, move || {
+        let attempt = crate::config_persistence::lock::lock_config_blocking_deferred(
+            &probe,
+            Instant::now(),
+            |_| {},
+        );
+        *record.lock().expect("record") = Some(matches!(attempt, Err(NotLocked::Busy)));
+    });
+    let mut evaluated = super::serve_fixture::serve_load(ROW, &config).await;
+    let env = Arc::new(evaluated.live_env());
+    drop(
+        Box::pin(super::serve_fixture::serve_build(
+            ROW, evaluated, env, &config,
+        ))
+        .await,
+    );
+    assert_eq!(
+        *seen.lock().expect("record"),
+        Some(true),
+        "{ROW}: the settle was reached, and with the lock held"
     );
 }

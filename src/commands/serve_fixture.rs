@@ -27,3 +27,17 @@ pub(crate) async fn serve_build(
         .await
         .unwrap_or_else(|error| panic!("{row}: the gateway builds: {error}"))
 }
+
+/// The words of the refusal sentence for an abandoned file a start cannot settle.
+pub(crate) const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
+
+/// A config with auth off whose audit log cannot open: it puts a plain file in `dir` and names
+/// a log inside it, so the best-effort open fails.
+pub(crate) fn failed_log_config(dir: &Path) -> String {
+    let blocker = dir.join("not-a-dir");
+    std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
+    format!(
+        "auth:\n  enabled: false\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
+        blocker.join("audit.jsonl").display()
+    )
+}
