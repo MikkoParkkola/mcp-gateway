@@ -386,8 +386,8 @@ mod save_rows_tests;
 
 /// The file's contents at `now`. The key map is walked once for its handles,
 /// so a name appears at most once; each series is copied under its own lock,
-/// one at a time. Every copy is then aged to one cutoff, the newest hour and
-/// the newest date any copy or `now` holds, before the keys are ranked by
+/// one at a time. Every copy is then aged to one cutoff, `now`'s hour and
+/// local date (save and age measure from now), before the keys are ranked by
 /// their 30-day spend; the keys past [`MAX_KEYS`] are summed into the
 /// overflow with the carried one. No live series is read after the copies.
 fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> History {
@@ -405,13 +405,9 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
     after_copy();
     let mut overflow = tracker.carried.lock().clone();
 
-    let all = || keys.iter().map(|(_, s)| s).chain([&keyless, &overflow]);
-    let hour = all()
-        .filter_map(|s| s.hours.newest())
-        .fold(now / 3600, u64::max);
-    let date = all()
-        .filter_map(|s| s.days.newest())
-        .fold(tally::local_date(now), NaiveDate::max);
+    // The cut is the save instant's own: a slot one copy holds past `now`
+    // (a clock that stepped back) must not age the other copies' rows.
+    let (hour, date) = (now / 3600, tally::local_date(now));
     for series in keys
         .iter_mut()
         .map(|(_, s)| s)

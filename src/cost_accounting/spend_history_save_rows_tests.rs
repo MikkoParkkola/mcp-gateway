@@ -623,3 +623,27 @@ fn a_fifo_at_the_history_path_is_set_aside_without_a_hang() {
     assert!(logged.contains("not a regular file"), "{logged}");
     assert!(!path.exists(), "the FIFO is set aside");
 }
+
+/// Lead 2026-11-22 (save and age measure from now): one key spent while the
+/// clock ran 40 days ahead; the clock then stepped back and another key spent
+/// at the corrected time. The save keeps the second key's row: its cut is
+/// the save instant, not the newest slot any copy holds. Red with the cut at
+/// the newest slot: the second key's hour and date were aged out of the file.
+#[test]
+fn a_save_after_the_clock_stepped_back_keeps_every_other_keys_rows() {
+    let dir = tempfile::tempdir().expect("dir");
+    let tracker = CostTracker::new();
+    spend(&tracker, Some("ran-ahead"), T0 + 40 * DAY, 5);
+    spend(&tracker, Some("current"), T0, 2);
+    let file = saved(&tracker, dir.path(), T0 + 60);
+    let row_of = |name: &str| {
+        file["keys"]
+            .as_array()
+            .expect("keys")
+            .iter()
+            .find(|row| row["name"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("no row for {name}: {file}"))
+    };
+    assert_eq!(saved_micro(&row_of("current")), (2, 2), "{file}");
+}
