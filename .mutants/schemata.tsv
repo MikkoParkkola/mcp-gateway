@@ -1,0 +1,19 @@
+head_sha	77ceec16d09582f9a6dc0ae99bd3ab47f385f95d
+#mutant m-no-switch
+mcp_gateway	commands::api_tests::yaml::a_capability_save_sends_its_yaml_unchanged	src/commands/api_yaml_tests.rs:64
+#mutant m-json-first
+mcp_gateway	commands::api_tests::yaml::a_capability_save_sends_its_yaml_unchanged	src/commands/api_yaml_tests.rs:69
+#mutant m-reserialise
+mcp_gateway	commands::api_tests::yaml::a_capability_save_sends_its_yaml_unchanged	src/commands/api_yaml_tests.rs:70
+#mutant m-wrong-type
+mcp_gateway	commands::api_tests::yaml::a_capability_save_sends_its_yaml_unchanged	src/commands/api_yaml_tests.rs:69
+#mutant m-ignore-method
+mcp_gateway	commands::api_tests::yaml::only_the_save_and_validate_routes_take_yaml	src/commands/api_tests.rs:187
+#mutant m-any-depth
+mcp_gateway	commands::api_tests::yaml::only_the_save_and_validate_routes_take_yaml	src/commands/api_tests.rs:187
+#mutant m-cap-off
+mcp_gateway	commands::api_tests::yaml::the_body_cap_holds_for_yaml	src/commands/api_tests.rs:187
+#mutant m-limit-up
+mcp_gateway	commands::api_tests::yaml::the_body_cap_holds_for_yaml	src/commands/api_tests.rs:187
+#mutant m-limit-off-by-one
+mcp_gateway	commands::api_tests::yaml::the_body_cap_holds_for_yaml	src/commands/api_yaml_tests.rs:64
