@@ -432,6 +432,8 @@ class DropIds(unittest.TestCase):
             ("a kept code span holding a semicolon", f"- c (`echo ready; exit 0`, {T}50).", "- c (`echo ready; exit 0`)."),
             ("a kept code span holding two spaces", f"- c2 (`a  b`, #51, {T}52).", "- c2 (`a  b`, #51)."),
             ("kept parts keep their semicolon", f"- c3 (#53; {T}54; #55).", "- c3 (#53; #55)."),
+            ("a kept double-backtick code span holding a comma", f"- c4 (``printf a,b``, {T}58).", "- c4 (``printf a,b``)."),
+            ("a double-backtick span holding a single backtick", f"- c5 (``a ` b; c``, {T}59).", "- c5 (``a ` b; c``)."),
             ("text after a parenthetical that spans a line break", f"- e2 (F13, {T}56,\n  #57). Then a note follows.", "- e2 (F13, #57). Then a note follows."),
         ]
         for name, fragment, rendered in shapes:
@@ -448,7 +450,10 @@ class DropIds(unittest.TestCase):
 
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
         cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
-                 (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"))
+                 (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"),
+                 (f"- v (`run {T}60`, {T}61).\n", 1, "a tracker id among other words"),
+                 (f"- w ``see {T}62`` here.\n", 1, "a tracker id in prose"),
+                 (f"- x (`open, {T}63).\n", 1, "a tracker id beside an unclosed code span"))
         for fragment, line, why in cases:
             with self.subTest(fragment=fragment):
                 with self.assertRaises(ValueError) as caught:
