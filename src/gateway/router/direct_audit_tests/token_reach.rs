@@ -46,15 +46,45 @@ fn assert_carries(record: &Value, fx: &Fixture, jti: &str) {
     );
 }
 
+/// Plan row R4: the token a call's decision names resolves, through that
+/// call's own receipt, to the token's reach: its backends and tools as minted
+/// and the expiry bound its issuance row recorded. The receipt is read with
+/// the call's own `bearer`, made admin only now (after the call) and so only
+/// inside the token's own backends.
+async fn assert_resolves(
+    fx: &Fixture,
+    record: &Value,
+    (jti, bearer): (&str, &str),
+    backends: &[&str],
+) {
+    map_admin(fx);
+    let hash = record["entry_hash"]
+        .as_str()
+        .and_then(|h| h.strip_prefix("sha256:"))
+        .expect("a hashed call record");
+    let receipt = format!("/ui/api/activity/{}-{}", record["counter"], &hash[..16]);
+    let (status, body) = post_bearer(fx, "GET", &receipt, "", bearer, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reach = serde_json::from_str::<Value>(&body).expect("a JSON receipt")["reach"].clone();
+    let bound = issuance_row_of(fx, jti)["expires_by"].clone();
+    assert!(bound.is_u64(), "premise: the row records a bound");
+    assert_eq!(
+        reach,
+        json!({"jti": jti, "backends": backends, "tools": [], "expires_by": bound}),
+        "{record}"
+    );
+}
+
 async fn post_bearer(
     fx: &Fixture,
+    method: &str,
     uri: &str,
     body: &str,
     bearer: &str,
     stream: bool,
 ) -> (StatusCode, String) {
     let mut request = axum::http::Request::builder()
-        .method("POST")
+        .method(method)
         .uri(uri)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {bearer}"));
@@ -99,37 +129,45 @@ fn invoke(server: &str) -> String {
 #[tokio::test]
 async fn a_meta_call_answered_as_json_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
-    let (status, body) = post_bearer(&fx, "/mcp", &invoke("alpha"), &bearer, false).await;
+    let (status, body) = post_bearer(&fx, "POST", "/mcp", &invoke("alpha"), &bearer, false).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_carries(&only_invocation(&fx), &fx, &jti);
+    let record = only_invocation(&fx);
+    assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
 }
 
 /// A meta call answered as a stream carries the minted token and its issuance row.
 #[tokio::test]
 async fn a_meta_call_answered_as_a_stream_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
-    let (status, body) = post_bearer(&fx, "/mcp", &invoke("alpha"), &bearer, true).await;
+    let (status, body) = post_bearer(&fx, "POST", "/mcp", &invoke("alpha"), &bearer, true).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_carries(&only_invocation(&fx), &fx, &jti);
+    let record = only_invocation(&fx);
+    assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
 }
 
 /// A direct backend call carries the minted token and its issuance row.
 #[tokio::test]
 async fn a_direct_backend_call_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
-    let (status, body) = post_bearer(&fx, "/mcp/alpha", &tools_call("t"), &bearer, false).await;
+    let (status, body) =
+        post_bearer(&fx, "POST", "/mcp/alpha", &tools_call("t"), &bearer, false).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_carries(&only_invocation(&fx), &fx, &jti);
+    let record = only_invocation(&fx);
+    assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
 }
 
 /// A backend scope refusal still records the presented token and its issuance row.
 #[tokio::test]
 async fn a_call_refused_by_the_router_records_its_token() {
     let (fx, bearer, jti) = token_fixture().await;
-    post_bearer(&fx, "/mcp", &invoke("beta"), &bearer, false).await;
+    post_bearer(&fx, "POST", "/mcp", &invoke("beta"), &bearer, false).await;
     let record = only_invocation(&fx);
     assert_eq!(record["outcome"], "denied", "{record}");
     assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
 }
 
 /// A replay records the token without calling the backend a second time.
@@ -146,6 +184,7 @@ async fn a_replayed_call_records_its_token() {
     let records = invocations(&fx);
     assert_eq!(records.len(), 2, "{records:?}");
     assert_carries(&records[1], &fx, &jti);
+    assert_resolves(&fx, &records[1], (&jti, &bearer), &["alpha"]).await;
 }
 
 /// A keyed task call of `alpha:t` as `bearer`, from a client that can answer
@@ -199,6 +238,7 @@ async fn a_task_step_records_its_token() {
     assert!(!records.is_empty(), "premise: the step was recorded");
     for record in &records {
         assert_carries(record, &fx, &jti);
+        assert_resolves(&fx, record, (&jti, &bearer), &["alpha"]).await;
     }
 }
 
@@ -246,14 +286,11 @@ async fn a_resumed_task_step_records_the_resuming_token() {
         .find(|record| named_jti(record) == Some(resumer_jti.as_str()))
         .unwrap_or_else(|| panic!("no resumed record names the second token: {resumed:?}"));
     assert_carries(step, &fx, &resumer_jti);
+    assert_resolves(&fx, step, (&resumer_jti, &resumer), &["alpha"]).await;
 }
 
-/// A Web UI tool call made with an admin exchanged token carries that token.
-#[tokio::test]
-async fn a_web_ui_tool_call_records_its_token() {
-    let (fx, _, _) = token_fixture().await;
-    // Admin for mint_for's issuer and group, and a token reaching every
-    // backend: the two things the UI route asks of an exchanged token.
+/// Map the identity `mint_for` names (its issuer, its group `g`) to admin.
+fn map_admin(fx: &Fixture) {
     let admin: crate::control_plane::ControlPlaneRoleRule = serde_json::from_value(
         json!({"issuer": "https://issuer.invalid", "group": "g", "role": "admin"}),
     )
@@ -261,12 +298,22 @@ async fn a_web_ui_tool_call_records_its_token() {
     fx.state
         .live_config
         .edit(|c| c.control_plane.role_mapping.rules = vec![admin]);
+}
+
+/// The Web UI tool call: an admin exchanged token that reaches every backend,
+/// as that route requires, is named on the call's decision.
+#[tokio::test]
+async fn a_web_ui_tool_call_records_its_token() {
+    let (fx, _, _) = token_fixture().await;
+    map_admin(&fx);
     let ks = fx.state.key_server.as_ref().expect("fixture key server");
     let (bearer, jti) = crate::key_server::issuance_row_tests::mint_for(ks, &["*"]).await;
     let ask = json!({"server": "alpha", "tool": "t", "arguments": {"q": 1}, "confirm_write": true});
     let route = crate::gateway::routes::UI_TOOLS_CALL;
-    let (status, answer) = post_bearer(&fx, route, &ask.to_string(), &bearer, false).await;
+    let (status, answer) = post_bearer(&fx, "POST", route, &ask.to_string(), &bearer, false).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{answer}");
-    assert_carries(&only_invocation(&fx), &fx, &jti);
+    let record = only_invocation(&fx);
+    assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["*"]).await;
 }
