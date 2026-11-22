@@ -197,10 +197,18 @@ struct GrantsAfterB {
     text_b: String,
 }
 
+/// The publish that moves the published revision with no version stored.
+#[derive(Clone, Copy)]
+enum PartOnly {
+    Grants,
+    Capabilities,
+}
+
 /// Started on A with env files E (edited before B) and F (equal in both),
 /// reloaded to B, then a grants publish, so the published revision names no
-/// kept version. `bounds` are the store's.
-async fn grants_after_b(bounds: Bounds) -> GrantsAfterB {
+/// kept version. `bounds` are the store's; `part` picks the part-only
+/// publish (a grants save unless the row says otherwise).
+async fn grants_after_b(bounds: Bounds, part: PartOnly) -> GrantsAfterB {
     let home = crate::test_dir_keep::kept_tempdir();
     let edited = put(&home, "edited.env", b"E=before\n");
     // Equal in A and B: it shows up only when no baseline was found.
@@ -213,11 +221,21 @@ async fn grants_after_b(bounds: Bounds) -> GrantsAfterB {
     put(&rig.dir, "edited.env", b"E=after\n");
     rig.reload_to(&text_b).await;
     let version_b = rig.served();
-    // A grants save publishes a new revision over the same files and
-    // hands the history no record.
-    rig.state
-        .live_config
-        .set_grants(Some(b"grants changed by a save\n"));
+    // A part-only publish: a new revision over the same files, and no
+    // record handed to the history.
+    match part {
+        PartOnly::Grants => rig
+            .state
+            .live_config
+            .set_grants(Some(b"grants changed by a save\n")),
+        PartOnly::Capabilities => rig.state.live_config.set_capabilities(
+            1,
+            crate::config_reload::revision::CapabilityPart::Loaded(vec![(
+                "caps/scanned.yaml".to_owned(),
+                [0x5c; 32],
+            )]),
+        ),
+    }
     let published = rig.served();
     assert_ne!(
         published, version_b,
@@ -245,7 +263,7 @@ async fn g1d_a_grants_publish_leaves_the_served_version_marked() {
         version_a,
         version_b,
         ..
-    } = grants_after_b(Bounds::default()).await;
+    } = grants_after_b(Bounds::default(), PartOnly::Grants).await;
     let (status, listing) = rig.history(Caller::Root).await;
     assert_eq!(status, StatusCode::OK, "{listing}");
     assert_eq!(listing["running"], json!(version_b));
@@ -274,7 +292,7 @@ async fn g1d_plus_an_unchanged_reload_after_the_grants_publish_keeps_b_marked() 
         version_a,
         version_b,
         text_b,
-    } = grants_after_b(Bounds::default()).await;
+    } = grants_after_b(Bounds::default(), PartOnly::Grants).await;
     // The one change: a reload that finds every file as it was.
     rig.reload_to(&text_b).await;
     let (status, listing) = rig.history(Caller::Root).await;
@@ -306,6 +324,25 @@ async fn g1d_plus_an_unchanged_reload_after_the_grants_publish_keeps_b_marked() 
     );
 }
 
+#[tokio::test]
+async fn g1d_cap_a_capability_publish_then_an_unchanged_reload_keeps_b_marked() {
+    let setup = grants_after_b(Bounds::default(), PartOnly::Capabilities).await;
+    setup.rig.reload_to(&setup.text_b).await;
+    let (status, page) = setup.rig.history(Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let expected = [setup.version_b.clone(), setup.version_a.clone()];
+    assert_eq!(revisions(&page["versions"]), expected, "no version stored");
+    assert_eq!(page["running"], json!(setup.version_b));
+    assert_eq!(flags(&page), [true, false]);
+    let first_env = setup.rig.env_paths(&setup.version_a)[0].clone();
+    let (status, reply) = setup.rig.restore(&setup.version_a, Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        reply["not_restored"],
+        json!([{"path": first_env, "kind": "env_file"}, {"kind": "grants"}])
+    );
+}
+
 /// The revisions the store keeps, oldest first.
 fn kept_revisions(rig: &Rig) -> Vec<String> {
     rig.store
@@ -321,7 +358,7 @@ async fn g1e_a_refusal_after_the_grants_publish_keeps_b_pinned() {
         max_age_secs: 100,
         ..Bounds::default()
     };
-    let GrantsAfterB { rig, version_b, .. } = grants_after_b(bounds).await;
+    let GrantsAfterB { rig, version_b, .. } = grants_after_b(bounds, PartOnly::Grants).await;
     let hook = rig
         .state
         .live_config
@@ -358,7 +395,7 @@ async fn g1f_an_unchanged_record_after_the_grants_publish_keeps_b_pinned() {
         version_b,
         text_b,
         ..
-    } = grants_after_b(bounds).await;
+    } = grants_after_b(bounds, PartOnly::Grants).await;
     // Records carry whole seconds. Wait (bounded) until the clock's second
     // passes B's stamp, so A and B are both past a 0 s age when the next
     // record is saved. Nothing else waits on this.
@@ -387,7 +424,7 @@ async fn g1g_a_restart_on_the_served_files_then_an_aged_refusal_keeps_them() {
         version_b,
         text_b,
         ..
-    } = grants_after_b(bounds).await;
+    } = grants_after_b(bounds, PartOnly::Grants).await;
     let before = kept_revisions(&rig);
     // A new process starts on B's files over the same history directory.
     let restarted = Rig::start_in(
@@ -416,7 +453,18 @@ async fn g1g_a_restart_on_the_served_files_then_an_aged_refusal_keeps_them() {
         .expect("a history hook")
         .run(refusal, late);
     // A ages out; B, what the restarted process serves, stays pinned.
-    assert_eq!(kept_revisions(&restarted), [version_b]);
+    assert_eq!(kept_revisions(&restarted), [version_b.clone()]);
+    // And the refusal dates B from its first stored copy, not the restart.
+    let named = restarted
+        .store
+        .events()
+        .pop()
+        .and_then(|event| event.still_running)
+        .expect("the refusal names what still runs");
+    assert_eq!(
+        (named.revision, named.since),
+        (version_b.clone(), restarted.kept(&version_b).at)
+    );
 }
 
 /// Every object key anywhere in `value`.
