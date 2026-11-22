@@ -169,10 +169,12 @@ fn every_test_binary_spawn_goes_through_test_binary() {
         ),
         ("src/home_dir_probe_tests.rs", "spawn_r1a_child"),
     ];
-    const PRODUCTION: [(&str, &str); 3] = [
+    const PRODUCTION: [(&str, &str); 4] = [
         ("src/preview_sandbox/mod.rs", "start"),
         ("src/preview_sandbox/mod.rs", "start_fetching"),
         ("src/gateway/server/window_saver.rs", "start_window_saver"),
+        // Reads the running file for the restart notice's start command; spawns nothing.
+        ("src/gateway/ui/restart_confirm.rs", "restart_advice"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
