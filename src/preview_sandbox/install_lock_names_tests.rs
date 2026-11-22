@@ -56,6 +56,13 @@ fn r20_only_registry_names_are_quoted_in_a_lock_refusal() {
             text.contains(&format!("the install holds {who}, which")) && !text.contains("x y<b>"),
             "the refusal should name {who:?} and never the bad name: {text}"
         );
+        // The frame every command refusal carries: what failed, and that the
+        // server can still be added.
+        assert!(
+            text.starts_with("this command cannot be previewed: ")
+                && text.ends_with("; the server can still be added without a preview"),
+            "the refusal lost its frame: {text}"
+        );
     }
 }
 
