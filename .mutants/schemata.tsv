@@ -1,0 +1,15 @@
+head_sha	357586cf3d268e511f6e66ae453227066144eecf
+#mutant M1
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a5_a_refusal_is_the_only_key_on_both_platforms	src/gateway/ui/restart_advice_tests.rs:77
+mcp_gateway	gateway::ui::settings::restart_advice_route_tests::r3_reload_whose_restart_would_be_refused_brings_the_refusal_alone	src/gateway/ui/restart_advice_route_tests.rs:141
+#mutant M2
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a4_windows_never_carries_a_command	src/gateway/ui/restart_advice_tests.rs:66
+#mutant M3a
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a7_the_command_holds_no_argument_of_the_process	src/gateway/ui/restart_advice_tests.rs:195
+#mutant M3b
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a7_the_command_holds_no_argument_of_the_process	src/gateway/ui/restart_advice_tests.rs:196
+#mutant M6 multi=2
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a1_nothing_pending_adds_no_key	src/gateway/ui/restart_advice_tests.rs:30
+mcp_gateway	gateway::ui::settings::restart_advice_route_tests::r1_reload_with_nothing_pending_brings_no_restart_key	src/gateway/ui/restart_advice_route_tests.rs:130
+#mutant M7
+mcp_gateway	gateway::ui::restart_confirm::advice::tests::a9_a_control_character_in_either_path_leaves_the_command_out	src/gateway/ui/restart_advice_tests.rs:254
