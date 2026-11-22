@@ -81,10 +81,10 @@ export const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate
 // when the test has seen the request go out, and then the advance moves time past
 // nothing. trackTimers() lets a test wait for that one timer first (advanceArmed).
 //
-// trackTimers() must be called after page.clock.install(): its init script wraps the
-// clock's fake setTimeout and clearTimeout. Called before, it would wrap the real ones,
-// which the clock then replaces, and it would see no timer at all: advanceArmed() then
-// fails loudly instead of passing.
+// It wraps whichever setTimeout and clearTimeout the page has when its init script runs.
+// A test with a fake clock calls it after page.clock.install(), so the fake timers are
+// the ones wrapped; called first, the clock would replace the wrapper and nothing would be
+// seen, and advanceArmed() fails loudly. A test on real timers (pendingFrom) needs no clock.
 export async function trackTimers(page) {
   await page.addInitScript(() => {
     const pending = new Map();
