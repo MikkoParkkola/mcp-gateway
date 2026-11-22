@@ -588,11 +588,16 @@ impl<'a> Refused<'a> {
         let server = refusal.server.to_string();
         let tool = refusal.tool.map(str::to_string);
         let attribution = DispatchNotes::default().attribution(meta, refusal.tenants, None);
-        let decision = Box::new(noted.decision(
-            crate::security::decision_record::Decided::Fresh,
-            crate::security::decision_record::Refused::of(outcome),
-            meta.live_config().as_deref(),
-        ));
+        let decision = Box::new(
+            noted.decision(
+                crate::security::decision_record::Decided::Fresh,
+                crate::security::decision_record::Refused::of(outcome),
+                meta.live_config().as_deref(),
+                self.who
+                    .credential_kind
+                    .unwrap_or(crate::security::audit::CredentialKind::None),
+            ),
+        );
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
         // Taken here: the blocking append below has no task-locals. Run only

@@ -18,7 +18,7 @@ mod reload;
 #[cfg(tp1)]
 mod resume;
 #[cfg(tp1)]
-mod tasks;
+pub(super) mod tasks;
 
 /// In the key's scope, never registered.
 const GHOST: &str = "ghost";

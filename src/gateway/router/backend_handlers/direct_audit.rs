@@ -398,7 +398,11 @@ pub(super) async fn record(
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
-    let decision = Box::new(notes.decided(&state.meta_mcp, outcome));
+    let kind = call
+        .who
+        .credential_kind
+        .unwrap_or(crate::security::audit::CredentialKind::None);
+    let decision = Box::new(notes.decided(&state.meta_mcp, outcome, kind));
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     let trace_id = trace_id.to_owned();
     let envelope = AuditEnvelope {

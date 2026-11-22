@@ -703,3 +703,7 @@ mod pinned_mapping;
 /// Reloadable mismatch blocks and shared-body divergence diagnostics.
 #[path = "ui_access_matrix_test_output.rs"]
 mod output;
+
+/// Each UI write body refuses a field it does not know, through the same fixture.
+#[path = "ui_strict_body_tests.rs"]
+mod strict_bodies;

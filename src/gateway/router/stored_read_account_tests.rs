@@ -11,6 +11,8 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use super::tests::task_execution_adapter::input_round as round;
+
 use crate::config::{ApiKeyConfig, AuthConfig, SurfacedToolConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
     BACKEND, Binding, DirectAccountGateway,
@@ -476,12 +478,8 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
 /// A task of the operator's `read` that asked for input and parked, with the
 /// request metadata that made it (reused for the resume).
 async fn parked_input_task(fx: &Fx) -> (String, Value) {
-    fx.gateway.answer_next(json!({
-        "resultType": "input_required",
-        "inputRequests": {"confirm": {"method": "elicitation/create",
-            "params": {"message": "confirm?", "requestedSchema": {"type": "object", "properties": {}}}}},
-        "requestState": "backend-state-w2"
-    }));
+    fx.gateway
+        .answer_next(round::ask("confirm", "backend-state-w2"));
     let mut meta = modern_meta();
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-w2");
     meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
@@ -532,7 +530,7 @@ async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refu
         &fx,
         "tasks/update",
         &id,
-        json!({"taskId": id, "inputResponses": {"confirm": {"action": "accept", "content": {}}},
+        json!({"taskId": id, "inputResponses": {"confirm": round::answer()},
             "_meta": meta}),
     )
     .await;
