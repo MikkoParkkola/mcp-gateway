@@ -642,10 +642,6 @@ async fn a_modern_server_that_refuses_initialize_previews() {
 /// is what a loaded runner could outlast, so this row does not run under it.
 #[tokio::test]
 async fn an_over_budget_discovery_answer_is_a_502() {
-    if crate::era_probe_cap::in_child_with_cap() {
-        return;
-    }
-    crate::era_probe_cap::widen_probe_cap();
     fn huge_discover(request: &Value) -> Response {
         if request.get("method").and_then(Value::as_str) != Some("server/discover") {
             return answer(request);
@@ -654,6 +650,10 @@ async fn an_over_budget_discovery_answer_is_a_502() {
         Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": {"pad": padding}}))
             .into_response()
     }
+    if crate::era_probe_cap::in_child_with_cap() {
+        return;
+    }
+    crate::era_probe_cap::widen_probe_cap();
     let log = Log::default();
     let url = stub_with(&log, huge_discover).await;
     let (router, _store) = router_with(false).await;
