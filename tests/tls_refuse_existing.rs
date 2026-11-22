@@ -7,6 +7,9 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[cfg(unix)]
+#[path = "common/required.rs"]
+mod required;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -303,7 +306,7 @@ fn r9b_a_dangling_key_link_refuses() {
 #[test]
 fn r10_a_lookup_error_refuses() {
     if rustix::process::geteuid().is_root() {
-        eprintln!("r10 SKIPPED: running as root, which ignores the directory's mode");
+        required::skip_or_fail("r10 needs a non-root user: root ignores the directory's mode");
         return;
     }
     let out = tempfile::tempdir().expect("out");
