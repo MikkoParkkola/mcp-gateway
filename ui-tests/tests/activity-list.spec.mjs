@@ -148,12 +148,9 @@ function shown(core, q, label) {
 }
 
 test.describe('LC list core', () => {
-  test('LC1 an operator replace keeps nothing of the state it replaces', async () => {
-    const core = await loadCore();
-    expect(core.initial(Q2), 'initial() holds exactly the fresh fields').toEqual(FRESH(Q2));
-    // Three reachable states, each far from initial in its own way. Each drive
-    // returns the request it leaves in flight (or null) and the fields it moved.
-    const drives = {
+  // Three reachable states, each far from initial in its own way. Each drive
+  // returns the request it leaves in flight (or null) and the fields it moved.
+  const LC1_DRIVES = {
       'failed page 1': (r) => {
         const p1 = started(r.replace(Q0, T1), 'page1', 'failed page 1: open');
         r.fail(p1.handle);
@@ -175,15 +172,31 @@ test.describe('LC list core', () => {
         r.frame(T2);
         return { inFlight: live.handle, moved: ['rows', 'cursor', 'window', 'dirty'] };
       },
-    };
+  };
+
+  test('LC1 initial() holds exactly the fresh fields, and some drive moves each one', async () => {
+    const core = await loadCore();
+    expect(core.initial(Q2), 'LC1 initial()').toEqual(FRESH(Q2));
     const everMoved = new Set();
-    for (const [label, drive] of Object.entries(drives)) {
+    for (const [label, drive] of Object.entries(LC1_DRIVES)) {
+      const r = new Run(core, Q0, `LC1 ${label}`);
+      drive(r);
+      for (const key of Object.keys(FRESH(Q0))) if (!isDeepStrictEqual(r.state[key], FRESH(Q0)[key])) everMoved.add(key);
+    }
+    // A field added to the state later fails here until some drive moves it.
+    for (const key of Object.keys(FRESH(Q0)).filter((k) => k !== 'query' && k !== 'flight')) {
+      expect(everMoved.has(key), `LC1: some drive moves ${key}`).toBe(true);
+    }
+  });
+
+  for (const [label, drive] of Object.entries(LC1_DRIVES)) {
+    test(`LC1 an operator replace after a ${label} keeps nothing of it`, async () => {
+      const core = await loadCore();
       const r = new Run(core, Q0, `LC1 ${label}`);
       const { inFlight, moved } = drive(r);
       for (const key of moved) {
         expect(r.state[key], `LC1 ${label}: premise, ${key} is not initial's`).not.toEqual(FRESH(Q0)[key]);
       }
-      for (const key of Object.keys(FRESH(Q0))) if (!isDeepStrictEqual(r.state[key], FRESH(Q0)[key])) everMoved.add(key);
       const H = {};
       const out = r.replace(Q2, T2, H);
       const { flight, ...rest } = out.state;
@@ -194,17 +207,11 @@ test.describe('LC list core', () => {
       expect(flight.kind, `LC1 ${label}: flight kind`).toBe('page1');
       expect(flight.window, `LC1 ${label}: flight window`).toEqual({ from: T2 - HOUR, to: T2 });
       expect(out.abort, `LC1 ${label}: aborts what was in flight`).toBe(inFlight);
-    }
-    // A field added to the state later fails here until some drive moves it.
-    for (const key of Object.keys(FRESH(Q0)).filter((k) => k !== 'query' && k !== 'flight')) {
-      expect(everMoved.has(key), `LC1: some drive moves ${key}`).toBe(true);
-    }
-  });
+    });
+  }
 
-  test('LC2 a settle for a handle no longer in flight changes nothing', async () => {
-    const core = await loadCore();
-    // Each setup leaves A aborted and B, made the same way, in flight.
-    const setups = {
+  // Each setup leaves A aborted and B, made the same way, in flight.
+  const LC2_SETUPS = {
       page1: (r) => {
         const a = started(r.replace(Q0, T1), 'page1', 'LC2 page1: A');
         const b = r.replace(Q0, T1);
@@ -226,9 +233,12 @@ test.describe('LC list core', () => {
         r.ok(started(again, 'page1', 'LC2 append: reopen').handle, answer(Q0, 1, 'c2'));
         return { a, b: started(r.next(T2), 'append', 'LC2 append: B'), aborted: again.abort };
       },
-    };
-    for (const [kind, setup] of Object.entries(setups)) {
-      for (const how of ['answer', 'failure']) {
+  };
+
+  for (const [kind, setup] of Object.entries(LC2_SETUPS)) {
+    for (const how of ['answer', 'failure']) {
+      test(`LC2 a late ${how} for an aborted ${kind} request changes nothing`, async () => {
+        const core = await loadCore();
         const label = `LC2 ${kind} ${how}`;
         const r = new Run(core, Q0, label);
         const { a, b, aborted } = setup(r);
@@ -245,9 +255,12 @@ test.describe('LC list core', () => {
         expect(late.abort, `${label}: aborts nothing`).toBeNull();
         expect(late.issue, `${label}: starts nothing`).toBeNull();
         expect(late.state.flight?.handle, `${label}: B is still the flight, by identity`).toBe(b.handle);
-      }
+      });
     }
-    // A late page 1 must not read the dirty flag a live frame set on its successor.
+  }
+
+  test('LC2 a late page 1 does not read the dirty flag set on its successor', async () => {
+    const core = await loadCore();
     const r = new Run(core, Q0, 'LC2 dirty');
     const a = started(r.replace(Q0, T1), 'page1', 'LC2 dirty: A');
     started(r.replace(Q0, T1), 'page1', 'LC2 dirty: B');
@@ -336,7 +349,7 @@ test.describe('LC list core', () => {
     expect(stats.sequences, 'LC3 sequences walked (8^6)').toBe(262_144);
   });
 
-  test('LC4 live frames give one refresh at a time, and one more per burst', async () => {
+  test('LC4 on an idle page 1, no frame asks nothing and one frame asks one refresh', async () => {
     const core = await loadCore();
     {
       const r = shown(core, Q0, 'LC4 idle');
@@ -346,8 +359,12 @@ test.describe('LC list core', () => {
       const end = r.ok(live.handle, answer(Q0, 1, 'c2'));
       expect(end.issue, 'LC4 idle: no frame during it, so the chain stops').toBeNull();
     }
-    for (const frames of [1, 5]) {
-      for (const how of ['ok', 'fail']) {
+  });
+
+  for (const frames of [1, 5]) {
+    for (const how of ['ok', 'fail']) {
+      test(`LC4 ${frames} frame(s) during a refresh that ends ${how} give exactly one more`, async () => {
+        const core = await loadCore();
         const label = `LC4 ${frames} frame(s), refresh ${how}`;
         const r = shown(core, Q0, label);
         const live = started(r.frame(T2), 'live', `${label}: first frame`);
@@ -360,9 +377,9 @@ test.describe('LC list core', () => {
         expect(r.frame(T3).issue, `${label}: a frame during the trailing one starts nothing yet`).toBeNull();
         const more = started(r.ok(trailing.handle, answer(Q0, 1, 'c2'), T3), 'live', `${label}: one more`);
         expect(r.ok(more.handle, answer(Q0, 1, 'c2'), T3).issue, `${label}: then the chain stops`).toBeNull();
-      }
+      });
     }
-  });
+  }
 
   test('LC5 a next page holds the list and aborts a live refresh', async () => {
     const core = await loadCore();
@@ -377,7 +394,10 @@ test.describe('LC list core', () => {
     expect([out.state.held, out.state.newer, out.state.dirty], 'LC5: held, newer, not dirty').toEqual([true, true, false]);
     const busy = r.next(T3);
     expect([busy.state, busy.abort, busy.issue], 'LC5: refused while an append is in flight').toEqual([out.state, null, null]);
+  });
 
+  test('LC5 a next page is refused before any page 1 answer gives a cursor', async () => {
+    const core = await loadCore();
     const f = new Run(core, Q0, 'LC5 fresh');
     started(f.replace(Q0, T1), 'page1', 'LC5 fresh: open');
     const before = f.state;
@@ -397,7 +417,7 @@ test.describe('LC list core', () => {
     expect([out.state.rows, out.state.cursor], 'LC6: rows and cursor kept').toEqual([rows, cursor]);
   });
 
-  test('LC7 each failure shows its own notice, and its page clears it', async () => {
+  test('LC7 a failed page 1 then a failed refresh keep both notices; a page 1 answer clears them', async () => {
     const core = await loadCore();
     {
       const r = new Run(core, Q0, 'LC7 page 1');
@@ -410,6 +430,10 @@ test.describe('LC list core', () => {
       r.ok(again.handle, answer(Q0, 1, 'c2'), T3);
       expect(noticeSet(r.state), 'LC7 page 1: a page 1 answer clears both').toEqual([]);
     }
+  });
+
+  test('LC7 a failed live refresh keeps the rows and shows stale; its answer clears it', async () => {
+    const core = await loadCore();
     {
       const r = shown(core, Q0, 'LC7 live');
       r.fail(started(r.frame(T2), 'live', 'LC7 live: frame').handle);
@@ -417,6 +441,10 @@ test.describe('LC list core', () => {
       r.ok(started(r.frame(T3), 'live', 'LC7 live: frame again').handle, answer(Q0, 1, 'c2'), T3);
       expect(noticeSet(r.state), 'LC7 live: the refresh answer clears stale').toEqual([]);
     }
+  });
+
+  test('LC7 a failed next page keeps the chain and the hold; its retry appends', async () => {
+    const core = await loadCore();
     {
       const r = shown(core, Q0, 'LC7 append');
       r.fail(started(r.next(T2), 'append', 'LC7 append: next').handle);
@@ -427,22 +455,26 @@ test.describe('LC list core', () => {
     }
   });
 
-  test('LC8 leaving aborts the one request in flight and starts nothing', async () => {
-    const core = await loadCore();
-    for (const kind of ['live', 'append']) {
+  for (const kind of ['live', 'append']) {
+    test(`LC8 leaving with a ${kind} request out aborts it and starts nothing`, async () => {
+      const core = await loadCore();
       const r = shown(core, Q0, `LC8 ${kind}`);
       const req = started(kind === 'live' ? r.frame(T2) : r.next(T2), kind, `LC8 ${kind}: in flight`);
       const out = r.leave();
       expect(out.abort, `LC8 ${kind}: aborts it, by identity`).toBe(req.handle);
       expect(out.issue, `LC8 ${kind}: starts nothing`).toBeNull();
-    }
+    });
+  }
+
+  test('LC8 a later open starts from initial', async () => {
+    const core = await loadCore();
     const back = new Run(core, Q0, 'LC8 back').replace(Q0, T3);
     const { flight: _f, ...rest } = back.state;
     const { flight: _g, ...fresh } = FRESH(Q0);
     expect(rest, 'LC8: a later open is initial').toEqual(fresh);
   });
 
-  test('LC9 each page 1 proposes a window from its own clock; pages keep their chain', async () => {
+  test('LC9 a next page asks its chain\'s window, not the clock\'s', async () => {
     const core = await loadCore();
     {
       const r = shown(core, Q0, 'LC9 append');
@@ -450,24 +482,38 @@ test.describe('LC list core', () => {
       expect(append.window, 'LC9 append: the chain window').toEqual(span(Q0, T1));
       expect(append.window, 'LC9 append: not a clock window').not.toEqual(span(Q0, T2));
     }
-    const liveAt3 = (label) => {
+  });
+
+  /** A shown page 1 (asked at T1) and a frame's live refresh asked at T3. */
+  const liveAt3 = (core, label) => {
       const r = shown(core, Q0, label);
       const live = started(r.frame(T3), 'live', `${label}: frame`);
       expect(live.window, `${label}: a window at the frame's clock`).toEqual(span(Q0, T3));
       expect(live.window, `${label}: not the chain's`).not.toEqual(span(Q0, T1));
       return { r, live };
-    };
+  };
+
+  test('LC9 a live refresh asks a new window, and its answer moves the chain to it', async () => {
+    const core = await loadCore();
     {
-      const { r, live } = liveAt3('LC9 live');
+      const { r, live } = liveAt3(core, 'LC9 live');
       r.ok(live.handle, answer(Q0, 1, 'c2'), T3);
       expect(started(r.next(T3), 'append', 'LC9 live: next').window, 'LC9 live: the applied window').toEqual(span(Q0, T3));
     }
+  });
+
+  test('LC9 an aborted live refresh leaves the chain\'s window', async () => {
+    const core = await loadCore();
     {
-      const { r } = liveAt3('LC9 aborted');
+      const { r } = liveAt3(core, 'LC9 aborted');
       expect(started(r.next(T3), 'append', 'LC9 aborted: next').window, 'LC9 aborted: the chain window').toEqual(span(Q0, T1));
     }
+  });
+
+  test('LC9 a failed live refresh leaves the chain\'s window', async () => {
+    const core = await loadCore();
     {
-      const { r, live } = liveAt3('LC9 failed');
+      const { r, live } = liveAt3(core, 'LC9 failed');
       r.fail(live.handle, T3);
       expect(started(r.next(T3), 'append', 'LC9 failed: next').window, 'LC9 failed: the chain window').toEqual(span(Q0, T1));
     }
@@ -487,10 +533,9 @@ test.describe('LC list core', () => {
     started(r.next(T3), 'append', 'LC10: next page');
   });
 
-  test('LC11 a cursor reset starts the chain again and keeps the newer signal', async () => {
-    const core = await loadCore();
-    const R = [{ id: 'q0.reset.0' }, { id: 'q0.reset.1' }];
-    const held = (label, withNewer) => {
+  const R = [{ id: 'q0.reset.0' }, { id: 'q0.reset.1' }];
+  /** A held chain of pages 1-2 with the stale notice and page 3 in flight; `newer` as asked. */
+  const held = (core, label, withNewer) => {
       const r = shown(core, Q0, label);
       r.fail(started(r.frame(T2), 'live', `${label}: frame`).handle);
       r.ok(started(r.next(T2), 'append', `${label}: page 2`).handle, answer(Q0, 2, 'c3'));
@@ -499,10 +544,13 @@ test.describe('LC list core', () => {
       expect([r.state.rows, r.state.held, r.state.newer, noticeSet(r.state)], `${label}: premise`)
         .toEqual([[...tags(Q0, 1), ...tags(Q0, 2)], true, withNewer, ['stale']]);
       return { r, append };
-    };
+  };
+
+  test('LC11 a cursor reset starts the chain again and refreshes for the news held', async () => {
+    const core = await loadCore();
     const { flight: _f, ...fresh } = FRESH(Q0);
     {
-      const { r, append } = held('LC11 newer', true);
+      const { r, append } = held(core, 'LC11 newer', true);
       const out = r.ok(append.handle, { rows: R, next_cursor: 'c9', cursor_reset: true }, T3);
       const { flight, ...rest } = out.state;
       expect(rest, 'LC11 newer: initial with the answer applied').toEqual({ ...fresh, rows: R, cursor: 'c9', window: span(Q0, T1) });
@@ -510,15 +558,23 @@ test.describe('LC list core', () => {
       expect(live.window, 'LC11 newer: on a new window').toEqual(span(Q0, T3));
       expect(flight?.handle, 'LC11 newer: that request is the flight').toBe(live.handle);
     }
+  });
+
+  test('LC11 a cursor reset with no news held asks nothing, and ends the hold', async () => {
+    const core = await loadCore();
     {
-      const { r, append } = held('LC11 quiet', false);
+      const { r, append } = held(core, 'LC11 quiet', false);
       const out = r.ok(append.handle, { rows: R, next_cursor: 'c9', cursor_reset: true }, T3);
       expect([out.issue, out.state.flight], 'LC11 quiet: starts nothing').toEqual([null, null]);
       expect(out.state.held, 'LC11 quiet: the hold ended').toBe(false);
       started(r.frame(T3), 'live', 'LC11 quiet: a frame now refreshes');
     }
+  });
+
+  test('LC11 the same answer without a reset appends and stays held', async () => {
+    const core = await loadCore();
     {
-      const { r, append } = held('LC11 no reset', true);
+      const { r, append } = held(core, 'LC11 no reset', true);
       const out = r.ok(append.handle, { rows: R, next_cursor: 'c9' }, T3);
       expect([out.state.rows, out.state.held], 'LC11 no reset: appends and stays held').toEqual([[...tags(Q0, 1), ...tags(Q0, 2), ...R], true]);
     }
