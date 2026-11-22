@@ -301,7 +301,11 @@ fn the_sent_answer_is_scanned_whatever_field_carries_it() {
                 ),
             });
         assert!(
-            evaluation.transformed.stripped || evaluation.transformed.summarized,
+            if decision == ContextIntegrityDecisionKind::Strip {
+                evaluation.transformed.stripped
+            } else {
+                evaluation.transformed.summarized
+            },
             "{decision:?}: premise: the kernel rewrote the answer: {:?}",
             evaluation.transformed
         );
@@ -367,7 +371,7 @@ fn the_sent_answer_is_scanned_whatever_field_carries_it() {
         );
         let told = after.explain().action_taken;
         assert!(
-            told.starts_with("Withheld"),
+            told.starts_with("Withheld content:") && !told.contains("delivered"),
             "{decision:?}: the explanation says withheld, got {told:?}"
         );
     }
