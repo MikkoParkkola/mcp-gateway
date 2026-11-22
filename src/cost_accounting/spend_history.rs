@@ -152,6 +152,11 @@ impl History {
 /// `now` is `None` when the clock reads before 1970: then nothing can be
 /// dated, nothing is restored, and this run never saves, so a later save on a
 /// corrected clock cannot replace the file with a history it never loaded.
+///
+/// The invariant: a run saves only after its restore reached a known outcome,
+/// which is loaded, absent, or set aside with a warning (the old bytes kept
+/// beside it). Every other outcome turns this run's saves off. Every save in
+/// the server starts after this call (the meta layer is built first).
 pub(crate) fn restore(
     tracker: &CostTracker,
     data_dir: &Path,
@@ -218,6 +223,11 @@ const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// cap if it grows meanwhile.
 fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read as _;
+    // Judged before the open: opening a FIFO waits for a writer, and the
+    // start would hang on it. A link to a regular file is followed.
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
     let file = std::fs::File::open(path)?;
     if file.metadata()?.len() > MAX_FILE_BYTES {
         return Ok(None);

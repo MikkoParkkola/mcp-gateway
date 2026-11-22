@@ -589,3 +589,35 @@ fn a_file_past_the_read_cap_is_refused_unread() {
     assert!(warnings.contains("larger than"), "{warnings}");
     assert!(!path.exists(), "the file is set aside");
 }
+
+/// Lead 2026-11-22, the "never save over an unloaded file" class: a FIFO at
+/// the path is no history file. The restore refuses it without opening it
+/// (an open would wait for a writer and hang the start), sets it aside with
+/// one warning, and so the run's saves write a new file beside the kept one.
+/// Red before: the open blocked, past the 120 s hang guard (flaky-under-load
+/// family).
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_history_path_is_set_aside_without_a_hang() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(FILE_NAME);
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(
+        made.is_ok_and(|s| s.success()),
+        "premise: a FIFO at the path"
+    );
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let folder = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let restoring = || restored(&folder, &["k"], T0).per_key.len();
+        let outcome = crate::test_log_capture::capture_warnings(restoring);
+        done_tx.send(outcome).ok();
+    });
+    let (keys, logged) = done_rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .expect("the restore returns instead of waiting on the FIFO");
+    assert_eq!(keys, 0, "a key was restored from a FIFO");
+    assert_eq!(logged.matches("WARN").count(), 1, "one warning: {logged}");
+    assert!(logged.contains("not a regular file"), "{logged}");
+    assert!(!path.exists(), "the FIFO is set aside");
+}
