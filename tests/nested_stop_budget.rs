@@ -107,13 +107,20 @@ fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> Pat
     }
     save(root, "inner.yaml", &config)
 }
-fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
+/// A stall row's outer runs no backend health probe: a probe already running or due could
+/// count the frozen inner as failed and start a recovery, and the row would then test that
+/// recovery's cleanup instead of the stop's. Every other row keeps the default probes.
+fn probe_backends(config: &mut Config, during: During) {
+    config.failsafe.health_check.enabled = !matches!(during, During::Freeze);
+}
+fn write_outer_config(root: &Path, inner: &Path, total: Duration, during: During) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
     std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.dup2(os.open('inner.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
     let mut config = base_config(root, "outer");
     config.server.host = "127.0.0.1".into();
     config.server.port = gateway_bin::ANY_PORT;
     config.server.shutdown_timeout = total;
+    probe_backends(&mut config, during);
     let mut inner_backend = backend(
         root,
         format!(
@@ -129,7 +136,13 @@ fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
     config.backends.insert("inner".into(), inner_backend);
     save(root, "gateway.yaml", &config)
 }
-fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path) -> PathBuf {
+fn write_chain_parent(
+    root: &Path,
+    name: &str,
+    child: &str,
+    child_config: &Path,
+    during: During,
+) -> PathBuf {
     std::fs::write(
         root.join(format!("{child}.py")),
         format!(
@@ -139,6 +152,7 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     .expect("chain launcher");
     let mut config = base_config(root, name);
     config.server.shutdown_timeout = Duration::from_secs(30);
+    probe_backends(&mut config, during);
     config.backends.insert(
         child.into(),
         backend(
@@ -280,9 +294,9 @@ fn sigterm(pid: u32) {
 #[derive(Clone, Copy)]
 enum During {
     Nothing,
-    /// Freeze the inner (SIGSTOP) as soon as it logs that it was told to
-    /// hurry, keep it frozen this long, then let it run again (SIGCONT).
-    Stall(Duration),
+    /// Freeze the inner (SIGSTOP) before the outer's stop starts and never let
+    /// it run again: it can end nothing, so only the outer's sweep ends its leaves.
+    Freeze,
     /// Record the stop's timeline for the margin measurement: every pid's
     /// exit as it happens, the inner's hurry line, the SIGTERM's wall time.
     Watch,
@@ -291,11 +305,6 @@ enum During {
 /// The inner logs this when the outer's SIGTERM reaches it. Its stdin closed earlier, so its own stop is
 /// already under way and the signal hurries it: from here it has only the nested need before the outer kills it.
 const HURRY_LINES: [&str; 1] = ["Shutdown signal received"];
-
-/// Longer than the 1.5 s nested need the outer leaves an inner after its
-/// SIGTERM, so the outer's kill lands while the inner is still frozen and
-/// only the outer's own sweep can end what the inner started.
-const STALL_PAST_THE_NEED: Duration = Duration::from_secs(3);
 
 /// An inner stop total longer than the parent's whole plan. With a short one
 /// (8 s) the inner ends its leaf by itself about 2 s after its stdin closes,
@@ -332,26 +341,31 @@ fn send(pid: u32, sig: &str) {
         .status();
 }
 
-/// Watches inner.log for any of [`HURRY_LINES`], then freezes `inner` for `hold`.
-/// Yields whether the freeze happened, so a row whose inner never hurried
-/// fails by that name instead of passing without a stall.
-fn freeze_once_hurried(root: &Path, inner: u32, hold: Duration) -> tokio::task::JoinHandle<bool> {
-    let log = root.join("inner.log");
-    tokio::spawn(async move {
-        let stop_looking = Instant::now() + STOP_BOUND;
-        while Instant::now() < stop_looking {
-            if std::fs::read_to_string(&log)
-                .is_ok_and(|text| HURRY_LINES.iter().any(|line| text.contains(line)))
-            {
-                send(inner, "STOP");
-                tokio::time::sleep(hold).await;
-                send(inner, "CONT");
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        false
-    })
+/// Freezes `inner` before the outer's stop starts, so it has sent nothing when that stop
+/// begins: SIGSTOP, then its state read until stopped (within 1 s), then every one of its
+/// `descendants` checked still alive. It is never continued; if the row fails, KillGroup
+/// kills it (SIGKILL reaches a stopped process).
+async fn freeze_before_the_stop(root: &Path, inner: u32, descendants: &[u32]) {
+    send(inner, "STOP");
+    let stopped_by = Instant::now() + Duration::from_secs(1);
+    while !pids::stopped(inner) {
+        assert!(
+            Instant::now() < stopped_by,
+            "the inner never stopped\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let gone: Vec<u32> = descendants
+        .iter()
+        .copied()
+        .filter(|pid| !pids::alive(*pid))
+        .collect();
+    assert!(
+        gone.is_empty(),
+        "the inner's descendants {gone:?} were gone before the outer's stop began\n{}",
+        logs(root)
+    );
 }
 
 fn alive_pids(pids: &[u32]) -> Vec<u32> {
@@ -404,7 +418,7 @@ async fn run_with(
     let root = temp.path().to_path_buf();
     let root = root.as_path();
     let inner = write_inner_config(root, leaves, inner_stop);
-    let config = write_outer_config(root, &inner, total);
+    let config = write_outer_config(root, &inner, total, during);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut command = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
@@ -478,6 +492,10 @@ async fn run_with(
         leaves.iter().all(|pid| pids::alive(*pid)),
         "inner and leaves must be live at stop"
     );
+    if matches!(during, During::Freeze) {
+        // The pid list starts with the inner gateway's (inner.pid, above).
+        freeze_before_the_stop(root, leaves[0], &leaves[1..]).await;
+    }
     let deadline = Instant::now() + STOP_BOUND;
     let watcher = matches!(during, During::Watch).then(|| {
         tokio::process::Command::new("python3")
@@ -490,11 +508,6 @@ async fn run_with(
     });
     // Wall time, to line up with the watcher's stamps and the inner's log.
     let signalled_wall = std::time::SystemTime::now();
-    // The pid list starts with the inner gateway's (inner.pid, above).
-    let freeze = match during {
-        During::Nothing | During::Watch => None,
-        During::Stall(hold) => Some(freeze_once_hurried(root, leaves[0], hold)),
-    };
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
     if let Some(watcher) = watcher {
         let exits = tokio::time::timeout(STOP_BOUND, watcher.wait_with_output())
@@ -524,12 +537,6 @@ async fn run_with(
         );
     }
     let logs_then = logs(root);
-    if let Some(freeze) = freeze {
-        assert!(
-            freeze.await.expect("the freeze task"),
-            "the inner never logged that it was told to hurry, so nothing was stalled\n{logs_then}"
-        );
-    }
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
         .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
@@ -590,10 +597,11 @@ async fn measure_one_nested_stop_for_the_margin() {
     .await;
 }
 
-/// A nested gateway frozen past its nested need, right after its parent's
-/// SIGTERM reaches it, cannot end its own leaf before the parent kills it. The
-/// parent's descendant sweep then has to end the leaf and the leaf's child:
-/// once the stop is over, no process of the tree is left.
+/// A nested gateway frozen before its parent's stop and for all of it (so past
+/// its nested need) ends nothing by itself: SIGTERM waits on a stopped process,
+/// only the parent's SIGKILL reaches it. The parent's descendant sweep then has
+/// to end the leaf and the leaf's child: once the stop is over, no process of
+/// the tree is left.
 /// Red if the sweep stops killing what a killed backend leaves behind.
 #[tokio::test]
 async fn a_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
@@ -601,7 +609,7 @@ async fn a_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
         HTTP_MINIMUM,
         INNER_OUTLASTS_THE_PLAN,
         &["leaf"],
-        During::Stall(STALL_PAST_THE_NEED),
+        During::Freeze,
     )
     .await;
 }
@@ -677,8 +685,8 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
     let root = temp.path();
     let leaves = ["leaf_a", "leaf_b"];
     let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let middle = write_chain_parent(root, "middle", "inner", &inner);
-    let outer = write_chain_parent(root, "outer", "middle", &middle);
+    let middle = write_chain_parent(root, "middle", "inner", &inner, During::Nothing);
+    let outer = write_chain_parent(root, "outer", "middle", &middle, During::Nothing);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut reaped = gateway_bin::Reaped::new(
         tokio::process::Command::from(gateway_bin::command(
@@ -778,26 +786,27 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
 /// Red if a gateway-child's leaves outlive the stop (the sweep before the kill is missing).
 #[tokio::test]
 async fn a_two_level_hurried_stop_leaves_no_leaf() {
-    two_level_hurried_stop(None).await;
+    two_level_hurried_stop(During::Nothing).await;
 }
 
-/// The same hurried stop, but the inner is stopped (SIGSTOP) as its signal line
-/// lands and held there past its nested need, so it ends nothing by itself: only
-/// the outer's descendant sweep can end its leaves and their children.
+/// The same hurried stop, but the inner is stopped (SIGSTOP) before the outer's
+/// stop begins and never continued, so it ends nothing by itself: only the
+/// outer's descendant sweep can end its leaves and their children.
 /// Fails when that sweep no longer ends what a killed gateway-backend started.
 #[tokio::test]
 async fn a_hurried_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
-    two_level_hurried_stop(Some(STALL_PAST_THE_NEED)).await;
+    two_level_hurried_stop(During::Freeze).await;
 }
 
 /// EOF, then a second signal, to a stdio outer whose backend is a gateway with two
-/// leaves; given `stall`, the inner is frozen on its signal line for that long.
-async fn two_level_hurried_stop(stall: Option<Duration>) {
+/// leaves; given `During::Freeze`, the inner is frozen before the EOF, where this
+/// outer's stop begins.
+async fn two_level_hurried_stop(during: During) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path();
     let leaves = ["leaf_a", "leaf_b"];
     let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let outer = write_chain_parent(root, "outer", "inner", &inner);
+    let outer = write_chain_parent(root, "outer", "inner", &inner, during);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut reaped = gateway_bin::Reaped::new(
         tokio::process::Command::from(gateway_bin::command(
@@ -855,6 +864,15 @@ async fn two_level_hurried_stop(stall: Option<Duration>) {
         tree.push(read_pid(root, &format!("leaf-{name}.pid")));
         tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
     }
+    assert_eq!(
+        alive_pids(&tree),
+        tree,
+        "every pid of the tree must be live before the stop"
+    );
+    if matches!(during, During::Freeze) {
+        // tree[1] is the inner gateway's pid; its leaves and their children follow.
+        freeze_before_the_stop(root, tree[1], &tree[2..]).await;
+    }
     // EOF installs the hurry listener before logging this message. The busy
     // calls keep teardown pending until the subsequent SIGTERM cuts it short.
     drop(stdin);
@@ -867,8 +885,6 @@ async fn two_level_hurried_stop(stall: Option<Duration>) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // tree[1] is the inner gateway's pid.
-    let freeze = stall.map(|hold| freeze_once_hurried(root, tree[1], hold));
     let hurried_at = Instant::now();
     sigterm(pid);
     // Observation time, not a watchdog: the outer kills at ~300 ms; allow
@@ -889,13 +905,6 @@ async fn two_level_hurried_stop(stall: Option<Duration>) {
         .await
         .expect("outer exit deadline")
         .expect("outer exit");
-    if let Some(freeze) = freeze {
-        assert!(
-            freeze.await.expect("the freeze task"),
-            "the inner never logged that it was told to hurry, so nothing was stalled\n{}",
-            logs(root)
-        );
-    }
     reaped.reap().await;
     std::mem::forget(cleanup);
 }
