@@ -446,6 +446,14 @@ class DropIds(unittest.TestCase):
         # What the fold keeps must pass the hygiene rule the release gate runs.
         self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
 
+    def test_an_id_alone_on_its_lines_takes_those_lines_with_it(self):
+        # A line left holding only spaces would read as a blank line and split the
+        # bullet; a blank line the fragment itself has stays.
+        for src, out in ((f"- n one\n  ({T}74)\n  two.\n\n  Kept.\n", "- n one\n  two.\n\n  Kept.\n"),
+                         (f"- n2 one\n  ({T}75,\n  {T}76)\n  two.\n", "- n2 one\n  two.\n")):
+            with self.subTest(src=src):
+                self.assertEqual(cf.drop_ids(src), (out, []))
+
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
         HOLDS_CODE = "a tracker id in a parenthetical that holds code"
         ODD_BACKTICK = "a tracker id in a bullet with an escaped or unclosed backtick"
