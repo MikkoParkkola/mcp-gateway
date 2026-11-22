@@ -634,8 +634,18 @@ async fn a_modern_server_that_refuses_initialize_previews() {
 
 /// T11b: an over-budget answer to the era probe is the budget's 502, not a
 /// silence that falls back to the handshake.
+///
+/// Only the budget may decide. The probe's window is the cap from exec, 20 s:
+/// it opens once the transport has connected, and the preview's 35 s request
+/// timeout and 30 s outer cap (which also covers the connect) are both longer.
+/// A 5 MB answer over loopback takes well under a second; the 2 s default cap
+/// is what a loaded runner could outlast, so this row does not run under it.
 #[tokio::test]
 async fn an_over_budget_discovery_answer_is_a_502() {
+    if crate::era_probe_cap::in_child_with_cap() {
+        return;
+    }
+    crate::era_probe_cap::widen_probe_cap();
     fn huge_discover(request: &Value) -> Response {
         if request.get("method").and_then(Value::as_str) != Some("server/discover") {
             return answer(request);
