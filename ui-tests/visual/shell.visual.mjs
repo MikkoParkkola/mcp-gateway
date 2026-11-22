@@ -113,8 +113,12 @@ test.describe('frames', () => {
         await page.setViewportSize({ width: f.width, height: f.height });
         await page.emulateMedia({ colorScheme: f.scheme });
         await screen.states.find((s) => s.name === f.state).step(page, f.data);
-        // The frames draw no focus ring.
-        await page.evaluate(() => document.activeElement?.blur());
+        // The frames draw no focus ring; let a fading ring (any finite animation) finish first.
+        await page.evaluate(async () => {
+          document.activeElement?.blur();
+          const ending = document.getAnimations().filter((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+          await Promise.all(ending.map((a) => a.finished.catch(() => {})));
+        });
         await compareWithFrame(page, f.file, f.regions, f.masks);
       });
     }

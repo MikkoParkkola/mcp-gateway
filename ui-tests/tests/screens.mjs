@@ -364,6 +364,10 @@ export const SCREENS = [
           await confirm.getByRole('button', { name: 'Cancel atlas.pin', exact: true }).click();
           await expect(confirm).toHaveCount(0);
           await expect(runButton(page, 'atlas.pin')).toBeFocused();
+          // A call sent after the dialog closed would still be a write: give the page a round
+          // trip and two frames to send one, then require that none came.
+          await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+          await page.evaluate(() => null);
           expect(calls).toEqual([]);
         },
       },
