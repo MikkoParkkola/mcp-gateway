@@ -53,6 +53,10 @@ module = "src/security/rule_id.rs"
 reason = "the keyed id a decision record names a configured rule by (derived key, id form); it names rules, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/metrics_scrape.rs"
+reason = "test-only (#[cfg(test)]): reads the rendered metrics text back in rows; it is not compiled into the gateway and refuses nothing"
+
+[[coverage.not_a_control]]
 module = "src/security/decision_fixture_table.rs"
 reason = "the decision fixture table's row shape, compiled in test builds only (#[cfg(test)] in security/mod.rs); it asserts recorded decisions and refuses no request"
 
