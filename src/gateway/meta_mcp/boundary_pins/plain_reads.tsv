@@ -55,6 +55,7 @@ src/control_plane/export.rs	drop_torn_tail	File::open	1	not-config	reads the las
 src/control_plane/export.rs	open	fs::read	1	not-config	the control-plane export cursor
 src/control_plane/store/file_io.rs	write_atomic	File::open	1	no-content	opens a directory only to fsync it
 src/cost_accounting/persistence.rs	load	fs::read_to_string	1	not-config	cost history JSON
+src/cost_accounting/spend_history.rs	read_capped	File::open	1	not-config	saved spend series JSON
 src/counters/persist.rs	restore	fs::read	1	not-config	persisted counters
 src/debug_trust_roots.rs	with_roots_from	fs::read	1	not-config	test-only trust roots PEM
 src/discovery/config_scanner.rs	parse_claude_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
