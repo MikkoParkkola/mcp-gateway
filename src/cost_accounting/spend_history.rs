@@ -80,7 +80,11 @@ impl Rows {
     fn flaw(&self, what: &str) -> Option<String> {
         let max_hours = usize::try_from(BUCKET_HOURS + 1).unwrap_or(usize::MAX);
         let max_days = usize::try_from(KEPT_DAYS).unwrap_or(usize::MAX);
-        if self.hours.len() > max_hours || self.days.len() > max_days {
+        if mutant!(
+            "m17",
+            false,
+            self.hours.len() > max_hours || self.days.len() > max_days
+        ) {
             return Some(format!("{what} holds more rows than one series keeps"));
         }
         if self
@@ -153,7 +157,14 @@ impl History {
             if !shaped {
                 return Some("a key fingerprint is not 32 lowercase hex digits".to_owned());
             }
-            if !seen.insert(key.fp.as_str()) {
+            if mutant!(
+                "m24",
+                {
+                    seen.insert(key.fp.as_str());
+                    false
+                },
+                !seen.insert(key.fp.as_str())
+            ) {
                 return Some("two keys share a fingerprint".to_owned());
             }
         }
@@ -219,13 +230,16 @@ pub(crate) fn restore(
     if let Some(why) = history.flaw() {
         return set_aside(tracker, &path, now, &why);
     }
-    let by_fp: HashMap<String, &String> = key_names.iter().map(|n| (fingerprint(n), n)).collect();
+    let by_fp: HashMap<String, &String> = key_names
+        .iter()
+        .map(|n| (mutant!("m13", n.clone(), fingerprint(n)), n))
+        .collect();
     let mut ahead = history.keyless.replay(&mut tracker.keyless.lock(), now);
     let mut carried = tracker.carried.lock();
     ahead = ahead.max(history.overflow.replay(&mut carried, now));
     for key in &history.keys {
-        let Some(name) = by_fp.get(&key.fp) else {
-            ahead = ahead.max(key.rows.replay(&mut carried, now));
+        let Some(name) = by_fp.get(mutant!("m13", &key.name, &key.fp)) else {
+            ahead = mutant!("m23", ahead, ahead.max(key.rows.replay(&mut carried, now)));
             continue;
         };
         // An idle key whose rows have all aged out gets no entry, so it is
@@ -335,7 +349,11 @@ fn save_with(
     let written = crate::config_persistence::write_atomic_checked(
         &path,
         &bytes,
-        crate::config_persistence::FileMode::Private,
+        mutant!(
+            "m16",
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::FileMode::Private
+        ),
         crate::config_persistence::Symlink::Replace,
         before_rename,
     );
@@ -398,7 +416,14 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
         .collect();
     let mut keys = Vec::with_capacity(handles.len());
     for (name, key) in handles {
-        keys.push((name, key.spend.lock().0.clone()));
+        mutant!(
+            "m20",
+            if let Some(live) = tracker.per_key.get(&name) {
+                let copy = live.spend.lock().0.clone();
+                keys.push((name, copy));
+            },
+            keys.push((name, key.spend.lock().0.clone()))
+        );
         after_copy();
     }
     let mut keyless = tracker.keyless.lock().clone();
@@ -415,13 +440,23 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
         .map(|(_, s)| s)
         .chain([&mut keyless, &mut overflow])
     {
-        series.settle(hour, date);
+        mutant!("m19", (), series.settle(hour, date));
     }
 
     // Most 30-day spend first; the name breaks a tie, so a save is stable.
     let mut ranked: Vec<(u64, String, Series)> = keys
         .into_iter()
-        .map(|(name, series)| (series.days.micro_total(), name, series))
+        .map(|(name, series)| {
+            let total = mutant!(
+                "m14",
+                tracker
+                    .per_key
+                    .get(&name)
+                    .map_or(0, |live| live.spend.lock().0.days.micro_total()),
+                series.days.micro_total()
+            );
+            (total, name, series)
+        })
         .collect();
     ranked.sort_by(|(x, a, _), (y, b, _)| y.cmp(x).then_with(|| a.cmp(b)));
     let folded = ranked.split_off(ranked.len().min(MAX_KEYS));

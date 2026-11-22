@@ -237,9 +237,20 @@ impl KeyCost {
         let last = self.last_spend.load(Ordering::Relaxed);
         // Both cuts the series age by: with a 25-hour day in the month the
         // dates outlast the hours, and the entry must outlast both.
-        last != 0
+        let held = last != 0
             && (last / 3600).expired(now / 3600)
-            && tally::local_date(last).expired(tally::local_date(now))
+            && tally::local_date(last).expired(tally::local_date(now));
+        mutant!(
+            "m18",
+            last != 0
+                && last / 3600 + tally::BUCKET_HOURS + 1 < now / 3600
+                && (tally::local_date(now) - tally::local_date(last)).num_days() > tally::KEPT_DAYS,
+            mutant!(
+                "m15",
+                self.spend.lock().0.hours.newest().is_none() || held,
+                held
+            )
+        )
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock
@@ -451,7 +462,11 @@ impl CostTracker {
         // Per-key (if we have a key name)
         if let Some(key_name) = api_key_name {
             self.per_key
-                .entry(key_name.to_string())
+                .entry(mutant!(
+                    "m22",
+                    crate::counters::normalize(key_name),
+                    key_name.to_string()
+                ))
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name)))
                 .record(rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
