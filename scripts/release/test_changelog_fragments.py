@@ -451,13 +451,17 @@ class DropIds(unittest.TestCase):
         # bullet; a blank line the fragment itself has stays.
         for src, out in ((f"- n one\n  ({T}74)\n  two.\n\n  Kept.\n", "- n one\n  two.\n\n  Kept.\n"),
                          (f"- n2 one\n  ({T}75,\n  {T}76)\n  two.\n", "- n2 one\n  two.\n"),
-                         (f"- n3 one\n  ({T}77,\n\n  {T}78)\n  two.\n", "- n3 one\n\n  two.\n")):
+                         (f"- n3 one\n  ({T}77,\n\n  {T}78)\n  two.\n", "- n3 one\n\n  two.\n"),
+                         (f"- n4 one\n  ({T}79,\n  \t\n\n  {T}80)\n  two.\n", "- n4 one\n  \t\n\n  two.\n"),
+                         (f"- n5 one\n  ({T}81)", "- n5 one")):
             with self.subTest(src=src):
                 self.assertEqual(cf.drop_ids(src), (out, []))
 
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
         HOLDS_CODE = "a tracker id in a parenthetical that holds code"
         ODD_BACKTICK = "a tracker id in a bullet with an escaped or unclosed backtick"
+        SPAN_CHANGED = "dropping the tracker id would change a code span; reword the line"
+        BLOCK = "a tracker id in a bullet holding a code block; move the id out of the bullet, or reword"
         cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
                  (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"),
                  (f"- v (`run {T}60`, {T}61).\n", 1, HOLDS_CODE),
@@ -472,7 +476,14 @@ class DropIds(unittest.TestCase):
                  (f"- e \\`x (#1, {T}66) here.\n", 1, ODD_BACKTICK),
                  (f"- m `f(\n{T}67)`.\n", 2, ODD_BACKTICK),
                  (f"- m2 `f(\n{T}68,\nx)`.\n", 2, ODD_BACKTICK),
-                 (f"- m3 `a\n  f({T}69)\n  b`.\n", 2, ODD_BACKTICK))
+                 (f"- m3 `a\n  f({T}69)\n  b`.\n", 2, ODD_BACKTICK),
+                 # The drop itself would join two spans, or escape the backtick after it.
+                 (f"- j `printf a,b` ({T}82)`exit 0`.\n", 1, SPAN_CHANGED),
+                 (f"- j2 a\\ ({T}83)`x`.\n", 1, SPAN_CHANGED),
+                 # Block code the span reader cannot see.
+                 (f"- k run:\n  ~~~\n  printf \"({T}84)\"\n  ~~~\n", 3, BLOCK),
+                 (f"- k2 run:\n  ```\n  printf \"({T}85)\"\n  ```\n", 3, BLOCK),
+                 (f"- k3 run:\n\n      printf \"({T}86)\"\n", 3, BLOCK))
         for fragment, line, why in cases:
             with self.subTest(fragment=fragment):
                 with self.assertRaises(ValueError) as caught:
