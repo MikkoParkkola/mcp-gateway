@@ -16,6 +16,8 @@ use super::{Decided, Decision, DecisionFinding, DecisionKind, Effect, EffectSour
 /// A v2 decision with every field this version writes.
 fn full() -> Decision {
     Decision {
+        token: None,
+        token_unavailable: false,
         v: 2,
         config_revision: Some("rev-a".into()),
         config_revision_capabilities: None,

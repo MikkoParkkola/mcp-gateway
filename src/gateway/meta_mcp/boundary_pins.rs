@@ -18,6 +18,8 @@ mod ci_wiring;
 #[cfg(tp2)]
 mod creation_sites;
 #[cfg(tp2)]
+mod decision_builders;
+#[cfg(tp2)]
 mod delivery_framing;
 #[cfg(tp2)]
 mod discarded_sends;
