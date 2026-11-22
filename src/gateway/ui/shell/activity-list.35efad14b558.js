@@ -41,7 +41,7 @@ export function replace(state, { query, fresh, now }) {
 
 /** A live activity frame arrived on the stream. */
 export function frame(state, { fresh, now }) {
-  // While the operator reads older pages, news is only marked, never fetched.
+  // While the operator reads older pages, news is only marked, never asked for.
   if (state.held) return { state: { ...state, newer: true }, abort: null, issue: null };
   // A page 1 or live refresh is out: one more refresh follows when it settles.
   if (state.flight) return { state: { ...state, dirty: true }, abort: null, issue: null };
