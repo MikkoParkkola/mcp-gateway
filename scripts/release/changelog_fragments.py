@@ -203,8 +203,10 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
             start, end = text.rfind("\n", 0, o) + 1, text.find("\n", c)
             end = len(text) if end < 0 else end
             if not text[start:o].strip() and not text[c + 1:end].strip():
-                # Alone on its lines: they go too, as a line of spaces reads as a blank line.
-                text = text[:start] + text[end + 1:]
+                # Alone on its lines: they go too, as a line of spaces reads as a blank
+                # line; a blank line the source has inside it stays, as written.
+                kept = "".join(f"{blank}\n" for blank in text[start:end].split("\n") if not blank.strip())
+                text = text[:start] + kept + text[end + 1:]
             else:
                 text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
         masked, blind, spans, _ = scan(text)
