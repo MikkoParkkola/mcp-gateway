@@ -35,7 +35,7 @@ fn config_file(dir: &Path, auth: bool, log: Option<&Path>) -> std::path::PathBuf
 async fn served(row: &str, config: &Path) -> Gateway {
     let mut evaluated = serve_load(row, config).await;
     let env = Arc::new(evaluated.live_env());
-    serve_build(row, evaluated, env, config).await
+    Box::pin(serve_build(row, evaluated, env, config)).await
 }
 
 fn one_logger(
@@ -54,7 +54,7 @@ async fn startup_one_logger() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let log = dir.path().join("audit.jsonl");
-    let gateway = served(ROW, &config_file(dir.path(), true, Some(&log))).await;
+    let gateway = Box::pin(served(ROW, &config_file(dir.path(), true, Some(&log)))).await;
     let first = gateway.build_meta_mcp().await;
     let second = gateway.build_meta_mcp().await;
     let opened = open_attempts::at(&log);
@@ -72,7 +72,7 @@ async fn startup_one_logger() {
     drop((first, second, gateway));
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let gateway = served(ROW, &config_file(dir.path(), false, None)).await;
+    let gateway = Box::pin(served(ROW, &config_file(dir.path(), false, None))).await;
     for build in 0..2 {
         let built = gateway
             .build_meta_mcp()
@@ -89,7 +89,7 @@ async fn startup_one_logger() {
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
     let log = blocker.join("audit.jsonl");
-    let gateway = served(ROW, &config_file(dir.path(), false, Some(&log))).await;
+    let gateway = Box::pin(served(ROW, &config_file(dir.path(), false, Some(&log)))).await;
     std::fs::remove_file(&blocker).expect("remove the file");
     std::fs::create_dir(&blocker).expect("the log's folder exists now");
     for build in 0..2 {

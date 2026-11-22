@@ -133,7 +133,7 @@ async fn crash_s1() {
     );
     let token = persisted_recovery_token(&left.path, ROW);
 
-    let gateway = serve_start(ROW, &left.path)
+    let gateway = Box::pin(serve_start(ROW, &left.path))
         .await
         .unwrap_or_else(|error| panic!("{ROW}: the next served start builds: {error}"));
     drop(gateway);
@@ -176,7 +176,7 @@ async fn crash_s2() {
         "{ROW}: the served start was killed after opening its log, got {status}"
     );
     let token = persisted_recovery_token(&left.path, ROW);
-    let gateway = serve_start(ROW, &left.path)
+    let gateway = Box::pin(serve_start(ROW, &left.path))
         .await
         .unwrap_or_else(|error| panic!("{ROW}: the next served start builds: {error}"));
     drop(gateway);
@@ -199,7 +199,7 @@ async fn crash_s2_child() {
     let _armed = serve_seams::arm(&path, Point::AfterServingOpen, || {
         std::process::abort();
     });
-    let _ = serve_start("crash_s2_child", &path).await;
+    let _ = Box::pin(serve_start("crash_s2_child", &path)).await;
 }
 
 /// `crash_s3`: delivery fails at a boundary while a served gateway is built. No gateway is
@@ -210,7 +210,7 @@ async fn crash_s3() {
     for at in [At::IntentAppended, At::OutcomeAppended] {
         let left = crashed_write(ROW);
         let armed = fault::arm(&left.path, Fault::Fail(at));
-        let built = serve_start(ROW, &left.path).await;
+        let built = Box::pin(serve_start(ROW, &left.path)).await;
         let fired = fault::fired(&left.path);
         drop(armed);
         assert!(fired > 0, "{ROW} {at:?}: the delivery reached the boundary");
@@ -220,7 +220,7 @@ async fn crash_s3() {
         );
         drop(built);
 
-        let gateway = serve_start(ROW, &left.path)
+        let gateway = Box::pin(serve_start(ROW, &left.path))
             .await
             .unwrap_or_else(|error| panic!("{ROW} {at:?}: the next served start builds: {error}"));
         drop(gateway);

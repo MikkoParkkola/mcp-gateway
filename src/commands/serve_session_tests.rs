@@ -41,7 +41,10 @@ async fn startup_lock_span() {
         held_elsewhere(&config).await,
         "{ROW}: held after the environment hand-over"
     );
-    let gateway = super::serve_fixture::serve_build(ROW, evaluated, env, &config).await;
+    let gateway = Box::pin(super::serve_fixture::serve_build(
+        ROW, evaluated, env, &config,
+    ))
+    .await;
     assert!(
         !held_elsewhere(&config).await,
         "{ROW}: free once the gateway is built"
@@ -291,7 +294,10 @@ async fn startup_session_take_once() {
     let env = Arc::new(evaluated.live_env());
     let after = evaluated.clone();
     let second = Arc::new(evaluated.live_env());
-    let gateway = super::serve_fixture::serve_build(ROW, evaluated, env, &config).await;
+    let gateway = Box::pin(super::serve_fixture::serve_build(
+        ROW, evaluated, env, &config,
+    ))
+    .await;
     drop(gateway);
     assert!(
         !held_elsewhere(&config).await,
