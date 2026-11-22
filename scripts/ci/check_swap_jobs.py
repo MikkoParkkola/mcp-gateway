@@ -14,6 +14,11 @@ This check reads every workflow and refuses:
     before its first such step;
   - an add-swap step whose `if:` is not one of ALLOWED_CONDITIONS (a condition
     that skips a library matrix row would leave that row without swap);
+  - a Linux-hosted job that runs the memory tripwire unless an add-swap step
+    without `if:` comes before its first `run:` step and the tripwire comes
+    after every other `run:` command (no build detection: position decides),
+    since the tripwire fails closed with no active swap and counts the whole
+    job's swap-out, and some runner images come with none;
   - a hand-copied swap script (`swapon`/`mkswap` in a workflow `run:`), which
     could drift from the shared action;
   - an in-scope job list that differs from EXPECTED (a job that starts or stops
@@ -68,10 +73,9 @@ WRAPPERS = (
 )
 COPIED_SWAP = re.compile(r"\b(swapon|mkswap)\b")
 
-# The add-swap step may be conditional only in these ways: the coverage parts
-# run it on every library part and on no integration part.
+# The one condition an add-swap step may carry. Gating it to the library coverage parts went: the integration parts
+# run the memory tripwire too, and it needs active swap on every leg (train 64a: an int part on an image with none).
 ALLOWED_CONDITIONS = {
-    "startsWith(matrix.part, 'lib-')",
     # A step shared with a self-hosted twin job (mutants.yml keeps its hosted
     # and trusted Linux jobs identical): it runs on every hosted run.
     "runner.environment == 'github-hosted'",
@@ -316,7 +320,7 @@ def census(jobs_in_scope: dict, packaged_by_part: bool, packaged_run_by_part: bo
     for key in sorted(through):
         steps = [s for s in jobs_in_scope[key].get("steps", []) if isinstance(s, dict)]
         last_build = max((i for i, s in enumerate(steps) if step_builds(s)), default=-1)
-        if not any((run_commands(str(s.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
+        if not any(runs_tripwire(s)
                    and str(s.get("if", "")).strip() == "always()"
                    for s in steps[last_build + 1:]):
             problems.append(f"{key[0]}:{key[1]} builds by part with no `if: always()` step running {TRIPWIRE} "
@@ -358,6 +362,32 @@ def linux_hosted(job: dict) -> bool:
     return "ubuntu" in (" ".join(runs_on) if isinstance(runs_on, list) else str(runs_on))
 
 
+def runs_tripwire(step: dict) -> bool:
+    return (run_commands(str(step.get("run", ""))) or [""])[0].startswith(TRIPWIRE)
+
+
+def tripwire_swap_problems(name: str, steps: list) -> list[str]:
+    """The tripwire counts swap-out since boot and fails closed when none is active. So in its job the unconditional
+    add-swap step comes before every shell step, and the tripwire after every other one. Position alone decides,
+    whatever a step compiles: a build the library match misses still runs between the two."""
+    shell = [i for i, s in enumerate(steps) if "run" in s]
+    trips = [i for i in shell if runs_tripwire(steps[i])]
+    if not trips:
+        return []
+    found = []
+    if not any(s.get("uses") == ACTION and "if" not in s for s in steps[:shell[0]]):
+        found.append(f"{name}: needs an {ACTION} step without `if:` before step {shell[0]}, its first shell step, "
+                     f"since the memory tripwire (step {trips[0]}) fails closed on a runner image that has no swap")
+    later = [i for i in shell if i > trips[-1] and not runs_tripwire(steps[i])]
+    if later:
+        found.append(f"{name}: its memory tripwire (step {trips[-1]}) is not the job's last shell step: step "
+                     f"{later[0]} runs after it, and its swap-out goes uncounted")
+    elif any(not c.startswith(TRIPWIRE) for c in run_commands(str(steps[trips[-1]].get("run", "")))[1:]):
+        found.append(f"{name}: step {trips[-1]} runs another command after the memory tripwire in the same step, "
+                     "and that command's swap-out goes uncounted")
+    return found
+
+
 def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     """(in scope, problems) for one job."""
     problems: list[str] = []
@@ -368,6 +398,7 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
     if not linux_hosted(job):
         return False, problems
     first_build = next((i for i, s in enumerate(steps) if step_builds(s)), None)
+    problems += tripwire_swap_problems(name, steps)
     if first_build is None:
         return False, problems
     swap = next((i for i, s in enumerate(steps) if s.get("uses") == ACTION), None)
@@ -387,6 +418,8 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
 # its own limit keeps none). Limits come from measured healthy durations; a step with no measurement yet logs
 # only, named here per step. Its limit must not be set until it is measured.
 MEMLOG = "scripts/ci/with-memory-log.sh"
+# The same wrapper as the mutants jobs run it: fetched from the release line into $RUNNER_TEMP, never the checkout's.
+MEMLOG_FETCHED = 'bash "$RUNNER_TEMP/with-memory-log.sh"'
 LOG_ONLY = {
     # A healthy lib-b run took 52 min on 2026-11-13: no limit until the shard suite's tail is measured.
     ("ci.yml", "test-shards", "Shard suite"),
@@ -415,7 +448,8 @@ def whole_step_wrapped(run: str) -> bool:
 # optional loop/branch keyword, the wrapper as the command's first word, an optional interpreter, and the start of
 # the build's own word when the match begins inside it (`"$RUNNER_TEMP/run_mutants.py`). No `(` or backtick.
 WRAPPED_PREFIX = re.compile(
-    r"\s*(?:(?:do|then|else)\s+)?(?:\./)?" + re.escape(MEMLOG) + r"\s+(?:(?:python3?|bash|sh)\s+)?[\w$./{}\"'-]*")
+    r"\s*(?:(?:do|then|else)\s+)?(?:(?:\./)?" + re.escape(MEMLOG) + "|" + re.escape(MEMLOG_FETCHED) + ")"
+    r"\s+(?:(?:python3?|bash|sh)\s+)?[\w$./{}\"'-]*")
 # Characters that end one command and start another (or a substitution's): a build's command starts after the
 # last of them.
 COMMAND_BREAKS = "\n;&|(`"
@@ -539,6 +573,17 @@ def run_action(before_mb: int, after_mb: int) -> int:
         return subprocess.run(["bash", "-c", action_script()], env=env, capture_output=True, text=True).returncode
 
 
+def each_in_its_own(words: tuple, problems: list[str]) -> bool:
+    """Every word found in a different problem, so one merged message cannot stand for two."""
+    left = list(problems)
+    for word in words:
+        hit = next((p for p in left if word in p), None)
+        if hit is None:
+            return False
+        left.remove(hit)
+    return True
+
+
 def self_test() -> int:
     def job(*steps: dict, runs_on: str = "ubuntu-latest") -> dict:
         return {"runs-on": runs_on, "steps": list(steps)}
@@ -547,6 +592,12 @@ def self_test() -> int:
         return {"run": run, **fields}
 
     swap = {"uses": ACTION}
+    tw = step(f"{TRIPWIRE} 2048 \"$RUNNER_TEMP/memory-trend.txt\"", **{"if": "always()"})
+    # Train 64a: an integration coverage part drew a runner image with no swap, and its tripwire failed closed.
+    lib_only_swap = {**swap, "if": "startsWith(matrix.part, 'lib-')"}
+    cov_part = step("python3 scripts/ci/coverage_shards.py run 4 \"$PART\"")
+    full = step("cargo test --all-features")
+    itest = step("cargo test --test public_claims_validation")  # out of scope: no library build
     cases = [
         ("a library test build with no swap step", job({"run": "cargo test --all-features --lib --no-run"}), True, 1),
         ("a build continued between cargo and test, no swap step",
@@ -563,7 +614,22 @@ def self_test() -> int:
         ("the mutant harness copied to the runner temp", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o'}), True, 1),
         ("the mutant harness plan step does not compile", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" plan'}), False, 0),
         ("the repo's mutant runner path", job({"run": "python3 scripts/ci/mutants/run_mutants.py run --platform linux"}), True, 1),
-        ("coverage parts gated to every lib part", job({**swap, "if": "startsWith(matrix.part, 'lib-')"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 0),
+        ("swap gated to lib parts leaves the int parts with none", job(lib_only_swap, cov_part), True, 1),
+        ("tripwire job, swap gated to lib parts", job(lib_only_swap, cov_part, tw), True, ("needs an", "runs only if")),
+        ("tripwire job, swap on hosted runners only", job({**swap, "if": "runner.environment == 'github-hosted'"}, full, tw), True, ("needs an",)),
+        ("tripwire job, unconditional swap before the build", job(swap, full, tw), True, 0),
+        ("tripwire job, no library build and no swap", job(itest, tw), False, ("needs an",)),
+        ("tripwire job, swap only after the build", job(full, swap, tw), True, ("needs an", "comes after the library build")),
+        ("tripwire job, no library build, swap first", job(swap, tw), False, 0),
+        ("tripwire job, tripwire before the build it should measure", job(swap, tw, full), True, ("not the job's last",)),
+        ("tripwire job, swap after an integration build", job(itest, swap, tw), False, ("needs an",)),
+        ("tripwire job, an integration build after the tripwire", job(swap, tw, itest), False, ("not the job's last",)),
+        ("tripwire job, an upload step after it", job(swap, full, tw, {"uses": "actions/upload-artifact@v7"}), True, 0),
+        ("tripwire job, two tripwire steps, the second last", job(swap, full, tw, tw), True, 0),
+        ("tripwire job, a shell step before add-swap", job(step("echo setup"), swap, full, tw), True, ("needs an",)),
+        ("tripwire job, a build in the tripwire's own step",
+         job(swap, full, step(f"{TRIPWIRE} 2048 t\ncargo test --all-features", **{"if": "always()"})), True,
+         ("in the same step",)),
         ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
@@ -600,7 +666,11 @@ def self_test() -> int:
         print(f"{'ok   ' if ok else 'WRONG'} add-swap action, {label}: exit {rc}")
     for label, j, want_scope, want_problems in cases:
         in_scope, problems = check_job("fixture", j)
-        ok = in_scope == want_scope and len(problems) == want_problems
+        if isinstance(want_problems, tuple):  # one word per expected problem, each found in its own message
+            ok = (in_scope == want_scope and len(problems) == len(want_problems)
+                  and each_in_its_own(want_problems, problems))
+        else:
+            ok = in_scope == want_scope and len(problems) == want_problems
         wrong += not ok
         print(f"{'ok   ' if ok else 'WRONG'} {label}: in scope {in_scope}, problems {problems}")
     for label, file, name, j, want_bad in memlog_cases():
@@ -984,6 +1054,11 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C15 the wrapper on a continued line", "ci.yml", "j", job(step(w + "\\\n  cargo test --all-features --lib --no-run")), False),
         ("C15 the mutant harness through the wrapper", "m.yml", "j",
          job(step(w + 'python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), False),
+        # The mutants jobs fetch the wrapper from the release line, like the runner, and run that copy.
+        ("C15b the mutant harness through the release line's fetched wrapper", "m.yml", "j",
+         job(step(f'{MEMLOG_FETCHED} python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), False),
+        ("C15c another fetched script is not the wrapper", "m.yml", "j",
+         job(step('bash "$RUNNER_TEMP/other.sh" python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), True),
         ("C16 a comment naming cargo test is not a build", "ci.yml", "j",
          job(step(f"# cargo test --all-features --lib runs below\n{w}cargo test --all-features --lib --no-run")), False),
         ("C16 a bare single-target run beside a wrapped library build", "ci.yml", "j",

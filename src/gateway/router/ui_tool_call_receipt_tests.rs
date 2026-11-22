@@ -13,8 +13,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::ui_tool_call_tests::{
-    ADMIN, Fx, SERVER, Stub, USER, admin_actions, call, fixture, post, sent,
+    ADMIN, Fx, POST_BOUND, Stub, TestDeadline, USER, admin_actions, call, deadline_after_send,
+    fixture, install, install_slow_gated, post, sent,
 };
+// Only the firewall rows name the server now; the stub installer goes through `install`.
+#[cfg(feature = "firewall")]
+use super::ui_tool_call_tests::SERVER;
 
 /// A refusal body with its receipt's value masked: each call names its own
 /// trace, so two answers alike differ only there. Whether a receipt is present
@@ -256,18 +260,26 @@ async fn mcp_call(fx: &Fx, key: &str, params: Value) -> (StatusCode, axum::http:
 }
 
 fn install_stub(fx: &Fx, gate: Option<Arc<tokio::sync::Notify>>) {
-    let backend = Arc::new(crate::backend::Backend::new(
-        SERVER,
-        crate::config::BackendConfig::default(),
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
-    backend.set_transport_for_test(Arc::new(Stub {
-        calls: Arc::clone(&fx.calls),
-        declares_read: true,
-        list_gate: gate,
-    }));
-    assert!(fx.state.backends.register(backend), "registration");
+    install(
+        fx,
+        Stub {
+            calls: Arc::clone(&fx.calls),
+            declares_read: true,
+            list_gate: gate,
+            list_entered: None,
+            slow_gate: None,
+        },
+    );
+}
+
+/// Opens a list gate when dropped, so a row that fails before its own release
+/// still lets the held call finish. A stored permit: no waiter is missed.
+struct ReleaseOnDrop(Arc<tokio::sync::Notify>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
 }
 
 /// B1: a gateway admin, refused in the route stage, before dispatch, by a
@@ -447,31 +459,26 @@ async fn b5_the_deadline_both_orders() {
     let fx = fixture().await;
     let gate = Arc::new(tokio::sync::Notify::new());
     install_stub(&fx, Some(Arc::clone(&gate)));
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(Duration::from_millis(50))));
-    let (status, early) = post(&fx, ADMIN, call("read", false)).await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));
+    let release = ReleaseOnDrop(Arc::clone(&gate));
+    let early = {
+        // limit-under-test (fires-only): dispatch waits on the held list, so only the deadline can end this call
+        let _deadline = TestDeadline::set(Duration::from_millis(50));
+        tokio::time::timeout(POST_BOUND, post(&fx, ADMIN, call("read", false))).await
+    };
+    let (status, early) = early.expect("the route answered within the post bound");
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{early}");
     assert_eq!(early["disposition"], "not_run", "{early}");
     assert!(early.get("receipt").is_none(), "before dispatch: {early}");
     assert_eq!(sent(&fx), 0, "the deadline won before the send");
-    gate.notify_waiters();
+    drop(release);
     for _ in 0..64 {
         tokio::task::yield_now().await;
     }
     assert_eq!(sent(&fx), 0, "releasing the list sent nothing");
 
-    install_stub(&fx, None);
-    fx.state
-        .backends
-        .get(SERVER)
-        .expect("alpha was registered again")
-        .get_tools_shared()
-        .await
-        .expect("the catalogue is warm");
+    let gate = install_slow_gated(&fx).await;
     let before = admin_actions(&fx).len();
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(Duration::from_millis(100))));
-    let (status, late) = post(&fx, ADMIN, call("slow", false)).await;
-    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));
+    let (status, late) = deadline_after_send(&fx, &gate).await;
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{late}");
     assert_eq!(late["disposition"], "may_have_run", "{late}");
     assert_eq!(sent(&fx), 1, "the slow call was sent");

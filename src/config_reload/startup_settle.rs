@@ -169,7 +169,7 @@ async fn from_worker<T: Send + 'static>(
     path: PathBuf,
     work: impl FnOnce() -> Result<T, Refusal> + Send + 'static,
 ) -> Result<T, StartError> {
-    match off_runtime(work).await {
+    match off_runtime(Some(&path), work).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(refusal)) => Err(logged(refusal)),
         Err(NoResult::Stalled) => Err(logged(refuse(StartError::Busy, path, "Stalled"))),

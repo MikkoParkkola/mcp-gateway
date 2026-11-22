@@ -1038,7 +1038,7 @@ configuration and is not covered by the shipped rules or their tests.
 ### Live Statistics / Web Dashboard
 
 ```bash
-mcp-gateway stats --url http://127.0.0.1:39400
+mcp-gateway stats --gateway http://127.0.0.1:39400
 ```
 
 Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools), which is admin-only — see [Opening the dashboard](#opening-the-dashboard). Auto-refresh every 5s.

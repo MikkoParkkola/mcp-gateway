@@ -381,6 +381,7 @@ async fn one_clock_reading_judges_a_key_server_token() {
         ks.store.as_ref(),
         ks.config.token_ttl_secs,
         crate::key_server::TemporaryToken {
+            issuance_row: None,
             jti: "j1".into(),
             token: "mcpgw_t".into(),
             identity: crate::key_server::oidc::VerifiedIdentity::for_test(
@@ -448,6 +449,7 @@ async fn key_server_credentials_are_rechecked_where_they_were_issued() {
         ks.store.as_ref(),
         ks.config.token_ttl_secs,
         crate::key_server::TemporaryToken {
+            issuance_row: None,
             jti: "j1".into(),
             token: "mcpgw_t".into(),
             identity: identity.clone(),

@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/meta_mcp/task_replay.rs	cold_state	cold_refusal	1	not-delivered	memo: the lender refusal a settled cold fill kept on the caller's slot, read for the stored read's answer
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	Error::Forbidden{}	1	composite-or-replay	a stored task read answers the lender refusal its cold fill recorded, unrecorded like the retry it replaces

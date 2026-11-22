@@ -477,6 +477,28 @@ def drift_problems(repo) -> list[str]:
     return drift_test.problems(repo) + drift_test.rust_drift(repo)
 
 
+def resolve_gate_py(lines, repo, environ=None, helper=None):
+    """(interpreter, error) for rows written as "$GATE_PY" <script>.
+
+    Nothing to do when no row names it or GATE_PY is already set. Otherwise the same helper the pre-push hook
+    uses prints the gates' pinned interpreter. If it cannot, the caller stops with this one error: an empty
+    GATE_PY would make every such row fail with "command not found", a block of reds lanes learn to skim past.
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get("GATE_PY") or not any('"$GATE_PY"' in line for line in lines):
+        return None, None
+    helper = helper or str(Path(repo) / "scripts/dev/gate-env-python.sh")
+    try:
+        done = subprocess.run(["bash", helper], cwd=repo, capture_output=True, text=True, timeout=SETUP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, f"setup error: GATE_PY is not set and {helper} gave no answer in {SETUP_TIMEOUT_S} s; no check was run"
+    found = done.stdout.strip()
+    if done.returncode != 0 or not found:
+        why = (done.stderr.strip() or f"{helper} exited {done.returncode}").splitlines()[-1]
+        return None, f"setup error: GATE_PY is not set and the gate environment is not ready ({why}); no check was run"
+    return found, None
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--merge-base", required=True)
@@ -503,6 +525,12 @@ def main(argv=None) -> int:
         return 1
     lines = [l for l in (repo / "scripts/dev/prepush-ci-checks.txt").read_text().splitlines()
              if l.strip() and not l.startswith("#")]
+    gate_py, setup_error = resolve_gate_py(lines, repo)
+    if setup_error:
+        print(f"CI script checks: {setup_error}")
+        return 2
+    if gate_py:
+        os.environ["GATE_PY"] = gate_py  # every row's bash inherits it (_execute)
     start = time.monotonic()
     report = run(lines, repo=repo, head=head, merge_base=args.merge_base, base_tip=base_tip,
                  drift=lambda: drift_problems(repo))

@@ -23,6 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
+import cache_writers  # noqa: E402
 
 SKIPPED = {
     "check", "kani", "fmt", "audit",
@@ -430,26 +431,6 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
-def clippy_cache_errors(jobs: dict) -> list[str]:
-    """The pedantic clippy job restores its cache on every run but saves it only on a push.
-
-    A pull request restores only caches saved on its base branch or its own ref, so the release-line
-    push is the one run whose save helps anyone; a save on every PR ref wrote a 310 MB cache per run
-    that nothing else could read, which held the repository at its 10 GB cache limit and let eviction
-    push the line's own cache out."""
-    out = []
-    steps = [s for s in jobs["check"]["steps"] if str(s.get("uses", "")).startswith("Swatinem/rust-cache@")]
-    if len(steps) != 1:
-        return [f"clippy cache: the check job has {len(steps)} rust-cache steps, want exactly one"]
-    save_if = str((steps[0].get("with") or {}).get("save-if", ""))
-    for label, event, want in (("a pull request", "pull_request", False), ("a push", "push", True)):
-        got = evaluate(save_if, ctx(event, "success", "false")) if save_if else True
-        if bool(got) is not want:
-            out.append(f"clippy cache: {label} {'does not save' if want else 'saves'} the cache "
-                       f"(save-if: {save_if or 'default true'})")
-    return out
-
-
 def ui_tests_apt_errors() -> list[str]:
     """The UI tests job must not fail because an Ubuntu mirror is down.
 
@@ -538,7 +519,7 @@ def main() -> int:
     errors += macos_train_errors(jobs)
     errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
-    errors += clippy_cache_errors(jobs)
+    errors += cache_writers.errors() + cache_writers.self_test()
     errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.

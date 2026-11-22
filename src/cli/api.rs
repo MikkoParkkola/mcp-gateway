@@ -3,7 +3,7 @@
 //! Arguments of `mcp-gateway api`: one request to a running gateway's admin
 //! API (`/ui/api/...`), authenticated by `MCP_GATEWAY_TOKEN`.
 
-use super::dashboard_link::DashboardLinkTls;
+use super::dashboard_link::{DashboardLinkTls, GatewayArg};
 
 /// The HTTP methods `mcp-gateway api` sends. Anything else is a usage error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,9 +57,9 @@ pub struct ApiArgs {
     /// this many events, then close the stream and exit.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
     pub limit: Option<u32>,
-    /// Gateway base URL (default as for `dashboard-link`).
-    #[arg(short, long)]
-    pub url: Option<String>,
+    /// Where to send the request.
+    #[command(flatten)]
+    pub gateway: GatewayArg,
     /// Emit errors as one structured JSON object on stderr.
     /// Successful responses retain the gateway's native JSON or raw bytes.
     #[arg(long)]

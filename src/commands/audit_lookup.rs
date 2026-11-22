@@ -332,12 +332,13 @@ pub(crate) async fn lookup_run(
     let token = super::dashboard_link::read_token(token);
     let mut secrets: Vec<String> = token.iter().cloned().collect();
     let (base, tls, token) = match super::dashboard_link::resolved(
-        args.url.clone(),
+        args.gateway.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
         token,
+        crate::cli::output::Render::Text,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return (out, secrets),

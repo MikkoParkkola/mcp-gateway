@@ -19,6 +19,12 @@
 //! transparency log's `correlation_source`, which is the field the criterion
 //! is about. Nothing between the two is constructed by the test.
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 #[path = "common/record_key.rs"]
 mod record_key;
 use record_key::RECORD_KEY as KEY;
@@ -333,6 +339,7 @@ fn invocation_entries(path: &std::path::Path) -> Vec<Value> {
 /// that trace id and the entry names `otel_trace_id` as its source.
 #[tokio::test]
 async fn ac_control_3b_client_params_meta_trace_id_is_the_correlation_key() {
+    require_private_home!();
     let (_log_dir, state, log_path, _store_dir) = app_state_with_log().await;
     let url = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
@@ -377,6 +384,7 @@ async fn ac_control_3b_client_params_meta_trace_id_is_the_correlation_key() {
 /// pass the case above.
 #[tokio::test]
 async fn control_params_meta_without_traceparent_yields_no_otel_key() {
+    require_private_home!();
     let (_log_dir, state, log_path, _store_dir) = app_state_with_log().await;
     let url = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
@@ -415,5 +423,14 @@ async fn control_params_meta_without_traceparent_yields_no_otel_key() {
         entry.get("session_id").and_then(Value::as_str),
         Some(TRACE_ID),
         "the trace id from the other case must not leak into this one: {entry}"
+    );
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
     );
 }

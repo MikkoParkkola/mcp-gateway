@@ -14,7 +14,7 @@ use crate::test_wait::HANG_BOUND;
 use futures::StreamExt as _;
 
 /// A key server holding one live temporary token; its credential and `jti`.
-async fn key_server_with_token() -> (
+pub(super) async fn key_server_with_token() -> (
     Arc<crate::key_server::KeyServer>,
     Option<HeldCredential>,
     String,
@@ -92,7 +92,7 @@ async fn read_for_absence(
 /// `HANG_BOUND` passes (the caller's assert then says what was missing), and
 /// whether it ended. Once `until` holds, it keeps reading for `SETTLE`, where
 /// an extra write or an end that must not happen would show.
-async fn read_until(
+pub(super) async fn read_until(
     body: &mut axum::body::BodyDataStream,
     until: impl Fn(&str) -> bool,
 ) -> (String, bool) {
@@ -112,11 +112,11 @@ async fn read_until(
 }
 
 /// Read until the stream ends: the event a revoked token's stream must reach.
-fn until_it_ends(_: &str) -> bool {
+pub(super) fn until_it_ends(_: &str) -> bool {
     false
 }
 
-fn note(uri: &str) -> TaggedNotification {
+pub(super) fn note(uri: &str) -> TaggedNotification {
     TaggedNotification {
         source: "alpha".to_string(),
         event_type: "message".to_string(),
@@ -129,7 +129,9 @@ fn note(uri: &str) -> TaggedNotification {
     }
 }
 
-fn multiplexer(key_server: &Arc<crate::key_server::KeyServer>) -> Arc<NotificationMultiplexer> {
+pub(super) fn multiplexer(
+    key_server: &Arc<crate::key_server::KeyServer>,
+) -> Arc<NotificationMultiplexer> {
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
         StreamingConfig::default(),

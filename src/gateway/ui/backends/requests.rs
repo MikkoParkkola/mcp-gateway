@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 /// Request body for `POST /ui/api/backends`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AddBackendRequest {
     /// Backend name / key.
     pub name: String,
@@ -32,6 +33,7 @@ pub struct AddBackendRequest {
 
 /// Request body for `PATCH /ui/api/backends/:name`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateBackendRequest {
     /// New stdio command (replaces existing).
     pub command: Option<String>,
