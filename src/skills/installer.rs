@@ -16,7 +16,6 @@
 
 use std::path::{Path, PathBuf};
 
-use tokio::fs;
 use tracing::{debug, info, warn};
 
 use super::renderer::SkillBundle;
@@ -74,31 +73,138 @@ pub async fn install_bundle(
     out_dir: &Path,
     agent_paths: &[PathBuf],
 ) -> Result<InstallResult> {
+    install_bundle_kept(
+        bundle,
+        out_dir,
+        agent_paths,
+        &InstallKeep::silent(out_dir, agent_paths),
+    )
+    .await
+}
+
+/// What every write on the install path holds while it runs: the temp dirs a
+/// test kept (`crate::spawn_keep`), and a row's seams.
+#[derive(Clone, Default)]
+pub(crate) struct InstallKeep {
+    kept: crate::spawn_keep::Kept,
+    #[cfg(test)]
+    pub(crate) seams: Option<std::sync::Arc<Seams>>,
+}
+
+impl InstallKeep {
+    /// The keep a detached regen loop takes when it spawns: its output dir
+    /// and every agent root, each reported when no test kept it.
+    pub(crate) fn at_spawn(out_dir: &Path, agent_paths: &[PathBuf]) -> Self {
+        let roots = std::iter::once(out_dir).chain(agent_paths.iter().map(PathBuf::as_path));
+        Self {
+            kept: crate::spawn_keep::union(roots.map(|root| {
+                crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SKILL_BUNDLE, root)
+            })),
+            #[cfg(test)]
+            seams: None,
+        }
+    }
+
+    /// The same keep, silent: an awaited install starts no detached writer
+    /// of its own, so it reports nothing, but a write it started still
+    /// holds the dir if the caller's task is cancelled.
+    pub(crate) fn silent(out_dir: &Path, agent_paths: &[PathBuf]) -> Self {
+        let roots = std::iter::once(out_dir).chain(agent_paths.iter().map(PathBuf::as_path));
+        Self {
+            kept: crate::spawn_keep::union(roots.map(crate::spawn_keep::kept_dirs_at_spawn)),
+            #[cfg(test)]
+            seams: None,
+        }
+    }
+}
+
+/// Test-only holds inside the install path's writes (rows K4-K4w), each one
+/// shot: `*_before` before the write, `*_after` once it returned but before
+/// its closure drops its keep; `copy_mid` after the copy's first file.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Seams {
+    pub(crate) crust_before: std::sync::Arc<crate::test_pause::Slot>,
+    pub(crate) crust_after: std::sync::Arc<crate::test_pause::Slot>,
+    // Read only by the symlink path, which is built on Unix alone.
+    #[cfg(unix)]
+    pub(crate) link_before: std::sync::Arc<crate::test_pause::Slot>,
+    #[cfg(unix)]
+    pub(crate) link_after: std::sync::Arc<crate::test_pause::Slot>,
+    // Read only by the copy fallback, which is not built on Unix.
+    #[cfg(not(unix))]
+    pub(crate) copy_mid: std::sync::Arc<crate::test_pause::Slot>,
+    #[cfg(not(unix))]
+    pub(crate) copy_done: std::sync::Arc<crate::test_pause::Slot>,
+}
+
+/// One pair of seams, cloned out of `keep` for one write's closure.
+#[cfg(test)]
+fn seam_pair(
+    keep: &InstallKeep,
+    pick: impl Fn(&Seams) -> [&std::sync::Arc<crate::test_pause::Slot>; 2],
+) -> Option<[std::sync::Arc<crate::test_pause::Slot>; 2]> {
+    keep.seams
+        .as_deref()
+        .map(|seams| pick(seams).map(std::sync::Arc::clone))
+}
+
+/// Run one blocking filesystem call with a clone of `keep`'s kept dirs, so
+/// the keep lives exactly as long as that write, even past the task that
+/// started it: a write still running when the runtime drops holds the dir.
+async fn kept_blocking<T: Send + 'static>(
+    keep: &InstallKeep,
+    write: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> Result<T> {
+    let kept = keep.kept.clone();
+    tokio::task::spawn_blocking(move || crate::spawn_keep::holding(kept, write))
+        .await
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error)))?
+        .map_err(crate::Error::Io)
+}
+
+/// [`install_bundle`] with the keep its writes hold.
+pub(crate) async fn install_bundle_kept(
+    bundle: &SkillBundle,
+    out_dir: &Path,
+    agent_paths: &[PathBuf],
+    keep: &InstallKeep,
+) -> Result<InstallResult> {
     let bundle_dir = out_dir.join(format!("mcp-gateway-{}", bundle.category));
     let commands_dir = bundle_dir.join("commands");
 
-    fs::create_dir_all(&commands_dir)
-        .await
-        .map_err(crate::Error::Io)?;
+    let dir = commands_dir.clone();
+    kept_blocking(keep, move || std::fs::create_dir_all(dir)).await?;
 
     // Write SKILL.md
-    fs::write(bundle_dir.join("SKILL.md"), &bundle.skill_index)
-        .await
-        .map_err(crate::Error::Io)?;
+    let (path, text) = (bundle_dir.join("SKILL.md"), bundle.skill_index.clone());
+    kept_blocking(keep, move || std::fs::write(path, text)).await?;
 
     // Write per-command docs
     for (name, content) in &bundle.command_docs {
         let cmd_path = commands_dir.join(format!("{name}.md"));
-        fs::write(&cmd_path, content)
-            .await
-            .map_err(crate::Error::Io)?;
+        let (path, text) = (cmd_path.clone(), content.clone());
+        kept_blocking(keep, move || std::fs::write(path, text)).await?;
         debug!(path = %cmd_path.display(), "Wrote command doc");
     }
 
     // Write ownership marker
-    fs::write(bundle_dir.join("crust.json"), CRUST_JSON)
-        .await
-        .map_err(crate::Error::Io)?;
+    let path = bundle_dir.join("crust.json");
+    #[cfg(test)]
+    let seams = seam_pair(keep, |s| [&s.crust_before, &s.crust_after]);
+    kept_blocking(keep, move || {
+        #[cfg(test)]
+        if let Some([before, _]) = &seams {
+            before.pause_on_thread();
+        }
+        let written = std::fs::write(path, CRUST_JSON);
+        #[cfg(test)]
+        if let Some([_, after]) = &seams {
+            after.pause_on_thread();
+        }
+        written
+    })
+    .await?;
 
     info!(
         category = %bundle.category,
@@ -112,7 +218,7 @@ pub async fn install_bundle(
     // Link into agent discovery paths
     for agent_root in agent_paths {
         let link_path = agent_root.join(format!("mcp-gateway-{}", bundle.category));
-        match link_or_copy(&bundle_dir, &link_path).await {
+        match link_or_copy(&bundle_dir, &link_path, keep).await {
             Ok(()) => {
                 info!(
                     category = %bundle.category,
@@ -148,49 +254,99 @@ pub fn default_agent_paths(base_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Attempt a symlink; fall back to recursive copy on platforms that reject it.
-async fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
+async fn link_or_copy(src: &Path, dst: &Path, keep: &InstallKeep) -> Result<()> {
     // Remove stale target if present
     if dst.exists() || dst.is_symlink() {
+        let stale = dst.to_path_buf();
         if dst.is_dir() && !dst.is_symlink() {
-            fs::remove_dir_all(dst).await.map_err(crate::Error::Io)?;
+            kept_blocking(keep, move || std::fs::remove_dir_all(stale)).await?;
         } else {
-            fs::remove_file(dst).await.map_err(crate::Error::Io)?;
+            kept_blocking(keep, move || std::fs::remove_file(stale)).await?;
         }
     }
 
     // Ensure parent exists
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent).await.map_err(crate::Error::Io)?;
+        let parent = parent.to_path_buf();
+        kept_blocking(keep, move || std::fs::create_dir_all(parent)).await?;
     }
 
+    let (src, dst) = (src.to_path_buf(), dst.to_path_buf());
     // Try symlink first (Unix), fall back to copy
     #[cfg(unix)]
     {
-        tokio::fs::symlink(src, dst).await.map_err(crate::Error::Io)
+        #[cfg(test)]
+        let seams = seam_pair(keep, |s| [&s.link_before, &s.link_after]);
+        kept_blocking(keep, move || {
+            #[cfg(test)]
+            if let Some([before, _]) = &seams {
+                before.pause_on_thread();
+            }
+            let linked = std::os::unix::fs::symlink(src, dst);
+            #[cfg(test)]
+            if let Some([_, after]) = &seams {
+                after.pause_on_thread();
+            }
+            linked
+        })
+        .await
     }
     #[cfg(not(unix))]
     {
-        copy_dir_recursive(src, dst).await
+        // One blocking call for the whole tree: a copy that has started
+        // finishes whole even if its task is cancelled.
+        #[cfg(test)]
+        let seams = seam_pair(keep, |s| [&s.copy_mid, &s.copy_done]);
+        kept_blocking(keep, move || {
+            #[cfg(test)]
+            let mid = seams.as_ref().map(|[mid, _]| std::sync::Arc::clone(mid));
+            #[cfg(test)]
+            COPY_MID.with(|slot| *slot.borrow_mut() = mid);
+            let copied = copy_dir_recursive(&src, &dst);
+            #[cfg(test)]
+            COPY_MID.with(|slot| slot.borrow_mut().take());
+            #[cfg(test)]
+            if let Some([_, done]) = &seams {
+                done.pause_on_thread();
+            }
+            copied
+        })
+        .await
     }
 }
 
-/// Recursively copy a directory tree (Windows fallback).
+#[cfg(all(test, not(unix)))]
+std::thread_local! {
+    /// The mid-copy seam of the copy running on this blocking thread.
+    static COPY_MID: std::cell::RefCell<Option<std::sync::Arc<crate::test_pause::Slot>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Recursively copy a directory tree (Windows fallback), on the blocking
+/// thread [`link_or_copy`] runs it on.
 #[cfg(not(unix))]
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst).await.map_err(crate::Error::Io)?;
-    let mut entries = fs::read_dir(src).await.map_err(crate::Error::Io)?;
-    while let Some(entry) = entries.next_entry().await.map_err(crate::Error::Io)? {
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
         let dst_entry = dst.join(entry.file_name());
         if entry.path().is_dir() {
-            Box::pin(copy_dir_recursive(&entry.path(), &dst_entry)).await?;
+            copy_dir_recursive(&entry.path(), &dst_entry)?;
         } else {
-            fs::copy(entry.path(), &dst_entry)
-                .await
-                .map_err(crate::Error::Io)?;
+            std::fs::copy(entry.path(), &dst_entry)?;
+            #[cfg(test)]
+            if let Some(mid) = COPY_MID.with(|slot| slot.borrow().clone()) {
+                mid.pause_on_thread();
+            }
         }
     }
     Ok(())
 }
+
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "installer_keep_tests.rs"]
+mod keep_tests;
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
