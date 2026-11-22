@@ -8,35 +8,12 @@
 // screens as window events. Rows ST1-ST7. The stream is the fixture server's
 // held route (server.mjs), driven per test through /__stream/<channel>/.
 import { test, expect } from './base.mjs';
-import { withFixturePages, shellReady } from './shell.mjs';
+import { withFixturePages, shellReady, heldStream, frame } from './shell.mjs';
 
 const KEY = 'mcpg_fixture_key_0123456789';
 const INDICATOR = '.top .stream';
 const STALE = '#content [data-state="stale"]';
 
-/**
- * A held stream for this test. The fixture-stream cookie only names the
- * channel on the fixture server; it is test plumbing, not a session.
- */
-async function heldStream(page, request, testInfo, setup = {}) {
-  const name = testInfo.testId.replace(/[^\w-]/g, '-');
-  await request.post(`/__stream/${name}/setup`, { data: setup });
-  const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
-  await page.context().addCookies([{ name: 'fixture-stream', value: name, url }]);
-  const log = async () => (await request.get(`/__stream/${name}/log`)).json();
-  return {
-    log,
-    connects: async () => (await log()).length,
-    send: (text) => request.post(`/__stream/${name}/send`, { data: text, headers: { 'content-type': 'text/plain' } }),
-    end: () => request.post(`/__stream/${name}/end`),
-  };
-}
-
-/** One SSE frame as the gateway writes it (conn.rs); hello carries a retry hint and no id. */
-function frame(event, data, id = null) {
-  const head = event === 'hello' ? 'retry: 3000\n' : '';
-  return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
-}
 const HELLO = frame('hello', { kinds: ['status', 'reload'], head: 'b1.s1.r1' });
 
 /** Pause the page clock at 14:02 today, local time, before the page loads. */
