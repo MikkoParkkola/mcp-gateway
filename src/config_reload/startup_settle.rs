@@ -254,19 +254,24 @@ fn nothing_pending(held: &Locked) -> Result<(), Refusal> {
         (retired_path(&held.target), StartError::ManifestUnread),
     ];
     for (artifact, class) in beside {
-        match std::fs::symlink_metadata(&artifact) {
-            Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => {
-                return Err(refuse(
-                    StartError::ArtifactCheckFailed,
-                    artifact,
-                    "unproven",
-                ));
-            }
-            Ok(_) => return Err(refuse(class, artifact, "present")),
-        }
+        proven_absent(artifact, class)?;
     }
     Ok(())
+}
+
+/// `artifact` proven absent, or the refusal: `class` when it is there, and the unproven class for
+/// any answer other than "not found".
+fn proven_absent(artifact: PathBuf, class: StartError) -> Result<(), Refusal> {
+    let unproven = match std::fs::symlink_metadata(&artifact).map_err(|error| error.kind()) {
+        Err(std::io::ErrorKind::NotFound) => return Ok(()),
+        Err(_) => true,
+        Ok(_) => false,
+    };
+    Err(if unproven {
+        refuse(StartError::ArtifactCheckFailed, artifact, "unproven")
+    } else {
+        refuse(class, artifact, "present")
+    })
 }
 
 // Stalled retries. Lost proves nothing about the artifacts. Every refusal, these included, is logged
@@ -350,6 +355,9 @@ fn held(locked: Locked, configured: PathBuf, state: Option<JournalV2>) -> Startu
 }
 
 fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Refusal> {
+    // A retired manifest is evidence this build cannot read yet: refused before any recovery, as
+    // the unlocked probe and the sessionless gate refuse it. The abandoned file is the drain's.
+    proven_absent(retired_path(&locked.target), StartError::ManifestUnread)?;
     let path = journal_path(&locked.target);
     match dispatch_journal(&locked) {
         Ok(None) => Ok(held(locked, configured, None)),
