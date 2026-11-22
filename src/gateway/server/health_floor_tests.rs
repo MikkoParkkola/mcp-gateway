@@ -662,8 +662,7 @@ async fn g8_a_checkpoint_records_no_clean_stop() {
     );
     adapter.commit();
     wait_until("the adapter never settled", || adapter.settled());
-    let (_, shutdown_save) = rig.health.shutdown_save();
-    shutdown_save();
+    rig.health.shutdown_save().run_now();
     assert_ne!(
         rig.on_disk()["clean_stop"],
         serde_json::Value::Null,

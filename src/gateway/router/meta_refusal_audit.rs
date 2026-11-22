@@ -249,6 +249,12 @@ impl<'a> Refused<'a> {
             Ok(trace) => {
                 let mut response =
                     build_error_response(Some(id), code, message, self.session_id, status);
+                // Only a written record names a receipt; the frame's trace
+                // may be the ambient one.
+                #[cfg(feature = "webui")]
+                response
+                    .extensions_mut()
+                    .insert(super::helpers::RefusalRecorded(trace.clone()));
                 super::helpers::trace_error_frame(&mut response, trace);
                 response
             }
@@ -324,11 +330,16 @@ impl<'a> Refused<'a> {
         {
             noted.refused(kind, None);
         }
-        let decision = Box::new(noted.decision(
-            crate::security::decision_record::Decided::Fresh,
-            crate::security::decision_record::Refused::of(refusal.outcome),
-            state.meta_mcp.live_config().as_deref(),
-        ));
+        let decision = Box::new(
+            noted.decision(
+                crate::security::decision_record::Decided::Fresh,
+                crate::security::decision_record::Refused::of(refusal.outcome),
+                state.meta_mcp.live_config().as_deref(),
+                self.who
+                    .credential_kind
+                    .unwrap_or(crate::security::audit::CredentialKind::None),
+            ),
+        );
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
         // Taken here: the blocking append below has no task-locals. Run only

@@ -35,13 +35,13 @@ fn the_base_url_never_falls_back_past_a_config_that_failed_to_load() {
     assert_eq!(
         explicit.map(|(base, _)| base).as_deref(),
         Ok("http://h:1"),
-        "--url wins without a load"
+        "--gateway wins without a load"
     );
 
     let failed = dashboard_link_base(None, no_flags(), || Err("bad yaml".into()), None, None)
         .expect_err("a config that fails to load is not replaced by defaults");
     assert!(
-        failed.contains("bad yaml") && failed.contains("--url"),
+        failed.contains("bad yaml") && failed.contains("--gateway"),
         "{failed}"
     );
 
@@ -241,11 +241,14 @@ async fn answering(status: u16, body: String) -> String {
 /// What `dashboard-link` and `events dead-letters` (a list) print against `base`, through their entry points.
 async fn both(base: &str, token: &str) -> [(&'static str, CliOutcome); 2] {
     let link = mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-        url: Some(base.to_string()),
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg {
+            url: Some(base.to_string()),
+        },
         tls: no_flags(),
+        json: false,
     };
     let mut list = dead_letters(mcp_gateway::cli::events::DeadLetterAction::List);
-    list.url = Some(base.to_string());
+    list.gateway.url = Some(base.to_string());
     let unused = || Err("not loaded".to_string());
     [
         (
@@ -401,7 +404,7 @@ fn dead_letters(
         all: false,
         subscription: None,
         reason: None,
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
     }
 }
@@ -413,8 +416,9 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
     let token = "tok-IN-CONFIG-9679";
     let load = || Err(format!("bad bearer_token value {token}"));
     let args = || mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: no_flags(),
+        json: false,
     };
     let link = super::dashboard_link_outcome(args(), load, None, None, Ok(token.to_string())).await;
     let list = dead_letters(mcp_gateway::cli::events::DeadLetterAction::List);
@@ -448,7 +452,7 @@ async fn a_config_error_quoting_the_token_is_never_printed() {
 async fn usage_and_marker_edge_tokens_are_never_printed() {
     let base = answering(400, r#"{"error":"denied: Xd]zz"}"#.into()).await;
     let mut replay = dead_letters(mcp_gateway::cli::events::DeadLetterAction::Replay);
-    replay.url = Some(base.clone());
+    replay.gateway.url = Some(base.clone());
     let unused = || Err("not loaded".to_string());
     let usage = super::events_outcome(&replay, unused, None, None, Ok("replay".to_string())).await;
     printed_nowhere("events", "replay", &usage);
@@ -537,5 +541,73 @@ async fn fixed_text_and_the_final_newline_never_complete_the_token() {
 #[test]
 fn run_output_uses_the_shared_emitter() {
     let source = include_str!("dashboard_link.rs");
-    assert_eq!(source.matches("emit(&out, false, &[&secret])").count(), 2);
+    // events prints through `emit`; dashboard-link through its print step, which hands the run's form to `emit_to`.
+    assert_eq!(source.matches("emit(&out, false, &[&secret])").count(), 1);
+    assert_eq!(
+        source.matches("let exit = print_dashboard_link(").count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("emit_to(&out, json, &[&secret], stdout, stderr)")
+            .count(),
+        1
+    );
+}
+
+/// T3 (MIK-9764.JSONF.1, design D5): the command's path from its arguments to the shared emitter carries the run's
+/// form, so a stdout write failure other than a broken pipe is the shared JSON error under `--json`, and the text
+/// error without.
+#[tokio::test]
+async fn the_print_step_carries_the_json_form() {
+    struct Failing;
+    impl std::io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let base = answering(200, r#"{"link":"https://gw.test/ui/#k=abc123"}"#.to_owned()).await;
+    let run = |json: bool| {
+        let base = base.clone();
+        async move {
+            let args = mcp_gateway::cli::dashboard_link::DashboardLinkArgs {
+                gateway: mcp_gateway::cli::dashboard_link::GatewayArg { url: Some(base) },
+                tls: no_flags(),
+                json,
+            };
+            let mut err = Vec::new();
+            let exit = super::print_dashboard_link(
+                args,
+                || Err("not loaded".to_string()),
+                None,
+                None,
+                Ok("tok-print-0123456789".to_owned()),
+                &mut Failing,
+                &mut err,
+            )
+            .await;
+            (exit, String::from_utf8(err).expect("utf-8"))
+        }
+    };
+    let (exit, err) = run(true).await;
+    assert_eq!(exit, CliExit::LocalFailure);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&err).expect("one JSON error"),
+        serde_json::json!({"schema_version": 1, "error": {
+            "kind": "LocalFailure", "message": "Could not write command output.",
+            "remedy": "Check the output destination before repeating the command.",
+            "http_status": null, "request_id": null
+        }})
+    );
+    assert_eq!(
+        run(false).await,
+        (
+            CliExit::LocalFailure,
+            "error: Could not write command output.\nCheck the output destination before repeating the command.\n"
+                .to_owned()
+        )
+    );
 }

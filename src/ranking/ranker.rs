@@ -15,6 +15,7 @@ impl SearchRanker {
     pub fn new() -> Self {
         Self {
             usage_counts: DashMap::new(),
+            write_turn: parking_lot::Mutex::new(()),
         }
     }
 
@@ -139,8 +140,33 @@ impl SearchRanker {
     /// # Errors
     ///
     /// Returns an error if serialization fails or the file cannot be written.
-    // In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
+    // Atomic: the shared writer replaces the file by rename, so a crash or kill
+    // mid-save leaves the old file or the new one. Never wider by mode on Linux;
+    // on macOS a directory-inherited ACE can apply and the file's own deny ACEs
+    // are not carried over; a file another user owned becomes the writer's.
+    // Other hard links keep the old bytes. The writer's owner and macOS ACL
+    // handling is a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        let turn = self.write_turn.lock();
+        self.write(path, &turn)
+    }
+
+    /// The stop checkpoint's save: `None`, skipped, while another write of
+    /// this file holds its turn, so writes stalled on a slow disk never pile up.
+    pub(crate) fn save_unless_busy(&self, path: &Path) -> Option<std::io::Result<()>> {
+        let turn = self.write_turn.try_lock()?;
+        Some(self.write(path, &turn))
+    }
+
+    /// Hold the write turn, as a write does: a row's stand-in for a write in
+    /// flight.
+    #[cfg(test)]
+    pub(crate) fn hold_write_turn(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.write_turn.lock()
+    }
+
+    /// The write itself, snapshot through rename, under the caller's turn.
+    fn write(&self, path: &Path, _turn: &parking_lot::MutexGuard<'_, ()>) -> std::io::Result<()> {
         // The same row and key split as the stats snapshot, so a tool name
         // with a colon is saved whole.
         let counts: Vec<TopTool> = self
@@ -150,7 +176,12 @@ impl SearchRanker {
             .collect();
 
         let json = serde_json::to_string_pretty(&counts)?;
-        std::fs::write(path, json)
+        crate::config_persistence::write_atomic(
+            path,
+            json.as_bytes(),
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::Symlink::Follow,
+        )
     }
 
     /// Load usage counts from JSON file

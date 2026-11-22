@@ -46,14 +46,17 @@ pub(super) fn save_with_logging<F, E>(
     save: F,
     error_message: &'static str,
     success_message: &'static str,
-) where
+) -> bool
+where
     F: FnOnce(&Path) -> Result<(), E>,
     E: Display,
 {
     if let Err(e) = save(path) {
         warn!(error = %e, "{error_message}");
+        false
     } else {
         info!("{success_message}");
+        true
     }
 }
 
@@ -105,11 +108,11 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 pub(super) const PROTOCOL_TELEMETRY_SAVE_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
 
-/// Save today's spend to `<data_dir>/costs.json`.
+/// Save today's spend to `<data_dir>/costs.json`. Returns whether it wrote.
 #[cfg(feature = "cost-governance")]
-pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
     let turn = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    write_costs(enforcer, data_dir, &turn);
+    write_costs(enforcer, data_dir, &turn)
 }
 
 /// One `costs.json` write at a time, each snapshotting the spend under the
@@ -125,10 +128,14 @@ static COST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SKIPPED_SAVES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(feature = "cost-governance")]
-fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::MutexGuard<'_, ()>) {
+fn write_costs(
+    enforcer: &BudgetEnforcer,
+    data_dir: &Path,
+    _turn: &std::sync::MutexGuard<'_, ()>,
+) -> bool {
     let Ok(snapshot) = enforcer.snapshot_for_save() else {
         tracing::warn!("Clock reads before 1970; cost save skipped, the last saved spend stands");
-        return;
+        return false;
     };
     let persisted = super::support::build_persisted_costs(&snapshot);
     save_with_logging(
@@ -136,17 +143,18 @@ fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::Mu
         |path| crate::cost_accounting::persistence::save(path, &persisted),
         "Failed to save cost governance data",
         "Saved cost governance data",
-    );
+    )
 }
 
 /// The periodic save: skipped while an earlier write still holds the file
-/// (stuck on a stalled mount), so stuck writes never pile up.
+/// (stuck on a stalled mount), so stuck writes never pile up. Returns whether
+/// it wrote.
 #[cfg(feature = "cost-governance")]
-fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
+pub(super) fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) -> bool {
     match COST_WRITE.try_lock() {
         Ok(turn) => write_costs(enforcer, data_dir, &turn),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            write_costs(enforcer, data_dir, &poisoned.into_inner());
+            write_costs(enforcer, data_dir, &poisoned.into_inner())
         }
         Err(std::sync::TryLockError::WouldBlock) => {
             warn!("periodic cost save skipped: the previous costs.json write has not finished");
@@ -155,6 +163,7 @@ fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(data_dir.to_path_buf());
+            false
         }
     }
 }
@@ -168,9 +177,15 @@ pub(super) fn spawn_cost_saver(
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_periodic_save("cost save", every, shutdown, move || {
-        save_costs_unless_busy(&enforcer, &data_dir);
-    })
+    spawn_periodic_save(
+        "cost save",
+        every,
+        shutdown,
+        Some(data_dir.clone()),
+        move || {
+            save_costs_unless_busy(&enforcer, &data_dir);
+        },
+    )
 }
 
 /// Run `save` every `every` until `shutdown` fires, or until the returned
@@ -183,16 +198,33 @@ pub(super) fn spawn_cost_saver(
 /// blocking pool, the runtime's drop (MIK-8157). `save` keeps at most one
 /// write in flight itself (a busy guard), so a slow write skips ticks rather
 /// than piling up threads.
+///
+/// `root` is the file or dir the save writes (none for a saver that writes
+/// nothing): a test's temp dir holding it is kept by the saver for its whole
+/// life, and by each tick's thread until that save returns.
 pub(super) fn spawn_periodic_save(
     name: &'static str,
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    root: Option<PathBuf>,
     save: impl Fn() + Send + Sync + 'static,
 ) -> tokio::task::JoinHandle<()> {
     let save = Arc::new(save);
+    #[cfg(test)]
+    let seams = periodic_seams_for(root.as_deref());
+    // Taken and reported once, here, before the loop: an unkept saver prints
+    // one line, not one per tick. The saver holds it between ticks, so a test
+    // that dropped its share cannot lose the dir before the next tick writes.
+    let kept = root
+        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, &root))
+        .unwrap_or_default();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
         interval.tick().await;
+        #[cfg(test)]
+        if let Some(seams) = &seams {
+            seams.loop_started.notify_one();
+        }
         let stopped = async move {
             match shutdown {
                 Some(mut rx) => drop(rx.recv().await),
@@ -204,17 +236,75 @@ pub(super) fn spawn_periodic_save(
             tokio::select! {
                 _ = interval.tick() => {
                     let save = Arc::clone(&save);
+                    // The tick's thread holds its own clone to its end, past
+                    // a saver that was aborted meanwhile.
+                    let kept = kept.clone();
+                    #[cfg(test)]
+                    let gate = seams.clone();
                     let spawned = std::thread::Builder::new()
                         .name(name.to_owned())
-                        .spawn(move || save());
-                    if let Err(error) = spawned {
-                        warn!(%error, saver = name, "periodic save could not start a thread; skipped");
+                        .spawn(move || {
+                            #[cfg(test)]
+                            if let Some(gate) = gate {
+                                gate.pre_save.pause_on_thread();
+                            }
+                            crate::spawn_keep::holding(kept, || save());
+                        });
+                    match spawned {
+                        Ok(_) => {
+                            #[cfg(test)]
+                            if let Some(seams) = &seams {
+                                seams.writer_spawned.notify_one();
+                            }
+                        }
+                        Err(error) => {
+                            warn!(%error, saver = name, "periodic save could not start a thread; skipped");
+                        }
                     }
                 }
                 () = &mut stopped => break,
             }
         }
     })
+}
+
+/// Test-only signals and a gate for one periodic saver, found by its root
+/// (K8, K11b), so parallel rows each reach their own saver, through any
+/// caller's wiring.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct PeriodicSeams {
+    /// Sent once the loop has consumed the interval's first tick.
+    pub(super) loop_started: tokio::sync::Notify,
+    /// Sent right after a tick's save thread is spawned.
+    pub(super) writer_spawned: tokio::sync::Notify,
+    /// Holds a tick's save thread before the save runs (one-shot).
+    pub(super) pre_save: crate::test_pause::Slot,
+}
+
+/// The seams each row registered, by the root its saver writes.
+#[cfg(test)]
+static PERIODIC_SEAMS: parking_lot::Mutex<Vec<(PathBuf, Arc<PeriodicSeams>)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Register seams for the periodic saver that writes `root`.
+#[cfg(test)]
+pub(super) fn periodic_seams(root: &Path) -> Arc<PeriodicSeams> {
+    let seams = Arc::new(PeriodicSeams::default());
+    PERIODIC_SEAMS
+        .lock()
+        .push((root.to_path_buf(), Arc::clone(&seams)));
+    seams
+}
+
+#[cfg(test)]
+fn periodic_seams_for(root: Option<&Path>) -> Option<Arc<PeriodicSeams>> {
+    let root = root?;
+    PERIODIC_SEAMS
+        .lock()
+        .iter()
+        .find(|(registered, _)| registered == root)
+        .map(|(_, seams)| Arc::clone(seams))
 }
 
 impl super::Gateway {
@@ -242,8 +332,63 @@ impl super::Gateway {
 /// How long an HTTP gateway's shutdown gives its state saves (MIK-8157).
 pub(super) const SHUTDOWN_SAVES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// One state save run at shutdown: its name, for the log, and the write.
-pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
+/// One state save run at shutdown.
+pub(super) struct ShutdownSave {
+    /// Its name, for the log.
+    step: &'static str,
+    /// The file or dir the save writes: a test's temp dir holding it is kept
+    /// while the save runs (`crate::spawn_keep`). None for a save that writes
+    /// nothing.
+    root: Option<PathBuf>,
+    /// The write.
+    save: Box<dyn FnOnce() + Send>,
+    /// Holds the save's thread before the write, for the one row that built
+    /// this save; parallel rows never share it.
+    #[cfg(test)]
+    gate: Option<Arc<crate::test_pause::Slot>>,
+}
+
+impl ShutdownSave {
+    pub(super) fn new(
+        step: &'static str,
+        root: Option<PathBuf>,
+        save: Box<dyn FnOnce() + Send>,
+    ) -> Self {
+        Self {
+            step,
+            root,
+            save,
+            #[cfg(test)]
+            gate: None,
+        }
+    }
+
+    /// This save, held at `gate` on its thread before the write.
+    #[cfg(test)]
+    pub(super) fn gated(mut self, gate: Arc<crate::test_pause::Slot>) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// The root this save keeps while it runs (K10).
+    #[cfg(test)]
+    pub(super) fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// Run the write here and now, on this thread: for a row that checks
+    /// what the save writes, with no detached thread to keep a dir for.
+    #[cfg(test)]
+    pub(super) fn run_now(self) {
+        (self.save)();
+    }
+}
+
+/// Every save `run_shutdown_saves` started, with the root it carried: K10
+/// reads a site's root here by its own temp path, so parallel rows do not mix.
+#[cfg(test)]
+pub(super) static STARTED_ROOTS: parking_lot::Mutex<Vec<(&'static str, Option<PathBuf>)>> =
+    parking_lot::Mutex::new(Vec::new());
 
 /// Run `saves` together under one `deadline`, each on its own detached thread
 /// (MIK-8157), so one write stuck on a stalled mount takes no time from the
@@ -252,12 +397,32 @@ pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
 /// runtime's drop after it.
 pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
     let mut running = Vec::new();
-    for (step, save) in saves {
+    for one in saves {
+        // The gate moves out first, outside the pattern: a cfg on a field
+        // pattern is valid Rust, but the gates' source parser cannot read it.
+        #[cfg(test)]
+        let gate = one.gate;
+        let ShutdownSave {
+            step, root, save, ..
+        } = one;
+        #[cfg(test)]
+        STARTED_ROOTS.lock().push((step, root.clone()));
+        // Taken here, before the thread exists, while the caller (a test)
+        // still holds its share of the dir; the save thread holds it to its end.
+        let kept = root
+            .as_deref()
+            .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::SHUTDOWN_SAVE, root))
+            .unwrap_or_default();
         let (done, finished) = tokio::sync::oneshot::channel();
         let spawned = std::thread::Builder::new()
             .name(format!("shutdown: {step}"))
             .spawn(move || {
-                save();
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    gate.pause_on_thread();
+                }
+                // The thread holds the keep until the save returns.
+                crate::spawn_keep::holding(kept, save);
                 let _ = done.send(());
             });
         match spawned {
@@ -292,8 +457,9 @@ pub(super) async fn save_state_on_shutdown(
 ) {
     #[allow(unused_mut)]
     let mut saves: Vec<ShutdownSave> = vec![
-        (
+        ShutdownSave::new(
             "search ranking save",
+            Some(ranker_path.clone()),
             Box::new(move || {
                 save_with_logging(
                     &ranker_path,
@@ -303,8 +469,9 @@ pub(super) async fn save_state_on_shutdown(
                 );
             }),
         ),
-        (
+        ShutdownSave::new(
             "transition tracking save",
+            Some(transition_path.clone()),
             Box::new(move || {
                 save_with_logging(
                     &transition_path,
@@ -317,9 +484,12 @@ pub(super) async fn save_state_on_shutdown(
     ];
     #[cfg(feature = "cost-governance")]
     if let Some((enforcer, data_dir)) = cost {
-        saves.push((
+        saves.push(ShutdownSave::new(
             COST_SAVE_STEP,
-            Box::new(move || save_costs(&enforcer, &data_dir)),
+            Some(data_dir.clone()),
+            Box::new(move || {
+                save_costs(&enforcer, &data_dir);
+            }),
         ));
     }
     #[cfg(not(feature = "cost-governance"))]
@@ -366,6 +536,16 @@ pub(super) async fn advance_until_saved(costs: &std::path::Path) -> Result<(), S
 #[path = "persistence_tests.rs"]
 mod tests;
 
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "shutdown_keep_tests.rs"]
+mod shutdown_keep_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "periodic_keep_tests.rs"]
+mod periodic_keep_tests;
+
 // Stays inline: its timing windows are checked as new code at any new path.
 #[cfg(tp4)]
 #[cfg(test)]
@@ -381,14 +561,16 @@ mod shutdown_deadline_tests {
         let (finished, done) = std::sync::mpsc::channel::<()>();
         // The stuck save first: the quick one still runs, in the same window.
         let saves: Vec<ShutdownSave> = vec![
-            (
+            ShutdownSave::new(
                 "stuck save",
+                None,
                 Box::new(move || {
                     let _ = stuck.recv();
                 }),
             ),
-            (
+            ShutdownSave::new(
                 "quick save",
+                None,
                 Box::new(move || {
                     let _ = finished.send(());
                 }),
@@ -418,10 +600,11 @@ mod shutdown_deadline_tests {
     /// window decides the row.
     #[tokio::test(start_paused = true)]
     async fn the_state_saves_end_at_the_deadline_they_are_given() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let (release, stuck) = std::sync::mpsc::channel::<()>();
-        let stuck_save: ShutdownSave = (
+        let stuck_save = ShutdownSave::new(
             "stuck save",
+            None,
             Box::new(move || {
                 let _ = stuck.recv();
             }),

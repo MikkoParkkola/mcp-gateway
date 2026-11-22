@@ -3,7 +3,7 @@
 //! Every leaf command's output class and error-conversion state (design D7).
 //!
 //! Two families of named lists, each a partition of the CLI's leaf commands, keyed by the full command path as
-//! typed. The classes: `JSON_CAPABLE`, `JSON_DEFAULT`, `PENDING_JSON` (the JSON-forms follow-up, `MIK-9764.JSONF.2`, empties it), `ACTION`, `SCRIPT`. The
+//! typed. The classes: `JSON_CAPABLE`, `JSON_DEFAULT`, `PENDING_JSON` (empty since `MIK-9764.JSONF.2`; a new data command without a JSON form goes there), `ACTION`, `SCRIPT`. The
 //! errors: `REMOTE_ON_SHARED_ERRORS` and `PENDING_SHARED_ERRORS` (the local-errors follow-up, `MIK-9765.LERR.2`, empties it). A row walks the real clap
 //! tree and fails on a leaf missing from a family, a leaf in two lists of one family, a list naming no command, or a
 //! class its arguments contradict, so a new command cannot ship off the output contract unnoticed.
@@ -11,8 +11,17 @@
 /// Leaves with a JSON form: a `json` flag, or a `format` argument that accepts `json`.
 pub(crate) const JSON_CAPABLE: &[&str] = &[
     "api",
+    "audit verify",
     "cap discover",
+    "cap list",
+    "cap registry-list",
+    "cap search",
+    "cap test",
+    "cap validate",
+    "dashboard-link",
     "doctor",
+    "get",
+    "hash-key",
     "identity grants grant",
     "identity grants list",
     "identity grants revoke",
@@ -22,7 +31,12 @@ pub(crate) const JSON_CAPABLE: &[&str] = &[
     "kubernetes controller",
     "kubernetes plan",
     "list",
+    "provenance verify",
     "ranking eval",
+    "skills list",
+    "skills search",
+    "skills show",
+    "stats",
     "tool inspect",
     "tool invoke",
     "tool list",
@@ -35,29 +49,14 @@ pub(crate) const JSON_CAPABLE: &[&str] = &[
 /// Leaves whose stdout is JSON with no flag; their errors stay human text on stderr (design D10).
 pub(crate) const JSON_DEFAULT: &[&str] = &[
     "audit lookup-email",
+    "audit show",
     "events dead-letters",
     "provenance public-key",
     #[cfg(feature = "runtime-substrate")]
     "runtime compile",
 ];
-/// Leaves that print data with no JSON form yet; each entry cites `MIK-9764.JSONF.2`.
-pub(crate) const PENDING_JSON: &[&str] = &[
-    "audit show",        // MIK-9764.JSONF.2
-    "audit verify",      // MIK-9764.JSONF.2
-    "cap list",          // MIK-9764.JSONF.2
-    "cap registry-list", // MIK-9764.JSONF.2
-    "cap search",        // MIK-9764.JSONF.2
-    "cap test",          // MIK-9764.JSONF.2
-    "cap validate",      // MIK-9764.JSONF.2
-    "dashboard-link",    // MIK-9764.JSONF.2
-    "get",               // MIK-9764.JSONF.2
-    "hash-key",          // MIK-9764.JSONF.2
-    "provenance verify", // MIK-9764.JSONF.2
-    "skills list",       // MIK-9764.JSONF.2
-    "skills search",     // MIK-9764.JSONF.2
-    "skills show",       // MIK-9764.JSONF.2
-    "stats",             // MIK-9764.JSONF.2
-];
+/// Leaves that print data with no JSON form yet: none, since every data command has one (`MIK-9764.JSONF.2`).
+pub(crate) const PENDING_JSON: &[&str] = &[];
 /// Leaves that act and print status only.
 pub(crate) const ACTION: &[&str] = &[
     "accounts init-store",

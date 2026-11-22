@@ -5,15 +5,22 @@
 use super::*;
 
 /// Modern `_meta` declaring the tasks extension.
-fn tasks_meta() -> Value {
+pub(crate) fn tasks_meta() -> Value {
     json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
            "io.modelcontextprotocol/clientCapabilities": {
                "extensions": {"io.modelcontextprotocol/tasks": {}}}})
 }
 
-/// POST `method` with `params` as key `k` on the 2026-07-28 revision; `name`
+/// POST `method` with `params` as the holder of `bearer` (the scoped key is
+/// `k`) on the 2026-07-28 revision; `name`
 /// is the `mcp-name` header. The HTTP status and the JSON-RPC message.
-async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> (StatusCode, Value) {
+pub(crate) async fn send(
+    fx: &Fixture,
+    bearer: &str,
+    method: &str,
+    name: &str,
+    params: Value,
+) -> (StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
     let request = axum::http::Request::builder()
         .method("POST")
@@ -21,7 +28,7 @@ async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> (StatusC
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", "2026-07-28")
-        .header("authorization", "Bearer k")
+        .header("authorization", format!("Bearer {bearer}"))
         .header("mcp-method", method)
         .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
@@ -38,6 +45,7 @@ async fn submit_mixed_chain(fx: &Fixture, server: &str) -> (StatusCode, Value) {
                        {"tool": format!("{server}:t"), "arguments": {}}]);
     send(
         fx,
+        "k",
         "tools/call",
         "gateway_execute",
         json!({"name": "gateway_execute", "arguments": {"chain": chain},
@@ -63,6 +71,7 @@ async fn settled(fx: &Fixture, id: &str, server: &str) -> (StatusCode, Value) {
     loop {
         let read = send(
             fx,
+            "k",
             "tasks/get",
             id,
             json!({"taskId": id, "_meta": tasks_meta()}),
@@ -213,6 +222,7 @@ async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
     let fx = scoped_fixture(MetaMode::Plain).await;
     let (_, control) = send(
         &fx,
+        "k",
         "tools/call",
         "gateway_invoke",
         json!({"name": "gateway_invoke",
@@ -234,7 +244,7 @@ async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
                             "arguments": {"server": name, "tool": "t", "arguments": {}},
                             "task": {}, "_meta": keyed_tasks_meta(name)});
         for attempt in ["submit", "repeat"] {
-            let (_, made) = send(&fx, "tools/call", "gateway_invoke", params.clone()).await;
+            let (_, made) = send(&fx, "k", "tools/call", "gateway_invoke", params.clone()).await;
             let id = made
                 .pointer("/result/task/taskId")
                 .or_else(|| made.pointer("/result/taskId"));
@@ -277,6 +287,7 @@ fn r3_a_stored_read_refused_for_scope_logs_the_refusal_and_an_absent_one_does_no
         let (read, warnings) = crate::test_log_capture::capture_warnings(|| {
             rt.block_on(send(
                 &fx,
+                "k",
                 "tasks/get",
                 &id,
                 json!({"taskId": id, "_meta": tasks_meta()}),

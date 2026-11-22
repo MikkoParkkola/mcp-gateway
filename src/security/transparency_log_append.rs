@@ -263,7 +263,7 @@ impl TransparencyLogger {
         inner: &mut Inner,
         fields: Map<String, Value>,
         resync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         self.refresh(inner, resync)?;
         self.append_refreshed(inner, fields, resync, None)
     }
@@ -293,7 +293,7 @@ impl TransparencyLogger {
         fields: Map<String, Value>,
         resync: bool,
         bound: Option<&LogId>,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         let published = self.subscribers.wants(&fields).then(|| fields.clone());
         let path = self.path();
         let (line, _) = chain_line(
@@ -348,7 +348,7 @@ impl TransparencyLogger {
             }
             other => other,
         };
-        if let (Ok(entry_hash), Some(fields)) = (&written, published) {
+        if let (Ok((_, entry_hash)), Some(fields)) = (&written, published) {
             self.subscribers.publish(&fields, entry_hash, inner.counter);
         }
         written
@@ -391,7 +391,7 @@ impl TransparencyLogger {
         path: &Path,
         fields: Map<String, Value>,
         sync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         let counter = inner.counter + 1;
         let (line, hash) = chain_line(&self.config, fields, counter, &inner.last_entry_hash)?;
         self.write_line(inner, &line, sync)?;
@@ -400,7 +400,7 @@ impl TransparencyLogger {
         inner.seg.has_records = true;
         self.mark_hwm(inner, path, sync);
         self.subscribers.announce(&line, counter);
-        Ok(hash)
+        Ok((counter, hash))
     }
 
     /// Write one whole line. A failed write is cut back to the last good

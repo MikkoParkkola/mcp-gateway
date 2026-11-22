@@ -57,20 +57,15 @@ pub(crate) struct HttpSegmentSink {
     identity: WriterIdentity,
     #[cfg(test)]
     created_by: crate::test_late_write::Creator,
-    /// The temp dirs this sink keeps; declared last so the window's files
-    /// close before the dirs can go.
-    #[cfg(test)]
-    _kept_dirs: Vec<std::sync::Arc<tempfile::TempDir>>,
+    /// The temp dirs this sink keeps (nothing in a release build); declared
+    /// last so the window's files close before the dirs can go.
+    _kept_dirs: Kept,
 }
 
 /// The temp dirs a detached open was asked to keep, taken when its thread was
-/// spawned. Test builds only carry them; a release build passes nothing.
-#[cfg(test)]
-pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
-/// The temp dirs a detached open was asked to keep: none in a release build.
-#[cfg(not(test))]
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct Kept;
+/// spawned: test builds carry them, a release build carries nothing. Shared
+/// with every detached writer (`crate::spawn_keep`).
+pub(crate) use crate::spawn_keep::Kept;
 
 impl HttpSegmentSink {
     /// Append this process's segment under the lock. It never waits for a
@@ -103,7 +98,7 @@ impl HttpSegmentSink {
         #[cfg(test)]
         crate::test_dir_keep::run_before_first_fs_call();
         #[cfg(not(test))]
-        let Kept = kept;
+        let kept_dirs = kept;
         let (window_path, lock_path) = window_paths(data_dir);
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         // A missing data directory here means the open is about to rebuild a
@@ -144,7 +139,6 @@ impl HttpSegmentSink {
             identity,
             #[cfg(test)]
             created_by,
-            #[cfg(test)]
             _kept_dirs: kept_dirs,
         })
     }

@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_persistence_keyedit.rs	edit_unmarked	refusal	1	no-record	a config write: the in-place editor's refusal (now inside the step that runs after a leading byte order mark is set aside), sent back to the admin UI with steps to edit by hand; no tool call is involved

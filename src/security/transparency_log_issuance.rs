@@ -12,12 +12,38 @@
 use std::io;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use super::TransparencyLogger;
 use super::bounded::Dispatch;
 use crate::security::audit::AuditEnvelope;
 
 /// The only event this path writes.
 pub(crate) const ISSUED_EVENT: &str = "token.issued";
+
+/// A token's issuance row in the transparency log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct IssuanceRow {
+    pub(crate) counter: u64,
+    pub(crate) entry_hash: String,
+}
+
+/// The temporary token presented for a call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct TokenOnCall {
+    pub(crate) jti: String,
+    pub(crate) issuance_row: Option<IssuanceRow>,
+}
+
+// A field added to TokenOnCall stops this compiling. Before adding it, update
+// the ci-allow-secret-debug reason on `Decision.token` (decision_record.rs):
+// the call's decision derives Debug over this struct.
+const _: fn(&TokenOnCall) = |token| {
+    let TokenOnCall {
+        jti: _,
+        issuance_row: _,
+    } = token;
+};
 
 /// How an issuance row's append came out. Every arm but `Confirmed` means
 /// "the row is not known to be on disk"; `Failed` and `Unconfirmed` may
@@ -26,7 +52,7 @@ pub(crate) const ISSUED_EVENT: &str = "token.issued";
 #[derive(Debug)]
 pub(crate) enum IssuanceWrite {
     /// The row was written and synced.
-    Confirmed,
+    Confirmed(IssuanceRow),
     /// No append ran: the event was not an issuance row, admission refused,
     /// or the log was stalled or its permit was not taken.
     NotAttempted(io::Error),
@@ -40,7 +66,7 @@ impl IssuanceWrite {
     /// The error's kind, safe to log; the text may name a path.
     pub(crate) fn error_kind(&self) -> Option<io::ErrorKind> {
         match self {
-            Self::Confirmed => None,
+            Self::Confirmed(_) => None,
             Self::NotAttempted(e) | Self::Failed(e) | Self::Unconfirmed(e) => Some(e.kind()),
         }
     }
@@ -48,7 +74,7 @@ impl IssuanceWrite {
     /// The fixed label for logs and counters; never the error text.
     pub(crate) fn label(&self) -> &'static str {
         match self {
-            Self::Confirmed => "confirmed",
+            Self::Confirmed(_) => "confirmed",
             Self::NotAttempted(_) => "not_attempted",
             Self::Failed(_) => "failed",
             Self::Unconfirmed(_) => "unconfirmed",
@@ -73,10 +99,15 @@ impl TransparencyLogger {
         }
         crate::clock::stamp_audit_row(&mut fields);
         let dispatched = self
-            .dispatch_bounded(None, move |log| log.append_event_synced(fields, &envelope))
+            .dispatch_bounded(None, move |log| {
+                log.append_event_synced_row(fields, &envelope)
+            })
             .await;
         match dispatched {
-            Dispatch::Joined(Ok(_)) => IssuanceWrite::Confirmed,
+            Dispatch::Joined(Ok((counter, entry_hash))) => IssuanceWrite::Confirmed(IssuanceRow {
+                counter,
+                entry_hash,
+            }),
             Dispatch::Joined(Err(error)) => IssuanceWrite::Failed(error),
             Dispatch::NotStarted(error) => IssuanceWrite::NotAttempted(error),
             Dispatch::Unconfirmed(error) => IssuanceWrite::Unconfirmed(error),

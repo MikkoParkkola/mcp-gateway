@@ -63,6 +63,7 @@ fn token(group: &str) -> crate::key_server::TemporaryToken {
     use crate::key_server::InMemoryTokenStore;
     let now = crate::clock::unix_secs().expect("the test clock reads");
     crate::key_server::TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: crate::key_server::oidc::VerifiedIdentity::for_test(

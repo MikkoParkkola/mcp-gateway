@@ -210,7 +210,7 @@ impl TransparencyLogger {
             );
         }
 
-        self.append_core(fields, envelope, false).map(|_| ())
+        self.append_core(fields, envelope, false).map(|(_, _)| ())
     }
 }
 
