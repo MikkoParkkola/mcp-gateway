@@ -103,10 +103,31 @@ def _parts(masked: str, o: int, c: int) -> list[tuple[int, int]]:
     return spans + [(start, c)]
 
 
-def _code_blind(masked: str) -> str:
-    """`masked` with the inside of each one-line backtick code span replaced by
-    `x`, so no `(`, `)`, `,` or `;` written in code splits a parenthetical."""
-    return re.sub(r"`[^`\n]*`", lambda m: "`" + "x" * (len(m.group(0)) - 2) + "`", masked)
+def _code_blind(masked: str) -> tuple[str, list[int]]:
+    """(`masked` with the inside of each one-line code span replaced by `x`,
+    the offsets of backtick runs that close nothing).
+
+    A code span is read as CommonMark reads it: a run of N backticks opens
+    it, and the next run of exactly N on the same line closes it, so no `(`,
+    `)`, `,` or `;` written in code splits a parenthetical. A run with no
+    closing run is left as text and reported, so the caller can refuse it."""
+    runs = list(re.finditer(r"`+", masked))
+    out, unclosed, i = list(masked), [], 0
+    while i < len(runs):
+        opening = runs[i]
+        width = len(opening.group())
+        closing = next(
+            (j for j in range(i + 1, len(runs))
+             if len(runs[j].group()) == width and "\n" not in masked[opening.end():runs[j].start()]),
+            None,
+        )
+        if closing is None:
+            unclosed.append(opening.start())
+            i += 1
+            continue
+        out[opening.end():runs[closing].start()] = "x" * (runs[closing].start() - opening.end())
+        i = closing + 1
+    return "".join(out), unclosed
 
 
 def _kept_text(piece: str) -> str:
@@ -128,7 +149,7 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
 
     def scan(t: str):
         masked = ACCEPTANCE_ID.sub(lambda m: "\0" * len(m.group(0)), t)
-        blind = _code_blind(masked)
+        blind, unclosed = _code_blind(masked)
         spans, problems = [], []
         for m in TRACKER_ID.finditer(masked):
             at = m.end(1)  # the id, past the boundary character the pattern consumes
@@ -136,6 +157,10 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
             span = _enclosing(blind, at)
             if span is None:
                 problems.append(f"{line}: a tracker id in prose; reword the line without it")
+                continue
+            if any(span[0] < u < span[1] for u in unclosed):
+                # Where its code ends is unknown, so no split of it can be trusted.
+                problems.append(f"{line}: a tracker id beside an unclosed code span; close the span or reword the line")
                 continue
             part = next(p for p in _parts(blind, *span) if p[0] <= at < p[1])
             if not ID_PART.fullmatch(" ".join(masked[part[0]:part[1]].split())):
