@@ -707,6 +707,7 @@ fn start_error_texts() {
         StartError::AbandonedPending,
         StartError::InvalidAuditPayload,
         StartError::ArtifactCheckFailed,
+        StartError::UnloadableRecovery,
     ] {
         let sentence = match error {
             StartError::Busy => {
@@ -726,6 +727,9 @@ fn start_error_texts() {
             }
             StartError::ArtifactCheckFailed => {
                 "This gateway could not confirm that no config write is pending beside the config. Fix access to the config directory, then start again."
+            }
+            StartError::UnloadableRecovery => {
+                "Nothing was recovered: the config a crashed write would restore does not load."
             }
             // Not in the list above: the sessionless constructor rows pin these two in full.
             StartError::RecoveryPending | StartError::ManifestUnread => {

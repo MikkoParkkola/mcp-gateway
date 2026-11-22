@@ -19,7 +19,7 @@ use crate::config_persistence::lock::{
     Locked, NoResult, NotLocked, absent, dispatch_journal, lock_config_deferred, lock_path,
     no_writer_possible, off_runtime,
 };
-use crate::config_persistence::{CLI_LOCK_WAIT, recover_recorded};
+use crate::config_persistence::{CLI_LOCK_WAIT, Unrecovered, recover_recorded};
 use crate::identity_grants::journal::resolved;
 use crate::security::transparency_log::TransparencyLogger;
 
@@ -50,6 +50,9 @@ pub(crate) enum StartError {
     RecoveryPending,
     /// A retired manifest, which this build cannot read yet.
     ManifestUnread,
+    /// A v1 journal whose recovery would leave a config that does not load. The logged cause names
+    /// the files and the steps to finish by hand.
+    UnloadableRecovery,
 }
 
 impl fmt::Display for StartError {
@@ -77,6 +80,9 @@ impl fmt::Display for StartError {
                 "An interrupted config write needs recovering before this config is used. Call mcp_gateway::config_reload::recover_before_start on it, or start the gateway once with serve, then build again."
             }
             Self::ManifestUnread => crate::config_persistence::lock::MANIFEST_UNREAD,
+            Self::UnloadableRecovery => {
+                "Nothing was recovered: the config a crashed write would restore does not load."
+            }
         })
     }
 }
@@ -351,7 +357,12 @@ fn open_locked(locked: Locked, configured: PathBuf) -> Result<StartupSession, Re
             drop(legacy);
             recover_recorded(&locked, &super::startup_recovery_intent)
                 .map(|()| held(locked, configured, None))
-                .map_err(|why| refuse(StartError::JournalPending, path, why))
+                .map_err(|why| match why {
+                    Unrecovered::Unloadable(why) => {
+                        refuse(StartError::UnloadableRecovery, path, why)
+                    }
+                    Unrecovered::Other(why) => refuse(StartError::JournalPending, path, why),
+                })
         }
         Ok(Some(OpenJournal::Current(state))) => match handover_of(&state) {
             // Repair refuses a donor. The file drain's resume finishes a full handover.
