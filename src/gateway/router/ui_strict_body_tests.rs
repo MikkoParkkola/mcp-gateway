@@ -171,7 +171,7 @@ async fn s4_the_edit_body_refuses_an_unknown_field() {
     handled(&first);
 }
 
-/// A one-operation OpenAPI document, inline, so no row fetches anything.
+/// A one-operation `OpenAPI` document, inline, so no row fetches anything.
 const SPEC: &str = r#"{"openapi":"3.0.0","info":{"title":"t","version":"1"},"paths":{"/x":{"get":{"operationId":"getx","responses":{"200":{"description":"ok"}}}}}}"#;
 
 /// S5: the import body on the preview route.
