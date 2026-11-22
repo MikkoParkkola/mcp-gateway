@@ -43,6 +43,18 @@ line meets the 5 s rule exactly as it will after merge. For an elapsed bound,
 the paused clock exempts it only when the instant measured is tokio's: a
 `std::time::Instant` reads real time on a paused clock too (MIK-8360).
 
+New test code may not derive a real-clock bound from a timer the product runs
+(#3826), since a host slow enough to use the timer up fails the test too. A
+window that names a product `const NAME: Duration` (one `from_secs` or
+`from_millis`, outside test code), alone, scaled, plus a margin, or through
+the right-hand side of a local let or const it reads, is refused; so is a
+`timeout(W, f)` whose future itself runs a product `*_within` call handed a
+budget of W or more. Wait for the event; keep a hang guard well above the
+timer. Without `--base`, every such site, and every literal under 10 s equal
+to a timer the file can reach, prints as a `BUDGET LIST` line that never fails
+the run. This check reads Rust test code only; the rows of
+scripts/ci/test_*.py are judged by their own tickets.
+
 Stated misses: `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result
 first consumed over 2000 characters later; a fn that pauses the clock partway,
 which is skipped whole; a commented-out `include!`, or a file included by two
@@ -51,8 +63,16 @@ the timeout's result can be read as consuming it: that fails loudly, never
 quietly. And, for MIK-8360 (none is lexical; the fix pattern follows each):
 - a bounded wait whose clock starts before its premise holds (MIK-8359 t14):
   wait first on a premise signal that moves without the event under test;
-- a bound derived from a product timeout plus a fixed margin (#3826): any
-  margin can be outrun; await the event and keep the bound a hang guard;
+- a bound derived from a product timeout plus a fixed margin (#3826) in a form
+  the product-timer rule cannot see: any margin can be outrun; await the event
+  and keep the bound a hang guard. Not seen: a literal equal in value to a
+  product budget (under 10 s the floor refuses it anyway; at 10 s and over the
+  match is mostly chance); a timer behind a re-export the module walk cannot
+  follow; an explicit budget raced by an elapsed assert, or by a future that is
+  not the call, an `async` block, or a spawn of one;
+- for every new-code rule except the product-timer one, a window counts as new
+  through the bindings it reads directly: an edit two bindings up from it does
+  not make it new;
 - a literal window handed to a generic helper whose builder sees only its
   parameter, or a timing-named const passed as an argument;
 - a short window as a positional constructor argument with no timing name
@@ -213,7 +233,7 @@ def read_base(ref: str) -> list[Row] | None:
     return None
 
 
-def judge_new(found, rows, texts, consts, includers, added, carried=frozenset()):
+def judge_new(found, rows, texts, consts, includers, added, carried=frozenset(), budgets=None):
     """(findings for the 5 s rule, new-code errors), given added lines.
 
     The 5 s rule's findings pass through unchanged: a changed line meets that
@@ -231,7 +251,7 @@ def judge_new(found, rows, texts, consts, includers, added, carried=frozenset())
         str(f)
         for path, lines in sorted(added.items())
         if path in texts
-        for f in scan_new(path, texts[path], consts, includers, lines, carried=carried)
+        for f in scan_new(path, texts[path], consts, includers, lines, carried=carried, budgets=budgets)
         if (f.path, f.line) not in reported
     ]
     return found, errors
@@ -377,9 +397,14 @@ def main(argv: list[str] | None = None) -> int:
         base_rows = read_base(pin)
         if base_rows is not None:
             carried = _compute_carried(pin, base_rows, rows)
-        found, new_errors = judge_new(found, rows, texts, consts, includers, changed, carried=carried)
+        found, new_errors = judge_new(found, rows, texts, consts, includers, changed, carried=carried, budgets=budgets_of(texts))
     else:
         print("No --base: the new-code rules (10 s floor, sleep windows, poll budgets) were not run.")
+        timers = budgets_of(texts)
+        # Product-timer audit: listed, never failing.
+        for path, text in texts.items():
+            for line in budget_list(path, text, consts, includers, timers):
+                print(line)
     errors = judge(found, rows, base_rows, carried=carried) + new_errors
     for line in errors:
         print(line)
