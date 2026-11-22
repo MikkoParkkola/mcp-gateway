@@ -62,8 +62,8 @@ function rowLink(row) {
     h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
     h('span', {}, text(row.who?.account)), ' ',
     h('span', {}, text(row.tool)), ' ',
-    h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome),
-    ...effectOf(row));
+    // The effect shares the outcome's cell: the grid has one column per cell and one for the chevron.
+    h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome, ...effectOf(row)));
 }
 
 /** A call's delivery effect, when the row has one. no_record is never final: the record lands after the call. */
@@ -336,8 +336,11 @@ async function statusTab(body, ctx) {
 
   // The automatic next page: asked when the list end is in view, measured now, after the
   // rows are drawn. A failed next page waits for its Retry instead.
-  function readOn() {
+  // A reading taken after a draw waits for a live refresh that is out, so a short list
+  // does not abort its own trailing refresh; the operator scrolling to the end still does.
+  function readOn(scrolled = false) {
     if (left || !list.cursor || list.flight?.kind === 'append' || list.notices.includes('next-retry')) return;
+    if (!scrolled && list.flight?.kind === 'live') return;
     const at = sentinel.getBoundingClientRect();
     if (at.bottom >= 0 && at.top <= innerHeight) step('next');
   }
@@ -368,7 +371,7 @@ async function statusTab(body, ctx) {
 
   // Scrolling the list end into view reads on.
   const endSeen = new IntersectionObserver((changes) => {
-    if (changes.some((c) => c.isIntersecting)) readOn();
+    if (changes.some((c) => c.isIntersecting)) readOn(true);
   });
   endSeen.observe(sentinel);
   // An activity frame says the log moved; the core decides whether to ask again.
@@ -400,13 +403,16 @@ let returnTo = null;
 const RULE_NOT_RECORDED = 'rule not recorded for this check';
 
 // The keys a receipt shows, per wire kind (a refusal's kind is "call"). true is a plain
-// value; an object maps its own keys; LIST is a list of items with these keys; TEXTS a
-// list of strings; EITHER takes a plain value or that shape. Nothing else is shown or
+// value; STR and WHOLE take only a string or only a whole number; an object maps its own
+// keys; LIST is a list of items of that shape; TEXTS a list of strings; EITHER takes a
+// string or that shape. Nothing else is shown or
 // copied: an unlisted key, or a listed key holding another shape, is dropped.
-const LIST = (keys) => ({ list: keys });
+const LIST = (item) => ({ list: item });
+const STR = (v) => typeof v === 'string';
+const WHOLE = (v) => Number.isInteger(v);
 const TEXTS = { texts: true };
 const EITHER = (shape) => ({ either: shape });
-const FINDINGS = LIST(['scan_type', 'severity', 'location']);
+const FINDINGS = LIST({ scan_type: true, severity: true, location: true });
 const BASE = {
   id: true, kind: true, counter: true, timestamp: true, signature: true, integrity: true, unanchored: true,
   signing_anchor: true,
@@ -421,11 +427,11 @@ const SHOWN = {
     answer_findings: EITHER(FINDINGS), answer_findings_total: true, answer_integrity: true, answer_integrity_scope: true,
     findings: EITHER(FINDINGS), findings_truncated: true,
     answer: {
-      effect: true, line: true, records: LIST(['counter', 'effect', 'findings_listed']), more: true,
+      effect: true, line: true, records: LIST({ counter: true, effect: true, findings_listed: WHOLE }), more: true,
       search: { bytes: true, lines: true, stopped: true },
     },
     decision: EITHER({
-      kind: true, rule: true, grant: true, flags: true, effect: true, decided: true,
+      kind: true, rule: true, grant: STR, flags: STR, effect: true, decided: true,
       config_revision: true, running_revision: true, config_revision_capabilities: true,
       reason: true, scope: true, capability: true, grant_id: true,
     }),
@@ -445,12 +451,12 @@ const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 /** The one projection: what the receipt shows, what Copy as JSON copies, and what its fallback shows. */
 function project(value, shape) {
   if (shape === true) return plain(value) ? value : undefined;
-  if (shape.either) return plain(value) ? value : project(value, shape.either);
+  if (typeof shape === 'function') return shape(value) ? value : undefined;
+  if (shape.either) return typeof value === 'string' ? value : project(value, shape.either);
   if (shape.texts) return Array.isArray(value) ? value.filter((v) => typeof v === 'string') : undefined;
   if (shape.list) {
     if (!Array.isArray(value)) return undefined;
-    const item = Object.fromEntries(shape.list.map((k) => [k, true]));
-    return value.filter(isMap).map((entry) => project(entry, item));
+    return value.filter(isMap).map((entry) => project(entry, shape.list));
   }
   if (!isMap(value)) return undefined;
   const out = {};
@@ -490,7 +496,7 @@ function factsOf(projected, shape, path, into) {
       const items = h('ol', { class: 'activity-items' });
       for (const entry of v) {
         const li = h('li', {});
-        for (const k of form.list) {
+        for (const k of Object.keys(form.list)) {
           if (entry[k] === undefined) continue;
           li.append(h('span', { 'data-field': `${at}[].${k}` }, `${k.replace(/_/g, ' ')}: ${wordsOf(`${at}.${k}`, entry[k])}`), ' ');
         }
@@ -577,7 +583,7 @@ async function receiptTab(body, ctx) {
         body: 'No such entry is in the kept log: it may have rotated out, or this key may not read it.',
       }));
     } else if (status === 401) {
-      view.replaceChildren(ctx.state('signin', { title: 'Sign in to read this entry', body: '' }));
+      // The shell's own sign-in has taken the page; the receipt draws again after it.
     } else if (status === 403) {
       view.replaceChildren();
       bannered = true;
@@ -610,7 +616,8 @@ async function receiptTab(body, ctx) {
     }, (err) => {
       if (err?.name === 'AbortError' || left || flight !== mine) return;
       flight = null;
-      if (again) {
+      // A refusal or a missing entry is an answer, not a failed check: it gets its own state.
+      if (again && ![401, 403, 404].includes(err?.status)) {
         note.textContent = 'Could not check again. The entry above is as last read.';
         note.hidden = false;
       } else {
