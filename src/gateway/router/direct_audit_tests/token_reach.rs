@@ -276,14 +276,14 @@ async fn a_resumed_task_step_records_the_resuming_token() {
     send(&fx, &resumer, "tasks/update", &id, resume).await;
     rests(&fx, &id, 2).await;
     let later = invocations(&fx);
-    let resumed = &later[earlier..];
+    let round_records = &later[earlier..];
     assert!(
-        !resumed.is_empty(),
+        !round_records.is_empty(),
         "premise: the resumed step was recorded"
     );
     // Every record of the resumed round names the resuming token, so a round
     // that names it on one record and the first token on another fails.
-    for record in resumed {
+    for record in round_records {
         assert_ne!(named_jti(record), Some(starter_jti.as_str()), "{record}");
         assert_carries(record, &fx, &resumer_jti);
         assert_resolves(&fx, record, &resumer_jti, &["alpha"]).await;

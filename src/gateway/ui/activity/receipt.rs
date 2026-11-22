@@ -61,11 +61,11 @@ fn receipt_reach(
     };
     let e = &found.entry;
     let stored = hash_of(e, "entry_hash");
-    let taken = stored.as_deref() == Some(row.entry_hash.as_str())
+    let matches = stored.as_deref() == Some(row.entry_hash.as_str())
         && recompute_entry_hash(e).ok() == stored
         && e.get("event").and_then(Value::as_str) == Some(ISSUED_EVENT)
         && e.get("token_jti").and_then(Value::as_str) == Some(token.jti.as_str());
-    if !taken {
+    if !matches {
         return Ok(NOT_FOUND.into());
     }
     Ok(json!({

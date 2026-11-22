@@ -397,8 +397,6 @@ async fn fixture(setup: Setup) -> Fixture {
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
-    // Copied out before `agent_identity` is moved from `setup` below.
-    let extras = setup.extras;
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
@@ -421,7 +419,7 @@ async fn fixture(setup: Setup) -> Fixture {
     if setup.log == Log::On {
         meta.enable_transparency_log(Arc::clone(&log));
     }
-    meta = arm_extras(meta, extras);
+    meta = arm_extras(meta, setup.extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
