@@ -51,13 +51,6 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
 ///
 /// The first read error other than `Interrupted`; no digest is returned for
 /// a read that failed part way.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the config commit primitive's read-back, called by a later step"
-    )
-)]
 pub(crate) fn sha256_hex_reader(mut reader: impl std::io::Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
