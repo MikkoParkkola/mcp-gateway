@@ -63,7 +63,8 @@ COMPILE_USES = (
     "./.github/actions/add-swap",
 )
 
-CI = Path(".github/workflows/ci.yml")
+# From this file's own place, so the check runs from any working directory.
+CI = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 
 def load_jobs() -> dict:
@@ -234,11 +235,12 @@ def check_build(jobs: dict) -> list[str]:
     return problems
 
 
-def check_gate(name: str, steps: list[dict], build: str = BUILD_JOB) -> list[str]:
-    """C3. The first step fails the job when the shared build (BUILD, by default Linux's) did not succeed."""
+def check_gate(name: str, steps: list[dict], build: str = BUILD_JOB, gate_run: str = GATE_RUN) -> list[str]:
+    """C3. The first step fails the job when the shared build (BUILD, by default Linux's) did not succeed; its run
+    text is exactly GATE_RUN (named for BUILD) or the caller's own."""
     if not steps:
         return [f"{name} job: has no steps; the first must gate on {build}"]
-    want_env, want_run = GATE_BUILD.replace(BUILD_JOB, build), GATE_RUN.replace(BUILD_JOB, build)
+    want_env, want_run = GATE_BUILD.replace(BUILD_JOB, build), gate_run.replace(BUILD_JOB, build)
     step = steps[0]
     label = step_label(0, step)
     problems: list[str] = []
@@ -416,8 +418,9 @@ WIN_ARTIFACT = "windows-lib-tests"
 WIN_ROLLUP = "windows-check"
 WIN_JUDGES = (WIN_ROLLUP, "heavy-gate")  # the roll-ups that may need the build besides the legs
 WIN_EXPORT = 'python scripts/ci/shard_tests.py export-lib "$env:RUNNER_TEMP\\lib-bin"'
-WIN_EXE = "lib-bin\\lib-tests.exe"  # how the legs' run step names the exe
+WIN_EXE = "lib-bin\\lib-tests.exe"  # how a leg's step names the exe, in its run text or its env (LIB_EXE)
 WIN_PATH = "${{ runner.temp }}/lib-bin"
+WIN_GATE = '[ "$BUILD" = success ] || { echo "::error::windows-lib-build $BUILD"; exit 1; }'  # the legs' first step
 
 
 def check_windows(jobs: dict) -> list[str]:
@@ -457,10 +460,10 @@ def check_windows(jobs: dict) -> list[str]:
     if not "".join(str(legs.get("if", "")).split()).startswith(CANCELLED):
         problems.append(f"{WIN_LEGS} job: if: does not start with !cancelled(), so a failed build can skip it")
     lsteps = steps_of(legs)
-    problems += check_gate(WIN_LEGS, lsteps, WIN_BUILD)
+    problems += check_gate(WIN_LEGS, lsteps, WIN_BUILD, WIN_GATE)
     fetch = [i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact")
              and with_map(s).get("name") == WIN_ARTIFACT and with_map(s).get("path") == WIN_PATH]
-    runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s)]
+    runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s) + str(s.get("env") or "")]
     if not fetch:
         problems.append(f"{WIN_LEGS} job: no actions/download-artifact step for {WIN_ARTIFACT} into {WIN_PATH}")
     elif runs and runs[0] < fetch[0]:

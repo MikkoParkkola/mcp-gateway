@@ -51,7 +51,8 @@ SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build"), "windows": ("wind
 # (from pwsh, as every Windows test step runs: Git Bash enables a privilege that writes through DACL denies).
 SHARED_CALL = {
     "linux": 'python3 scripts/ci/shard_tests.py run-prebuilt-parts linux ${{ matrix.shard }} "$RUNNER_TEMP/lib-bin"',
-    "windows": 'python scripts/ci/shard_tests.py run-prebuilt windows ${{ matrix.shard }} "$env:RUNNER_TEMP\\lib-bin\\lib-tests.exe"',
+    # The exe's path is the step's env.LIB_EXE (check_shared_lib.py finds the step by it).
+    "windows": 'python scripts/ci/shard_tests.py run-prebuilt windows ${{ matrix.shard }} "$env:LIB_EXE"',
 }
 # Every aggregate skips on a same-repo merge-train PR into the release line: merge-train judges its needs
 # itself from the base copy of this workflow (the ROLLUP_EXPECTS ids below).
