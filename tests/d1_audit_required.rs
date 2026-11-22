@@ -219,13 +219,15 @@ fn the_environment_sets_the_audit_switch_both_ways() {
 
 /// STARTREC.2 where the operator reads it: a `serve` start that meets a pending write it cannot
 /// recover exits non-zero, and its stderr, at the default log level, names the journal and the
-/// steps to finish by hand. Two causes: the config the recovery would restore does not load (auth
-/// on with its log off), and its log cannot open (its folder is a regular file).
+/// steps to finish by hand. Three causes: the config the recovery would restore does not load (auth
+/// on with its log off), it names a reserved writer slot (whose name the line must keep), and its
+/// log cannot open (its folder is a regular file).
 #[test]
 fn a_refused_recovery_tells_the_operator_how_to_finish_on_stderr() {
     use sha2::Digest as _;
     for cause in [
         "the restored config does not load",
+        "the restored config names a reserved slot",
         "the restored log cannot open",
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -233,6 +235,8 @@ fn a_refused_recovery_tells_the_operator_how_to_finish_on_stderr() {
         std::fs::write(&blocker, "a plain file").unwrap();
         let restored = if cause.ends_with("does not load") {
             format!("{AUTH_ON}{LOG_OFF}")
+        } else if cause.ends_with("reserved slot") {
+            "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    description: \"env:MCPGW_PENDING_SLOT_X\"\n".to_owned()
         } else {
             let log = blocker.join("audit.jsonl").display().to_string();
             format!("security:\n  transparency_log:\n    enabled: true\n    path: {log:?}\n")
@@ -275,5 +279,11 @@ fn a_refused_recovery_tells_the_operator_how_to_finish_on_stderr() {
             journal.exists(),
             "{cause}: the journal stays for the hand recovery"
         );
+        if cause.ends_with("reserved slot") {
+            assert!(
+                stderr.contains("MCPGW_PENDING_SLOT_X"),
+                "{cause}: the line names the slot: {stderr}"
+            );
+        }
     }
 }
