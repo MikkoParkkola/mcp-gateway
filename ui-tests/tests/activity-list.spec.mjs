@@ -888,6 +888,22 @@ test.describe('LE list screen', () => {
     await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 shorten: then page 2');
   });
 
+  // Accepted behaviour: a taller window that shows the list end reads on like a scroll does,
+  // and the refresh it overtakes waits behind the control, one press away.
+  test('LE5 a window made tall enough to show the end reads on and holds', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE5 resize: page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+    await stream.send(activityFrame(callRow('a.live')));
+    const live = await screen.request(1, 'LE5 resize: the live refresh');
+    await screen.quiet(2, 'LE5 resize: premise, the end is out of view');
+    const { width } = page.viewportSize();
+    await page.setViewportSize({ width, height: 8000 });
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 resize: page 2');
+    await screen.aborted(live, 'LE5 resize: the live refresh');
+    await expect(screen.control(), 'LE5 resize: its rows wait behind the control').toBeVisible();
+  });
+
   test('LE5 the next-page retry asks again with the list end out of view', async ({ page, request }, testInfo) => {
     const { screen, stream } = await screenFor(page, request, testInfo);
     await screen.open(stream);
