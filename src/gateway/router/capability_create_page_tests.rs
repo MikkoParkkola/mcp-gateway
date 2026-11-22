@@ -177,22 +177,22 @@ async fn s1_a_create_body_with_an_unknown_field_is_refused() {
 async fn cr1_the_page_creates_the_named_capability_through_the_route() {
     let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
     let addr = serve(&fx).await;
-    let got = press(addr, "page-made", "null").await;
-    let file = fx.file.with_file_name("page-made.yaml");
+    let got = press(addr, "page_made", "null").await;
+    let file = fx.file.with_file_name("page_made.yaml");
     assert!(file.exists(), "no file was written: {got}");
     let written = crate::capability::parse_capability_file(&file)
         .await
         .expect("the written file is a capability");
-    assert_eq!(written.name, "page-made");
+    assert_eq!(written.name, "page_made");
     let text = std::fs::read_to_string(&file).expect("the file reads");
     assert!(text.contains("\nproviders:\n"), "{text}");
     let (status, list) = fx
         .send(request("GET", "/ui/api/capabilities", "", ""))
         .await;
     assert_eq!(status, StatusCode::OK, "{list}");
-    assert!(list.contains("page-made"), "{list}");
+    assert!(list.contains("page_made"), "{list}");
     assert_eq!(got["alerts"], serde_json::json!([]), "{got}");
-    assert_eq!(got["opened"], serde_json::json!(["page-made"]), "{got}");
+    assert_eq!(got["opened"], serde_json::json!(["page_made"]), "{got}");
     let sent = got["sent"].as_array().expect("the requests");
     assert_eq!(sent.len(), 2, "{got}");
     assert_eq!(sent[0]["contentType"], Value::Null, "{got}");
@@ -230,7 +230,7 @@ async fn cr3_a_create_answered_without_201_is_not_success() {
       { status: 200, type: 'text/yaml', body: 'fulcrum: 1.0\nname: my_capability\nproviders: {}\n' },
       { status: 200, type: 'application/json', body: '{}' },
     ]";
-    let got = press(addr, "not-made", scripted).await;
+    let got = press(addr, "not_made", scripted).await;
     assert_eq!(got["alerts"].as_array().map(Vec::len), Some(1), "{got}");
     assert_eq!(got["opened"], serde_json::json!([]), "{got}");
     assert_eq!(got["sent"].as_array().map(Vec::len), Some(2), "{got}");
@@ -247,4 +247,43 @@ async fn cr4_a_template_without_a_name_line_sends_no_create() {
     assert_eq!(got["alerts"].as_array().map(Vec::len), Some(1), "{got}");
     assert_eq!(got["sent"].as_array().map(Vec::len), Some(1), "{got}");
     assert_eq!(got["opened"], serde_json::json!([]), "{got}");
+}
+
+/// CR5: a typed name with capitals and a space becomes the one name a
+/// capability may carry (CAP-001: lowercase, digits, '_'), used for both the
+/// file and the capability, and the route accepts it.
+#[tokio::test]
+async fn cr5_a_typed_name_becomes_a_name_the_route_accepts() {
+    let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
+    let addr = serve(&fx).await;
+    let got = press(addr, "My Tools", "null").await;
+    let file = fx.file.with_file_name("my_tools.yaml");
+    assert!(file.exists(), "no my_tools.yaml: {got}");
+    let written = crate::capability::parse_capability_file(&file)
+        .await
+        .expect("the written file is a capability");
+    assert_eq!(written.name, "my_tools");
+    assert_eq!(got["alerts"], serde_json::json!([]), "{got}");
+    assert_eq!(got["opened"], serde_json::json!(["my_tools"]), "{got}");
+}
+
+/// CR6: a typed name with no letter or digit left after the mapping is
+/// refused on the page with its reason, before any request is sent.
+#[tokio::test]
+async fn cr6_a_name_with_no_letter_or_digit_is_refused_before_any_request() {
+    let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
+    let addr = serve(&fx).await;
+    for typed in ["", "   ", "--", "_"] {
+        let got = press(addr, typed, "null").await;
+        let alerts = got["alerts"].as_array().expect("the alerts");
+        assert_eq!(alerts.len(), 1, "{typed:?}: {got}");
+        assert!(
+            alerts[0]
+                .as_str()
+                .expect("text")
+                .contains("letters or digits"),
+            "{typed:?}: {got}"
+        );
+        assert_eq!(got["sent"], serde_json::json!([]), "{typed:?}: {got}");
+    }
 }

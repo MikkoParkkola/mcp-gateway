@@ -2092,10 +2092,15 @@ async function deleteCap(name) {
 // The route's own template is the only one: a POST with no body and no
 // Content-Type answers it. Success is the route's 201 alone.
 async function newCapability() {
-  const rawName = prompt('Enter capability file name (e.g. "my-tools"):');
+  const rawName = prompt('Enter capability file name (e.g. "my_tools"):');
   if (rawName === null) return;
-  const name = rawName.trim().replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
-  if (!name) { alert('Invalid name.'); return; }
+  // One name for the file and the capability, in the only characters a
+  // capability name may hold (CAP-001): lowercase letters, digits, '_'.
+  const name = rawName.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  if (!/[a-z0-9]/.test(name)) {
+    alert('Invalid name: use letters or digits (spaces and other characters become "_").');
+    return;
+  }
 
   // The route's words for an answer that is not the one wanted.
   const why = async (answer) => {
