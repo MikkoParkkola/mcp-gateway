@@ -1,0 +1,27 @@
+head_sha	45e6c36a902d4ed0a8e4b1d0e33025465de5d380
+#mutant m-skip-hash
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::a_row_with_another_hash_is_not_found	src/gateway/ui/activity/receipt_reach_tests.rs:84
+#mutant m-skip-recompute
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::an_edited_row_is_not_found	src/gateway/ui/activity/receipt_reach_tests.rs:147
+#mutant m-skip-kind
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::the_same_tokens_revocation_row_is_not_found	src/gateway/ui/activity/receipt_reach_tests.rs:105
+#mutant m-skip-jti
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::another_tokens_row_is_not_found	src/gateway/ui/activity/receipt_reach_tests.rs:118
+#mutant m-legacy-text
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::the_export_points_a_token_call_at_its_receipt	src/gateway/ui/activity/receipt_reach_tests.rs:213
+#mutant m-legacy-default
+mcp_gateway	gateway::ui::activity::receipt::reach_tests::a_call_without_a_token_keeps_the_legacy_value	src/gateway/ui/activity/receipt_reach_tests.rs:200
+#mutant m-guard-off
+mcp_gateway	security::decision_record::token_tests::a_key_server_call_without_a_token_scope_is_marked_unavailable	src/security/decision_token_tests.rs:14
+#mutant m-guard-all-kinds
+mcp_gateway	security::decision_record::token_tests::other_callers_never_carry_or_mark_a_token	src/security/decision_token_tests.rs:45
+#mutant m-worker-drops-row
+mcp_gateway	gateway::router::direct_audit_tests::token_reach::a_task_step_records_its_token	src/gateway/router/direct_audit_tests/token_reach.rs:35
+#mutant m-resume-drops-row
+mcp_gateway	gateway::router::direct_audit_tests::token_reach::a_resumed_task_step_records_the_resuming_token	src/gateway/router/direct_audit_tests/token_reach.rs:35
+#mutant m-meta-scope-dropped
+mcp_gateway	gateway::router::direct_audit_tests::token_reach::a_meta_call_answered_as_json_records_its_token	src/security/decision_record.rs:440
+#mutant m-expires-from-row-time
+mcp_gateway	key_server::issuance_expiry_tests::issued_row_records_the_ttl_and_the_expiry_bound	src/key_server/issuance_expiry_tests.rs:63
+#mutant m-window-31
+mcp_gateway	key_server::issuance_expiry_tests::issued_row_records_the_ttl_and_the_expiry_bound	src/key_server/issuance_expiry_tests.rs:63
