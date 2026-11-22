@@ -177,7 +177,8 @@ async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
 #[test]
 fn the_answer_helpers_reject_the_skipped_shape() {
     assert!(skipped(&skip_answer()), "premise: the skipped shape");
-    let helpers: [(&str, fn(&Value, &str)); 2] = [
+    type AnswerCheck = fn(&Value, &str);
+    let helpers: [(&str, AnswerCheck); 2] = [
         ("assert_refusal", assert_refusal),
         ("assert_retryable", assert_retryable),
     ];
