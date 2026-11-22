@@ -33,6 +33,10 @@ mod playbook_drivers;
 pub(crate) mod read_verdict;
 #[path = "route_matrix_driver_response_tests.rs"]
 pub(crate) mod response;
+/// Signing refusals on stdio, as their records name them.
+#[cfg(tp4)]
+#[path = "signing_records_stdio_tests.rs"]
+mod signing_records;
 pub(crate) use playbook_drivers::{
     playbook_of, stdio_params_counted, stdio_params_over, stdio_playbook_flaky, stdio_playbook_runs,
 };
@@ -124,19 +128,30 @@ async fn stdio_send_under(
     params: Value,
     policy: &crate::security::ToolPolicyConfig,
 ) -> Value {
+    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
+    stdio_send_raw(gateway_meta, &request, policy)
+        .await
+        .expect("a request is answered")
+}
+
+/// One stdio message exactly as given (a row may leave out its id), under
+/// the tool policy `policy`; `None` when no answer is due.
+async fn stdio_send_raw(
+    gateway_meta: &Arc<MetaMcp>,
+    request: &Value,
+    policy: &crate::security::ToolPolicyConfig,
+) -> Option<Value> {
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
     super::Gateway::dispatch_single(
         gateway_meta,
         &crate::gateway::authz::test_line(gateway_meta, policy),
         &mtls,
-        &request,
+        request,
         "stdio-matrix",
     )
     .await
-    .expect("a request is answered")
 }
 
 /// The params of `gateway_invoke alpha read` with `args`.
@@ -603,3 +618,8 @@ pub(crate) async fn stdio_keyed_calls() -> ([Value; 3], usize) {
 #[cfg(tp4)]
 #[path = "stdio_question_key_tests.rs"]
 mod stdio_question_key;
+
+// Part 3b-1 of the decision fixture table: the syntax row on stdio.
+#[cfg(tp4)]
+#[path = "route_matrix_driver_syntax_tests.rs"]
+mod syntax_rows;

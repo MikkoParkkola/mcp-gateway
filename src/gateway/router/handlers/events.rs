@@ -81,6 +81,7 @@ impl Presented {
     ) -> Result<crate::events::Credential, String> {
         let kind = CredentialKind::of(client);
         let facts = self.facts.clone().unwrap_or(CredentialFacts {
+            issuance_row: None,
             expires_at: None,
             jti: None,
             issued_at: None,

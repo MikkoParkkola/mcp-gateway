@@ -253,6 +253,22 @@ impl Gateway {
         if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
         }
+        // Its own step, whatever governance says: the history comes back even
+        // when this run charges nothing. Only API keys are charged per key,
+        // so with auth off no saved key row has a key to attach to.
+        #[cfg(feature = "cost-governance")]
+        {
+            let auth = &self.config.auth;
+            let names: Vec<String> = auth
+                .api_keys
+                .iter()
+                .filter(|_| auth.enabled)
+                .map(|key| key.name.clone())
+                .collect();
+            let tracker = meta_mcp_builder.cost_tracker();
+            let now = crate::clock::unix_secs().ok();
+            crate::cost_accounting::spend_history::restore(&tracker, &data_dir, &names, now);
+        }
 
         meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
         meta_mcp_builder.set_idempotency_key_mode(self.config.server.idempotency_key);

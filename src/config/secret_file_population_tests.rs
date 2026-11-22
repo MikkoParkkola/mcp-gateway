@@ -178,6 +178,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cost ledger; no secret",
     ),
     (
+        "src/cost_accounting/spend_history.rs",
+        "spend history: hourly and daily spend per API key name; no secret",
+    ),
+    (
         "src/counters/persist.rs",
         "call counters and markers; no secret",
     ),
@@ -241,7 +245,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/fragments.rs",
-        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; under BOUNDARY_PINS_BLESS it appends the rows a check lists to add to one <name>.d/<ticket>.tsv fragment, and reads a scratch table's fragments back for a row to compare; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",

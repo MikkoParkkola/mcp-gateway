@@ -43,14 +43,22 @@ pub(super) fn start(
 ) -> (Counters, tokio::task::JoinHandle<()>) {
     let counters = restore(data_dir);
     meta_mcp.set_counters(Arc::clone(&counters.store));
-    let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
-        let (store, file) = (Arc::clone(&counters.store), Arc::clone(&counters.file));
-        move || {
-            if let Ok(now) = crate::clock::unix_secs() {
-                file.save_unless_busy(&store, VERSION, now);
+    // The saver's root is the file it writes, so a test's kept dir covers it between ticks.
+    let root = Some(data_dir.join("counters.json"));
+    let saver = spawn_periodic_save(
+        "counter save",
+        COUNTER_SAVE_INTERVAL,
+        Some(shutdown),
+        root,
+        {
+            let (store, file) = (Arc::clone(&counters.store), Arc::clone(&counters.file));
+            move || {
+                if let Ok(now) = crate::clock::unix_secs() {
+                    file.save_unless_busy(&store, VERSION, now);
+                }
             }
-        }
-    });
+        },
+    );
     (counters, saver)
 }
 

@@ -156,11 +156,14 @@ pub(super) fn shown(path: &Path) -> String {
 /// file holding it) differ from the computed rows, or `None` when they match
 /// as multisets. It lists what to add, in the reader's own fragment, and what
 /// to remove with its quantity and the files holding copies; the computed rows
-/// follow for comparison only, never as text to paste.
-pub(super) fn multiset_delta(
+/// follow for comparison only, never as text to paste. With `bless`, the rows
+/// to add are also appended to that fragment ([`bless_into`]); the result is
+/// the same failure, so a run that wrote rows never passes.
+pub(super) fn delta_or_bless(
     name: &str,
     computed: &[String],
     pinned: &[(&Path, &str)],
+    bless: Option<Bless<'_>>,
 ) -> Option<String> {
     use std::collections::BTreeMap;
     let mut want: BTreeMap<&str, usize> = BTreeMap::new();
@@ -200,7 +203,8 @@ pub(super) fn multiset_delta(
     if !add.is_empty() {
         let _ = writeln!(
             message,
-            "rows to add ({}; put these in your fragment {name}.d/<ticket>.tsv):\n{}",
+            "rows to add ({}; put these in your fragment {name}.d/<ticket>.tsv, or run with \
+             {BLESS_VAR}=<ticket> to have them written there):\n{}",
             add.len(),
             add.join("\n")
         );
@@ -213,12 +217,135 @@ pub(super) fn multiset_delta(
             remove.join("\n")
         );
     }
+    if let Some(bless) = bless.filter(|_| !add.is_empty()) {
+        let _ = writeln!(message, "{}", bless_into(bless, name, &add));
+    }
     let _ = write!(
         message,
         "for comparison only; do not paste into any table:\n{}",
         computed.join("\n")
     );
     Some(message)
+}
+
+/// The variable that turns the bless mode on; its value is the ticket that
+/// names the fragment the rows go into.
+pub(super) const BLESS_VAR: &str = "BOUNDARY_PINS_BLESS";
+
+/// Where a blessed check writes: a crate-shaped root and the ticket of the
+/// fragment, `<name>.d/<ticket>.tsv`.
+#[derive(Clone, Copy)]
+pub(super) struct Bless<'a> {
+    pub(super) root: &'a Path,
+    pub(super) ticket: &'a str,
+}
+
+/// The ticket a bless names, given the values of [`BLESS_VAR`] and `CI`:
+/// none when unset or empty; refused when the value names no fragment, and
+/// refused under CI, which never writes the tree.
+pub(super) fn bless_from(bless: Option<&str>, ci: Option<&str>) -> Result<Option<String>, String> {
+    let Some(ticket) = bless.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !fragment_name_ok(&format!("{ticket}.tsv")) {
+        return Err(format!(
+            "{BLESS_VAR}={ticket} names no fragment; want <digits>[-<digits>]"
+        ));
+    }
+    if ci.is_some_and(|value| !value.is_empty()) {
+        return Err(format!(
+            "{BLESS_VAR}={ticket} with CI set: a CI run never writes pin fragments"
+        ));
+    }
+    Ok(Some(ticket.to_owned()))
+}
+
+/// The bless target of the live pin tests: this checkout's root and the
+/// ticket the environment names, decided once per process. Only the live
+/// `#[test]` functions call it; every check helper takes the result as a
+/// parameter, so a test that passes `None` never writes, whatever the
+/// environment holds. A refused value fails the calling test.
+pub(super) fn bless_ticket() -> Option<Bless<'static>> {
+    static DECIDED: std::sync::OnceLock<Result<Option<String>, String>> =
+        std::sync::OnceLock::new();
+    let decided = DECIDED.get_or_init(|| {
+        let read = |key| std::env::var(key).ok();
+        bless_from(read(BLESS_VAR).as_deref(), read("CI").as_deref())
+    });
+    match decided {
+        Ok(ticket) => ticket.as_deref().map(|ticket| Bless {
+            root: crate_root(),
+            ticket,
+        }),
+        Err(refused) => panic!("{refused}"),
+    }
+}
+
+/// Append `rows` to the fragment `bless` names for table `name`, and say so
+/// in one line for the failure message. Append-only: a new file starts with
+/// the base table's `#` header line, when it has one; an existing file keeps
+/// its bytes, gaining a newline first when its last line lacks one.
+fn bless_into(bless: Bless<'_>, name: &str, rows: &[&str]) -> String {
+    let dir = bless.root.join(DIR);
+    let path = dir
+        .join(format!("{name}.d"))
+        .join(format!("{}.tsv", bless.ticket));
+    match append_rows(&dir.join(format!("{name}.tsv")), &path, rows) {
+        Ok(()) => format!(
+            "blessed: {} rows written into {name}.d/{}.tsv; review them before committing",
+            rows.len(),
+            bless.ticket
+        ),
+        Err(e) => format!("bless failed: cannot write {}: {e}", path.display()),
+    }
+}
+
+/// [`bless_into`]'s write: the separator or header, then one line per row.
+fn append_rows(base: &Path, path: &Path, rows: &[&str]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut text = String::new();
+    match std::fs::read(path) {
+        Ok(held) if held.last().is_some_and(|byte| *byte != b'\n') => text.push('\n'),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let base_text = std::fs::read_to_string(base)?;
+            if let Some(header) = base_text.lines().next().filter(|l| l.starts_with('#')) {
+                text.push_str(header);
+                text.push('\n');
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    for row in rows {
+        text.push_str(row);
+        text.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(text.as_bytes())
+}
+
+/// Every fragment file of table `name` under `root`, by file name, with its
+/// bytes: what a row compares before and after a check. Listed by
+/// [`fragment_files`], so a missing folder is no fragments and any other
+/// failure fails the row; an unreadable fragment fails it too, so a snapshot
+/// never stands in for a file it could not read.
+pub(super) fn fragment_bytes(root: &Path, name: &str) -> Vec<(String, Vec<u8>)> {
+    let folder = root.join(DIR).join(format!("{name}.d"));
+    let listed = fragment_files(&folder).unwrap_or_else(|e| panic!("{e}"));
+    listed
+        .into_iter()
+        .map(|file| {
+            let held = std::fs::read(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+            (shown(&file), held)
+        })
+        .collect()
 }
 
 /// The live base text of table `name` in this checkout.
@@ -278,3 +405,6 @@ pub(super) fn scratch_table(
 
 #[path = "fragments_tests.rs"]
 mod tests;
+
+#[path = "bless_tests.rs"]
+mod bless_tests;

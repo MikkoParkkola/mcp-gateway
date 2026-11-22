@@ -11,10 +11,7 @@
 /// the scan until its row is removed. A new row is added only for a test
 /// file the release line brought in while this sweep is open; any other new
 /// unkept file fails the scan.
-const PENDING: &[&str] = &[
-    "src/cli/main_audit_secret_tests.rs",
-    "src/commands/audit_race_tests.rs",
-];
+const PENDING: &[&str] = &[];
 
 fn is_test(rel: &str) -> bool {
     (rel.contains("/tests/")

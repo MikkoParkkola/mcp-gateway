@@ -16,10 +16,65 @@ use super::receipt_scan::{answer_block, scan};
 use super::rows::{Check, Kind, findings_value, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::decision_record::{Decision, read};
+use crate::security::transparency_log::issuance::ISSUED_EVENT;
 use crate::security::transparency_log::recompute_entry_hash;
 
 /// What a receipt says for evidence this gateway version does not record.
 pub(super) const NOT_RECORDED: &str = "not recorded by this gateway version";
+
+/// What a receipt says for a call whose exchanged token's issuance row the
+/// log does not hold: rotated out, or never written by a best-effort mint.
+pub(super) const NOT_FOUND: &str = "not found in the activity log";
+
+/// Where the export sends a reader for a token call's reach.
+const RESOLVED_ON: &str = "this call's receipt";
+
+/// A call's reach from its decision alone, reading no other row: the export's
+/// whole answer, and the receipt's when there is no row to seek.
+fn recorded_reach(decision: Option<&Decision>) -> Value {
+    match decision {
+        Some(Decision {
+            token: Some(token), ..
+        }) => json!({"jti": token.jti, "resolved_on": RESOLVED_ON}),
+        Some(d) if d.token_unavailable => NOT_FOUND.into(),
+        _ => NOT_RECORDED.into(),
+    }
+}
+
+/// The reach a call's receipt shows: the issuance row its decision names,
+/// found by counter in one seek, and taken only when its stored hash is the
+/// one the decision recorded, still matches its content, and the row is the
+/// `token.issued` row of that same jti. Anything else names no cause.
+fn receipt_reach(
+    log: &Path,
+    decision: Option<&Decision>,
+    reads: &mut Reads,
+) -> std::io::Result<Value> {
+    let Some(token) = decision.and_then(|d| d.token.as_ref()) else {
+        return Ok(recorded_reach(decision));
+    };
+    let Some(row) = &token.issuance_row else {
+        return Ok(NOT_FOUND.into());
+    };
+    let Some(found) = seek(log, row.counter, reads)? else {
+        return Ok(NOT_FOUND.into());
+    };
+    let e = &found.entry;
+    let stored = hash_of(e, "entry_hash");
+    let matches = stored.as_deref() == Some(row.entry_hash.as_str())
+        && recompute_entry_hash(e).ok() == stored
+        && e.get("event").and_then(Value::as_str) == Some(ISSUED_EVENT)
+        && e.get("token_jti").and_then(Value::as_str) == Some(token.jti.as_str());
+    if !matches {
+        return Ok(NOT_FOUND.into());
+    }
+    Ok(json!({
+        "jti": token.jti,
+        "backends": e.get("backends"),
+        "tools": e.get("tools"),
+        "expires_by": e.get("expires_by"),
+    }))
+}
 
 /// A row id: which log, the counter, and the first 16 hex of its hash.
 #[derive(Debug, PartialEq, Eq)]
@@ -150,11 +205,9 @@ pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value)
             body.insert("rollback_summary".into(), recorded(e, "rollback_summary"));
         }
         Kind::Call => {
-            body.insert(
-                "decision".into(),
-                decision_projection(read::decision_evidence(e).as_ref()),
-            );
-            body.insert("reach".into(), NOT_RECORDED.into());
+            let decision = read::decision_evidence(e);
+            body.insert("decision".into(), decision_projection(decision.as_ref()));
+            body.insert("reach".into(), recorded_reach(decision.as_ref()));
         }
         // The row already carries the refusing decision (reason, scope,
         // capability, grant id); no backend was reached.
@@ -221,6 +274,12 @@ pub(super) fn receipt(
         }),
     );
     add_evidence(&mut body, kind, e);
+    // Only the receipt resolves a call's reach: it may seek one more row.
+    if kind == Kind::Call {
+        let decision = read::decision_evidence(e);
+        let reach = receipt_reach(log, decision.as_ref(), &mut reads)?;
+        body.insert("reach".into(), reach);
+    }
     if let Some(s) = &scanned {
         if let Some(Value::Object(chain)) = body.get_mut("chain") {
             let window = if s.chain_broken { "broken" } else { "intact" };
@@ -241,3 +300,8 @@ pub(super) fn receipt(
 #[cfg(test)]
 #[path = "receipt_tests.rs"]
 mod tests;
+
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "receipt_reach_tests.rs"]
+mod reach_tests;

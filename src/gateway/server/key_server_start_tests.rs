@@ -50,7 +50,7 @@ async fn an_enabled_key_server_without_the_audit_log_is_refused() {
 /// the log holds exactly one creation record; a second start adds none.
 #[tokio::test]
 async fn with_the_audit_log_the_key_is_created_and_recorded_once() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("audit.jsonl");
     let log_config = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
@@ -109,7 +109,7 @@ async fn a_disabled_key_server_needs_no_audit_log_and_makes_no_key() {
 /// recorded: the next start finds the record and appends no second one.
 #[tokio::test]
 async fn a_crash_between_record_and_flag_appends_no_second_record() {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("audit.jsonl");
     let logger = Arc::new(
         crate::security::transparency_log::TransparencyLogger::open(Arc::new(

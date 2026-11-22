@@ -8,7 +8,7 @@
 // screens as window events. Rows ST1-ST7. The stream is the fixture server's
 // held route (server.mjs), driven per test through /__stream/<channel>/.
 import { test, expect } from './base.mjs';
-import { withFixturePages, shellReady } from './shell.mjs';
+import { withFixturePages, shellReady, trackTimers, advanceArmed } from './shell.mjs';
 
 const KEY = 'mcpg_fixture_key_0123456789';
 const INDICATOR = '.top .stream';
@@ -44,6 +44,7 @@ async function pausedAt1402(page) {
   const at = new Date();
   at.setHours(14, 2, 0, 0);
   await page.clock.install({ time: at.getTime() - 60_000 });
+  await trackTimers(page);
   await page.clock.pauseAt(at.getTime());
 }
 
@@ -137,11 +138,11 @@ test('ST4 a 503 with Retry-After waits at least that long before the next attemp
   await page.goto('/ui/servers/status');
   await shellReady(page);
   await expect.poll(stream.connects).toBe(1);
-  await page.clock.runFor(8999);
+  await advanceArmed(page, 9000, 'connect', 8999);
   await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
   expect(asked.length).toBe(1);
   expect(await stream.connects()).toBe(1);
-  await page.clock.runFor(2);
+  await page.clock.runFor(1);
   await expect.poll(stream.connects).toBe(2);
 });
 
@@ -255,10 +256,10 @@ test('ST9c a 404 first connect shows Updates unavailable and retries at the 30 s
   await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
   await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE);
   for (const n of [1, 2]) {
-    await page.clock.runFor(29_999);
+    await advanceArmed(page, 30_000, 'connect', 29_999);
     await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
     expect(asked.length).toBe(n);
-    await page.clock.runFor(2);
+    await page.clock.runFor(1);
     await expect.poll(stream.connects).toBe(n + 1);
   }
   await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE); // never told it is live
@@ -466,10 +467,10 @@ test('ST20 several failed first connects keep the banner, and the waits grow', a
   await expect.poll(stream.connects).toBe(1);
   for (const [n, wait] of [[1, 1000], [2, 2000], [3, 4000]]) {
     await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
-    await page.clock.runFor(wait - 1);
+    await advanceArmed(page, wait, 'connect', wait - 1);
     await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
     expect(asked.length).toBe(n);
-    await page.clock.runFor(2);
+    await page.clock.runFor(1);
     await expect.poll(stream.connects).toBe(n + 1);
   }
   await expect(page.locator(STALE)).toHaveCount(1);

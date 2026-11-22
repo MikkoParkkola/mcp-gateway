@@ -5,7 +5,7 @@
 use super::*;
 
 /// One capability YAML, shaped like the existing watcher test's.
-fn cap_yaml(name: &str, category: &str, description: &str) -> String {
+pub(super) fn cap_yaml(name: &str, category: &str, description: &str) -> String {
     format!(
         "name: {name}\ndescription: {description}\nproviders:\n  primary:\n    \
          service: rest\n    config:\n      base_url: https://example.com\n\
@@ -22,7 +22,7 @@ fn skill_md(out: &Path, category: &str) -> PathBuf {
 /// of the 150 bundles are never regenerated.
 #[tokio::test]
 async fn a_burst_over_the_channel_size_regenerates_every_skill() {
-    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let tmp = crate::test_dir_keep::kept_tempdir();
     let out = tmp.path().join("skills");
     let mut paths = Vec::new();
     for i in 0..150 {
@@ -62,7 +62,7 @@ async fn a_burst_over_the_channel_size_regenerates_every_skill() {
 /// regenerated on the next pass.
 #[tokio::test]
 async fn an_edit_during_a_pass_is_regenerated_next_pass() {
-    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let tmp = crate::test_dir_keep::kept_tempdir();
     let out = tmp.path().join("skills");
     let p = tmp.path().join("p.yaml");
     tokio::fs::write(
@@ -117,7 +117,7 @@ fn a_pass_that_leaves_changes_behind_warns_once() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let tmp = crate::test_dir_keep::kept_tempdir();
         let out = tmp.path().join("skills");
         let p = tmp.path().join("p.yaml");
         tokio::fs::write(
@@ -188,7 +188,7 @@ fn a_single_quiet_edit_warns_nothing() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let tmp = crate::test_dir_keep::kept_tempdir();
         let out = tmp.path().join("skills");
         let p = tmp.path().join("p.yaml");
         tokio::fs::write(&p, cap_yaml("quiet_cap", "quiet", "midpass-before-edit"))

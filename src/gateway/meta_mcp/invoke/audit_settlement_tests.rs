@@ -304,13 +304,18 @@ async fn a_firewall_withheld_invalid_params_failure_settles_denied() {
 
 /// Settle a recovered task that failed with `code` and return its record.
 async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
-    let dir = crate::test_dir_keep::kept_tempdir();
-    let meta = meta_logging_to(&dir);
     let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
         code,
         message: "failed".to_string(),
         data: None,
     });
+    settle(proposed, notes).await
+}
+
+/// Settle a recovered task as `proposed` and return its record.
+async fn settle(proposed: TaskTransition, notes: &DispatchNotes) -> serde_json::Value {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let meta = meta_logging_to(&dir);
     let task = SettledTask {
         server: "srv",
         tool: "read",
@@ -361,4 +366,38 @@ fn a_settlement_join_serialises_as_its_snake_case_name() {
         serde_json::to_value(SettlementJoin::TaskId).unwrap(),
         json!("task_id")
     );
+}
+
+/// Notes in which a gate refused (`response_gate`), with no recovered-result
+/// refusal noted.
+fn gate_refused() -> DispatchNotes {
+    let mut notes = DispatchNotes::default();
+    notes.decision.refused(
+        crate::security::decision_record::DecisionKind::ResponseGate,
+        None,
+    );
+    notes
+}
+
+/// R7: a gate-noted refusal committed as a bare `-32602` keeps the class
+/// the live record gives it, `invalid`, and is not demoted to `error` as a
+/// peer's own `-32602` is (gpt r4c improvement).
+#[tokio::test]
+async fn a_gate_noted_invalid_settlement_stays_invalid() {
+    let record = settle_failure(-32602, &gate_refused()).await;
+    assert_eq!(record["outcome"], json!("invalid"), "{record}");
+    assert_eq!(record["error_code"], json!(-32602), "{record}");
+}
+
+/// A backend failure converted to an isError result is an `error` with its
+/// own code even when a gate also noted a refusal: the converted-failure arm
+/// is first and final (gpt r4c improvement).
+#[tokio::test]
+async fn a_converted_failure_settles_error_beside_a_gate_note() {
+    let mut notes = gate_refused();
+    notes.failure = Some(-32603);
+    let failed = json!({"content": [{"type": "text", "text": "backend failed"}], "isError": true});
+    let record = settle(TaskTransition::Complete(failed), &notes).await;
+    assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32603), "{record}");
 }
