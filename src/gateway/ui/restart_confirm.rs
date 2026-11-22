@@ -168,9 +168,9 @@ impl Platform {
 #[path = "restart_advice.rs"]
 mod advice;
 
-/// The restart keys one UI answer carries (restart_advice, start_command or
-/// start_refusal), or none when no restart is pending. `refusal` is what
-/// next_start_refusal said of the config a restart would boot; `config_path`
+/// The restart keys one UI answer carries (`restart_advice`, `start_command` or
+/// `start_refusal`), or none when no restart is pending. `refusal` is what
+/// `next_start_refusal` said of the config a restart would boot; `config_path`
 /// is the file this gateway was started with.
 pub(crate) fn restart_advice(
     pending: bool,
