@@ -312,7 +312,7 @@ enum During {
 /// before the parent's SIGTERM is due, and the nested need is never in play.
 const INNER_OUTLASTS_THE_PLAN: Duration = Duration::from_secs(30);
 
-/// Prints "<pid> <CLOCK_MONOTONIC ns>" the moment each given pid exits, through
+/// Prints "<pid> <`CLOCK_MONOTONIC` ns>" the moment each given pid exits, through
 /// a pidfd each (Linux), so a stop's timeline is read without polling. A pid
 /// already gone when the watcher starts prints "<pid> gone-before".
 #[cfg(target_os = "linux")]
@@ -353,7 +353,7 @@ fn chain_roles(root: &Path, leaves: &[&str]) -> Vec<(String, u32)> {
     roles
 }
 
-/// One measured stop's timeline for the margin harness (Linux: pidfd, CLOCK_MONOTONIC).
+/// One measured stop's timeline for the margin harness (Linux: pidfd, `CLOCK_MONOTONIC`).
 #[cfg(target_os = "linux")]
 mod measure {
     use super::{Duration, EXIT_WATCHER, STOP_BOUND, Stdio, json};
@@ -390,7 +390,7 @@ mod measure {
 
         /// Waits for every exit, then prints the run's one MEASURE line: `signalled_mono_ns` (the
         /// instant taken just before the SIGTERM), the stop `total_ms`, the `path`, and `exits` as
-        /// `[role, stamp]` pairs in the order seen (a stamp is CLOCK_MONOTONIC ns or "gone-before").
+        /// `[role, stamp]` pairs in the order seen (a stamp is `CLOCK_MONOTONIC` ns or "gone-before").
         /// Nothing here is asserted; the analyser refuses a run with a missing or repeated role.
         pub(super) async fn report(self, path: Path, total: Duration, signalled_mono_ns: u128) {
             let out = tokio::time::timeout(STOP_BOUND, self.watcher.wait_with_output())
@@ -425,7 +425,7 @@ mod measure {
         }
     }
 
-    /// CLOCK_MONOTONIC now, in ns: the clock the watcher's `time.monotonic_ns()` reads and the
+    /// `CLOCK_MONOTONIC` now, in ns: the clock the watcher's `time.monotonic_ns()` reads and the
     /// stop's own deadlines run on.
     pub(super) fn now_ns() -> u128 {
         let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
@@ -444,7 +444,7 @@ fn send(pid: u32, sig: &str) {
 
 /// Freezes `inner` before the outer's stop starts, so it has sent nothing when that stop
 /// begins: SIGSTOP, then its state read until stopped (within 5 s), then every one of its
-/// `descendants` checked still alive. It is never continued; if the row fails, KillGroup
+/// `descendants` checked still alive. It is never continued; if the row fails, `KillGroup`
 /// kills it (SIGKILL reaches a stopped process).
 async fn freeze_before_the_stop(root: &Path, inner: u32, descendants: &[u32]) {
     send(inner, "STOP");
@@ -510,6 +510,10 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped 
     run_with(total, inner_stop, leaves, During::Nothing).await
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one chain's start, stop and checks, with the freeze and the watch at their places in it"
+)]
 async fn run_with(
     total: Duration,
     inner_stop: Duration,
@@ -648,7 +652,7 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
 }
 /// One measured stop of the chain at the floor, for sizing the nested margin:
 /// its timeline goes out as a MEASURE line (each role's exit from a pidfd
-/// watcher and the SIGTERM's instant, both CLOCK_MONOTONIC; the stop total; the
+/// watcher and the SIGTERM's instant, both `CLOCK_MONOTONIC`; the stop total; the
 /// path). It asserts no timing; the margin harness runs it many times under load
 /// and reads the lines.
 #[cfg(target_os = "linux")]

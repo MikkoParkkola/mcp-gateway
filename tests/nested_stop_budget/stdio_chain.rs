@@ -148,6 +148,10 @@ async fn a_hurried_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
 /// EOF, then a second signal, to a stdio outer whose backend is a gateway with two
 /// leaves; given `During::Freeze`, the inner is frozen before the EOF, where this
 /// outer's stop begins.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one hurried chain's start, stop and checks, with the freeze and the watch at their places in it"
+)]
 async fn two_level_hurried_stop(during: During) {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path();
@@ -269,7 +273,7 @@ async fn two_level_hurried_stop(during: During) {
 
 /// One measured hurried stop for the margin harness: the stdio outer's EOF, then its second
 /// signal, with the same MEASURE line as the normal path's (path "hurried"). The hurried kill
-/// comes HURRY_WINDOW after the signal, so these runs size nothing: they are a sweep check.
+/// comes `HURRY_WINDOW` after the signal, so these runs size nothing: they are a sweep check.
 #[cfg(target_os = "linux")]
 #[ignore = "a measurement for the margin harness, not a CI row"]
 #[tokio::test]
