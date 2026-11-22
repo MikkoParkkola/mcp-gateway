@@ -139,25 +139,27 @@ function installMotionRecorder() {
   const send = (rec) => pending.push(window.g4Record(rec));
   window.g4Describe = describe;
   window.g4Flush = () => Promise.all(pending);
-  // Each start event claims one animation not yet logged, so two animations sharing a
-  // name on one element are both described, each with its own timing.
+  // A start event describes EVERY matching animation not yet logged (same element,
+  // pseudo-element and name), so same-name twins are each judged by their own timing
+  // whichever of them starts first. A later event whose matches are all logged adds
+  // nothing; one with no match at all is logged as not found, which fails the rule.
   const logged = new WeakSet();
-  const ownerOf = (ev, matches) => {
-    const anim = document.getAnimations().find((a) => !logged.has(a) && a.effect?.target === ev.target
+  const record = (ev, source, matches, fallback) => {
+    const all = document.getAnimations().filter((a) => a.effect?.target === ev.target
       && (a.effect.pseudoElement ?? '') === (ev.pseudoElement ?? '') && matches(a));
-    if (anim) logged.add(anim);
-    return anim;
+    if (all.length === 0) return send(fallback);
+    for (const anim of all.filter((a) => !logged.has(a))) {
+      logged.add(anim);
+      send(describe(anim, source));
+    }
+    return undefined;
   };
-  document.addEventListener('animationstart', (ev) => {
-    const anim = ownerOf(ev, (a) => a.animationName === ev.animationName);
-    send(anim ? describe(anim, 'css animation')
-      : { source: 'css animation', id: ev.animationName, props: ['(not found)'], active: null, iterations: null });
-  }, true);
-  document.addEventListener('transitionrun', (ev) => {
-    const anim = ownerOf(ev, (a) => a.transitionProperty === ev.propertyName);
-    send(anim ? describe(anim, 'css transition')
-      : { source: 'css transition', id: ev.propertyName, props: [ev.propertyName], active: null, iterations: null });
-  }, true);
+  document.addEventListener('animationstart', (ev) => record(ev, 'css animation',
+    (a) => a.animationName === ev.animationName,
+    { source: 'css animation', id: ev.animationName, props: ['(not found)'], active: null, iterations: null }), true);
+  document.addEventListener('transitionrun', (ev) => record(ev, 'css transition',
+    (a) => a.transitionProperty === ev.propertyName,
+    { source: 'css transition', id: ev.propertyName, props: [ev.propertyName], active: null, iterations: null }), true);
   const animate = Element.prototype.animate;
   Element.prototype.animate = function recordedAnimate(...args) {
     const anim = animate.apply(this, args);
@@ -369,6 +371,21 @@ test('G4 plant: two animations sharing a name on one element are each judged by 
     styles: [['animation', 'g4-twin 50ms linear 1, g4-twin 300ms linear 1']],
   }))({ page });
   expect(faults).toEqual(['css animation "g4-twin": changes for 300 ms']);
+});
+
+test('G4 plant: same-name twins with staggered starts: the one that ran and finished is still judged', async ({ page }) => {
+  // The 50 ms twin waits a minute; the 300 ms twin starts now and finishes before the check.
+  const { faults } = await g4((p) => p.evaluate(async () => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('@keyframes g4-stagger { from { opacity: 1 } to { opacity: 0.6 } }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    const box = Object.assign(document.createElement('div'), { textContent: 'stagger' });
+    box.style.setProperty('animation', 'g4-stagger 50ms linear 60s 1, g4-stagger 300ms linear 1', 'important');
+    document.getElementById('content').append(box);
+    const now = box.getAnimations().filter((a) => a.effect.getComputedTiming().delay === 0);
+    await Promise.all(now.map((a) => a.finished));
+  }))({ page });
+  expect(faults).toEqual(['css animation "g4-stagger": changes for 300 ms']);
 });
 
 test('G4 plant: a transform on a pseudo-element is recorded', async ({ page }) => {

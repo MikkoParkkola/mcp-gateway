@@ -118,18 +118,19 @@ const refusal = (status, error, message, disposition) => ({
 });
 
 // The ten answer kinds Try draws, a closed list (design section 4): name -> the call's
-// reply and the first line the panel must show for it.
+// reply, the first line the panel must show, and the detail it must show under it (the
+// answer text or the gateway's message; none when the gateway never answered).
 const ANSWER_KINDS = {
-  ran: [ranText(64, 'Two places found'), 'Answered in 64 ms'],
-  'is-error': [{ json: { ...ranText(64, 'lookup service down').json, is_error: true } }, 'The tool answered with an error'],
-  blocked: [refusal(403, 'refused', 'a rule stopped this call', 'not_run'), 'Blocked'],
-  'bad-request': [refusal(400, 'bad_request', 'limit is not a number'), 'Not run'],
-  missing: [refusal(404, 'not_found', 'that tool is gone'), 'Not run'],
-  failed: [refusal(500, 'failed', 'the call broke after it left', 'may_have_run'), 'The tool may have run'],
-  deadline: [refusal(504, 'deadline', 'no answer in time', 'may_have_run'), 'Timed out; the tool may still be running'],
-  'audit-not-run': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'not_run'), 'Not run'],
-  'audit-may': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'may_have_run'), 'The tool may have run'],
-  'no-answer': [{ abort: true }, 'No answer from the gateway; the tool may have run'],
+  ran: [ranText(64, 'Two places found'), 'Answered in 64 ms', 'Two places found'],
+  'is-error': [{ json: { ...ranText(64, 'lookup service down').json, is_error: true } }, 'The tool answered with an error', 'lookup service down'],
+  blocked: [refusal(403, 'refused', 'a rule stopped this call', 'not_run'), 'Blocked', 'a rule stopped this call'],
+  'bad-request': [refusal(400, 'bad_request', 'limit is not a number'), 'Not run', 'limit is not a number'],
+  missing: [refusal(404, 'not_found', 'that tool is gone'), 'Not run', 'that tool is gone'],
+  failed: [refusal(500, 'failed', 'the call broke after it left', 'may_have_run'), 'The tool may have run', 'the call broke after it left'],
+  deadline: [refusal(504, 'deadline', 'no answer in time', 'may_have_run'), 'Timed out; the tool may still be running', 'no answer in time'],
+  'audit-not-run': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'not_run'), 'Not run', 'the audit log is unavailable'],
+  'audit-may': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'may_have_run'), 'The tool may have run', 'the audit log is unavailable'],
+  'no-answer': [{ abort: true }, 'No answer from the gateway; the tool may have run', null],
 };
 
 const tryPanel = (page) => page.locator('section.tools-try');
@@ -185,20 +186,29 @@ function optionLabel(tools, name) {
   return `${t.name} ${t.server} · ${t.class === 'read' ? 'reads only' : 'writes'}`;
 }
 
-/** Run the picked tool and wait for the answer's first line. */
-async function runAndAnswer(page, data, headline) {
-  const { name } = await openTry(page, data);
+/**
+ * Run the picked tool and wait for the answer's first line (and `detail` under it, when
+ * given). The one call sent must name the picked tool and carry every filled value.
+ */
+async function runAndAnswer(page, data, headline, detail = null) {
+  const { name, calls } = await openTry(page, data);
   await runButton(page, name).click();
   await expect(tryAnswer(page).locator('p').first()).toHaveText(headline);
+  if (detail) await expect(tryAnswer(page)).toContainText(detail);
   if (data.receipt) await expect(tryAnswer(page)).toContainText(`Recorded in Activity as a call by ${data.receipt.account}`);
+  const tool = data.tools.find((t) => t.name === name);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ server: tool.server, tool: name, confirm_write: false, arguments: data.fill ?? {} });
   await settled(page);
 }
 
-const answeredStates = Object.entries(ANSWER_KINDS).map(([kind, [reply, headline]]) => ({
+const answeredStates = Object.entries(ANSWER_KINDS).map(([kind, [reply, headline, detail]]) => ({
   name: `try-answered-${kind}`,
   action: 'Run',
   async step(page, data = { tools: TRY_TOOLS, reply }) {
-    await runAndAnswer(page, data, kind === 'ran' && data.headline ? data.headline : headline);
+    // A frame passes its own reply and headline; the kind's detail then belongs to the default reply only.
+    if (data.headline) await runAndAnswer(page, data, data.headline);
+    else await runAndAnswer(page, data, headline, detail);
   },
 }));
 
@@ -300,9 +310,13 @@ export const SCREENS = [
         name: 'J-most-called',
         async step(page) {
           await serveTools(page, TOOLS_SMALL);
-          await page.route('**/ui/api/tools/call', async (route) => route.fulfill({ json: {
-            disposition: 'ran', latency_ms: 37, result: { content: [{ type: 'text', text: 'gate is open' }] },
-          } }));
+          const calls = [];
+          await page.route('**/ui/api/tools/call', async (route) => {
+            calls.push(route.request().postDataJSON());
+            return route.fulfill({ json: {
+              disposition: 'ran', latency_ms: 37, result: { content: [{ type: 'text', text: 'gate is open' }] },
+            } });
+          });
           await page.goto('/ui/overview/status');
           await settled(page);
           await page.locator('nav.route-nav').getByRole('link', { name: 'Tools', exact: true }).click();
@@ -317,6 +331,7 @@ export const SCREENS = [
           const answer = page.locator('.tools-try-answer');
           await expect(answer.locator('p').first()).toHaveText('Answered in 37 ms');
           await expect(answer.locator('pre')).toHaveText('gate is open');
+          expect(calls).toEqual([{ server: 'yard', tool: 'gate.open', arguments: {}, confirm_write: false }]);
           await page.goBack();
           await expect(page).toHaveURL('/ui/tools/yard%3Agate.open/status');
           await page.goBack();
@@ -328,13 +343,14 @@ export const SCREENS = [
         // The sidebar, Actions, a read tool run, its answer, and where Activity will show it.
         name: 'J-try',
         async step(page) {
-          await openTry(page, {
+          const { calls } = await openTry(page, {
             tools: TRY_TOOLS, pick: 'atlas.nearby', reply: ranText(41, 'one cafe nearby'), receipt: { account: 'mikko' },
           }, 'sidebar');
           await runButton(page, 'atlas.nearby').click();
           await expect(tryAnswer(page).locator('p').first()).toHaveText('Answered in 41 ms');
           await expect(tryAnswer(page).locator('pre')).toHaveText('one cafe nearby');
           await expect(tryAnswer(page).getByRole('link', { name: 'Open', exact: true })).toHaveAttribute('href', '/ui/activity/row-7/status');
+          expect(calls).toEqual([{ server: 'maps', tool: 'atlas.nearby', arguments: {}, confirm_write: false }]);
         },
       },
       {
