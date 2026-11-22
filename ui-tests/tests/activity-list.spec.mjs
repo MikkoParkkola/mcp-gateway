@@ -48,7 +48,9 @@ const Q2 = { name: 'q2', spanMs: HOUR };
 /** The window a page 1 asked at `t` proposes for query `q`. */
 const span = (q, t) => ({ from: t - q.spanMs, to: t });
 /** What initial(q) must hold, written out here rather than read from the core. */
-const FRESH = (q) => ({ query: q, rows: [], cursor: null, window: null, dirty: false, held: false, newer: false, notices: [], flight: null });
+const FRESH = (q) => ({ query: q, rows: [], cursor: null, window: null, dirty: false, held: false, newer: false, notices: [], flight: null, stalled: false });
+/** An answer whose scan stopped before the end of the log: the cursor keeps looking. */
+const stalledAnswer = (q, page, next) => ({ ...answer(q, page, next), scan_exhausted: true });
 /** Fields that may survive an operator replace. None. */
 const CARRY_OVER = [];
 /** Rows of this test's own making, each naming its query, its page and its place. */
@@ -171,6 +173,11 @@ test.describe('LC list core', () => {
         const live = started(r.frame(T2), 'live', 'dirty: frame');
         r.frame(T2);
         return { inFlight: live.handle, moved: ['rows', 'cursor', 'window', 'dirty'] };
+      },
+      'stopped scan': (r) => {
+        const p1 = started(r.replace(Q0, T1), 'page1', 'stopped scan: open');
+        r.ok(p1.handle, stalledAnswer(Q0, 1, 'c2'));
+        return { inFlight: null, moved: ['rows', 'cursor', 'window', 'stalled'] };
       },
   };
 
@@ -303,7 +310,8 @@ test.describe('LC list core', () => {
           fn = 'settle';
           target = name.startsWith('late') ? (lastAborted ?? ghost(state.query)) : (current ?? ghost(state.query));
           input = name.endsWith('ok')
-            ? { handle: target.handle, answer: answer(target.query, pageOf(target), `c${pageOf(target) + 1}`), fresh: {}, now }
+            // Every other depth answers with a stopped scan, so both values reach every input.
+            ? { handle: target.handle, answer: { ...answer(target.query, pageOf(target), `c${pageOf(target) + 1}`), scan_exhausted: path.length % 2 === 1 }, fresh: {}, now }
             : { handle: target.handle, failed: true, fresh: {}, now };
         }
         let out;
@@ -333,6 +341,10 @@ test.describe('LC list core', () => {
         if (target && input.answer && open.has(target.handle)) stats.applied += 1;
         const why = broken({ name: fn, input, before: state, out, openBefore: open, open: after });
         if (why) { bad = `${seq}: ${why}`; return; }
+        // I6: stopped only when the last applied answer said so; a replace starts unstopped.
+        const applied = fn === 'settle' && input.answer && open.has(target.handle);
+        const wantStalled = name === 'replace' ? false : applied ? input.answer.scan_exhausted === true : state.stalled;
+        if (out.state.stalled !== wantStalled) { bad = `${seq}: I6 stalled is ${out.state.stalled}, want ${wantStalled}`; return; }
         if (!chainOk(out.state)) { bad = `${seq}: P1 rows are not pages 1..k of ${out.state.query?.name}: ${JSON.stringify(out.state.rows)}`; return; }
         if (state.held && (name === 'frame' || name.startsWith('late')) && !isDeepStrictEqual(out.state.rows, state.rows)) {
           bad = `${seq}: P4 rows moved while held`;
@@ -347,6 +359,29 @@ test.describe('LC list core', () => {
     expect(stats.applied, 'LC3 premise: some answers apply').toBeGreaterThan(0);
     expect(bad, 'LC3 first counterexample').toBeNull();
     expect(stats.sequences, 'LC3 sequences walked (8^6)').toBe(262_144);
+  });
+
+  test('LC12 a stopped scan marks the list stalled until the next answer', async () => {
+    const core = await loadCore();
+    const r = new Run(core, Q0, 'LC12');
+    r.ok(started(r.replace(Q0, T1), 'page1', 'LC12: open').handle, stalledAnswer(Q0, 1, 'c2'));
+    expect(r.state.stalled, 'LC12 page 1 stopped short').toBe(true);
+    r.fail(started(r.next(T2), 'append', 'LC12: next').handle);
+    expect(r.state.stalled, 'LC12 a failed next page leaves it').toBe(true);
+    r.ok(started(r.next(T2), 'append', 'LC12: retry').handle, answer(Q0, 2, 'c3'));
+    expect(r.state.stalled, 'LC12 an answer that read to its end clears it').toBe(false);
+    r.ok(started(r.next(T3), 'append', 'LC12: next again').handle, stalledAnswer(Q0, 3, 'c4'));
+    expect(r.state.stalled, 'LC12 a next page that stopped short sets it').toBe(true);
+    const again = started(r.replace(Q0, T3), 'page1', 'LC12: reopen');
+    expect(r.state.stalled, 'LC12 a replace clears it').toBe(false);
+    r.ok(again.handle, answer(Q0, 1, 'c2'));
+    const reset = started(r.next(T3), 'append', 'LC12: next before a reset');
+    r.ok(reset.handle, { ...stalledAnswer(Q0, 1, 'c2'), cursor_reset: true });
+    expect(r.state.stalled, 'LC12 a cursor reset takes it from its own answer').toBe(true);
+    // A live refresh applies its answer as page 1 does.
+    const live = shown(core, Q0, 'LC12 live');
+    live.ok(started(live.frame(T2), 'live', 'LC12 live: frame').handle, stalledAnswer(Q0, 1, 'c2'));
+    expect(live.state.stalled, 'LC12 a live refresh that stopped short sets it').toBe(true);
   });
 
   test('LC4 on an idle page 1, no frame asks nothing and one frame asks one refresh', async () => {
@@ -592,6 +627,18 @@ const CONTROL = 'Newer activity · show';
 const MORE_FAILED = 'More calls could not be read.';
 const UNAVAILABLE = 'Activity is unavailable';
 const NOT_FINAL = 'delivery not yet recorded';
+// The slot's faces and what it says (the frozen spec's words).
+const LOAD_MORE = 'Load more';
+const KEEP_LOOKING = 'Keep looking';
+const READING = 'Reading more…';
+const NONE_YET = 'No matching call in the part of the log searched so far.';
+const STOPPED = 'The search stopped before the end of the log.';
+const SAY_NONE_YET = 'Nothing found yet. You can keep looking.';
+const SAY_NO_MORE_YET = 'No more matching calls yet. You can keep looking.';
+const SAY_NONE = 'No calls found.';
+const SAY_NO_MORE = 'No more matching calls.';
+/** A list answer that stopped short of the end of the log, with a cursor to keep looking. */
+const stopped = (rows, next = 'c2') => ({ rows, next_cursor: next, scan_exhausted: true });
 
 /** A call row as the list answers it. Every row of a page has its own tool, so its text is its own. */
 function callRow(tool, extra = {}) {
@@ -704,6 +751,28 @@ class Screen {
   control() { return this.page.getByRole('button', { name: CONTROL, exact: true }); }
 
   said() { return this.page.evaluate(() => window.__said.length); }
+
+  /** A button of the screen by its exact name. */
+  button(name) { return this.page.locator('#content').getByRole('button', { name, exact: true }); }
+
+  /** The one line after the rows that says how to get more. */
+  slot() { return this.page.locator('#content .activity-more-error'); }
+
+  emptyState() { return this.page.locator('#content [data-state="empty"]'); }
+
+  /** What the focused element says, spaces folded as texts() folds a row. */
+  focusedText() { return this.page.evaluate(() => (document.activeElement?.textContent ?? '').replace(/\s+/g, ' ').trim()); }
+
+  /** Whether focus sits on the slot element itself. */
+  focusOnSlot() { return this.page.evaluate(() => document.activeElement?.classList.contains('activity-more-error') ?? false); }
+
+  /** Whether the observer's target after the rows is inside the viewport. */
+  endInView() {
+    return this.page.evaluate(() => {
+      const box = document.querySelector('#content .activity-more').getBoundingClientRect();
+      return box.bottom >= 0 && box.top <= innerHeight;
+    });
+  }
 
   /** How many times `text` was said: one announcer entry can join several messages. */
   heard(text) { return this.page.evaluate((t) => window.__said.join(' ').split(t).length - 1, text); }
