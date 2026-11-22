@@ -467,6 +467,11 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
             json!(true),
             "{label}: a malformed round must be refused as an error: {result:#}"
         );
+        // The malformed-round refusal itself, so a generic withhold cannot pass for it.
+        assert!(
+            result["content"].to_string().contains("malformed result"),
+            "{label}: refused as malformed, not merely withheld: {result:#}"
+        );
         assert!(
             result.get("resultType").is_none(),
             "{label}: a refused round carries no discriminator: {result:#}"
