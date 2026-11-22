@@ -21,12 +21,16 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
+        "activity-list.35efad14b558.js",
+        include_bytes!("shell/activity-list.35efad14b558.js"),
+    ),
+    (
         "activity.237d685089d2.css",
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.6532f4d1169a.js",
-        include_bytes!("shell/activity.6532f4d1169a.js"),
+        "activity.7969b1c8d96c.js",
+        include_bytes!("shell/activity.7969b1c8d96c.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,24 +53,24 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.31c6a46d61db.js",
-        include_bytes!("shell/gateway.31c6a46d61db.js"),
+        "gateway.0cb500980128.js",
+        include_bytes!("shell/gateway.0cb500980128.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.7d6f111a7157.js",
-        include_bytes!("shell/overview.7d6f111a7157.js"),
+        "overview.de89aada8b1c.js",
+        include_bytes!("shell/overview.de89aada8b1c.js"),
+    ),
+    (
+        "shell.1010a68154f6.js",
+        include_bytes!("shell/shell.1010a68154f6.js"),
     ),
     (
         "shell.c460caebf770.css",
         include_bytes!("shell/shell.c460caebf770.css"),
-    ),
-    (
-        "shell.d0963799aba0.js",
-        include_bytes!("shell/shell.d0963799aba0.js"),
     ),
     (
         "shell.nojs.4e34f233c1ba.css",
@@ -77,12 +81,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.fed6466b7bdc.json"),
     ),
     (
-        "tools.2a290fcdc815.js",
-        include_bytes!("shell/tools.2a290fcdc815.js"),
-    ),
-    (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
+    ),
+    (
+        "tools.be2c5b35f5a3.js",
+        include_bytes!("shell/tools.be2c5b35f5a3.js"),
     ),
     (
         "tooltip.04e4f1b0ef1f.js",
