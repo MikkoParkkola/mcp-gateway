@@ -369,6 +369,24 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/config_history.rs (history; placeholder codes until the
+    // first run records them)
+    row(
+        "/ui/api/config/history",
+        Method::GET,
+        "/ui/api/config/history",
+        Payload::None,
+        [0, 0, 0, 0],
+    ),
+    // src/gateway/ui/config_history.rs (restore; placeholder codes until the
+    // first run records them)
+    row(
+        "/ui/api/config/restore",
+        Method::POST,
+        "/ui/api/config/restore",
+        Payload::Json("{\"version\": \"rv-table-row\"}"),
+        [0, 0, 0, 0],
+    ),
     // src/gateway/ui/mod.rs:556 (reload; no reload context in the fixture)
     row(
         "/ui/api/reload",
