@@ -306,13 +306,29 @@ pub(super) async fn settings_save(
     );
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+    let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
     match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
-        Ok(saved) => Json(json!({
-            "revision": saved.revision.as_str(), "changed": saved.changed,
-            "restart_required": restart_fields(&fields, &saved.reload),
-            "reload": saved.reload, "comments": "kept",
-        }))
-        .into_response(),
+        Ok(saved) => {
+            let pending = saved.reload.restart_required;
+            let mut body = json!({
+                "revision": saved.revision.as_str(), "changed": saved.changed,
+                "restart_required": restart_fields(&fields, &saved.reload),
+                "reload": saved.reload, "comments": "kept",
+            });
+            // A restart would boot the published config.
+            let refusal = pending
+                .then(|| crate::gateway::next_start_refusal(&live.get()))
+                .flatten();
+            if let Some(keys) = super::restart_confirm::restart_advice(
+                pending,
+                refusal.as_deref(),
+                Some(&config_path),
+            ) && let Some(answer) = body.as_object_mut()
+            {
+                answer.extend(keys);
+            }
+            Json(body).into_response()
+        }
         Err(refusal) => answer_for(refusal, &fields),
     }
 }
