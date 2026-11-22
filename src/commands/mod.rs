@@ -395,7 +395,42 @@ pub fn run_tls_command(cmd: TlsCommand) -> ExitCode {
     }
 }
 
+/// Refuses a tls command whose output would replace something: `out` already
+/// holds `<stem>.crt` or `<stem>.key`. Each path is looked at itself, never
+/// through it, so any entry there (a file, a directory, a link even when it
+/// dangles) refuses, and so does a lookup that fails for any reason other
+/// than "not found". Called first, before any key is generated or read, so a
+/// refusal writes nothing. The check runs once, when the command starts:
+/// anything that creates these files while it runs, another tls command or
+/// any other process, can still race; the rerun case is closed.
+fn refuse_existing_tls_output(out: &std::path::Path, stem: &str) -> Result<(), ExitCode> {
+    for extension in ["crt", "key"] {
+        let path = out.join(format!("{stem}.{extension}"));
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                eprintln!(
+                    "Error: {} already exists. Remove it first or choose a different --out.",
+                    path.display()
+                );
+                return Err(ExitCode::FAILURE);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error: cannot tell whether {} exists ({e}); nothing was written.",
+                    path.display()
+                );
+                return Err(ExitCode::FAILURE);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn tls_init_ca(cn: &str, validity_days: u32, out: &std::path::Path) -> ExitCode {
+    if let Err(code) = refuse_existing_tls_output(out, "ca") {
+        return code;
+    }
     println!("Generating Root CA: {cn}");
     let params = CaParams { cn, validity_days };
     match CertGenerator::init_ca(&params) {
@@ -428,6 +463,9 @@ fn tls_issue_server(
     validity_days: u32,
     out: &std::path::Path,
 ) -> ExitCode {
+    if let Err(code) = refuse_existing_tls_output(out, "server") {
+        return code;
+    }
     println!("Issuing server certificate for: {cn}");
     let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
         Ok(pair) => pair,
@@ -477,6 +515,12 @@ fn tls_issue_client(
     validity_days: u32,
     out: &std::path::Path,
 ) -> ExitCode {
+    // One stem for both the check and the write, so they cannot name
+    // different files.
+    let stem = cn.replace(['/', ' '], "-");
+    if let Err(code) = refuse_existing_tls_output(out, &stem) {
+        return code;
+    }
     println!("Issuing client certificate for: {cn}");
     let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
         Ok(pair) => pair,
@@ -490,7 +534,6 @@ fn tls_issue_client(
         san_uris,
         validity_days,
     };
-    let stem = cn.replace(['/', ' '], "-");
     match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
         Ok(cert) => {
             if let Err(e) = CertGenerator::write_to_dir(&cert, out, &stem) {
