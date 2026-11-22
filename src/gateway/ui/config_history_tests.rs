@@ -427,10 +427,12 @@ async fn g1g_a_restart_on_the_served_files_then_an_aged_refusal_keeps_them() {
     } = grants_after_b(bounds, PartOnly::Grants).await;
     let before = kept_revisions(&rig);
     // A new process starts on B's files over the same history directory.
+    // No audit log: the first gateway still holds its lease (Windows refuses
+    // a second holder), and nothing here writes through the audited writer.
     let restarted = Rig::start_in(
         std::sync::Arc::clone(&rig.dir),
         &text_b,
-        Audit::Logged,
+        Audit::Unlogged,
         bounds,
         History::Kept,
     )
