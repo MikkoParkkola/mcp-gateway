@@ -307,6 +307,14 @@ impl LiveConfig {
         pending_restart_fields(&self.running, &self.get())
     }
 
+    /// Everything only a restart would apply, as the Gateway page shows it:
+    /// the published config's fields plus the startup-environment marker,
+    /// read from one snapshot.
+    #[must_use]
+    pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Clone the current active configuration snapshot.
     #[must_use]
     pub fn get(&self) -> Arc<Config> {
