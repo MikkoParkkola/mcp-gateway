@@ -120,9 +120,8 @@ impl Default for Bounds {
     }
 }
 
-/// What `lookup` found for a revision. Test-only until the history page
-/// reads it.
-#[cfg(test)]
+/// What `lookup` found for a revision.
+#[cfg(any(test, feature = "webui"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Lookup {
     Kept(Snapshot),
@@ -231,28 +230,33 @@ impl ConfigHistory {
         self.with_state(|state| state.snapshots.clone())
     }
 
-    /// `Kept` when `revision` is still stored. `NoLongerKept` when a held
-    /// event names it. Otherwise `Unknown`. Test-only until the history page
-    /// reads it.
+    /// What `revision` resolves to in one read of the store (see `resolve`).
+    /// A file that cannot be read or parsed is the caller's error, never an
+    /// empty store and never `Unknown`. The routes read through
+    /// `lookup_against` and `contents`; this is the rows' single lookup.
     #[cfg(test)]
     pub(crate) fn lookup(&self, revision: &str) -> Result<Lookup, String> {
-        Ok(self.with_state(|state| {
-            if let Some(snapshot) = state
-                .snapshots
-                .iter()
-                .find(|snapshot| snapshot.revision == revision)
-            {
-                return Lookup::Kept(snapshot.clone());
-            }
-            if state
-                .events
-                .iter()
-                .any(|event| event.revision.as_deref() == Some(revision))
-            {
-                return Lookup::NoLongerKept;
-            }
-            Lookup::Unknown
-        }))
+        self.read_state().map(|state| resolve(&state, revision))
+    }
+
+    /// For a restore, from one read: what `revision` resolves to, and the
+    /// newest kept copy of `served`, the version it is compared against.
+    #[cfg(feature = "webui")]
+    pub(crate) fn lookup_against(
+        &self,
+        revision: &str,
+        served: Option<&str>,
+    ) -> Result<(Lookup, Option<Snapshot>), String> {
+        let state = self.read_state()?;
+        let baseline = served.and_then(|served| newest(&state, served).cloned());
+        Ok((resolve(&state, revision), baseline))
+    }
+
+    /// Every kept version and held event, oldest first, from one read.
+    #[cfg(feature = "webui")]
+    pub(crate) fn contents(&self) -> Result<(Vec<Snapshot>, Vec<Event>), String> {
+        self.read_state()
+            .map(|state| (state.snapshots, state.events))
     }
 
     /// Memory-only reads the held state; otherwise the file. Test-only. A
@@ -260,15 +264,49 @@ impl ConfigHistory {
     /// with the read error (design D-2).
     #[cfg(test)]
     fn with_state<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        let state = self
+            .read_state()
+            .unwrap_or_else(|error| panic!("the history file does not read: {error}"));
+        read(&state)
+    }
+
+    /// The production read: memory-only answers the held state, otherwise
+    /// the file is read and parsed now. Its error goes to the caller.
+    #[cfg(any(test, feature = "webui"))]
+    fn read_state(&self) -> Result<State, String> {
         let mode = self.mode.lock();
         match &*mode {
-            StoreMode::MemoryOnly { state } => read(state),
-            StoreMode::Disk | StoreMode::Unopened { .. } => {
-                let state = load_state(&self.file())
-                    .unwrap_or_else(|error| panic!("the history file does not read: {error}"));
-                read(&state)
-            }
+            StoreMode::MemoryOnly { state } => Ok(state.clone()),
+            StoreMode::Disk | StoreMode::Unopened { .. } => load_state(&self.file()),
         }
+    }
+}
+
+/// The newest kept copy of `revision`: the copy eviction pins.
+#[cfg(any(test, feature = "webui"))]
+fn newest<'a>(state: &'a State, revision: &str) -> Option<&'a Snapshot> {
+    state
+        .snapshots
+        .iter()
+        .rev()
+        .find(|kept| kept.revision == revision)
+}
+
+/// `Kept` with the newest copy when `revision` is still stored,
+/// `NoLongerKept` when only a held event names it, else `Unknown`.
+#[cfg(any(test, feature = "webui"))]
+fn resolve(state: &State, revision: &str) -> Lookup {
+    if let Some(kept) = newest(state, revision) {
+        return Lookup::Kept(kept.clone());
+    }
+    let named = state
+        .events
+        .iter()
+        .any(|event| event.revision.as_deref() == Some(revision));
+    if named {
+        Lookup::NoLongerKept
+    } else {
+        Lookup::Unknown
     }
 }
 

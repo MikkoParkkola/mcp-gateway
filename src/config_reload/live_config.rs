@@ -390,6 +390,17 @@ impl LiveConfig {
         self.inner.read().running_revision.clone()
     }
 
+    /// The revision this gateway serves: the one it published last, which
+    /// the config history pins. Not `running_revision`, the startup
+    /// one, which a reload never moves.
+    #[cfg(any(test, feature = "webui"))]
+    #[must_use]
+    pub(crate) fn served_revision(&self) -> Option<String> {
+        self.applied_now()
+            .published
+            .map(|applied| applied.revision.clone())
+    }
+
     fn applied(
         &self,
         inputs: AppliedInputs,
