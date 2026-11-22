@@ -154,6 +154,8 @@ fn ri6_a_bare_carriage_return_gives_cause_and_path_but_no_instructions() {
     assert_eq!(answer["code"], "other", "{answer}");
     let reason = answer["reason"].as_str().expect("a reason");
     assert!(!reason.starts_with("to revoke key"), "{answer}");
+    // The refusal is the one this file was built for, not another "other".
+    assert!(reason.contains("bare carriage return"), "{answer}");
     assert!(answer.get("instructions").is_none(), "{answer}");
 }
 
