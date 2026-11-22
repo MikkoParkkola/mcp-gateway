@@ -20,7 +20,8 @@ use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, grants, invocations, logger, wait_for_decisions,
+    CAPS, Endpoint, PERSONAL, capability_backend, grant, grants, invocations, logger,
+    wait_for_decisions,
 };
 use crate::gateway::routes;
 use crate::security::audit::AuditFailurePolicy;
@@ -203,31 +204,49 @@ async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     assert_eq!(rows[0]["tool"], json!(PERSONAL), "{rows:#?}");
 }
 
-/// The same `gateway_invoke`, signed: refused while signing is prepared,
-/// before the route stage. The refusal writes its own invocation record, the
-/// decision says so and names the same trace, and Activity lists the call
-/// once (the stdio twin is `grant_decision_stdio.rs`).
+/// On `/mcp` the route stage judges the grant before signing runs, so a
+/// signing refusal meets a grant note only after the grant allowed the call:
+/// here a granted, signed `gateway_invoke` is sent twice with one nonce. The
+/// replay's grant note was taken before any trace existed; the refusal's
+/// record and that decision must still name one trace, and the decision must
+/// read recorded, so Activity lists two calls as two rows (the stdio twin is
+/// `grant_decision_stdio.rs`).
 #[tokio::test]
-async fn a_signing_time_grant_refusal_is_one_activity_row() {
+async fn a_replay_refused_after_a_granted_route_shares_its_decisions_trace() {
     let endpoint = Endpoint::start(false).await;
     let rig = signed_rig(&endpoint).await;
-
+    let owner = (ISSUER, SUBJECT);
+    rig.state
+        .meta_mcp
+        .set_identity_grants(grants(vec![grant("g-replay", owner, owner)]));
     let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
-    let answer = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
 
-    assert!(answer.get("error").is_some(), "premise: refused: {answer}");
-    let held = wait_for_decisions(&rig.dir, 1).await;
-    assert_eq!(held.len(), 1, "{held:#?}: {answer}");
-    let calls = invocations(&rig.dir);
-    assert_eq!(calls.len(), 1, "the refusal's own record: {answer}");
-    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
-    assert_eq!(
-        calls[0]["trace_id"], held[0]["trace_id"],
-        "{calls:#?} {held:#?}"
+    let served = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
+    assert!(
+        served.get("error").is_none(),
+        "premise: granted and served: {served}"
     );
+    let replay = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
+    assert_eq!(
+        replay["error"]["code"],
+        json!(-32001),
+        "premise: a replay: {replay}"
+    );
+
+    let held = wait_for_decisions(&rig.dir, 2).await;
+    let calls = invocations(&rig.dir);
+    assert_eq!((held.len(), calls.len()), (2, 2), "{held:#?} {calls:#?}");
+    let refused = calls
+        .iter()
+        .find(|call| call["outcome"] != json!("ok"))
+        .expect("the replay's own record");
+    let decision = held
+        .iter()
+        .find(|decision| decision["trace_id"] == refused["trace_id"])
+        .unwrap_or_else(|| panic!("no decision names the refusal's trace: {held:#?} {calls:#?}"));
+    assert_eq!(decision["invocation_recorded"], json!(true), "{held:#?}");
     let rows = activity(&rig, "").await;
-    assert_eq!(rows.len(), 1, "one call, one row: {rows:#?}");
-    assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
+    assert_eq!(rows.len(), 2, "two calls, two rows: {rows:#?}");
 }
 
 /// A surfaced tool the caller's key withholds (`denied_tools`), where the
