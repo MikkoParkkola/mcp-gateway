@@ -138,6 +138,8 @@ fn a6_a_posix_shell_reads_the_command_back_as_the_same_words() {
 }
 
 const SENTINEL: &str = "argv-sentinel-9453";
+/// The name A7's child is invoked by on Unix (its argv[0]).
+const ARG0_SENTINEL: &str = "arg0-sentinel-9453";
 const MARK: &str = "A7-ADVICE:";
 /// The config path the parent hands the child, marked with the parent's pid.
 const A7_CONFIG_ENV: &str = "GW_A7_MARKED_CONFIG";
@@ -158,7 +160,12 @@ fn a7_the_command_holds_no_argument_of_the_process() {
         .map_or(module_path!(), |(_, rest)| rest);
     let helper = format!("{full}::a7_child_prints_the_production_advice");
     let marked = format!("/etc/gw/a7-run-{}/gateway.yaml", std::process::id());
-    let out = crate::test_home::test_binary()
+    let mut child = crate::test_home::test_binary();
+    // The command names the running file, never the name the process was
+    // invoked by, so the child's argv[0] is a sentinel as well.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut child, ARG0_SENTINEL);
+    let out = child
         .env(A7_CONFIG_ENV, &marked)
         .args([
             helper.as_str(),
@@ -186,6 +193,7 @@ fn a7_the_command_holds_no_argument_of_the_process() {
             .unwrap_or_else(|| panic!("no start command: {printed}"));
         assert!(command.contains(&marked), "{command}");
         assert!(!command.contains(SENTINEL), "{command}");
+        assert!(!command.contains(ARG0_SENTINEL), "{command}");
     } else {
         assert!(!printed.contains(SENTINEL), "{printed}");
     }
