@@ -116,15 +116,23 @@ async fn a_capability_save_sends_its_yaml_unchanged() {
 /// T2: both validate routes send the body as given.
 #[tokio::test]
 async fn a_capability_validate_sends_its_yaml_unchanged() {
-    for route in [
-        (ApiMethod::Put, "/ui/api/capabilities/a?validate=1"),
-        (ApiMethod::Post, "/ui/api/capabilities/a/validate"),
+    for (route, wire) in [
+        (
+            (ApiMethod::Put, "/ui/api/capabilities/a?validate=1"),
+            axum::http::Method::PUT,
+        ),
+        (
+            (ApiMethod::Post, "/ui/api/capabilities/a/validate"),
+            axum::http::Method::POST,
+        ),
     ] {
         for body in [YAML, JSON_SHAPED] {
             let stand = ok_stand().await;
             let ran = run(&stand, route.clone(), body.as_bytes(), Input::Inline, None).await;
             assert_sent(&stand, &ran, body.as_bytes(), "application/x-yaml");
-            assert_eq!(stand.seen.lock().expect("requests")[0].path, route.1);
+            let seen = stand.seen.lock().expect("requests");
+            assert_eq!(seen[0].method, wire, "{}", route.1);
+            assert_eq!(seen[0].path, route.1);
         }
     }
 }
@@ -192,6 +200,9 @@ async fn only_the_save_and_validate_routes_take_yaml() {
         (ApiMethod::Get, "/ui/api/capabilities/a"),
         (ApiMethod::Delete, "/ui/api/capabilities/a"),
         (ApiMethod::Patch, "/ui/api/capabilities/a"),
+        // The validate query alone does not switch: only a PUT on the name.
+        (ApiMethod::Post, "/ui/api/capabilities/a?validate=1"),
+        (ApiMethod::Get, "/ui/api/capabilities/a?validate=1"),
     ] {
         let stand = ok_stand().await;
         let ran = run(&stand, route.clone(), YAML.as_bytes(), Input::Inline, None).await;
