@@ -21,6 +21,7 @@ thread_local! {
 /// there, so a test that reads the key back from its own folder sets this
 /// before building; `with_data_dir` after the build comes too late for it.
 #[cfg(test)]
+#[must_use = "the folder applies only while the guard lives; bind it with let"]
 pub(super) fn data_dir_for_constructions(dir: PathBuf) -> ConstructionDataDir {
     let previous = CONSTRUCTION_DATA_DIR.with(|slot| slot.borrow_mut().replace(dir));
     ConstructionDataDir { previous }
