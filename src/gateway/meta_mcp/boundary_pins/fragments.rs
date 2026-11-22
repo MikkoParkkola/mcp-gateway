@@ -292,7 +292,7 @@ fn bless_into(bless: Bless<'_>, name: &str, rows: &[&str]) -> String {
         .join(format!("{}.tsv", bless.ticket));
     match append_rows(&dir.join(format!("{name}.tsv")), &path, rows) {
         Ok(()) => format!(
-            "blessed: {} rows written into {name}.d/{}.tsv; review them, and fill in any class, before committing",
+            "blessed: {} rows written into {name}.d/{}.tsv; review them before committing",
             rows.len(),
             bless.ticket
         ),
