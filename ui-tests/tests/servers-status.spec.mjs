@@ -60,6 +60,19 @@ function gate() {
 /** What the live stream does on a status frame: tell the screens. */
 const statusEvent = (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent('gateway-status', { detail: {} })));
 
+/** From before the shell loads, keep a count of live gateway-status listeners as window.__statusListeners(). */
+const countListeners = (page) => page.addInitScript(() => {
+  const fns = new Set();
+  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
+    const real = window[name];
+    window[name] = function (type, fn, ...more) {
+      if (type === 'gateway-status') fns[op](fn);
+      return real.call(this, type, fn, ...more);
+    };
+  }
+  window.__statusListeners = () => fns.size;
+});
+
 async function openScreen(page, query = '') {
   await page.goto(`/ui/servers/status${query}`);
   await shellReady(page);
@@ -225,6 +238,17 @@ test('answering: groups by registry category, Other last, sums and the highest p
   await expect(answering.getByRole('rowheader', { name: 'oddity', exact: true })).toBeVisible();
 });
 
+test('a group whose calls are not all known shows its total as not known, never a smaller number', async ({ page }) => {
+  const partial = structuredClone(MIXED);
+  partial.body.servers.find((s) => s.name === 'lookout').calls_24h = null;
+  await fakeGateway(page, { status: [partial] });
+  await openScreen(page);
+  await expect(groupRow(page, 'Search and web').getByRole('cell')).toHaveText(['1 answering', '3', '—', '120 ms']);
+  await expect(groupRow(page, 'Search and web').getByRole('cell', { name: 'not known' })).toHaveCount(1);
+  // Groups whose members all report still add up.
+  await expect(groupRow(page, 'Developer tools').getByRole('cell').nth(2)).toHaveText('45');
+});
+
 test('a member row: Answering, Slow with its reason, Idle; tools 0 shows 0', async ({ page }) => {
   await fakeGateway(page, { status: [MIXED] });
   await openScreen(page, '?open=developer-tools');
@@ -256,6 +280,24 @@ test('a group opens from the keyboard, keeps ?open= and survives a reload', asyn
   await expect(page).not.toHaveURL(/open=/);
 });
 
+test('a click anywhere on a group row opens that group', async ({ page }) => {
+  await fakeGateway(page, { status: [MIXED] });
+  await openScreen(page);
+  await groupRow(page, 'Developer tools').getByRole('cell').first().click();
+  await expect(groupButton(page, 'Developer tools')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page).toHaveURL(/[?&]open=developer-tools(&|$)/);
+});
+
+test('while the first status read is out, the shell shows its loading state', async ({ page }) => {
+  const held = gate();
+  await fakeGateway(page, { status: [{ ...MIXED, hold: held.shut }] });
+  await page.goto('/ui/servers/status');
+  await expect(content(page).locator('[data-state="loading"]')).toBeVisible();
+  held.open();
+  await expect(block(page, 'Answering')).toBeVisible();
+  await expect(content(page).locator('[data-state="loading"]')).toHaveCount(0);
+});
+
 test('a registry that fails, or never answers, puts every answering server under Other, quietly', async ({ page }) => {
   for (const registry of [json(500, { error: 'no' }), DROP]) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
@@ -265,6 +307,18 @@ test('a registry that fails, or never answers, puts every answering server under
     await expect(block(page, 'Needs a look').getByRole('rowheader')).toHaveText(['hold', 'gate', 'vault', 'creaky']);
     await expect(content(page).locator('[data-state]')).toHaveCount(0);
   }
+});
+
+test('a registry and a discovery that never reply are given up on, and refreshes still run', async ({ page }) => {
+  test.setTimeout(60_000);
+  const never = { hold: new Promise(() => {}) };
+  const reads = await fakeGateway(page, { status: [MIXED], registry: never, discovery: never });
+  await openScreen(page);
+  await expect(groupButtons(page)).toHaveText(['Other'], { timeout: 30_000 });
+  await expect(content(page).getByText(QUIET)).toHaveCount(1);
+  await statusEvent(page);
+  await expect.poll(() => reads.status).toBe(2);
+  expect(reads).toEqual({ status: 2, registry: 1, discovery: 1 });
 });
 
 // ------------------------------------------------------------ not behind the gateway
@@ -451,6 +505,39 @@ test.describe('refresh on the gateway-status event', () => {
     // The away event made no read: the read on return is the second, not the third.
     expect(reads.status).toBe(2);
     expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+  });
+
+  test('leaving and coming back twice with no event between leaves one listener', async ({ page }) => {
+    await countListeners(page);
+    await fakeGateway(page, { status: [MIXED] });
+    await openScreen(page);
+    await expect(block(page, 'Answering')).toBeVisible();
+    for (const link of ['Tools', 'Servers', 'Tools', 'Servers']) {
+      await page.getByRole('navigation').getByRole('link', { name: link, exact: true }).click();
+      await expect(page).toHaveURL(link === 'Tools' ? /\/ui\/tools\// : /\/ui\/servers\//);
+    }
+    await expect(block(page, 'Answering')).toBeVisible();
+    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+  });
+
+  test('a refresh keeps focus where it was: a tip trigger, a table, a group', async ({ page }) => {
+    await fakeGateway(page, { status: [MIXED] });
+    await openScreen(page);
+    const answering = block(page, 'Answering');
+    const targets = [
+      answering.getByRole('columnheader', { name: /^Tools/ }).getByRole('button'),
+      page.getByRole('region', { name: 'Answering, table', exact: true }),
+      groupButton(page, 'Other'),
+    ];
+    for (const target of targets) {
+      await target.focus();
+      await expect(target).toBeFocused();
+      // Mark the drawn tables, so the wait below ends only once a redraw replaced them.
+      await page.evaluate(() => { for (const n of document.querySelectorAll('#content .sv-scroll')) n.dataset.old = '1'; });
+      await statusEvent(page);
+      await expect(page.locator('#content .sv-scroll[data-old]')).toHaveCount(0);
+      await expect(target).toBeFocused();
+    }
   });
 });
 

@@ -42,6 +42,16 @@ const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
 
 const QUIET_LINE = 'Could not check this machine for servers outside the gateway.';
 
+/**
+ * How long the registry and discovery reads may take before the page draws without
+ * them. Past the gateway's own 10 s scan bound (SCAN_TIMEOUT in discovery/listing.rs),
+ * so its 503 normally answers first; this only covers a reply that never comes.
+ */
+const EXTRA_MS = 15_000;
+
+/** The live screen's listener, dropped when the screen opens again, so a quiet session keeps no old screen. */
+let dropListener = null;
+
 const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const known = (n) => typeof n === 'number' && Number.isFinite(n);
 const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(1)} s`);
@@ -125,13 +135,14 @@ function groupSummary(members) {
   let words = `${count('running') + slow} answering`;
   if (slow) words += ` · ${slow} slow`;
   if (idle) words += ` · ${idle} idle`;
-  const sum = (key) => members.reduce((n, s) => n + (known(s[key]) ? s[key] : 0), 0);
+  // A total with an unknown part is not known: a smaller number would read as exact.
+  const sum = (key) => (members.every((s) => known(s[key])) ? members.reduce((n, s) => n + s[key], 0) : null);
   const p95s = members.map((s) => s.latency_p95_ms).filter(known);
   const top = p95s.length ? Math.max(...p95s) : null;
   return [
     el('td', {}, words),
-    el('td', { class: 'n' }, String(sum('tools_cached'))),
-    el('td', { class: 'n' }, String(sum('calls_24h'))),
+    numberCell(sum('tools_cached')),
+    numberCell(sum('calls_24h')),
     top === null ? notKnown() : el('td', { class: 'n', 'aria-label': `Highest p95 among its servers: ${ms(top)}` }, ms(top)),
   ];
 }
@@ -149,7 +160,10 @@ function answeringBlock(list, categories, view) {
       history.replaceState(history.state, '', url);
       showOpen(tbody, view.open);
     });
-    tbody.append(el('tr', { class: 'sv-group-row' }, el('th', { scope: 'row' }, button), ...groupSummary(members)));
+    const row = el('tr', { class: 'sv-group-row' }, el('th', { scope: 'row' }, button), ...groupSummary(members));
+    // The whole row toggles; the button stays its one keyboard stop.
+    row.addEventListener('click', (event) => { if (!button.contains(event.target)) button.click(); });
+    tbody.append(row);
     for (const s of members) {
       const words = s.state === 'slow' && typeof s.reason === 'string' ? s.reason : '';
       tbody.append(el('tr', { class: 'sv-member', 'data-member-of': key },
@@ -187,17 +201,30 @@ function outsideBlock(discovery, statusNames) {
   })));
 }
 
+/** A selector for the screen's focused control that still finds it after a redraw, or null. */
+function focusKey(root) {
+  const at = document.activeElement;
+  if (!at || !root.contains(at)) return null;
+  if (at.dataset.group) return `button[data-group="${CSS.escape(at.dataset.group)}"]`;
+  const holder = at.closest('.has-tip[data-tip]');
+  if (holder) return `.has-tip[data-tip="${CSS.escape(holder.dataset.tip)}"] button`;
+  if (at.matches('.sv-scroll')) return `.sv-scroll[aria-label="${CSS.escape(at.getAttribute('aria-label'))}"]`;
+  return null;
+}
+
 async function readOr(ctx, path) {
   try {
-    return { ok: true, body: await ctx.api(path) };
+    return { ok: true, body: await ctx.api(path, { signal: AbortSignal.timeout(EXTRA_MS) }) };
   } catch {
     return { ok: false, body: null };
   }
 }
 
 function statusTab(body, ctx) {
+  // The root joins the body at the first draw: an empty body lets the shell show its
+  // loading state meanwhile. Whether the screen is still up is the body's to say.
   const root = el('div', { class: 'sv' });
-  body.append(root);
+  const up = () => body.isConnected;
   // Per render: the registry's categories and the discovery answer, each read once.
   const view = { open: new URL(location.href).searchParams.get('open'), extras: null };
   let reading = false;
@@ -221,7 +248,7 @@ function statusTab(body, ctx) {
       if (err?.status === 401) throw err; // the shell is showing sign-in
       return alone('error');
     }
-    if (!root.isConnected) return;
+    if (!up()) return;
     if (!Array.isArray(answer?.servers)) return alone('forbidden');
     if (!view.extras) {
       view.extras = Promise.all([readOr(ctx, '/ui/api/registry'), readOr(ctx, '/ui/api/discovery')]).then(([registry, found]) => ({
@@ -232,9 +259,9 @@ function statusTab(body, ctx) {
       }));
     }
     const { categories, discovery } = await view.extras;
-    if (!root.isConnected) return;
+    if (!up()) return;
     const servers = answer.servers.filter((s) => s && typeof s.name === 'string');
-    const focused = document.activeElement?.closest?.('.sv') === root ? document.activeElement.dataset.group : undefined;
+    const focused = focusKey(root);
     ctx.show(null);
     const parts = [];
     if (!servers.length) {
@@ -247,8 +274,13 @@ function statusTab(body, ctx) {
     if (fine.length) parts.push(answeringBlock(fine, categories, view));
     const outside = outsideBlock(discovery, new Set(servers.map((s) => s.name)));
     if (outside) parts.push(outside);
+    if (root.parentNode !== body) body.append(root);
     root.replaceChildren(...parts);
-    if (focused) root.querySelector(`button[data-group="${CSS.escape(focused)}"]`)?.focus();
+    if (focused) {
+      // Tip triggers join their headings once the tooltip module answers: wait for it, then focus.
+      await tipModule?.catch(() => {});
+      root.querySelector(focused)?.focus();
+    }
   }
 
   async function refresh() {
@@ -261,20 +293,22 @@ function statusTab(body, ctx) {
       do {
         again = false;
         await paint();
-      } while (again && root.isConnected);
+      } while (again && up());
     } finally {
       reading = false;
     }
   }
 
   const onStatus = () => {
-    if (!root.isConnected) {
+    if (!up()) {
       removeEventListener('gateway-status', onStatus);
       return;
     }
     refresh().catch(() => {});
   };
+  dropListener?.();
   addEventListener('gateway-status', onStatus);
+  dropListener = () => removeEventListener('gateway-status', onStatus);
   return refresh();
 }
 
