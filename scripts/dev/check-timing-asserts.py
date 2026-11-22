@@ -125,10 +125,13 @@ from check_timing_asserts_newcode import (
     FLOOR_S,
     IS_OK,
     ORACLE,
+    PRODUCT_BUDGET,
     SETTER,
     SLEEP,
     TAG,
     TIMER,
+    budget_list,
+    budgets_of,
     fn_spans,
     scan_new,
 )

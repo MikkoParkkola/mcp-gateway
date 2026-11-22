@@ -20,6 +20,7 @@ from pathlib import Path
 
 from check_timing_asserts_fixtures import PATH, guard, scan, ScratchGit
 from check_timing_asserts_moved_rows import MovedRows
+from check_timing_asserts_budget_rows import BudgetList, Docstring, ProductBudgets, VisibleBinding
 
 
 class Windows(unittest.TestCase):

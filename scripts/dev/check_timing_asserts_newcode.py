@@ -49,6 +49,23 @@ TIMER = "short product timer slept against on the real clock"
 SETTER = "short timeout set through a timeout-named builder or call"
 FIELD = "short timeout field"
 IS_OK = "timeout whose result is asserted is_ok, under the 10 s floor"
+# A real-clock bound whose window is written from a product budget (#3826).
+PRODUCT_BUDGET = "bound written from product budget"
+
+
+class Budgets(NamedTuple):
+    """The tree's product budgets: duration consts and `x_within` fns."""
+
+    consts: dict[str, list[tuple[str, int, float]]]
+    within: frozenset[str]
+
+
+def budgets_of(texts: dict[str, str]) -> Budgets:
+    return Budgets({}, frozenset())
+
+
+def budget_list(path, text, consts, includers, budgets) -> list[str]:
+    return []
 # MIK-8360 R3a: `.with_x_timeout(D)` / `.set_x_timeout(D)`, and any other
 # call named for a timeout given a literal Duration (not `timeout(` itself,
 # which the floor already judges, nor `timeout_at`).
@@ -190,6 +207,7 @@ def scan_new(
     includers: dict[str, str],
     added: set[int],
     carried=frozenset(),
+    budgets: Budgets | None = None,
 ) -> list[Finding]:
     """PR-C's rules on the spans of `text` that touch an `added` line."""
     code = blank_strings_and_comments(text)
