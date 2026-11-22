@@ -4,6 +4,8 @@
 //! unknown never says nothing was written.
 
 use super::*;
+use crate::config_reload::NO_AUDIT_LOG;
+use crate::secret_store::{SaveError, StoreError};
 
 async fn message(e: &ReplaceError) -> (StatusCode, String) {
     let response = refused_write(e);
