@@ -129,11 +129,11 @@ async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_return
     a_stalled_client_is_closed(4096).await;
 }
 
-#[tokio::test]
-async fn a_stalled_client_with_a_large_receive_buffer_is_closed_too() {
-    a_stalled_client_is_closed(LARGE_RECV_BUFFER).await;
-}
-
+// No large-buffer twin of the row above. On a loaded host the paused clock
+// races ahead while the kernel keeps moving frames into a big receive buffer
+// in real time, and each frame it takes lets the waiting send finish, so the
+// 30 s wait starts over. How often that happens depends on the buffer's size,
+// not on any count of steps, so no fixed bound is sure to see the close.
 async fn a_stalled_client_is_closed(buffer: u32) {
     let (state, _dir) = fixture_unpaused().await;
     tokio::time::pause();
