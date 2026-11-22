@@ -259,7 +259,7 @@ fn r12b_a_fifo_at_the_cert_name_refuses_without_opening_it() {
         .expect("run mkfifo");
     assert!(made.success(), "mkfifo failed");
     let ran = init_ca(out.path());
-    assert_refused(&ran, &[fifo.clone()]);
+    assert_refused(&ran, std::slice::from_ref(&fifo));
     let kind = std::fs::symlink_metadata(&fifo).expect("stat").file_type();
     assert!(kind.is_fifo(), "the FIFO was replaced");
     assert_eq!(names(out.path()), ["ca.crt"]);
@@ -272,7 +272,7 @@ fn r9_a_dangling_cert_link_refuses() {
     let link = out.path().join("ca.crt");
     std::os::unix::fs::symlink("ca.key", &link).expect("stage link");
     let ran = init_ca(out.path());
-    assert_refused(&ran, &[link.clone()]);
+    assert_refused(&ran, std::slice::from_ref(&link));
     assert_eq!(
         std::fs::read_link(&link).expect("still a link"),
         Path::new("ca.key")
@@ -291,7 +291,7 @@ fn r9b_a_dangling_key_link_refuses() {
     let link = out.path().join("ca.key");
     std::os::unix::fs::symlink("nowhere", &link).expect("stage link");
     let ran = init_ca(out.path());
-    assert_refused(&ran, &[link.clone()]);
+    assert_refused(&ran, std::slice::from_ref(&link));
     assert_eq!(
         std::fs::read_link(&link).expect("still a link"),
         Path::new("nowhere")
