@@ -359,12 +359,64 @@ async fn g1f_an_unchanged_record_after_the_grants_publish_keeps_b_pinned() {
         text_b,
         ..
     } = grants_after_b(bounds).await;
-    // Records carry whole seconds: after 1.1 s every earlier version is past
-    // a 0 s age, whatever the sub-second start. Nothing else waits on this.
-    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    // Records carry whole seconds. Wait (bounded) until the clock's second
+    // passes B's stamp, so A and B are both past a 0 s age when the next
+    // record is saved. Nothing else waits on this.
+    let stamped = rig.kept(&version_b).at;
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while crate::clock::unix_secs().expect("the clock reads") <= stamped {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the clock did not pass B's stamp"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     rig.reload_to(&text_b).await;
     // A ages out; B stays, pinned by the unchanged reload's record.
     assert_eq!(kept_revisions(&rig), [version_b]);
+}
+
+#[tokio::test]
+async fn g1g_a_restart_on_the_served_files_then_an_aged_refusal_keeps_them() {
+    let bounds = Bounds {
+        max_age_secs: 100,
+        ..Bounds::default()
+    };
+    let GrantsAfterB {
+        rig,
+        version_b,
+        text_b,
+        ..
+    } = grants_after_b(bounds).await;
+    let before = kept_revisions(&rig);
+    // A new process starts on B's files over the same history directory.
+    let restarted = Rig::start_in(
+        std::sync::Arc::clone(&rig.dir),
+        &text_b,
+        Audit::Logged,
+        bounds,
+        History::Kept,
+    )
+    .await;
+    assert_eq!(
+        kept_revisions(&restarted),
+        before,
+        "premise: the restart's start record stores no second copy of B"
+    );
+    let refusal = restarted
+        .state
+        .live_config
+        .refused_record(Source::File, Some(3))
+        .expect("a refusal record");
+    let late = crate::clock::unix_secs().expect("the clock reads") + 1_000;
+    restarted
+        .state
+        .live_config
+        .history_hook()
+        .expect("a history hook")
+        .run(refusal, late);
+    // A ages out; B, what the restarted process serves, stays pinned.
+    assert_eq!(kept_revisions(&restarted), [version_b]);
 }
 
 /// Every object key anywhere in `value`.
