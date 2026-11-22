@@ -81,6 +81,13 @@ def test_the_privileged_rows_run_their_script_under_pwsh():
     code = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
     assert code[0].startswith("param("), code[:2]
     assert code[1] == "$ErrorActionPreference = 'Stop'", code[:2]
+    # The rows run from the checkout the exe was built for, and fewer than five passing is a failure; the count
+    # comes from the harness's last line-anchored summary, never a line a test printed.
+    assert any(l.startswith("$env:CARGO_MANIFEST_DIR = ") for l in code), "the manifest dir is not set"
+    floor = [l for l in code if "-lt 5" in l]
+    assert len(floor) == 1 and "exit 1" in floor[0], floor
+    assert any("(?m)^test result: ok" in l for l in code), "the count is not anchored to the harness summary"
+    assert any("$summaries.Count - 1" in l for l in code), "the count does not take the last summary"
 
 
 def libtest_selects(name, args):

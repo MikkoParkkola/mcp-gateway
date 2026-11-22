@@ -41,5 +41,7 @@ param([Parameter(Mandatory = $true)][string]$Exe)
           $env:CARGO_MANIFEST_DIR = (Get-Location).Path
           & $Exe --ignored --show-output win_privileged:: 2>&1 | Tee-Object -Variable ran
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $count = [regex]::Match(($ran -join "`n"), 'test result: ok\. (\d+) passed').Groups[1].Value
+          # The harness's own summary: the last line that starts with it, never a line a test printed.
+          $summaries = [regex]::Matches(($ran -join "`n"), '(?m)^test result: ok\. (\d+) passed')
+          $count = if ($summaries.Count) { $summaries[$summaries.Count - 1].Groups[1].Value } else { '' }
           if ([int]"0$count" -lt 5) { Write-Output "::error::the privileged rows ran $count tests; at least 5 must"; exit 1 }

@@ -440,6 +440,14 @@ def check_windows(jobs: dict) -> list[str]:
     exports = [i for i, s in enumerate(steps) if run_text(s).strip() == WIN_EXPORT]
     if len(exports) != 1:
         problems.append(f"{WIN_BUILD} job: expected exactly one step running {WIN_EXPORT!r}, found {len(exports)}")
+    job_limit = as_minutes(build.get("timeout-minutes"))
+    for i in exports:
+        step_limit = as_minutes(steps[i].get("timeout-minutes"))
+        if step_limit is None or job_limit is None or step_limit >= job_limit:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: timeout-minutes {step_limit} is not under the "
+                            f"job's {job_limit}, so a hung build leaves no time for the upload to report it")
+        if "if" in steps[i]:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: carries if:, so the build can be switched off")
     uploads = [i for i, s in enumerate(steps) if uses_action(s, "actions/upload-artifact")
                and with_map(s).get("name") == WIN_ARTIFACT]
     if not uploads:
@@ -468,6 +476,9 @@ def check_windows(jobs: dict) -> list[str]:
     runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s) + " " + env_text(s)]
     if not runs:
         problems.append(f"{WIN_LEGS} job: no step names {WIN_EXE} in its run text or env, so none runs the exe")
+    for i, s in enumerate(lsteps):
+        if "shard_tests.py run-prebuilt" in run_text(s) and "if" in s:
+            problems.append(f"{WIN_LEGS} {step_label(i, s)}: the suite step carries if:, so a leg can run no tests")
     if not fetch:
         problems.append(f"{WIN_LEGS} job: no actions/download-artifact step for {WIN_ARTIFACT} into {WIN_PATH}")
     elif runs and runs[0] < fetch[0]:
@@ -506,7 +517,20 @@ def _windows_cases(live: dict) -> list[tuple[str, dict]]:
     late = fresh()
     lsteps = late[WIN_LEGS]["steps"]
     lsteps.append(lsteps.pop(next(i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact"))))
+    no_reserve, export_off, suite_off = fresh(), fresh(), fresh()
+    for s in no_reserve[WIN_BUILD]["steps"]:
+        if run_text(s).strip() == WIN_EXPORT:
+            s["timeout-minutes"] = no_reserve[WIN_BUILD]["timeout-minutes"]
+    for s in export_off[WIN_BUILD]["steps"]:
+        if run_text(s).strip() == WIN_EXPORT:
+            s["if"] = False
+    for s in suite_off[WIN_LEGS]["steps"]:
+        if "shard_tests.py run-prebuilt" in run_text(s):
+            s["if"] = False
     return [
+        ("the Windows export step's limit reaches the job's", no_reserve),
+        ("the Windows export step is switched off by if:", export_off),
+        ("the Windows legs' suite step is switched off by if:", suite_off),
         ("the Windows exe is fetched after the steps that run it", late),
         ("Windows upload if-no-files-found 'warn'", warn),
         ("the Windows legs lose their build gate step", ungated),

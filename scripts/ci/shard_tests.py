@@ -8,8 +8,8 @@ a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
 - the library is split by a libtest filter and the matching `--skip` (Windows
-  splits the skipped part again by module filters, so it has three lib
-  shards), or run whole in one shard (macOS). Filters match substrings of
+  cuts it by module filters into four lib legs, each skipping the filters of
+  the legs before it), or run whole in one shard (macOS). Filters match substrings of
   the test path, so a module filter also takes its nested paths;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
