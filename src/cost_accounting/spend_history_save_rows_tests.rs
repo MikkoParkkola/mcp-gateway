@@ -565,7 +565,9 @@ fn restored_maximum_values_saturate_the_window_a_view_reads() {
     let _clock = at_secs(T0);
     let window = back.key_snapshot("k").expect("the key").window_24h;
     assert_eq!(window.tokens, Some(u64::MAX));
-    assert!(window.cost_usd.is_some_and(f64::is_finite), "{window:?}");
+    // Saturated micro-USD is about 1.8e13 USD; a wrapped sum would be tiny.
+    let usd = window.cost_usd.expect("a dated window");
+    assert!(usd.is_finite() && usd > 1.8e13, "{window:?}");
 }
 
 /// gpt seat 1 (HIGH): a file past the read cap is refused by its length,
