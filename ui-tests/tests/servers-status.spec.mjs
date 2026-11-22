@@ -240,13 +240,14 @@ test('answering: groups by registry category, Other last, sums and the highest p
 
 test('a group whose calls are not all known shows its total as not known, never a smaller number', async ({ page }) => {
   const partial = structuredClone(MIXED);
-  partial.body.servers.find((s) => s.name === 'lookout').calls_24h = null;
+  // One of three members: the other two still report, so only an every-member check gives a dash.
+  partial.body.servers.find((s) => s.name === 'forge').calls_24h = null;
   await fakeGateway(page, { status: [partial] });
   await openScreen(page);
-  await expect(groupRow(page, 'Search and web').getByRole('cell')).toHaveText(['1 answering', '3', '—', '120 ms']);
-  await expect(groupRow(page, 'Search and web').getByRole('cell', { name: 'not known' })).toHaveCount(1);
+  await expect(groupRow(page, 'Developer tools').getByRole('cell')).toHaveText(['2 answering · 1 slow · 1 idle', '9', '—', '1.9 s']);
+  await expect(groupRow(page, 'Developer tools').getByRole('cell', { name: 'not known' })).toHaveCount(1);
   // Groups whose members all report still add up.
-  await expect(groupRow(page, 'Developer tools').getByRole('cell').nth(2)).toHaveText('45');
+  await expect(groupRow(page, 'Search and web').getByRole('cell').nth(2)).toHaveText('9');
 });
 
 test('a member row: Answering, Slow with its reason, Idle; tools 0 shows 0', async ({ page }) => {
@@ -518,6 +519,21 @@ test.describe('refresh on the gateway-status event', () => {
     }
     await expect(block(page, 'Answering')).toBeVisible();
     expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+  });
+
+  test('a tooltip module that never loads holds up no refresh, and a group keeps its focus', async ({ page }) => {
+    await page.route('**/ui/assets/tooltip.*.js', () => new Promise(() => {}));
+    const moved = structuredClone(MIXED);
+    moved.body.servers.find((s) => s.name === 'kiln').state = 'paused';
+    const reads = await fakeGateway(page, { status: [MIXED, moved, MIXED] });
+    await openScreen(page);
+    await groupButton(page, 'Other').focus();
+    await statusEvent(page);
+    await expect(block(page, 'Needs a look').getByRole('heading')).toHaveText('Needs a look · 5');
+    await expect(groupButton(page, 'Other')).toBeFocused();
+    await statusEvent(page);
+    await expect(block(page, 'Needs a look').getByRole('heading')).toHaveText('Needs a look · 4');
+    expect(reads.status).toBe(3);
   });
 
   test('a refresh keeps focus where it was: a tip trigger, a table, a group', async ({ page }) => {

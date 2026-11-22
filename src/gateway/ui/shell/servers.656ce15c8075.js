@@ -277,9 +277,15 @@ function statusTab(body, ctx) {
     if (root.parentNode !== body) body.append(root);
     root.replaceChildren(...parts);
     if (focused) {
-      // Tip triggers join their headings once the tooltip module answers: wait for it, then focus.
-      await tipModule?.catch(() => {});
-      root.querySelector(focused)?.focus();
+      // Focus lost with the old nodes comes back; a focus the user has since moved stays.
+      const restore = () => {
+        const at = document.activeElement;
+        if (up() && (!at || at === document.body)) root.querySelector(focused)?.focus();
+      };
+      restore();
+      // Tip triggers join their headings once the tooltip module answers. That is not waited
+      // on here, so a module that never loads holds up no refresh.
+      tipModule?.then(restore, () => {});
     }
   }
 
