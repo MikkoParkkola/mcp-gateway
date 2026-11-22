@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Request body for a grant upsert mutation.
+/// Strict at the top level only: the grant and rollback types are shared
+/// with the store, which must keep reading records other builds wrote.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GrantMutationRequest {
     /// The grant to upsert (insert/replace).
     pub(super) grant: ControlPlaneGrant,
@@ -33,7 +36,9 @@ pub(super) struct GrantMutationRequest {
 }
 
 /// Request body for a policy upsert mutation.
+/// Strict at the top level only, as [`GrantMutationRequest`].
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct PolicyMutationRequest {
     /// The policy to upsert (insert/replace).
     pub(super) policy: ControlPlanePolicy,
@@ -135,7 +140,9 @@ pub(super) enum Decision {
 }
 
 /// Request body for resolving a decision-queue item.
+/// Strict at the top level only, as [`GrantMutationRequest`].
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct DecisionRequest {
     /// Kind of the queued item (only `grant`/`policy` are actionable today).
     pub(super) target_kind: ControlPlaneDecisionTargetKind,
