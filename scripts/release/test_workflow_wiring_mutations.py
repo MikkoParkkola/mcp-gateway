@@ -111,8 +111,8 @@ def _mutate(span, *edits):
         return STALE, STALE
     out = span
     for old, new in edits:
-        # An empty `old` is refused here too: it occurs len(span) + 1 times.
-        if out.count(old) != 1:
+        # An empty `old` is refused by name: in an empty span it occurs exactly once.
+        if not old or out.count(old) != 1:
             return STALE, STALE
         out = out.replace(old, new, 1)
     return span, out
@@ -1592,6 +1592,9 @@ def _recheck_moved_before_publish(publish=_PUBLISH, recheck=_RECHECK, both=_PUBL
     if STALE in (publish, recheck, both):
         return STALE, STALE
     gap = both[len(publish):len(both) - len(recheck)]
+    # Only blank lines and comments may sit between them; anything else would move as well.
+    if any(line.strip() and not line.lstrip().startswith("#") for line in gap.splitlines()):
+        return STALE, STALE
     return both, gap.lstrip("\n") + recheck + "\n" + publish
 
 
@@ -2035,6 +2038,9 @@ CASES += [
 
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
+    # A replacement built from a span that went stale carries the marker: the case is stale too.
+    if STALE in after:
+        return None, ""
     path = directory / workflow
     original = path.read_text(encoding="utf-8")
     # Exactly once. An anchor matching twice mutates whichever copy comes
