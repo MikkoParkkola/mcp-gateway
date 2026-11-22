@@ -18,8 +18,8 @@ const TOKEN: &str = "serving-log-row-token-0123456789abcdef";
 fn config_file(dir: &Path, auth: bool, log: Option<&Path>) -> std::path::PathBuf {
     let audit = match log {
         Some(path) => format!(
-            "security:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
-            path.display()
+            "security:\n  transparency_log:\n    enabled: true\n    path: {:?}\n",
+            path.display().to_string()
         ),
         None => "security:\n  transparency_log:\n    enabled: false\n".to_owned(),
     };

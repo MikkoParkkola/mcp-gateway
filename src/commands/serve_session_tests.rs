@@ -307,8 +307,8 @@ async fn startup_session_take_once() {
     let config = dir.path().join("gateway.yaml");
     let log = dir.path().join("audit.jsonl");
     let text = format!(
-        "security:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
-        log.display()
+        "security:\n  transparency_log:\n    enabled: true\n    path: {:?}\n",
+        log.display().to_string()
     );
     write_owner_only(&config, text).expect("config");
 

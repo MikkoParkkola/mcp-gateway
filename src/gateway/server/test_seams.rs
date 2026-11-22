@@ -8,6 +8,35 @@ use std::path::PathBuf;
 
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+thread_local! {
+    /// The data directory constructions on this thread start with, set by
+    /// [`data_dir_for_constructions`].
+    static CONSTRUCTION_DATA_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While the returned guard lives, every gateway built on this thread starts
+/// with `dir` as its data directory. Construction resolves the record key
+/// there, so a test that reads the key back from its own folder sets this
+/// before building; `with_data_dir` after the build comes too late for it.
+#[cfg(test)]
+pub(super) fn data_dir_for_constructions(dir: PathBuf) -> ConstructionDataDir {
+    CONSTRUCTION_DATA_DIR.with(|slot| *slot.borrow_mut() = Some(dir));
+    ConstructionDataDir
+}
+
+/// Clears the construction data directory when dropped.
+#[cfg(test)]
+pub(super) struct ConstructionDataDir;
+
+#[cfg(test)]
+impl Drop for ConstructionDataDir {
+    fn drop(&mut self) {
+        CONSTRUCTION_DATA_DIR.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
 #[derive(Default)]
 pub(super) struct TestSeams {
     /// The test's tempdir (`with_data_dir`); `None` is the standard one.
@@ -95,6 +124,7 @@ impl TestSeams {
         #[cfg(test)]
         {
             seams.spawner = std::thread::current().name().map(str::to_owned);
+            seams.data_dir = CONSTRUCTION_DATA_DIR.with(|dir| dir.borrow().clone());
         }
         seams
     }

@@ -7,29 +7,11 @@
 
 use syn::visit::Visit;
 
+// The shared test-only cfg reader, never a private copy of it (check_cfg_reader_copies).
+use crate::test_source_text::test_only;
+
 /// Paths into the test-only seams, by the module names the product files use for them.
 const SEAMS: [&str; 3] = ["fault", "observe", "crash_fs"];
-
-/// A predicate that holds only in a test build: `test`, or `all(...)` with `test` among its parts.
-fn test_only(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if !attr.path().is_ident("cfg") {
-            return false;
-        }
-        let Ok(meta) = attr.parse_args::<syn::Meta>() else {
-            return false;
-        };
-        match &meta {
-            syn::Meta::Path(path) => path.is_ident("test"),
-            syn::Meta::List(list) if list.path.is_ident("all") => list
-                .parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                )
-                .is_ok_and(|parts| parts.iter().any(|part| part.path().is_ident("test"))),
-            _ => false,
-        }
-    })
-}
 
 /// The attributes written on an expression statement, for the expression kinds the drain uses.
 fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {

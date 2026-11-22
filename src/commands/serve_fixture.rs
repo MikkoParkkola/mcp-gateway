@@ -37,7 +37,9 @@ pub(crate) fn failed_log_config(dir: &Path) -> String {
     let blocker = dir.join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
     format!(
-        "auth:\n  enabled: false\nsecurity:\n  transparency_log:\n    enabled: true\n    path: \"{}\"\n",
-        blocker.join("audit.jsonl").display()
+        "auth:\n  enabled: false\nsecurity:\n  transparency_log:\n    enabled: true\n    path: {:?}\n",
+        // Debug quoting escapes a Windows path's backslashes, which YAML's double quotes would
+        // otherwise read as escape sequences.
+        blocker.join("audit.jsonl").display().to_string()
     )
 }
