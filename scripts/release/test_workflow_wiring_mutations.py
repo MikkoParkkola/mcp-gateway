@@ -119,7 +119,11 @@ def _mutate(span, *edits):
 
 
 def _mutate_step(span, step, *edits):
-    """_mutate over `span`, for a step whose own text is not unique in the file; stub until the rows are red."""
+    """_mutate over `span`, for a step whose own text is not unique in the file, so the span starts at the job's
+    id line and ends with `step`. Every edit must also apply inside `step`: a line that moved into an earlier step
+    of the job would otherwise be rewritten there and the case would still report on the step it names."""
+    if not span.endswith(step) or _mutate(step, *edits)[0] == STALE:
+        return STALE, STALE
     return _mutate(span, *edits)
 
 
@@ -1772,6 +1776,7 @@ CASES += [
 # The helm job's cosign installer is the same step text as docker-manifest's,
 # so its span starts at the job's id line.
 _COSIGN_HELM = _wf_span("ci.yml", "helm-supply-chain", None, "Install cosign")
+_COSIGN_HELM_STEP = _wf_span("ci.yml", "helm-supply-chain", "Install cosign")
 CASES += [
     ("cosign-pin-downgraded", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
@@ -1780,7 +1785,7 @@ CASES += [
     ("cosign-pin-quoted-and-downgraded", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: 'v2.5.2'\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", CAUGHT),
-    ("cosign-pin-left-to-the-installer-default", "ci.yml", *_mutate(_COSIGN_HELM, ('        with:\n          cosign-release: v2.6.5\n', '')), CAUGHT),
+    ("cosign-pin-left-to-the-installer-default", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('        with:\n          cosign-release: v2.6.5\n', '')), CAUGHT),
     ("cosign-pin-quoted-at-the-floor", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: \"v2.6.5\"\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n", TOLERATED),
@@ -1796,7 +1801,7 @@ CASES += [
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n"
      "      - uses: \"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6\" # v4.1.2\n"
      "      - name: Run the full-burst ledger\n", CAUGHT),
-    ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n', "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n"), ('          cosign-release: v2.6.5\n', '          cosign-release: v2.6.4\n')), CAUGHT),
+    ("cosign-pin-below-the-floor-behind-a-single-quoted-uses", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n', "        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n"), ('          cosign-release: v2.6.5\n', '          cosign-release: v2.6.4\n')), CAUGHT),
     # The push-guard inventory must still see a quoted installer: a second,
     # unnamed one with no tag guard is found only by what it uses.
     ("cosign-installer-quoted-and-unguarded", "ci.yml",
@@ -1846,7 +1851,7 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: Sigstore/Cosign-Installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n", TOLERATED),
     # A pin inside another input's block scalar is text the action never reads.
-    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml", *_mutate(_COSIGN_HELM, ('          cosign-release: v2.6.5\n', '          ignored-input: |\n            cosign-release: v2.6.5\n')), CAUGHT),
+    ("cosign-pin-hidden-in-another-inputs-block-scalar", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('          cosign-release: v2.6.5\n', '          ignored-input: |\n            cosign-release: v2.6.5\n')), CAUGHT),
     # A shell redirection or a comment is not a YAML anchor.
     ("shell-redirection-and-a-comment-are-not-anchors", "mrtr7b-full-burst.yml",
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - name: Run the full-burst ledger\n",
@@ -1872,8 +1877,8 @@ CASES += [
      "      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: 1.99.1\n      - \"u\\x73es\": \"sigstore/cosign\\x2dinstaller@6f9f17788090df1f26f669e9d70d6ae9567deba6\"\n        with:\n          cosign-release: v2.6.5\n      - name: Run the full-burst ledger\n", CAUGHT),
     # PyYAML keeps the last of two keys and flattens `<<`; the strict
     # loader refuses both.
-    ("cosign-pin-given-twice", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n')), CAUGHT),
-    ("cosign-pin-through-a-merge-key", "ci.yml", *_mutate(_COSIGN_HELM, ('          cosign-release: v2.6.5\n', '          <<: { cosign-release: v2.6.5 }\n')), CAUGHT),
+    ("cosign-pin-given-twice", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n          cosign-release: v2.5.2\n')), CAUGHT),
+    ("cosign-pin-through-a-merge-key", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('          cosign-release: v2.6.5\n', '          <<: { cosign-release: v2.6.5 }\n')), CAUGHT),
     ("release-runs-the-floor-without-its-parser", "release.yml",
      "      - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)\n        run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != \"6.0.2\")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'\n",
      "", CAUGHT),
@@ -1882,7 +1887,7 @@ CASES += [
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n",
      "        # cosign-release is pinned so flag behavior can't drift under a v3 default.\n        uses: 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' # v4.1.2\n", TOLERATED),
     # Under env: the input never reaches the action, which installs its default.
-    ("cosign-pin-moved-under-env", "ci.yml", *_mutate(_COSIGN_HELM, ('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        env:\n')), CAUGHT),
+    ("cosign-pin-moved-under-env", "ci.yml", *_mutate_step(_COSIGN_HELM, _COSIGN_HELM_STEP,('        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        with:\n', '        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2\n        env:\n')), CAUGHT),
     ("cosign-pin-moved-up-a-major", "ci.yml",
      "          cosign-release: v2.6.5\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
      "          cosign-release: v3.1.3\n      - name: Install syft (SBOM)\n        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n      - name: Validate supply-chain smoke script\n",
@@ -1999,13 +2004,14 @@ CASES += [
 # run the same steps, so the hosted job's span starts at its id line, which
 # names one job; the trusted one is named by its env block.
 _HOSTED_TO_SUITES = _wf_span("ci.yml", "test-throwaway-hosted", None, "Release tooling Python suites")
+_HOSTED_SUITES_STEP = _wf_span("ci.yml", "test-throwaway-hosted", "Release tooling Python suites")
 _TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
 CASES += [
     # Every step after the swap step, through the suites, dropped.
     ("throwaway-python-suites-dropped", "ci.yml", _HOSTED_TO_SUITES,
      _wf_span("ci.yml", "test-throwaway-hosted", None, "uses:./.github/actions/add-swap"), CAUGHT),
     ("throwaway-python-failure-swallowed", "ci.yml",
-     *_mutate(_HOSTED_TO_SUITES, ('          exit "$fail"\n', "          exit 0\n")), CAUGHT),
+     *_mutate_step(_HOSTED_TO_SUITES, _HOSTED_SUITES_STEP, ('          exit "$fail"\n', "          exit 0\n")), CAUGHT),
     ("trusted-throwaway-swallows-failures", "ci.yml",
      _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
 ]
