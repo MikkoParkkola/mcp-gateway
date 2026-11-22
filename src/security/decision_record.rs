@@ -314,8 +314,10 @@ pub(crate) fn token_on_decision(
         (crate::security::audit::CredentialKind::KeyServerToken, Some(token)) => {
             (Some(token), false)
         }
-        (crate::security::audit::CredentialKind::KeyServerToken, None) => (None, true),
-        _ => (None, false),
+        (crate::security::audit::CredentialKind::KeyServerToken, None) => {
+            mutant!("m-guard-off", (None, false), (None, true))
+        }
+        _ => mutant!("m-guard-all-kinds", (None, true), (None, false)),
     }
 }
 

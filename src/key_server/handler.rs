@@ -364,7 +364,14 @@ pub(super) async fn issue(
     audit::emit(&ev);
     // One read of the lifetime, used for the row's bound and for exp below.
     let ttl = ks.config.token_ttl_secs;
-    let Some(expiry) = super::issuance::RowExpiry::after(reservation.deadline, ttl) else {
+    let Some(expiry) = super::issuance::RowExpiry::after(
+        mutant!(
+            "m-expires-from-row-time",
+            reservation.deadline - super::store::PENDING_WINDOW_SECS,
+            reservation.deadline
+        ),
+        ttl,
+    ) else {
         return clock_refusal();
     };
     match super::issuance::record_issuance(ks, &ev, expiry).await {

@@ -446,7 +446,11 @@ impl TokenStore for InMemoryTokenStore {
             return Err(ReserveError::DuplicateJti);
         }
         let deadline = now
-            .checked_add(PENDING_WINDOW_SECS)
+            .checked_add(mutant!(
+                "m-window-31",
+                PENDING_WINDOW_SECS + 1,
+                PENDING_WINDOW_SECS
+            ))
             .ok_or(ReserveError::Clock)?;
         let id = ReservationId::new();
         pending.slots.insert(

@@ -35,9 +35,13 @@ fn recorded_reach(decision: Option<&Decision>) -> Value {
     match decision {
         Some(Decision {
             token: Some(token), ..
-        }) => json!({"jti": token.jti, "resolved_on": RESOLVED_ON}),
+        }) => mutant!(
+            "m-legacy-text",
+            NOT_RECORDED.into(),
+            json!({"jti": token.jti, "resolved_on": RESOLVED_ON})
+        ),
         Some(d) if d.token_unavailable => NOT_FOUND.into(),
-        _ => NOT_RECORDED.into(),
+        _ => mutant!("m-legacy-default", NOT_FOUND.into(), NOT_RECORDED.into()),
     }
 }
 
@@ -61,10 +65,23 @@ fn receipt_reach(
     };
     let e = &found.entry;
     let stored = hash_of(e, "entry_hash");
-    let matches = stored.as_deref() == Some(row.entry_hash.as_str())
-        && recompute_entry_hash(e).ok() == stored
-        && e.get("event").and_then(Value::as_str) == Some(ISSUED_EVENT)
-        && e.get("token_jti").and_then(Value::as_str) == Some(token.jti.as_str());
+    let matches = mutant!(
+        "m-skip-hash",
+        true,
+        stored.as_deref() == Some(row.entry_hash.as_str())
+    ) && mutant!(
+        "m-skip-recompute",
+        true,
+        recompute_entry_hash(e).ok() == stored
+    ) && mutant!(
+        "m-skip-kind",
+        true,
+        e.get("event").and_then(Value::as_str) == Some(ISSUED_EVENT)
+    ) && mutant!(
+        "m-skip-jti",
+        true,
+        e.get("token_jti").and_then(Value::as_str) == Some(token.jti.as_str())
+    );
     if !matches {
         return Ok(NOT_FOUND.into());
     }

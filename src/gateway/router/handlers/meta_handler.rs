@@ -48,7 +48,7 @@ pub(in crate::gateway) async fn meta_mcp_handler(
         .get::<crate::gateway::auth::live::CredentialFacts>()
         .and_then(crate::gateway::auth::live::CredentialFacts::token_on_call);
     let dispatch = crate::security::decision_record::with_token(
-        token,
+        mutant!("m-meta-scope-dropped", None, token),
         crate::gateway::meta_mcp::sealed_hold::scoped(
             crate::gateway::meta_mcp::grant_audit::slot_http(
                 logger.clone(),

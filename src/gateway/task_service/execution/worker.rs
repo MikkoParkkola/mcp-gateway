@@ -253,7 +253,14 @@ async fn run_dispatched(
     // The pin covers the readmission as well as the dispatch.
     // The worker runs in its own spawned task, so the creating request's token
     // scope is reopened here from the task's own context.
-    let token = intent.owned.token().cloned();
+    let token = mutant!(
+        "m-worker-drops-row",
+        intent.owned.token().cloned().map(|mut t| {
+            t.issuance_row = None;
+            t
+        }),
+        intent.owned.token().cloned()
+    );
     let dispatch = crate::security::decision_record::with_token(
         token,
         meta.with_surfaced_pin(&call.tool, recorded, async {
