@@ -289,6 +289,32 @@ async fn a_resumed_task_step_records_the_resuming_token() {
     assert_resolves(&fx, step, (&resumer_jti, &resumer), &["alpha"]).await;
 }
 
+/// A streamed call whose backend speaks first (a progress notification before
+/// the answer): the stream goes out before the call is decided, so its
+/// decision is built after the handler returned, and still names the token.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_call_decided_after_its_stream_opened_records_its_token() {
+    let (fx, bearer, jti) = token_fixture().await;
+    let mut call: Value = serde_json::from_str(&invoke("alpha")).expect("the call is JSON");
+    call["params"]["_meta"] = json!({
+        "progressToken": "reach-progress",
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    });
+    let (status, body) = post_modern_bearer(&fx, &call.to_string(), &bearer).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let progress = body.find("notifications/progress");
+    let answer = body.find("\"result\"");
+    assert!(
+        matches!((progress, answer), (Some(p), Some(a)) if p < a),
+        "premise: the notification streamed before the answer: {body}"
+    );
+    let record = only_invocation(&fx);
+    assert_carries(&record, &fx, &jti);
+    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+}
+
 /// Map the identity `mint_for` names (its issuer, its group `g`) to admin.
 fn map_admin(fx: &Fixture) {
     let admin: crate::control_plane::ControlPlaneRoleRule = serde_json::from_value(
