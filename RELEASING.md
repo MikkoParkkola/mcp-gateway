@@ -93,7 +93,9 @@ python3 scripts/release/upgrading_fragments.py assemble   # writes the guide and
 ```
 
 For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
-section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
+section, so that the release leaves exactly one `[4.0.0]` heading. The untagged
+`[4.0.0-beta.4]` section is already gone: the version bump deleted it
+(`docs/release/v4.0.0-gate-day-procedure.md`, Order on freeze day, step 1). Before the fold,
 every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
 or its mention removed from the draft.
 
