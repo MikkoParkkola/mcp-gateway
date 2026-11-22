@@ -98,6 +98,8 @@ struct Scripted {
     reply: Option<Value>,
     /// Every notification is refused for want of a caller slot (a 429).
     notify_refused: bool,
+    /// Under [`Extra::GateCall`]: a counted call waits here for its answer.
+    gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -125,6 +127,9 @@ impl Transport for Scripted {
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            gate.notified().await;
+        }
         if self.extras.contains(&Extra::Hang) || self.extras.contains(&Extra::HangCall) {
             std::future::pending::<()>().await;
         }
@@ -165,6 +170,9 @@ struct Fixture {
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
+    /// Opens the held answers under [`Extra::GateCall`] (one per call).
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    gate: Option<Arc<tokio::sync::Notify>>,
     _dirs: (
         Arc<tempfile::TempDir>,
         crate::gateway::router::tests::FixtureDir,
@@ -363,6 +371,9 @@ async fn fixture(setup: Setup) -> Fixture {
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let lists = Arc::new(AtomicUsize::new(0));
+    let gate = setup
+        .has(Extra::GateCall)
+        .then(|| Arc::new(tokio::sync::Notify::new()));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     if setup.has(Extra::Hardened) {
         harden(state_mut);
@@ -382,6 +393,7 @@ async fn fixture(setup: Setup) -> Fixture {
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
             notify_refused: setup.notify_refused,
+            gate: gate.clone(),
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
@@ -439,6 +451,7 @@ async fn fixture(setup: Setup) -> Fixture {
         path,
         calls,
         lists,
+        gate,
         _dirs: (audit, store),
     }
 }

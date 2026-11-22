@@ -100,8 +100,9 @@ async fn post_bearer(
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
-async fn post_modern_bearer(fx: &Fixture, body: &str, bearer: &str) -> (StatusCode, String) {
-    let request = axum::http::Request::builder()
+/// A modern-era `gateway_invoke` POST to `/mcp` with `body`, as `bearer`.
+fn modern_request(body: &str, bearer: &str) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
@@ -111,7 +112,12 @@ async fn post_modern_bearer(fx: &Fixture, body: &str, bearer: &str) -> (StatusCo
         .header("mcp-method", "tools/call")
         .header("mcp-name", "gateway_invoke")
         .body(axum::body::Body::from(body.to_owned()))
-        .unwrap();
+        .unwrap()
+}
+
+/// [`modern_request`] sent; its status and the whole body.
+async fn post_modern_bearer(fx: &Fixture, body: &str, bearer: &str) -> (StatusCode, String) {
+    let request = modern_request(body, bearer);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -289,27 +295,49 @@ async fn a_resumed_task_step_records_the_resuming_token() {
     assert_resolves(&fx, step, (&resumer_jti, &resumer), &["alpha"]).await;
 }
 
-/// A streamed call whose backend speaks first (a progress notification before
-/// the answer): the stream goes out before the call is decided, so its
-/// decision is built after the handler returned, and still names the token.
+/// A streamed call decided after its handler returned: the backend holds its
+/// answer on a gate the row opens only once the handler's response is in hand
+/// and no decision exists yet, so the decision is built later, and still names
+/// the token.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_call_decided_after_its_stream_opened_records_its_token() {
-    let (fx, bearer, jti) = token_fixture().await;
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        key_server: Exchange::On,
+        extras: &[Extra::GateCall],
+        ..Setup::default()
+    })
+    .await;
+    let ks = fx.state.key_server.as_ref().expect("fixture key server");
+    let (bearer, jti) = crate::key_server::issuance_row_tests::mint_for(ks, &["alpha"]).await;
     let mut call: Value = serde_json::from_str(&invoke("alpha")).expect("the call is JSON");
     call["params"]["_meta"] = json!({
         "progressToken": "reach-progress",
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {},
     });
-    let (status, body) = post_modern_bearer(&fx, &call.to_string(), &bearer).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let progress = body.find("notifications/progress");
-    let answer = body.find("\"result\"");
-    assert!(
-        matches!((progress, answer), (Some(p), Some(a)) if p < a),
-        "premise: the notification streamed before the answer: {body}"
-    );
+    // The handler returns the stream's head while the backend still holds its
+    // answer: nothing is decided yet at that point.
+    let head = tokio::time::timeout(
+        Duration::from_secs(30),
+        fx.router
+            .clone()
+            .oneshot(modern_request(&call.to_string(), &bearer)),
+    )
+    .await
+    .expect("premise: the handler returned before the backend answered")
+    .expect("a response");
+    assert_eq!(head.status(), StatusCode::OK);
+    let early = invocations(&fx);
+    assert!(early.is_empty(), "decided before the answer: {early:?}");
+    // Only now may the backend answer; the decision is built after this.
+    fx.gate.as_ref().expect("a gated fixture").notify_one();
+    let streamed = to_bytes(head.into_body(), usize::MAX)
+        .await
+        .expect("the stream ends");
+    let streamed = String::from_utf8_lossy(&streamed);
+    assert!(streamed.contains("\"result\""), "{streamed}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
     assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;

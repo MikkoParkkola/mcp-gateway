@@ -55,6 +55,9 @@ pub(super) enum Extra {
     /// Context integrity enforces and strips every finding, so an answer
     /// carrying an injected instruction is rebuilt without it.
     ContextIntegrityStrips,
+    /// Every `tools/call` is counted, then held until the cell opens
+    /// `Fixture::gate`, so a row can look between the send and the answer.
+    GateCall,
 }
 
 impl Setup {
