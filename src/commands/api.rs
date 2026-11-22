@@ -52,7 +52,7 @@ pub async fn run_api_command(
         error.outcome(args.json, &[redaction])
     } else {
         match dashboard_link_base(
-            args.url.clone(),
+            args.gateway.url.clone(),
             args.tls.clone(),
             load,
             port_override,

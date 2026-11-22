@@ -144,7 +144,10 @@ const RESPONSE_BUDGET: usize = 4 * 1024 * 1024;
 const PREVIEW_BUDGET: usize = 8 * 1024 * 1024;
 
 /// The add body, plus the token from the describe step.
+/// Strict on its own: a flattened struct only claims the keys it knows, so the
+/// add body's attribute never sees a key left over here.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct PreviewRequest {
     #[serde(flatten)]
     add: AddBackendRequest,

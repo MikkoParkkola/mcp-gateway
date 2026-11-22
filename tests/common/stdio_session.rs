@@ -234,7 +234,22 @@ impl StdioSession {
     /// `EnvFilter::try_from_default_env()` wins over its `--log-level`, so an
     /// ambient value in the test environment could silence the lines read here.
     pub fn spawn_capturing_stderr(home: &Path) -> (Self, CapturedStderr) {
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        Self::capturing(
+            gateway_bin::command(home, gateway_bin::Inherit::Environment),
+            home,
+        )
+    }
+
+    /// As [`Self::spawn_capturing_stderr`], started through `wrapper` (see
+    /// [`Self::spawn_through`]): for a row whose launcher leaves a process behind.
+    pub fn spawn_capturing_through(wrapper: &[&str], home: &Path) -> (Self, CapturedStderr) {
+        Self::capturing(
+            gateway_bin::wrapped(wrapper, home, gateway_bin::Inherit::Environment),
+            home,
+        )
+    }
+
+    fn capturing(mut command: std::process::Command, home: &Path) -> (Self, CapturedStderr) {
         command.env("RUST_LOG", "info");
         let lines: Arc<Mutex<Vec<String>>> = Arc::default();
         let (session, drain) = Self::serve(command, home, StderrSink::Capture(Arc::clone(&lines)));

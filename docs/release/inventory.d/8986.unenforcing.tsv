@@ -1,0 +1,1 @@
+src/gateway/server/persistence.rs	new	1	Builds one shutdown save from its name, the path it writes and the write; decides nothing

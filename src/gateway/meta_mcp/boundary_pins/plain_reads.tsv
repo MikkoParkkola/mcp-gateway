@@ -88,6 +88,7 @@ src/gateway/ui/capabilities.rs	list_capabilities	fs::read_to_string	1	not-config
 src/gateway/ui/capabilities.rs	validate_only	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/preview.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/health_history/file.rs	read	fs::read	1	not-config	persisted health history
+src/heartbeat.rs	read_install_id	fs::read_to_string	1	not-config	the heartbeat's own random install id in its state dir; never gateway.yaml
 src/identity_grants/journal.rs	append_line	.open	1	not-config	the grant-change journal, opened to append and to check its tail; judged by its own integrity rule
 src/identity_grants/journal.rs	open_journal_windows	.open	1	not-config	Windows: the grant-change journal, judged by its own integrity rule before an append
 src/identity_grants/journal.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read

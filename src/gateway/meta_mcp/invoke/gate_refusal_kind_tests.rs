@@ -228,3 +228,55 @@ async fn an_ambiguous_backend_is_not_recorded_as_a_refusal() {
     .await;
     assert_eq!(effect, "delivered");
 }
+
+/// R5 (code review r1, improvement 2): a call whose result is the audit log
+/// being unavailable has no outcome class, so `audit_invocation` writes no
+/// record, moves no counter and counts no D4 denial, as before the class was
+/// worked out once ahead of both counts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unavailable_audit_log_classes_and_counts_nothing() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("audit.jsonl");
+    let log = crate::security::TransparencyLogger::open(std::sync::Arc::new(
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "r5-unavailable".to_owned(),
+            ..Default::default()
+        },
+    ))
+    .expect("the log opens");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    meta.enable_transparency_log(std::sync::Arc::new(log));
+    let store = std::sync::Arc::new(crate::counters::CounterStore::new(
+        crate::clock::unix_secs().expect("a readable clock"),
+    ));
+    meta.set_counters(std::sync::Arc::clone(&store));
+    let args = serde_json::json!({"server": "alpha", "tool": "t", "arguments": {}});
+    let (result, text) = crate::security::metrics_scrape::scrape_if_enabled(meta.audit_invocation(
+        &args,
+        None,
+        &caller(),
+        "trace-r5",
+        Err(Error::AuditUnavailable),
+        super::super::audit::DispatchNotes::default(),
+    ));
+    assert!(matches!(result, Err(Error::AuditUnavailable)), "{result:?}");
+    // No file is no record; any other read error must not pass as one.
+    let records = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("the audit log is unreadable: {error}"),
+    };
+    assert!(
+        !records.contains("request_hash"),
+        "no invocation record: {records}"
+    );
+    let d4 = crate::security::metrics_scrape::route_denials(text.as_deref(), "meta");
+    assert_eq!(
+        (crate::counters::test_totals::totals(&store), d4),
+        ([0, 0, 0, 0, 0], crate::security::metrics_scrape::NO_DENIAL)
+    );
+}

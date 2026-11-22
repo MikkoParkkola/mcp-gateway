@@ -11,6 +11,9 @@ use super::*;
 /// updated `era` — an internally inconsistent read no per-field assertion sees.
 #[tokio::test]
 async fn a_contradiction_reprobes_and_the_whole_read_moves_with_it() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::reprobing(METHOD_NOT_FOUND, UNSUPPORTED_VERSION);
     let backends = Arc::new(BackendRegistry::new());
@@ -62,6 +65,9 @@ async fn a_contradiction_reprobes_and_the_whole_read_moves_with_it() {
 /// finding it can no longer support.
 #[tokio::test]
 async fn a_reprobe_that_gets_no_answer_returns_the_era_to_assumed() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::reprobing(NOT_MODERN_DISCOVER, "");
     let backends = Arc::new(BackendRegistry::new());
@@ -121,6 +127,9 @@ fn keys(record: &Record) -> Vec<&str> {
 /// has narrowed it, and only a pinned set sees either.
 #[tokio::test]
 async fn the_era_probe_record_carries_exactly_its_designed_fields() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     probe_and_read(&fixture, "probe-record").await;
@@ -150,6 +159,9 @@ async fn the_era_probe_record_carries_exactly_its_designed_fields() {
 /// that follows it.
 #[tokio::test]
 async fn the_era_cache_record_reports_a_miss_then_a_hit() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     probe_and_read(&fixture, "cache-record").await;
@@ -178,6 +190,9 @@ async fn the_era_cache_record_reports_a_miss_then_a_hit() {
 /// `era_invalidated` names why the era was thrown away.
 #[tokio::test]
 async fn the_era_invalidated_record_names_the_contradiction_as_its_reason() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::reprobing(METHOD_NOT_FOUND, UNSUPPORTED_VERSION);
     let backends = Arc::new(BackendRegistry::new());
@@ -212,6 +227,9 @@ async fn the_era_invalidated_record_names_the_contradiction_as_its_reason() {
 /// the read and the observed behaviour say the same thing.
 #[tokio::test]
 async fn the_era_read_agrees_with_how_the_peer_answers_a_modern_only_call() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let modern = Fixture::new(MODERN_DISCOVER);
     let legacy = Fixture::new(METHOD_NOT_FOUND);
@@ -263,6 +281,9 @@ async fn the_era_read_agrees_with_how_the_peer_answers_a_modern_only_call() {
 /// separates them.
 #[tokio::test]
 async fn each_backend_carries_its_own_era_observation() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let probed = Fixture::new(MODERN_DISCOVER);
     let unprobed = Fixture::new(MODERN_DISCOVER);
