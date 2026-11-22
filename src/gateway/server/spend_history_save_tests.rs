@@ -215,3 +215,39 @@ async fn the_history_restores_with_cost_governance_off() {
     let series = meta.cost_tracker().key_series("k").expect("restored");
     assert_eq!(series.hours.rows().iter().map(|r| r.2).sum::<u64>(), 3);
 }
+
+/// agy r7d carry: with auth off no key is charged per key, so a saved key row
+/// attaches to no configured name even when `api_keys` still lists one; its
+/// spend comes back in the gateway's total, through the carried overflow.
+/// Mutant: the names passed whatever `auth.enabled` says.
+#[tokio::test]
+async fn with_auth_off_a_saved_key_row_attaches_to_no_key() {
+    let dir = tempfile::tempdir().expect("dir");
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).expect("data dir");
+    let now = crate::clock::unix_secs().expect("a clock");
+    assert!(spend_history::save(&spent(), &data, now));
+
+    let mut config = one_key_config(dir.path());
+    config.auth.enabled = false;
+    assert_eq!(
+        config.auth.api_keys.len(),
+        1,
+        "premise: a key is still listed"
+    );
+    let gateway = crate::gateway::Gateway::new(config)
+        .await
+        .expect("the gateway builds")
+        .with_data_dir(data);
+    let built = Box::pin(gateway.build_meta_mcp()).await;
+    let tracker = built
+        .expect("the meta layer builds")
+        .meta_mcp
+        .cost_tracker();
+    assert!(
+        tracker.key_series("k").is_none(),
+        "a key row attached with auth off"
+    );
+    let total = tracker.gateway_series();
+    assert_eq!(total.hours.rows().iter().map(|r| r.2).sum::<u64>(), 3);
+}
