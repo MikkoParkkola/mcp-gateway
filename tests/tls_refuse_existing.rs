@@ -327,11 +327,17 @@ fn r10_a_lookup_error_refuses() {
         "no OS error in: {}",
         ran.stderr
     );
+    assert!(
+        ran.stderr.contains("choose a different --out"),
+        "no next step in: {}",
+        ran.stderr
+    );
     assert_eq!(dir_mode, 0o600, "the refusal changed the directory's mode");
     assert_eq!(
         std::fs::read(out.path().join("ca.key")).expect("key"),
         b"old-key"
     );
+    assert_eq!(names(out.path()), ["ca.key"]);
 }
 
 // ── issue-server ────────────────────────────────────────────────────────────
@@ -471,6 +477,8 @@ fn r4c_the_checked_names_are_the_written_names() {
     let first = issue_client(ca.path(), "agent one/a", out.path());
     assert!(first.ok, "first issue-client: {}", first.stderr);
     assert_eq!(names(out.path()), ["agent-one-a.crt", "agent-one-a.key"]);
+    let cert = std::fs::read(out.path().join("agent-one-a.crt")).expect("cert");
+    let key = std::fs::read(out.path().join("agent-one-a.key")).expect("key");
     let ran = issue_client(ca.path(), "agent one/a", out.path());
     assert_refused(
         &ran,
@@ -478,6 +486,14 @@ fn r4c_the_checked_names_are_the_written_names() {
             out.path().join("agent-one-a.crt"),
             out.path().join("agent-one-a.key"),
         ],
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("agent-one-a.crt")).expect("cert"),
+        cert
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("agent-one-a.key")).expect("key"),
+        key
     );
     assert_eq!(names(out.path()), ["agent-one-a.crt", "agent-one-a.key"]);
 }
