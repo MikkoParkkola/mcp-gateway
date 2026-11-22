@@ -200,7 +200,13 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
             inner = kept[0][1] + "".join(f"{sep} {piece}" for sep, piece in kept[1:])
             text = f"{text[:o]}({inner}){text[c + 1:]}"
         else:
-            text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
+            start, end = text.rfind("\n", 0, o) + 1, text.find("\n", c)
+            end = len(text) if end < 0 else end
+            if not text[start:o].strip() and not text[c + 1:end].strip():
+                # Alone on its lines: they go too, as a line of spaces reads as a blank line.
+                text = text[:start] + text[end + 1:]
+            else:
+                text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
         masked, blind, spans, _ = scan(text)
     return text, []
 
