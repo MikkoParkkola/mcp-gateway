@@ -42,8 +42,16 @@ async fn restore(State(_state): State<Arc<AppState>>, guard: Guard) -> Response 
 
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "config_history_restore_scope_tests.rs"]
+mod restore_scope_tests;
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_history_restore_tests.rs"]
 mod restore_tests;
 #[cfg(test)]
 #[path = "config_history_support_tests.rs"]
 mod support_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_history_tests.rs"]
+mod tests;

@@ -38,6 +38,14 @@ pub(super) enum Audit {
     Unlogged,
 }
 
+/// Whether the rig's live config records into a history store.
+#[derive(Clone, Copy)]
+pub(super) enum History {
+    Kept,
+    /// No hook, as a gateway with no config file at start.
+    Absent,
+}
+
 /// Who sends a request.
 #[derive(Clone, Copy)]
 pub(super) enum Caller<'a> {
@@ -73,6 +81,23 @@ pub(super) fn config_text(tail: &str) -> String {
     format!("{}{tail}", yaml_of(&keys))
 }
 
+/// The `env_files:` block that lists `paths`, for a `config_text` tail.
+pub(super) fn env_files(paths: &[&std::path::Path]) -> String {
+    use std::fmt::Write as _;
+    let mut block = String::from("env_files:\n");
+    for path in paths {
+        let _ = writeln!(block, "  - '{}'", path.display());
+    }
+    block
+}
+
+/// Write `bytes` owner-only as `name` in `dir`; its path.
+pub(super) fn put(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> PathBuf {
+    let path = dir.path().join(name);
+    crate::gateway::test_helpers::write_owner_only(&path, bytes).expect("the file writes");
+    path
+}
+
 /// One gateway under test.
 pub(super) struct Rig {
     pub(super) state: Arc<AppState>,
@@ -90,6 +115,18 @@ impl Rig {
 
     pub(super) async fn start_bounded(text: &str, audit: Audit, bounds: Bounds) -> Self {
         let dir = crate::test_dir_keep::kept_tempdir();
+        Self::start_in(dir, text, audit, bounds, History::Kept).await
+    }
+
+    /// A gateway started in `dir` (where a row may have written env files
+    /// first), recording into a history store unless `history` is Absent.
+    pub(super) async fn start_in(
+        dir: Arc<tempfile::TempDir>,
+        text: &str,
+        audit: Audit,
+        bounds: Bounds,
+        history: History,
+    ) -> Self {
         let config = dir.path().join(CONFIG_FILE);
         crate::gateway::test_helpers::write_owner_only(&config, text).expect("gateway.yaml");
         let loaded =
@@ -103,14 +140,15 @@ impl Rig {
             config_path: config.display().to_string(),
             store: Arc::clone(&store),
         };
-        let live = Arc::new(
-            LiveConfig::with_auth(loaded.config, table)
-                .with_history(hook)
-                .with_startup_revision(
-                    &crate::gateway::record_principal::test_record_key(),
-                    Some(loaded.inputs),
-                ),
-        );
+        let live = LiveConfig::with_auth(loaded.config, table);
+        let live = match history {
+            History::Kept => live.with_history(hook),
+            History::Absent => live,
+        };
+        let live = Arc::new(live.with_startup_revision(
+            &crate::gateway::record_principal::test_record_key(),
+            Some(loaded.inputs),
+        ));
         let ctx = Arc::new(
             ReloadContext::new(
                 config.clone(),
@@ -172,6 +210,37 @@ impl Rig {
             })
             .map(|kept| kept.revision.clone())
             .expect("a kept version holds those bytes")
+    }
+
+    /// The revision the gateway serves (what it published last).
+    pub(super) fn served(&self) -> String {
+        self.state
+            .live_config
+            .applied_now()
+            .published
+            .map(|applied| applied.revision.clone())
+            .expect("the gateway publishes a revision")
+    }
+
+    /// The newest kept copy of `revision`.
+    pub(super) fn kept(&self, revision: &str) -> crate::config_reload::history::Snapshot {
+        self.store
+            .snapshots()
+            .into_iter()
+            .rev()
+            .find(|kept| kept.revision == revision)
+            .expect("that revision is kept")
+    }
+
+    /// The env-file paths a kept version recorded, as the store holds them.
+    pub(super) fn env_paths(&self, revision: &str) -> Vec<String> {
+        let config = self.path().display().to_string();
+        self.kept(revision)
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .filter(|path| *path != config)
+            .collect()
     }
 
     /// Every `gateway.yaml.<time>.rejected` beside the file.
