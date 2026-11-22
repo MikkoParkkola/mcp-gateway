@@ -9,7 +9,7 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES } from '/ui/assets/shell.9da3ee6648d7.js';
+import { register, el, serverBadge, SERVER_STATES } from '/ui/assets/shell.062faf930cc8.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -45,9 +45,9 @@ const QUIET_LINE = 'Could not check this machine for servers outside the gateway
 const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const known = (n) => typeof n === 'number' && Number.isFinite(n);
 const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(1)} s`);
-const notKnown = () => el('td', { 'aria-label': 'not known' }, '—');
-const numberCell = (n) => (known(n) ? el('td', { class: 'num' }, String(n)) : notKnown());
-const p95Cell = (n) => (known(n) ? el('td', { class: 'num' }, ms(n)) : notKnown());
+const notKnown = () => el('td', { class: 'n', 'aria-label': 'not known' }, '—');
+const numberCell = (n) => (known(n) ? el('td', { class: 'n' }, String(n)) : notKnown());
+const p95Cell = (n) => (known(n) ? el('td', { class: 'n' }, ms(n)) : notKnown());
 
 /** The words after a needs-a-look badge: a retry time, the gateway's sentence, or the shell's. */
 function detail(s) {
@@ -73,17 +73,28 @@ function memberBadge(state) {
   return el('span', { class: `lb ${row.tone} plain` }, el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', MEMBER_WORD[state]);
 }
 
-const head = () => el('thead', {}, el('tr', {},
-  el('th', { scope: 'col' }, 'Server'), el('th', { scope: 'col' }, 'State'), el('th', { scope: 'col', class: 'num' }, 'Tools'),
-  el('th', { scope: 'col', class: 'num' }, 'Calls, last 24 h'), el('th', { scope: 'col', class: 'num' }, 'p95')));
+// The tooltip module loads after the screen has drawn and never holds it up; if it
+// fails, the headings stand without their (i). Each caller names its id literally.
+let tipModule = null;
+function withTip(node, make) {
+  (tipModule ??= import('/ui/assets/tooltip.e30bc593ce57.js'))
+    .then((mod) => node.append(' ', make(mod.tip)), () => {});
+  return node;
+}
+
+/** The column headings; `tips` adds the Tools explanation (the Answering table only, so one per page). */
+const head = (tips) => el('thead', {}, el('tr', {},
+  el('th', { scope: 'col' }, 'Server'), el('th', { scope: 'col' }, 'State'),
+  tips ? withTip(el('th', { scope: 'col', class: 'n' }, 'Tools'), (tip) => tip('servers.status.tools')) : el('th', { scope: 'col', class: 'n' }, 'Tools'),
+  el('th', { scope: 'col', class: 'n' }, 'Calls, last 24 h'), el('th', { scope: 'col', class: 'n' }, 'p95')));
 
 /** One titled block: its heading names the region, and the table scrolls on its own when narrow. */
-function block(title, count, tbody, ...after) {
+function block(title, count, tbody, { tips = false, after = [] } = {}) {
   const id = `sv-${slug(title)}`;
   return el('section', { class: 'sv-block', 'aria-labelledby': id },
-    el('h2', { id }, `${title} · ${count}`),
+    el('div', { class: 'sv-head' }, el('h2', { id }, `${title} · ${count}`)),
     el('div', { class: 'sv-scroll', tabindex: 0, role: 'region', 'aria-label': `${title}, table` },
-      el('table', { class: 't sv-table' }, head(), tbody)),
+      el('table', { class: 't sv-table' }, head(tips), tbody)),
     ...after);
 }
 
@@ -119,9 +130,9 @@ function groupSummary(members) {
   const top = p95s.length ? Math.max(...p95s) : null;
   return [
     el('td', {}, words),
-    el('td', { class: 'num' }, String(sum('tools_cached'))),
-    el('td', { class: 'num' }, String(sum('calls_24h'))),
-    top === null ? notKnown() : el('td', { class: 'num', 'aria-label': `Highest p95 among its servers: ${ms(top)}` }, ms(top)),
+    el('td', { class: 'n' }, String(sum('tools_cached'))),
+    el('td', { class: 'n' }, String(sum('calls_24h'))),
+    top === null ? notKnown() : el('td', { class: 'n', 'aria-label': `Highest p95 among its servers: ${ms(top)}` }, ms(top)),
   ];
 }
 
@@ -147,8 +158,15 @@ function answeringBlock(list, categories, view) {
     }
   }
   showOpen(tbody, view.open);
-  return block('Answering', list.length, tbody,
-    el('p', { class: 't3 sv-note' }, "A group's p95 is the highest of its servers' p95s, not one pooled across them."));
+  // The p95 explanation sits on the column note: in the header row its popup would cover the Tools (i).
+  const note = withTip(el('p', { class: 't3 sv-note' }, "A group's p95 is the highest of its servers' p95s, not one pooled across them."),
+    (tip) => tip('servers.status.p95-last-1-000-calls'));
+  const section = block('Answering', list.length, tbody, { tips: true, after: [note] });
+  // The frame's heading reads "Answering · N, grouped by the gateway"; its (i) follows the phrase.
+  const phrase = el('span', { class: 't3' }, 'grouped by the gateway');
+  section.querySelector('.sv-head').append(phrase);
+  withTip(phrase, (tip) => tip('servers.status.answering-24-grouped-by-the'));
+  return section;
 }
 
 /** Open the group `key` (or none) and shut every other one, in place. */

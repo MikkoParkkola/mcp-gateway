@@ -8,7 +8,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, tooltipCoversNothing } from './shell.mjs';
+import { readCopy, readScreens, scanScreens } from './copy-check.mjs';
 
 // ------------------------------------------------------------ fake gateway
 
@@ -68,6 +69,8 @@ const content = (page) => page.locator('#content');
 const block = (page, start) => page.getByRole('region', { name: new RegExp(`^${start} · \\d+`) });
 const statusRow = (scope, name) => scope.locator('tr').filter({ has: scope.page().getByRole('rowheader', { name, exact: true }) });
 const groupButton = (page, label) => block(page, 'Answering').getByRole('button', { name: label, exact: true });
+// Group toggles sit in row headers; the tooltip triggers in column headings are buttons too.
+const groupButtons = (page) => block(page, 'Answering').getByRole('rowheader').getByRole('button');
 const groupRow = (page, label) => block(page, 'Answering').locator('tr').filter({ has: page.getByRole('button', { name: label, exact: true }) });
 const QUIET = 'Could not check this machine for servers outside the gateway.';
 
@@ -209,7 +212,7 @@ test('answering: groups by registry category, Other last, sums and the highest p
   await openScreen(page);
   const answering = block(page, 'Answering');
   await expect(answering.getByRole('heading')).toHaveText('Answering · 7');
-  await expect(answering.getByRole('button')).toHaveText(['Databases', 'Developer tools', 'Search and web', 'Other']);
+  await expect(groupButtons(page)).toHaveText(['Databases', 'Developer tools', 'Search and web', 'Other']);
   await expect(groupRow(page, 'Developer tools').getByRole('cell')).toHaveText(['2 answering · 1 slow · 1 idle', '9', '45', '1.9 s']);
   await expect(groupRow(page, 'Developer tools').getByRole('cell', { name: 'Highest p95 among its servers: 1.9 s' })).toHaveCount(1);
   await expect(groupRow(page, 'Search and web').getByRole('cell')).toHaveText(['1 answering', '3', '9', '120 ms']);
@@ -258,7 +261,7 @@ test('a registry that fails, or never answers, puts every answering server under
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await fakeGateway(page, { status: [MIXED], registry });
     await openScreen(page);
-    await expect(block(page, 'Answering').getByRole('button')).toHaveText(['Other']);
+    await expect(groupButtons(page)).toHaveText(['Other']);
     await expect(block(page, 'Needs a look').getByRole('rowheader')).toHaveText(['hold', 'gate', 'vault', 'creaky']);
     await expect(content(page).locator('[data-state]')).toHaveCount(0);
   }
@@ -358,7 +361,7 @@ test.describe('refresh on the gateway-status event', () => {
     await openScreen(page);
     await expect(content(page).locator('[data-state="empty"]')).toBeVisible();
     await statusEvent(page);
-    await expect(block(page, 'Answering').getByRole('button')).toHaveText(['Developer tools', 'Search and web']);
+    await expect(groupButtons(page)).toHaveText(['Developer tools', 'Search and web']);
     await expect(content(page).locator('[data-state="empty"]')).toHaveCount(0);
     expect(reads.registry).toBe(1);
   });
@@ -478,6 +481,25 @@ test('every category in the built-in registry has a label in the screen', async 
     return Object.keys(mod.GROUP_LABELS);
   });
   expect(categories.filter((c) => !labelled.includes(c))).toEqual([]);
+});
+
+const DRAWN_TIPS = ['servers.status.answering-24-grouped-by-the', 'servers.status.tools', 'servers.status.p95-last-1-000-calls'];
+
+test('the status tab draws its three tips; no servers.status copy waits as unbuilt', () => {
+  const scan = scanScreens(readScreens());
+  expect(scan.tabs.servers).toEqual({ status: true, actions: false, settings: false });
+  for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
+  const copy = readCopy();
+  expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);
+});
+
+test('each tip opens from the keyboard and hides no control', async ({ page }) => {
+  await fakeGateway(page, { status: [MIXED], discovery: finds(['stray', false]) });
+  await openScreen(page, '?open=developer-tools');
+  for (const id of DRAWN_TIPS) {
+    await expect(page.locator(`.has-tip[data-tip="${id}"] button`)).toHaveCount(1);
+    expect(await tooltipCoversNothing(page, id), id).toEqual([]);
+  }
 });
 
 for (const width of WIDTHS) {
