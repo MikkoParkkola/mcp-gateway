@@ -475,6 +475,9 @@ impl ContextIntegrityEvaluation {
             ContextIntegrityDecisionKind::Strip => {
                 "Removed instruction-like lines before delivery.".to_string()
             }
+            ContextIntegrityDecisionKind::Summarize if self.transformed.withheld => {
+                "Withheld content: the summarized answer could not be sent clean.".to_string()
+            }
             ContextIntegrityDecisionKind::Summarize => {
                 "Withheld raw content and delivered a short summary.".to_string()
             }
