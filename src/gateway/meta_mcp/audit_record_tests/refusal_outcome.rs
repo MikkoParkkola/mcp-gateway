@@ -13,7 +13,6 @@ use crate::gateway::meta_mcp::visible::memo::with_visibility_memo;
 /// O1: the spend budget refuses the call with -32003; the one record says
 /// `denied`, not `error`, beside its `cost_budget` decision, and the
 /// counters and D4 count it once as a refusal.
-#[cfg(feature = "cost-governance")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn o1_a_spend_refusal_is_recorded_as_denied() {
     let dir = crate::test_dir_keep::kept_tempdir();
