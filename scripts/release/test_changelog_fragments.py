@@ -429,6 +429,10 @@ class DropIds(unittest.TestCase):
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
             ("a PR number and an id split by a semicolon", f"- s (#40; {T}41).", "- s (#40)."),
             ("two ids split by a semicolon", f"- s2 ({T}42; {T}43).", "- s2."),
+            ("a kept code span holding a semicolon", f"- c (`echo ready; exit 0`, {T}50).", "- c (`echo ready; exit 0`)."),
+            ("a kept code span holding two spaces", f"- c2 (`a  b`, #51, {T}52).", "- c2 (`a  b`, #51)."),
+            ("kept parts keep their semicolon", f"- c3 (#53; {T}54; #55).", "- c3 (#53; #55)."),
+            ("text after a parenthetical that spans a line break", f"- e2 (F13, {T}56,\n  #57). Then a note follows.", "- e2 (F13, #57). Then a note follows."),
         ]
         for name, fragment, rendered in shapes:
             with self.subTest(name):
