@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 use tokio::net::{UnixListener, UnixStream};
 
 use super::Refusal;
-use super::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE, Run};
+use super::control_msg::{Expired, FetchDone, FetchStart, Issued, MAX_LINE, Run, SetupStatus};
 use super::proxy::{AllowlistProxy, Credential};
 
 /// The bounds a session runs under; rows shorten them.
@@ -384,6 +384,25 @@ pub(crate) async fn serve_session(
         return Err(Refusal::Step("the sandbox sent run false".into()));
     }
     Ok(())
+}
+
+/// One helper's whole control session: the fetch when `fetch` names its
+/// proxy, then the helper's setup status, which is the session's answer.
+#[cfg_attr(
+    all(not(test), target_os = "linux"),
+    expect(dead_code, reason = "the launch starts calling it with the helper's status")
+)]
+pub(crate) async fn serve_control(
+    stream: UnixStream,
+    fetch: Option<&AllowlistProxy>,
+    deadline: tokio::time::Instant,
+    bounds: ControlBounds,
+) -> Result<SetupStatus, Refusal> {
+    // RED STUB: any first line is taken as a finished setup.
+    let _ = (fetch, deadline);
+    let mut read = tokio::io::BufReader::new(stream);
+    read_line(&mut read, bounds.setup, bounds).await?;
+    Ok(SetupStatus::Done)
 }
 
 /// The fetch's credential, revoked when this drops.

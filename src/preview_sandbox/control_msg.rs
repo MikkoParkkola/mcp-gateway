@@ -251,66 +251,6 @@ impl SetupStatus {
     }
 }
 
-/// One thing the gateway reads on the control connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ControlEvent {
-    FetchStart,
-    FetchDone { refused: bool },
-    Status(SetupStatus),
-}
-
-/// Where a control session stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Seen {
-    Start,
-    Fetching,
-    Fetched,
-    Ended(Ending),
-}
-
-/// How a well-formed control session ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ending {
-    Status(SetupStatus),
-    FetchRefused,
-}
-
-/// The next state after `event`, or `None` when the event is out of order.
-/// `fetching` says whether the plan has a fetch phase. A refusal may end the
-/// session before a fetch or after a successful one; a fetch failure reports
-/// through `fetch_done`, never a status; done needs the fetch done first.
-pub(crate) fn next(fetching: bool, at: Seen, event: ControlEvent) -> Option<Seen> {
-    use ControlEvent::{FetchDone, FetchStart, Status};
-    match (at, event) {
-        (Seen::Start, FetchStart) if fetching => Some(Seen::Fetching),
-        (Seen::Start, Status(SetupStatus::Done)) if !fetching => {
-            Some(Seen::Ended(Ending::Status(SetupStatus::Done)))
-        }
-        (Seen::Start | Seen::Fetched, Status(status @ SetupStatus::Refused { .. })) => {
-            Some(Seen::Ended(Ending::Status(status)))
-        }
-        (Seen::Fetching, FetchDone { refused: false }) => Some(Seen::Fetched),
-        (Seen::Fetching, FetchDone { refused: true }) => Some(Seen::Ended(Ending::FetchRefused)),
-        (Seen::Fetched, Status(SetupStatus::Done)) => {
-            Some(Seen::Ended(Ending::Status(SetupStatus::Done)))
-        }
-        _ => None,
-    }
-}
-
-/// The ending a whole session reached when the connection closed, or `None`
-/// when it went out of order or closed before an ending.
-pub(crate) fn ending(fetching: bool, events: &[ControlEvent]) -> Option<Ending> {
-    let mut at = Seen::Start;
-    for event in events {
-        at = next(fetching, at, *event)?;
-    }
-    match at {
-        Seen::Ended(ending) => Some(ending),
-        _ => None,
-    }
-}
-
 #[cfg(tp1)]
 #[cfg(test)]
 #[path = "control_status_tests.rs"]
