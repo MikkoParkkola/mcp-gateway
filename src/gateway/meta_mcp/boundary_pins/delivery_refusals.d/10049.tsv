@@ -1,0 +1,4 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/commands/mod.rs	tls_init_ca	refuse_existing_tls_output	1	no-record	the CLI refuses init-ca when its output already exists under --out; an offline command, no tool call to record
+src/commands/mod.rs	tls_issue_client	refuse_existing_tls_output	1	no-record	the CLI refuses issue-client when its output already exists under --out; an offline command, no tool call to record
+src/commands/mod.rs	tls_issue_server	refuse_existing_tls_output	1	no-record	the CLI refuses issue-server when its output already exists under --out; an offline command, no tool call to record
