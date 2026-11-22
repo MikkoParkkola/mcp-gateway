@@ -420,7 +420,8 @@ pub(crate) async fn serve_control(
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
     let Some(proxy) = fetch else {
-        return read_status(&mut read, deadline, bounds).await;
+        // The helper builds its root before it reports: the setup bound.
+        return read_status(&mut read, bounds.setup, deadline, bounds).await;
     };
     // A fetching helper's first line is `fetch_start`, or a refusal of a
     // step it failed before asking; it is read as the fetch always was.
@@ -436,7 +437,10 @@ pub(crate) async fn serve_control(
         None => {}
     }
     serve_fetch(&line, &mut read, &mut write, proxy, deadline, bounds).await?;
-    read_status(&mut read, deadline, bounds).await
+    // After the run line the helper only checks its entry point: the time
+    // left to the deadline, as for the fetch's own reads.
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    read_status(&mut read, left, deadline, bounds).await
 }
 
 #[cfg_attr(
@@ -455,11 +459,12 @@ fn no_status() -> Refusal {
 )]
 async fn read_status<R: AsyncBufRead + Unpin>(
     read: &mut R,
+    first: Duration,
     deadline: tokio::time::Instant,
     bounds: ControlBounds,
 ) -> Result<SetupStatus, Refusal> {
     let line = by_deadline(deadline, "the sandbox's status", async {
-        read_line(&mut *read, bounds.setup, bounds)
+        read_line(&mut *read, first, bounds)
             .await
             .map_err(|_| no_status())
     })

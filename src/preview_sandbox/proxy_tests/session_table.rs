@@ -227,3 +227,100 @@ async fn r41_a_silent_helper_is_refused_at_exactly_the_deadline() {
     assert_eq!(began.elapsed(), Duration::from_secs(10), "the deadline");
     drop(helper);
 }
+
+/// The helper's end of a pair, driven one line at a time.
+struct Scripted {
+    from_gateway: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+    to_gateway: tokio::net::unix::OwnedWriteHalf,
+}
+
+impl Scripted {
+    fn new(end: UnixStream) -> Self {
+        let (from, to) = end.into_split();
+        Self {
+            from_gateway: tokio::io::BufReader::new(from),
+            to_gateway: to,
+        }
+    }
+
+    /// Say `said`, and when the gateway answers it (the credential, then
+    /// `expired`), take that answer before going on.
+    async fn say(&mut self, said: Line) {
+        use tokio::io::AsyncBufReadExt as _;
+        let text = format!("{}\n", said.wire());
+        self.to_gateway.write_all(text.as_bytes()).await.expect("say");
+        if matches!(said, Line::FetchStart | Line::FetchDone) {
+            let mut answer = String::new();
+            let got = self.from_gateway.read_line(&mut answer).await;
+            got.expect("the gateway answers");
+        }
+    }
+}
+
+/// R41 after a fetch: the status read after the run line waits for the time
+/// left to the deadline, so a helper silent there ends at exactly the
+/// deadline (the setup bound, 30 s, is past it here).
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r41_a_helper_silent_after_its_run_line_is_refused_at_the_deadline() {
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let began = tokio::time::Instant::now();
+    let deadline = began + Duration::from_secs(20);
+    let served = serve_control(gateway, Some(&rig.proxy), deadline, CONTROL_BOUNDS);
+    let script = async {
+        let mut scripted = Scripted::new(helper);
+        for said in [Line::FetchStart, Line::FetchDone, Line::Run] {
+            scripted.say(said).await;
+        }
+        // Silent from here, its side open, until the gateway gives up.
+        let mut tail = Vec::new();
+        let _ = scripted.from_gateway.read_to_end(&mut tail).await;
+    };
+    let (got, ()) = tokio::time::timeout(GUARD, async { tokio::join!(served, script) })
+        .await
+        .expect("the session did not end within the guard");
+    assert_eq!(
+        got,
+        step("the preview's deadline passed before the sandbox's status")
+    );
+    assert_eq!(began.elapsed(), Duration::from_secs(20), "the deadline");
+}
+
+/// R41, kills "the gateway closes its side before it has the status's end"
+/// (m-early-write-drop): the helper takes the gateway's close as its cue to go
+/// on, so after `setup_done` the gateway's side stays open until the helper
+/// has shut its own; only then does the helper see the end.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r41_the_gateway_stays_open_until_the_helper_has_shut_its_side() {
+    for fetching in [false, true] {
+        let rig = rig().await;
+        let (helper, gateway) = UnixStream::pair().expect("pair");
+        let served = serve_control(gateway, fetching.then_some(&rig.proxy), far(), CONTROL_BOUNDS);
+        let script = async {
+            let mut scripted = Scripted::new(helper);
+            if fetching {
+                for said in [Line::FetchStart, Line::FetchDone, Line::Run] {
+                    scripted.say(said).await;
+                }
+            }
+            scripted.say(Line::SetupDone).await;
+            // Reported, still open: the gateway waits for this side's end (up
+            // to its 5 s frame bound), so nothing ends here within 1 s.
+            let mut one = [0_u8; 1];
+            let peek = scripted.from_gateway.read(&mut one);
+            let early = tokio::time::timeout(Duration::from_secs(1), peek).await;
+            assert!(
+                early.is_err(),
+                "fetching {fetching}: the gateway ended its side first: {early:?}"
+            );
+            scripted.to_gateway.shutdown().await.expect("shut");
+            let mut tail = Vec::new();
+            let ended = scripted.from_gateway.read_to_end(&mut tail).await;
+            assert_eq!(ended.expect("the gateway's end"), 0, "fetching {fetching}");
+        };
+        let (got, ()) = tokio::time::timeout(GUARD, async { tokio::join!(served, script) })
+            .await
+            .expect("the session did not end within the guard");
+        assert_eq!(got, Ok(SetupStatus::Done), "fetching {fetching}");
+    }
+}
