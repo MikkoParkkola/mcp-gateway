@@ -157,3 +157,35 @@ fn norm_resolves_a_symlink_reached_after_dot_dot() {
         .join("audit.jsonl");
     assert_eq!(norm(&through), canon(b.path()).join("audit.jsonl"));
 }
+
+/// A log in the process's test home is never named, even where the temp dir
+/// holds that home (as on Windows runners); a log next to the home still is.
+/// Mutant: the test-home exclusion removed.
+#[test]
+fn a_log_in_the_test_home_is_not_named() {
+    use super::{AUDIT_LOG, expect_unkept, report_unkept, temp_root_for_test};
+    let home = crate::home_dir::home_dir().expect("a test process has a home");
+    let parent = home.parent().expect("the home has a parent");
+    // Treat the home's parent as the temp dir, so on every host the home
+    // counts as inside it.
+    let _root = temp_root_for_test(parent);
+    let mut neighbour = home.file_name().expect("a named home").to_owned();
+    neighbour.push("-next-door");
+    let next_door = parent.join(neighbour).join("audit.jsonl");
+    let in_home = home.join(".mcp-gateway").join("audit.jsonl");
+    // A parent's kept-dir list would also hide this log, and then the row
+    // could not tell the home rule apart from it.
+    assert!(
+        !super::is_external(&in_home),
+        "the home is already kept by a parent process; this row proves nothing here"
+    );
+    let guard = expect_unkept();
+    report_unkept(AUDIT_LOG, &in_home);
+    report_unkept(AUDIT_LOG, &next_door);
+    let seen = guard.recorded();
+    assert_eq!(seen.len(), 1, "the home's log was named too: {seen:?}");
+    assert_eq!(
+        seen[0].1, next_door,
+        "the log next to the home was not named"
+    );
+}

@@ -217,6 +217,7 @@ src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, u
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/denial.rs	backend_miss	http_invoke_tiny	on the HTTP gateway_invoke path (the dispatch's miss of an unheld backend)
 src/gateway/meta_mcp/invoke/denial.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
+src/gateway/meta_mcp/invoke/denial.rs	withheld	http_invoke_tiny	on the HTTP gateway_invoke path (a withheld target's class, read once before both counts)
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
