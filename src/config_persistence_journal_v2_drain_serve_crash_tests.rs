@@ -282,7 +282,7 @@ async fn a_failed_serving_log_refuses_a_readable_abandoned_file() {
     use crate::gateway::test_helpers::write_owner_only;
     const ROW: &str = "a_failed_serving_log_refuses_a_readable_abandoned_file";
     for open_failed in [false, true] {
-        let scratch = tempfile::tempdir().expect("scratch");
+        let scratch = crate::test_dir_keep::kept_tempdir();
         let root = scratch.path().canonicalize().expect("canonical root");
         let mut donor = state(&root);
         decided(&mut donor);

@@ -52,7 +52,7 @@ fn one_logger(
 async fn startup_one_logger() {
     const ROW: &str = "startup_one_logger";
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     let gateway = Box::pin(served(ROW, &config_file(dir.path(), true, Some(&log)))).await;
     let first = gateway.build_meta_mcp().await;
@@ -85,7 +85,7 @@ async fn startup_one_logger() {
     }
     drop(gateway);
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("a file where the log's folder should be");
     let log = blocker.join("audit.jsonl");

@@ -303,7 +303,7 @@ async fn startup_session_take_once() {
     use crate::security::transparency_log::open_attempts;
     const ROW: &str = "startup_session_take_once";
     const ABANDONED_CLASS: &str = "holds audit records this gateway cannot deliver";
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = dir.path().join("gateway.yaml");
     let log = dir.path().join("audit.jsonl");
     let text = format!(
@@ -424,7 +424,7 @@ async fn startup_read_only_starts_unlocked() {
 async fn failed_log_refuses_abandoned() {
     const ROW: &str = "failed_log_refuses_abandoned";
     for artifact in [true, false] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let config = dir.path().join("gateway.yaml");
         write_owner_only(&config, super::serve_fixture::failed_log_config(dir.path()))
             .expect("config");
