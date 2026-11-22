@@ -549,6 +549,8 @@ tr:hover td { background: var(--bg3); }
       <div style="margin-bottom:1rem">
         <button class="btn" id="reload-btn" onclick="doReload()">Hot Reload</button>
         <span id="reload-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--fg2)"></span>
+        <div id="reload-advice" hidden style="margin-top:0.5rem;font-size:0.85rem;color:var(--fg2)"></div>
+        <code id="reload-command" hidden></code>
       </div>
       <div class="config-block" id="config-content" tabindex="0" role="region" aria-label="Current configuration">Loading...</div>
     </div>
@@ -1887,11 +1889,32 @@ async function refreshConfig() {
 async function doReload() {
   const btn = document.getElementById('reload-btn');
   const status = document.getElementById('reload-status');
+  const advice = document.getElementById('reload-advice');
+  const command = document.getElementById('reload-command');
+  // Each answer replaces both lines, so no earlier guidance or command stays.
+  for (const line of [advice, command]) {
+    line.textContent = '';
+    line.hidden = true;
+  }
   btn.disabled = true;
   try {
     const result = await apiFetch('/ui/api/reload', { method: 'POST' });
     const stamp = new Date().toLocaleTimeString();
-    if (result.restart_required) {
+    if (result.start_refusal) {
+      // A restart would not start: the refusal alone, with no "restart
+      // required" summary and no command to run.
+      status.textContent = result.start_refusal;
+      status.style.color = 'var(--yellow)';
+    } else if (result.restart_advice) {
+      status.textContent = `${result.changes} at ${stamp}`;
+      status.style.color = 'var(--yellow)';
+      advice.textContent = result.restart_advice;
+      advice.hidden = false;
+      if (result.start_command) {
+        command.textContent = result.start_command;
+        command.hidden = false;
+      }
+    } else if (result.restart_required) {
       const reason = result.restart_reason ? ` (${result.restart_reason})` : '';
       status.textContent = `${result.changes} — restart required${reason} at ${stamp}`;
       status.style.color = 'var(--yellow)';

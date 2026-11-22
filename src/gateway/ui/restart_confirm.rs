@@ -126,8 +126,7 @@ impl Reason {
                 "Restart the service or process through its service or process manager."
             }
             Self::RestartNotAvailable => {
-                "This process cannot tell which supervisor runs it; use your supervisor's restart command, \
-                 for example systemctl restart, brew services restart, or docker restart."
+                "Restart the gateway with the service manager that runs it, for example systemctl restart, brew services restart or docker restart; if you launched it by hand, stop this process, then start it again with the start command."
             }
             Self::AuditLogRequired => {
                 "Turn on the transparency log (security.transparency_log.enabled): a restart is refused \
@@ -178,8 +177,16 @@ pub(crate) fn restart_advice(
     refusal: Option<&str>,
     config_path: Option<&std::path::Path>,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let _ = (pending, refusal, config_path, Platform::current());
-    None
+    if !pending {
+        return None;
+    }
+    // current_exe, not the process arguments: the command names the running
+    // file, whatever the invocation looked like.
+    let start = config_path.and_then(|config| {
+        let exe = std::env::current_exe().ok()?;
+        advice::StartCommand::new(&exe, config)
+    });
+    advice::advice(pending, refusal, Platform::current(), start.as_ref())
 }
 
 /// Where readiness reads the process's restart binding.
