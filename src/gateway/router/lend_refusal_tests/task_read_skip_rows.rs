@@ -121,9 +121,12 @@ async fn a_settled_read_that_skipped_its_claim_once_is_read_again() {
         !gw.clear_skip_after_one.load(Ordering::SeqCst),
         "premise: one attempt answered the skipped claim"
     );
-    assert!(
-        gw.backend.unfilled_outcome_reads.load(Ordering::SeqCst) > unfilled_before,
-        "premise: that attempt read an unfilled account outcome"
+    // Which judgement answered the skipped shape (an unfilled outcome bumps
+    // this count; a busy custody answers the same shape without it) is for
+    // the log only: the row is about the read again, not the cause.
+    eprintln!(
+        "T1 unfilled outcome reads: {unfilled_before} -> {}",
+        gw.backend.unfilled_outcome_reads.load(Ordering::SeqCst)
     );
     assert_refusal(&settled.answer, "T1");
     assert_eq!(
