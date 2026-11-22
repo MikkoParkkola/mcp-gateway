@@ -429,17 +429,15 @@ class DropIds(unittest.TestCase):
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
             ("a PR number and an id split by a semicolon", f"- s (#40; {T}41).", "- s (#40)."),
             ("two ids split by a semicolon", f"- s2 ({T}42; {T}43).", "- s2."),
-            ("a kept code span holding a semicolon", f"- c (`echo ready; exit 0`, {T}50).", "- c (`echo ready; exit 0`)."),
-            ("a kept code span holding two spaces", f"- c2 (`a  b`, #51, {T}52).", "- c2 (`a  b`, #51)."),
             ("kept parts keep their semicolon", f"- c3 (#53; {T}54; #55).", "- c3 (#53; #55)."),
-            ("a kept double-backtick code span holding a comma", f"- c4 (``printf a,b``, {T}58).", "- c4 (``printf a,b``)."),
-            ("a double-backtick span holding a single backtick", f"- c5 (``a ` b; c``, {T}59).", "- c5 (``a ` b; c``)."),
             ("text after a parenthetical that spans a line break", f"- e2 (F13, {T}56,\n  #57). Then a note follows.", "- e2 (F13, #57). Then a note follows."),
+            ("code on the line outside the parenthetical", f"- r `cmd a,b` fixed (#72, {T}73).", "- r `cmd a,b` fixed (#72)."),
+            ("an unclosed backtick in another bullet", f"- p (`open.\n- q (#70, {T}71).", "- p (`open.\n- q (#70)."),
         ]
         for name, fragment, rendered in shapes:
             with self.subTest(name):
                 out = cf.assemble(BASE, {"20.fixed.md": fragment + "\n"})
-                self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", rendered])
+                self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", *rendered.split("\n")])
                 self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
 
     def test_acceptance_ids_and_pr_numbers_stay(self):
@@ -449,11 +447,21 @@ class DropIds(unittest.TestCase):
         self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
 
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
+        HOLDS_CODE = "a tracker id in a parenthetical that holds code"
+        ODD_BACKTICK = "a tracker id on a line with an escaped or unclosed backtick"
         cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
                  (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"),
-                 (f"- v (`run {T}60`, {T}61).\n", 1, "a tracker id among other words"),
+                 (f"- v (`run {T}60`, {T}61).\n", 1, HOLDS_CODE),
                  (f"- w ``see {T}62`` here.\n", 1, "a tracker id in prose"),
-                 (f"- x (`open, {T}63).\n", 1, "a tracker id beside an unclosed code span"))
+                 (f"- x (`open, {T}63).\n", 1, HOLDS_CODE),
+                 (f"- c (`echo ready; exit 0`, {T}50).\n", 1,
+                  HOLDS_CODE + "; move the id out of the parenthetical that holds code, or reword"),
+                 (f"- c4 (``printf a,b``, {T}58).\n", 1, HOLDS_CODE),
+                 (f"- c6 (\\`lit, `printf a,b`, \\`lit, {T}64).\n", 1, HOLDS_CODE),
+                 (f"- c7 (`open ({T}65), #2).\n", 1, HOLDS_CODE),
+                 (f"- c5 ``a ` f({T}59)`` here.\n", 1, "a tracker id in prose"),
+                 (f"- e \\`x (#1, {T}66) here.\n", 1, ODD_BACKTICK),
+                 (f"- m `f(\n{T}67)`.\n", 2, ODD_BACKTICK))
         for fragment, line, why in cases:
             with self.subTest(fragment=fragment):
                 with self.assertRaises(ValueError) as caught:
