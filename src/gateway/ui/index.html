@@ -2101,7 +2101,8 @@ async function newCapability() {
     alert('Invalid name: use letters or digits (spaces and other characters become "_").');
     return;
   }
-  // The route takes names of up to 128 characters (capabilities.rs is_safe_name).
+  // The route takes names of up to 128 characters (capabilities.rs
+  // is_safe_name); which characters a capability name may hold is CAP-001's.
   if (name.length > 128) {
     alert('Invalid name: use at most 128 characters.');
     return;
@@ -2118,7 +2119,10 @@ async function newCapability() {
     const template = await t.text();
     const nameLine = /^name:.*$/m;
     if (!nameLine.test(template)) throw new Error('the template has no name line to set');
-    const yaml = template.replace(nameLine, `name: ${name}`);
+    // Quoted, so YAML reads "true", "null" or "123" as the name, not a
+    // boolean, a null or a number. A JSON string is a valid YAML
+    // double-quoted scalar, every quote and backslash escaped.
+    const yaml = template.replace(nameLine, `name: ${JSON.stringify(name)}`);
     const r = await uiFetch('/ui/api/capabilities', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },

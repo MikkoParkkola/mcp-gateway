@@ -304,3 +304,21 @@ async fn cr7_the_page_holds_the_routes_name_length_limit() {
     assert!(alerts[0].as_str().expect("text").contains("128"), "{got}");
     assert_eq!(got["sent"], serde_json::json!([]), "{got}");
 }
+
+/// CR8: names YAML would read as another type unquoted (a boolean, a null, a
+/// number) are written as strings, so each creates a capability by that name.
+#[tokio::test]
+async fn cr8_names_yaml_would_read_as_another_type_create_by_that_name() {
+    let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
+    let addr = serve(&fx).await;
+    for typed in ["true", "null", "123"] {
+        let got = press(addr, typed, "null").await;
+        let file = fx.file.with_file_name(format!("{typed}.yaml"));
+        assert!(file.exists(), "{typed}: no file was written: {got}");
+        let written = crate::capability::parse_capability_file(&file)
+            .await
+            .expect("the written file is a capability");
+        assert_eq!(written.name, typed, "{typed}: {got}");
+        assert_eq!(got["alerts"], serde_json::json!([]), "{typed}: {got}");
+    }
+}
