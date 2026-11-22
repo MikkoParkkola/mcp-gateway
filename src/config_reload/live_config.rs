@@ -312,7 +312,18 @@ impl LiveConfig {
     /// read from one snapshot.
     #[must_use]
     pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
-        Vec::new()
+        // One read, so a publish cannot land between taking the stored set and
+        // the generation it was computed for.
+        let (applied, generation) = {
+            let inner = self.inner.read();
+            (inner.applied.clone(), Arc::clone(&inner.generation))
+        };
+        match applied {
+            Some(applied) => applied.pending_restart.clone(),
+            // No revision published (a config built in memory): no reload of
+            // an env file can have happened, so the config fields are all.
+            None => pending_restart_fields(&self.running, generation.config()),
+        }
     }
 
     /// Clone the current active configuration snapshot.
