@@ -526,7 +526,10 @@ async fn send_admin_request(
         // The web shell's own type for these routes.
         Some(AdminBody::Yaml(bytes)) => {
             request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/x-yaml")
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    mutant!("m-wrong-type", "text/yaml", "application/x-yaml"),
+                )
                 .body(bytes.clone());
         }
         None => {}
