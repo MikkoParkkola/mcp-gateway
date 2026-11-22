@@ -450,7 +450,8 @@ class DropIds(unittest.TestCase):
         # A line left holding only spaces would read as a blank line and split the
         # bullet; a blank line the fragment itself has stays.
         for src, out in ((f"- n one\n  ({T}74)\n  two.\n\n  Kept.\n", "- n one\n  two.\n\n  Kept.\n"),
-                         (f"- n2 one\n  ({T}75,\n  {T}76)\n  two.\n", "- n2 one\n  two.\n")):
+                         (f"- n2 one\n  ({T}75,\n  {T}76)\n  two.\n", "- n2 one\n  two.\n"),
+                         (f"- n3 one\n  ({T}77,\n\n  {T}78)\n  two.\n", "- n3 one\n\n  two.\n")):
             with self.subTest(src=src):
                 self.assertEqual(cf.drop_ids(src), (out, []))
 
