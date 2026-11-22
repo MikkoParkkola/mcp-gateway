@@ -3,7 +3,7 @@
 //! WIRE.1 / SERVE.1, crash rows at the serve level: a write a crash left behind (a staged v2
 //! journal) is settled by a served start. A start killed during its repair leaves the next served
 //! start to finish the job; a start whose delivery fails builds no gateway, and the next one
-//! delivers what was owed, each record settling once.
+//! delivers what was owed, each record settling to one distinct outcome.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -210,7 +210,8 @@ async fn crash_s2_child() {
 }
 
 /// `crash_s3`: delivery fails at a boundary while a served gateway is built. No gateway is
-/// built, and the next served start delivers what was owed, each terminal record once.
+/// built, and the next served start delivers what was owed. Counted as distinct outcomes, not
+/// records: a cut between an append and its flag resends an equal record, which collapses.
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_s3() {
     const ROW: &str = "crash_s3";
@@ -235,7 +236,7 @@ async fn crash_s3() {
         assert_eq!(
             outcomes_for(&records, WRITER),
             1,
-            "{ROW} {at:?}: the writer's outcome settled once"
+            "{ROW} {at:?}: the writer settled to one distinct outcome"
         );
         let attempts = records
             .iter()
@@ -246,7 +247,7 @@ async fn crash_s3() {
             assert_eq!(
                 outcomes_for(&records, token),
                 1,
-                "{ROW} {at:?}: recovery attempt {token} settled once"
+                "{ROW} {at:?}: recovery attempt {token} settled to one distinct outcome"
             );
         }
         assert!(
