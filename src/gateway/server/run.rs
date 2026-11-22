@@ -542,6 +542,7 @@ impl Gateway {
             .map(|enforcer| {
                 persistence::spawn_cost_saver(
                     Arc::clone(enforcer),
+                    meta_mcp_for_shutdown.cost_tracker(),
                     data_dir.clone(),
                     persistence::COST_SAVE_INTERVAL,
                     Some(shutdown_tx.subscribe()),
@@ -583,7 +584,13 @@ impl Gateway {
         let cost_state = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, data_dir.clone()));
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
         #[cfg(not(feature = "cost-governance"))]
         let cost_state = None;
         let checkpoints = Arc::new(stop_checkpoints::Checkpoints::new(
@@ -639,7 +646,13 @@ impl Gateway {
         let cost = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, data_dir.clone()));
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
         // It ends on the shutdown broadcast; a write in flight finishes or
         // is abandoned on its own thread.
         #[cfg(feature = "cost-governance")]

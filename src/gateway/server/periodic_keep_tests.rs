@@ -295,7 +295,8 @@ async fn the_cost_saver_keeps_its_dir_through_a_tick() {
     };
     let registry = Arc::new(CostRegistry::new(&cfg));
     let enforcer = Arc::new(BudgetEnforcer::new(cfg, registry));
-    let saver = spawn_cost_saver(enforcer, root.clone(), EVERY, None);
+    let tracker = Arc::new(crate::cost_accounting::CostTracker::new());
+    let saver = spawn_cost_saver(enforcer, tracker, root.clone(), EVERY, None);
     hold_one_tick(&seams, reached, EVERY, saver).await;
     drop(dir);
     let release = Release(release);

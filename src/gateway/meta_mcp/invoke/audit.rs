@@ -160,6 +160,13 @@ mod settlement_tests;
 #[path = "audit_delivered_value_tests.rs"]
 mod delivered_value_tests;
 
+// The kind an unredeemable continuation notes (declared here, not beside the
+// refusal, so a red run that puts the refusal back still compiles the row).
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "continuation_kind_tests.rs"]
+mod continuation_kind_tests;
+
 mod settlement;
 
 tokio::task_local! {
@@ -621,7 +628,7 @@ impl MetaMcp {
             notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
-        let decision = Box::new(notes.decided(self, outcome));
+        let decision = Box::new(notes.decided(self, outcome, caller.credential_kind));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));

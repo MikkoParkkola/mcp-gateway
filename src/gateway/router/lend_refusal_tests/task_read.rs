@@ -24,6 +24,57 @@ struct Refusing {
     sent: Arc<AtomicUsize>,
     /// The log and store directories, alive for the row.
     _dirs: (Arc<tempfile::TempDir>, Arc<tempfile::TempDir>),
+    /// Set by a row that sets the backend's skip seam for one attempt only:
+    /// the first skipped answer [`Refusing::read_task`] sees then clears both.
+    clear_skip_after_one: AtomicBool,
+}
+
+/// The most skipped-claim answers one read absorbs before it fails: 3, so a
+/// read makes at most 4 attempts. A chosen tolerance, not a measured bound.
+const SKIPS_ABSORBED: usize = 3;
+
+/// Whether `answer` is a stored read that skipped its claim (an unfilled or
+/// busy account outcome, judging.rs:266-281): -32603, retryable, no retry
+/// time and nothing of a refusal. No row asserts this shape (F6).
+fn skipped(answer: &Value) -> bool {
+    answer.pointer("/error/code") == Some(&json!(-32603))
+        && answer.pointer("/error/data/retryable") == Some(&json!(true))
+        && answer.pointer("/error/data/retry_after_ms").is_none()
+        && !answer.to_string().contains(REFUSAL)
+}
+
+/// Runs `attempt` until it answers something other than a skipped claim, and
+/// returns that answer with the attempts it took. A skipped answer whose
+/// attempt moved `refusals` is returned at once: the lender refused a fill,
+/// and that is a regression a row must see, not a race. Past
+/// [`SKIPS_ABSORBED`] skipped answers in a row it fails, naming the count, the
+/// last answer and `unfilled`, the backend's unfilled-outcome reads.
+async fn absorb_skips<A, F>(
+    mut attempt: A,
+    refusals: impl Fn() -> usize,
+    unfilled: impl Fn() -> usize,
+) -> (Value, usize)
+where
+    A: FnMut() -> F,
+    F: std::future::Future<Output = Value>,
+{
+    let mut skips = 0;
+    loop {
+        let before = refusals();
+        let answer = attempt().await;
+        if !skipped(&answer) || refusals() != before {
+            return (answer, skips + 1);
+        }
+        skips += 1;
+        eprintln!("read_task: attempt {skips} skipped its claim; reading again");
+        assert!(
+            skips <= SKIPS_ABSORBED,
+            "read_task: {skips} skipped-claim answers in a row (unfilled outcome reads {}); \
+             the account never confirmed live: {answer}",
+            unfilled()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn refusing() -> Refusing {
@@ -39,6 +90,7 @@ async fn refusing() -> Refusing {
         backend,
         sent,
         _dirs: dirs,
+        clear_skip_after_one: AtomicBool::new(false),
     }
 }
 
@@ -76,8 +128,28 @@ impl Refusing {
             .to_owned()
     }
 
-    /// One `tasks/get` of `id`; a read carries no idempotency key.
+    /// A `tasks/get` of `id` as a row sees it: a skipped-claim answer (a race
+    /// with the account's custody, never a row's subject) is read again, up to
+    /// [`SKIPS_ABSORBED`] times; every other answer is returned as it came.
     async fn read_task(&self, id: &str) -> Value {
+        let this = self;
+        let attempt = move || async move {
+            let answer = this.read_once(id).await;
+            if skipped(&answer) && this.clear_skip_after_one.swap(false, Ordering::SeqCst) {
+                this.backend
+                    .skip_account_prepass
+                    .store(false, Ordering::SeqCst);
+            }
+            answer
+        };
+        let unfilled = || self.backend.unfilled_outcome_reads.load(Ordering::SeqCst);
+        absorb_skips(attempt, || self.lender_refusals(), unfilled)
+            .await
+            .0
+    }
+
+    /// One `tasks/get` of `id`; a read carries no idempotency key.
+    async fn read_once(&self, id: &str) -> Value {
         let mut body = task_request("tasks/get", json!({"taskId": id}));
         if let Some(meta) = body
             .pointer_mut("/params/_meta")
@@ -314,6 +386,7 @@ async fn switchable() -> (Refusing, Arc<AtomicBool>, PeerControl) {
         backend,
         sent: Arc::clone(&control.calls),
         _dirs: dirs,
+        clear_skip_after_one: AtomicBool::new(false),
     };
     (gw, lend, control)
 }
@@ -510,6 +583,7 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         backend: second,
         sent: second_sent,
         _dirs: dirs,
+        clear_skip_after_one: AtomicBool::new(false),
     });
     let steps = json!([
         {"arguments": {"q": "x"}, "tool": format!("{BACKEND}:{TOOL}")},
@@ -547,6 +621,16 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         );
     }
     others.store(false, Ordering::SeqCst);
+    // The holder may read only the first target. Unseamed, a skipped claim on
+    // the first target (the race read_task absorbs) would let its read claim
+    // the second one, whose refusal moves the count and is returned at once,
+    // and the holder would never reach the first peer. A seamed target leaves
+    // the stored read's whole target list (task_replay.rs:104-114), which the
+    // read fixes before its fill reaches the peer, so clearing the seam after
+    // "reached" cannot hand the holder's read the second target.
+    gw.backend
+        .skip_account_prepass
+        .store(true, Ordering::SeqCst);
     control.hold.store(true, Ordering::SeqCst);
     let lists_before = control.lists.load(Ordering::SeqCst);
     let holder = {
@@ -563,6 +647,9 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
         reached.is_ok(),
         "premise: the holding reader's fill of the first target reached its peer"
     );
+    gw.backend
+        .skip_account_prepass
+        .store(false, Ordering::SeqCst);
     let before_read = gw.lender_refusals();
     let answer = gw.read_task(&id).await;
     eprintln!(
@@ -579,3 +666,7 @@ async fn a_later_targets_refusal_is_answered_over_an_earlier_targets_lease() {
     );
     assert_refusal(&answer, "R6");
 }
+
+/// The skipped-claim absorb's own rows.
+#[path = "task_read_skip_rows.rs"]
+mod skipped_claim;

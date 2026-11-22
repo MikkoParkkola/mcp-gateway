@@ -30,6 +30,7 @@ pub(super) fn temporary_token() -> crate::key_server::TemporaryToken {
         .unwrap()
         .as_secs();
     crate::key_server::TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: crate::key_server::oidc::VerifiedIdentity::for_test(

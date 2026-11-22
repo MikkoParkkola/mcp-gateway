@@ -60,6 +60,7 @@ async fn fixture(
 fn oidc_token() -> TemporaryToken {
     let now = crate::clock::unix_secs().expect("the test clock reads");
     TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: VerifiedIdentity::for_test(

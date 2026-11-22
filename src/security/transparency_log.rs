@@ -485,6 +485,7 @@ impl TransparencyLogger {
     ) -> io::Result<String> {
         Self::reject_reserved_keys(&fields)?;
         self.append_core(fields, envelope, false)
+            .map(|(_, hash)| hash)
     }
 
     /// Like [`Self::append_event`], but re-syncs chain state (`counter`,
@@ -506,6 +507,16 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
     ) -> io::Result<String> {
+        self.append_event_synced_row(fields, envelope)
+            .map(|(_, hash)| hash)
+    }
+
+    /// Append a synced event and return its assigned counter and hash.
+    pub(crate) fn append_event_synced_row(
+        &self,
+        fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
+    ) -> io::Result<(u64, String)> {
         Self::reject_reserved_keys(&fields)?;
         self.append_core(fields, envelope, true)
     }
@@ -592,7 +603,8 @@ impl TransparencyLogger {
     }
 
     /// Chain one entry from caller-supplied domain `fields`, returning its
-    /// `entry_hash`. Shared by [`Self::log_invocation`], [`Self::append_event`],
+    /// assigned counter and `entry_hash`. Shared by [`Self::log_invocation`],
+    /// [`Self::append_event`],
     /// and [`Self::append_event_synced`] so the chain logic exists exactly once.
     ///
     /// When `resync` is set, the in-memory `counter`/`last_entry_hash` are first
@@ -604,7 +616,7 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
         resync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         let fields = self.keyed_caller_key(fields)?;
         let result = self.append_chained(fields, envelope, resync);
         // An oversized record is refused for that call only: it is an
@@ -620,7 +632,7 @@ impl TransparencyLogger {
         mut fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
         resync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         envelope.write_into(&mut fields);
         #[cfg(test)]
         {

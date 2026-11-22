@@ -114,12 +114,16 @@ src/gateway/server/identity_grants.rs	snapshot_time	-	startup identity-grant aud
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	stdio_identity_grants	-	startup identity-grant audit for stdio, before serving
 src/gateway/server/listener.rs	serve	-	the HTTP listener loop, started once per serve; the timed rows call the router in-process and over stdio pipes, with no socket
+src/gateway/server/mod.rs	answer_unprepared	-	on-path, untimed: a stdio request prepare_signing stopped only; the timed rows go on to dispatch
 src/gateway/server/mod.rs	attach_capability_revision	-	startup: hands the published config to the capability catalogue before the listener binds, not per call
 src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup config, not per call
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup config, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup path resolution, not per call
+src/gateway/server/mod.rs	from	-	on-path, untimed: wraps an early answer of a stdio request prepare_signing stopped only; the timed rows go on to dispatch
 src/gateway/server/mod.rs	history_hook	-	startup config history hook, not per call
 src/gateway/server/mod.rs	leaky_single_user_backends	-	startup config, not per call
+src/gateway/server/mod.rs	stdio_audit_who	-	on-path, untimed: an early stdio signing refusal only, recorded before the caller context exists; the harness does not configure signing
+src/gateway/server/mod.rs	stdio_record_principal	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/persistence.rs	advance_until_saved	-	shutdown and periodic cost-save catch-up, off the request path
 src/gateway/server/persistence.rs	boot_cost_governance	-	startup cost-governance restore, once per serve
 src/gateway/server/persistence.rs	ensure_data_dir	-	startup data-directory creation, once per serve

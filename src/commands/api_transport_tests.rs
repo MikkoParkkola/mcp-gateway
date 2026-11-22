@@ -602,7 +602,10 @@ async fn request_sources_accept_exactly_sixteen_mib() {
             credential,
             || Ok(body.clone()),
             |request| async move {
-                assert_eq!(request.body, Some(json!({})));
+                assert_eq!(
+                    request.body,
+                    Some(crate::commands::dashboard_link::AdminBody::Json(json!({})))
+                );
                 Ok(AdminResponse {
                     status: StatusCode::OK,
                     headers: reqwest::header::HeaderMap::new(),

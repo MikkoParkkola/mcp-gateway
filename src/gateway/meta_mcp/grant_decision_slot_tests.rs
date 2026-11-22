@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::grant_audit::{GrantNote, allow_unslotted_check_for_test, select_records};
+use super::grant_audit::{
+    GrantNote, allow_unslotted_check_for_test, select_records, stamp_written_untraced,
+};
 use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger, stall_log,
 };
@@ -71,6 +73,31 @@ fn selection_rule_table() {
         note("s", "t", Some("tr-2"), true),
     ];
     assert_eq!(select_records(&d), vec![&d[0], &d[1]], "(d)");
+}
+
+/// A signing refusal's stamp traces exactly the notes the slot writes (the
+/// last untraced note of each target with no traced note), whatever target
+/// the refusal's record spells: a surfaced name's record has no server, its
+/// note the backend's. The slot then writes the same notes, now traced.
+#[test]
+fn a_signing_refusal_stamps_the_notes_its_slot_writes() {
+    let mut notes = [
+        note(CAPS, PERSONAL, None, false),
+        note(CAPS, PERSONAL, None, true),
+        note("s2", "t", Some("tr-1"), true),
+        note("s2", "t", None, true),
+    ];
+    let picked = |notes: &[GrantNote]| -> Vec<(String, String, bool)> {
+        select_records(notes)
+            .into_iter()
+            .map(|n| (n.server.clone(), n.tool.clone(), n.allowed))
+            .collect()
+    };
+    let before = picked(&notes);
+    stamp_written_untraced(&mut notes, "tr-refused");
+    let traces: Vec<Option<&str>> = notes.iter().map(|n| n.trace_id.as_deref()).collect();
+    assert_eq!(traces, [None, Some("tr-refused"), Some("tr-1"), None]);
+    assert_eq!(picked(&notes), before, "the same decisions are written");
 }
 
 /// Wait, bounded, for the log to hold `count` decision records.
