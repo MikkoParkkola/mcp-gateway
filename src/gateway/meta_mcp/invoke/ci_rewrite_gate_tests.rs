@@ -345,6 +345,10 @@ fn the_sent_answer_is_scanned_whatever_field_carries_it() {
             effect, None,
             "{decision:?}: a split nested instruction withholds: {sent}"
         );
+        assert!(
+            is_the_withhold(&sent),
+            "{decision:?}: the withheld body is sent, not the nested one: {sent}"
+        );
 
         let (after, sent, effect) = meta.checked_as_sent(
             evaluation,
