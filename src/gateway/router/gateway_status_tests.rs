@@ -581,7 +581,8 @@ async fn a_reload_refused_at_shutdown_changes_nothing_served() {
         .await
         .expect_err("the registry refuses a backend once shutdown has begun");
     let refusal = format!("{refusal:?}");
-    assert!(refusal.contains("shutting down"), "{refusal}");
+    // The refusal after the patch applied, not the stop before it.
+    assert!(refusal.contains("refused to register"), "{refusal}");
 
     let after = read(&state).await;
     assert_eq!(pending(&after), pending(&before), "{after}");

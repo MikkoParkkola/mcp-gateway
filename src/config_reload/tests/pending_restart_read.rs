@@ -185,6 +185,8 @@ fn a_restart_clears_it() {
         "fixture"
     );
     let restarted = keyed((*before.get()).clone());
+    // The new process runs the edited config, not the one it started from.
+    assert_eq!(restarted.running().error_budget.threshold, Some(0.25));
     assert!(
         restarted.pending_restart().is_empty(),
         "{:?}",
