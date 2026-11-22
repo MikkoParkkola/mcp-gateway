@@ -156,6 +156,7 @@ src/gateway/meta_mcp/invoke/bridge_settle.rs	refuse_if_killed	-	on-path, untimed
 src/gateway/meta_mcp/invoke/budget.rs	apply_context_integrity	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/budget.rs	attach_context_integrity_metadata	-	on-path, untimed: only when context integrity finds or enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/budget.rs	capability_context_flags	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	checked_as_sent	-	untimed: runs only after an enforced rewrite, which a clean timed call never reaches
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_delivered_result	-	on-path, untimed: only when context integrity enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_enforces	-	on-path, untimed: the egress scan's content check, on error frames and non-tools/call answers; a tools/call result met it at dispatch
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_input	http_invoke_tiny	on the HTTP gateway_invoke path
