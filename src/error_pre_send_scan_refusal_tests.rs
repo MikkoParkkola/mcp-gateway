@@ -95,6 +95,18 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         "gateway::meta_mcp::task_replay::judging::MetaMcp::authorize_stored",
         1,
     ),
+    // A stored task read answering the lender refusal its cold fill
+    // recorded: the call was never sent, and the read sends nothing.
+    (
+        "gateway::meta_mcp::task_replay::judging::MetaMcp::refuse_stored",
+        1,
+    ),
+    // A cold fill matching the lender's refusal to keep it on the slot: a
+    // pattern, not a construction; the refusal came before any send.
+    (
+        "gateway::meta_mcp::invoke::caller_verdict::ColdFill::run",
+        1,
+    ),
     // A stored task read this process cannot track, refused under `block`
     // when the read starts: a stored result, no send.
     (

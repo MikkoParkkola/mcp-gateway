@@ -55,6 +55,7 @@ src/gateway/server/persistence.rs	spawn_periodic_save	spawn	1	outside-calls	peri
 src/gateway/server/run.rs	run	spawn	1	outside-calls	waits for shutdown and cancels the reload token
 src/gateway/server/run_steps.rs	start_capability_watcher	spawn	1	outside-calls	start-up capability scan run in the background; refusals only logged
 src/gateway/server/stdio_loop.rs	run_stdio_on	spawn	1	no-refusal-inside	stdio stdout writer: writes already-decided answer frames from the queue to stdout
+src/gateway/server/stop_checkpoints.rs	start	spawn	1	no-refusal-inside	the stop's checkpoint loop: one pass a second until the last pass aborts it; each write runs on its own thread and only logs
 src/gateway/server/tools_changed.rs	spawn_drain	spawn	1	no-refusal-inside	tools/list_changed notification fan-out for HTTP sessions
 src/gateway/server/tools_changed/stdio.rs	start	spawn	2	no-refusal-inside	stdio tools-changed announcer: decides and queues list_changed notifications, plus the send-when-ready task
 src/gateway/server/warmstart.rs	spawn	spawn	1	outside-calls	warm-start task that fills a backend's tool cache

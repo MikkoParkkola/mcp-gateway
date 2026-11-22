@@ -54,7 +54,7 @@ jobs:
           MINGW_DOWNLOAD_SECONDS: "3000"
         run: scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
       - name: Save the mingw packages
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/mingw-debs
@@ -62,9 +62,10 @@ jobs:
       # The save action reports an upload failure as a warning, so a green
       # job alone does not prove a filled cache. Look the key up again: it
       # passes when this run saved it or a concurrent run on another ref won
-      # the race, and fails only when no entry exists.
+      # the race, and fails only when no entry exists. Off the release line and main
+      # nothing is saved (an entry there is restored by nothing), so nothing is confirmed.
       - name: Confirm the cache is filled
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/mingw-debs

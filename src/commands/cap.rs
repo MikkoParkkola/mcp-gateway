@@ -255,12 +255,26 @@ async fn cap_list(
     }
 }
 
+/// What `cap import --auth-key` says for a value that is not a credential
+/// reference: every form the resolver reads, and never the value.
+const AUTH_KEY_REFUSAL: &str = "--auth-key takes a credential reference: env:NAME, keychain:NAME, \
+oauth:PROVIDER, file:PATH, {env.NAME} or a variable NAME";
+
 async fn cap_import(
     spec: std::path::PathBuf,
     output: std::path::PathBuf,
     prefix: Option<String>,
     auth_key: Option<String>,
 ) -> ExitCode {
+    // Read through the resolver's own parser, so this accepts exactly the
+    // forms a capability's auth key can use, and never echoes a value.
+    if auth_key
+        .as_deref()
+        .is_some_and(|key| crate::capability::credential_form(key).is_err())
+    {
+        eprintln!("Error: {AUTH_KEY_REFUSAL}");
+        return ExitCode::from(2);
+    }
     let mut converter = OpenApiConverter::new();
     if let Some(p) = prefix {
         converter = converter.with_prefix(&p);
