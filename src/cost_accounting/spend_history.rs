@@ -270,7 +270,8 @@ fn still_private(path: &Path) -> bool {
     {
         use std::os::unix::fs::MetadataExt as _;
         let mine = meta.uid() == rustix::process::geteuid().as_raw();
-        meta.file_type().is_file() && mine && meta.mode() & 0o077 == 0
+        // No group or other bit: the low six permission bits are all clear.
+        meta.file_type().is_file() && mine && meta.mode().trailing_zeros() >= 6
     }
     #[cfg(not(unix))]
     {

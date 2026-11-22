@@ -21,7 +21,7 @@ use super::file_tests::{DAY, HOUR, T0, date_of, micro, restored, saved, saved_mi
 
 /// A whole file holding one hour and one date in the keyless series and the
 /// overflow, and `keys`: each case below breaks it in one place.
-fn valid(keys: Value) -> Value {
+fn valid(keys: &Value) -> Value {
     let rows = json!({"hours": [[T0 / HOUR, 1, 1]], "days": [["2026-11-21", 1, 1]]});
     json!({"keyless": rows.clone(), "keys": keys, "overflow": rows})
 }
@@ -52,11 +52,11 @@ fn a_bad_file_starts_empty_with_one_warning_and_is_set_aside() {
         json!(rows)
     };
     let with = |field: &str, rows: Value| {
-        let mut file = valid(json!([]));
+        let mut file = valid(&json!([]));
         file["keyless"][field] = rows;
         file.to_string().into_bytes()
     };
-    let keys = |rows: Vec<Value>| valid(json!(rows)).to_string().into_bytes();
+    let keys = |rows: Vec<Value>| valid(&json!(rows)).to_string().into_bytes();
     let many: Vec<Value> = (0..=MAX_KEYS)
         .map(|i| key_row(&fingerprint(&format!("x{i}"))))
         .collect();
@@ -122,7 +122,7 @@ fn a_bad_file_starts_empty_with_one_warning_and_is_set_aside() {
     }
     // Whole, the file the cases break restores without a warning.
     let dir = tempfile::tempdir().expect("dir");
-    let whole = valid(json!([key_row(&fp)])).to_string();
+    let whole = valid(&json!([key_row(&fp)])).to_string();
     std::fs::write(dir.path().join(FILE_NAME), whole).expect("write");
     let (back, warnings) =
         crate::test_log_capture::capture_warnings(|| restored(dir.path(), &["k"], T0));
@@ -447,12 +447,12 @@ fn a_save_keeps_one_split_while_records_land_mid_save() {
 
     let rows = first["keys"].as_array().expect("keys");
     assert_eq!(rows.len(), MAX_KEYS);
-    let named: Vec<&str> = rows
+    let listed: Vec<&str> = rows
         .iter()
         .map(|r| r["name"].as_str().expect("name"))
         .collect();
-    let unique: HashSet<&str> = named.iter().copied().collect();
-    assert_eq!(unique.len(), named.len(), "a name appears once");
+    let unique: HashSet<&str> = listed.iter().copied().collect();
+    assert_eq!(unique.len(), listed.len(), "a name appears once");
     for gone in ["k0000", "k0001", "idle", "fresh"] {
         assert!(!unique.contains(gone), "{gone} is a row");
     }

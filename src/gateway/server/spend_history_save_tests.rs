@@ -106,9 +106,8 @@ mod modes {
     #[test]
     #[ignore = "started by the rows below as a child under umask 022"]
     fn mode_case_in_a_child() {
-        let case = match std::env::var(CASE) {
-            Ok(case) => case,
-            Err(_) => return,
+        let Ok(case) = std::env::var(CASE) else {
+            return;
         };
         let dir = tempfile::tempdir().expect("dir");
         let (path, target) = (
