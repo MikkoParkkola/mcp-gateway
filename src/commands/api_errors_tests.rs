@@ -15,7 +15,7 @@ async fn invalid_data_is_a_usage_error_before_sending() {
             2,
             "Usage",
             "Request body is not valid JSON.".to_string(),
-            "Correct the JSON or select the body's actual Content-Type.".to_string(),
+            "Send JSON: only the capability save and validate routes take YAML.".to_string(),
         ),
         (
             format!("@{}", absent.display()),
