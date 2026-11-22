@@ -58,6 +58,112 @@ function callReceipt(id, over = {}) {
   };
 }
 
+// The field lists, written out here (design r1 D2 as amended by r8f Part 2). A path names a value by its
+// keys; "[]" marks the items of a list. The wire kind of a refusal is "call" (rows.rs:167): the receipt
+// for kind "call" takes the union of the call and refusal lists, and only present keys render.
+const COMMON = ['id', 'kind', 'counter', 'timestamp', 'signature', 'integrity', 'unanchored'];
+const ON_RECEIPT = ['signing_anchor', 'chain.counter', 'chain.prev_entry_hash', 'chain.entry_hash', 'chain.link'];
+const CALL_FIELDS = [...COMMON, ...ON_RECEIPT,
+  'server', 'tool', 'route', 'trace_id', 'outcome', 'error_code',
+  'who.credential_kind', 'who.account', 'who.authority', 'who.subject',
+  'request_hash', 'response_hash', 'effect', 'answer_findings', 'answer_findings_total', 'answer_integrity',
+  'answer_integrity_scope', 'findings[].scan_type', 'findings[].severity', 'findings[].location', 'findings_truncated',
+  'chain.window', 'chain.window_scope',
+  'answer.effect', 'answer.line', 'answer.records[].counter', 'answer.records[].effect', 'answer.records[].findings_listed',
+  'answer.more', 'answer.search.bytes', 'answer.search.lines', 'answer.search.stopped',
+  'decision.kind', 'decision.rule', 'decision.grant', 'decision.flags', 'decision.effect', 'decision.decided',
+  'decision.config_revision', 'decision.running_revision', 'decision.config_revision_capabilities',
+  'reach.jti', 'reach.backends', 'reach.tools', 'reach.expires_by'];
+const REFUSAL_FIELDS = [...COMMON, ...ON_RECEIPT, 'server', 'tool', 'trace_id', 'outcome',
+  'who.account', 'who.authority', 'who.subject',
+  'decision.reason', 'decision.scope', 'decision.capability', 'decision.grant_id', 'reach'];
+const CONFIG_FIELDS = [...COMMON, ...ON_RECEIPT, 'action', 'actor_id', 'target_id', 'outcome',
+  'reason.recorded', 'reason.length', 'rollback_summary.recorded', 'rollback_summary.length'];
+const ADMIN_FIELDS = [...COMMON, ...ON_RECEIPT, 'surface', 'route', 'method', 'http_status', 'tool', 'outcome'];
+/** Keys the Rust emits that the receipt never shows (r8f Part 2): CUT, or not sent on this route. */
+const NOT_SHOWN = ['v', 'resolved_on'];
+/** Keys that only hold other keys. */
+const HOLDERS = ['who', 'chain', 'answer', 'decision', 'reach', 'search', 'records', 'reason', 'rollback_summary', 'findings'];
+
+const ANCHORED = { signature: 'verified', integrity: 'hmac_mismatch', unanchored: true, signing_anchor: 'anchored' };
+const chainOf = (counter) => ({ counter, prev_entry_hash: HASH('c'), entry_hash: HASH('d'), link: 'verified' });
+
+/** A call receipt with every listed key present. */
+function fullCall(id) {
+  return callReceipt(id, {
+    ...ANCHORED,
+    error_code: 'E_UPSTREAM',
+    answer_findings: 'answer not scanned',
+    answer_findings_total: 40,
+    answer_integrity: 'invalid',
+    findings: [{ scan_type: 'secret', severity: 'high', location: 'arguments.query' }],
+    findings_truncated: true,
+    chain: { ...chainOf(41), window: 'intact', window_scope: 'chain checked across the delivery window' },
+    answer: {
+      effect: 'delivered',
+      line: 'record found',
+      records: [{ counter: 50, effect: 'delivered', findings_listed: 2 }],
+      more: true,
+      search: { bytes: 1024, lines: 3, stopped: 'end of the kept log' },
+    },
+    decision: {
+      kind: 'allow', rule: RULE, grant: 'grant-1', flags: 'none', effect: 'allow', decided: 'when the call arrived',
+      config_revision: 'rev-1', running_revision: 'rev-2', config_revision_capabilities: 'does not cover the capability files',
+    },
+    reach: { jti: 'jti-1', backends: ['docs'], tools: ['kb.search'], expires_by: '2026-11-15T09:00:00Z' },
+  });
+}
+
+/** A refused call (wire kind "call", outcome blocked), every listed key present. */
+function refusalReceipt(id) {
+  return {
+    id, kind: 'call', counter: 43, timestamp: '2026-11-15T08:00:00Z', ...ANCHORED,
+    server: 'docs', tool: 'kb.search', trace_id: `trace-${id}`, outcome: 'blocked',
+    decision: { reason: 'no grant covers this tool', scope: 'tool', capability: 'kb.search', grant_id: 'grant-9' },
+    who: { account: 'ops', authority: 'https://issuer.example', subject: 'sub-1' },
+    reach: 'not recorded by this gateway version',
+    chain: chainOf(43),
+  };
+}
+
+const configReceipt = (id) => ({
+  id, kind: 'config', counter: 7, timestamp: '2026-11-15T08:00:00Z', ...ANCHORED,
+  action: 'backend.add', actor_id: 'ops', target_id: 'docs', outcome: 'change',
+  reason: { recorded: true, length: 12 }, rollback_summary: { recorded: true, length: 5 },
+  chain: chainOf(7),
+});
+
+const adminReceipt = (id) => ({
+  id, kind: 'admin_action', counter: 44, timestamp: '2026-11-15T08:00:00Z', ...ANCHORED,
+  surface: 'ui', route: '/ui/api/backends', method: 'POST', http_status: 201, tool: 'backends.add', outcome: 'change',
+  chain: chainOf(44),
+});
+
+const read = (obj, path) => path.split('.').reduce((v, k) => (v == null ? undefined : v[k]), obj);
+function write(obj, path, value) {
+  const keys = path.split('.');
+  let at = obj;
+  for (const k of keys.slice(0, -1)) at = (at[k] ??= {});
+  at[keys.at(-1)] = value;
+}
+/** The projection the receipt must show and copy: only listed paths, built here from the test's own lists. */
+function project(body, paths) {
+  const out = {};
+  for (const path of paths) {
+    const item = path.match(/^(.+)\[\]\.([a-z_]+)$/);
+    if (item) {
+      const list = read(body, item[1]);
+      if (!Array.isArray(list)) continue;
+      const into = read(out, item[1]) ?? list.map(() => ({}));
+      list.forEach((entry, i) => { if (entry && item[2] in entry) into[i][item[2]] = entry[item[2]]; });
+      write(out, item[1], into);
+    } else if (read(body, path) !== undefined) {
+      write(out, path, read(body, path));
+    }
+  }
+  return out;
+}
+
 /** A list row for the same entry, as the list answers it. */
 const listRow = (id, tool = 'kb.search') => ({ id, kind: 'call', timestamp: '2026-11-15T08:00:00Z', outcome: 'ok', who: { account: 'ops' }, server: 'docs', tool });
 
@@ -157,7 +263,7 @@ test.describe('R receipt', () => {
 
   const NO_LINK = {
     'the not-recorded sentence': () => callReceipt(ID_A, { decision: { ...callReceipt(ID_A).decision, rule: ruleNotRecorded() } }),
-    'a refusal': () => ({ ...callReceipt(ID_A, { kind: 'refusal', outcome: 'blocked' }), decision: { reason: 'no grant', scope: 'tool', capability: 'kb.search', grant_id: null }, answer: undefined }),
+    'a refusal': () => refusalReceipt(ID_A),
     'the legacy string decision': () => callReceipt(ID_A, { decision: 'not recorded by this gateway version' }),
   };
   for (const [label, body] of Object.entries(NO_LINK)) {
@@ -350,4 +456,179 @@ test.describe('R receipt', () => {
     await stream.send(frame('activity', listRow(ID_A), 'b1.s1.r2'));
     await r.quiet(1, 'R13 frame: still one receipt request');
   });
+
+  const ID_G = 'g7-0123456789abcdef';
+  const VARIANTS = {
+    call: [ID_A, fullCall, CALL_FIELDS],
+    refusal: [ID_A, refusalReceipt, REFUSAL_FIELDS],
+    'config change': [ID_G, configReceipt, CONFIG_FIELDS],
+    'admin action': [ID_A, adminReceipt, ADMIN_FIELDS],
+  };
+  const shownFields = (page) => page.locator('#content [data-field]')
+    .evaluateAll((els) => [...new Set(els.map((e) => e.getAttribute('data-field')))].sort());
+
+  for (const [label, [id, make, list]] of Object.entries(VARIANTS)) {
+    test(`R1 a ${label} receipt shows exactly its field list, each with a label`, async ({ page }) => {
+      const r = await receiptsFor(page);
+      await r.open(id);
+      await (await r.request(0, `R1 ${label}`)).answer(make(id));
+      await expect(page.locator('#content [data-field]').first(), `R1 ${label}: premise, fields drawn`).toBeVisible();
+      expect(await shownFields(page), `R1 ${label}: the shown field set`).toEqual([...new Set(list)].sort());
+      // A field (not a list item) is a dd whose dt names it.
+      const unlabelled = await page.locator('#content [data-field]').evaluateAll((els) => els
+        .filter((e) => !e.dataset.field.includes('[]'))
+        .filter((e) => {
+          const dt = e.previousElementSibling;
+          return !(dt && dt.tagName === 'DT' && dt.textContent.trim() !== '');
+        })
+        .map((e) => e.dataset.field));
+      expect(unlabelled, `R1 ${label}: fields without a label`).toEqual([]);
+    });
+  }
+
+  /** Clipboard for this page: 'ok' records the text; 'none', 'denied' and 'rejected' each fail one way. */
+  async function clipboard(page, mode) {
+    await page.addInitScript((m) => {
+      window.__copied = [];
+      let clip;
+      if (m === 'ok') clip = { writeText: async (text) => { window.__copied.push(text); } };
+      if (m === 'denied') clip = { writeText: () => Promise.reject(new DOMException('write denied', 'NotAllowedError')) };
+      if (m === 'rejected') clip = { writeText: () => Promise.reject(new Error('write failed')) };
+      Object.defineProperty(navigator, 'clipboard', { value: clip, configurable: true });
+    }, mode);
+  }
+  const copyButton = (page) => page.locator('#content').getByRole('button', { name: /copy as json/i });
+  const fallback = (page) => page.locator('#content textarea[readonly]');
+
+  /** A full call whose top level and every listed sub-object carry a body-like extra key. */
+  const BODY = (where) => `BODY-${where}-9f2`;
+  function withExtras(id) {
+    const b = fullCall(id);
+    b.request_body = BODY('top');
+    b.who.payload = BODY('who');
+    b.chain.payload = BODY('chain');
+    b.answer.payload = BODY('answer');
+    b.answer.search.payload = BODY('search');
+    b.answer.records[0].payload = BODY('record');
+    b.decision.payload = BODY('decision');
+    b.reach.payload = BODY('reach');
+    b.findings[0].payload = BODY('finding');
+    return b;
+  }
+  const EXTRAS = ['top', 'who', 'chain', 'answer', 'search', 'record', 'decision', 'reach', 'finding'].map(BODY);
+
+  test('R2 body-like extra keys show nowhere: not on screen, not in the copy', async ({ page }) => {
+    await clipboard(page, 'ok');
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    await (await r.request(0, 'R2')).answer(withExtras(ID_A));
+    await drawn(page, 'R2');
+    const text = await page.locator('body').innerText();
+    expect(EXTRAS.filter((x) => text.includes(x)), 'R2 extras on screen').toEqual([]);
+    expect((await shownFields(page)).filter((f) => /payload|request_body/.test(f)), 'R2 extra fields').toEqual([]);
+    await copyButton(page).click();
+    await expect.poll(() => page.evaluate(() => window.__copied.length), { message: 'R2 copied once' }).toBe(1);
+    const copied = await page.evaluate(() => window.__copied[0]);
+    expect(EXTRAS.filter((x) => copied.includes(x)), 'R2 extras in the copy').toEqual([]);
+  });
+
+  test('R2 body-like extra keys stay out of the copy fallback too', async ({ page }) => {
+    await clipboard(page, 'rejected');
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    await (await r.request(0, 'R2 fallback')).answer(withExtras(ID_A));
+    await drawn(page, 'R2 fallback');
+    await copyButton(page).click();
+    await expect(fallback(page), 'R2 fallback: the text shows').toBeVisible();
+    const shown = await fallback(page).inputValue();
+    expect(EXTRAS.filter((x) => shown.includes(x)), 'R2 extras in the fallback').toEqual([]);
+  });
+
+  test('R2 a config change\'s recorded-text facts show no extra key', async ({ page }) => {
+    const r = await receiptsFor(page);
+    await r.open(ID_G);
+    const body = configReceipt(ID_G);
+    body.reason.text = BODY('reason');
+    body.rollback_summary.text = BODY('rollback');
+    await (await r.request(0, 'R2 config')).answer(body);
+    await expect(page.locator('#content [data-field]').first(), 'R2 config: premise, fields drawn').toBeVisible();
+    const text = await page.locator('body').innerText();
+    expect([BODY('reason'), BODY('rollback')].filter((x) => text.includes(x)), 'R2 config: extras on screen').toEqual([]);
+  });
+
+  test('R3 copy as JSON writes exactly the projection', async ({ page }) => {
+    await clipboard(page, 'ok');
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    await (await r.request(0, 'R3')).answer(fullCall(ID_A));
+    await drawn(page, 'R3');
+    await copyButton(page).click();
+    await expect.poll(() => page.evaluate(() => window.__copied.length), { message: 'R3 copied once' }).toBe(1);
+    expect(JSON.parse(await page.evaluate(() => window.__copied[0])), 'R3 the copied JSON').toEqual(project(fullCall(ID_A), CALL_FIELDS));
+  });
+
+  for (const mode of ['none', 'denied', 'rejected']) {
+    test(`R3 with the clipboard ${mode === 'none' ? 'missing' : mode}, the same JSON shows read-only and selected`, async ({ page }) => {
+      await clipboard(page, mode);
+      const r = await receiptsFor(page);
+      await r.open(ID_A);
+      await (await r.request(0, `R3 ${mode}`)).answer(fullCall(ID_A));
+      await drawn(page, `R3 ${mode}`);
+      await copyButton(page).click();
+      await expect(fallback(page), `R3 ${mode}: the text shows`).toBeVisible();
+      const value = await fallback(page).inputValue();
+      expect(JSON.parse(value), `R3 ${mode}: the same projection`).toEqual(project(fullCall(ID_A), CALL_FIELDS));
+      const sel = await fallback(page).evaluate((t) => [t.selectionStart, t.selectionEnd, t.value.length]);
+      expect([sel[0], sel[1]], `R3 ${mode}: all of it selected`).toEqual([0, sel[2]]);
+    });
+  }
+
+  test('R9 a reach string shows as text', async ({ page }) => {
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    await (await r.request(0, 'R9 string')).answer(callReceipt(ID_A));
+    await drawn(page, 'R9 string');
+    await expect(field(page, 'reach'), 'R9 the string').toHaveText('not recorded by this gateway version');
+  });
+
+  test('R9 a reach object shows exactly its four keys', async ({ page }) => {
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    const body = fullCall(ID_A);
+    body.reach.issued_to = BODY('identity');
+    await (await r.request(0, 'R9 object')).answer(body);
+    await drawn(page, 'R9 object');
+    expect((await shownFields(page)).filter((f) => f.startsWith('reach')), 'R9 reach fields')
+      .toEqual(['reach.backends', 'reach.expires_by', 'reach.jti', 'reach.tools']);
+    await expect(field(page, 'reach.backends'), 'R9 backends').toContainText('docs');
+    await expect(field(page, 'reach.tools'), 'R9 tools').toContainText('kb.search');
+    expect(await page.locator('body').innerText(), 'R9 no extra key').not.toContain(BODY('identity'));
+  });
+
+  test('R14 the field lists match the key names the Rust emits', () => {
+    const src = (p) => readFileSync(fileURLToPath(new URL(`../../src/${p}`, import.meta.url)), 'utf8');
+    const rows = src('gateway/ui/activity/rows.rs');
+    const rowFn = rows.slice(rows.indexOf('pub(super) fn row('), rows.indexOf('pub(super) fn findings_value('));
+    expect(rowFn.length, 'R14 premise: rows.rs row() found').toBeGreaterThan(100);
+    // Every quoted name in row() is a key, except these values it writes.
+    const VALUES = ['change'];
+    const emitted = new Set([...rowFn.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).filter((k) => !VALUES.includes(k)));
+    const KEY = /insert\(\s*"([a-z_]+)"|"([a-z_]+)":|\["([a-z_]+)"\]|\(\s*"([a-z_]+)",\s*&d\./g;
+    for (const p of ['gateway/ui/activity/receipt.rs', 'gateway/ui/activity/answer.rs', 'gateway/ui/activity/receipt_scan.rs']) {
+      for (const m of src(p).matchAll(KEY)) emitted.add(m.slice(1).find(Boolean));
+    }
+    const record = src('security/decision_record.rs');
+    const finding = record.slice(record.indexOf('pub(crate) struct DecisionFinding {'));
+    for (const m of finding.slice(0, finding.indexOf('}')).matchAll(/pub ([a-z_]+):/g)) emitted.add(m[1]);
+    const leaves = new Set([...CALL_FIELDS, ...REFUSAL_FIELDS, ...CONFIG_FIELDS, ...ADMIN_FIELDS]
+      .flatMap((p) => p.replace('[]', '').split('.')));
+    const known = new Set([...leaves, ...HOLDERS, ...NOT_SHOWN]);
+    expect([...emitted].filter((k) => !known.has(k)).sort(), 'R14 Rust keys no list classes').toEqual([]);
+    expect([...leaves].filter((k) => !emitted.has(k)).sort(), 'R14 listed keys the Rust no longer emits').toEqual([]);
+  });
+
+  // R8 waits for the delivery-check word table; its rows land with it.
+  test.skip('R8 each answer_integrity value shows through the delivery-check word table', () => {});
+  test.skip('R8 an absent answer_integrity shows the table\'s unlisted badge', () => {});
+  test.skip('R8 the receipt imports the table and spells none of its words', () => {});
 });

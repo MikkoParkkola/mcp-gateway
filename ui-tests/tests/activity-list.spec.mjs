@@ -823,6 +823,27 @@ test.describe('LE list screen', () => {
     expect(await screen.texts(), 'LE5 nothing of the late answer').toEqual(want);
   });
 
+  test('LE5 a short page 1 whose end is in view reads on to page 2 after it is drawn', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE5 short page')).answer({ rows: rowsOf('a', 1), next_cursor: 'c2' });
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 short page: page 2 without a scroll');
+  });
+
+  test('LE5 the next-page retry asks again with the list end out of view', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE5 retry: page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+    await screen.toEnd();
+    await (await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 retry: page 2')).fail();
+    const retry = page.locator('#content').getByRole('button', { name: 'Retry', exact: true });
+    await expect(retry, 'LE5 retry: premise, the retry shows').toBeVisible();
+    await screen.rows().first().scrollIntoViewIfNeeded();
+    // A click event, not a pointer click: a pointer click would scroll the end back into view first.
+    await retry.dispatchEvent('click');
+    await expect.poll(() => screen.sent.filter((r) => r.params.cursor === 'c2').length, { message: 'LE5 retry: page 2 asked again' }).toBe(2);
+  });
+
   // A held page 2, voided three ways: its late answer must show nothing.
   for (const how of ['filter', 'control', 'leave']) {
     test(`LE5 a held next page is voided by ${how}`, async ({ page, request }, testInfo) => {
