@@ -165,7 +165,7 @@ use super::cli_exit::{
 };
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
-// Test-only until the fix routes ApiRequest's body through it (red scaffold).
+// Test-only, as the type is, until the fix routes ApiRequest's body through it.
 #[cfg(test)]
 pub(crate) use admin::AdminBody;
 pub(crate) use admin::{

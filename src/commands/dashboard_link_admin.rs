@@ -325,13 +325,13 @@ impl Default for AdminClientOptions {
     }
 }
 
-/// A request body: JSON, or capability YAML sent as its bytes.
-// Scaffold for the red run: Debug is derived here; the fix writes it by hand
-// and wires the type into the send path, dropping this allow.
-#[allow(dead_code)]
+/// A request body: capability YAML, sent as its bytes.
+// Scaffold for the red run, test-only: Debug is derived here. The fix writes
+// Debug by hand, adds the Json arm and wires the type into the send path,
+// dropping the cfg.
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub(crate) enum AdminBody {
-    Json(serde_json::Value),
     Yaml(Vec<u8>),
 }
 
