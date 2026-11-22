@@ -325,17 +325,28 @@ impl Default for AdminClientOptions {
     }
 }
 
-/// A request body: capability YAML, sent as its bytes.
-// Scaffold for the red run, test-only: Debug is derived here. The fix writes
-// Debug by hand, adds the Json arm and wires the type into the send path,
-// dropping the cfg.
-#[cfg(test)]
-#[derive(Debug, PartialEq)]
+/// A request body: JSON, or a capability's YAML sent as its bytes.
+#[derive(PartialEq)]
 pub(crate) enum AdminBody {
+    Json(serde_json::Value),
     Yaml(Vec<u8>),
 }
 
-/// Send the exact URL the caller validated, optionally carrying a JSON body.
+/// Prints a YAML body's size only: a capability may hold a credential
+/// reference, so its text never reaches a log or a failed assertion.
+impl std::fmt::Debug for AdminBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(value) => formatter.debug_tuple("Json").field(value).finish(),
+            Self::Yaml(bytes) => formatter
+                .debug_struct("Yaml")
+                .field("bytes", &bytes.len())
+                .finish(),
+        }
+    }
+}
+
+/// Send the exact URL the caller validated, optionally carrying a body.
 ///
 /// # Errors
 ///
@@ -345,7 +356,7 @@ pub(crate) async fn admin_call_url(
     endpoint: reqwest::Url,
     token: &str,
     tls: &LinkTls,
-    body: Option<&serde_json::Value>,
+    body: Option<&AdminBody>,
     if_match: Option<&reqwest::header::HeaderValue>,
 ) -> Result<AdminResponse, AdminCallError> {
     admin_call_url_with_options(
@@ -365,7 +376,7 @@ pub(crate) async fn admin_call_url_with_options(
     endpoint: reqwest::Url,
     token: &str,
     tls: &LinkTls,
-    body: Option<&serde_json::Value>,
+    body: Option<&AdminBody>,
     if_match: Option<&reqwest::header::HeaderValue>,
     options: &AdminClientOptions,
 ) -> Result<AdminResponse, AdminCallError> {
@@ -476,7 +487,7 @@ async fn send_admin_request(
     endpoint: &str,
     token: &str,
     tls: &LinkTls,
-    body: Option<&serde_json::Value>,
+    body: Option<&AdminBody>,
     if_match: Option<&reqwest::header::HeaderValue>,
     options: &AdminClientOptions,
 ) -> Result<reqwest::Response, AdminCallError> {
@@ -510,8 +521,15 @@ async fn send_admin_request(
     if let Some(total) = options.total {
         request = request.timeout(total);
     }
-    if let Some(body) = body {
-        request = request.json(body);
+    match body {
+        Some(AdminBody::Json(value)) => request = request.json(value),
+        // The web shell's own type for these routes.
+        Some(AdminBody::Yaml(bytes)) => {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/x-yaml")
+                .body(bytes.clone());
+        }
+        None => {}
     }
     if let Some(value) = if_match {
         request = request.header(reqwest::header::IF_MATCH, value);
