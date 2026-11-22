@@ -87,7 +87,7 @@ async fn stdio_admission_refusal_writes_one_record() {
 fn a_signed_stdio_refusal_writes_one_unrecorded_decision() {
     use super::signing_nonce_allocations_support::{Fixture, SESSION, runtime};
     let runtime = runtime();
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     runtime.block_on(async {
         let fixture = Fixture::start_audited_signed(&log).await;

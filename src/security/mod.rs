@@ -50,6 +50,8 @@ pub(crate) type ReplayCalls = Vec<(Option<u32>, String, String)>;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
 pub use posture::{HardenedConfig, SecurityPosture, unhardened_multi_user_warning};
+#[cfg(test)]
+pub(crate) mod metrics_scrape;
 pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;

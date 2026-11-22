@@ -50,3 +50,4 @@ src/gateway/task_service/host.rs	readmit	1	audit-unavailable or gateway-wrapped 
 src/personal_accounts/refusal.rs	mark_rejection	1	builds an Error::JsonRpc code; no frame
 src/protocol/messages.rs	of_error_text	1	the constructor that records the origin
 src/security/audit.rs	from_result	3	audit outcome; no frame
+src/security/decision_record.rs	refused_outcome	1	audit outcome: the error_code an invocation record carries for an answer a gate withheld as a tool result; no frame

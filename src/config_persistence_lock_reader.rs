@@ -79,7 +79,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
         Ok(locked) => {
             // The lock moves into the worker and back, so a cancelled caller never leaves a
             // recovery running unlocked.
-            let checked = off_runtime(move || {
+            let checked = off_runtime(Some(config), move || {
                 if let Some(why) = artifact_blocks(&locked.target) {
                     return Err(why.to_owned());
                 }
@@ -108,7 +108,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
         )),
         Err(NotLocked::Failed(message) | NotLocked::Refused(message)) => {
             let probed = config.to_path_buf();
-            let probe = off_runtime(move || {
+            let probe = off_runtime(Some(config), move || {
                 let target = resolved(&probed);
                 let journal = crate::config_persistence::journal::journal_path(&target);
                 Probe {

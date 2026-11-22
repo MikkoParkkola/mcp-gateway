@@ -22,7 +22,6 @@ const TEST_EXEMPT: &[&str] = &[
     "tests/capability_default_directories.rs",
     "tests/capability_egress_env_proxy.rs",
     "tests/capability_egress_proxy_opt_in.rs",
-    "tests/common/era_probe_cap.rs",
     "tests/hardened_backend_env_proxy.rs",
     "tests/loopback_backend_env_proxy.rs",
     "tests/redact_memory_peak.rs",
