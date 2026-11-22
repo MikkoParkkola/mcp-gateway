@@ -63,7 +63,8 @@ COMPILE_USES = (
     "./.github/actions/add-swap",
 )
 
-CI = Path(".github/workflows/ci.yml")
+# From this file's own place, so the check runs from any working directory.
+CI = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 
 def load_jobs() -> dict:
@@ -234,18 +235,20 @@ def check_build(jobs: dict) -> list[str]:
     return problems
 
 
-def check_gate(name: str, steps: list[dict]) -> list[str]:
-    """C3. The first step fails the job when the shared build did not succeed."""
+def check_gate(name: str, steps: list[dict], build: str = BUILD_JOB, gate_run: str = GATE_RUN) -> list[str]:
+    """C3. The first step fails the job when the shared build (BUILD, by default Linux's) did not succeed; its run
+    text is exactly GATE_RUN (named for BUILD) or the caller's own."""
     if not steps:
-        return [f"{name} job: has no steps; the first must gate on {BUILD_JOB}"]
+        return [f"{name} job: has no steps; the first must gate on {build}"]
+    want_env, want_run = GATE_BUILD.replace(BUILD_JOB, build), gate_run.replace(BUILD_JOB, build)
     step = steps[0]
     label = step_label(0, step)
     problems: list[str] = []
     env = step.get("env")
-    build = env.get("BUILD") if isinstance(env, dict) else None
-    if build != GATE_BUILD:
-        problems.append(f"{name} {label}: env.BUILD is {build!r}, want {GATE_BUILD!r}")
-    if run_text(step).strip() != GATE_RUN:
+    env_build = env.get("BUILD") if isinstance(env, dict) else None
+    if env_build != want_env:
+        problems.append(f"{name} {label}: env.BUILD is {env_build!r}, want {want_env!r}")
+    if run_text(step).strip() != want_run:
         problems.append(f"{name} {label}: run is not the shared-build gate")
     if "if" in step:
         problems.append(f"{name} {label}: carries if:")
@@ -407,8 +410,139 @@ def check_union(jobs: dict) -> list[str]:
     return problems
 
 
+# Windows builds the whole lib test exe once (export-lib) for its four lib legs. Its own rule set, beside Linux's:
+# no parts, no union job, no memory log; the same fail-closed consumer rules.
+WIN_BUILD = "windows-lib-build"
+WIN_LEGS = "windows-lib-shards"
+WIN_ARTIFACT = "windows-lib-tests"
+WIN_ROLLUP = "windows-check"
+WIN_JUDGES = (WIN_ROLLUP, "heavy-gate")  # the roll-ups that may need the build besides the legs
+WIN_EXPORT = 'python scripts/ci/shard_tests.py export-lib "$env:RUNNER_TEMP\\lib-bin"'
+WIN_EXE = "lib-bin\\lib-tests.exe"  # how a leg's step names the exe, in its run text or its env (LIB_EXE)
+WIN_PATH = "${{ runner.temp }}/lib-bin"
+WIN_GATE = '[ "$BUILD" = success ] || { echo "::error::windows-lib-build $BUILD"; exit 1; }'  # the legs' first step
+
+
+def check_windows(jobs: dict) -> list[str]:
+    """W1-W5: the Windows build exports once and fails red on no exe; its legs gate on it, fetch it before
+    running it and never compile; only the legs and the roll-ups need it; windows-check judges both jobs."""
+    problems: list[str] = []
+    build, legs, rollup = jobs.get(WIN_BUILD), jobs.get(WIN_LEGS), jobs.get(WIN_ROLLUP)
+    if not isinstance(build, dict):
+        return [f"{WIN_BUILD} job: missing"]
+    if "windows" not in str(build.get("runs-on", "")):
+        problems.append(f"{WIN_BUILD} job: runs-on {build.get('runs-on')!r} is not a Windows runner")
+    if as_minutes(build.get("timeout-minutes")) is None:
+        problems.append(f"{WIN_BUILD} job: has no timeout-minutes")
+    if build.get("if") != (jobs.get("windows-shards") or {}).get("if"):
+        problems.append(f"{WIN_BUILD} job: if: does not equal windows-shards if:")
+    steps = steps_of(build)
+    exports = [i for i, s in enumerate(steps) if run_text(s).strip() == WIN_EXPORT]
+    if len(exports) != 1:
+        problems.append(f"{WIN_BUILD} job: expected exactly one step running {WIN_EXPORT!r}, found {len(exports)}")
+    job_limit = as_minutes(build.get("timeout-minutes"))
+    for i in exports:
+        step_limit = as_minutes(steps[i].get("timeout-minutes"))
+        if step_limit is None or job_limit is None or step_limit >= job_limit:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: timeout-minutes {step_limit} is not under the "
+                            f"job's {job_limit}, so a hung build leaves no time for the upload to report it")
+        if "if" in steps[i]:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: carries if:, so the build can be switched off")
+    uploads = [i for i, s in enumerate(steps) if uses_action(s, "actions/upload-artifact")
+               and with_map(s).get("name") == WIN_ARTIFACT]
+    if not uploads:
+        problems.append(f"{WIN_BUILD} job: no actions/upload-artifact step named {WIN_ARTIFACT}")
+    for i in uploads:
+        body = with_map(steps[i])
+        if body.get("if-no-files-found") != "error":
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: if-no-files-found is not 'error'")
+        if body.get("path") != WIN_PATH:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: path is {body.get('path')!r}, want {WIN_PATH!r}")
+        if exports and i < exports[0]:
+            problems.append(f"{WIN_BUILD} {step_label(i, steps[i])}: upload is not after the export step")
+    problems += check_no_continue(WIN_BUILD, build, steps)
+    if not isinstance(legs, dict):
+        return problems + [f"{WIN_LEGS} job: missing"]
+    if WIN_BUILD not in needs_of(legs):
+        problems.append(f"{WIN_LEGS} job: needs does not contain {WIN_BUILD}")
+    if not "".join(str(legs.get("if", "")).split()).startswith(CANCELLED):
+        problems.append(f"{WIN_LEGS} job: if: does not start with !cancelled(), so a failed build can skip it")
+    lsteps = steps_of(legs)
+    problems += check_gate(WIN_LEGS, lsteps, WIN_BUILD, WIN_GATE)
+    fetch = [i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact")
+             and with_map(s).get("name") == WIN_ARTIFACT and with_map(s).get("path") == WIN_PATH]
+    # Each env value as written: str() of the whole mapping would double the path's backslashes.
+    env_text = lambda s: " ".join(str(v) for v in (s.get("env") or {}).values()) if isinstance(s.get("env"), dict) else ""
+    runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s) + " " + env_text(s)]
+    if not runs:
+        problems.append(f"{WIN_LEGS} job: no step names {WIN_EXE} in its run text or env, so none runs the exe")
+    for i, s in enumerate(lsteps):
+        if "shard_tests.py run-prebuilt" in run_text(s) and "if" in s:
+            problems.append(f"{WIN_LEGS} {step_label(i, s)}: the suite step carries if:, so a leg can run no tests")
+    if not fetch:
+        problems.append(f"{WIN_LEGS} job: no actions/download-artifact step for {WIN_ARTIFACT} into {WIN_PATH}")
+    elif runs and runs[0] < fetch[0]:
+        problems.append(f"{WIN_LEGS} job: {step_label(runs[0], lsteps[runs[0]])} runs the exe before it is fetched")
+    problems += check_no_compile(WIN_LEGS, lsteps)
+    problems += check_no_continue(WIN_LEGS, legs, lsteps)
+    for name, job in jobs.items():
+        if isinstance(job, dict) and name not in (WIN_BUILD, WIN_LEGS, *WIN_JUDGES) and WIN_BUILD in needs_of(job):
+            problems.append(f"{name} job: needs {WIN_BUILD} but is not its legs job or a roll-up")
+    named = [str((s.get("env") or {}).get("ROLLUP_EXPECTS", "")).split() for s in steps_of(rollup or {})]
+    for job_name in (WIN_BUILD, WIN_LEGS):
+        if job_name not in needs_of(rollup or {}):
+            problems.append(f"{WIN_ROLLUP} job: needs does not contain {job_name}")
+        if not any(job_name in n for n in named):
+            problems.append(f"{WIN_ROLLUP} job: no step env.ROLLUP_EXPECTS lists {job_name}")
+    return problems
+
+
+def _windows_cases(live: dict) -> list[tuple[str, dict]]:
+    """One mutation of the live Windows jobs per rule."""
+    def fresh() -> dict:
+        return copy.deepcopy(live)
+
+    warn = fresh()
+    for s in warn[WIN_BUILD]["steps"]:
+        if uses_action(s, "actions/upload-artifact"):
+            s["with"]["if-no-files-found"] = "warn"
+    ungated = fresh()
+    ungated[WIN_LEGS]["steps"] = ungated[WIN_LEGS]["steps"][1:]
+    compiles = fresh()
+    compiles[WIN_LEGS]["steps"].append({"run": "cargo test --all-features --lib"})
+    unjudged = fresh()
+    unjudged[WIN_ROLLUP]["needs"] = [n for n in needs_of(unjudged[WIN_ROLLUP]) if n != WIN_BUILD]
+    skippable = fresh()
+    skippable[WIN_LEGS]["if"] = str(skippable[WIN_LEGS]["if"]).replace("!cancelled() && ", "", 1)
+    late = fresh()
+    lsteps = late[WIN_LEGS]["steps"]
+    lsteps.append(lsteps.pop(next(i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact"))))
+    no_reserve, export_off, suite_off = fresh(), fresh(), fresh()
+    for s in no_reserve[WIN_BUILD]["steps"]:
+        if run_text(s).strip() == WIN_EXPORT:
+            s["timeout-minutes"] = no_reserve[WIN_BUILD]["timeout-minutes"]
+    for s in export_off[WIN_BUILD]["steps"]:
+        if run_text(s).strip() == WIN_EXPORT:
+            s["if"] = False
+    for s in suite_off[WIN_LEGS]["steps"]:
+        if "shard_tests.py run-prebuilt" in run_text(s):
+            s["if"] = False
+    return [
+        ("the Windows export step's limit reaches the job's", no_reserve),
+        ("the Windows export step is switched off by if:", export_off),
+        ("the Windows legs' suite step is switched off by if:", suite_off),
+        ("the Windows exe is fetched after the steps that run it", late),
+        ("Windows upload if-no-files-found 'warn'", warn),
+        ("the Windows legs lose their build gate step", ungated),
+        ("a Windows leg gains a cargo test step", compiles),
+        ("windows-check drops windows-lib-build from needs", unjudged),
+        ("the Windows legs' if: loses !cancelled()", skippable),
+    ]
+
+
 def check(jobs: dict) -> list[str]:
     problems = check_build(jobs)
+    problems += check_windows(jobs)
     for name in CONSUMERS:
         problems += check_consumer(name, jobs.get(name))
     problems += check_closed(jobs)
@@ -546,7 +680,7 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
 
 def self_test() -> int:
     live = load_jobs()
-    cases = _cases(live)
+    cases = _cases(live) + _windows_cases(live)
     wrong = 0
     for index, (label, jobs) in enumerate(cases):
         found = check(jobs)
