@@ -215,8 +215,10 @@ fn revoke_response(
         && let Some(ComputeRefusal::Unprovable { code, reason }) = keyedit
         && let Some(path) = state.config_path.as_deref()
     {
+        // Not cached, like the success answer: the body names the file.
         return (
             StatusCode::CONFLICT,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(keyedit_refusal(*code, reason, path)),
         )
             .into_response();
