@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use super::support_tests::{Audit, Caller, History, Rig, config_text, env_files, put};
-use crate::config_reload::history::Bounds;
+use crate::config_reload::history::{Bounds, Event, Outcome, Source, StoredFile};
 
 #[tokio::test]
 async fn r2_restoring_the_served_version_writes_nothing_but_still_appends_its_intent() {
@@ -101,27 +101,61 @@ async fn r4b_with_every_env_file_equal_only_the_grants_entry_is_listed() {
 
 #[tokio::test]
 async fn r4c_env_files_on_one_side_only_are_both_listed() {
+    // A change to env_files waits for a restart, so a reload keeps the
+    // running set: a version listing other env files comes from another
+    // run. That version is recorded straight into the store here, beside a
+    // gateway serving with env file Q.
     let dir = crate::test_dir_keep::kept_tempdir();
     let only_old = put(&dir, "old-only.env", b"P=1\n");
     let only_new = put(&dir, "new-only.env", b"Q=1\n");
-    let first = config_text(&format!("environment: \"a\"\n{}", env_files(&[&only_old])));
-    let rig = Rig::start_in(dir, &first, Audit::Logged, Bounds::default(), History::Kept).await;
-    let a = rig.version_of(first.as_bytes());
-    rig.reload_to(&config_text(&format!(
-        "environment: \"b\"\n{}",
-        env_files(&[&only_new])
-    )))
+    let serving = config_text(&format!("environment: \"b\"\n{}", env_files(&[&only_new])));
+    let rig = Rig::start_in(
+        dir,
+        &serving,
+        Audit::Logged,
+        Bounds::default(),
+        History::Kept,
+    )
     .await;
-    let (p, q) = (rig.env_paths(&a), rig.env_paths(&rig.served()));
-    // The premise: each version recorded its own one env file.
-    assert_eq!((p.len(), q.len()), (1, 1), "{p:?} {q:?}");
-    assert_ne!(p, q);
-    let (status, body) = rig.restore(&a, Caller::Root).await;
+    let served = rig.served();
+    let q = rig.env_paths(&served);
+    let other_run = config_text(&format!("environment: \"a\"\n{}", env_files(&[&only_old])));
+    let p = only_old.display().to_string();
+    let mut earlier = rig.kept(&served);
+    earlier.revision = "rv-another-run".into();
+    earlier.files = vec![
+        StoredFile {
+            path: rig.path().display().to_string(),
+            bytes: Some(other_run.into_bytes()),
+        },
+        StoredFile {
+            path: p.clone(),
+            bytes: Some(b"P=1\n".to_vec()),
+        },
+    ];
+    let named = Event {
+        revision: Some(earlier.revision.clone()),
+        source: Source::File,
+        outcome: Outcome::Applied,
+        at: earlier.at,
+        unchanged: false,
+        location: None,
+        still_running: None,
+        attempted_diff: None,
+    };
+    rig.store
+        .record(named, Some(earlier.clone()), &served, earlier.at);
+    assert_eq!(
+        q.len(),
+        1,
+        "the premise: the served version lists Q alone: {q:?}"
+    );
+    let (status, body) = rig.restore(&earlier.revision, Caller::Root).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["not_restored"],
         json!([
-            {"path": p[0], "kind": "env_file"},
+            {"path": p, "kind": "env_file"},
             {"path": q[0], "kind": "env_file"},
             {"kind": "grants"}
         ])
