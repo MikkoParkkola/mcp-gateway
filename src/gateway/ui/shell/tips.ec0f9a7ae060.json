@@ -110,13 +110,7 @@
   "overview.status.tools-agents-load": "Overview › Status: the KPI tiles' info tips",
   "overview.status.traffic": "Overview › Status: the flow map",
   "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state",
-  "servers.status.1-246-tools": "Servers › Status: the tool total in the subtitle",
-  "servers.status.1-284-tools": "Servers › Status: the tool total in the subtitle",
-  "servers.status.1-290-tools": "Servers › Status: the tool total in the subtitle",
-  "servers.status.1-296-tools": "Servers › Status: the tool total in the subtitle",
   "servers.status.accepted-risk-1": "Servers › Status: the Accepted risk group",
-  "servers.status.answering-25-grouped-by-the": "Servers › Status: the Answering heading, second frame",
-  "servers.status.calls-today": "Servers › Status: a calls-since-midnight column",
   "servers.status.failed-calls-per-hour": "Servers › Status: the failed-calls chart",
   "servers.status.failed-last-hour": "Servers › Status: a failed-last-hour column",
   "servers.status.p95-2-1-s-4": "Servers › Status: the Slow badge's own tip",
@@ -219,14 +213,8 @@
   "servers.settings.writing-ones-start-unticked",
   "servers.settings.writing-tools-start-unticked-as",
   "servers.settings.writing-tools-start-unticked-as-2",
-  "servers.status.1-246-tools",
-  "servers.status.1-284-tools",
-  "servers.status.1-290-tools",
-  "servers.status.1-296-tools",
   "servers.status.accepted-risk-1",
   "servers.status.answering-24-grouped-by-the",
-  "servers.status.answering-25-grouped-by-the",
-  "servers.status.calls-today",
   "servers.status.failed-calls-per-hour",
   "servers.status.failed-last-hour",
   "servers.status.p95-2-1-s-4",
@@ -620,22 +608,6 @@
   "title": "Writing tools start unticked, as on",
   "text": "Tools that change something start off, so bringing servers in never hands out a write you did not choose."
  },
- "servers.status.1-246-tools": {
-  "title": "1,246 tools",
-  "text": "Every tool on every server behind the gateway, counted once, now that github's 38 are gone."
- },
- "servers.status.1-284-tools": {
-  "title": "1,284 tools",
-  "text": "Every tool on every server behind the gateway, counted once. Agents see 11 of them and find the rest through search."
- },
- "servers.status.1-290-tools": {
-  "title": "1,290 tools",
-  "text": "Every tool on every server behind the gateway, including inventory's 6 since 14:22."
- },
- "servers.status.1-296-tools": {
-  "title": "1,296 tools",
-  "text": "Every tool on every server behind the gateway, counted once, including postgres-mcp's 12 since 14:32."
- },
  "servers.status.accepted-risk-1": {
   "title": "Accepted risk",
   "text": "Servers running with a risk you confirmed, such as a key sent over plain http. They stay here until the risk is gone."
@@ -643,14 +615,6 @@
  "servers.status.answering-24-grouped-by-the": {
   "title": "Answering",
   "text": "Servers that answer normally, grouped by what they do so the list stays short. Open a group to see each server."
- },
- "servers.status.answering-25-grouped-by-the": {
-  "title": "Answering",
-  "text": "Servers that answer normally, grouped by what they do so the list stays short. Open a group to see each server."
- },
- "servers.status.calls-today": {
-  "title": "Calls today",
-  "text": "Tool calls this server answered or refused since midnight in the gateway's time zone."
  },
  "servers.status.failed-calls-per-hour": {
   "title": "Failed calls per hour",
