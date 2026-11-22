@@ -1511,4 +1511,20 @@ test.describe('LE list screen', () => {
     await page.keyboard.press('Tab');
     await expect(screen.button(KEEP_LOOKING), 'LE22 the next Tab reaches Keep looking').toBeFocused();
   });
+
+  test('LE23 Retry on an empty stopped list keeps focus on the slot', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE23 page 1')).answer(stopped([]));
+    await screen.button(KEEP_LOOKING).click();
+    await (await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE23 the press asks c2')).fail();
+    const retry = screen.button('Retry');
+    await expect(retry, 'LE23 Retry replaces Keep looking').toBeVisible();
+    await focusInPlace(retry);
+    await page.keyboard.press('Enter');
+    await expect.poll(() => asked(screen, 'c2'), { message: 'LE23 Retry asks c2 again' }).toBe(2);
+    await expect(screen.slot(), 'LE23 the slot says it is reading').toHaveText(READING);
+    // No button, no row and no empty state remain, so the slot itself holds focus.
+    await expect.poll(() => screen.focusOnSlot(), { message: 'LE23 focus waits on the slot' }).toBe(true);
+  });
 });
