@@ -313,7 +313,10 @@ async fn cr7_the_page_holds_the_routes_name_length_limit() {
 async fn cr8_names_yaml_would_read_as_another_type_create_by_that_name() {
     let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
     let addr = serve(&fx).await;
-    for typed in ["true", "null", "123"] {
+    // Booleans, nulls and every number form a loader could read the bare
+    // scalar as, and then turn back into different text (007 as 7, 1e3 as
+    // 1000, 0x10 as 16, 0o7 as 7, 1_000 as 1000).
+    for typed in ["true", "null", "123", "007", "1e3", "0x10", "0o7", "1_000"] {
         let got = press(addr, typed, "null").await;
         let file = fx.file.with_file_name(format!("{typed}.yaml"));
         assert!(file.exists(), "{typed}: no file was written: {got}");
