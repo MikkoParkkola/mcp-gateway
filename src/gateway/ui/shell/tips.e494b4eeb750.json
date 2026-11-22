@@ -110,11 +110,6 @@
   "overview.status.tools-agents-load": "Overview › Status: the KPI tiles' info tips",
   "overview.status.traffic": "Overview › Status: the flow map",
   "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state",
-  "servers.status.accepted-risk-1": "Servers › Status: the Accepted risk group",
-  "servers.status.failed-calls-per-hour": "Servers › Status: the failed-calls chart",
-  "servers.status.failed-last-hour": "Servers › Status: a failed-last-hour column",
-  "servers.status.p95-2-1-s-4": "Servers › Status: the Slow badge's own tip",
-  "servers.status.slowest-5-last-1-000": "Servers › Status: the slowest-servers list",
   "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page"
  },
  "_pending_rows": [
@@ -213,13 +208,8 @@
   "servers.settings.writing-ones-start-unticked",
   "servers.settings.writing-tools-start-unticked-as",
   "servers.settings.writing-tools-start-unticked-as-2",
-  "servers.status.accepted-risk-1",
   "servers.status.answering-24-grouped-by-the",
-  "servers.status.failed-calls-per-hour",
-  "servers.status.failed-last-hour",
-  "servers.status.p95-2-1-s-4",
   "servers.status.p95-last-1-000-calls",
-  "servers.status.slowest-5-last-1-000",
   "servers.status.tools",
   "todo.status.ci-bot-is-at-21",
   "todo.status.commit-4f2a91c-by-renovate-bot",
@@ -608,33 +598,13 @@
   "title": "Writing tools start unticked, as on",
   "text": "Tools that change something start off, so bringing servers in never hands out a write you did not choose."
  },
- "servers.status.accepted-risk-1": {
-  "title": "Accepted risk",
-  "text": "Servers running with a risk you confirmed, such as a key sent over plain http. They stay here until the risk is gone."
- },
  "servers.status.answering-24-grouped-by-the": {
   "title": "Answering",
   "text": "Servers that answer normally, grouped by what they do so the list stays short. Open a group to see each server."
  },
- "servers.status.failed-calls-per-hour": {
-  "title": "Failed calls per hour",
-  "text": "Calls to this server that failed, per hour over 24 hours. The grey line is the same hours a day earlier."
- },
- "servers.status.failed-last-hour": {
-  "title": "Failed, last hour",
-  "text": "Calls to this server that failed in the last 60 minutes: errors, timeouts and refused connections."
- },
- "servers.status.p95-2-1-s-4": {
-  "title": "P95 2.1 s, 4× its usual 520 ms",
-  "text": "Slow: this server still answers, but its slowest 5% of calls took over 3 times its usual time (the median of its daily p95 over the last 7 days) for the last 15 minutes. Nothing is paused; agents just wait longer."
- },
  "servers.status.p95-last-1-000-calls": {
   "title": "P95, last 1,000 calls",
   "text": "p95: 95 of every 100 calls finished faster than this. From the gateway's own latency histogram, its last 1,000 successful calls to this server. A group shows its slowest server. A dash means no calls to measure."
- },
- "servers.status.slowest-5-last-1-000": {
-  "title": "Slowest",
-  "text": "95 of every 100 recent calls to this server finished faster than this. Measured over its last 1,000 calls."
  },
  "servers.status.tools": {
   "title": "Tools",
