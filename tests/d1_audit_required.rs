@@ -216,3 +216,64 @@ fn the_environment_sets_the_audit_switch_both_ways() {
     assert_eq!(on.security.transparency_log.enabled, Some(true));
     assert!(on.security.transparency_log.is_enabled(on.auth.enabled));
 }
+
+/// STARTREC.2 where the operator reads it: a `serve` start that meets a pending write it cannot
+/// recover exits non-zero, and its stderr, at the default log level, names the journal and the
+/// steps to finish by hand. Two causes: the config the recovery would restore does not load (auth
+/// on with its log off), and its log cannot open (its folder is a regular file).
+#[test]
+fn a_refused_recovery_tells_the_operator_how_to_finish_on_stderr() {
+    use sha2::Digest as _;
+    for cause in [
+        "the restored config does not load",
+        "the restored log cannot open",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-folder");
+        std::fs::write(&blocker, "a plain file").unwrap();
+        let restored = if cause.ends_with("does not load") {
+            format!("{AUTH_ON}{LOG_OFF}")
+        } else {
+            let log = blocker.join("audit.jsonl").display().to_string();
+            format!("security:\n  transparency_log:\n    enabled: true\n    path: {log:?}\n")
+        };
+        let config = write_config(&dir, "server:\n  port: 9\n");
+        let target = std::fs::canonicalize(&config).unwrap();
+        let staged = target.with_file_name(".gateway.yaml.replace-original");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&staged, &restored).unwrap();
+        let journal = target.with_file_name(".gateway.yaml.replace-journal");
+        let pending = serde_json::json!({
+            "original_revision": hex::encode(sha2::Sha256::digest(restored.as_bytes())),
+            "state": "staged",
+            "version": 1,
+            "original": staged,
+            "target": target,
+        });
+        mcp_gateway::gateway::test_helpers::write_owner_only(&journal, pending.to_string())
+            .unwrap();
+
+        let output = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment)
+            .env_remove("RUST_LOG")
+            .current_dir(dir.path())
+            .args(["--config", config.to_str().unwrap(), "serve", "--stdio"])
+            .stdin(Stdio::null())
+            .output()
+            .expect("run the shipped binary");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{cause}: refused: {stderr}");
+        for told in [
+            ".gateway.yaml.replace-journal",
+            "original_revision",
+            "Nothing was recovered",
+        ] {
+            assert!(
+                stderr.contains(told),
+                "{cause}: stderr says {told:?}: {stderr}"
+            );
+        }
+        assert!(
+            journal.exists(),
+            "{cause}: the journal stays for the hand recovery"
+        );
+    }
+}

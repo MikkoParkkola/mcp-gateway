@@ -75,11 +75,18 @@ async fn serve_start(row: &str, config: &Path) -> crate::Result<crate::gateway::
     crate::gateway::Gateway::new_evaluated(evaluated.config, env, Some(config.to_path_buf())).await
 }
 
+/// The distinct outcomes the log holds for `token`. A resend after a cut between an append and
+/// its flag repeats an equal record, which collapses here, as `converged` counts it
+/// (crash_f1_terminal); a second distinct outcome would be a terminal settled twice.
 fn outcomes_for(records: &[Value], token: &str) -> usize {
     records
         .iter()
         .filter(|record| record["token"] == token && record["event"] == "config_write_outcome")
-        .count()
+        .map(|record| {
+            ["result", "reason", "settled_by", "intent_counter"].map(|key| record[key].to_string())
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 /// The recovery attempt a killed start persisted in the journal.

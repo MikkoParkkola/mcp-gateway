@@ -141,7 +141,13 @@ async fn run_nested(row: &str, scenario: &str, scratch: &Path) {
 async fn discovered_config_with_abandoned_session_refuses() {
     const ROW: &str = "discovered_config_with_abandoned_session_refuses";
     let scratch = tempfile::tempdir().expect("scratch");
-    write_owner_only(scratch.path().join("gateway.yaml"), SERVED).expect("config");
+    // Logging on: with it off, an abandoned file is accepted for later (WIRE.4), so the gate's
+    // refusal would never be reached.
+    let logged = format!(
+        "{SERVED}security:\n  transparency_log:\n    enabled: true\n    path: {:?}\n",
+        scratch.path().join("audit.jsonl").display().to_string()
+    );
+    write_owner_only(scratch.path().join("gateway.yaml"), logged).expect("config");
     write_owner_only(
         scratch.path().join("gateway.yaml.abandoned"),
         "left by a dead writer",
@@ -172,8 +178,17 @@ async fn discovered_abandoned_scenario() {
         Some(Path::new("gateway.yaml")),
         "{ROW}: premise: discovery finds the scratch folder's config"
     );
-    match super::load_for_serve(discovered.as_deref()).await {
-        Ok(_) => panic!("{ROW}: the serve load must refuse the discovered config"),
+    // Load, then build: the gate settles at construction, with the serving log (D-LOG).
+    let started = match super::load_for_serve(discovered.as_deref()).await {
+        Ok(mut evaluated) => {
+            let env = Arc::new(evaluated.live_env());
+            let built = crate::gateway::Gateway::new_evaluated(evaluated.config, env, discovered);
+            Box::pin(built).await.map(drop)
+        }
+        Err(error) => Err(error),
+    };
+    match started {
+        Ok(()) => panic!("{ROW}: the served start must refuse the discovered config"),
         Err(error) => assert!(
             error.to_string().contains(ABANDONED_CLASS),
             "{ROW}: the abandoned-file refusal, got {error}"

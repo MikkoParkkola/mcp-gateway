@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
+use crate::config_reload::startup_settle::StartError;
+
 const ORIGINAL: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 const CANDIDATE: &str = "backends: [not: yaml\n";
 
@@ -68,8 +70,9 @@ fn a_starting_gateway_recovers_a_crashed_write_before_loading() {
     assert!(!journal.exists());
 }
 
-/// A start with no journal is today's start: nothing is locked or written,
-/// not even a lock file.
+/// A start with no journal writes nothing but the config lock's sidecar: the startup gate takes
+/// the lock (as every writer and reload does), so the sidecar is the one new name beside the
+/// config.
 #[test]
 fn a_start_without_a_journal_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -78,11 +81,12 @@ fn a_start_without_a_journal_writes_nothing() {
 
     serve_load(Some(&config)).expect("loads");
 
-    let names: Vec<_> = std::fs::read_dir(dir.path())
+    let mut names: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .map(|e| e.unwrap().file_name())
         .collect();
-    assert_eq!(names, ["gateway.yaml"]);
+    names.sort();
+    assert_eq!(names, [".gateway.yaml.lock", "gateway.yaml"]);
 }
 
 /// A config directory this account cannot write: `None` under root, where
@@ -141,7 +145,7 @@ fn an_unwritable_directory_with_a_journal_refuses_to_start() {
         Ok(_) => panic!("a pending journal it cannot lock must refuse the start"),
     };
     assert!(
-        message.contains("resolve the pending write from the writable side"),
+        message.contains(&StartError::ArtifactCheckFailed.to_string()),
         "{message}"
     );
     assert!(journal.exists(), "nothing was changed");
@@ -340,12 +344,8 @@ fn auth_on_without_a_log_refuses_the_recovery_and_says_how_to_finish() {
 
     nothing_recovered(&config, &journal, CANDIDATE);
     assert!(
-        message.contains(".gateway.yaml.replace-journal"),
+        message.contains(&StartError::UnloadableRecovery.to_string()),
         "{message}"
-    );
-    assert!(
-        message.contains("original_revision"),
-        "the hand steps: {message}"
     );
 }
 
@@ -361,12 +361,8 @@ fn an_unparseable_surviving_config_refuses_the_recovery() {
 
     nothing_recovered(&config, &journal, ORIGINAL);
     assert!(
-        message.contains(".gateway.yaml.replace-journal"),
+        message.contains(&StartError::UnloadableRecovery.to_string()),
         "{message}"
-    );
-    assert!(
-        message.contains("original_revision"),
-        "the hand steps: {message}"
     );
 }
 
@@ -383,7 +379,10 @@ fn a_surviving_config_naming_a_reserved_slot_refuses_the_recovery() {
     let message = refused_start(&config);
 
     nothing_recovered(&config, &journal, CANDIDATE);
-    assert!(message.contains("MCPGW_PENDING_SLOT_X"), "{message}");
+    assert!(
+        message.contains(&StartError::UnloadableRecovery.to_string()),
+        "{message}"
+    );
 }
 
 /// A log under a regular file cannot open: with auth on or off, a configured
@@ -407,7 +406,7 @@ fn a_log_that_cannot_open_refuses_the_recovery() {
 
         nothing_recovered(&config, &journal, CANDIDATE);
         assert!(
-            message.contains(".gateway.yaml.replace-journal"),
+            message.contains(&StartError::JournalPending.to_string()),
             "auth {auth}: {message}"
         );
     }
