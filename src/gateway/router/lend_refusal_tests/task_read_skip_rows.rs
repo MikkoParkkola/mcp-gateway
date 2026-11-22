@@ -172,12 +172,14 @@ async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
     );
 }
 
+/// An answer helper a row judges with: it panics on an answer it rejects.
+type AnswerCheck = fn(&Value, &str);
+
 /// T8 (a): the answer helpers the rows judge with both reject the skipped
 /// shape, so a row can never pass on an answer the absorb would hide.
 #[test]
 fn the_answer_helpers_reject_the_skipped_shape() {
     assert!(skipped(&skip_answer()), "premise: the skipped shape");
-    type AnswerCheck = fn(&Value, &str);
     let helpers: [(&str, AnswerCheck); 2] = [
         ("assert_refusal", assert_refusal),
         ("assert_retryable", assert_retryable),
