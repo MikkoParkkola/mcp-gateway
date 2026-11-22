@@ -89,6 +89,18 @@ fn tls_block(state: &AppState) -> Value {
     })
 }
 
+/// What only a restart would apply: null while nothing waits, else the field
+/// ids in stored order. A changed startup value shows as one "environment"
+/// id; no variable is named.
+fn pending_restart_block(state: &AppState) -> Value {
+    let fields = state.live_config.pending_restart();
+    if fields.is_empty() {
+        Value::Null
+    } else {
+        json!({ "fields": fields })
+    }
+}
+
 /// The handler.
 pub(super) async fn gateway_status(
     State(state): State<Arc<AppState>>,
@@ -112,6 +124,7 @@ pub(super) async fn gateway_status(
         "upgrade": upgrade_block(state.process.upgrade()),
         "clients": state.multiplexer.client_roster(),
         "refused_at_start": state.process.refused_at_start(),
+        "pending_restart": pending_restart_block(&state),
     }))
     .into_response()
 }
