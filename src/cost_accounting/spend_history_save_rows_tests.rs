@@ -663,11 +663,15 @@ fn a_save_after_the_clock_stepped_back_keeps_every_other_keys_rows() {
 fn the_fold_keeps_every_folded_keys_spend_when_one_ran_ahead() {
     let dir = tempfile::tempdir().expect("dir");
     let tracker = CostTracker::new();
+    // The key dated ahead spends first: a record may run the idle sweep at its
+    // own instant, and one 40 days on would sweep every key spent at T0. After
+    // it, the sweep is not due again before T0 + 40 days.
+    spend(&tracker, Some("small-ran-ahead"), T0 + 40 * DAY, 1);
     for i in 0..MAX_KEYS {
         spend(&tracker, Some(&format!("big{i:04}")), T0, 100);
     }
-    spend(&tracker, Some("small-ran-ahead"), T0 + 40 * DAY, 1);
     spend(&tracker, Some("small-current"), T0, 2);
+    assert_eq!(tracker.per_key.len(), MAX_KEYS + 2, "premise: no key swept");
     let file = saved(&tracker, dir.path(), T0 + 60);
     let overflow = &file["overflow"];
     assert_eq!(saved_micro(overflow), (3, 3), "{overflow}");
