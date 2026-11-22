@@ -103,16 +103,16 @@ def _parts(masked: str, o: int, c: int) -> list[tuple[int, int]]:
     return spans + [(start, c)]
 
 
-def _code_blind(masked: str) -> tuple[str, list[int]]:
+def _code_blind(masked: str) -> tuple[str, list[int], list[tuple[int, int]]]:
     """(`masked` with the inside of each one-line code span replaced by `x`,
-    the offsets of backtick runs that close nothing).
+    the offsets of backtick runs that close nothing, and where each span starts and ends).
 
     A code span is read as CommonMark reads it: a run of N backticks opens
     it, and the next run of exactly N on the same line closes it, so no `(`,
     `)`, `,` or `;` written in code splits a parenthetical. A run with no
     closing run is left as text and reported, so the caller can refuse it."""
     runs = list(re.finditer(r"`+", masked))
-    out, unclosed, i = list(masked), [], 0
+    out, unclosed, spans, i = list(masked), [], [], 0
     while i < len(runs):
         opening = runs[i]
         width = len(opening.group())
@@ -126,8 +126,15 @@ def _code_blind(masked: str) -> tuple[str, list[int]]:
             i += 1
             continue
         out[opening.end():runs[closing].start()] = "x" * (runs[closing].start() - opening.end())
+        spans.append((opening.start(), runs[closing].end()))
         i = closing + 1
-    return "".join(out), unclosed
+    return "".join(out), unclosed, spans
+
+
+def _code_seen(t: str) -> tuple[list[str], int]:
+    """Each code span of `t` as `_code_blind` pairs it, and the count of escaped
+    backticks: a drop that changes either has changed what a reader sees as code."""
+    return [t[a:b] for a, b in _code_blind(t)[2]], t.count("\\`")
 
 
 def _kept_text(piece: str) -> str:
@@ -150,11 +157,19 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
 
     def scan(t: str):
         masked = ACCEPTANCE_ID.sub(lambda m: "\0" * len(m.group(0)), t)
-        blind, unclosed = _code_blind(masked)
+        blind, unclosed, _ = _code_blind(masked)
         spans, problems = [], []
         for m in TRACKER_ID.finditer(masked):
             at = m.end(1)  # the id, past the boundary character the pattern consumes
             line = t.count("\n", 0, at) + 1
+            # Its bullet ends at a blank line or at the next bullet; no code span crosses those.
+            start = max(t.rfind("\n- ", 0, at), t.rfind("\n\n", 0, at)) + 1
+            end = min((e for e in (t.find("\n- ", at), t.find("\n\n", at)) if e >= 0), default=len(t))
+            # Fenced or indented block code is invisible to the span reader, so refuse outright.
+            if re.search(r"(?m)^[ \t]*(```|~~~)|^ {6,}\S", t[start:end]):
+                problems.append(f"{line}: a tracker id in a bullet holding a code block; "
+                                "move the id out of the bullet, or reword")
+                continue
             span = _enclosing(blind, at)
             if span is None:
                 problems.append(f"{line}: a tracker id in prose; reword the line without it")
@@ -169,10 +184,8 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
                                 "move the id out of the parenthetical that holds code, or reword")
                 continue
             # An escaped backtick, or a run that closes nothing on its own line,
-            # anywhere in the id's bullet leaves where code starts or ends in doubt:
-            # a code span may run across line breaks, up to a blank line or the next bullet.
-            start = max(t.rfind("\n- ", 0, at), t.rfind("\n\n", 0, at)) + 1
-            end = min((e for e in (t.find("\n- ", at), t.find("\n\n", at)) if e >= 0), default=len(t))
+            # anywhere in the id's bullet leaves where code starts or ends in doubt,
+            # as a code span may run across line breaks.
             if "\\`" in t[start:end] or any(start <= u < end for u in unclosed):
                 problems.append(f"{line}: a tracker id in a bullet with an escaped or unclosed backtick; "
                                 "close the span or reword the line")
@@ -188,9 +201,11 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
     masked, blind, spans, problems = scan(text)
     if problems:
         return text, problems
+    source = text
     while spans:
         # The last parenthetical first, then scan again: a rewrite moves every later offset.
         o, c = max(spans)
+        before = text
         # Each kept part keeps its own text and the separator written before it
         # (`,` or `;`); the first kept part needs none.
         kept = [(text[a - 1] if a > o + 1 else "", _kept_text(text[a:b]))
@@ -205,10 +220,16 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
             if not text[start:o].strip() and not text[c + 1:end].strip():
                 # Alone on its lines: they go too, as a line of spaces reads as a blank
                 # line; a blank line the source has inside it stays, as written.
-                kept = "".join(f"{blank}\n" for blank in text[start:end].split("\n") if not blank.strip())
-                text = text[:start] + kept + text[end + 1:]
+                blanks = "".join(f"{blank}\n" for blank in text[start:end].split("\n") if not blank.strip())
+                if end == len(text) and start and not blanks:
+                    start -= 1  # the text ends on those lines: their line break goes too
+                text = text[:start] + blanks + text[end + 1:]
             else:
                 text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
+        # The invariant behind every code rule above: a drop leaves each code span as it was.
+        if _code_seen(text) != _code_seen(before):
+            line = before.count("\n", 0, o) + 1
+            return source, [f"{line}: dropping the tracker id would change a code span; reword the line"]
         masked, blind, spans, _ = scan(text)
     return text, []
 
