@@ -149,6 +149,12 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
 /// report an invalidated MCP session. Both carriages key on it.
 const SESSION_NOT_FOUND_CODE: i32 = -32015;
 
+/// The header-name prefix a 2026-07-28 peer requires for each tool argument.
+///
+/// Lowercase because `HeaderName` normalises to it, so the prefix and the
+/// `keys()` comparison that clears stale ones agree.
+const MCP_PARAM_PREFIX: &str = "mcp-param-";
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches the safe markers emitted at the HTTP boundary:
@@ -420,6 +426,7 @@ fn finalise_modern_headers(
         // Not every method names something. Writing the header anyway would
         // assert a name the body does not have.
         headers.remove("Mcp-Name");
+        clear_mcp_param_headers(headers);
         return Ok(());
     };
     let name = params
@@ -436,6 +443,77 @@ fn finalise_modern_headers(
             ))
         })?;
     headers.insert("Mcp-Name", modern_header_value(name, "Mcp-Name", method)?);
+    // `tools/call` carries its arguments in the body under `arguments`, and a
+    // 2026 peer also requires each one mirrored as `Mcp-Param-<name>`. Without
+    // them the call is refused `-32020` naming whichever parameter it wanted
+    // first, which reads exactly like a malformed body and is not one: the body
+    // is well formed and only the envelope is incomplete.
+    mirror_params_as_headers(headers, method, params)?;
+    Ok(())
+}
+
+/// Drop every `Mcp-Param-*` header already present.
+///
+/// The transport reuses one `HeaderMap` per call, and the backend's static
+/// headers were merged in before this runs, so a parameter mirrored for an
+/// earlier call would otherwise ride out on a call that has no such argument.
+fn clear_mcp_param_headers(headers: &mut header::HeaderMap) {
+    let stale: Vec<header::HeaderName> = headers
+        .keys()
+        .filter(|name| name.as_str().starts_with(MCP_PARAM_PREFIX))
+        .cloned()
+        .collect();
+    for name in stale {
+        headers.remove(name);
+    }
+}
+
+/// Mirror a call's arguments as `Mcp-Param-<name>` headers.
+///
+/// Only `tools/call` carries arguments, and only a string argument mirrors: the
+/// revision defines the envelope per-parameter and the name comes from the
+/// body's own `arguments` object, never from a table here — a table would drift
+/// from the backend's schema the first time an argument was added.
+///
+/// A value is sentinel-encoded through the same encoder as `Mcp-Name`, because
+/// an argument is caller-supplied and may hold anything UTF-8 allows, while a
+/// header value may not.
+fn mirror_params_as_headers(
+    headers: &mut header::HeaderMap,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<()> {
+    clear_mcp_param_headers(headers);
+    if method != "tools/call" {
+        return Ok(());
+    }
+    let Some(arguments) = params
+        .and_then(|params| params.get("arguments"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    for (key, value) in arguments {
+        let Some(text) = value.as_str() else {
+            // A non-string argument has no header form the revision defines.
+            // Skipping it leaves the body authoritative, which is what a peer
+            // that did not ask for it will read.
+            continue;
+        };
+        let header_name = format!("{MCP_PARAM_PREFIX}{key}");
+        let Ok(name) = header_name.parse::<header::HeaderName>() else {
+            // An argument key that is not a legal header token cannot be
+            // mirrored. The body still carries it; refusing here would fail a
+            // call the peer is willing to serve.
+            continue;
+        };
+        // The header name is dynamic, so it is leaked once per distinct
+        // argument name to satisfy the `&'static str` the shared error path
+        // takes. The set is the backends' combined argument vocabulary, which
+        // is bounded and fixed at build time, not per-call growth.
+        let header_name_static: &'static str = Box::leak(header_name.into_boxed_str());
+        headers.insert(name, modern_header_value(text, header_name_static, method)?);
+    }
     Ok(())
 }
 

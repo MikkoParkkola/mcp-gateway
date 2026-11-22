@@ -2758,3 +2758,44 @@ async fn row_16d_a_404_carrying_a_session_error_body_still_reinitializes() {
 
     server.abort();
 }
+
+/// A 2026-07-28 peer requires each `tools/call` argument mirrored as an
+/// `Mcp-Param-<name>` header beside `Mcp-Method`/`Mcp-Name`.
+///
+/// Without them the peer refuses the call `-32020` naming whichever header it
+/// wanted first, which reads like a malformed body when the body is well formed
+/// and only the envelope is incomplete. Reproduced against a live
+/// `github-mcp-server` behind a supergateway shim before this test existed.
+#[test]
+fn modern_tools_call_mirrors_each_argument_as_a_param_header() {
+    // GIVEN: a tools/call whose arguments are all strings
+    let params = serde_json::json!({
+        "name": "list_pull_requests",
+        "arguments": { "owner": "unity", "repo": "matter-plugin" },
+    });
+    let mut headers = header::HeaderMap::new();
+
+    // WHEN: the modern envelope is finalised
+    finalise_modern_headers(&mut headers, "tools/call", Some(&params)).unwrap();
+
+    // THEN: every argument is mirrored, and the named headers are still written
+    assert_eq!(headers.get("mcp-param-owner").unwrap(), "unity");
+    assert_eq!(headers.get("mcp-param-repo").unwrap(), "matter-plugin");
+    assert_eq!(headers.get("mcp-name").unwrap(), "list_pull_requests");
+    assert_eq!(headers.get("mcp-method").unwrap(), "tools/call");
+}
+
+/// A method that carries no arguments must not inherit the previous call's.
+#[test]
+fn modern_method_without_arguments_leaves_no_stale_param_headers() {
+    // GIVEN: a header map left over from a call that mirrored an argument
+    let mut headers = header::HeaderMap::new();
+    headers.insert("mcp-param-owner", header::HeaderValue::from_static("unity"));
+    let params = serde_json::json!({ "name": "list_issues" });
+
+    // WHEN: a non-tools/call method finalises over it
+    finalise_modern_headers(&mut headers, "tasks/get", Some(&params)).unwrap();
+
+    // THEN: the stale mirror is gone
+    assert!(headers.get("mcp-param-owner").is_none());
+}
