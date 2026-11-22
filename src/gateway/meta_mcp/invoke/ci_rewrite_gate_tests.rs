@@ -22,9 +22,15 @@ const INJECTED: &str =
 
 /// A gateway whose context integrity strips untrusted instructions.
 fn stripping() -> MetaMcp {
+    gate(ContextIntegrityDecisionKind::Strip)
+}
+
+/// A gateway whose context integrity meets untrusted instructions with
+/// `decision`.
+fn gate(decision: ContextIntegrityDecisionKind) -> MetaMcp {
     let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_context_integrity_kernel(ContextIntegrityKernel::new(ContextIntegrityPolicy {
-        untrusted_instruction_decision: ContextIntegrityDecisionKind::Strip,
+        untrusted_instruction_decision: decision,
         ..ContextIntegrityPolicy::enforcing_baseline()
     }));
     meta
@@ -141,9 +147,8 @@ async fn an_enforced_follow_up_question_records_refused() {
 /// The `task_recovery` settlement record of an upstream task whose result
 /// is `result`, recovered and settled in one delivery cell, as the recovery
 /// worker opens it around its query and commit.
-async fn recovery_record(result: Value) -> Value {
+async fn recovery_record(mut meta: MetaMcp, result: Value) -> Value {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let mut meta = stripping();
     let log = crate::security::TransparencyLogger::open(Arc::new(
         crate::security::transparency_log::TransparencyLogConfig {
             enabled: true,
@@ -159,15 +164,17 @@ async fn recovery_record(result: Value) -> Value {
     .expect("open log");
     meta.enable_transparency_log(Arc::new(log));
     delivery_facts::scope(async {
-        let recovered = meta
-            .recover_task_result("alpha", "read", None, "t", result)
-            .expect("recovered");
+        // The notes the recovery's gates took, as the worker passes them.
+        let (recovered, notes) = super::super::audit::with_dispatch_scope(async {
+            meta.recover_task_result("alpha", "read", None, "t", result)
+        })
+        .await;
+        let recovered = recovered.expect("recovered");
         let task = super::super::audit::SettledTask {
             server: "alpha",
             tool: "read",
             id: "task-1",
         };
-        let notes = super::super::audit::DispatchNotes::default();
         let _ = Box::pin(meta.audit_settlement(
             task,
             crate::protocol::tasks::TaskTransition::Complete(recovered),
@@ -188,9 +195,16 @@ async fn recovery_record(result: Value) -> Value {
 /// settlement record; a clean one records no effect.
 #[tokio::test]
 async fn a_recovered_task_records_its_rewrite_on_the_settlement() {
-    let rewritten = Box::pin(recovery_record(answer(INJECTED))).await;
+    let rewritten = Box::pin(recovery_record(stripping(), answer(INJECTED))).await;
     assert_eq!(rewritten["response_effect"], "rewritten", "{rewritten}");
-    let clean = Box::pin(recovery_record(answer("Quarterly figures attached."))).await;
+    // A strip notes no refusal: with the gate's real notes the settlement
+    // still says `ok`.
+    assert_eq!(rewritten["outcome"], "ok", "{rewritten}");
+    let clean = Box::pin(recovery_record(
+        stripping(),
+        answer("Quarterly figures attached."),
+    ))
+    .await;
     assert!(clean.get("response_effect").is_none(), "{clean}");
 }
 
@@ -375,4 +389,23 @@ fn the_sent_answer_is_scanned_whatever_field_carries_it() {
             "{decision:?}: the explanation says withheld, got {told:?}"
         );
     }
+}
+
+/// A recovered answer context integrity withholds whole reaches the task as
+/// a tool result flagged `isError`, and the gate noted its refusal: the
+/// settlement says `denied` with -32600, as the live call's record does,
+/// never `tool_error`, and never `error` from the arm that demotes a bare
+/// committed code with no refusal behind it.
+#[tokio::test]
+async fn a_withheld_recovered_answer_settles_denied() {
+    let meta = gate(ContextIntegrityDecisionKind::Deny);
+    let record = Box::pin(recovery_record(meta, answer(INJECTED))).await;
+    // Premise: the task committed a result, not an error (a failed one has
+    // no response hash), so only the isError arm can make it `denied`.
+    assert!(
+        record["response_hash"].is_string(),
+        "premise: a result: {record}"
+    );
+    assert_eq!(record["outcome"], "denied", "{record}");
+    assert_eq!(record["error_code"], -32600, "{record}");
 }

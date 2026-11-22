@@ -362,13 +362,25 @@ pub(super) async fn record(
     {
         notes.refused_by_memo(refusal);
     }
+    // The meta writer's refusal rule, before either count, so
+    // the counters, the metric and the record take one class.
+    let answered = outcome;
+    let outcome = notes.outcome(outcome);
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")
         .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
     if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
     {
-        use crate::security::security_metrics::{DenialRoute, denied};
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        // A refusal the rule reclassified answered a code the reason table
+        // does not read as a refusal, so it is `other`; the record names the
+        // check.
+        let reason = if matches!(answered, AuditOutcome::Denied(_)) {
+            reason
+        } else {
+            DenialReason::Other
+        };
         denied(DenialRoute::Direct, reason);
     }
     // The web UI's counters move here too, once per call.
