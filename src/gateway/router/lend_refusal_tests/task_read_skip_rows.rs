@@ -154,7 +154,9 @@ async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
     };
     let ended = tokio::time::timeout(Duration::from_secs(120), read).await;
     let joined = ended.expect("the read ends at its bound");
-    let failure = joined.expect_err("the read fails at the bound");
+    let Err(failure) = joined else {
+        panic!("the read answered instead of failing at the bound");
+    };
     assert!(failure.is_panic(), "{failure}");
     let payload = failure.into_panic();
     let message = payload
