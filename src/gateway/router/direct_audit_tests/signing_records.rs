@@ -10,7 +10,7 @@ use super::*;
 
 /// Signing on under `security.posture: hardened`: every `tools/call` on
 /// either route must carry a nonce, and every caller a per-caller identity
-/// (hardened_identity.rs), so the rows call as [`Caller::ModernOidc`].
+/// (`hardened_identity.rs`), so the rows call as [`Caller::ModernOidc`].
 async fn hardened_signing() -> Fixture {
     fixture(Setup {
         extras: &[Extra::Signing, Extra::Hardened],
