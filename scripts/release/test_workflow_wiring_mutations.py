@@ -196,12 +196,28 @@ def _self_test():
         ("M3", _mutate("a\na\n", ("a\n", "")), (STALE, STALE)),
         ("M4", _mutate(STALE, ("span", "spun")), (STALE, STALE)),
         ("M5", _mutate("a\nb\n", ("", "x\n")), (STALE, STALE)),
+        # An empty span holds the empty string exactly once; the edit is still refused.
+        ("M6", _mutate("", ("", "x\n")), (STALE, STALE)),
+        # The swap keeps a comment between the two steps with the moved step.
+        ("W1", _recheck_moved_before_publish("A\n", "C\n", "A\n\n      # c\nC\n"),
+         ("A\n\n      # c\nC\n", "      # c\nC\n\nA\n")),
+        # A step between the two would move too, so the case goes stale instead.
+        ("W2", _recheck_moved_before_publish("A\n", "C\n", "A\n      - name: B\n        run: b\nC\n"),
+         (STALE, STALE)),
     ]
     out = [f"{name}: got {got!r}, want {want!r}" for name, got, want in rows if got != want]
     # The marker is what makes a case stale, so it must occur in no workflow.
     for text in [w] + [p.read_text(encoding="utf-8") for p in sorted(WORKFLOWS.glob("*.y*ml"))]:
         if STALE in text:
             out.append("STALE marker occurs in a workflow text")
+    # A replacement derived from a span that went stale makes the case stale; the marker
+    # is never written into a workflow copy. The file is left as it was.
+    with tempfile.TemporaryDirectory() as directory:
+        probe = pathlib.Path(directory) / "w.yml"
+        probe.write_text("a\n", encoding="utf-8")
+        got = verdict(pathlib.Path(directory), "w.yml", "a\n", "b\n" + STALE)
+        if got != (None, "") or probe.read_text(encoding="utf-8") != "a\n":
+            out.append(f"V1: got {got[0]!r}, want None and the file unchanged")
     return out
 # docker.yml's smoke step and the push step it guards, verbatim. Held apart so
 # the reordering case can swap them whole: deleting the gate and moving it
@@ -1571,12 +1587,12 @@ _RECHECK = _wf_span("release.yml", "release", "Verify the published release's as
 _PUBLISH_THEN_RECHECK = _wf_span("release.yml", "release", "Publish the release", "Verify the published release's assets")
 
 
-def _recheck_moved_before_publish():
+def _recheck_moved_before_publish(publish=_PUBLISH, recheck=_RECHECK, both=_PUBLISH_THEN_RECHECK):
     """The two steps swapped; the comment above the recheck moves with it, and the blank line goes between them."""
-    if STALE in (_PUBLISH, _RECHECK, _PUBLISH_THEN_RECHECK):
+    if STALE in (publish, recheck, both):
         return STALE, STALE
-    gap = _PUBLISH_THEN_RECHECK[len(_PUBLISH):len(_PUBLISH_THEN_RECHECK) - len(_RECHECK)]
-    return _PUBLISH_THEN_RECHECK, gap.lstrip("\n") + _RECHECK + "\n" + _PUBLISH
+    gap = both[len(publish):len(both) - len(recheck)]
+    return both, gap.lstrip("\n") + recheck + "\n" + publish
 
 
 CASES += [
