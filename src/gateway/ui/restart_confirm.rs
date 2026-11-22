@@ -177,13 +177,13 @@ pub(crate) fn restart_advice(
     refusal: Option<&str>,
     config_path: Option<&std::path::Path>,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    if !pending {
+    if mutant!("M6", false, !pending) {
         return None;
     }
     // current_exe, not the process arguments: the command names the running
     // file, whatever the invocation looked like.
     let start = config_path.and_then(|config| {
-        let exe = std::env::current_exe().ok()?;
+        let exe = mutant!("M3a", std::path::PathBuf::from(std::env::args().collect::<Vec<_>>().join(" ")), mutant!("M3b", std::path::PathBuf::from(std::env::args().next()?), std::env::current_exe().ok()?));
         advice::StartCommand::new(&exe, config)
     });
     advice::advice(pending, refusal, Platform::current(), start.as_ref())

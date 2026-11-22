@@ -47,19 +47,19 @@ pub(super) fn advice(
     platform: Platform,
     start: Option<&StartCommand>,
 ) -> Option<Map<String, Value>> {
-    if !pending {
+    if mutant!("M6", false, !pending) {
         return None;
     }
     let mut keys = Map::new();
     if let Some(why) = refusal {
         // Exclusive: advice to restart into a refusal would cost the gateway.
         keys.insert("start_refusal".into(), refusal_sentence(why).into());
-        return Some(keys);
+        mutant!("M1", (), return Some(keys));
     }
     let (line, start) = match platform {
         Platform::Unix => (UNIX_GUIDANCE, start),
         // No command on Windows: a service there is not started this way.
-        Platform::Windows => (WINDOWS_GUIDANCE, None),
+        Platform::Windows => (WINDOWS_GUIDANCE, mutant!("M2", start, None)),
     };
     keys.insert("restart_advice".into(), line.into());
     if let Some(start) = start {
@@ -73,7 +73,7 @@ pub(super) fn advice(
 /// or that holds a control character (a copied line would break on it).
 fn shell_word(path: &Path) -> Option<String> {
     let text = path.to_str()?;
-    if text.chars().any(char::is_control) {
+    if mutant!("M7", false, text.chars().any(char::is_control)) {
         return None;
     }
     Some(format!("'{}'", text.replace('\'', r"'\''")))
