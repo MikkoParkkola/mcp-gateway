@@ -21,7 +21,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Destructive-call confirmation | A destructive meta-tool running without the user agreeing to it |
 | Capability pin check | Tampering with a pinned capability file. A file whose `sha256:` pin no longer matches is refused |
 | Process limits for CLI capabilities | A CLI capability starting arbitrary programs. It runs only if it is pinned and its command is on `capabilities.process_commands`, with no shell, in a private directory, with a cleared environment, an output cap and a timeout. Unset, the list admits the commands the shipped catalogue runs: `gws`, `openpencil-mcp`, `pact-mcp`, `pyghidra-mcp` and `skill-scanner scan`. Setting the key replaces that list, so keep the entries you still need |
-| Response inspection and context integrity | Nothing is blocked by default. Both observe tool output and record what they find. Context integrity classifies the text of a tool answer's strings, and above 64 KiB only its first and last 32 KiB |
+| Response inspection and context integrity | Nothing is blocked by default. Both observe tool output and record what they find. Context integrity classifies the text of a tool answer's values (strings, numbers and booleans), and above 64 KiB only its first and last 32 KiB |
 
 ## Opt-in
 
