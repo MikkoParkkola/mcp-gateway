@@ -233,7 +233,10 @@ impl HourBuckets {
             .0
             .iter()
             .filter(|(h, ..)| *h >= from)
-            .fold((0, 0), |(t, m), (_, tok, mic)| (t + tok, m + mic));
+            // Saturating: a restored file can hold any numbers.
+            .fold((0u64, 0u64), |(t, m), (_, tok, mic)| {
+                (t.saturating_add(*tok), m.saturating_add(*mic))
+            });
         (tokens, usd(micro))
     }
 }

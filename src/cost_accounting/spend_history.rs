@@ -151,8 +151,12 @@ impl History {
 /// cannot be set aside, this run saves no history, so its bytes survive.
 pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[String], now: u64) {
     let path = data_dir.join(FILE_NAME);
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
+    let bytes = match read_capped(&path) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            let why = format!("larger than {MAX_FILE_BYTES} bytes, more than any save writes");
+            return set_aside(tracker, &path, now, &why);
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) => return set_aside(tracker, &path, now, &e.to_string()),
     };
@@ -180,6 +184,26 @@ pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[Strin
     }
     drop(carried);
     tracing::info!(keys = history.keys.len(), "Restored spend history");
+}
+
+/// The largest file a restore reads. A save at the bounds writes about 20 MB,
+/// a little more with every key name escaped, so this only ever refuses a
+/// file the gateway did not write, and the restore never holds more.
+const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The bytes at `path`, or `None` when the file is over [`MAX_FILE_BYTES`]:
+/// judged by its length first, and by a read that stops one byte past the
+/// cap if it grows meanwhile.
+fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    let within = u64::try_from(bytes.len()).is_ok_and(|n| n <= MAX_FILE_BYTES);
+    Ok(within.then_some(bytes))
 }
 
 fn set_aside(tracker: &CostTracker, path: &Path, now: u64, why: &str) {

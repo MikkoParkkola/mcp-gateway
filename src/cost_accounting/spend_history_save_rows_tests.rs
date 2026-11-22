@@ -549,3 +549,41 @@ fn a_full_file_stays_within_its_stated_size_and_restores() {
     assert!(warnings.is_empty(), "{warnings}");
     assert_eq!(back.per_key.len(), MAX_KEYS);
 }
+
+/// gpt seat 1 (CRITICAL): a restored file may hold the largest numbers. Two
+/// adjacent full hours sum to more than a u64 holds; the window a view reads
+/// saturates at the largest value instead of wrapping or panicking. Red
+/// before: the window's sum overflowed.
+#[test]
+fn restored_maximum_values_saturate_the_window_a_view_reads() {
+    let full = |hour: u64| json!([hour, u64::MAX, u64::MAX]);
+    let hours = json!([full(T0 / HOUR - 1), full(T0 / HOUR)]);
+    let row = json!({"fp": fingerprint("k"), "name": "k", "hours": hours, "days": []});
+    let empty = json!({"hours": [], "days": []});
+    let file = json!({"keyless": empty, "keys": [row], "overflow": empty});
+    let (_dir, back) = restore_file(&file, &["k".to_owned()]);
+    let _clock = at_secs(T0);
+    let window = back.key_snapshot("k").expect("the key").window_24h;
+    assert_eq!(window.tokens, Some(u64::MAX));
+    assert!(window.cost_usd.is_some_and(f64::is_finite), "{window:?}");
+}
+
+/// gpt seat 1 (HIGH): a file past the read cap is refused by its length,
+/// before it is read: set aside, with one warning that says why. Red before:
+/// the restore read the whole file and refused it only as bad JSON.
+#[test]
+fn a_file_past_the_read_cap_is_refused_unread() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(FILE_NAME);
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(super::MAX_FILE_BYTES + 1)
+        .expect("a sparse file");
+    drop(file);
+    let (back, warnings) =
+        crate::test_log_capture::capture_warnings(|| restored(dir.path(), &["k"], T0));
+    assert_eq!(back.per_key.len(), 0);
+    let warned = warnings.lines().filter(|l| l.contains("WARN")).count();
+    assert_eq!(warned, 1, "{warnings}");
+    assert!(warnings.contains("larger than"), "{warnings}");
+    assert!(!path.exists(), "the file is set aside");
+}
