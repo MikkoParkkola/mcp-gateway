@@ -81,6 +81,14 @@ pub(super) fn config_text(tail: &str) -> String {
     format!("{}{tail}", yaml_of(&keys))
 }
 
+/// As [`config_text`], but the CLI key is gone: root and the viewer only.
+pub(super) fn config_text_without_cli(tail: &str) -> String {
+    format!(
+        "{}{tail}",
+        yaml_of(&[root_item(), item("viewer", VIEWER, "")])
+    )
+}
+
 /// The `env_files:` block that lists `paths`, for a `config_text` tail.
 pub(super) fn env_files(paths: &[&std::path::Path]) -> String {
     use std::fmt::Write as _;

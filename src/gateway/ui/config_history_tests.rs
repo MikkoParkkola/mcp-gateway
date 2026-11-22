@@ -213,11 +213,31 @@ async fn g2_no_stored_byte_reaches_the_history_answer() {
     );
     let rig = Rig::start_in(dir, &text, Audit::Logged, Bounds::default(), History::Kept).await;
     let a = rig.version_of(text.as_bytes());
+    // An event holding a diff with a secret in it, as a store may hold one.
+    let at = crate::clock::unix_secs().expect("the clock reads");
+    rig.store.record(
+        crate::config_reload::history::Event {
+            at,
+            source: crate::config_reload::history::Source::File,
+            outcome: crate::config_reload::history::Outcome::Refused,
+            revision: None,
+            unchanged: false,
+            still_running: None,
+            location: Some(7),
+            attempted_diff: Some("+TOKEN=sentinel-diff-6618\n".into()),
+        },
+        None,
+        &a,
+        at,
+    );
     let (status, body) = rig.history(Caller::Root).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The premise: the answer lists that event.
+    assert_eq!(body["events"][0]["location"], json!(7), "{body}");
     let served = body.to_string();
     assert!(!served.contains("sentinel-env-9902"), "{served}");
     assert!(!served.contains("sentinel-yaml-4471"), "{served}");
+    assert!(!served.contains("sentinel-diff-6618"), "{served}");
     let mut keys = BTreeSet::new();
     all_keys(&body, &mut keys);
     assert!(

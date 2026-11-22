@@ -240,15 +240,17 @@ impl ConfigHistory {
     }
 
     /// For a restore, from one read: what `revision` resolves to, and the
-    /// newest kept copy of `served`, the version it is compared against.
+    /// newest kept copy of the served revision, the version it is compared
+    /// against. `served` is asked after the read, so the baseline is judged
+    /// by the revision served when the read was taken, never an earlier one.
     #[cfg(feature = "webui")]
     pub(crate) fn lookup_against(
         &self,
         revision: &str,
-        served: Option<&str>,
+        served: impl FnOnce() -> Option<String>,
     ) -> Result<(Lookup, Option<Snapshot>), String> {
         let state = self.read_state()?;
-        let baseline = served.and_then(|served| newest(&state, served).cloned());
+        let baseline = served().and_then(|served| newest(&state, &served).cloned());
         Ok((resolve(&state, revision), baseline))
     }
 

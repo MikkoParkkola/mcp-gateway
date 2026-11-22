@@ -47,19 +47,27 @@ async fn history(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
     let Some(hook) = state.live_config.history_hook() else {
         return no_config_file().into_response();
     };
-    let served = state.live_config.served_revision();
     let store = Arc::clone(&hook.store);
     match tokio::task::spawn_blocking(move || store.contents()).await {
         Ok(Ok((versions, events))) => {
+            // Sampled after the read, as a restore's baseline is.
+            let served = state.live_config.served_revision();
             Json(projection(&versions, &events, served.as_deref())).into_response()
         }
-        _ => unreadable(),
+        Ok(Err(_)) => unreadable(UNREADABLE_STORE),
+        Err(_) => unreadable(UNREADABLE_TASK),
     }
 }
 
+/// The log line's cause when the store's file cannot be read or parsed.
+const UNREADABLE_STORE: &str = "the history file could not be read or parsed";
+/// The log line's cause when the blocking read did not finish.
+const UNREADABLE_TASK: &str = "the history read did not finish";
+
 /// One fixed answer for a history that cannot be read or parsed: no path,
-/// no parser text.
-fn unreadable() -> Response {
+/// no parser text. The log line names which of the two failed, nothing more.
+fn unreadable(cause: &'static str) -> Response {
+    tracing::warn!(cause, "config history route: the history could not be read");
     structured_error(
         StatusCode::SERVICE_UNAVAILABLE,
         "history_unreadable",
@@ -140,6 +148,7 @@ struct RestoreBody {
 async fn restore(
     State(state): State<Arc<AppState>>,
     guard: Guard,
+    Extension(_arrival): Extension<Arc<crate::config_reload::Generation>>,
     session: Option<Extension<SessionMintedBy>>,
     body: Result<Json<RestoreBody>, JsonRejection>,
 ) -> Response {
@@ -153,8 +162,8 @@ async fn restore(
         .as_ref()
         .and_then(|client| client.quota_principal.as_ref());
     let minted = session.as_ref().map(|Extension(SessionMintedBy(key))| key);
-    let table = state.live_config.generation();
-    if super::settings::caller_is_cli_key(table.auth(), quota, minted) {
+    let generation = state.live_config.generation();
+    if super::settings::caller_is_cli_key(generation.auth(), quota, minted) {
         return super::guard::Refused::Forbidden.into_response();
     }
     let version = match body {
@@ -167,12 +176,19 @@ async fn restore(
     ) else {
         return no_config_file().into_response();
     };
-    let served = state.live_config.served_revision();
-    let (store, wanted) = (Arc::clone(&hook.store), version.clone());
-    let read =
-        tokio::task::spawn_blocking(move || store.lookup_against(&wanted, served.as_deref())).await;
-    let Ok(Ok((found, baseline))) = read else {
-        return unreadable();
+    let (store, live, wanted) = (
+        Arc::clone(&hook.store),
+        Arc::clone(&state.live_config),
+        version.clone(),
+    );
+    let read = tokio::task::spawn_blocking(move || {
+        store.lookup_against(&wanted, || live.served_revision())
+    })
+    .await;
+    let (found, baseline) = match read {
+        Ok(Ok(read)) => read,
+        Ok(Err(_)) => return unreadable(UNREADABLE_STORE),
+        Err(_) => return unreadable(UNREADABLE_TASK),
     };
     let kept = match found {
         Lookup::Kept(kept) => kept,
@@ -293,6 +309,10 @@ fn not_restored(kept: &Snapshot, baseline: Option<&Snapshot>, config: &str) -> V
         .collect()
 }
 
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_history_cli_tests.rs"]
+mod cli_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_history_restore_scope_tests.rs"]
