@@ -427,6 +427,8 @@ class DropIds(unittest.TestCase):
             ("a kept part beside an id and a blank part", f"- y (#12, {T}37, ).", "- y (#12)."),
             ("ids split across a line break", f"- d ({T}4,\n  {T}5).", "- d."),
             ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
+            ("a PR number and an id split by a semicolon", f"- s (#40; {T}41).", "- s (#40)."),
+            ("two ids split by a semicolon", f"- s2 ({T}42; {T}43).", "- s2."),
         ]
         for name, fragment, rendered in shapes:
             with self.subTest(name):
@@ -459,6 +461,10 @@ class DropIds(unittest.TestCase):
         first = cf.assemble(BASE, {"23.fixed.md": f"- k ({T}15).\n"})
         second = cf.assemble(first, {"24.fixed.md": "- m (#24)\n"})
         self.assertEqual(unreleased_fixed(second), ["- existing fix (#2)", "- k.", "- m (#24)"])
+
+    def test_folding_its_own_output_with_no_fragments_changes_nothing(self):
+        first = cf.assemble(BASE, {"26.fixed.md": f"- z (#26, {T}18).\n"})
+        self.assertEqual(cf.assemble(first, {}), first)
 
 
 class DropIdsCli(unittest.TestCase):
@@ -503,6 +509,11 @@ class DropIdsCli(unittest.TestCase):
         (self.root / "CHANGELOG.md").write_text(BASE.replace("- existing fix (#2)", f"- i {T}12 holds (#2)"), encoding="utf-8")
         (self.root / "changelog.d/32.fixed.md").write_text("- p (#32)\n", encoding="utf-8")
         self.refused("CHANGELOG.md:7: ")
+
+    def test_one_refused_fragment_keeps_every_fragment_including_a_clean_one(self):
+        (self.root / "changelog.d/35.fixed.md").write_text("- clean (#35)\n", encoding="utf-8")
+        (self.root / "changelog.d/36.fixed.md").write_text(f"- Seen in {T}19 first.\n", encoding="utf-8")
+        self.refused("changelog.d/36.fixed.md:1: ")
 
     def test_a_dry_run_leaves_every_fragment_byte_for_byte(self):
         (self.root / "changelog.d/33.fixed.md").write_text(f"- q ({T}16, #33)\n", encoding="utf-8")
