@@ -93,7 +93,8 @@ export async function trackTimers(page) {
     window.setTimeout = function (fn, ms, ...rest) {
       if (typeof fn !== 'function') return arm.call(this, fn, ms, ...rest);
       const entry = { ms: Number(ms) || 0, stack: new Error().stack ?? '' };
-      const id = arm.call(this, (...a) => { pending.delete(id); return fn(...a); }, ms, ...rest);
+      // A plain function, so the callback gets whatever receiver the clock calls it with.
+      const id = arm.call(this, function (...a) { pending.delete(id); return Reflect.apply(fn, this, a); }, ms, ...rest);
       pending.set(id, entry);
       return id;
     };
@@ -123,14 +124,22 @@ export async function advanceArmed(page, ms, from, by = ms) {
     throw new Error('advanceArmed needs trackTimers(page), called after page.clock.install()');
   }
   let pending = [];
+  let broke = null; // a failure of the read itself (a closed page, a thrown evaluate)
   const armed = async () => {
-    const timers = await page.evaluate(() => window.__pendingTimers());
-    pending = timers.map((t) => ({ ms: t.ms, callers: callersOf(t.stack) }));
+    try {
+      const timers = await page.evaluate(() => window.__pendingTimers());
+      pending = timers.map((t) => ({ ms: t.ms, callers: callersOf(t.stack) }));
+      broke = null;
+    } catch (err) {
+      broke = err;
+      throw err;
+    }
     return pending.some((t) => t.ms === ms && t.callers.includes(from));
   };
   try {
     await expect.poll(armed).toBe(true);
   } catch {
+    if (broke) throw broke; // its own error, not "no timer armed"
     const list = pending.map((t) => `${t.ms} ms from ${t.callers.slice(0, 3).join(' < ')}`).join('; ') || 'none';
     throw new Error(`no ${ms} ms timer armed from ${from}; pending: ${list}`);
   }
