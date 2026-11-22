@@ -48,22 +48,20 @@ fn assert_carries(record: &Value, fx: &Fixture, jti: &str) {
 
 /// Plan row R4: the token a call's decision names resolves, through that
 /// call's own receipt, to the token's reach: its backends and tools as minted
-/// and the expiry bound its issuance row recorded. The receipt is read with
-/// the call's own `bearer`, made admin only now (after the call) and so only
-/// inside the token's own backends.
-async fn assert_resolves(
-    fx: &Fixture,
-    record: &Value,
-    (jti, bearer): (&str, &str),
-    backends: &[&str],
-) {
+/// and the expiry bound its issuance row recorded. The receipt is read by a
+/// separate reader: a token minted now, after the call, for every backend and
+/// mapped to admin, so a call refused for a backend outside its own token's
+/// scope still has a readable receipt.
+async fn assert_resolves(fx: &Fixture, record: &Value, jti: &str, backends: &[&str]) {
     map_admin(fx);
+    let ks = fx.state.key_server.as_ref().expect("fixture key server");
+    let (reader, _) = crate::key_server::issuance_row_tests::mint_for(ks, &["*"]).await;
     let hash = record["entry_hash"]
         .as_str()
         .and_then(|h| h.strip_prefix("sha256:"))
         .expect("a hashed call record");
     let receipt = format!("/ui/api/activity/{}-{}", record["counter"], &hash[..16]);
-    let (status, body) = post_bearer(fx, "GET", &receipt, "", bearer, false).await;
+    let (status, body) = post_bearer(fx, "GET", &receipt, "", &reader, false).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let reach = serde_json::from_str::<Value>(&body).expect("a JSON receipt")["reach"].clone();
     let bound = issuance_row_of(fx, jti)["expires_by"].clone();
@@ -139,7 +137,7 @@ async fn a_meta_call_answered_as_json_records_its_token() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
 /// A meta call answered as a stream carries the minted token and its issuance row.
@@ -150,7 +148,7 @@ async fn a_meta_call_answered_as_a_stream_records_its_token() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
 /// A direct backend call carries the minted token and its issuance row.
@@ -162,7 +160,7 @@ async fn a_direct_backend_call_records_its_token() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
 /// A backend scope refusal still records the presented token and its issuance row.
@@ -173,7 +171,7 @@ async fn a_call_refused_by_the_router_records_its_token() {
     let record = only_invocation(&fx);
     assert_eq!(record["outcome"], "denied", "{record}");
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
 /// A replay records the token without calling the backend a second time.
@@ -190,7 +188,7 @@ async fn a_replayed_call_records_its_token() {
     let records = invocations(&fx);
     assert_eq!(records.len(), 2, "{records:?}");
     assert_carries(&records[1], &fx, &jti);
-    assert_resolves(&fx, &records[1], (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &records[1], &jti, &["alpha"]).await;
 }
 
 /// A keyed task call of `alpha:t` as `bearer`, from a client that can answer
@@ -244,7 +242,7 @@ async fn a_task_step_records_its_token() {
     assert!(!records.is_empty(), "premise: the step was recorded");
     for record in &records {
         assert_carries(record, &fx, &jti);
-        assert_resolves(&fx, record, (&jti, &bearer), &["alpha"]).await;
+        assert_resolves(&fx, record, &jti, &["alpha"]).await;
     }
 }
 
@@ -283,16 +281,13 @@ async fn a_resumed_task_step_records_the_resuming_token() {
         !resumed.is_empty(),
         "premise: the resumed step was recorded"
     );
+    // Every record of the resumed round names the resuming token, so a round
+    // that names it on one record and the first token on another fails.
     for record in resumed {
         assert_ne!(named_jti(record), Some(starter_jti.as_str()), "{record}");
+        assert_carries(record, &fx, &resumer_jti);
+        assert_resolves(&fx, record, &resumer_jti, &["alpha"]).await;
     }
-    let step = resumed
-        .iter()
-        .rev()
-        .find(|record| named_jti(record) == Some(resumer_jti.as_str()))
-        .unwrap_or_else(|| panic!("no resumed record names the second token: {resumed:?}"));
-    assert_carries(step, &fx, &resumer_jti);
-    assert_resolves(&fx, step, (&resumer_jti, &resumer), &["alpha"]).await;
 }
 
 /// A streamed call decided after its handler returned: the backend holds its
@@ -344,7 +339,7 @@ async fn a_call_decided_after_its_stream_opened_records_its_token() {
     assert!(streamed.contains("\"result\""), "{streamed}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["alpha"]).await;
+    assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
 /// Map the identity `mint_for` names (its issuer, its group `g`) to admin.
@@ -373,5 +368,5 @@ async fn a_web_ui_tool_call_records_its_token() {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{answer}");
     let record = only_invocation(&fx);
     assert_carries(&record, &fx, &jti);
-    assert_resolves(&fx, &record, (&jti, &bearer), &["*"]).await;
+    assert_resolves(&fx, &record, &jti, &["*"]).await;
 }
