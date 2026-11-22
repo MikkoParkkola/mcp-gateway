@@ -130,6 +130,17 @@ fn a_planted_stub_writer_is_named() {
     assert!(!wrapper_allowance_holds(&format!("{wrapper}\n{wrapper}")));
 }
 
+/// The census reads this file too, as code only: a real writer here is named,
+/// while a mode spelled in a literal or a comment, as the fixtures do, is not.
+#[test]
+fn the_census_reads_its_own_file_as_code() {
+    let own = "src/test_stub_tests.rs";
+    let writer = "let s = \"#!/bin/sh\";\nset_mode(0o755);\n";
+    assert_eq!(stub_writers(own, writer).len(), 1);
+    let inert = "let s = \"#!/bin/sh from_mode(0o755)\";\n// set_mode(0o755)\n";
+    assert!(stub_writers(own, inert).is_empty());
+}
+
 #[test]
 fn a_stub_holds_its_contents_and_runs() {
     let dir = tempfile::tempdir().expect("dir");
