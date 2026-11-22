@@ -347,9 +347,12 @@ def window_of(equality: bool, args: str, names: dict[str, float], deadlines: dic
 
 
 def scan_text(
-    path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]], threshold: float = THRESHOLD_S
+    path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]], threshold: float = THRESHOLD_S,
+    sites: list | None = None,
 ) -> list[Finding]:
-    """Every assert in `text` that bounds a measured time under 5 s, or by a window that does not resolve."""
+    """Every assert in `text` that bounds a measured time under 5 s, or by a window that does not resolve.
+
+    `sites`, when given, also collects (finding, offset, window expression) for each one reported."""
     code = blank_strings_and_comments(text)
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
     imports = imports_of(code)
@@ -381,6 +384,8 @@ def scan_text(
                 "unresolvable window" if value is None else "under 5 s",
             )
         )
+        if sites is not None:
+            sites.append((found[-1], offset, expr))
     return found
 
 
@@ -447,6 +452,7 @@ def scan_timeouts(
     tree_consts: dict[str, list[tuple[str, str]]],
     includers: dict[str, str],
     threshold: float = THRESHOLD_S,
+    sites: list | None = None,
 ) -> list[Finding]:
     """Every `timeout(W, f)` in test code whose expiry fails the test, when W is
     under 5 s or does not resolve (MIK-8247); and every HTTP client or request
@@ -458,6 +464,9 @@ def scan_timeouts(
     `let` binding the function later consumes the same way. A timeout whose
     Result is only inspected (`assert!(r.is_err())`, a cancellation) is not
     judged: it expects the window to pass.
+
+    `sites`, when given, also collects (finding, offset, argument text) for
+    each reported `timeout(W, f)`.
     """
     code = blank_strings_and_comments(text)
     tested = test_lines(path, text)
@@ -510,6 +519,8 @@ def scan_timeouts(
                 "unresolvable window" if seconds is None else "under 5 s",
             )
         )
+        if sites is not None:
+            sites.append((found[-1], m.start(), code[m.end() : end - 1]))
     for m in METHOD_TIMEOUT.finditer(code):
         line = code.count("\n", 0, m.start()) + 1
         args, end = call_args(code, m.end() - 1)
