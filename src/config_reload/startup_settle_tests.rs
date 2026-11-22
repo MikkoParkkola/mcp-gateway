@@ -362,8 +362,9 @@ async fn prepare_locks_a_writable_config() {
 }
 
 /// GATE.1, the writable side: a retired manifest beside a config this start can lock is evidence
-/// this build cannot read, so the start refuses it before any recovery. The config and the
-/// manifest keep their bytes, and the lock is free again.
+/// this build cannot read, so the start refuses it before any recovery. A crashed write waits
+/// beside it, so a recovery run first would restore the config and remove the journal: the whole
+/// folder must keep its entries and bytes, and the lock is free again.
 #[tokio::test]
 async fn prepare_refuses_a_retired_manifest_it_can_lock() {
     let row = "prepare_refuses_a_retired_manifest_it_can_lock";
@@ -371,10 +372,18 @@ async fn prepare_refuses_a_retired_manifest_it_can_lock() {
     let (dir, config) = fresh_config();
     let manifest = dir.path().join("gateway.yaml.abandoned.retired");
     write_owner_only(&manifest, LEFT).expect("manifest");
+    crashed_after_rename(&config, START, NEXT);
+    let sidecar = crate::config_persistence::lock::lock_path(
+        &crate::identity_grants::journal::resolved(&config),
+    );
+    let before = tree_with_sidecar(dir.path(), &sidecar);
+    assert!(
+        matches!(snap(&journal_file(dir.path())), Snap::File(_)),
+        "{row}: premise: a journal waits to be recovered"
+    );
     let outcome = prepare_start(&config).await;
     want_session(row, "manifest", outcome, StartError::ManifestUnread);
-    assert_eq!(read_bytes(&config), START.as_bytes(), "{row}: config kept");
-    assert_eq!(read_bytes(&manifest), LEFT, "{row}: manifest kept");
+    same_tree(row, "manifest beside a crashed write", dir.path(), &before);
     assert_lock_free(&config, row).await;
 }
 
