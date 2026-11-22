@@ -247,6 +247,7 @@ async fn restart_overlap_waits_then_busy() {
     };
     let started = Instant::now();
     let release = tokio::spawn(async move {
+        // timing: lower-bound
         tokio::time::sleep(RELEASED_AFTER).await;
         drop(held);
     });
