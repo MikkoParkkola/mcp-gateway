@@ -406,14 +406,16 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
     let mut overflow = tracker.carried.lock().clone();
 
     // The cut is the save instant's own: a slot one copy holds past `now`
-    // (a clock that stepped back) must not age the other copies' rows.
+    // (a clock that stepped back) must not age the other copies' rows. Such
+    // a slot is counted in `now`'s hour and date, so no saved slot is dated
+    // after the save and the fold below stays within one series' caps.
     let (hour, date) = (now / 3600, tally::local_date(now));
     for series in keys
         .iter_mut()
         .map(|(_, s)| s)
         .chain([&mut keyless, &mut overflow])
     {
-        series.age(hour, date);
+        series.settle(hour, date);
     }
 
     // Most 30-day spend first; the name breaks a tie, so a save is stable.

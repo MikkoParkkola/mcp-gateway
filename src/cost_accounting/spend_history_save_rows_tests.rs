@@ -646,4 +646,32 @@ fn a_save_after_the_clock_stepped_back_keeps_every_other_keys_rows() {
             .unwrap_or_else(|| panic!("no row for {name}: {file}"))
     };
     assert_eq!(saved_micro(&row_of("current")), (2, 2), "{file}");
+    // The spend dated ahead is kept, counted in the save's own hour and date.
+    let ahead = row_of("ran-ahead");
+    assert_eq!(saved_micro(&ahead), (5, 5), "{file}");
+    assert_eq!(ahead["hours"][0][0], json!(T0 / HOUR), "{file}");
+    let save_date = json!(date_of(T0).to_string());
+    assert_eq!(ahead["days"][0][0], save_date, "{file}");
+}
+
+/// Lead 2026-11-22: past [`MAX_KEYS`], the fold sums every folded key into the
+/// overflow. One folded key spent while the clock ran 40 days ahead, another
+/// at the corrected time; the overflow keeps both keys' spend, and no slot of
+/// it is dated after the save. Red with the slot dated ahead kept as it was:
+/// summing it in aged the other folded key's rows out of the overflow.
+#[test]
+fn the_fold_keeps_every_folded_keys_spend_when_one_ran_ahead() {
+    let dir = tempfile::tempdir().expect("dir");
+    let tracker = CostTracker::new();
+    for i in 0..MAX_KEYS {
+        spend(&tracker, Some(&format!("big{i:04}")), T0, 100);
+    }
+    spend(&tracker, Some("small-ran-ahead"), T0 + 40 * DAY, 1);
+    spend(&tracker, Some("small-current"), T0, 2);
+    let file = saved(&tracker, dir.path(), T0 + 60);
+    let overflow = &file["overflow"];
+    assert_eq!(saved_micro(overflow), (3, 3), "{overflow}");
+    let hours = overflow["hours"].as_array().expect("hours");
+    let not_after_save = |row: &Value| row[0].as_u64() <= Some(T0 / HOUR);
+    assert!(hours.iter().all(not_after_save), "{overflow}");
 }

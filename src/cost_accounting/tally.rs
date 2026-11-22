@@ -205,10 +205,14 @@ impl<S: Slot> Buckets<S> {
         self.0.iter().copied().collect()
     }
 
-    /// Drop the slots a window ending at `newest` no longer holds.
+    /// End the window at `newest`: a slot dated after it is counted in
+    /// `newest`'s own slot, amounts summed, and the slots the window no
+    /// longer holds are dropped. Afterwards no slot is dated after `newest`.
     #[cfg(feature = "cost-governance")]
-    pub(crate) fn age(&mut self, newest: S) {
-        self.0.retain(|(s, ..)| !s.expired(newest));
+    pub(crate) fn settle(&mut self, newest: S) {
+        for (slot, tokens, micro) in std::mem::take(&mut self.0) {
+            self.add_slot(slot.min(newest), newest, tokens, micro);
+        }
     }
 
     /// The micro-USD summed over every slot held.
@@ -256,11 +260,12 @@ impl Series {
             .add_slot(local_date(at), local_date(now), tokens, micro);
     }
 
-    /// Drop every hour past `hour`'s window and every date past `date`'s.
+    /// End the hours at `hour` and the dates at `date`: see
+    /// [`Buckets::settle`].
     #[cfg(feature = "cost-governance")]
-    pub(crate) fn age(&mut self, hour: u64, date: NaiveDate) {
-        self.hours.age(hour);
-        self.days.age(date);
+    pub(crate) fn settle(&mut self, hour: u64, date: NaiveDate) {
+        self.hours.settle(hour);
+        self.days.settle(date);
     }
 
     /// Add each of `other`'s rows into this series' row for the same hour or
