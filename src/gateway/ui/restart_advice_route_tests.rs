@@ -70,8 +70,9 @@ fn expect_advice(answer: &Value, route: &Route) {
         None => panic!("no start command: {answer}"),
     }
     // The route serves the entry point's own command, not one it builds.
-    let own = crate::gateway::ui::restart_confirm::restart_advice(true, None, Some(route.path()))
-        .expect("a pending restart has advice");
+    let own =
+        crate::gateway::ui::restart_confirm::restart_advice(true, None, Some(config.as_path()))
+            .expect("a pending restart has advice");
     assert_eq!(answer["start_command"], own["start_command"], "{answer}");
 }
 
