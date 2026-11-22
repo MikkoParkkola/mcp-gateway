@@ -63,6 +63,8 @@ Object.assign(globalThis, {
 
 /// This fixture's router, listening on a free local port.
 async fn serve(fx: &Fixture) -> SocketAddr {
+    // The listener moves into the spawned task, so its port stays bound.
+    // port-check: a listener serving on in a spawned task for the row's life
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a free port");
