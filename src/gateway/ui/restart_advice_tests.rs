@@ -38,6 +38,8 @@ fn a1_nothing_pending_adds_no_key() {
     }
 }
 
+// Unix only: the command absolutizes its config path, and a POSIX path is not absolute on Windows.
+#[cfg(unix)]
 #[test]
 fn a2_unix_pending_gives_the_line_and_the_quoted_command() {
     let cmd = start(EXE, CONFIG).expect("plain paths give a command");
@@ -91,12 +93,26 @@ fn a5_a_refusal_is_the_only_key_on_both_platforms() {
 const ODD_EXE: &str = "/opt/my 'gw'/$(id) bin/mcp-gateway";
 const ODD_CONFIG: &str = "/srv/it's here/$(id).yaml";
 
+#[cfg(unix)]
 #[test]
 fn a6_quotes_keep_every_path_one_word_with_nothing_expanded() {
     let cmd = start(ODD_EXE, ODD_CONFIG).expect("quotes and spaces are quotable");
     assert_eq!(
         cmd.as_str(),
         r#"'/opt/my '\''gw'\''/$(id) bin/mcp-gateway' serve --config '/srv/it'\''s here/$(id).yaml'"#
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a6b_a_relative_config_path_is_given_absolute() {
+    let cmd = start(EXE, "conf/gateway.yaml").expect("a relative path gives a command");
+    let whole = std::path::absolute("conf/gateway.yaml").expect("the working directory is known");
+    assert!(
+        cmd.as_str()
+            .ends_with(&format!(" serve --config '{}'", whole.display())),
+        "{}",
+        cmd.as_str()
     );
 }
 

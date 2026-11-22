@@ -98,3 +98,24 @@ test('C6 nothing pending after an advice clears the guidance and the command, an
   await expect(guidance(page)).toBeHidden();
   await expect(startCmd(page)).toBeHidden();
 });
+
+test('C7 a failed reload after an advice leaves no stale guidance or command and Hot Reload works again', async ({ page }) => {
+  await openConfig(page, [ADVISED]);
+  const failures = {
+    'an HTTP refusal': (route) => route.fulfill({ status: 500, json: { error: 'mock refusal' } }),
+    'a network failure': (route) => route.abort(),
+    'an answer that is not JSON': (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{not json' }),
+  };
+  for (const [what, fail] of Object.entries(failures)) {
+    await page.unroute('**/ui/api/reload');
+    await hotReload(page);
+    await expect(startCmd(page), `advised before ${what}`).toHaveText(COMMAND);
+    // Routes added later win, so this answer replaces the mock's for the next press.
+    await page.route('**/ui/api/reload', fail);
+    await hotReload(page);
+    await expect(statusLine(page), what).toContainText('Failed');
+    await expect(guidance(page), what).toBeHidden();
+    await expect(startCmd(page), what).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Hot Reload' }), what).toBeEnabled();
+  }
+});
