@@ -146,6 +146,19 @@ export async function advanceArmed(page, ms, from, by = ms) {
   await page.clock.runFor(by);
 }
 
+/**
+ * The delays of the page's pending timers that were armed from the function named
+ * `from` (needs trackTimers). Keying on the arming function, not on the delay alone,
+ * keeps another part of the shell that happens to use the same delay out of the count.
+ * A function run as an event handler shows on the stack with its receiver in front
+ * ("HTMLButtonElement.start"), so that form counts as `from` too.
+ */
+export async function pendingFrom(page, from) {
+  const timers = await page.evaluate(() => window.__pendingTimers());
+  const named = (c) => c === from || c.endsWith(`.${from}`);
+  return timers.filter((t) => callersOf(t.stack).some(named)).map((t) => t.ms);
+}
+
 /** Wait until the shell has rendered something into its content area. */
 export async function shellReady(page) {
   await page.waitForSelector('#content [data-rendered]');

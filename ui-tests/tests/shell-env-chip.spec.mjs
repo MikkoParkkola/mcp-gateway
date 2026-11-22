@@ -9,6 +9,13 @@ import { test, expect, blockingViolations } from './base.mjs';
 import { shellReady } from './shell.mjs';
 
 const chip = (page) => page.locator('.top .env');
+
+/**
+ * What the announcer says other than "Loading <page>". A slow page may rightly say it is
+ * loading; an error or a refusal is anything else, so the rows expect this to be empty.
+ */
+const saidBesidesLoading = (page) => page.locator('#announcer').evaluate((el) => [...el.childNodes]
+  .map((n) => (n.textContent ?? '').trim()).filter((t) => t && !t.startsWith('Loading ')));
 const gateway = (page, environment) => page.route('**/ui/api/gateway', (r) => r.fulfill({ json: { environment } }));
 
 /** True when neither the top bar nor the page scrolls sideways. */
@@ -66,7 +73,7 @@ test('E4 a key that is not admin sees no chip and no error', async ({ page }) =>
   await expect(chip(page)).toHaveCount(0);
   await expect(page.locator('.top .has-tip')).toHaveCount(0);
   await expect(page.locator('#content [data-state="error"], #content [data-state="forbidden"], [role="alert"]')).toHaveCount(0);
-  await expect(page.locator('#announcer')).toBeEmpty();
+  expect(await saidBesidesLoading(page)).toEqual([]);
   expect(asked, 'the admin-only route is never asked for by another key').toEqual([]);
 });
 
@@ -81,7 +88,7 @@ test('E4b an admin whose gateway answers 403 or 404 sees no chip and no error', 
     await expect(page.locator('.top .who')).toHaveText('Signed in · admin');
     await expect(chip(page)).toHaveCount(0);
     await expect(page.locator('#content [data-state="error"], #content [data-state="forbidden"], [role="alert"]')).toHaveCount(0);
-    await expect(page.locator('#announcer')).toBeEmpty();
+    expect(await saidBesidesLoading(page)).toEqual([]);
     await page.unroute('**/ui/api/gateway');
   }
 });
