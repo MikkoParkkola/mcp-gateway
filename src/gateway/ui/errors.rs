@@ -105,30 +105,38 @@ pub(super) fn config_path_unavailable() -> (StatusCode, Json<Value>) {
 /// The answer when the configured store cannot take values on this host.
 pub(super) const STORE_UNAVAILABLE: &str = "secrets.store cannot take these values; set secrets.store, or give each value as a secret reference";
 
+/// The UI route answering a refused write: `log` opens each of its log
+/// lines, and `change` is what its fixed 500 answers say was not done.
+#[derive(Clone, Copy)]
+pub(super) struct WriteRoute {
+    pub(super) log: &'static str,
+    pub(super) change: &'static str,
+}
+
 /// A 500 with fixed text: an inner error can quote a configured value, so
 /// only the variant name is logged.
-fn unwritten(variant: &'static str) -> axum::response::Response {
-    tracing::warn!(variant, "backend route: the config write failed");
+fn unwritten(route: WriteRoute, variant: &'static str) -> axum::response::Response {
+    tracing::warn!(variant, "{}: the config write failed", route.log);
     flat_error(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "the backend change was not written",
+        format!("{} was not written", route.change),
     )
     .into_response()
 }
 
 /// A 500 for a write whose outcome on disk is unknown: a failed rollback,
 /// or a failure anywhere in the writer. Fixed text, as [`unwritten`].
-pub(super) fn incomplete(variant: &'static str) -> axum::response::Response {
-    tracing::warn!(variant, "backend route: the config write failed");
+pub(super) fn incomplete(route: WriteRoute, variant: &'static str) -> axum::response::Response {
+    tracing::warn!(variant, "{}: the config write failed", route.log);
     flat_error(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "the backend change could not be completed; gateway.yaml may have changed, so inspect it before retrying",
+        format!("{} could not be completed; gateway.yaml may have changed, so inspect it before retrying", route.change),
     )
     .into_response()
 }
 
-/// The answer to a backend write the writer refused.
-pub(super) fn refused_write(e: &ReplaceError) -> axum::response::Response {
+/// The answer to a UI config write the writer refused, logged as `route`'s.
+pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::response::Response {
     match e {
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
@@ -154,7 +162,8 @@ pub(super) fn refused_write(e: &ReplaceError) -> axum::response::Response {
         ReplaceError::Unconfirmed { .. } => {
             tracing::warn!(
                 variant = "unconfirmed",
-                "backend route: the config write failed"
+                "{}: the config write failed",
+                route.log
             );
             flat_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -162,15 +171,15 @@ pub(super) fn refused_write(e: &ReplaceError) -> axum::response::Response {
             )
             .into_response()
         }
-        ReplaceError::Refused(_) => unwritten("refused"),
-        ReplaceError::AuditRefused(_) => unwritten("audit_refused"),
-        ReplaceError::ReloadRefused { .. } => unwritten("reload_refused"),
-        ReplaceError::Unsupported(_) => unwritten("unsupported"),
-        ReplaceError::Stage(_) => unwritten("stage"),
-        ReplaceError::Write(_) => unwritten("write"),
+        ReplaceError::Refused(_) => unwritten(route, "refused"),
+        ReplaceError::AuditRefused(_) => unwritten(route, "audit_refused"),
+        ReplaceError::ReloadRefused { .. } => unwritten(route, "reload_refused"),
+        ReplaceError::Unsupported(_) => unwritten(route, "unsupported"),
+        ReplaceError::Stage(_) => unwritten(route, "stage"),
+        ReplaceError::Write(_) => unwritten(route, "write"),
         // The bytes on disk are not known: say so, never "not written".
-        ReplaceError::RollbackFailed { .. } => incomplete("rollback_failed"),
-        ReplaceError::Failed(_) => incomplete("failed"),
+        ReplaceError::RollbackFailed { .. } => incomplete(route, "rollback_failed"),
+        ReplaceError::Failed(_) => incomplete(route, "failed"),
         // The store's own text never leaves: fixed answers by kind.
         ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_))) => flat_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -195,7 +204,7 @@ pub(super) fn refused_write(e: &ReplaceError) -> axum::response::Response {
             "the secret store could not take the values now; nothing was written; retry",
         )
         .into_response(),
-        ReplaceError::Secrets(_) => unwritten("secrets"),
+        ReplaceError::Secrets(_) => unwritten(route, "secrets"),
         // gateway.yaml went while the writer held it: the shared 409.
         ReplaceError::NoConfigFile => no_config_file().into_response(),
         // The guard refused gateway.yaml or its recovery files. Its text
@@ -204,7 +213,8 @@ pub(super) fn refused_write(e: &ReplaceError) -> axum::response::Response {
             tracing::warn!(
                 variant = "config_refused",
                 detail = %why,
-                "backend route: the config write refused gateway.yaml"
+                "{}: the config write refused gateway.yaml",
+                route.log
             );
             config_refusal().into_response()
         }

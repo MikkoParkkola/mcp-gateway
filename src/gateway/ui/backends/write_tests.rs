@@ -8,7 +8,7 @@ use crate::config_reload::NO_AUDIT_LOG;
 use crate::secret_store::{SaveError, StoreError};
 
 async fn message(e: &ReplaceError) -> (StatusCode, String) {
-    let response = refused_write(e);
+    let response = refused_write(BACKEND_WRITE, e);
     let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), 1 << 16)
         .await

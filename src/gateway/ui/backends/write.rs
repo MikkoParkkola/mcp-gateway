@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use super::super::errors::{
-    config_path_unavailable, flat_error, incomplete, no_config_file, refused_write,
+    WriteRoute, config_path_unavailable, flat_error, incomplete, no_config_file, refused_write,
 };
 use super::super::secret_slots;
 use crate::config::Config;
@@ -28,6 +28,12 @@ const ROUTE_ANSWERED: &str = "the backend route answered the edit itself";
 /// The compute's refusal when a slot's key is not on the edited backend: a
 /// bug in the route, never the caller's.
 const SLOT_MISSING: &str = "a secret slot names a value the edit did not leave";
+
+/// How this route's refused writes are logged and answered.
+const BACKEND_WRITE: WriteRoute = WriteRoute {
+    log: "backend route",
+    change: "the backend change",
+};
 
 /// The values a write stores instead of writing them: each `(header?, key)`
 /// on the edited backend becomes a slot the writer fills with its store
@@ -160,8 +166,8 @@ where
             reload: outcome.reload,
             secrets: outcome.secrets,
         }),
-        (Ok(_), _) => Err(Box::new(incomplete("no_answer"))),
-        (Err(e), _) => Err(Box::new(refused_write(&e))),
+        (Ok(_), _) => Err(Box::new(incomplete(BACKEND_WRITE, "no_answer"))),
+        (Err(e), _) => Err(Box::new(refused_write(BACKEND_WRITE, &e))),
     }
 }
 
