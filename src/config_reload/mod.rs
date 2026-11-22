@@ -319,7 +319,9 @@ pub(crate) use reload_context::replace::ui_diff::{
     BusyReason, Patch, PatchStep, PreviewRefused, Shown, UiPreview, UiRefused, path_text, ui_diff,
 };
 #[cfg(feature = "webui")]
-pub(crate) use reload_context::replace::ui_save::{SaveEdit, SaveValue, SecretTarget, ui_save};
+pub(crate) use reload_context::replace::ui_save::{
+    SaveEdit, SaveValue, SecretTarget, UiSaved, ui_save,
+};
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
