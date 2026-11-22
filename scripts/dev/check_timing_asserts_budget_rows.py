@@ -223,9 +223,11 @@ class CodeReviewRows(unittest.TestCase):
         body = 'timeout(Duration::from_secs(30), crate::run_within(&x, Duration::from_secs(30), f)).await.expect("w");'
         self.refused(test_file(body), "run_within")
 
-    def test_c2_any_duration_argument_of_any_carried_call_counts(self):
+    def test_c2a_any_duration_argument_of_the_carried_call_counts(self):
         one_call = 'timeout(Duration::from_secs(30), pair_within(Duration::from_secs(60), Duration::from_secs(10))).await.expect("w");'
         self.refused(test_file(one_call), "pair_within")
+
+    def test_c2b_any_carried_call_counts(self):
         two_calls = (
             "let h = async {\n    run_within(&x, Duration::from_secs(10), f).await;\n"
             "    run_within(&x, Duration::from_secs(60), g).await\n};\n"
@@ -233,12 +235,14 @@ class CodeReviewRows(unittest.TestCase):
         )
         self.refused(test_file(two_calls), "run_within")
 
-    def test_c3_a_name_is_followed_only_as_the_timeouts_own_future(self):
+    def test_c3a_a_name_given_to_spawn_is_not_followed(self):
         through_spawn = (
             "let fut = run_within(&x, Duration::from_secs(30), f);\nlet h = tokio::spawn(fut);\n"
             'timeout(Duration::from_secs(30), h).await.expect("w");'
         )
         self.passes(test_file(through_spawn))
+
+    def test_c3b_a_chain_of_lets_is_not_followed(self):
         chained = (
             "let a = async { run_within(&x, Duration::from_secs(30), f).await };\nlet b = a;\n"
             'timeout(Duration::from_secs(30), b).await.expect("w");'
@@ -258,17 +262,33 @@ class CodeReviewRows(unittest.TestCase):
         )
         self.refused(test_file(body), "run_within")
 
-    def test_c6_a_deadline_window_is_read_where_the_deadline_is_built(self):
+    def test_c6a_a_deadline_window_is_read_where_the_deadline_is_built(self):
         hidden = (
             "let w = DRAIN;\nlet deadline = Instant::now() + w;\nlet w = Duration::from_secs(30);\n"
             "settle().await;\nassert!(Instant::now() < deadline);"
         )
         self.refused(test_file(hidden), "DRAIN")
+
+    def test_c6b_a_later_binding_invents_no_budget_for_a_deadline(self):
         invented = (
             "let w = Duration::from_secs(30);\nlet deadline = Instant::now() + w;\nlet w = DRAIN;\n"
             "settle().await;\nassert!(Instant::now() < deadline);"
         )
         self.passes(test_file(invented))
+
+    def test_c10_only_the_deadline_the_condition_compares_moves_the_reading(self):
+        body = (
+            "let w = DRAIN;\nlet deadline = Instant::now() + w;\nlet w = Duration::from_secs(30);\n"
+            'let t = Instant::now();\nsettle().await;\nassert!(t.elapsed() < w, "{:?}", deadline);'
+        )
+        self.passes(test_file(body))
+
+    def test_c11_a_budget_bound_inside_the_carried_block_is_read(self):
+        body = (
+            "let h = tokio::spawn(async move { let b = Duration::from_secs(30); run_within(&x, b, f).await });\n"
+            'timeout(Duration::from_secs(20), h).await.expect("w");'
+        )
+        self.refused(test_file(body), "run_within")
 
     def test_c7_an_edit_after_a_semicolon_inside_the_timed_block_is_new(self):
         body = 'let r = timeout(Duration::from_secs(5), async {\n    a().await;\n    b().await;\n}).await.expect("x");'
