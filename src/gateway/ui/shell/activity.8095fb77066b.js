@@ -370,7 +370,8 @@ async function statusTab(body, ctx) {
   function draw() {
     const rows = list.rows;
     if (rows !== shownRows) {
-      const grew = rows.length > shownRows.length && shownRows.every((row, i) => rows[i] === row);
+      // An append of no rows keeps every row element, so a focused row is never rebuilt away.
+      const grew = rows.length >= shownRows.length && shownRows.every((row, i) => rows[i] === row);
       if (grew) rowsEl.append(...rows.slice(shownRows.length).map(rowLink));
       else rowsEl.replaceChildren(...rows.map(rowLink));
       shownRows = rows;
