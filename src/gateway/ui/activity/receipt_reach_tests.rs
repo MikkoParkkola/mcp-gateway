@@ -94,6 +94,17 @@ fn a_row_that_is_not_an_issuance_row_is_not_found() {
     assert_eq!(reach_of(&mut entries), NOT_FOUND);
 }
 
+/// R9 with only the kind wrong: the same token's revocation row carries its
+/// jti and its own real hash, so the event check alone must refuse it.
+#[test]
+fn the_same_tokens_revocation_row_is_not_found() {
+    let mut revoked = issued("jti-a");
+    revoked["event"] = "token.revoked".into();
+    let h = hashes_of(std::slice::from_ref(&revoked));
+    let mut entries = [revoked, call_with("jti-a", Some((1, &h[0])))];
+    assert_eq!(reach_of(&mut entries), NOT_FOUND);
+}
+
 /// R10: counter and hash are another token's real issuance row.
 #[test]
 fn another_tokens_row_is_not_found() {
