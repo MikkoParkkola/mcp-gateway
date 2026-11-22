@@ -140,6 +140,24 @@ async fn a_meta_call_answered_as_json_records_its_token() {
     assert_resolves(&fx, &record, &jti, &["alpha"]).await;
 }
 
+/// A real-token call's decision, as Debug prints it, names the token's id and
+/// never its bearer text: the reason the marker on `Decision.token` gives.
+#[tokio::test]
+async fn a_decisions_debug_names_the_token_id_never_its_bearer() {
+    let (fx, bearer, jti) = token_fixture().await;
+    let (status, body) = post_bearer(&fx, "POST", "/mcp", &invoke("alpha"), &bearer, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let record = only_invocation(&fx);
+    let decision: crate::security::decision_record::Decision =
+        serde_json::from_value(record["decision"].clone()).expect("the decision reads back");
+    let printed = format!("{decision:?}");
+    assert!(printed.contains(&jti), "the id is missing: {printed}");
+    assert!(
+        !printed.contains(&bearer),
+        "the bearer is printed: {printed}"
+    );
+}
+
 /// A meta call answered as a stream carries the minted token and its issuance row.
 #[tokio::test]
 async fn a_meta_call_answered_as_a_stream_records_its_token() {

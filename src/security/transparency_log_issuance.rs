@@ -35,6 +35,16 @@ pub(crate) struct TokenOnCall {
     pub(crate) issuance_row: Option<IssuanceRow>,
 }
 
+// A field added to TokenOnCall stops this compiling. Before adding it, update
+// the ci-allow-secret-debug reason on `Decision.token` (decision_record.rs):
+// the call's decision derives Debug over this struct.
+const _: fn(&TokenOnCall) = |token| {
+    let TokenOnCall {
+        jti: _,
+        issuance_row: _,
+    } = token;
+};
+
 /// How an issuance row's append came out. Every arm but `Confirmed` means
 /// "the row is not known to be on disk"; `Failed` and `Unconfirmed` may
 /// still leave bytes behind (a rollback can fail, a timed-out write can land

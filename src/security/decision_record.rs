@@ -107,6 +107,7 @@ pub(crate) enum Coverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Decision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // ci-allow-secret-debug: the token's id and its issuance-row reference, never the bearer; TokenOnCall's field guard keeps this true.
     pub token: Option<crate::security::transparency_log::issuance::TokenOnCall>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub token_unavailable: bool,
