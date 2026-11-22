@@ -327,7 +327,24 @@ pub(crate) async fn serve_session(
         "fetch_start",
         read_line(&mut read, bounds.setup, bounds),
     );
-    let start: FetchStart = parse(&line.await?, "fetch_start")?;
+    serve_fetch(&line.await?, &mut read, &mut write, proxy, deadline, bounds).await
+}
+
+/// The fetch, from the helper's first line (which must be `fetch_start`) to
+/// its run acknowledgement, on borrowed halves of the connection.
+async fn serve_fetch<R, W>(
+    first_line: &str,
+    mut read: R,
+    mut write: W,
+    proxy: &AllowlistProxy,
+    deadline: tokio::time::Instant,
+    bounds: ControlBounds,
+) -> Result<(), Refusal>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let start: FetchStart = parse(first_line, "fetch_start")?;
     if !start.fetch_start {
         return Err(Refusal::Step("the sandbox sent fetch_start false".into()));
     }
@@ -398,11 +415,78 @@ pub(crate) async fn serve_control(
     deadline: tokio::time::Instant,
     bounds: ControlBounds,
 ) -> Result<SetupStatus, Refusal> {
-    // RED STUB: any first line is taken as a finished setup.
-    let _ = (fetch, deadline);
-    let mut read = tokio::io::BufReader::new(stream);
-    read_line(&mut read, bounds.setup, bounds).await?;
-    Ok(SetupStatus::Done)
+    // The write half stays open until the status is read: the helper takes
+    // the gateway's close as its cue to go on.
+    let (read, mut write) = stream.into_split();
+    let mut read = tokio::io::BufReader::new(read);
+    let Some(proxy) = fetch else {
+        return read_status(&mut read, deadline, bounds).await;
+    };
+    // A fetching helper's first line is `fetch_start`, or a refusal of a
+    // step it failed before asking; it is read as the fetch always was.
+    let line = by_deadline(
+        deadline,
+        "fetch_start",
+        read_line(&mut read, bounds.setup, bounds),
+    )
+    .await?;
+    match SetupStatus::parse(&line) {
+        Some(SetupStatus::Done) => return Err(no_status()),
+        Some(refused) => return status_at_end(&mut read, refused, deadline, bounds).await,
+        None => {}
+    }
+    serve_fetch(&line, &mut read, &mut write, proxy, deadline, bounds).await?;
+    read_status(&mut read, deadline, bounds).await
+}
+
+#[cfg_attr(
+    all(not(test), target_os = "linux"),
+    expect(dead_code, reason = "only serve_control reads a status so far")
+)]
+fn no_status() -> Refusal {
+    Refusal::Step("the sandbox helper sent no valid status".into())
+}
+
+/// The helper's one status line. Anything that is not exactly one well-formed
+/// status followed by the end of the connection is no status at all.
+#[cfg_attr(
+    all(not(test), target_os = "linux"),
+    expect(dead_code, reason = "only serve_control reads a status so far")
+)]
+async fn read_status<R: AsyncBufRead + Unpin>(
+    read: &mut R,
+    deadline: tokio::time::Instant,
+    bounds: ControlBounds,
+) -> Result<SetupStatus, Refusal> {
+    let line = by_deadline(deadline, "the sandbox's status", async {
+        read_line(&mut *read, bounds.setup, bounds)
+            .await
+            .map_err(|_| no_status())
+    })
+    .await?;
+    let status = SetupStatus::parse(&line).ok_or_else(no_status)?;
+    status_at_end(read, status, deadline, bounds).await
+}
+
+/// `status` stands only when the connection ends right after it, within the
+/// frame bound: the helper shuts its side once it has reported.
+#[cfg_attr(
+    all(not(test), target_os = "linux"),
+    expect(dead_code, reason = "only serve_control reads a status so far")
+)]
+async fn status_at_end<R: AsyncBufRead + Unpin>(
+    read: &mut R,
+    status: SetupStatus,
+    deadline: tokio::time::Instant,
+    bounds: ControlBounds,
+) -> Result<SetupStatus, Refusal> {
+    let end = by_deadline(deadline, "the sandbox's status", async {
+        match tokio::time::timeout(bounds.frame, read.fill_buf()).await {
+            Ok(Ok([])) => Ok(()),
+            _ => Err(no_status()),
+        }
+    });
+    end.await.map(|()| status)
 }
 
 /// The fetch's credential, revoked when this drops.
