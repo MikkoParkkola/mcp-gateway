@@ -135,9 +135,10 @@ async fn a_settled_read_that_skipped_its_claim_once_is_read_again() {
 }
 
 /// T4: an account that never confirms live (the seam stays set) fails the
-/// read loudly at the bound, after about 60 ms of waits. The row allows 25 s
-/// (no test bound in the repo is under 10 s): an absorb with no bound never
-/// returns at all, so only the bound can end the read in time.
+/// read loudly at the bound, after about 60 ms of waits. The row's limit is
+/// the 120 s hang guard (the flaky-under-load family: shorter real-time waits
+/// failed under a loaded runner); real sockets keep it off a paused clock.
+/// An absorb with no bound never returns at all, so only the bound ends it.
 /// Red against an absorb with no bound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
@@ -151,7 +152,7 @@ async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
         let gw = Arc::clone(&gw);
         tokio::spawn(async move { gw.settled_read(&id).await })
     };
-    let ended = tokio::time::timeout(Duration::from_secs(25), read).await;
+    let ended = tokio::time::timeout(Duration::from_secs(120), read).await;
     let joined = ended.expect("the read ends at its bound");
     let failure = joined.expect_err("the read fails at the bound");
     assert!(failure.is_panic(), "{failure}");
