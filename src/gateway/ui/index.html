@@ -2101,6 +2101,11 @@ async function newCapability() {
     alert('Invalid name: use letters or digits (spaces and other characters become "_").');
     return;
   }
+  // The route takes names of up to 128 characters (capabilities.rs is_safe_name).
+  if (name.length > 128) {
+    alert('Invalid name: use at most 128 characters.');
+    return;
+  }
 
   // The route's words for an answer that is not the one wanted.
   const why = async (answer) => {

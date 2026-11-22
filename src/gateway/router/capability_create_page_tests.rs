@@ -7,7 +7,7 @@
 //! nothing was written.
 
 use std::net::SocketAddr;
-use std::process::Command;
+use tokio::process::Command;
 
 use super::*;
 
@@ -84,18 +84,15 @@ async fn press(addr: SocketAddr, name: &str, scripted: &str) -> Value {
         page_async_fn("uiFetch"),
         create_part(),
     );
-    let ran = tokio::time::timeout(
-        GUARD,
-        tokio::task::spawn_blocking(move || {
-            Command::new("node")
-                .args(["--input-type=module", "-e", &program])
-                .output()
-        }),
-    )
-    .await
-    .expect("the page's script finished in time")
-    .expect("the blocking task joined")
-    .expect("these rows drive the page's script with node, so node must be on PATH");
+    // A child the timeout abandons is killed when its future drops, so a hung
+    // script can never outlive the row or hold the runtime's shutdown.
+    let mut node = Command::new("node");
+    node.args(["--input-type=module", "-e", &program])
+        .kill_on_drop(true);
+    let ran = tokio::time::timeout(GUARD, node.output())
+        .await
+        .expect("the page's script finished in time")
+        .expect("these rows drive the page's script with node, so node must be on PATH");
     assert!(
         ran.status.success(),
         "the page's script exited with an error: {}",
@@ -286,4 +283,24 @@ async fn cr6_a_name_with_no_letter_or_digit_is_refused_before_any_request() {
         );
         assert_eq!(got["sent"], serde_json::json!([]), "{typed:?}: {got}");
     }
+}
+
+/// CR7: the page holds the route's 128-character name limit: 128 creates,
+/// 129 is refused on the page before any request.
+#[tokio::test]
+async fn cr7_the_page_holds_the_routes_name_length_limit() {
+    let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
+    let addr = serve(&fx).await;
+    let longest = "a".repeat(128);
+    let got = press(addr, &longest, "null").await;
+    assert!(
+        fx.file.with_file_name(format!("{longest}.yaml")).exists(),
+        "128 characters were not created: {got}"
+    );
+    assert_eq!(got["alerts"], serde_json::json!([]), "{got}");
+    let got = press(addr, &"a".repeat(129), "null").await;
+    let alerts = got["alerts"].as_array().expect("the alerts");
+    assert_eq!(alerts.len(), 1, "{got}");
+    assert!(alerts[0].as_str().expect("text").contains("128"), "{got}");
+    assert_eq!(got["sent"], serde_json::json!([]), "{got}");
 }

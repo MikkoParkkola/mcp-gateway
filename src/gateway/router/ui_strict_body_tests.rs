@@ -101,27 +101,49 @@ fn handled((status, body): &(StatusCode, String)) {
     assert!(!body.contains(CONFIRM_UNREADABLE), "{status}: {body}");
 }
 
-/// S2: the add body. Its known body with an empty name reaches the name check.
+/// Every field the classic page's add and preview forms send, with an empty
+/// name so the handler stops at its name check and nothing is written.
+fn every_add_field() -> Value {
+    json!({
+        "name": "", "registry": "r", "command": "c", "url": "http://127.0.0.1:1/mcp",
+        "description": "d", "env": { "K": "V" }, "allowed_tools": ["t"],
+    })
+}
+
+/// S2: the add body, as the minimal probe and with every field callers send.
+/// Each known body reaches the name check.
 #[tokio::test]
 async fn s2_the_add_body_refuses_an_unknown_field() {
-    let known = json!({ "name": "" });
-    let first = strict(
-        "POST",
-        routes::UI_BACKENDS,
-        &known,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        UNKNOWN,
-    )
-    .await;
-    assert_eq!(first.0, StatusCode::UNPROCESSABLE_ENTITY, "{}", first.1);
-    handled(&first);
+    for known in [json!({ "name": "" }), every_add_field()] {
+        let first = strict(
+            "POST",
+            routes::UI_BACKENDS,
+            &known,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            UNKNOWN,
+        )
+        .await;
+        assert_eq!(
+            first.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{known}: {}",
+            first.1
+        );
+        handled(&first);
+    }
 }
 
 /// S3: the preview body, which flattens the add body, so it needs its own
 /// attribute; both shapes the page sends (with and without `confirm`).
 #[tokio::test]
 async fn s3_the_preview_body_refuses_an_unknown_field_in_both_shapes() {
-    for known in [json!({ "name": "" }), json!({ "name": "", "confirm": "x" })] {
+    let mut full = every_add_field();
+    full["confirm"] = json!("x");
+    for known in [
+        json!({ "name": "" }),
+        json!({ "name": "", "confirm": "x" }),
+        full,
+    ] {
         let first = strict(
             "POST",
             routes::UI_PREVIEWS,
