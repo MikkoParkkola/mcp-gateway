@@ -637,7 +637,9 @@ async fn a_modern_server_that_refuses_initialize_previews() {
 ///
 /// Only the budget may decide. The probe's window is the cap from exec, 20 s:
 /// it opens once the transport has connected, and the preview's 35 s request
-/// timeout and 30 s outer cap (which also covers the connect) are both longer.
+/// timeout and 30 s outer cap are both longer. The outer cap starts before the
+/// connect, so the full 20 s window fits only while the connect takes under
+/// 10 s; a slower connect is ended by the outer cap, not by the probe cap.
 /// A 5 MB answer over loopback takes well under a second; the 2 s default cap
 /// is what a loaded runner could outlast, so this row does not run under it.
 #[tokio::test]
