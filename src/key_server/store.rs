@@ -166,6 +166,8 @@ pub struct Reserved {
     /// The unique claim on the pending slot.
     pub id: ReservationId,
     /// The pending deadline in Unix seconds, the instant after which activation is refused.
+    /// Activation dates the token from its own clock read, before this instant, and adds the
+    /// store's ttl to that same read, so deadline + ttl bounds every expiry.
     pub deadline: u64,
 }
 

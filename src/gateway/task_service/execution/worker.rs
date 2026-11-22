@@ -373,21 +373,27 @@ async fn run_dispatched(
         let job = job.expect("a handle is captured only for an armed job");
         // Read after the dispatch: what its send injected, or nothing.
         let injected = submission.as_ref().and_then(|slot| slot.dispatched());
-        follow_upstream_job(
-            &executor,
-            &state,
-            &principal,
-            &id,
-            revision,
-            // MIK-8407: with the bindings the dispatch ran under, from its log.
-            (
-                job,
-                handle,
-                caller.relay_caller(session_id.as_deref()),
-                intent.owned.dispatch_log().bindings(),
-                injected,
+        // The call's token scope spans the follow too. No decision is built
+        // there today (a_settlement_record_builds_no_decision), but every
+        // future that could reach one runs inside the call's scope (D2).
+        crate::security::decision_record::with_token(
+            intent.owned.token().cloned(),
+            follow_upstream_job(
+                &executor,
+                &state,
+                &principal,
+                &id,
+                revision,
+                // MIK-8407: with the bindings the dispatch ran under, from its log.
+                (
+                    job,
+                    handle,
+                    caller.relay_caller(session_id.as_deref()),
+                    intent.owned.dispatch_log().bindings(),
+                    injected,
+                ),
+                &mut cancel_rx,
             ),
-            &mut cancel_rx,
         )
         .await;
     } else {
