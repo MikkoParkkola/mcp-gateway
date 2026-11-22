@@ -81,6 +81,10 @@ fn a5_a_refusal_is_the_only_key_on_both_platforms() {
     assert!(sentence.contains(why), "{sentence}");
     assert!(sentence.contains("config file"), "{sentence}");
     assert!(!sentence.contains("gateway.yaml"), "{sentence}");
+    // A reason that ends in its own full stop: one stop where reason and fix meet.
+    let stopped = refusal_sentence("the port is taken.");
+    assert!(stopped.contains("the port is taken. Fix"), "{stopped}");
+    assert!(!stopped.contains(".."), "{stopped}");
 }
 
 /// Paths with a quote, a space and a substitution, in exe and config alike.
@@ -102,7 +106,8 @@ fn a6_a_posix_shell_reads_the_command_back_as_the_same_words() {
     let cmd = start(ODD_EXE, ODD_CONFIG).expect("quotes and spaces are quotable");
     let out = std::process::Command::new("sh")
         .arg("-c")
-        .arg(format!("printf '%s\\0' {}", cmd.as_str()))
+        // The shell parses the command into its words, then prints each.
+        .arg(format!("set -- {}; printf '%s\\0' \"$@\"", cmd.as_str()))
         .output()
         .expect("sh runs");
     let words: Vec<String> = out
@@ -116,12 +121,15 @@ fn a6_a_posix_shell_reads_the_command_back_as_the_same_words() {
 
 const SENTINEL: &str = "argv-sentinel-9453";
 const MARK: &str = "A7-ADVICE:";
+/// The config path the parent hands the child, marked with the parent's pid.
+const A7_CONFIG_ENV: &str = "GW_A7_MARKED_CONFIG";
 
 /// Run by A7 as a child process whose argv holds the sentinel.
 #[test]
 #[ignore = "run by a7 as a child process"]
 fn a7_child_prints_the_production_advice() {
-    let advice = super::super::restart_advice(true, None, Some(Path::new(CONFIG)));
+    let config = std::env::var(A7_CONFIG_ENV).unwrap_or_else(|_| CONFIG.to_owned());
+    let advice = super::super::restart_advice(true, None, Some(Path::new(&config)));
     println!("{MARK}{}", keys(advice));
 }
 
@@ -131,7 +139,9 @@ fn a7_the_command_holds_no_argument_of_the_process() {
         .split_once("::")
         .map_or(module_path!(), |(_, rest)| rest);
     let helper = format!("{full}::a7_child_prints_the_production_advice");
+    let marked = format!("/etc/gw/a7-run-{}/gateway.yaml", std::process::id());
     let out = crate::test_home::test_binary()
+        .env(A7_CONFIG_ENV, &marked)
         .args([
             helper.as_str(),
             SENTINEL,
@@ -147,11 +157,20 @@ fn a7_the_command_holds_no_argument_of_the_process() {
         .lines()
         .find_map(|l| l.split_once(MARK).map(|(_, body)| body.to_owned()))
         .unwrap_or_else(|| panic!("the child printed no advice: {stdout}"));
+    assert!(out.status.success(), "the child failed: {stdout}");
+    let answer: Value = serde_json::from_str(&printed).expect("the child printed JSON");
+    assert!(answer.get("restart_advice").is_some(), "{printed}");
     if cfg!(unix) {
-        assert!(printed.contains("start_command"), "{printed}");
+        // The oracle is the command this run produced: it names the marked
+        // path, so a helper that never ran cannot pass by printing nothing.
+        let command = answer["start_command"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no start command: {printed}"));
+        assert!(command.contains(&marked), "{command}");
+        assert!(!command.contains(SENTINEL), "{command}");
+    } else {
+        assert!(!printed.contains(SENTINEL), "{printed}");
     }
-    assert!(printed.contains("restart_advice"), "{printed}");
-    assert!(!printed.contains(SENTINEL), "{printed}");
     assert!(
         !include_str!("restart_advice.rs").contains("env::args"),
         "the advice reads the process arguments"
@@ -202,6 +221,9 @@ fn a9_a_control_character_in_either_path_leaves_the_command_out() {
         (EXE, "/etc/gw/two\nlines.yaml"),
         ("/opt/gw\n/mcp-gateway", CONFIG),
         (EXE, "/etc/gw/tab\there.yaml"),
+        (EXE, "/etc/gw/carriage\rreturn.yaml"),
+        ("/opt/gw\r/mcp-gateway", CONFIG),
+        (EXE, "/etc/gw/bell\u{7}.yaml"),
     ] {
         assert!(start(exe, config).is_none(), "{exe:?} {config:?}");
     }

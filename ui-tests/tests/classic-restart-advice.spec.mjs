@@ -87,3 +87,14 @@ test('C5 a refusal after an advice leaves no stale guidance or command', async (
   await expect(guidance(page)).toBeHidden();
   await expect(startCmd(page)).toBeHidden();
 });
+
+test('C6 nothing pending after an advice clears the guidance and the command, and shows its own line', async ({ page }) => {
+  const calm = { status: 'ok', changes: 'second mock reload, nothing waits', restart_required: false };
+  await openConfig(page, [ADVISED, calm]);
+  await hotReload(page);
+  await expect(startCmd(page)).toHaveText(COMMAND);
+  await hotReload(page);
+  await expect(statusLine(page)).toContainText(calm.changes);
+  await expect(guidance(page)).toBeHidden();
+  await expect(startCmd(page)).toBeHidden();
+});

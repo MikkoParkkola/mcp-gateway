@@ -117,6 +117,8 @@ fn refusal(body: &Value, available: bool) {
             "brew services",
             "docker restart",
             "start command",
+            // A gateway started by hand is told to stop it before starting again.
+            "stop",
         ] {
             assert!(recovery.contains(phrase), "{body}");
         }
