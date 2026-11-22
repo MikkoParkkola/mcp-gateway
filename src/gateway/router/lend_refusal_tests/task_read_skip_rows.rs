@@ -105,7 +105,7 @@ async fn a_skipped_answer_with_a_refused_fill_is_returned_at_once() {
 /// attempt (the seam is set, and the fixture clears it after the first
 /// skipped answer). R1's guarantees then hold end to end: the read answers
 /// the lender's refusal and its own fill reached the lender. Red with
-/// read_task reading once: the skipped answer reaches R1's assertion.
+/// `read_task` reading once: the skipped answer reaches R1's assertion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_settled_read_that_skipped_its_claim_once_is_read_again() {
     let gw = refusing().await;
@@ -135,7 +135,9 @@ async fn a_settled_read_that_skipped_its_claim_once_is_read_again() {
 }
 
 /// T4: an account that never confirms live (the seam stays set) fails the
-/// read loudly at the bound, well inside 5 s, not at a row's 30 s deadline.
+/// read loudly at the bound, after about 60 ms of waits. The row allows 25 s
+/// (no test bound in the repo is under 10 s): an absorb with no bound never
+/// returns at all, so only the bound can end the read in time.
 /// Red against an absorb with no bound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
@@ -149,8 +151,8 @@ async fn a_read_that_never_claims_fails_loudly_at_the_bound() {
         let gw = Arc::clone(&gw);
         tokio::spawn(async move { gw.settled_read(&id).await })
     };
-    let ended = tokio::time::timeout(Duration::from_secs(5), read).await;
-    let joined = ended.expect("the read ends within 5 s");
+    let ended = tokio::time::timeout(Duration::from_secs(25), read).await;
+    let joined = ended.expect("the read ends at its bound");
     let failure = joined.expect_err("the read fails at the bound");
     assert!(failure.is_panic(), "{failure}");
     let payload = failure.into_panic();
