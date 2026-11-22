@@ -397,10 +397,10 @@ def main(argv: list[str] | None = None) -> int:
         base_rows = read_base(pin)
         if base_rows is not None:
             carried = _compute_carried(pin, base_rows, rows)
-        found, new_errors = judge_new(found, rows, texts, consts, includers, changed, carried=carried, budgets=budgets_of(texts))
+        found, new_errors = judge_new(found, rows, texts, consts, includers, changed, carried=carried, budgets=budgets_of(texts, consts))
     else:
         print("No --base: the new-code rules (10 s floor, sleep windows, poll budgets) were not run.")
-        timers = budgets_of(texts)
+        timers = budgets_of(texts, consts)
         # Product-timer audit: listed, never failing.
         for path, text in texts.items():
             for line in budget_list(path, text, consts, includers, timers):

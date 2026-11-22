@@ -70,9 +70,10 @@ class Budgets(NamedTuple):
     within: frozenset[str]
 
 
-def budgets_of(texts: dict[str, str]) -> Budgets:
+def budgets_of(texts: dict[str, str], consts=None) -> Budgets:
+    """`consts`: the tree's consts when the caller has read them already."""
     timers: dict[str, list[tuple[str, int, float]]] = {}
-    for name, defs in tree_consts(texts).items():
+    for name, defs in (consts if consts is not None else tree_consts(texts)).items():
         if name == "HANG_BOUND":
             continue
         for where in sorted({p for p, _ in defs}):
@@ -88,10 +89,13 @@ def budgets_of(texts: dict[str, str]) -> Budgets:
                     timers.setdefault(name, []).append((where, line, seconds))
     product_fns = set()
     for path, text in texts.items():
-        code, tested = blank_strings_and_comments(text), test_lines(path, text)
-        product_fns |= {
-            m.group(1) for m in FN.finditer(code) if m.group(1).endswith("_within") and code.count("\n", 0, m.start()) + 1 not in tested
-        }
+        if "_within" not in text:
+            continue
+        code = blank_strings_and_comments(text)
+        named = [m for m in FN.finditer(code) if m.group(1).endswith("_within")]
+        if named:
+            tested = test_lines(path, text)
+            product_fns |= {m.group(1) for m in named if code.count("\n", 0, m.start()) + 1 not in tested}
     return Budgets(timers, frozenset(product_fns))
 
 
@@ -254,19 +258,38 @@ def line_offset(code: str, line: int) -> int:
 def _written_at(code: str, at: int, window: str) -> int:
     """Where to read an assert's window: at the `Instant::now() + W` of the
     deadline let it compares against, when it comes from one; else the assert."""
-    args = call_args(code, code.index("(", at))[0]
-    for name in set(re.findall(r"\b[a-z_]\w*\b", args)):
-        local = visible_binding(code, name, at)
-        rhs = right_side(code, local) if local is not None else None
-        plus = re.match(rf"\s*{NOW}\s*\+\s*", rhs[0]) if rhs else None
-        if plus and rhs[0][plus.end() :].strip() == window:
-            return rhs[1] + plus.end()
+    # Only the condition, and only the name it holds against the clock: a
+    # message argument naming some other deadline must not move the reading.
+    condition = split_top(call_args(code, code.index("(", at))[0], (",",))[0][1]
+    compared = re.search(rf"{NOW}\s*<=?\s*(\w+)\b|\b(\w+)\s*>=?\s*{NOW}", condition)
+    name = compared and (compared.group(1) or compared.group(2))
+    local = visible_binding(code, name, at) if name else None
+    rhs = right_side(code, local) if local is not None else None
+    plus = re.match(rf"\s*{NOW}\s*\+\s*", rhs[0]) if rhs else None
+    if plus and rhs[0][plus.end() :].strip() == window:
+        return rhs[1] + plus.end()
     return at
+
+
+@functools.lru_cache(maxsize=64)
+def _file_level(code: str) -> tuple[dict[str, str], dict[str, str]]:
+    """(the file's own consts, its `use` imports), read once per file."""
+    return dict((c[2], c[3]) for c in CONST.finditer(code)), imports_of(code)
 
 
 def _scope_at(path: str, code: str, at: int, consts) -> Scope:
     body = next((s for _, _, s, e in fn_spans(code) if s < at < e), 0)
-    return Scope(path, bindings(code[body:at])[0], dict((c[2], c[3]) for c in CONST.finditer(code)), consts, imports_of(code))
+    own, imported = _file_level(code)
+    return Scope(path, bindings(code[body:at])[0], own, consts, imported)
+
+
+def _argument_value(path: str, code: str, arg: str, paren: int, consts):
+    """`resolve` of one call argument, a bare name read through the binding
+    visible at the call (so a let inside an enclosing block is seen)."""
+    if re.fullmatch(r"\w+", arg) and (local := visible_binding(code, arg, paren)) is not None:
+        if (rhs := right_side(code, local)) is not None:
+            return resolve(rhs[0], _scope_at(path, code, rhs[1], consts))
+    return resolve(arg, _scope_at(path, code, paren, consts))
 
 
 def budget_sites(path: str, text: str, consts, includers, budgets: Budgets):
@@ -306,7 +329,7 @@ def budget_sites(path: str, text: str, consts, includers, budgets: Budgets):
             (v[0], fn)
             for fn, args, paren in calls
             for _, a in split_top(args, (",",))
-            if not HANG_BOUND.search(a) and (v := resolve(a.strip(), _scope_at(path, code, paren, consts))) and v[1]
+            if not HANG_BOUND.search(a) and (v := _argument_value(path, code, a.strip(), paren, consts)) and v[1]
         ]
         if bound is not None and given and bound[0] <= max(given)[0]:
             longest, fn = max(given)
