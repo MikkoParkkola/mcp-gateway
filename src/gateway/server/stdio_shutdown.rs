@@ -120,8 +120,7 @@ pub(super) async fn bounded_blocking(
 pub(super) async fn final_cost_save(
     deadline: Instant,
     saver: Option<super::AbortOnDrop>,
-    enforcer: Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
-    data_dir: std::path::PathBuf,
+    (enforcer, costs, data_dir): super::persistence::CostShutdown,
 ) {
     if let Some(saver) = saver
         && bounded_step(deadline, "cost saver stop", saver.stop())
@@ -132,7 +131,7 @@ pub(super) async fn final_cost_save(
         return;
     }
     bounded_blocking(deadline, super::persistence::COST_SAVE_STEP, move || {
-        super::persistence::save_costs(&enforcer, &data_dir);
+        super::persistence::save_costs(&enforcer, &costs, &data_dir);
     })
     .await;
 }

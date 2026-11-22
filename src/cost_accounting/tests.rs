@@ -99,7 +99,7 @@ fn key_cost_keeps_no_bucket_for_spend_past_the_month() {
     spend(&kc, &CostRecord::new("s", "t", 50, 15.0));
     // One hour bucket (the current one); the old spend lives on only in the
     // all-time per-tool row.
-    assert_eq!(kc.spend.lock().0.len(), 1);
+    assert_eq!(kc.spend.lock().0.hours.len(), 1);
     assert_eq!(kc.snapshot().by_tool[0].token_count, 150);
 }
 
@@ -240,13 +240,14 @@ fn many_calls_on_one_key_hold_a_bounded_number_of_entries() {
     let early = tracker.key_retained("anonymous");
     // THEN: the key holds one tool row and an hour bucket (two, if the run
     // crossed an hour), not one entry per call
-    assert!(early <= 3, "the key holds {early} entries after 1000 calls");
+    // A day total is held too, two when the run crosses a local midnight.
+    assert!(early <= 5, "the key holds {early} entries after 1000 calls");
     // AND: ten times the calls hold no more, give or take one more hour
     // crossed (the bucket wrap is a tally test)
     calls(9_000);
     let late = tracker.key_retained("anonymous");
     assert!(
-        late <= early + 1,
+        late <= early + 2,
         "{late} entries after 10000 calls, {early} after 1000"
     );
     assert_eq!(
