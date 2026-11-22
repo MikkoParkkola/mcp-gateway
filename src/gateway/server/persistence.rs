@@ -178,6 +178,15 @@ pub(super) fn save_costs_unless_busy(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(data_dir.to_path_buf());
+            mutant!(
+                "m5",
+                {
+                    if let Ok(now) = crate::clock::unix_secs() {
+                        crate::cost_accounting::spend_history::save(tracker, data_dir, now);
+                    }
+                },
+                ()
+            );
             false
         }
     }

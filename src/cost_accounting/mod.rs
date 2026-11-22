@@ -239,7 +239,11 @@ impl KeyCost {
         // dates outlast the hours, and the entry must outlast both.
         last != 0
             && (last / 3600).expired(now / 3600)
-            && tally::local_date(last).expired(tally::local_date(now))
+            && mutant!(
+                "m11",
+                true,
+                tally::local_date(last).expired(tally::local_date(now))
+            )
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock
@@ -463,7 +467,11 @@ impl CostTracker {
             }
         } else if let Some(at) = rec.timestamp {
             let micro = tally::micro(rec.estimated_cost_usd);
-            self.keyless.lock().add(at, at, rec.token_count, micro);
+            mutant!(
+                "m7",
+                (),
+                self.keyless.lock().add(at, at, rec.token_count, micro)
+            );
         }
     }
 

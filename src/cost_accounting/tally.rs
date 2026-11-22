@@ -268,7 +268,11 @@ impl Series {
             self.settle(now / 3600, local_date(now));
         }
         self.hours.add(at, now, tokens, micro);
-        self.days.add_slot(date, local_date(now), tokens, micro);
+        mutant!(
+            "m1",
+            (),
+            self.days.add_slot(date, local_date(now), tokens, micro)
+        );
     }
 
     /// End the hours at `hour` and the dates at `date`: see

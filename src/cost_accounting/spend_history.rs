@@ -109,12 +109,25 @@ impl Rows {
         let mut ahead = Ahead::default();
         for &(hour, tokens, micro) in &self.hours {
             ahead.hours = ahead.hours.max(hour.saturating_sub(this_hour));
-            into.hours
-                .add(hour.min(this_hour) * 3600, now, tokens, micro);
+            let at = hour.min(this_hour) * 3600;
+            mutant!(
+                "m10",
+                into.hours.add(hour.min(this_hour), now, tokens, micro),
+                mutant!(
+                    "m2",
+                    into.hours.add(at, at, tokens, micro),
+                    into.hours.add(at, now, tokens, micro)
+                )
+            );
         }
         for &(date, tokens, micro) in &self.days {
             ahead.days = ahead.days.max((date - today).num_days());
-            into.days.add_slot(date.min(today), today, tokens, micro);
+            let day = date.min(today);
+            mutant!(
+                "m2",
+                into.days.add_slot(day, day, tokens, micro),
+                into.days.add_slot(day, today, tokens, micro)
+            );
         }
         ahead
     }
@@ -222,7 +235,22 @@ pub(crate) fn restore(
     let by_fp: HashMap<String, &String> = key_names.iter().map(|n| (fingerprint(n), n)).collect();
     let mut ahead = history.keyless.replay(&mut tracker.keyless.lock(), now);
     let mut carried = tracker.carried.lock();
-    ahead = ahead.max(history.overflow.replay(&mut carried, now));
+    let overflow_ahead = mutant!(
+        "m4",
+        {
+            let entry = tracker
+                .per_key
+                .entry("overflow".to_owned())
+                .or_insert_with(|| Arc::new(KeyCost::new("overflow")))
+                .clone();
+            let mut series = Series::default();
+            let got = history.overflow.replay(&mut series, now);
+            entry.spend.lock().0.merge(&series);
+            got
+        },
+        history.overflow.replay(&mut carried, now)
+    );
+    ahead = ahead.max(overflow_ahead);
     for key in &history.keys {
         let Some(name) = by_fp.get(&key.fp) else {
             ahead = ahead.max(key.rows.replay(&mut carried, now));
@@ -332,12 +360,16 @@ fn save_with(
     if same && still_private(&path) {
         return true;
     }
-    let written = crate::config_persistence::write_atomic_checked(
-        &path,
-        &bytes,
-        crate::config_persistence::FileMode::Private,
-        crate::config_persistence::Symlink::Replace,
-        before_rename,
+    let written = mutant!(
+        "m6",
+        std::fs::write(&path, &bytes),
+        crate::config_persistence::write_atomic_checked(
+            &path,
+            &bytes,
+            crate::config_persistence::FileMode::Private,
+            crate::config_persistence::Symlink::Replace,
+            before_rename,
+        )
     );
     match written {
         Ok(()) => {
@@ -403,7 +435,7 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
     }
     let mut keyless = tracker.keyless.lock().clone();
     after_copy();
-    let mut overflow = tracker.carried.lock().clone();
+    let mut overflow = mutant!("m8", Series::default(), tracker.carried.lock().clone());
 
     // The cut is the save instant's own: a slot one copy holds past `now`
     // (a clock that stepped back) must not age the other copies' rows. Such
@@ -426,8 +458,15 @@ fn snapshot(tracker: &CostTracker, now: u64, after_copy: &mut dyn FnMut()) -> Hi
     ranked.sort_by(|(x, a, _), (y, b, _)| y.cmp(x).then_with(|| a.cmp(b)));
     let folded = ranked.split_off(ranked.len().min(MAX_KEYS));
     for (.., series) in &folded {
-        overflow.merge(series);
+        mutant!("m3", (), overflow.merge(series));
     }
+    mutant!(
+        "m9",
+        {
+            *tracker.carried.lock() = overflow.clone();
+        },
+        ()
+    );
     let keys = ranked.into_iter().map(|(_, name, series)| (name, series));
     History {
         keyless: Rows::of(&keyless),
