@@ -136,6 +136,8 @@ fn write_outer_config(root: &Path, inner: &Path, total: Duration, during: During
     config.backends.insert("inner".into(), inner_backend);
     save(root, "gateway.yaml", &config)
 }
+/// The stop total of a chain parent (the stdio outer and the three-level chain's middle).
+const CHAIN_PARENT_STOP: Duration = Duration::from_secs(30);
 fn write_chain_parent(
     root: &Path,
     name: &str,
@@ -151,7 +153,7 @@ fn write_chain_parent(
     )
     .expect("chain launcher");
     let mut config = base_config(root, name);
-    config.server.shutdown_timeout = Duration::from_secs(30);
+    config.server.shutdown_timeout = CHAIN_PARENT_STOP;
     probe_backends(&mut config, during);
     config.backends.insert(
         child.into(),
@@ -297,23 +299,21 @@ enum During {
     /// Freeze the inner (SIGSTOP) before the outer's stop starts and never let
     /// it run again: it can end nothing, so only the outer's sweep ends its leaves.
     Freeze,
-    /// Record the stop's timeline for the margin measurement: every pid's
-    /// exit as it happens, the inner's hurry line, the SIGTERM's wall time.
+    /// Record the stop's timeline for the margin measurement (Linux only): each
+    /// role's exit as it happens and the SIGTERM's instant, on one monotonic clock.
+    #[cfg(target_os = "linux")]
     Watch,
 }
-
-/// The inner logs this when the outer's SIGTERM reaches it. Its stdin closed earlier, so its own stop is
-/// already under way and the signal hurries it: from here it has only the nested need before the outer kills it.
-const HURRY_LINES: [&str; 1] = ["Shutdown signal received"];
 
 /// An inner stop total longer than the parent's whole plan. With a short one
 /// (8 s) the inner ends its leaf by itself about 2 s after its stdin closes,
 /// before the parent's SIGTERM is due, and the nested need is never in play.
 const INNER_OUTLASTS_THE_PLAN: Duration = Duration::from_secs(30);
 
-/// Prints "<pid> <wall-clock ns>" the moment each given pid exits, through a
-/// pidfd each (Linux), so a stop's timeline is read without polling. A pid
+/// Prints "<pid> <CLOCK_MONOTONIC ns>" the moment each given pid exits, through
+/// a pidfd each (Linux), so a stop's timeline is read without polling. A pid
 /// already gone when the watcher starts prints "<pid> gone-before".
+#[cfg(target_os = "linux")]
 const EXIT_WATCHER: &str = r#"import os, select, sys, time
 watching = {}
 poller = select.poll()
@@ -328,10 +328,109 @@ for arg in sys.argv[1:]:
 give_up = time.monotonic() + 120
 while watching and time.monotonic() < give_up:
     for fd, _ in poller.poll(1000):
-        print(watching.pop(fd), time.time_ns(), flush=True)
+        print(watching.pop(fd), time.monotonic_ns(), flush=True)
         poller.unregister(fd)
         os.close(fd)
 "#;
+
+/// The inner gateway, each leaf and its grandchild, by role (`inner`, `leaf:<name>`,
+/// `grandchild:<name>`), from the pid files the chain writes. The grandchild is gone
+/// only if a gateway killed the leaf's whole process group.
+fn chain_roles(root: &Path, leaves: &[&str]) -> Vec<(String, u32)> {
+    let mut roles = vec![("inner".to_owned(), read_pid(root, "inner.pid"))];
+    for name in leaves {
+        roles.push((
+            format!("leaf:{name}"),
+            read_pid(root, &format!("leaf-{name}.pid")),
+        ));
+        roles.push((
+            format!("grandchild:{name}"),
+            read_pid(root, &format!("leaf-{name}.grandchild.pid")),
+        ));
+    }
+    roles
+}
+
+/// One measured stop's timeline for the margin harness (Linux: pidfd, CLOCK_MONOTONIC).
+#[cfg(target_os = "linux")]
+mod measure {
+    use super::{Duration, EXIT_WATCHER, STOP_BOUND, Stdio, json};
+
+    /// Which stop the run measured: the analyser applies its own kill instant to each.
+    #[derive(Clone, Copy)]
+    pub(super) enum Path {
+        /// The HTTP outer's planned stop.
+        Normal,
+        /// The stdio outer hurried by a second signal.
+        Hurried,
+    }
+
+    /// The exit watcher of one run, started on every role's pid before the stop.
+    pub(super) struct Watch {
+        watcher: tokio::process::Child,
+        roles: Vec<(String, u32)>,
+    }
+
+    impl Watch {
+        pub(super) fn start(roles: &[(String, u32)]) -> Self {
+            let watcher = tokio::process::Command::new("python3")
+                .args(["-I", "-c", EXIT_WATCHER])
+                .args(roles.iter().map(|(_, pid)| pid.to_string()))
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn() // spawn-check: not the gateway: the pidfd exit watcher of the margin measurement
+                .expect("the exit watcher");
+            Self {
+                watcher,
+                roles: roles.to_vec(),
+            }
+        }
+
+        /// Waits for every exit, then prints the run's one MEASURE line: `signalled_mono_ns` (the
+        /// instant taken just before the SIGTERM), the stop `total_ms`, the `path`, and `exits` as
+        /// `[role, stamp]` pairs in the order seen (a stamp is CLOCK_MONOTONIC ns or "gone-before").
+        /// Nothing here is asserted; the analyser refuses a run with a missing or repeated role.
+        pub(super) async fn report(self, path: Path, total: Duration, signalled_mono_ns: u128) {
+            let out = tokio::time::timeout(STOP_BOUND, self.watcher.wait_with_output())
+                .await
+                .expect("the exit watcher ended")
+                .expect("the exit watcher's output");
+            let exits: Vec<(String, String)> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| line.split_once(' '))
+                .map(|(pid, stamp)| {
+                    let role = pid
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(|seen| self.roles.iter().find(|(_, known)| *known == seen))
+                        .map_or_else(|| format!("unknown:{pid}"), |(role, _)| role.clone());
+                    (role, stamp.to_owned())
+                })
+                .collect();
+            let path = match path {
+                Path::Normal => "normal",
+                Path::Hurried => "hurried",
+            };
+            eprintln!(
+                "MEASURE {}",
+                json!({
+                    "signalled_mono_ns": signalled_mono_ns.to_string(),
+                    "total_ms": total.as_millis().to_string(),
+                    "path": path,
+                    "exits": exits,
+                })
+            );
+        }
+    }
+
+    /// CLOCK_MONOTONIC now, in ns: the clock the watcher's `time.monotonic_ns()` reads and the
+    /// stop's own deadlines run on.
+    pub(super) fn now_ns() -> u128 {
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        u128::try_from(now.tv_sec).expect("a monotonic clock past zero") * 1_000_000_000
+            + u128::try_from(now.tv_nsec).expect("nanoseconds in range")
+    }
+}
 
 /// `kill -<sig> <pid>`, best effort: a pid that has already gone is the
 /// row's own business to judge.
@@ -476,17 +575,8 @@ async fn run_with(
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // The inner gateway, each leaf and its grandchild: the grandchild is gone
-    // only if the gateway killed the leaf's whole process group.
-    let leaves: Vec<u32> = std::iter::once("inner.pid".to_owned())
-        .chain(leaves.iter().flat_map(|name| {
-            [
-                format!("leaf-{name}.pid"),
-                format!("leaf-{name}.grandchild.pid"),
-            ]
-        }))
-        .map(|file| read_pid(root, &file))
-        .collect();
+    let roles = chain_roles(root, leaves);
+    let leaves: Vec<u32> = roles.iter().map(|(_, pid)| *pid).collect();
     assert!(calls.try_join_next().is_none(), "hold returned before stop");
     assert!(
         leaves.iter().all(|pid| pids::alive(*pid)),
@@ -497,44 +587,17 @@ async fn run_with(
         freeze_before_the_stop(root, leaves[0], &leaves[1..]).await;
     }
     let deadline = Instant::now() + STOP_BOUND;
-    let watcher = matches!(during, During::Watch).then(|| {
-        tokio::process::Command::new("python3")
-            .args(["-I", "-c", EXIT_WATCHER])
-            .args(leaves.iter().map(u32::to_string))
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn() // spawn-check: not the gateway: the pidfd exit watcher of the margin measurement
-            .expect("the exit watcher")
-    });
-    // Wall time, to line up with the watcher's stamps and the inner's log.
-    let signalled_wall = std::time::SystemTime::now();
+    #[cfg(target_os = "linux")]
+    let watch = matches!(during, During::Watch).then(|| measure::Watch::start(&roles));
+    // On the watcher's clock, taken just before the SIGTERM.
+    #[cfg(target_os = "linux")]
+    let signalled_mono_ns = measure::now_ns();
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
-    if let Some(watcher) = watcher {
-        let exits = tokio::time::timeout(STOP_BOUND, watcher.wait_with_output())
-            .await
-            .expect("the exit watcher ended")
-            .expect("the exit watcher's output");
-        let hurry = std::fs::read_to_string(root.join("inner.log"))
-            .unwrap_or_default()
-            .lines()
-            .find(|line| HURRY_LINES.iter().any(|mark| line.contains(mark)))
-            .unwrap_or_default()
-            .to_owned();
-        let signalled_ns = signalled_wall
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("after the epoch")
-            .as_nanos()
-            .to_string();
-        // One line per run, read by the margin harness; nothing here is asserted.
-        eprintln!(
-            "MEASURE {}",
-            json!({
-                "signalled_wall_ns": signalled_ns,
-                "pids": leaves,
-                "exits": String::from_utf8_lossy(&exits.stdout),
-                "inner_hurry_line": hurry,
-            })
-        );
+    #[cfg(target_os = "linux")]
+    if let Some(watch) = watch {
+        watch
+            .report(measure::Path::Normal, total, signalled_mono_ns)
+            .await;
     }
     let logs_then = logs(root);
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
@@ -581,9 +644,10 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
     );
 }
 /// One measured stop of the chain at the floor, for sizing the nested margin:
-/// its timeline goes out as a MEASURE line (each pid's exit from a pidfd
-/// watcher, the inner's hurry line, the SIGTERM's wall time). It asserts no
-/// timing; the margin harness runs it many times under load and reads the lines.
+/// its timeline goes out as a MEASURE line (each role's exit from a pidfd
+/// watcher and the SIGTERM's instant, both CLOCK_MONOTONIC; the stop total; the
+/// path). It asserts no timing; the margin harness runs it many times under load
+/// and reads the lines.
 #[cfg(target_os = "linux")]
 #[ignore = "a measurement for the margin harness, not a CI row"]
 #[tokio::test]
@@ -859,11 +923,10 @@ async fn two_level_hurried_stop(during: During) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let mut tree = vec![pid, read_pid(root, "inner.pid")];
-    for name in leaves {
-        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
-        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
-    }
+    let roles = chain_roles(root, &leaves);
+    let tree: Vec<u32> = std::iter::once(pid)
+        .chain(roles.iter().map(|(_, pid)| *pid))
+        .collect();
     assert_eq!(
         alive_pids(&tree),
         tree,
@@ -873,6 +936,9 @@ async fn two_level_hurried_stop(during: During) {
         // tree[1] is the inner gateway's pid; its leaves and their children follow.
         freeze_before_the_stop(root, tree[1], &tree[2..]).await;
     }
+    // Started before the EOF, where this outer's stop begins, so no exit is missed.
+    #[cfg(target_os = "linux")]
+    let watch = matches!(during, During::Watch).then(|| measure::Watch::start(&roles));
     // EOF installs the hurry listener before logging this message. The busy
     // calls keep teardown pending until the subsequent SIGTERM cuts it short.
     drop(stdin);
@@ -885,6 +951,9 @@ async fn two_level_hurried_stop(during: During) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    // On the watcher's clock, taken just before the second signal.
+    #[cfg(target_os = "linux")]
+    let signalled_mono_ns = measure::now_ns();
     let hurried_at = Instant::now();
     sigterm(pid);
     // Observation time, not a watchdog: the outer kills at ~300 ms; allow
@@ -901,12 +970,28 @@ async fn two_level_hurried_stop(during: During) {
         "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
         logs(root)
     );
+    #[cfg(target_os = "linux")]
+    if let Some(watch) = watch {
+        watch
+            .report(measure::Path::Hurried, CHAIN_PARENT_STOP, signalled_mono_ns)
+            .await;
+    }
     tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
         .await
         .expect("outer exit deadline")
         .expect("outer exit");
     reaped.reap().await;
     std::mem::forget(cleanup);
+}
+
+/// One measured hurried stop for the margin harness: the stdio outer's EOF, then its second
+/// signal, with the same MEASURE line as the normal path's (path "hurried"). The hurried kill
+/// comes HURRY_WINDOW after the signal, so these runs size nothing: they are a sweep check.
+#[cfg(target_os = "linux")]
+#[ignore = "a measurement for the margin harness, not a CI row"]
+#[tokio::test]
+async fn measure_one_hurried_nested_stop_for_the_margin() {
+    two_level_hurried_stop(During::Watch).await;
 }
 
 /// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
