@@ -241,7 +241,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/fragments.rs",
-        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; under BOUNDARY_PINS_BLESS it appends the rows a check lists to add to one <name>.d/<ticket>.tsv fragment, and a row reads back (and removes, if a run wrongly created it) one fragment of the checkout; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",
