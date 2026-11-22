@@ -363,3 +363,9 @@ dialog.confirm .acts { display: flex; justify-content: flex-end; flex-wrap: wrap
   .palette-option { min-height: var(--size-touch); align-items: center; }
   .signin .btn { min-height: var(--size-touch); }
 }
+
+/* A config diff, as every settings tab shows one before a save: the server's masked text, as text. */
+.diff { margin: 0; padding: var(--space-2) var(--space-3); overflow-x: auto; font: var(--type-small); font-family: var(--font-family-mono); background: var(--color-bg-raised); border: var(--size-rule) solid var(--color-border-subtle); border-radius: var(--radius-sm); }
+.diff .add { color: var(--color-status-success-fg); }
+.diff .del { color: var(--color-status-danger-fg); }
+.diff .hunk { color: var(--color-text-secondary); }
