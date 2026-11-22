@@ -73,8 +73,7 @@ async fn served() -> Served {
     let dir = root.path().join("caps");
     std::fs::create_dir(&dir).expect("the capability directory is made");
     let file = dir.join("twofield.yaml");
-    crate::gateway::test_helpers::write_owner_only(&file, &original())
-        .expect("the file is written");
+    crate::gateway::test_helpers::write_owner_only(&file, original()).expect("the file is written");
     Arc::get_mut(&mut state)
         .expect("the state has one owner")
         .capability_dirs = vec![dir.to_string_lossy().into_owned()];
@@ -129,8 +128,10 @@ fn printed_revision(stderr: &str) -> String {
         .lines()
         .find_map(|line| line.strip_prefix("api: revision "))
         .and_then(|rest| rest.split_once("; "))
-        .map(|(token, _)| token.to_owned())
-        .unwrap_or_else(|| panic!("the load printed no revision: {stderr}"))
+        .map_or_else(
+            || panic!("the load printed no revision: {stderr}"),
+            |(token, _)| token.to_owned(),
+        )
 }
 
 fn on_disk(fx: &Served) -> String {

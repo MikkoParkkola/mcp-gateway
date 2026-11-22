@@ -19,7 +19,7 @@ async fn get(stand: &Stand, path: &str) -> CliOutcome {
     .await
 }
 
-/// An answer that carries an ETag prints it as given, with what it is for.
+/// An answer that carries an `ETag` prints it as given, with what it is for.
 #[tokio::test]
 async fn an_answer_with_an_etag_prints_its_revision() {
     let stand = stand_in_with_headers(
@@ -39,7 +39,7 @@ async fn an_answer_with_an_etag_prints_its_revision() {
     );
 }
 
-/// Control: an answer without an ETag prints no revision line.
+/// Control: an answer without an `ETag` prints no revision line.
 #[tokio::test]
 async fn an_answer_without_an_etag_prints_no_revision() {
     let stand = stand_in(StatusCode::OK, "application/json", "{}").await;
