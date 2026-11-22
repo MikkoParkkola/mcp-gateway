@@ -497,9 +497,22 @@ fn file_source() -> Source {
 
 /// Whether a full publish from `previous` to `revision` stores a version: only
 /// when the revision moved. The live config moves its recorded (served)
-/// revision by this same rule, so the two cannot drift.
-pub(super) fn records_a_version(previous: Option<&str>, revision: &str) -> bool {
+/// revision by this same rule ([`recorded_after`]), so the two cannot drift.
+fn records_a_version(previous: Option<&str>, revision: &str) -> bool {
     previous != Some(revision)
+}
+
+/// What the live config should hold as its recorded revision once a full
+/// publish replaced `before` with `now`: `now` if that publish stores a
+/// version, otherwise `kept` unchanged. Nothing published, nothing held.
+pub(super) fn recorded_after(
+    before: Option<&str>,
+    now: Option<&str>,
+    kept: Option<&str>,
+) -> Option<String> {
+    let now = now?;
+    let stored = records_a_version(before, now);
+    Some(if stored { now } else { kept? }.to_owned())
 }
 
 fn applied_event(at: u64, source: Source, revision: &str, unchanged: bool) -> Event {

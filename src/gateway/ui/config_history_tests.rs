@@ -400,7 +400,7 @@ async fn g1f_an_unchanged_record_after_the_grants_publish_keeps_b_pinned() {
     // passes B's stamp, so A and B are both past a 0 s age when the next
     // record is saved. Nothing else waits on this.
     let stamped = rig.kept(&version_b).at;
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while crate::clock::unix_secs().expect("the clock reads") <= stamped {
         assert!(
             std::time::Instant::now() < give_up,

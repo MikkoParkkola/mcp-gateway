@@ -38,20 +38,9 @@ struct Published {
     recorded_revision: Option<String>,
 }
 
-/// The recorded revision after a full publish from `previous` to
-/// `published`: the new revision when that publish stores a version, else
-/// the one already recorded; `None` with no revision published.
-fn recorded_after(
-    previous: Option<&str>,
-    published: Option<&Applied>,
-    recorded: Option<&str>,
-) -> Option<String> {
-    let published = published?;
-    if super::history::records_a_version(previous, &published.revision) {
-        Some(published.revision.clone())
-    } else {
-        recorded.map(str::to_owned)
-    }
+/// `applied`'s revision, for [`super::history::recorded_after`].
+fn revision_of(applied: Option<&Applied>) -> Option<&str> {
+    applied.map(|applied| applied.revision.as_str())
 }
 
 /// The keyed digests a published config was built from, its revision, and
@@ -369,7 +358,8 @@ impl LiveConfig {
         inner.capability_running_set = false;
         // The startup revision: its record stores that version, or finds it
         // already the newest kept (a restart on the same files).
-        inner.recorded_revision = recorded_after(None, applied.as_deref(), None);
+        inner.recorded_revision =
+            super::history::recorded_after(None, revision_of(applied.as_deref()), None);
         inner.applied = applied;
         self
     }
@@ -539,9 +529,9 @@ impl LiveConfig {
             let inputs = self.digest_over(raw, current);
             let pending = with_env_restart(pending, env_restart);
             inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
-            inner.recorded_revision = recorded_after(
+            inner.recorded_revision = super::history::recorded_after(
                 previous.as_deref(),
-                inner.applied.as_deref(),
+                revision_of(inner.applied.as_deref()),
                 inner.recorded_revision.as_deref(),
             );
             #[cfg(test)]
@@ -716,9 +706,9 @@ impl LiveConfig {
             let running_revision = inner.running_revision.clone();
             let startup_inputs = inner.startup_inputs.clone();
             let capability_running_set = inner.capability_running_set;
-            let recorded_revision = recorded_after(
-                inner.applied.as_ref().map(|now| now.revision.as_str()),
-                applied.as_deref(),
+            let recorded_revision = super::history::recorded_after(
+                revision_of(inner.applied.as_deref()),
+                revision_of(applied.as_deref()),
                 inner.recorded_revision.as_deref(),
             );
             let served = recorded_revision.clone();
