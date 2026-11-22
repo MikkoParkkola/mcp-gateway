@@ -352,3 +352,70 @@ fn a_start_before_1970_neither_restores_nor_replaces_the_history() {
     let after = std::fs::read(dir.path().join(FILE_NAME)).expect("the file");
     assert_eq!(after, on_disk, "the history on disk was replaced");
 }
+
+/// gpt delta 2 (CRITICAL), fixed at its cause (lead): a file written on a
+/// clock that ran 40 days ahead, restored after the clock was put back. Its
+/// spend is kept in the restore's own hour and date, with one warning that
+/// gives the skew, so no slot is dated after the restore. The key then ages
+/// like one that spent at the restore: a sweep 29 days on keeps it, and one
+/// 31 days on drops it with its rows expired. Red before: the rows kept
+/// their future dates, so a sweep 31 days on dropped a key still holding
+/// spend inside its windows.
+#[test]
+fn rows_dated_ahead_restore_into_the_restore_hour_and_age_from_there() {
+    let dir = tempfile::tempdir().expect("dir");
+    let ahead = CostTracker::new();
+    spend(&ahead, Some("k"), T0 + 40 * DAY, 3);
+    saved(&ahead, dir.path(), T0 + 40 * DAY);
+    let at_restore = || restored(dir.path(), &["k"], T0);
+    let (back, logged) = crate::test_log_capture::capture_warnings(at_restore);
+    let series = back.key_series("k").expect("the key restored");
+    assert_eq!(series.hours.rows(), vec![(T0 / HOUR, 3, 3)]);
+    assert_eq!(series.days.rows(), vec![(date_of(T0), 3, 3)]);
+    assert_eq!(logged.matches(" WARN ").count(), 1, "one warning: {logged}");
+    assert!(logged.contains("hours_ahead=960"), "the skew: {logged}");
+
+    let kept_after_sweep_at = |at: u64| {
+        back.next_key_sweep
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        spend(&back, Some("poke"), at, 1);
+        back.key_series("k").is_some()
+    };
+    assert!(
+        kept_after_sweep_at(T0 + 29 * DAY),
+        "swept with its rows held"
+    );
+    assert!(
+        !kept_after_sweep_at(T0 + 31 * DAY),
+        "kept with its rows expired"
+    );
+}
+
+/// Lead 2026-11-22: the clamp keeps every unit of spend. A file with rows
+/// before, in and after the restore hour restores to the file's own totals,
+/// over hours and over days, and nothing is dated after the restore. The
+/// totals held before the clamp too; the two date checks were red.
+#[test]
+fn a_restore_that_clamps_rows_keeps_the_files_totals() {
+    let dir = tempfile::tempdir().expect("dir");
+    let written = CostTracker::new();
+    // Before, in and after the restore hour, and three days on.
+    let spent_at = [T0 - 2 * HOUR, T0, T0 + 5 * HOUR, T0 + 3 * DAY];
+    for (at, n) in spent_at.into_iter().zip([1, 2, 4, 8]) {
+        spend(&written, Some("k"), at, n);
+    }
+    let file = saved(&written, dir.path(), T0 + 3 * DAY);
+    let series = restored(dir.path(), &["k"], T0)
+        .key_series("k")
+        .expect("the key");
+    let kept = micro(&series);
+    assert_eq!(kept, saved_micro(&file["keys"][0]), "the file's totals");
+    assert_eq!(kept, (15, 15));
+    let last_hour = series.hours.newest().expect("hours");
+    let last_date = series.days.newest().expect("dates");
+    assert_eq!(
+        (last_hour, last_date),
+        (T0 / HOUR, date_of(T0)),
+        "dated ahead"
+    );
+}

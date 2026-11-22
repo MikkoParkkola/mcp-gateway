@@ -551,13 +551,15 @@ fn a_full_file_stays_within_its_stated_size_and_restores() {
 }
 
 /// gpt seat 1 (CRITICAL): a restored file may hold the largest numbers. Two
-/// adjacent full hours sum to more than a u64 holds; the window a view reads
+/// adjacent hours sum to more than a u64 holds; the window a view reads
 /// saturates at the largest value instead of wrapping or panicking. Red
-/// before: the window's sum overflowed.
+/// before: the window's sum overflowed. The second hour's micro-USD is 1, so
+/// a wrapped sum reads 0 (two maxima would wrap to one less than the max and
+/// pass the USD check; gpt delta 2).
 #[test]
 fn restored_maximum_values_saturate_the_window_a_view_reads() {
-    let full = |hour: u64| json!([hour, u64::MAX, u64::MAX]);
-    let hours = json!([full(T0 / HOUR - 1), full(T0 / HOUR)]);
+    let full = |hour: u64, micro: u64| json!([hour, u64::MAX, micro]);
+    let hours = json!([full(T0 / HOUR - 1, u64::MAX), full(T0 / HOUR, 1)]);
     let row = json!({"fp": fingerprint("k"), "name": "k", "hours": hours, "days": []});
     let empty = json!({"hours": [], "days": []});
     let file = json!({"keyless": empty, "keys": [row], "overflow": empty});

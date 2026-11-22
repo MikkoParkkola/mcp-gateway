@@ -100,14 +100,39 @@ impl Rows {
 
     /// Add every row into `into` through the adds a live record uses, at
     /// unix second `now`, so a restored row ages by the same cuts. An hour
-    /// is replayed at its first second.
-    fn replay(&self, into: &mut Series, now: u64) {
-        let today = tally::local_date(now);
+    /// is replayed at its first second. A row dated after `now` (written on
+    /// a clock that ran ahead) is counted in `now`'s own hour or date, its
+    /// amounts summed in, so no restored slot is dated after the restore.
+    /// Returns how far ahead of `now` the latest row was.
+    fn replay(&self, into: &mut Series, now: u64) -> Ahead {
+        let (this_hour, today) = (now / 3600, tally::local_date(now));
+        let mut ahead = Ahead::default();
         for &(hour, tokens, micro) in &self.hours {
-            into.hours.add(hour * 3600, now, tokens, micro);
+            ahead.hours = ahead.hours.max(hour.saturating_sub(this_hour));
+            into.hours
+                .add(hour.min(this_hour) * 3600, now, tokens, micro);
         }
         for &(date, tokens, micro) in &self.days {
-            into.days.add_slot(date, today, tokens, micro);
+            ahead.days = ahead.days.max((date - today).num_days());
+            into.days.add_slot(date.min(today), today, tokens, micro);
+        }
+        ahead
+    }
+}
+
+/// How far a restored file's latest rows lay after the restore's clock: in
+/// hours, and in local dates. Zero for a file written on the same clock.
+#[derive(Clone, Copy, Default)]
+struct Ahead {
+    hours: u64,
+    days: i64,
+}
+
+impl Ahead {
+    fn max(self, other: Self) -> Self {
+        Self {
+            hours: self.hours.max(other.hours),
+            days: self.days.max(other.days),
         }
     }
 }
@@ -157,6 +182,13 @@ impl History {
 /// which is loaded, absent, or set aside with a warning (the old bytes kept
 /// beside it). Every other outcome turns this run's saves off. Every save in
 /// the server starts after this call (the meta layer is built first).
+///
+/// A second invariant: after a restore, no slot is dated after the restore
+/// instant. A row from a clock that ran ahead keeps its spend, counted in the
+/// restore's own hour and date, with one warning giving the skew. A live run
+/// then holds the same state it would after spending that much now: its
+/// last spend (the restore instant) agrees with its newest row, live spend
+/// lands in the window, and a save's cutoff is the real clock's.
 pub(crate) fn restore(
     tracker: &CostTracker,
     data_dir: &Path,
@@ -188,18 +220,18 @@ pub(crate) fn restore(
         return set_aside(tracker, &path, now, &why);
     }
     let by_fp: HashMap<String, &String> = key_names.iter().map(|n| (fingerprint(n), n)).collect();
-    history.keyless.replay(&mut tracker.keyless.lock(), now);
+    let mut ahead = history.keyless.replay(&mut tracker.keyless.lock(), now);
     let mut carried = tracker.carried.lock();
-    history.overflow.replay(&mut carried, now);
+    ahead = ahead.max(history.overflow.replay(&mut carried, now));
     for key in &history.keys {
         let Some(name) = by_fp.get(&key.fp) else {
-            key.rows.replay(&mut carried, now);
+            ahead = ahead.max(key.rows.replay(&mut carried, now));
             continue;
         };
         // An idle key whose rows have all aged out gets no entry, so it is
         // not reborn empty at every start and saved again as an empty row.
         let mut kept = Series::default();
-        key.rows.replay(&mut kept, now);
+        ahead = ahead.max(key.rows.replay(&mut kept, now));
         if kept.hours.newest().is_none() && kept.days.newest().is_none() {
             continue;
         }
@@ -210,6 +242,13 @@ pub(crate) fn restore(
         entry.spend.lock().0.merge(&kept);
     }
     drop(carried);
+    if ahead.hours > 0 || ahead.days > 0 {
+        tracing::warn!(
+            hours_ahead = ahead.hours,
+            days_ahead = ahead.days,
+            "Spend history holds spend dated after this clock (the clock that wrote it ran ahead); that spend is counted in the current hour and day"
+        );
+    }
     tracing::info!(keys = history.keys.len(), "Restored spend history");
 }
 
