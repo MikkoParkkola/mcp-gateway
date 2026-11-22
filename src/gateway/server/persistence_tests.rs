@@ -185,7 +185,7 @@ async fn the_catch_up_helper_recovers_a_tick_skipped_under_a_held_lock() {
         "this row's ordering relies on a current-thread runtime"
     );
     let (holder_joined, landed, global) = crate::test_day::same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         let enforcer = enforcer_with_spend(0.25);
         let (held_tx, held_rx) = std::sync::mpsc::channel();
@@ -248,7 +248,7 @@ async fn cost_saver_stops_on_shutdown() {
     // Per phase: the spend expected on disk, whether it landed in time,
     // and what the next boot read. Then: shutdown sent, and the task's end.
     let (phases, listening, stopped) = crate::test_day::same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         let (tx, rx) = tokio::sync::broadcast::channel(1);
         let enforcer = enforcer_with_spend(0.2);
