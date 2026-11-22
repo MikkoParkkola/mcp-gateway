@@ -515,7 +515,14 @@ fn http_refusal(
             "Choose an unused key name, then retry.".to_string(),
         ),
         reqwest::StatusCode::CONFLICT if code == Some("stale") => {
-            (PROTOCOL_MESSAGE, reload_and_save(path, token))
+            // A stale delete retries the delete on a fresh load; any other
+            // stale write redoes its change on the fresh text.
+            let remedy = if *method == reqwest::Method::DELETE {
+                precondition_remedy(method, path, token)
+            } else {
+                reload_and_save(path, token)
+            };
+            (PROTOCOL_MESSAGE, remedy)
         }
         reqwest::StatusCode::PRECONDITION_REQUIRED => {
             (PROTOCOL_MESSAGE, precondition_remedy(method, path, token))

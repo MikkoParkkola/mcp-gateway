@@ -48,6 +48,55 @@ async fn an_answer_without_an_etag_prints_no_revision() {
     assert!(!out.stderr().contains("api: revision"), "{}", out.stderr());
 }
 
+/// Which recovery a 428 names, by method and path: only a PUT or DELETE on
+/// one capability gets a load-and-retry recipe; look-alike paths, other
+/// methods and other routes keep the generic remedy.
+#[tokio::test]
+async fn only_a_capability_save_or_delete_gets_a_recovery_recipe() {
+    const SAVE: &str = "apply your change";
+    const DELETE: &str = "mean to remove";
+    const GENERIC: &str = "the current revision";
+    let stand = stand_in(
+        StatusCode::PRECONDITION_REQUIRED,
+        "application/json",
+        r#"{"error":"precondition_required","message":"Send If-Match"}"#,
+    )
+    .await;
+    for (method, path, want) in [
+        (ApiMethod::Put, "/ui/api/capabilities/a", SAVE),
+        (ApiMethod::Put, "/ui/api/capabilities/a?validate=1", SAVE),
+        (ApiMethod::Delete, "/ui/api/capabilities/a", DELETE),
+        (ApiMethod::Post, "/ui/api/capabilities/a", GENERIC),
+        (ApiMethod::Patch, "/ui/api/capabilities/a", GENERIC),
+        (ApiMethod::Put, "/ui/api/capabilities/a/b", GENERIC),
+        (ApiMethod::Delete, "/ui/api/capabilities/a/", GENERIC),
+        (ApiMethod::Put, "/ui/api/capabilities-x/a", GENERIC),
+    ] {
+        let mut call = args(path);
+        call.method = method.clone();
+        if method != ApiMethod::Delete {
+            call.data = Some("{}".to_owned());
+        }
+        let out = run_api_with(
+            &call,
+            &stand.base,
+            &LinkTls::default(),
+            credential,
+            no_stdin,
+            send,
+        )
+        .await;
+        let printed = out.stderr();
+        for other in [SAVE, DELETE, GENERIC] {
+            assert_eq!(
+                printed.contains(other),
+                other == want,
+                "{method:?} {path}: {printed}"
+            );
+        }
+    }
+}
+
 /// Control: a 428 that is neither a capability save nor a delete keeps the
 /// generic remedy, since no load-and-reapply recipe fits it.
 #[tokio::test]

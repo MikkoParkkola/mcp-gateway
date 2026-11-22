@@ -190,10 +190,9 @@ async fn a_cli_save_recovers_by_the_printed_text_and_keeps_another_writers_chang
         "{}",
         stale.stderr
     );
-    assert!(
-        on_disk(&fx).contains(THEIR_FIELD.1),
-        "the stale save wrote nothing"
-    );
+    // Both refused saves left the file exactly as the other writer saved it.
+    let theirs = original().replace(THEIR_FIELD.0, THEIR_FIELD.1);
+    assert_eq!(on_disk(&fx), theirs, "a refused save changed the file");
 
     let reload = cli(&fx, &["GET", PATH], "").await;
     let second = printed_revision(&reload.stderr);
@@ -248,8 +247,14 @@ async fn a_cli_delete_of_a_changed_capability_is_refused() {
     other_writer_saves(&fx, &load.stdout, &checked).await;
     let late = cli(&fx, &["DELETE", PATH, "--if-match", &checked], "").await;
     assert_ne!(late.code, 0, "the checked revision is no longer the file's");
+    // Refused as stale, and told to retry the delete on a fresh load, not to
+    // edit and save.
     assert!(
-        on_disk(&fx).contains(THEIR_FIELD.1),
-        "the file and its change stay"
+        late.stderr
+            .contains(&format!("\n{DELETE_RECIPE} Gateway reason: stale.\n")),
+        "{}",
+        late.stderr
     );
+    let theirs = original().replace(THEIR_FIELD.0, THEIR_FIELD.1);
+    assert_eq!(on_disk(&fx), theirs, "the file and its change stay");
 }
