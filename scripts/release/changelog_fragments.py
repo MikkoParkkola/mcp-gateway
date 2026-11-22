@@ -168,12 +168,13 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
                 problems.append(f"{line}: a tracker id in a parenthetical that holds code; "
                                 "move the id out of the parenthetical that holds code, or reword")
                 continue
-            # An escaped or unclosed backtick on the id's line leaves where code
-            # starts or ends in doubt (a span may also run across a line break).
-            start, end = t.rfind("\n", 0, at) + 1, t.find("\n", at)
-            end = len(t) if end < 0 else end
+            # An escaped backtick, or a run that closes nothing on its own line,
+            # anywhere in the id's bullet leaves where code starts or ends in doubt:
+            # a code span may run across line breaks, up to a blank line or the next bullet.
+            start = max(t.rfind("\n- ", 0, at), t.rfind("\n\n", 0, at)) + 1
+            end = min((e for e in (t.find("\n- ", at), t.find("\n\n", at)) if e >= 0), default=len(t))
             if "\\`" in t[start:end] or any(start <= u < end for u in unclosed):
-                problems.append(f"{line}: a tracker id on a line with an escaped or unclosed backtick; "
+                problems.append(f"{line}: a tracker id in a bullet with an escaped or unclosed backtick; "
                                 "close the span or reword the line")
                 continue
             part = next(p for p in _parts(blind, *span) if p[0] <= at < p[1])
