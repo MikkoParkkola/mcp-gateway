@@ -292,7 +292,7 @@ fn takes_yaml(method: &reqwest::Method, url: &reqwest::Url) -> bool {
 fn matches_route(route: &str, path: &str) -> bool {
     let want: Vec<&str> = route.split('/').collect();
     let got: Vec<&str> = path.split('/').collect();
-    want.len() == got.len()
+    mutant!("m-any-depth", true, want.len() == got.len())
         && want.iter().zip(&got).all(|(want, got)| {
             if want.starts_with('{') {
                 !got.is_empty()
@@ -517,10 +517,18 @@ fn http_refusal(
         reqwest::StatusCode::CONFLICT if code == Some("stale") => {
             // A stale delete retries the delete on a fresh load; any other
             // stale write redoes its change on the fresh text.
-            let remedy = if *method == reqwest::Method::DELETE {
+            let remedy = if mutant!(
+                "m-stale-delete-as-save",
+                false,
+                *method == reqwest::Method::DELETE
+            ) {
                 precondition_remedy(method, path, token)
             } else {
-                reload_and_save(path, token)
+                mutant!(
+                    "m-stale-generic",
+                    GENERIC_PRECONDITION.to_owned(),
+                    reload_and_save(path, token)
+                )
             };
             (PROTOCOL_MESSAGE, remedy)
         }
@@ -573,7 +581,11 @@ fn reload_and_save(path: &str, token: &str) -> String {
 /// the revision; every other request keeps the generic sentence.
 fn precondition_remedy(method: &reqwest::Method, path: &str, token: &str) -> String {
     if !matches_route(
-        routes::UI_CAPABILITY,
+        mutant!(
+            "m-recipe-never",
+            routes::UI_CAPABILITIES,
+            routes::UI_CAPABILITY
+        ),
         path.split('?').next().unwrap_or(path),
     ) {
         return GENERIC_PRECONDITION.to_owned();
@@ -586,7 +598,11 @@ fn precondition_remedy(method: &reqwest::Method, path: &str, token: &str) -> Str
                 "Run api GET {path}, confirm it is the version you mean to remove, and delete with --if-match set to the revision it printed."
             )
         }
-        _ => GENERIC_PRECONDITION.to_owned(),
+        _ => mutant!(
+            "m-recipe-any-method",
+            reload_and_save(path, token),
+            GENERIC_PRECONDITION.to_owned()
+        ),
     }
 }
 
@@ -648,7 +664,11 @@ fn render_response(
     // shown here, as the gateway sent it.
     if let Some(revision) = response
         .headers
-        .get(reqwest::header::ETAG)
+        .get(mutant!(
+            "m-no-revision-line",
+            reqwest::header::IF_MATCH,
+            reqwest::header::ETAG
+        ))
         .and_then(|value| value.to_str().ok())
     {
         let _ = writeln!(
