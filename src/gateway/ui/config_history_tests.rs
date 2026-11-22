@@ -189,6 +189,184 @@ async fn g1c_after_a_hot_reload_the_served_version_is_marked_and_restores_as_a_n
     );
 }
 
+/// The gateway G1d to G1f share, and its versions.
+struct GrantsAfterB {
+    rig: Rig,
+    version_a: String,
+    version_b: String,
+    text_b: String,
+}
+
+/// Started on A with env files E (edited before B) and F (equal in both),
+/// reloaded to B, then a grants publish, so the published revision names no
+/// kept version. `bounds` are the store's.
+async fn grants_after_b(bounds: Bounds) -> GrantsAfterB {
+    let home = crate::test_dir_keep::kept_tempdir();
+    let edited = put(&home, "edited.env", b"E=before\n");
+    // Equal in A and B: it shows up only when no baseline was found.
+    let same = put(&home, "same.env", b"F=kept\n");
+    let listed = env_files(&[&edited, &same]);
+    let text_a = config_text(&format!("environment: \"a\"\n{listed}"));
+    let text_b = config_text(&format!("environment: \"b\"\n{listed}"));
+    let rig = Rig::start_in(home, &text_a, Audit::Logged, bounds, History::Kept).await;
+    let version_a = rig.version_of(text_a.as_bytes());
+    put(&rig.dir, "edited.env", b"E=after\n");
+    rig.reload_to(&text_b).await;
+    let version_b = rig.served();
+    // A grants save publishes a new revision over the same files and
+    // hands the history no record.
+    rig.state
+        .live_config
+        .set_grants(Some(b"grants changed by a save\n"));
+    let published = rig.served();
+    assert_ne!(
+        published, version_b,
+        "premise: the published revision moved"
+    );
+    assert!(
+        rig.store
+            .snapshots()
+            .iter()
+            .all(|kept| kept.revision != published),
+        "premise: no kept version carries the published revision"
+    );
+    GrantsAfterB {
+        rig,
+        version_a,
+        version_b,
+        text_b,
+    }
+}
+
+#[tokio::test]
+async fn g1d_a_grants_publish_leaves_the_served_version_marked() {
+    let GrantsAfterB {
+        rig,
+        version_a,
+        version_b,
+        ..
+    } = grants_after_b(Bounds::default()).await;
+    let (status, listing) = rig.history(Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    assert_eq!(listing["running"], json!(version_b));
+    assert_eq!(
+        revisions(&listing["versions"]),
+        [version_b.clone(), version_a.clone()]
+    );
+    assert_eq!(flags(&listing), [true, false]);
+    let edited_path = rig
+        .env_paths(&version_a)
+        .into_iter()
+        .next()
+        .expect("A's first env file is the edited one");
+    let (status, answer) = rig.restore(&version_a, Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["not_restored"],
+        json!([{"path": edited_path, "kind": "env_file"}, {"kind": "grants"}])
+    );
+}
+
+#[tokio::test]
+async fn g1d_plus_an_unchanged_reload_after_the_grants_publish_keeps_b_marked() {
+    let GrantsAfterB {
+        rig,
+        version_a,
+        version_b,
+        text_b,
+    } = grants_after_b(Bounds::default()).await;
+    // The one change: a reload that finds every file as it was.
+    rig.reload_to(&text_b).await;
+    let (status, listing) = rig.history(Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    // An event only, no new version (C11), and B is still the one marked.
+    assert_eq!(
+        (
+            &listing["events"][0]["outcome"],
+            &listing["events"][0]["unchanged"]
+        ),
+        (&json!("applied"), &json!(true))
+    );
+    assert_eq!(
+        revisions(&listing["versions"]),
+        [version_b.clone(), version_a.clone()]
+    );
+    assert_eq!(listing["running"], json!(version_b));
+    assert_eq!(flags(&listing), [true, false]);
+    let edited = rig
+        .env_paths(&version_a)
+        .into_iter()
+        .next()
+        .expect("A lists the edited env file first");
+    let (status, answer) = rig.restore(&version_a, Caller::Root).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["not_restored"],
+        json!([{"path": edited, "kind": "env_file"}, {"kind": "grants"}])
+    );
+}
+
+/// The revisions the store keeps, oldest first.
+fn kept_revisions(rig: &Rig) -> Vec<String> {
+    rig.store
+        .snapshots()
+        .into_iter()
+        .map(|kept| kept.revision)
+        .collect()
+}
+
+#[tokio::test]
+async fn g1e_a_refusal_after_the_grants_publish_keeps_b_pinned() {
+    let bounds = Bounds {
+        max_age_secs: 100,
+        ..Bounds::default()
+    };
+    let GrantsAfterB { rig, version_b, .. } = grants_after_b(bounds).await;
+    let hook = rig
+        .state
+        .live_config
+        .history_hook()
+        .expect("a history hook");
+    let refusal = rig
+        .state
+        .live_config
+        .refused_record(Source::File, Some(3))
+        .expect("a refusal record");
+    // Saved well past both versions' age limit.
+    let late = crate::clock::unix_secs().expect("the clock reads") + 1_000;
+    hook.run(refusal, late);
+    // A ages out (the age rule ran); B stays, pinned by the refusal.
+    assert_eq!(kept_revisions(&rig), [version_b.clone()]);
+    let still = rig
+        .store
+        .events()
+        .pop()
+        .and_then(|event| event.still_running)
+        .expect("the refusal names the version still served");
+    assert_eq!(still.revision, version_b);
+    assert_eq!(still.since, rig.kept(&version_b).at);
+}
+
+#[tokio::test]
+async fn g1f_an_unchanged_record_after_the_grants_publish_keeps_b_pinned() {
+    let bounds = Bounds {
+        max_age_secs: 0,
+        ..Bounds::default()
+    };
+    let GrantsAfterB {
+        rig,
+        version_b,
+        text_b,
+        ..
+    } = grants_after_b(bounds).await;
+    // Records carry whole seconds: after 1.1 s every earlier version is past
+    // a 0 s age, whatever the sub-second start. Nothing else waits on this.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    rig.reload_to(&text_b).await;
+    // A ages out; B stays, pinned by the unchanged reload's record.
+    assert_eq!(kept_revisions(&rig), [version_b]);
+}
+
 /// Every object key anywhere in `value`.
 fn all_keys(value: &Value, into: &mut BTreeSet<String>) {
     match value {
@@ -216,10 +394,10 @@ async fn g2_no_stored_byte_reaches_the_history_answer() {
     // An event holding a diff with a secret in it, as a store may hold one.
     let at = crate::clock::unix_secs().expect("the clock reads");
     rig.store.record(
-        crate::config_reload::history::Event {
+        Event {
             at,
-            source: crate::config_reload::history::Source::File,
-            outcome: crate::config_reload::history::Outcome::Refused,
+            source: Source::File,
+            outcome: Outcome::Refused,
             revision: None,
             unchanged: false,
             still_running: None,
