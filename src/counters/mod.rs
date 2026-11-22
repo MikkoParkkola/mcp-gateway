@@ -31,6 +31,8 @@ mod snapshot;
 // The readers serve the web UI's history routes; without them nothing reads.
 #[cfg(any(test, feature = "webui"))]
 mod sums;
+#[cfg(test)]
+pub(crate) mod test_totals;
 #[cfg(any(test, feature = "webui"))]
 mod view;
 
