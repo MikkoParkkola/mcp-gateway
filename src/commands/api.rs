@@ -19,9 +19,10 @@ use super::cli_exit::{
     unsafe_target,
 };
 use super::dashboard_link::{
-    AdminCallError, AdminResponse, LinkTls, TOKEN_ENV, admin_call_url, check_target,
+    AdminBody, AdminCallError, AdminResponse, LinkTls, TOKEN_ENV, admin_call_url, check_target,
     dashboard_link_base, gateway_reason, read_token,
 };
+use crate::gateway::routes;
 
 const BODY_LIMIT: u64 = 16 * 1024 * 1024;
 
@@ -34,7 +35,7 @@ pub(crate) struct ApiRequest {
     pub(crate) url: reqwest::Url,
     pub(crate) token: String,
     pub(crate) tls: LinkTls,
-    pub(crate) body: Option<Value>,
+    pub(crate) body: Option<AdminBody>,
     pub(crate) if_match: Option<reqwest::header::HeaderValue>,
 }
 
@@ -154,7 +155,9 @@ where
         Some(Some(value)) => Some(value),
         None => None,
     };
-    let body = match read_data(args.data.as_deref(), stdin) {
+    let body = match read_data(args.data.as_deref(), stdin)
+        .and_then(|data| data.map(|data| body_of(&method, &url, data)).transpose())
+    {
         Ok(body) => body,
         Err(error) => return error.outcome(args.json, &[token.as_str()]),
     };
@@ -233,10 +236,55 @@ fn api_url(base: &str, path: &str) -> Result<reqwest::Url, CliError> {
     Ok(url)
 }
 
+/// Whether the router runs a capability save (PUT on one capability, its
+/// `?validate` query included) or a validate (POST on its validate route) for
+/// `url`: the two routes that take raw YAML. Matched segment by segment against
+/// the router's own patterns; a `{name}` segment is one non-empty segment.
+fn takes_yaml(method: &reqwest::Method, url: &reqwest::Url) -> bool {
+    let route = match *method {
+        reqwest::Method::PUT => routes::UI_CAPABILITY,
+        reqwest::Method::POST => routes::UI_CAPABILITY_VALIDATE,
+        _ => return false,
+    };
+    let want: Vec<&str> = route.split('/').collect();
+    let got: Vec<&str> = url.path().split('/').collect();
+    want.len() == got.len()
+        && want.iter().zip(&got).all(|(want, got)| {
+            if want.starts_with('{') {
+                !got.is_empty()
+            } else {
+                want == got
+            }
+        })
+}
+
+/// The body `data` is sent as: its bytes unchanged on a YAML route, parsed
+/// JSON everywhere else.
+fn body_of(
+    method: &reqwest::Method,
+    url: &reqwest::Url,
+    data: Vec<u8>,
+) -> Result<AdminBody, CliError> {
+    if takes_yaml(method, url) {
+        return Ok(AdminBody::Yaml(data));
+    }
+    serde_json::from_slice(&data)
+        .map(AdminBody::Json)
+        .map_err(|_| {
+            CliError::new(
+                CliExit::Usage,
+                "Request body is not valid JSON.",
+                "Send JSON: only the capability save and validate routes take YAML.",
+            )
+        })
+}
+
+/// The `--data` bytes from stdin (`-`), a file (`@path`) or the argument
+/// itself, refused above 16 MiB.
 fn read_data(
     data: Option<&str>,
     stdin: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<Option<Value>, CliError> {
+) -> Result<Option<Vec<u8>>, CliError> {
     let Some(data) = data else { return Ok(None) };
     let data = if data == "-" {
         stdin().map_err(|_| {
@@ -270,13 +318,7 @@ fn read_data(
             "Send a smaller body.",
         ));
     }
-    serde_json::from_slice(&data).map(Some).map_err(|_| {
-        CliError::new(
-            CliExit::Usage,
-            "Request body is not valid JSON.",
-            "Correct the JSON or select the body's actual Content-Type.",
-        )
-    })
+    Ok(Some(data))
 }
 
 fn response_request_id(body: &Value, response: &AdminResponse, token: &str) -> Option<String> {
