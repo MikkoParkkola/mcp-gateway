@@ -165,6 +165,9 @@ use super::cli_exit::{
 };
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
+// Test-only until the fix routes ApiRequest's body through it (red scaffold).
+#[cfg(test)]
+pub(crate) use admin::AdminBody;
 pub(crate) use admin::{
     AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, Remedies,
     UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link, gateway_reason,

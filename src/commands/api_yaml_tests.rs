@@ -238,6 +238,17 @@ async fn the_body_cap_holds_for_yaml() {
     assert_sent(&stand, &ran, &at, "application/x-yaml");
 }
 
+/// T6: a YAML body's Debug names its size, never its bytes, so a logged
+/// request cannot carry a capability's text.
+#[test]
+fn a_yaml_body_debugs_as_its_size_only() {
+    let body = crate::commands::dashboard_link::AdminBody::Yaml(YAML.as_bytes().to_vec());
+    assert_eq!(
+        format!("{body:?}"),
+        format!("Yaml {{ bytes: {} }}", YAML.len())
+    );
+}
+
 /// T7: the command's arguments are exactly today's: no option names a type
 /// or a header.
 #[test]

@@ -325,6 +325,16 @@ impl Default for AdminClientOptions {
     }
 }
 
+/// A request body: JSON, or capability YAML sent as its bytes.
+// Scaffold for the red run: Debug is derived here; the fix writes it by hand
+// and wires the type into the send path, dropping this allow.
+#[allow(dead_code)]
+#[derive(Debug, PartialEq)]
+pub(crate) enum AdminBody {
+    Json(serde_json::Value),
+    Yaml(Vec<u8>),
+}
+
 /// Send the exact URL the caller validated, optionally carrying a JSON body.
 ///
 /// # Errors
