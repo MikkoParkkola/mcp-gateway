@@ -333,9 +333,13 @@ async fn a_call_decided_after_its_stream_opened_records_its_token() {
     assert!(early.is_empty(), "decided before the answer: {early:?}");
     // Only now may the backend answer; the decision is built after this.
     fx.gate.as_ref().expect("a gated fixture").notify_one();
-    let streamed = to_bytes(head.into_body(), usize::MAX)
-        .await
-        .expect("the stream ends");
+    let streamed = tokio::time::timeout(
+        Duration::from_secs(30),
+        to_bytes(head.into_body(), usize::MAX),
+    )
+    .await
+    .expect("the stream ends within the bound once the answer is let go")
+    .expect("the stream reads");
     let streamed = String::from_utf8_lossy(&streamed);
     assert!(streamed.contains("\"result\""), "{streamed}");
     let record = only_invocation(&fx);
