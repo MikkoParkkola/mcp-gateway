@@ -76,7 +76,7 @@ use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue,
 use crate::config_reload::{
     AuditPosture, BusyReason, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep,
     PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue,
-    SecretTarget, Shown, UiPreview, UiRefused, path_text, ui_diff, ui_save,
+    SecretTarget, Shown, UiPreview, UiRefused, UiSaved, path_text, ui_diff, ui_save,
 };
 use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
@@ -308,29 +308,35 @@ pub(super) async fn settings_save(
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
     let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
     match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
-        Ok(saved) => {
-            let pending = saved.reload.restart_required;
-            let mut body = json!({
-                "revision": saved.revision.as_str(), "changed": saved.changed,
-                "restart_required": restart_fields(&fields, &saved.reload),
-                "reload": saved.reload, "comments": "kept",
-            });
-            // A restart would boot the published config.
-            let refusal = pending
-                .then(|| crate::gateway::next_start_refusal(&live.get()))
-                .flatten();
-            if let Some(keys) = super::restart_confirm::restart_advice(
-                pending,
-                refusal.as_deref(),
-                Some(&config_path),
-            ) && let Some(answer) = body.as_object_mut()
-            {
-                answer.extend(keys);
-            }
-            Json(body).into_response()
-        }
+        Ok(saved) => saved_answer(saved, &fields, &live, &config_path),
         Err(refusal) => answer_for(refusal, &fields),
     }
+}
+
+/// The answer to a completed save, with the restart keys while one is pending.
+fn saved_answer(
+    saved: UiSaved,
+    fields: &[&str],
+    live: &crate::config_reload::LiveConfig,
+    config_path: &std::path::Path,
+) -> Response {
+    let pending = saved.reload.restart_required;
+    let mut body = json!({
+        "revision": saved.revision.as_str(), "changed": saved.changed,
+        "restart_required": restart_fields(fields, &saved.reload),
+        "reload": saved.reload, "comments": "kept",
+    });
+    // A restart would boot the published config.
+    let refusal = pending
+        .then(|| crate::gateway::next_start_refusal(&live.get()))
+        .flatten();
+    if let Some(keys) =
+        super::restart_confirm::restart_advice(pending, refusal.as_deref(), Some(config_path))
+        && let Some(answer) = body.as_object_mut()
+    {
+        answer.extend(keys);
+    }
+    Json(body).into_response()
 }
 
 fn preview_body(preview: UiPreview) -> serde_json::Value {

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Restart keys on the two UI answers, rows R1-R4: a pending restart brings
-//! restart_advice (plus start_command on Unix), a refused one brings
-//! start_refusal alone, and an answer with nothing pending carries none.
+//! `restart_advice` (plus `start_command` on Unix), a refused one brings
+//! `start_refusal` alone, and an answer with nothing pending carries none.
 
 use axum::extract::State;
 use axum::http::Method;

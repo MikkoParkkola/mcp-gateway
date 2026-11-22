@@ -90,7 +90,9 @@ fn a5_a_refusal_is_the_only_key_on_both_platforms() {
 }
 
 /// Paths with a quote, a space and a substitution, in exe and config alike.
+#[cfg(unix)]
 const ODD_EXE: &str = "/opt/my 'gw'/$(id) bin/mcp-gateway";
+#[cfg(unix)]
 const ODD_CONFIG: &str = "/srv/it's here/$(id).yaml";
 
 #[cfg(unix)]
