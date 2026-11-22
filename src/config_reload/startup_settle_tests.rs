@@ -361,6 +361,23 @@ async fn prepare_locks_a_writable_config() {
     );
 }
 
+/// GATE.1, the writable side: a retired manifest beside a config this start can lock is evidence
+/// this build cannot read, so the start refuses it before any recovery. The config and the
+/// manifest keep their bytes, and the lock is free again.
+#[tokio::test]
+async fn prepare_refuses_a_retired_manifest_it_can_lock() {
+    let row = "prepare_refuses_a_retired_manifest_it_can_lock";
+    const LEFT: &[u8] = b"written by an older gateway";
+    let (dir, config) = fresh_config();
+    let manifest = dir.path().join("gateway.yaml.abandoned.retired");
+    write_owner_only(&manifest, LEFT).expect("manifest");
+    let outcome = prepare_start(&config).await;
+    want_session(row, "manifest", outcome, StartError::ManifestUnread);
+    assert_eq!(read_bytes(&config), START.as_bytes(), "{row}: config kept");
+    assert_eq!(read_bytes(&manifest), LEFT, "{row}: manifest kept");
+    assert_lock_free(&config, row).await;
+}
+
 /// GATE.4: with nothing pending under the lock, finishing accepts and releases the lock.
 #[tokio::test]
 async fn finish_accepts_a_clean_start() {
