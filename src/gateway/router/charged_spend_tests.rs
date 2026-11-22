@@ -160,3 +160,28 @@ async fn a_fractional_price_records_the_same_micro_usd_on_both_sides() {
     })
     .await;
 }
+
+/// S1 (r7b carry): what a real priced call was charged comes back from the
+/// spend history: saved, then restored into a new tracker, the key's window
+/// still reads 0.25.
+#[tokio::test]
+async fn a_priced_calls_charge_comes_back_from_the_spend_history() {
+    use crate::cost_accounting::{CostTracker, spend_history};
+    let priced = governance(|c| {
+        c.tool_costs.insert("read".to_owned(), 0.25);
+    });
+    let run = || async {
+        let fx = fixture(&priced).await;
+        invoke(&fx, "read", None).await;
+        let dir = crate::test_dir_keep::kept_tempdir();
+        let now = crate::clock::unix_secs().expect("a clock");
+        let live = fx.state.meta_mcp.cost_tracker();
+        assert!(spend_history::save(&live, dir.path(), now), "saved");
+        let back = CostTracker::new();
+        spend_history::restore(&back, dir.path(), &[KEY.to_owned()], Some(now));
+        let report = back.key_snapshot(KEY).expect("the key came back");
+        let usd = report.window_24h.cost_usd.expect("a dated window");
+        close(usd, 0.25, "restored key window");
+    };
+    crate::test_day::same_utc_day_async(run).await;
+}
