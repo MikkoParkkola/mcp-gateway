@@ -39,6 +39,8 @@ use crate::{Error, Result};
 mod marker;
 mod withheld;
 pub(super) use marker::in_delivery_scope;
+#[cfg(test)]
+pub(super) use marker::stamp_written_untraced;
 pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
 pub(crate) use marker::{invocation_landing, stamp_refused};
 pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};

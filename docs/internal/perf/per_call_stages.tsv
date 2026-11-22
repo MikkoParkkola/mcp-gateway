@@ -59,7 +59,8 @@ src/gateway/meta_mcp/grant_audit/marker.rs	in_delivery_scope	-	finished-task and
 src/gateway/meta_mcp/grant_audit/marker.rs	land	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/marker.rs	note_retry_trace	-	retry-to-origin path only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/marker.rs	stamp_refused	-	on-path, untimed: signing refusals only; the timed rows are unsigned and admitted
-src/gateway/meta_mcp/grant_audit/marker.rs	stamp_untraced	-	on-path, untimed: signed calls only (a prepared call's note, or a signing refusal's); the timed rows are unsigned
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_untraced	-	on-path, untimed: signed calls only (a prepared call's note); the timed rows are unsigned
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_written_untraced	-	on-path, untimed: only when signing refuses a call that has grant notes; the timed rows are unsigned
 src/gateway/meta_mcp/grant_audit/marker.rs	with_retry_trace	-	retry-to-origin path only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	eq	-	equality impl; not on the dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	fmt	-	Debug formatting; not called per call

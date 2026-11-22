@@ -209,7 +209,7 @@ pub(crate) async fn answer_stdio_signing_refusal(
         firewall: false,
         trace: None,
     }
-    .traced_for_grant(&refusal);
+    .traced_for_grant();
     match refused
         .settle(meta, meta.transparency_logger.as_ref(), refusal)
         .await
@@ -272,20 +272,16 @@ impl<'a> Refused<'a> {
     }
 
     /// Signing refuses before the dispatch mints the call's trace, so a
-    /// signing refusal takes its trace now and hands it to the grant note
-    /// signing took for the same target: the decision and the record then
-    /// name one call, which Activity lists once.
-    fn traced_for_grant(self, refusal: &Refusal<'_>) -> Self {
+    /// signing refusal takes its trace now and hands it to its call's grant
+    /// decisions in the open slot: the decisions and the record then name one
+    /// call, which Activity lists once.
+    fn traced_for_grant(self) -> Self {
         let trace = self
             .trace
             .clone()
             .or_else(crate::gateway::trace::current)
             .unwrap_or_else(crate::gateway::trace::generate);
-        crate::gateway::meta_mcp::grant_audit::stamp_refused(
-            refusal.server,
-            refusal.tool.unwrap_or_default(),
-            &trace,
-        );
+        crate::gateway::meta_mcp::grant_audit::stamp_refused(&trace);
         self.with_trace(Some(trace))
     }
 
@@ -419,7 +415,7 @@ impl<'a> Refused<'a> {
         let code = error.to_rpc_code();
         let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
         let refusal = signing_refusal(error, request_target(self.arguments, called), site);
-        self.traced_for_grant(&refusal)
+        self.traced_for_grant()
             .record(state, refusal, code, message, StatusCode::BAD_REQUEST)
             .await
     }

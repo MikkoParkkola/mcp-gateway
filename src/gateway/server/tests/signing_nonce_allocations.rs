@@ -399,6 +399,12 @@ fn stdio_refusal_large_allocations_do_not_grow_with_the_payload() {
         return;
     }
     let [one, three] = [ONE_MIB, THREE_MIB].map(cold_missing_nonce);
+    // Not vacuous: the boxed dispatch futures are large allocations, so a
+    // meter that saw none would be measuring nothing.
+    assert!(
+        one.large > 0 && one.large_bytes > 0,
+        "no large allocation seen: {one}"
+    );
     assert_eq!(
         (one.large, one.large_bytes),
         (three.large, three.large_bytes),

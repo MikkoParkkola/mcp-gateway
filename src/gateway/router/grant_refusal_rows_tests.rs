@@ -244,6 +244,43 @@ async fn a_replay_refused_after_a_granted_route_shares_its_decisions_trace() {
     assert_eq!(rows.len(), 2, "two calls, two rows: {rows:#?}");
 }
 
+/// That replay with its record's append failing, under a best-effort log:
+/// answered as decided, and the replay's decision reads unrecorded, since
+/// nothing landed: the refusal's trace on a note never marks it recorded.
+#[tokio::test]
+async fn a_replay_whose_record_fails_leaves_its_decision_unrecorded() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = signed_rig(&endpoint).await;
+    let owner = (ISSUER, SUBJECT);
+    rig.state
+        .meta_mcp
+        .set_identity_grants(grants(vec![grant("g-replay", owner, owner)]));
+    let invoke =
+        json!({"server": CAPS, "tool": PERSONAL, "arguments": {}, "nonce": "grant-rows-0002"});
+    let served = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert!(served.get("error").is_none(), "premise: served: {served}");
+    let _ = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(
+        invocations(&rig.dir).len(),
+        1,
+        "premise: the served call's record"
+    );
+    let log = rig.state.transparency_log.as_ref().expect("the rig logs");
+    // The next append of route `meta` is the replay's invocation record.
+    log.fail_next_append_of_kind_for_test("meta");
+
+    let replay = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert_eq!(
+        replay["error"]["code"],
+        json!(-32001),
+        "answered as decided: {replay}"
+    );
+    let held = wait_for_decisions(&rig.dir, 2).await;
+    assert_eq!(invocations(&rig.dir).len(), 1, "the replay's append failed");
+    let marks: Vec<&Value> = held.iter().map(|d| &d["invocation_recorded"]).collect();
+    assert_eq!(marks, [&json!(true), &json!(false)], "{held:#?}");
+}
+
 /// A surfaced tool the caller's key withholds (`denied_tools`), where the
 /// grant also denies, called by its own name: no invocation record, one
 /// blocked row naming the server and tool, matched by its filters.
