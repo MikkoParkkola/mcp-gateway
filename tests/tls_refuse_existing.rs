@@ -48,7 +48,7 @@ fn finish(command: &mut std::process::Command, args: &[&str]) -> Ran {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn() // spawn-check: waits for exit: a one-shot tls command; reaped below, killed past RUN_BOUND
         .expect("start mcp-gateway");
     let mut pipe = child.stderr.take().expect("stderr pipe");
     let reader = std::thread::spawn(move || {
