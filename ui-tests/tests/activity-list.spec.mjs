@@ -617,6 +617,12 @@ class Screen {
     return this.sent[i];
   }
 
+  /** The first list request that fits `pred`, once one has been sent. */
+  async requestWhere(pred, what) {
+    await expect.poll(() => this.sent.some(pred), { message: `${what}: goes out`, timeout: 5_000 }).toBe(true);
+    return this.sent.find(pred);
+  }
+
   /** No list request beyond the first `n` in a 500 ms wait. */
   async quiet(n, what) {
     await this.page.waitForTimeout(500);
@@ -716,10 +722,8 @@ test.describe('LE list screen', () => {
     const { screen, stream } = await screenFor(page, request, testInfo);
     await screen.open(stream);
     await (await screen.request(0, 'LE4 page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
-    await screen.quiet(1, 'LE4 the list end is out of view');
     await screen.toEnd();
-    const p2 = await screen.request(1, 'LE4 page 2, the hold starts');
-    expect(p2.params.cursor, 'LE4 page 2').toBe('c2');
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE4 page 2, the hold starts');
     const before = await screen.said();
     for (let i = 0; i < 3; i += 1) await stream.send(activityFrame(callRow(`a.news${i}`)));
     await screen.quiet(2, 'LE4 three frames while held');
@@ -746,12 +750,14 @@ test.describe('LE list screen', () => {
     const one = rowsOf('a', 1, 60);
     const two = rowsOf('a', 2);
     await screen.open(stream);
-    await (await screen.request(0, 'LE5 page 1')).answer({ rows: one, next_cursor: 'c2' });
+    const p1 = await screen.request(0, 'LE5 page 1');
+    await p1.answer({ rows: one, next_cursor: 'c2' });
     await stream.send(activityFrame(callRow('a.live')));
-    const live = await screen.request(1, 'LE5 live refresh');
+    const live = await screen.requestWhere((r) => r !== p1 && !r.params.cursor, 'LE5 live refresh');
+    // Page 2 is asked when the operator reaches the list end, not as soon as a tall page 1 arrives.
+    expect(screen.sent.filter((r) => r.params.cursor).length, 'LE5 premise: no next page before the list end is in view').toBe(0);
     await screen.toEnd();
-    const p2 = await screen.request(2, 'LE5 page 2');
-    expect(p2.params.cursor, 'LE5 page 2').toBe('c2');
+    const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 page 2');
     await screen.aborted(live, 'LE5 live refresh');
     await p2.answer({ rows: two, next_cursor: null });
     const want = [...one, ...two].map(textOf);
@@ -771,6 +777,7 @@ test.describe('LE list screen', () => {
       if (how === 'filter') await pickOutcome(page, 'failed');
       if (how === 'control') {
         await stream.send(activityFrame(callRow('a.news')));
+        await expect(screen.control(), 'LE5 control: premise, the control shows').toBeVisible();
         await screen.control().click();
       }
       if (how === 'leave') await page.getByRole('link', { name: 'Tools', exact: true }).first().click();
@@ -792,6 +799,7 @@ test.describe('LE list screen', () => {
     await screen.request(1, 'LE6 page 2 held');
     await stream.send(activityFrame(callRow('a.news')));
     await page.clock.runFor(60_000);
+    await expect(screen.control(), 'LE6 premise, the control shows').toBeVisible();
     await screen.control().focus();
     await page.keyboard.press('Enter');
     const fresh = await screen.request(2, 'LE6 release');
