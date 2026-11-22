@@ -5,8 +5,9 @@
 //! file writes an executable stub of its own.
 
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use super::test_source_text::{rust_files, sanitize};
 use super::test_stub::write_executable;
 
 /// The one product file allowed a shebang plus an executable mode: the uv
@@ -14,20 +15,6 @@ use super::test_stub::write_executable;
 /// thread and no child (its order is pinned by its own row).
 const WRAPPER_FILE: &str = "src/preview_sandbox/linux/fetch_uv.rs";
 const WRAPPER_MODE: &str = "from_mode(0o555)";
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
 
 /// Each line of `text` that sets an octal mode with any execute bit, in the
 /// three spellings the tree uses, as (line number, trimmed line).
@@ -54,15 +41,33 @@ fn executable_modes(text: &str) -> Vec<(usize, String)> {
 /// stub can be written another way: a mode computed at run time, or a stub
 /// with no `#!/` literal, is not seen.
 fn stub_writers(rel: &str, text: &str) -> Vec<String> {
-    // The helper itself, and these rows, whose fixtures spell the patterns out.
-    if ["src/test_stub.rs", "src/test_stub_tests.rs"].contains(&rel) || !text.contains("\"#!/") {
+    // The helper itself is the one allowed writer.
+    if rel == "src/test_stub.rs" || !text.contains("\"#!/") {
         return Vec::new();
     }
-    executable_modes(text)
+    // These rows' fixtures spell the patterns out inside string literals, so
+    // in this file only code counts: a real writer beside them is still seen.
+    let scanned = if rel == "src/test_stub_tests.rs" {
+        sanitize(text)
+    } else {
+        text.to_owned()
+    };
+    executable_modes(&scanned)
         .into_iter()
         .filter(|(_, code)| !(rel == WRAPPER_FILE && code.contains(WRAPPER_MODE)))
         .map(|(line, code)| format!("{rel}:{line}: {code}"))
         .collect()
+}
+
+/// Whether the wrapper file's text sets the allowed mode exactly once: a second
+/// such line would pass through the allowance unseen, and none means the
+/// allowance names nothing and goes.
+fn wrapper_allowance_holds(text: &str) -> bool {
+    executable_modes(text)
+        .iter()
+        .filter(|(_, code)| code.contains(WRAPPER_MODE))
+        .count()
+        == 1
 }
 
 /// A test that writes and runs its own stub can fail with ETXTBSY when a
@@ -81,7 +86,7 @@ fn only_the_helper_writes_executable_stubs() {
         files.len()
     );
     let mut found = Vec::new();
-    let mut wrapper = 0;
+    let mut wrapper_ok = false;
     for file in &files {
         let rel = file
             .strip_prefix(&root)
@@ -90,10 +95,7 @@ fn only_the_helper_writes_executable_stubs() {
             .replace('\\', "/");
         let text = std::fs::read_to_string(file).expect("readable source");
         if rel == WRAPPER_FILE {
-            wrapper = executable_modes(&text)
-                .iter()
-                .filter(|(_, code)| code.contains(WRAPPER_MODE))
-                .count();
+            wrapper_ok = wrapper_allowance_holds(&text);
         }
         found.extend(stub_writers(&rel, &text));
     }
@@ -103,8 +105,8 @@ fn only_the_helper_writes_executable_stubs() {
         found.join("\n")
     );
     // The allowance names one line: when it goes, the allowance goes too.
-    assert_eq!(
-        wrapper, 1,
+    assert!(
+        wrapper_ok,
         "{WRAPPER_FILE} no longer sets {WRAPPER_MODE} once; update the allowance"
     );
 }
@@ -122,6 +124,10 @@ fn a_planted_stub_writer_is_named() {
     let wrapper = "\"#!/bin/sh\" ... Permissions::from_mode(0o555)";
     assert!(stub_writers(WRAPPER_FILE, wrapper).is_empty());
     assert_eq!(stub_writers("src/elsewhere.rs", wrapper).len(), 1);
+    // The allowance holds for exactly one such line: not for none, not for two.
+    assert!(wrapper_allowance_holds(wrapper));
+    assert!(!wrapper_allowance_holds("\"#!/bin/sh\""));
+    assert!(!wrapper_allowance_holds(&format!("{wrapper}\n{wrapper}")));
 }
 
 #[test]
@@ -166,13 +172,10 @@ fn a_stub_in_a_missing_directory_panics_naming_its_path() {
 /// a helper that opens the file itself brings the race back.
 #[test]
 fn the_helper_never_opens_the_stub_itself() {
-    let helper = include_str!("test_stub.rs");
-    for call in [
-        "fs::write",
-        "File::create",
-        "OpenOptions",
-        "set_permissions",
-    ] {
+    // Code only (comments and literals blanked); any std::fs path or File
+    // opener counts, not only the common spellings.
+    let helper = sanitize(include_str!("test_stub.rs"));
+    for call in ["fs::", "File", "OpenOptions", "set_permissions"] {
         assert!(
             !helper.contains(call),
             "src/test_stub.rs calls {call}: the stub must be written by a child process"

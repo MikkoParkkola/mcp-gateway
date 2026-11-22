@@ -23,7 +23,8 @@ use std::process::{Command, Stdio};
 /// say). The message names `path`, the writer's exit status and its stderr.
 pub(crate) fn write_executable(path: &Path, contents: &str) {
     let mut child = Command::new("/bin/sh")
-        .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
+        // Full paths: a test may have replaced PATH.
+        .args(["-c", r#"/bin/cat > "$1" && /bin/chmod 755 "$1""#, "sh"])
         .arg(path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
