@@ -619,10 +619,8 @@ pub async fn run_config_export(
     }
     println!();
     println!("Entry name: \"{name}\"");
-    match &gateway.url {
-        Some(url) => println!("Gateway endpoint: {url}"),
-        None => println!("Gateway endpoint: none (stdio entry)"),
-    }
+    let endpoint = gateway.url.as_deref().unwrap_or("none (stdio entry)");
+    println!("Gateway endpoint: {endpoint}");
 
     if watch {
         watch::run_watch_loop(target, mode, name, config_path).await;
