@@ -108,3 +108,38 @@ async fn startup_one_logger() {
         "{ROW} failed open: only the gateway build tried the log"
     );
 }
+
+/// The construction data-directory seam puts back what it found: an inner guard restores the
+/// outer guard's folder, and once the outer one drops, seams built on this thread name none, so
+/// nothing reaches a later test that runs on the same thread.
+#[test]
+fn construction_data_dir_guards_restore_what_they_found() {
+    use super::test_seams::{TestSeams, data_dir_for_constructions};
+    const ROW: &str = "construction_data_dir_guards_restore_what_they_found";
+    let outer = std::path::PathBuf::from("outer-folder");
+    let inner = std::path::PathBuf::from("inner-folder");
+    assert_eq!(
+        TestSeams::new().data_dir,
+        None,
+        "{ROW}: premise: no guard yet"
+    );
+    let outer_guard = data_dir_for_constructions(outer.clone());
+    let inner_guard = data_dir_for_constructions(inner.clone());
+    assert_eq!(
+        TestSeams::new().data_dir,
+        Some(inner),
+        "{ROW}: the inner guard wins"
+    );
+    drop(inner_guard);
+    assert_eq!(
+        TestSeams::new().data_dir,
+        Some(outer),
+        "{ROW}: dropping the inner guard brings the outer folder back"
+    );
+    drop(outer_guard);
+    assert_eq!(
+        TestSeams::new().data_dir,
+        None,
+        "{ROW}: with both guards gone, a new construction has no folder set"
+    );
+}
