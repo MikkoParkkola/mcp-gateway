@@ -210,7 +210,10 @@ def _self_test():
         # The edit must land in the named step, the span's last part, not earlier in the job.
         ("T1", _mutate_step("a\nb\nc\n", "c\n", ("c\n", "C\n")), ("a\nb\nc\n", "a\nb\nC\n")),
         ("T2", _mutate_step("a\nb\nc\n", "c\n", ("b\n", "B\n")), (STALE, STALE)),
-        ("T3", _mutate_step("a\nb\n", "c\n", ("b\n", "B\n")), (STALE, STALE)),
+        # The edit applies inside the step, but the step does not end the span.
+        ("T3", _mutate_step("c\nd\n", "c\n", ("c\n", "C\n")), (STALE, STALE)),
+        # The step check applies the edits in order, as _mutate does: the second edits the first's text.
+        ("T4", _mutate_step("a\nb\n", "b\n", ("b\n", "x\n"), ("x\n", "y\n")), ("a\nb\n", "a\ny\n")),
         # The swap keeps a comment between the two steps with the moved step.
         ("W1", _recheck_moved_before_publish("A\n", "C\n", "A\n\n      # c\nC\n"),
          ("A\n\n      # c\nC\n", "      # c\nC\n\nA\n")),
