@@ -108,7 +108,8 @@ fn identity() -> crate::key_server::oidc::VerifiedIdentity {
 }
 
 /// This rig with message signing switched on (a nonce optional), so a
-/// `gateway_invoke` sent with a nonce is judged while signing is prepared.
+/// `gateway_invoke` carrying a nonce argument is judged while signing is
+/// prepared.
 async fn signed_rig(endpoint: &Endpoint) -> Rig {
     let mut rig = rig(endpoint, AuditFailurePolicy::BestEffort, false, false).await;
     let signer = crate::security::message_signing::MessageSigner::new(
@@ -124,16 +125,8 @@ async fn signed_rig(endpoint: &Endpoint) -> Rig {
 
 /// One `tools/call` of `name` by the caller, over `/mcp`.
 async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
-    mcp_call_signed(rig, name, arguments, None).await
-}
-
-/// That call, carrying `nonce` as its signing nonce when one is given.
-async fn mcp_call_signed(rig: &Rig, name: &str, arguments: &Value, nonce: Option<&str>) -> Value {
-    let mut meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                       "io.modelcontextprotocol/clientCapabilities": {}});
-    if let Some(nonce) = nonce {
-        meta[crate::gateway::meta_mcp::signing::NONCE_META] = json!(nonce);
-    }
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": name, "arguments": arguments, "_meta": meta}});
     let mut request = Request::builder()
@@ -219,14 +212,16 @@ async fn a_replay_refused_after_a_granted_route_shares_its_decisions_trace() {
     rig.state
         .meta_mcp
         .set_identity_grants(grants(vec![grant("g-replay", owner, owner)]));
-    let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
+    // Outside hardened, a `gateway_invoke` carries its nonce as an argument.
+    let invoke =
+        json!({"server": CAPS, "tool": PERSONAL, "arguments": {}, "nonce": "grant-rows-0001"});
 
-    let served = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
+    let served = mcp_call(&rig, "gateway_invoke", &invoke).await;
     assert!(
         served.get("error").is_none(),
         "premise: granted and served: {served}"
     );
-    let replay = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
+    let replay = mcp_call(&rig, "gateway_invoke", &invoke).await;
     assert_eq!(
         replay["error"]["code"],
         json!(-32001),
