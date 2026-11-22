@@ -530,5 +530,10 @@ mod token_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]
+#[path = "decision_builders_tests.rs"]
+mod builders_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
 #[path = "decision_record_capability_tests.rs"]
 mod capability_tests;
