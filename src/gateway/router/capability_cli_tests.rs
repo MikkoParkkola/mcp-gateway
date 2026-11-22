@@ -164,6 +164,8 @@ async fn a_cli_save_recovers_by_the_printed_text_and_keeps_another_writers_chang
     assert_eq!(load.stdout, original(), "the load prints the file's text");
     let first = printed_revision(&load.stderr);
     other_writer_saves(&fx, &load.stdout, &first).await;
+    // The file as the other writer's save left it, for the refused saves below.
+    let theirs = on_disk(&fx);
 
     let mine = load.stdout.replace(MY_FIELD.0, MY_FIELD.1);
     let bare = cli(&fx, &["PUT", PATH, "--data", "-"], &mine).await;
@@ -191,7 +193,6 @@ async fn a_cli_save_recovers_by_the_printed_text_and_keeps_another_writers_chang
         stale.stderr
     );
     // Both refused saves left the file exactly as the other writer saved it.
-    let theirs = original().replace(THEIR_FIELD.0, THEIR_FIELD.1);
     assert_eq!(on_disk(&fx), theirs, "a refused save changed the file");
 
     let reload = cli(&fx, &["GET", PATH], "").await;
@@ -245,6 +246,7 @@ async fn a_cli_delete_of_a_changed_capability_is_refused() {
     let load = cli(&fx, &["GET", PATH], "").await;
     let checked = printed_revision(&load.stderr);
     other_writer_saves(&fx, &load.stdout, &checked).await;
+    let theirs = on_disk(&fx);
     let late = cli(&fx, &["DELETE", PATH, "--if-match", &checked], "").await;
     assert_ne!(late.code, 0, "the checked revision is no longer the file's");
     // Refused as stale, and told to retry the delete on a fresh load, not to
@@ -255,6 +257,5 @@ async fn a_cli_delete_of_a_changed_capability_is_refused() {
         "{}",
         late.stderr
     );
-    let theirs = original().replace(THEIR_FIELD.0, THEIR_FIELD.1);
     assert_eq!(on_disk(&fx), theirs, "the file and its change stay");
 }

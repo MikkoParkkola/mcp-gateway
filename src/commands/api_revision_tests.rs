@@ -97,6 +97,53 @@ async fn only_a_capability_save_or_delete_gets_a_recovery_recipe() {
     }
 }
 
+/// Which recovery a stale write (409) names: a DELETE on one capability is
+/// told to check and delete again, any other write to redo its change; a
+/// delete on a path that is not one capability keeps the generic remedy.
+#[tokio::test]
+async fn a_stale_write_names_the_recovery_its_method_needs() {
+    const SAVE: &str = "apply your change";
+    const DELETE: &str = "mean to remove";
+    const GENERIC: &str = "the current revision";
+    let stand = stand_in(
+        StatusCode::CONFLICT,
+        "application/json",
+        r#"{"error":"stale","message":"changed since it was loaded"}"#,
+    )
+    .await;
+    for (method, path, want) in [
+        (ApiMethod::Delete, "/ui/api/capabilities/a", DELETE),
+        (ApiMethod::Put, "/ui/api/capabilities/a", SAVE),
+        (ApiMethod::Post, "/ui/api/capabilities/a", SAVE),
+        (ApiMethod::Patch, "/ui/api/capabilities/a", SAVE),
+        (ApiMethod::Delete, "/ui/api/capabilities/a/", GENERIC),
+        (ApiMethod::Delete, "/ui/api/capabilities-x/a", GENERIC),
+    ] {
+        let mut call = args(path);
+        call.method = method.clone();
+        if method != ApiMethod::Delete {
+            call.data = Some("{}".to_owned());
+        }
+        let out = run_api_with(
+            &call,
+            &stand.base,
+            &LinkTls::default(),
+            credential,
+            no_stdin,
+            send,
+        )
+        .await;
+        let printed = out.stderr();
+        for other in [SAVE, DELETE, GENERIC] {
+            assert_eq!(
+                printed.contains(other),
+                other == want,
+                "{method:?} {path}: {printed}"
+            );
+        }
+    }
+}
+
 /// Control: a 428 that is neither a capability save nor a delete keeps the
 /// generic remedy, since no load-and-reapply recipe fits it.
 #[tokio::test]

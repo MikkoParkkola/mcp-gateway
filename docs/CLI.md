@@ -71,7 +71,9 @@ line `api: revision "<sha256>"; ...`. Edit the file, then
 `api PUT /ui/api/capabilities/NAME --data @NAME.yaml --if-match '"<sha256>"'`, quoting the value exactly as
 printed. Take the revision from the same load as the text you edited, never from the capability list. If the save
 is refused because the file changed, load it again, make your change on the new text, and save with the new
-revision. A delete takes `--if-match` the same way.
+revision. A delete takes `--if-match` the same way: load the file, check it is the version you mean to remove, then
+`api DELETE /ui/api/capabilities/NAME --if-match '"<sha256>"'`. If the delete is refused because the file changed,
+load it again and check the new version before deleting with the new revision.
 
 ## Command classes
 
