@@ -60,6 +60,16 @@ pub(super) fn table_meta(
     config: BackendConfig,
 ) -> (MetaMcp, Arc<AtomicUsize>) {
     let sent = Arc::new(AtomicUsize::new(0));
+    let meta = table_meta_over(dir, config, Arc::new(Counted(Arc::clone(&sent))));
+    (meta, sent)
+}
+
+/// [`table_meta`] whose `alpha` answers through `transport`.
+pub(super) fn table_meta_over(
+    dir: &Arc<tempfile::TempDir>,
+    config: BackendConfig,
+    transport: Arc<dyn crate::transport::Transport>,
+) -> MetaMcp {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -67,7 +77,7 @@ pub(super) fn table_meta(
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(Counted(Arc::clone(&sent))));
+    backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
     let logger = crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
@@ -84,7 +94,7 @@ pub(super) fn table_meta(
     logger.keep_test_dir(Arc::clone(dir));
     let mut meta = MetaMcp::new(registry);
     meta.enable_transparency_log(Arc::new(logger));
-    (meta, sent)
+    meta
 }
 
 /// How a refused call is answered to its caller.
@@ -111,10 +121,20 @@ struct Refusal {
 /// refused as `want` says: its answer's form and its record's outcome and
 /// code. Returns the call's one decision.
 async fn refused(meta: &MetaMcp, dir: &tempfile::TempDir, server: &str, want: Refusal) -> Value {
+    let read = json!({"server": server, "tool": "read", "arguments": {}});
+    refused_args(meta, dir, &read, want).await
+}
+
+/// [`refused`] for any `gateway_invoke` arguments: the syntax rows send malformed ones.
+async fn refused_args(
+    meta: &MetaMcp,
+    dir: &tempfile::TempDir,
+    args: &Value,
+    want: Refusal,
+) -> Value {
     let who = api_key_caller();
-    let args = json!({"server": server, "tool": "read", "arguments": {}});
     let answer =
-        with_visibility_memo(meta.invoke_tool(&args, None, &context(&AllowAll, &who))).await;
+        with_visibility_memo(meta.invoke_tool(args, None, &context(&AllowAll, &who))).await;
     let (form, answer) = match answer {
         Ok(result) => {
             assert_eq!(
@@ -466,3 +486,7 @@ async fn n3_chain_step_not_found() {
     };
     assert_row(&record["decision"], &row);
 }
+
+// Part 3b-1's syntax rows on the in-process meta route.
+#[path = "fixture_syntax_rows.rs"]
+mod syntax;

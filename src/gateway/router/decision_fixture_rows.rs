@@ -713,3 +713,8 @@ async fn a3_grant_match() {
 #[cfg(tp1)]
 #[path = "decision_fixture_mtls_rows.rs"]
 mod mtls;
+
+// Part 3b-1's syntax rows on the meta route over HTTP.
+#[cfg(tp1)]
+#[path = "decision_fixture_syntax_rows.rs"]
+mod syntax;
