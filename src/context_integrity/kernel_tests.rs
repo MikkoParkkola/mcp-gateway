@@ -102,7 +102,9 @@ fn policies_support_all_decision_kinds() {
         let transformed = transform_content(decision, &content, &findings);
         match decision {
             ContextIntegrityDecisionKind::Allow => assert!(transformed.delivered.is_some()),
-            ContextIntegrityDecisionKind::Strip => assert!(transformed.stripped),
+            // The free transform has no detectors to prove a strip clean, so it withholds; the
+            // kernel's own Strip is pinned by strip_lines_tests and strip_withhold_tests.
+            ContextIntegrityDecisionKind::Strip => assert!(transformed.withheld),
             ContextIntegrityDecisionKind::Summarize => assert!(transformed.summarized),
             ContextIntegrityDecisionKind::Quarantine
             | ContextIntegrityDecisionKind::Confirm
