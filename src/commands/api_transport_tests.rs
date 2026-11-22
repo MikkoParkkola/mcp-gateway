@@ -419,7 +419,7 @@ async fn if_match_controls_capability_delete() {
                     6,
                     "Gateway",
                     "If-Match is required.",
-                    "Send the request with If-Match set to the current revision.",
+                    "Load it with api GET /ui/api/capabilities/x, check it is the version to delete, then delete with --if-match set to the revision that load printed.",
                     Some(428),
                     None,
                 );
@@ -452,7 +452,7 @@ async fn control_characters_in_if_match_are_refused_before_send() {
                 2,
                 "Usage",
                 "If-Match value is not a valid header value.",
-                "Pass the ETag exactly as the gateway returned it.",
+                "Pass the revision api GET printed.",
                 None,
                 None,
             );

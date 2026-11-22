@@ -183,6 +183,37 @@ where
     }
 }
 
+/// The api command on its production send, for rows outside `commands` that
+/// drive it against a real gateway router (the router's own tests).
+#[cfg(test)]
+pub(crate) async fn run_api_for_tests(
+    args: &ApiArgs,
+    base: &str,
+    bearer: &str,
+    stdin: Vec<u8>,
+) -> CliOutcome {
+    let lookup = |name: &str| (name == TOKEN_ENV).then(|| bearer.to_owned());
+    run_api_with(
+        args,
+        base,
+        &LinkTls::default(),
+        lookup,
+        move || Ok(stdin),
+        |sent| async move {
+            let ApiRequest {
+                method,
+                url,
+                token,
+                tls,
+                body,
+                if_match,
+            } = sent;
+            admin_call_url(method, url, &token, &tls, body.as_ref(), if_match.as_ref()).await
+        },
+    )
+    .await
+}
+
 fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, CliError> {
     Ok(match method {
         ApiMethod::Get => reqwest::Method::GET,

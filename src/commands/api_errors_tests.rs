@@ -167,7 +167,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             6,
             "Gateway",
             "Capability 'x' changed on disk since it was loaded; reload it",
-            "Read capability \"x\" again and reapply the edit using its current revision. Gateway reason: stale.",
+            "Load it again with api GET /ui/api/capabilities/x, reapply your edit to that text, then save with --if-match set to the revision that load printed. Gateway reason: stale.",
         ),
         (
             StatusCode::PRECONDITION_REQUIRED,

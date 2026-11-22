@@ -756,3 +756,6 @@ mod matrix;
 
 #[path = "api_yaml_tests.rs"]
 mod yaml;
+
+#[path = "api_revision_tests.rs"]
+mod revision;

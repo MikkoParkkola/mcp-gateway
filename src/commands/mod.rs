@@ -12,6 +12,9 @@ mod accounts;
 mod add_remove;
 #[cfg(feature = "webui")]
 mod api;
+// The router's rows drive the real CLI against a served router (test-only).
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use api::run_api_for_tests;
 mod api_key_rewrite;
 mod audit;
 #[cfg(feature = "webui")]
