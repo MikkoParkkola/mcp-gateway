@@ -2089,38 +2089,32 @@ async function deleteCap(name) {
 // CAP-CREATE BEGIN
 // + New Capability. A lib row runs this block under node against the real
 // route (capability_create_page_tests.rs), so keep it self-contained.
-const CAP_TEMPLATE = `# Capability definition
-# See https://github.com/modelcontextprotocol/mcp-gateway for schema
-tools:
-  - name: example_tool
-    description: An example tool
-    input_schema:
-      type: object
-      properties:
-        input:
-          type: string
-          description: Input value
-      required:
-        - input
-`;
-
+// The route's own template is the only one: a POST with no body and no
+// Content-Type answers it. Success is the route's 201 alone.
 async function newCapability() {
   const rawName = prompt('Enter capability file name (e.g. "my-tools"):');
   if (rawName === null) return;
   const name = rawName.trim().replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
   if (!name) { alert('Invalid name.'); return; }
 
-  const msg_id = 'cap-new-msg';
+  // The route's words for an answer that is not the one wanted.
+  const why = async (answer) => {
+    const said = await answer.json().catch(() => ({}));
+    return said.message || said.error || answer.statusText || `HTTP ${answer.status}`;
+  };
   try {
+    const t = await uiFetch('/ui/api/capabilities', { method: 'POST', headers: authHeaders() });
+    if (t.status !== 200) throw new Error(await why(t));
+    const template = await t.text();
+    const nameLine = /^name:.*$/m;
+    if (!nameLine.test(template)) throw new Error('the template has no name line to set');
+    const yaml = template.replace(nameLine, `name: ${name}`);
     const r = await uiFetch('/ui/api/capabilities', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, content: CAP_TEMPLATE }),
+      body: JSON.stringify({ name, yaml }),
     });
-    if (!r.ok) {
-      const errData = await r.json().catch(() => ({ error: r.statusText }));
-      throw new Error(errData.error || r.statusText);
-    }
+    if (r.status !== 201) throw new Error(await why(r));
     await refreshCapabilities();
     // Auto-open the newly created capability
     const body = document.getElementById('cap-body-' + name);
