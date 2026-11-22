@@ -120,8 +120,15 @@ function installMotionRecorder() {
   const send = (rec) => pending.push(window.g4Record(rec));
   window.g4Describe = describe;
   window.g4Flush = () => Promise.all(pending);
-  const ownerOf = (ev, matches) => document.getAnimations().find((a) => a.effect?.target === ev.target
-    && (a.effect.pseudoElement ?? '') === (ev.pseudoElement ?? '') && matches(a));
+  // Each start event claims one animation not yet logged, so two animations sharing a
+  // name on one element are both described, each with its own timing.
+  const logged = new WeakSet();
+  const ownerOf = (ev, matches) => {
+    const anim = document.getAnimations().find((a) => !logged.has(a) && a.effect?.target === ev.target
+      && (a.effect.pseudoElement ?? '') === (ev.pseudoElement ?? '') && matches(a));
+    if (anim) logged.add(anim);
+    return anim;
+  };
   document.addEventListener('animationstart', (ev) => {
     const anim = ownerOf(ev, (a) => a.animationName === ev.animationName);
     send(anim ? describe(anim, 'css animation')
@@ -315,6 +322,38 @@ test('G4 plant: a 300 ms transform that has finished before the check is still r
   expect(faults).toEqual(['css animation "g4-slide": animates transform', 'css animation "g4-slide": changes for 300 ms']);
 });
 
+test('G4 plant: two animations sharing a name on one element are each judged by their own length', async ({ page }) => {
+  const { faults } = await g4((p) => cssPlant(p, {
+    keyframes: '@keyframes g4-twin { from { opacity: 1 } to { opacity: 0.6 } }',
+    styles: [['animation', 'g4-twin 50ms linear 1, g4-twin 300ms linear 1']],
+  }))({ page });
+  expect(faults).toEqual(['css animation "g4-twin": changes for 300 ms']);
+});
+
+test('G4 plant: a transform on a pseudo-element is recorded', async ({ page }) => {
+  const { faults } = await g4((p) => p.evaluate(async () => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('@keyframes g4-pseudo { to { transform: translateY(6px) } }'
+      + ' .g4-host::after { content: "x"; animation: g4-pseudo 300ms linear 1 !important; }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    const host = Object.assign(document.createElement('div'), { className: 'g4-host' });
+    document.getElementById('content').append(host);
+    const anims = document.getAnimations().filter((a) => a.effect?.pseudoElement === '::after');
+    await Promise.all(anims.map((a) => a.finished.catch(() => {})));
+  }))({ page });
+  expect(faults).toEqual(['css animation "g4-pseudo": animates transform', 'css animation "g4-pseudo": changes for 300 ms']);
+});
+
+test('G4 plant: an animation recorded before a navigation is still judged after it', async ({ page }) => {
+  const { faults } = await g4(async (p) => {
+    await p.evaluate(() => document.getElementById('content').animate({ transform: ['none', 'scale(1.1)'] }, { duration: 40, id: 'g4-before-goto' }));
+    // A full navigation replaces the document; the row's log lives outside it.
+    await p.goto('/ui/tools/status');
+    await expect(p.locator('#content [data-rendered]')).toBeVisible();
+  })({ page });
+  expect(faults).toEqual(['element.animate "g4-before-goto": animates transform']);
+});
+
 test('G4 plant: an opacity loop that never ends is reported', async ({ page }) => {
   const { faults } = await g4((p) => p.evaluate(() => {
     document.getElementById('content').animate({ opacity: [1, 0.5] }, { duration: 80, iterations: Infinity, id: 'g4-loop' });
@@ -330,11 +369,12 @@ test('G4 plant: a finished 100 ms colour transition is reported for its property
   expect(faults).toEqual(['css transition "color": animates color']);
 });
 
-test('G4 plant: a transform whose 500 ms delay outlasts the check is reported by the final read', async ({ page }) => {
+test('G4 plant: a transform whose delay outlasts the row is reported by the final read', async ({ page }) => {
   // A CSS animation's start event waits out its delay, so only the final read can see this one.
+  // The delay is a minute, far past the row, so no slow run can let the start event fire first.
   const { faults } = await g4((p) => cssPlant(p, {
     keyframes: '@keyframes g4-late { to { transform: scale(1.2) } }',
-    styles: [['animation', 'g4-late 200ms linear 500ms 1']],
+    styles: [['animation', 'g4-late 200ms linear 60s 1']],
     wait: false,
   }))({ page });
   // Only the final read names it: the start recorder never saw it.

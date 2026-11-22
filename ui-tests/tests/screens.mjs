@@ -31,7 +31,9 @@ export async function settled(page) {
   await page.waitForSelector('#content [data-rendered]');
   await page.evaluate(async () => {
     await document.fonts.ready;
-    await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})));
+    // Only animations that end are waited for: an endless one is G4's to name, not a hang here.
+    const ending = document.getAnimations().filter((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+    await Promise.all(ending.map((a) => a.finished.catch(() => {})));
   });
 }
 
