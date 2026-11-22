@@ -69,12 +69,16 @@ BASE = ["test", "--all-features", "--no-fail-fast"]
 #  libtest args before the OS skips, floor of selected tests)
 _LIB_A = ("suite", ["--lib"], [LIB_SPLIT])
 _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
-# Windows splits lib-b again: its tests ran about 23 min after a 22-min build (run 42493724287),
-# the longest job on a lane pull request. These top-level modules move to lib-c (4,727 of 9,251
-# tests then); lib-b skips them, so each library test still runs in exactly one shard.
-LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
-_WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
-_WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
+# Windows runs its library from one shared exe in four legs, so a leg costs setup only, not a
+# compile. gateway:: is cut in two (router and server first, then the rest of it), security::
+# runs on its own, and lib-b takes whatever is left. Each leg skips the filters of the legs
+# before it (the cascade test_os_shards.py checks), so every library test runs in exactly one.
+_WIN_FIRST = ["gateway::router::", "gateway::server::"]
+_WIN_SKIP_FIRST = [x for f in _WIN_FIRST for x in ("--skip", f)]
+_WIN_LIB_A = ("suite", ["--lib"], list(_WIN_FIRST))
+_WIN_LIB_D = ("suite", ["--lib"], [LIB_SPLIT, *_WIN_SKIP_FIRST])
+_WIN_LIB_C = ("suite", ["--lib"], ["security::", *_WIN_SKIP_FIRST, "--skip", LIB_SPLIT])
+_WIN_LIB_B = ("suite", ["--lib"], [*_WIN_SKIP_FIRST, "--skip", LIB_SPLIT, "--skip", "security::"])
 # The binary's own unit tests (599 of them) moved into the library behind `cli::run`: the
 # `--bins` selection of every int shard dropped by 597 (the binary keeps 2), and the library
 # shards gained them. Linux int-a measured 1063 before (run 42963873558), so 466 after, at the
@@ -90,10 +94,12 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-b": [("suite", ["--test", GLOB_B], [], 1371), ("doc", ["--doc"], [], 55)],
     },
     "windows": {
-        "lib-a": [(*_LIB_A, 5335)],
-        # The former lib-b floor (6747), divided in the measured proportion.
-        "lib-b": [(*_WIN_LIB_B, 3299)],
-        "lib-c": [(*_WIN_LIB_C, 3448)],
+        # Floors: 0.575 of each leg's count replayed over run 45007740526's 20,327 names
+        # (the lowest selected-to-floor proportion among the former legs).
+        "lib-a": [(*_WIN_LIB_A, 2528)],
+        "lib-d": [(*_WIN_LIB_D, 2861)],
+        "lib-c": [(*_WIN_LIB_C, 1086)],
+        "lib-b": [(*_WIN_LIB_B, 5211)],
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 295)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
@@ -129,7 +135,7 @@ for _leg, _parts in PARTS["macos"].items():
     SHARDS["macos"][_leg] = [("parts", ["--lib"], [], sum(MACOS_PART_COUNTS[k] for k in _parts) * 98 // 100)]
 # Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
 # of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
-SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
+SHARED_BUILD = {"linux": ("lib-a", "lib-b"), "windows": ("lib-a", "lib-b", "lib-c", "lib-d")}
 # The lib test binary's folder under BY_BINARY, as the cargo runner names it (`mcp_gateway-<hash>`, hash dropped).
 LIB_TARGET = "mcp_gateway"
 # Built, not run: the default `cargo test` target set compiles examples, and
@@ -730,6 +736,8 @@ def self_test() -> int:
             binary = os.path.join(record_dir, "fake-lib")
             with open(binary, "w", encoding="utf-8") as f:
                 f.write(f"#!{sys.executable}\n{recorder_src}")
+            with open(binary + ".root", "w", encoding="utf-8") as f:  # as export-lib leaves it
+                f.write(ROOT + "\n")
             single = next(name for name, steps in SHARDS["linux"].items() if len(steps) == 1)
             assert run_prebuilt("linux", single, binary) == 0, "the prebuilt control run"
             assert not os.path.exists(home_given("linux")), "a prebuilt shard removes its home"
@@ -1008,6 +1016,8 @@ def prebuilt_rows() -> None:
                         '  for t in $n; do echo "$t: test"; done; exit 0; fi\n'
                         f"{body}\n")
             os.chmod(fake, 0o644)  # run_prebuilt restores the exec bit an artifact drops
+            with open(fake + ".root", "w") as f:  # export-lib's record of where it built
+                f.write(ROOT + "\n")
         # Linux: a shared-build leg runs under the TMPDIR guard a cargo shard has. The binary sees its own
         # BY_BINARY folder as TMPDIR, and a test that leaves a file there fails the leg.
         lfloor = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
@@ -1321,7 +1331,7 @@ def lib_test_binary(lines: list[str]) -> str | None:
     return None
 
 
-def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
+def export_lib(dest: str, program: tuple[str, ...] = ("cargo",), os_name: str = os.name) -> int:
     """Build the `--lib` test binary (the same build `cargo test --all-features --lib` reuses) and
     copy it to `dest` as LIB_BINARY, for the SHARED_BUILD legs on other runners."""
     rc, lines = cargo([*BASE, "--lib", "--no-run", "--message-format=json-render-diagnostics"], program)
@@ -1330,8 +1340,12 @@ def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
         print(f"::error::export-lib: no lib test executable (cargo exited {rc})")
         return 1
     os.makedirs(dest, exist_ok=True)
-    out = os.path.join(dest, LIB_BINARY)
+    # Windows runs only a file named .exe; beside the copy, `.root` names the checkout it was built in,
+    # since the exe's compile-time paths point there.
+    out = os.path.join(dest, LIB_BINARY + (".exe" if os_name == "nt" else ""))
     shutil.copy2(path, out)
+    with open(out + ".root", "w") as f:
+        f.write(ROOT + "\n")
     os.chmod(out, 0o755)
     print(f"::notice::export-lib: {path} -> {out} ({os.path.getsize(out)} bytes)")
     return 0
@@ -1358,12 +1372,17 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
     except RuntimeError as error:
         return [f"lib union: {error}"]
     names = sorted(sets)
-    both = set.intersection(*sets.values()) if len(sets) > 1 else set()
-    missing = whole - set().union(*sets.values())
+    # Pairwise: with three legs or more, a test two of them pick is in no all-legs intersection.
+    seen: set[str] = set()
+    both: set[str] = set()
+    for chosen in sets.values():
+        both |= seen & chosen
+        seen |= chosen
+    missing = whole - seen
     print(f"::notice::{os_kind} lib union: whole {len(whole)}, "
           + ", ".join(f"{n} {len(sets[n])}" for n in names) + f", overlap {len(both)}, missing {len(missing)}")
-    out = [f"lib union: {len(both)} test(s) in both halves, e.g. {sorted(both)[:3]}"] * bool(both)
-    out += [f"lib union: {len(missing)} test(s) in neither half, e.g. {sorted(missing)[:3]}"] * bool(missing)
+    out = [f"lib union: {len(both)} test(s) that two legs both select, e.g. {sorted(both)[:3]}"] * bool(both)
+    out += [f"lib union: {len(missing)} test(s) no leg selects, e.g. {sorted(missing)[:3]}"] * bool(missing)
     return out
 
 
@@ -1376,6 +1395,9 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
+    if union:
+        # The legs do not partition this binary, so no count it gives could be trusted: run nothing.
+        return 0, union
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
     if tmp:
@@ -1405,6 +1427,15 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
 def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     """Run a SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
     ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    # Its compile-time paths point at the checkout export-lib recorded; refuse an exe from any other.
+    try:
+        built_in = open(binary + ".root").read().strip()
+    except OSError:
+        built_in = None
+    if built_in != ROOT:
+        print(f"::error::{os_kind} {shard} {step}: {os.path.basename(binary)} was built in "
+              f"{built_in or 'a checkout it did not record'}, not {ROOT}")
+        return 1
     n, failed = _run_binary(os_kind, shard, binary)
     print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
     failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
