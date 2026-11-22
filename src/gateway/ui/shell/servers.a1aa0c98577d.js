@@ -285,7 +285,8 @@ function statusTab(body, ctx) {
       restore();
       // Tip triggers join their headings once the tooltip module answers. That is not waited
       // on here, so a module that never loads holds up no refresh.
-      tipModule?.then(restore, () => {});
+      // Only a trigger not drawn yet waits; a group or table took its focus above.
+      if (!root.querySelector(focused)) tipModule?.then(restore, () => {});
     }
   }
 
