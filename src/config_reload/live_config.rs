@@ -392,8 +392,8 @@ impl LiveConfig {
 
     /// The revision this gateway serves: the one it published last, which
     /// the config history pins. Not `running_revision`, the startup
-    /// one, which a reload never moves.
-    #[cfg(any(test, feature = "webui"))]
+    /// one, which a reload never moves. Only the web UI's history routes read it.
+    #[cfg(feature = "webui")]
     #[must_use]
     pub(crate) fn served_revision(&self) -> Option<String> {
         self.applied_now()
