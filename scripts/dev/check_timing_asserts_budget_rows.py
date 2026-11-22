@@ -27,6 +27,9 @@ pub(crate) async fn run_within(x: &X, budget: Duration, f: F) -> R {
 pub(crate) async fn mutate_and_reload_within(p: &P, budget: Duration, e: E) -> R {
     e.await
 }
+pub(crate) async fn pair_within(first: Duration, second: Duration) -> R {
+    todo!()
+}
 """
 # The test hang bound, defined where the resolver reads it from source.
 HANG = {"HANG_BOUND": [("src/gateway/mod.rs", "Duration::from_secs(30)")]}
@@ -208,6 +211,82 @@ class ProductBudgets(unittest.TestCase):
         self.refused(test_file('let a = DRAIN;\nlet a = a * 2;\ntimeout(a, rx.recv()).await.expect("w");'), "DRAIN")
         body = 'let wait = DRAIN + Duration::from_secs(10);\nlet wait = timeout(wait, rx.recv()).await.expect("w");'
         self.refused(test_file(body), "DRAIN")
+
+
+class CodeReviewRows(unittest.TestCase):
+    """Rows added with the first code review of the rule (both counting seats)."""
+
+    refused = ProductBudgets.refused
+    passes = ProductBudgets.passes
+
+    def test_c1_a_path_qualified_call_is_a_carrier(self):
+        body = 'timeout(Duration::from_secs(30), crate::run_within(&x, Duration::from_secs(30), f)).await.expect("w");'
+        self.refused(test_file(body), "run_within")
+
+    def test_c2_any_duration_argument_of_any_carried_call_counts(self):
+        one_call = 'timeout(Duration::from_secs(30), pair_within(Duration::from_secs(60), Duration::from_secs(10))).await.expect("w");'
+        self.refused(test_file(one_call), "pair_within")
+        two_calls = (
+            "let h = async {\n    run_within(&x, Duration::from_secs(10), f).await;\n"
+            "    run_within(&x, Duration::from_secs(60), g).await\n};\n"
+            'timeout(Duration::from_secs(30), h).await.expect("w");'
+        )
+        self.refused(test_file(two_calls), "run_within")
+
+    def test_c3_a_name_is_followed_only_as_the_timeouts_own_future(self):
+        through_spawn = (
+            "let fut = run_within(&x, Duration::from_secs(30), f);\nlet h = tokio::spawn(fut);\n"
+            'timeout(Duration::from_secs(30), h).await.expect("w");'
+        )
+        self.passes(test_file(through_spawn))
+        chained = (
+            "let a = async { run_within(&x, Duration::from_secs(30), f).await };\nlet b = a;\n"
+            'timeout(Duration::from_secs(30), b).await.expect("w");'
+        )
+        self.passes(test_file(chained))
+
+    def test_c4_only_the_async_blocks_own_body_is_read(self):
+        body = 'timeout(Duration::from_secs(30), async { other().await }.then(|_| run_within(&x, Duration::from_secs(30), f))).await.expect("w");'
+        self.passes(test_file(body))
+
+    def test_c5_an_explicit_budget_is_resolved_where_the_call_is(self):
+        body = (
+            "let b = Duration::from_secs(30);\n"
+            "let h = tokio::spawn(async move { run_within(&x, b, f).await });\n"
+            "let b = Duration::from_secs(5);\n"
+            'timeout(Duration::from_secs(20), h).await.expect("w");'
+        )
+        self.refused(test_file(body), "run_within")
+
+    def test_c6_a_deadline_window_is_read_where_the_deadline_is_built(self):
+        hidden = (
+            "let w = DRAIN;\nlet deadline = Instant::now() + w;\nlet w = Duration::from_secs(30);\n"
+            "settle().await;\nassert!(Instant::now() < deadline);"
+        )
+        self.refused(test_file(hidden), "DRAIN")
+        invented = (
+            "let w = Duration::from_secs(30);\nlet deadline = Instant::now() + w;\nlet w = DRAIN;\n"
+            "settle().await;\nassert!(Instant::now() < deadline);"
+        )
+        self.passes(test_file(invented))
+
+    def test_c7_an_edit_after_a_semicolon_inside_the_timed_block_is_new(self):
+        body = 'let r = timeout(Duration::from_secs(5), async {\n    a().await;\n    b().await;\n}).await.expect("x");'
+        text = test_file(body)
+        found = scan(text, added={line_of(text, "b().await;")})
+        self.assertIn(guard.FLOOR, [f.rule for f in found], found)
+
+    def test_c8_a_const_with_disagreeing_definitions_in_its_file_is_no_budget(self):
+        product = "pub(crate) const T: Duration = Duration::from_secs(30);\nmod m {\n    pub(crate) const T: u64 = 5;\n}\n"
+        self.assertNotIn("T", guard.budgets_of({PRODUCT_PATH: product}).consts)
+
+    def test_c9_an_edit_inside_a_multiline_carrier_makes_the_timeout_new(self):
+        body = (
+            "let h = tokio::spawn(async move {\n    run_within(&x, Duration::from_secs(30), f).await\n});\n"
+            'timeout(Duration::from_secs(30), h).await.expect("w");'
+        )
+        text = test_file(body)
+        self.refused(text, "run_within", added={line_of(text, "run_within(&x")})
 
 
 class BudgetList(unittest.TestCase):
