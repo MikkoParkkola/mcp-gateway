@@ -101,7 +101,7 @@ fn assert_refused(ran: &Ran, deciding: &[PathBuf]) {
         ran.stderr
     );
     let lower = ran.stderr.to_lowercase();
-    for phrase in ["already exists", "remove it first", "--out"] {
+    for phrase in ["already exists", "remove it first", "different", "--out"] {
         assert!(
             lower.contains(phrase),
             "{phrase:?} missing from: {}",
