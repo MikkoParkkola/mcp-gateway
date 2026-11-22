@@ -34,9 +34,7 @@ impl Line {
             Self::FetchRefused => "{\"fetch_done\":true,\"refused\":\"npm-ci\"}",
             Self::Run => "{\"run\":true}",
             Self::SetupDone => "{\"setup_done\":true}",
-            Self::SetupRefused => {
-                "{\"setup_refused\":true,\"step\":\"binding\",\"denied\":false}"
-            }
+            Self::SetupRefused => "{\"setup_refused\":true,\"step\":\"binding\",\"denied\":false}",
         }
     }
 }
@@ -125,7 +123,15 @@ fn prefixes() -> [Vec<Line>; 4] {
 async fn r32w_every_line_order_gets_its_listed_answer() {
     let ns = || step(NO_STATUS);
     let non_fetching = [
-        [ns(), ns(), ns(), ns(), Ok(SetupStatus::Done), Ok(REFUSED), ns()],
+        [
+            ns(),
+            ns(),
+            ns(),
+            ns(),
+            Ok(SetupStatus::Done),
+            Ok(REFUSED),
+            ns(),
+        ],
         [ns(), ns(), ns(), ns(), ns(), ns(), ns()],
         [ns(), ns(), ns(), ns(), ns(), ns(), ns()],
         [ns(), ns(), ns(), ns(), ns(), ns(), ns()],
@@ -135,7 +141,15 @@ async fn r32w_every_line_order_gets_its_listed_answer() {
     let ack = || other_than("the run's acknowledgement");
     let closed = || step(CLOSED);
     let fetching = [
-        [closed(), start(), start(), start(), ns(), Ok(REFUSED), closed()],
+        [
+            closed(),
+            start(),
+            start(),
+            start(),
+            ns(),
+            Ok(REFUSED),
+            closed(),
+        ],
         [
             done(),
             closed(),
@@ -146,7 +160,15 @@ async fn r32w_every_line_order_gets_its_listed_answer() {
             closed(),
         ],
         [ack(), ack(), ack(), ns(), ack(), ack(), closed()],
-        [ns(), ns(), ns(), ns(), Ok(SetupStatus::Done), Ok(REFUSED), ns()],
+        [
+            ns(),
+            ns(),
+            ns(),
+            ns(),
+            Ok(SetupStatus::Done),
+            Ok(REFUSED),
+            ns(),
+        ],
     ];
     for (mode, table) in [(false, non_fetching), (true, fetching)] {
         for (prefix, row) in prefixes().iter().zip(table) {
@@ -184,7 +206,11 @@ async fn r41_only_one_well_formed_status_then_the_end_is_accepted() {
         let mut raw = before.clone();
         raw.extend(lines(&[SetupDone]));
         let got = session(fetching, &raw, CONTROL_BOUNDS, far()).await;
-        assert_eq!(got, Ok(SetupStatus::Done), "fetching {fetching}: the plain status");
+        assert_eq!(
+            got,
+            Ok(SetupStatus::Done),
+            "fetching {fetching}: the plain status"
+        );
     }
 }
 
@@ -248,7 +274,10 @@ impl Scripted {
     async fn say(&mut self, said: Line) {
         use tokio::io::AsyncBufReadExt as _;
         let text = format!("{}\n", said.wire());
-        self.to_gateway.write_all(text.as_bytes()).await.expect("say");
+        self.to_gateway
+            .write_all(text.as_bytes())
+            .await
+            .expect("say");
         if matches!(said, Line::FetchStart | Line::FetchDone) {
             let mut answer = String::new();
             let got = self.from_gateway.read_line(&mut answer).await;
@@ -295,7 +324,12 @@ async fn r41_the_gateway_stays_open_until_the_helper_has_shut_its_side() {
     for fetching in [false, true] {
         let rig = rig().await;
         let (helper, gateway) = UnixStream::pair().expect("pair");
-        let served = serve_control(gateway, fetching.then_some(&rig.proxy), far(), CONTROL_BOUNDS);
+        let served = serve_control(
+            gateway,
+            fetching.then_some(&rig.proxy),
+            far(),
+            CONTROL_BOUNDS,
+        );
         let script = async {
             let mut scripted = Scripted::new(helper);
             if fetching {

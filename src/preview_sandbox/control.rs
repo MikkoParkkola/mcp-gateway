@@ -407,7 +407,10 @@ where
 /// proxy, then the helper's setup status, which is the session's answer.
 #[cfg_attr(
     all(not(test), target_os = "linux"),
-    expect(dead_code, reason = "the launch starts calling it with the helper's status")
+    expect(
+        dead_code,
+        reason = "the launch starts calling it with the helper's status"
+    )
 )]
 pub(crate) async fn serve_control(
     stream: UnixStream,
