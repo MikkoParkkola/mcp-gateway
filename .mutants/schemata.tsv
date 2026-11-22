@@ -1,0 +1,23 @@
+head_sha	9434c798f35cc561ef72c3c28c7a7b21008eb3dd
+#mutant m1
+mcp_gateway	cost_accounting::spend_history_tests::a_local_midnight_inside_a_utc_hour_splits_the_days_not_the_hour	src/cost_accounting/spend_history_tests.rs:49
+#mutant m2 multi=2
+mcp_gateway	cost_accounting::spend_history::file_tests::a_restore_drops_what_aged_out_while_the_gateway_was_down	src/cost_accounting/spend_history_file_tests.rs:297
+#mutant m3
+mcp_gateway	cost_accounting::spend_history::file_tests::keys_past_the_cap_fold_into_the_overflow_which_is_no_key	src/cost_accounting/spend_history_file_tests.rs:145
+#mutant m4
+mcp_gateway	cost_accounting::spend_history::file_tests::keys_past_the_cap_fold_into_the_overflow_which_is_no_key	src/cost_accounting/spend_history_file_tests.rs:150
+#mutant m5
+mcp_gateway	gateway::server::persistence::spend_history_save_tests::a_skipped_periodic_save_writes_neither_file	src/gateway/server/spend_history_save_tests.rs:42
+#mutant m6
+mcp_gateway	cost_accounting::spend_history::save_rows_tests::a_save_stopped_before_its_rename_leaves_the_previous_file	src/cost_accounting/spend_history_save_rows_tests.rs:186
+#mutant m7
+mcp_gateway	cost_accounting::spend_history_tests::spend_with_no_key_is_in_the_keyless_series_and_the_gateway_total	src/cost_accounting/spend_history_tests.rs:99
+#mutant m8
+mcp_gateway	cost_accounting::spend_history::save_rows_tests::a_restored_overflow_survives_a_save_below_the_cap	src/cost_accounting/spend_history_save_rows_tests.rs:304
+#mutant m9
+mcp_gateway	cost_accounting::spend_history::save_rows_tests::every_save_writes_the_carried_overflow_plus_its_own_fold	src/cost_accounting/spend_history_save_rows_tests.rs:323
+#mutant m10
+mcp_gateway	cost_accounting::spend_history::file_tests::a_restart_keeps_every_series_hours_and_days	src/cost_accounting/spend_history_file_tests.rs:87
+#mutant m11
+mcp_gateway	cost_accounting::spend_history_tests::the_sweep_keeps_a_key_until_its_day_window_expires_too	src/cost_accounting/spend_history_tests.rs:139
