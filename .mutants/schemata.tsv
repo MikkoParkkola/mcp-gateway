@@ -1,0 +1,7 @@
+head_sha	b2f1551bc76704efcde90d49c277966f6fdfd326
+#mutant m1
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_blocked_write_cannot_stretch_the_credential_recheck	src/gateway/router/ui_stream_tests/backpressure.rs:241
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_blocked_write_behind_a_large_receive_buffer_cannot_stretch_it_either	src/gateway/router/ui_stream_tests/backpressure.rs:241
+#mutant m2
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_returns	src/gateway/router/ui_stream_tests/backpressure.rs:162
+mcp_gateway	gateway::router::ui_stream_tests::backpressure::a_stalled_client_with_a_large_receive_buffer_is_closed_too	src/gateway/router/ui_stream_tests/backpressure.rs:162
