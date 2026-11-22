@@ -338,8 +338,7 @@ fn settle_keeps_the_window_and_counts_later_slots_in_the_cut() {
         (cut + 1, 4, u64::MAX),
         (cut + 5, 5, 5),
     ];
-    let mut hours = HourBuckets::default();
-    hours.0 = std::collections::VecDeque::from(held.to_vec());
+    let mut hours: HourBuckets = Buckets(std::collections::VecDeque::from(held));
     hours.settle(cut);
     let once = hours.rows();
     assert_eq!(once, vec![(cut - BUCKET_HOURS, 2, 2), (cut, 12, u64::MAX)]);
