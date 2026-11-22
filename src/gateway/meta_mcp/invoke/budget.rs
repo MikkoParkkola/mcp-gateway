@@ -8,7 +8,8 @@ use tracing::{debug, warn};
 use super::{audit, withheld_evidence};
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
-    ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
+    ContextIntegrityInput, ContextIntegrityTransformedContent, ContextProvenance,
+    ContextTrustBoundary,
 };
 use crate::gateway::delivery_facts::ResponseEffect;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -286,14 +287,37 @@ impl MetaMcp {
     }
 
     /// The rebuilt answer, held to the promise of the transform that made it, read on the answer
-    /// exactly as it will be sent. Scaffold: passes every answer through unchanged.
+    /// exactly as it will be sent. Strip promises the delivered text is clean and Summarize that
+    /// the raw content stays back, so for either, every string the rebuild put in the answer,
+    /// whatever field carries it, is scanned. Anything found turns the evaluation into a withhold,
+    /// answered as one: the same tool result and record as a Deny, and the attached verdict says
+    /// withheld. The verdict itself is attached after this, so the scan never reads the gateway's
+    /// own words.
     pub(super) fn checked_as_sent(
         &self,
         evaluation: ContextIntegrityEvaluation,
-        _original: &Value,
+        original: &Value,
         (answer, effect): (Value, Option<ResponseEffect>),
     ) -> (ContextIntegrityEvaluation, Value, Option<ResponseEffect>) {
-        (evaluation, answer, effect)
+        let promised = evaluation.transformed.stripped || evaluation.transformed.summarized;
+        if !promised
+            || effect != Some(ResponseEffect::Rewritten)
+            || !self
+                .context_integrity_kernel
+                .read()
+                .scan_finds_anything(&answer)
+        {
+            return (evaluation, answer, effect);
+        }
+        let mut withheld = evaluation;
+        withheld.transformed = ContextIntegrityTransformedContent {
+            delivered: None,
+            stripped: false,
+            summarized: false,
+            withheld: true,
+        };
+        let (answer, effect) = Self::context_integrity_delivered_result(&withheld, original);
+        (withheld, answer, effect)
     }
 
     /// The answer enforcement delivers, and what that did to the backend's:

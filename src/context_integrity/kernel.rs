@@ -374,6 +374,12 @@ impl ContextIntegrityKernel {
         }
     }
 
+    /// Whether the text scan finds anything in `answer`, every string in it read as the
+    /// classification reads a result. The gateway asks it of an answer it is about to send.
+    pub(crate) fn scan_finds_anything(&self, answer: &Value) -> bool {
+        !self.text_only_findings(&render_text(answer)).is_empty()
+    }
+
     fn classify_text(
         &self,
         input: &ContextIntegrityInput,
