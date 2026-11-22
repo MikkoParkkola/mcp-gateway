@@ -591,6 +591,7 @@ async fn validate_only(
 
 /// Request body for `POST /ui/api/capabilities`.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CreateCapabilityBody {
     /// Optional YAML content.  When absent a template is returned.
     pub yaml: Option<String>,

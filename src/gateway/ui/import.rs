@@ -31,6 +31,7 @@ use crate::security::validate_url_not_ssrf;
 
 /// Body accepted by both import endpoints.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImportRequest {
     /// URL of the `OpenAPI` spec to fetch. Mutually exclusive with `spec`.
     pub url: Option<String>,
