@@ -161,7 +161,7 @@ jobs:
       # image's key would pin its older packages here. A lost race with
       # another run on the same image only warns.
       - name: Save the mingw packages
-        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-install.outputs.downloaded == 'true'
+        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-install.outputs.downloaded == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/mingw-debs
