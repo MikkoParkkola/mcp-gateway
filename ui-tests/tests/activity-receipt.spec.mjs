@@ -316,6 +316,20 @@ test.describe('R receipt', () => {
     await expect(page.locator('#content'), 'R6 the not-final words are gone').not.toContainText(NOT_FINAL);
   });
 
+  // A refusal or a missing entry on Check again is an answer: its own state, not the "as last read" note.
+  for (const [status, state] of [['404', 'not-found'], ['403', 'forbidden']]) {
+    test(`R6 a ${status} on check again shows the ${state} state`, async ({ page }) => {
+      const r = await receiptsFor(page);
+      await r.open(ID_A);
+      await (await r.request(0, `R6 ${status}: open`)).answer(callReceipt(ID_A, { effect: 'no_record' }));
+      await drawn(page, `R6 ${status}`);
+      await page.locator('#content').getByRole('button', { name: /check again/i }).click();
+      await (await r.request(1, `R6 ${status}: check again`)).fail(Number(status));
+      await expect(page.locator(`#content [data-state="${state}"]`), `R6 ${status}: the ${state} state`).toBeVisible();
+      await expect(page.locator('#content'), `R6 ${status}: no stale note`).not.toContainText(/as last read/i);
+    });
+  }
+
   const STATES = { 404: 'not-found', 401: 'signin', 403: 'forbidden', 500: 'error' };
   for (const [status, state] of Object.entries(STATES)) {
     test(`R7 a ${status} answer shows the ${state} state`, async ({ page }) => {
@@ -345,14 +359,15 @@ test.describe('R receipt', () => {
     await drawn(page, 'R10');
     const copy = page.locator('#content').getByRole('button', { name: /copy as json/i });
     const rule = page.locator('#content a[href^="/ui/activity?rule="]');
-    const reached = new Set();
+    // In the order Tab reaches them: the rule link sits in the field list, Copy after it.
+    const reached = [];
     await page.evaluate(() => document.activeElement?.blur());
-    for (let i = 0; i < 60 && reached.size < 2; i += 1) {
+    for (let i = 0; i < 60 && reached.length < 2; i += 1) {
       await page.keyboard.press('Tab');
-      if (await copy.evaluate((el) => el === document.activeElement).catch(() => false)) reached.add('copy');
-      if (await rule.evaluate((el) => el === document.activeElement).catch(() => false)) reached.add('rule');
+      if (await copy.evaluate((el) => el === document.activeElement).catch(() => false)) reached.push('copy');
+      if (await rule.evaluate((el) => el === document.activeElement).catch(() => false)) reached.push('rule');
     }
-    expect([...reached].sort(), 'R10 Tab reaches both').toEqual(['copy', 'rule']);
+    expect(reached, 'R10 Tab reaches the rule link, then copy').toEqual(['rule', 'copy']);
     await page.goBack();
     await expect(page.locator(`#content a[href="${receiptPath(ID_A)}"]`), 'R10 focus is back on the row').toBeFocused();
   });
@@ -558,6 +573,22 @@ test.describe('R receipt', () => {
     await expect(page.locator('#content [data-field]').first(), 'R2 config: premise, fields drawn').toBeVisible();
     const text = await page.locator('body').innerText();
     expect([BODY('reason'), BODY('rollback')].filter((x) => text.includes(x)), 'R2 config: extras on screen').toEqual([]);
+  });
+
+  // The design pins a few fields to one type; a value of another type is dropped, like an unlisted key.
+  test('R2 a pinned field holding another type is dropped', async ({ page }) => {
+    const r = await receiptsFor(page);
+    await r.open(ID_A);
+    const body = fullCall(ID_A);
+    body.decision.grant = 7;
+    body.decision.flags = true;
+    body.answer.records[0].findings_listed = 1.5;
+    body.reach = true;
+    await (await r.request(0, 'R2 types')).answer(body);
+    await drawn(page, 'R2 types');
+    const PINNED = ['decision.grant', 'decision.flags', 'answer.records[].findings_listed', 'reach'];
+    expect((await shownFields(page)).filter((f) => PINNED.includes(f)), 'R2 types: none of the mistyped fields').toEqual([]);
+    expect(await shownFields(page), 'R2 types: the rest still shows').toContain('decision.rule');
   });
 
   test('R3 copy as JSON writes exactly the projection', async ({ page }) => {

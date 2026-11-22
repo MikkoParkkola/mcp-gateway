@@ -704,6 +704,9 @@ class Screen {
   control() { return this.page.getByRole('button', { name: CONTROL, exact: true }); }
 
   said() { return this.page.evaluate(() => window.__said.length); }
+
+  /** How many times `text` was said: one announcer entry can join several messages. */
+  heard(text) { return this.page.evaluate((t) => window.__said.join(' ').split(t).length - 1, text); }
 }
 
 /** A Screen and a held stream for this test, installed before the page loads. */
@@ -788,6 +791,7 @@ test.describe('LE list screen', () => {
     // The announcer writes after its dwell, and the clock is paused.
     await page.clock.runFor(2000);
     expect(await screen.said() - before, 'LE4 announced once for three frames').toBe(1);
+    expect(await screen.heard('Newer activity is waiting'), 'LE4 the news is said once, not once per frame').toBe(1);
     const box = await screen.control().boundingBox();
     const { height } = page.viewportSize();
     expect(box.y >= 0 && box.y + box.height <= height, `LE4 the control stays in view at the list end (${JSON.stringify(box)})`).toBe(true);
@@ -830,6 +834,23 @@ test.describe('LE list screen', () => {
     await screen.open(stream);
     await (await screen.request(0, 'LE5 short page')).answer({ rows: rowsOf('a', 1), next_cursor: 'c2' });
     await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 short page: page 2 without a scroll');
+  });
+
+  test('LE5 a short page 1 lets its trailing live refresh land before it reads on', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    const p1 = await screen.request(0, 'LE5 trailing: page 1');
+    // A frame while page 1 is out: one live refresh follows its answer.
+    await stream.send(activityFrame(callRow('a.live')));
+    await p1.answer({ rows: rowsOf('a', 1), next_cursor: 'c2' });
+    const live = await screen.request(1, 'LE5 trailing: the live refresh');
+    expect(live.params.cursor ?? null, 'LE5 trailing: premise, a page 1 refresh').toBeNull();
+    await screen.quiet(2, 'LE5 trailing: no next page while it is out');
+    expect(screen.failed.has(live.href), 'LE5 trailing: the refresh is not aborted').toBe(false);
+    const fresh = rowsOf('b', 1);
+    await live.answer({ rows: fresh, next_cursor: 'c2' });
+    await expect.poll(() => screen.texts(), { message: 'LE5 trailing: the refresh\'s rows' }).toEqual(fresh.map(textOf));
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 trailing: then page 2');
   });
 
   test('LE5 the next-page retry asks again with the list end out of view', async ({ page, request }, testInfo) => {
