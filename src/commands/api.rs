@@ -244,11 +244,11 @@ fn takes_yaml(method: &reqwest::Method, url: &reqwest::Url) -> bool {
     let route = match *method {
         reqwest::Method::PUT => routes::UI_CAPABILITY,
         reqwest::Method::POST => routes::UI_CAPABILITY_VALIDATE,
-        _ => return false,
+        _ => mutant!("m-ignore-method", routes::UI_CAPABILITY, return false),
     };
     let want: Vec<&str> = route.split('/').collect();
     let got: Vec<&str> = url.path().split('/').collect();
-    want.len() == got.len()
+    mutant!("m-any-depth", true, want.len() == got.len())
         && want.iter().zip(&got).all(|(want, got)| {
             if want.starts_with('{') {
                 !got.is_empty()
@@ -265,8 +265,22 @@ fn body_of(
     url: &reqwest::Url,
     data: Vec<u8>,
 ) -> Result<AdminBody, CliError> {
-    if takes_yaml(method, url) {
-        return Ok(AdminBody::Yaml(data));
+    if mutant!(
+        "m-no-switch",
+        false,
+        mutant!(
+            "m-json-first",
+            takes_yaml(method, url) && serde_json::from_slice::<Value>(&data).is_err(),
+            takes_yaml(method, url)
+        )
+    ) {
+        return Ok(AdminBody::Yaml(mutant!(
+            "m-reserialise",
+            String::from_utf8_lossy(&data)
+                .replace("\r\n", "\n")
+                .into_bytes(),
+            data
+        )));
     }
     serde_json::from_slice(&data)
         .map(AdminBody::Json)
@@ -311,7 +325,19 @@ fn read_data(
     } else {
         data.as_bytes().to_vec()
     };
-    if data.len() as u64 > BODY_LIMIT {
+    if mutant!(
+        "m-cap-off",
+        false,
+        mutant!(
+            "m-limit-off-by-one",
+            data.len() as u64 >= BODY_LIMIT,
+            mutant!(
+                "m-limit-up",
+                data.len() as u64 > BODY_LIMIT + 1,
+                data.len() as u64 > BODY_LIMIT
+            )
+        )
+    ) {
         return Err(CliError::new(
             CliExit::Usage,
             "Request body exceeds 16 MiB.",
