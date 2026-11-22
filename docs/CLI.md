@@ -59,6 +59,12 @@ takes the gateway's base URL from the first of these that is set:
 The old spellings `--url` and `-u` still work on these five commands. The credential is never a flag: it is the
 `MCP_GATEWAY_TOKEN` environment variable.
 
+## Request bodies
+
+`api --data` takes a body inline, from `@FILE`, or from standard input (`-`), up to 16 MiB. It must be JSON, with
+two exceptions chosen by the route, never by a flag: a PUT to one capability (`/ui/api/capabilities/NAME`, with or
+without `?validate=1`) and a POST to its `validate` route send the body as `application/x-yaml`, byte for byte.
+
 ## Command classes
 
 Every command is in one class:
