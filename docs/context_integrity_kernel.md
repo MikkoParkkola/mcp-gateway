@@ -23,8 +23,11 @@ classification, policy, and audit evidence.
   for opt-in tests and deployments.
 - Evidence: versioned evaluation JSON, input content hash, findings, effective
   decision, would-enforce decision, and audit event.
-- Large-output handling: classifiers run over a bounded head/tail text sample
-  while the audit hash remains computed from the full canonical JSON payload.
+- Large-output handling: when the text classified for one tool answer is over
+  64 KiB, the classifiers see only its first 32 KiB and its last 32 KiB.
+  Content between them is never classified, so an answer with no finding in
+  those two parts is delivered as it is, whatever its middle holds. The audit
+  hash is still computed from the full canonical JSON payload.
 
 ## Default Posture
 
