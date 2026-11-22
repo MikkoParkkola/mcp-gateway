@@ -2086,6 +2086,9 @@ async function deleteCap(name) {
   }
 }
 
+// CAP-CREATE BEGIN
+// + New Capability. A lib row runs this block under node against the real
+// route (capability_create_page_tests.rs), so keep it self-contained.
 const CAP_TEMPLATE = `# Capability definition
 # See https://github.com/modelcontextprotocol/mcp-gateway for schema
 tools:
@@ -2126,6 +2129,7 @@ async function newCapability() {
     alert('Failed to create capability: ' + e.message);
   }
 }
+// CAP-CREATE END
 
 function capTabIndent(e) {
   if (e.key !== 'Tab') return;
