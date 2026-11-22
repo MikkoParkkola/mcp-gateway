@@ -24,6 +24,11 @@ const PINNED: &str = "2025-06-18";
 /// The stdio client's own revision: neither the pin nor the gateway's
 /// latest, so what the backend sees cannot be the client's echo.
 const CLIENT: &str = "2024-11-05";
+/// A hang guard, not a measured bound: each answer waits on a gateway boot
+/// and an HTTP round trip, which a full parallel test run on a loaded host
+/// can stretch past 10 s. The row asserts what the backend saw, never how
+/// fast, so the guard only has to stop a real hang.
+const ANSWER_HANG_GUARD: Duration = Duration::from_secs(120);
 
 /// What the backend saw: `initialize`'s proposed revision, and the
 /// `MCP-Protocol-Version` header of each `tools/call`.
@@ -122,9 +127,9 @@ async fn call_through_config(extra: &str) -> Seen {
             .await
             .expect("stdin");
         loop {
-            let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            let line = tokio::time::timeout(ANSWER_HANG_GUARD, lines.next_line())
                 .await
-                .expect("an answer within the bound")
+                .expect("an answer before the hang guard")
                 .expect("stdout readable")
                 .expect("stdout open");
             let answer: Value = serde_json::from_str(&line).expect("one JSON frame per line");
