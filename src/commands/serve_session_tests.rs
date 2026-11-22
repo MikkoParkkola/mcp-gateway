@@ -440,7 +440,12 @@ fn serve_paths_reach_the_gate() {
         .split("fn load_for_serve")
         .nth(1)
         .expect("load_for_serve is defined");
-    let load = load.split("\n}\n").next().expect("its body");
+    // Its body and the boxed gated load it hands to: the two functions that follow.
+    let load = load
+        .split("\n}\n")
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n}\n");
     // The scaffold commit carried a temporary allow above the function; the head must not.
     let above = commands
         .split("fn load_for_serve")

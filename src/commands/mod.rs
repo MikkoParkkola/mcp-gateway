@@ -684,11 +684,18 @@ mod admin_credential_tests {
 pub(crate) async fn load_for_serve(
     path: Option<&std::path::Path>,
 ) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
+    // Boxed: the gated load holds the startup session and the loaded config across its await,
+    // which would otherwise sit inline in both serve paths' futures.
+    Box::pin(gated_load(path)).await
+}
+
+async fn gated_load(
+    path: Option<&std::path::Path>,
+) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
     let Some(path) = path else {
         return mcp_gateway::config::Config::load_evaluated_defaults();
     };
-    // Boxed: the gate's future would otherwise sit inline in both serve paths' futures.
-    let session = Box::pin(crate::config_reload::startup_settle::prepare_start(path))
+    let session = crate::config_reload::startup_settle::prepare_start(path)
         .await
         .map_err(|class| mcp_gateway::Error::Config(class.to_string()))?;
     #[cfg(all(test, unix))]
