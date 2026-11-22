@@ -140,9 +140,11 @@ fn ri5_a_flow_entry_in_a_block_list_gives_a_line_deletion() {
 }
 
 #[test]
-fn ri6_a_document_marker_gives_cause_and_path_but_no_instructions() {
+fn ri6_a_second_document_after_the_frame_gives_cause_and_path_but_no_instructions() {
+    // keyedit edits a framed document in place, so a bare start line no longer refuses;
+    // a shape past the frame still does: here a second document follows the framed one.
     let entry = format!("    - name: target\n{}", digest_line());
-    let text = format!("---\n{}", yaml_of(&[root_item(), entry]));
+    let text = format!("---\n{}---\nother: 1\n", yaml_of(&[root_item(), entry]));
     let (_, answer) = refused_answer(on_file(text));
     assert_eq!(answer["code"], "other", "{answer}");
     let reason = answer["reason"].as_str().expect("a reason");
