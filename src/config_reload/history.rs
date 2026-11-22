@@ -342,12 +342,13 @@ impl HistoryHook {
                 revision,
                 pending_restart,
                 previous,
+                pin,
                 source,
             } => self.publish_record(
                 &raw,
-                &revision,
+                (&revision, previous.as_deref()),
                 &pending_restart,
-                previous.as_deref(),
+                &pin,
                 source,
                 now,
             ),
@@ -390,16 +391,18 @@ impl HistoryHook {
             .collect()
     }
 
+    /// `(revision, previous)`: the published revision and the one it replaced.
+    /// `pin` is the served version after this publish, the one eviction keeps.
     fn publish_record(
         &self,
         raw: &RawInputs,
-        revision: &str,
+        (revision, previous): (&str, Option<&str>),
         pending_restart: &[&str],
-        previous: Option<&str>,
+        pin: &str,
         source: Source,
         now: u64,
     ) -> Record {
-        let unchanged = previous == Some(revision);
+        let unchanged = !records_a_version(previous, revision);
         let snapshot = (!unchanged).then(|| Snapshot {
             revision: revision.to_string(),
             at: now,
@@ -414,7 +417,9 @@ impl HistoryHook {
         Record {
             event: applied_event(now, source, revision, unchanged),
             snapshot,
-            running: revision.to_string(),
+            // Not `revision`: after a part-only publish an unchanged event's
+            // revision names no kept version, and the served one must stay.
+            running: pin.to_string(),
             served: None,
             now,
         }
@@ -488,6 +493,13 @@ fn load_state(path: &Path) -> Result<State, String> {
 /// A stored version written before `source` existed is a file reload.
 fn file_source() -> Source {
     Source::File
+}
+
+/// Whether a full publish from `previous` to `revision` stores a version: only
+/// when the revision moved. The live config moves its recorded (served)
+/// revision by this same rule, so the two cannot drift.
+pub(super) fn records_a_version(previous: Option<&str>, revision: &str) -> bool {
+    previous != Some(revision)
 }
 
 fn applied_event(at: u64, source: Source, revision: &str, unchanged: bool) -> Event {
