@@ -89,6 +89,10 @@ async fn r3_an_unknown_version_is_404_and_an_evicted_one_is_410() {
         (status, body["error"].clone()),
         (StatusCode::NOT_FOUND, json!("unknown_version"))
     );
+    assert_eq!(
+        body["message"],
+        json!("no kept or recorded config version has that id")
+    );
     assert_eq!(rig.bytes(), before);
 
     // One kept version: the reload evicts the start one, whose event stays.
@@ -104,6 +108,10 @@ async fn r3_an_unknown_version_is_404_and_an_evicted_one_is_410() {
     assert_eq!(
         (status, body["error"].clone()),
         (StatusCode::GONE, json!("no_longer_kept"))
+    );
+    assert_eq!(
+        body["message"],
+        json!("that config version is no longer kept, so it cannot be restored")
     );
     assert_eq!(rig.bytes(), before);
 }
@@ -332,6 +340,10 @@ async fn g4b_a_history_that_cannot_be_read_refuses_a_restore_with_the_read_answe
         (status, body["error"].clone()),
         (StatusCode::SERVICE_UNAVAILABLE, json!("history_unreadable"))
     );
+    assert_eq!(
+        body["message"],
+        json!("the config history could not be read; nothing was changed")
+    );
     assert_eq!(rig.bytes(), before);
     assert!(rig.rejected().is_empty());
 
@@ -343,6 +355,10 @@ async fn g4b_a_history_that_cannot_be_read_refuses_a_restore_with_the_read_answe
     assert_eq!(
         (status, body["error"].clone()),
         (StatusCode::SERVICE_UNAVAILABLE, json!("history_unreadable"))
+    );
+    assert_eq!(
+        body["message"],
+        json!("the config history could not be read; nothing was changed")
     );
     assert_eq!(rig.bytes(), before);
     assert!(rig.rejected().is_empty());

@@ -12,6 +12,9 @@ use serde_json::{Value, json};
 use super::support_tests::{Audit, Caller, History, Rig, config_text, env_files, put};
 use crate::config_reload::history::{Bounds, Event, Outcome, Source};
 
+/// The fixed text of the answer to a history that cannot be read.
+const UNREADABLE: &str = "the config history could not be read; nothing was changed";
+
 /// The revision of each entry of `list`, in order.
 fn revisions(list: &Value) -> Vec<String> {
     list.as_array()
@@ -132,8 +135,16 @@ async fn g1b_only_the_newest_copy_of_the_served_revision_is_marked() {
 async fn g1c_after_a_hot_reload_the_served_version_is_marked_and_restores_as_a_no_op() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let env = put(&dir, "app.env", b"K=one\n");
-    let first = config_text(&format!("environment: \"a\"\n{}", env_files(&[&env])));
-    let second = config_text(&format!("environment: \"b\"\n{}", env_files(&[&env])));
+    // F is equal in A and B: listing it would mean the wrong baseline.
+    let steady = put(&dir, "steady.env", b"S=same\n");
+    let first = config_text(&format!(
+        "environment: \"a\"\n{}",
+        env_files(&[&env, &steady])
+    ));
+    let second = config_text(&format!(
+        "environment: \"b\"\n{}",
+        env_files(&[&env, &steady])
+    ));
     let rig = Rig::start_in(dir, &first, Audit::Logged, Bounds::default(), History::Kept).await;
     let a = rig.version_of(first.as_bytes());
     let started = rig.state.live_config.running_revision();
@@ -161,7 +172,11 @@ async fn g1c_after_a_hot_reload_the_served_version_is_marked_and_restores_as_a_n
     assert_eq!(rig.bytes(), before);
 
     // Then A: its env file differs from the served B's, so it is listed.
-    let path = rig.env_paths(&a).pop().expect("A recorded its env file");
+    let path = rig
+        .env_paths(&a)
+        .into_iter()
+        .next()
+        .expect("A recorded its env files, E first");
     let (status, body) = rig.restore(&a, Caller::Root).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -251,6 +266,7 @@ async fn g4_a_history_that_cannot_be_read_is_one_fixed_503() {
         (status, body["error"].clone()),
         (StatusCode::SERVICE_UNAVAILABLE, json!("history_unreadable"))
     );
+    assert_eq!(body["message"], json!(UNREADABLE));
     let text = body.to_string();
     assert!(!text.contains(&*file.to_string_lossy()), "{text}");
     assert!(!text.contains("symbolic"), "{text}");
@@ -263,6 +279,7 @@ async fn g4_a_history_that_cannot_be_read_is_one_fixed_503() {
         (status, body["error"].clone()),
         (StatusCode::SERVICE_UNAVAILABLE, json!("history_unreadable"))
     );
+    assert_eq!(body["message"], json!(UNREADABLE));
     let text = body.to_string();
     assert!(!text.contains("EOF") && !text.contains("line "), "{text}");
 }
