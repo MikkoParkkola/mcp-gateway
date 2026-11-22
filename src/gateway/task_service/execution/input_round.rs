@@ -381,6 +381,9 @@ async fn dispatch(
             response = dispatched => Some(response),
         }
     });
+    // The round's decisions name the task's own token: a continuation runs on
+    // its worker, outside any request's token scope.
+    let round = crate::security::decision_record::with_token(owned.token().cloned(), round);
     // Boxed: the round is too large to hold inline (`large_futures`).
     state.as_caller(owned, Box::pin(round)).await
 }

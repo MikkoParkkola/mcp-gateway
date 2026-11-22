@@ -621,7 +621,7 @@ impl MetaMcp {
             notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
-        let decision = Box::new(notes.decided(self, outcome));
+        let decision = Box::new(notes.decided(self, outcome, caller.credential_kind));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));

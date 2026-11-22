@@ -355,8 +355,12 @@ async fn p4_admission_routing_profile() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("p4_admission_routing_profile", "routing_profile"),
@@ -399,8 +403,12 @@ async fn t4_policy_allowed_tools() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("t4_policy_allowed_tools", "allowed_tools"),
@@ -443,8 +451,12 @@ async fn t5_policy_allowed_tools_from_the_memo() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("t5_policy_allowed_tools_from_the_memo", "allowed_tools"),

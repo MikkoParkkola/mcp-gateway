@@ -16,7 +16,8 @@ use tokio::sync::Barrier;
 use super::InMemoryTokenStore;
 use super::oidc_test_harness::{Harness, ISS_A, config_yaml};
 use super::store::{
-    ActivateError, ReservationId, ReservationRequest, ReserveError, TemporaryToken, TokenStore,
+    ActivateError, ReservationId, ReservationRequest, ReserveError, Reserved, TemporaryToken,
+    TokenStore,
 };
 
 const CAP: usize = 2;
@@ -36,11 +37,7 @@ struct HeldAtCount {
 
 #[async_trait::async_trait]
 impl TokenStore for HeldAtCount {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.inner.reserve(request, now)
     }
     fn activate(
