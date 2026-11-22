@@ -140,11 +140,16 @@ fn ri5_a_flow_entry_in_a_block_list_gives_a_line_deletion() {
 }
 
 #[test]
-fn ri6_a_second_document_after_the_frame_gives_cause_and_path_but_no_instructions() {
-    // keyedit edits a framed document in place, so a bare start line no longer refuses;
-    // a shape past the frame still does: here a second document follows the framed one.
+fn ri6_a_bare_carriage_return_gives_cause_and_path_but_no_instructions() {
+    // The file must still load (the GET gives the revision the DELETE sends), so the
+    // refusal comes from keyedit alone: a lone CR between two comment lines is a
+    // comment to the loader however it reads the CR, and keyedit refuses it as "other".
+    // (A second document refused earlier: the GET carried no revision.)
     let entry = format!("    - name: target\n{}", digest_line());
-    let text = format!("---\n{}---\nother: 1\n", yaml_of(&[root_item(), entry]));
+    let text = format!(
+        "# kept by hand\r# for the revoke row\n{}",
+        yaml_of(&[root_item(), entry])
+    );
     let (_, answer) = refused_answer(on_file(text));
     assert_eq!(answer["code"], "other", "{answer}");
     let reason = answer["reason"].as_str().expect("a reason");
