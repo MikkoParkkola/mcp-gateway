@@ -373,7 +373,7 @@ async fn g1e_a_refusal_after_the_grants_publish_keeps_b_pinned() {
     let late = crate::clock::unix_secs().expect("the clock reads") + 1_000;
     hook.run(refusal, late);
     // A ages out (the age rule ran); B stays, pinned by the refusal.
-    assert_eq!(kept_revisions(&rig), [version_b.clone()]);
+    assert_eq!(kept_revisions(&rig), std::slice::from_ref(&version_b));
     let still = rig
         .store
         .events()
@@ -453,7 +453,7 @@ async fn g1g_a_restart_on_the_served_files_then_an_aged_refusal_keeps_them() {
         .expect("a history hook")
         .run(refusal, late);
     // A ages out; B, what the restarted process serves, stays pinned.
-    assert_eq!(kept_revisions(&restarted), [version_b.clone()]);
+    assert_eq!(kept_revisions(&restarted), std::slice::from_ref(&version_b));
     // And the refusal dates B from its first stored copy, not the restart.
     let named = restarted
         .store
