@@ -103,6 +103,19 @@ def _parts(masked: str, o: int, c: int) -> list[tuple[int, int]]:
     return spans + [(start, c)]
 
 
+def _code_blind(masked: str) -> str:
+    """`masked` with the inside of each one-line backtick code span replaced by
+    `x`, so no `(`, `)`, `,` or `;` written in code splits a parenthetical."""
+    return re.sub(r"`[^`\n]*`", lambda m: "`" + "x" * (len(m.group(0)) - 2) + "`", masked)
+
+
+def _kept_text(piece: str) -> str:
+    """A kept part as written, trimmed; only a run of whitespace holding a line
+    break becomes one space, so a rejoined parenthetical sits on one line and
+    the spaces inside a code span stay as they are."""
+    return re.sub(r"[ \t]*\n\s*", " ", piece.strip())
+
+
 def drop_ids(text: str) -> tuple[str, list[str]]:
     """`text` without its bare tracker ids, and the ids that cannot be dropped.
 
@@ -115,35 +128,40 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
 
     def scan(t: str):
         masked = ACCEPTANCE_ID.sub(lambda m: "\0" * len(m.group(0)), t)
+        blind = _code_blind(masked)
         spans, problems = [], []
         for m in TRACKER_ID.finditer(masked):
             at = m.end(1)  # the id, past the boundary character the pattern consumes
             line = t.count("\n", 0, at) + 1
-            span = _enclosing(masked, at)
+            span = _enclosing(blind, at)
             if span is None:
                 problems.append(f"{line}: a tracker id in prose; reword the line without it")
                 continue
-            part = next(p for p in _parts(masked, *span) if p[0] <= at < p[1])
+            part = next(p for p in _parts(blind, *span) if p[0] <= at < p[1])
             if not ID_PART.fullmatch(" ".join(masked[part[0]:part[1]].split())):
                 problems.append(f"{line}: a tracker id among other words; reword the line without it")
                 continue
             if span not in spans:
                 spans.append(span)
-        return masked, spans, problems
+        return masked, blind, spans, problems
 
-    masked, spans, problems = scan(text)
+    masked, blind, spans, problems = scan(text)
     if problems:
         return text, problems
     while spans:
         # The last parenthetical first, then scan again: a rewrite moves every later offset.
         o, c = max(spans)
-        kept = [" ".join(text[a:b].split()) for a, b in _parts(masked, o, c)
+        # Each kept part keeps its own text and the separator written before it
+        # (`,` or `;`); the first kept part needs none.
+        kept = [(text[a - 1] if a > o + 1 else "", _kept_text(text[a:b]))
+                for a, b in _parts(blind, o, c)
                 if text[a:b].strip() and not TRACKER_ID.search(masked[a:b])]
         if kept:
-            text = f"{text[:o]}({', '.join(kept)}){text[c + 1:]}"
+            inner = kept[0][1] + "".join(f"{sep} {piece}" for sep, piece in kept[1:])
+            text = f"{text[:o]}({inner}){text[c + 1:]}"
         else:
             text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
-        masked, spans, _ = scan(text)
+        masked, blind, spans, _ = scan(text)
     return text, []
 
 
