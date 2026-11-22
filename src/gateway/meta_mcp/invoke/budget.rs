@@ -245,11 +245,11 @@ impl MetaMcp {
             return (result, GateEffect::PassedThrough, false);
         }
 
-        let (delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
+        let (evaluation, delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
             // A rebuilt round is raised here; a malformed round and a whole
             // withhold are both Withheld, raised once where they are delivered.
-            let (delivered, rebuilt) =
-                Self::context_integrity_delivered_result(&evaluation, &result);
+            let built = Self::context_integrity_delivered_result(&evaluation, &result);
+            let (evaluation, delivered, rebuilt) = self.checked_as_sent(evaluation, &result, built);
             let effect = match rebuilt {
                 Some(ResponseEffect::Rewritten) => {
                     crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
@@ -257,9 +257,9 @@ impl MetaMcp {
                 }
                 _ => GateEffect::Withheld,
             };
-            (delivered, effect, withheld_by(rebuilt))
+            (evaluation, delivered, effect, withheld_by(rebuilt))
         } else {
-            (result, GateEffect::PassedThrough, false)
+            (evaluation, result, GateEffect::PassedThrough, false)
         };
         (
             Self::attach_context_integrity_metadata(delivered, &evaluation),
@@ -283,6 +283,17 @@ impl MetaMcp {
         }
 
         (false, false)
+    }
+
+    /// The rebuilt answer, held to the promise of the transform that made it, read on the answer
+    /// exactly as it will be sent. Scaffold: passes every answer through unchanged.
+    pub(super) fn checked_as_sent(
+        &self,
+        evaluation: ContextIntegrityEvaluation,
+        _original: &Value,
+        (answer, effect): (Value, Option<ResponseEffect>),
+    ) -> (ContextIntegrityEvaluation, Value, Option<ResponseEffect>) {
+        (evaluation, answer, effect)
     }
 
     /// The answer enforcement delivers, and what that did to the backend's:
