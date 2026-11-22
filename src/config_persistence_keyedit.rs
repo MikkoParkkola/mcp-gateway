@@ -224,6 +224,36 @@ pub(crate) fn edit_in_place(
     original: &str,
     changes: &[(FieldPath, Change)],
 ) -> Result<Template, ComputeRefusal> {
+    // A byte order mark is not a line: the edit runs on the text after it,
+    // and it goes back at byte 0 with every slot moved past it, so every
+    // line number stays the file's own.
+    let Some(text) = original.strip_prefix('\u{feff}') else {
+        return edit_unmarked(original, changes);
+    };
+    let Template {
+        bytes,
+        slots,
+        dropped,
+        hunks,
+    } = edit_unmarked(text, changes)?;
+    let shift = '\u{feff}'.len_utf8();
+    let slots = slots
+        .into_iter()
+        .map(|(id, range)| (id, range.start + shift..range.end + shift))
+        .collect();
+    let mut with_mark = "\u{feff}".as_bytes().to_vec();
+    with_mark.extend_from_slice(&bytes);
+    let mut marked = Template::checked(with_mark, slots)?;
+    marked.dropped = dropped;
+    marked.hunks = hunks;
+    Ok(marked)
+}
+
+/// [`edit_in_place`] on a text without a leading byte order mark.
+fn edit_unmarked(
+    original: &str,
+    changes: &[(FieldPath, Change)],
+) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
     for (path, change) in changes {
@@ -549,14 +579,14 @@ fn give_up(code: GiveUp, reason: &str) -> ComputeRefusal {
 }
 
 /// One block-mapping document this module can reason about: no byte order
-/// mark, no directive or document marker, no duplicate key (the parser
-/// refuses those), and a mapping at the root.
+/// mark (`edit_in_place` sets one aside), directives and document markers
+/// only in the document's frame, no duplicate key (the parser refuses
+/// those), and a mapping at the root.
 fn whole_file_is_plain(original: &str) -> Result<(), ComputeRefusal> {
     if original.starts_with('\u{feff}') {
         return Err(unprovable("the file starts with a byte order mark"));
     }
-    let marker = |l: &str| l.starts_with("---") || l.starts_with("...") || l.starts_with('%');
-    if original.lines().any(marker) {
+    if frame::frame(original).is_none() {
         return Err(unprovable("the file has a document marker or directive"));
     }
     // A carriage return ends a line only before a line feed here; a bare one
@@ -684,6 +714,9 @@ pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> 
     };
     crate::yaml::to_string(&shape::expected(&doc, changes)?).ok()
 }
+
+#[path = "config_persistence_keyedit_frame.rs"]
+mod frame;
 
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;

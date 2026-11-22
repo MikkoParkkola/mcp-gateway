@@ -375,6 +375,10 @@ mod capability_cli_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
+/// The costs views report the USD the enforcer charged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "cost-governance"))]
+mod charged_spend_tests;
 /// A context-integrity rewrite is recorded as the gateway's rewrite.
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]

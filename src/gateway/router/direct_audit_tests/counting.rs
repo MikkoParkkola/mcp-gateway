@@ -5,6 +5,8 @@
 //! audit-off gateways included, replays never.
 
 use super::*;
+use crate::counters::test_totals::count;
+pub(super) use crate::counters::test_totals::totals;
 use crate::counters::{CounterStore, Dim, Filter, Metric, Query, Window};
 
 /// A store attached to `fx`'s meta layer, as the gateway attaches its own.
@@ -14,26 +16,6 @@ pub(super) fn attach(fx: &Fixture) -> Arc<CounterStore> {
     ));
     fx.state.meta_mcp.set_counters(Arc::clone(&store));
     store
-}
-
-/// `metric` over the last 24 hours of the series `filter` names.
-fn count(store: &CounterStore, metric: Metric, filter: Filter<'_>) -> u64 {
-    let now = crate::clock::unix_secs().expect("a readable clock");
-    store
-        .series(
-            &Query::new(metric, Window::Day, filter),
-            now,
-            &chrono::Local,
-        )
-        .points
-        .iter()
-        .map(|p| p.v)
-        .sum()
-}
-
-/// `[calls, blocks, errors, firewall, cache hits]` on the global series.
-pub(super) fn totals(store: &CounterStore) -> [u64; 5] {
-    Metric::ALL.map(|metric| count(store, metric, Filter::All))
 }
 
 pub(super) fn meta_invoke(server: &str, tool: &str, args: &Value) -> String {
