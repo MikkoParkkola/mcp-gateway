@@ -310,6 +310,7 @@ impl LiveConfig {
     /// Everything only a restart would apply, as the Gateway page shows it:
     /// the published config's fields plus the startup-environment marker,
     /// read from one snapshot.
+    #[cfg(any(test, feature = "webui"))]
     #[must_use]
     pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
         // One read, so a publish cannot land between taking the stored set and
