@@ -50,7 +50,8 @@ To turn CLI capabilities off entirely, set `capabilities.process_execution: disa
   port can call tools until you remove it.
 - **Prompt injection is flagged, not removed.** The response firewall warns about injection text
   but delivers it. Withholding it needs context integrity at `team_shared` or the hardened
-  posture.
+  posture, and even then only the start and end of an answer over the 64 KiB threshold are
+  checked: injection text in its middle cannot by itself get the answer withheld.
 - **Configured backend URLs are trusted.** The SSRF guard does not re-check URLs you put in
   `backends:` unless you set `security.trust_configured_backends: false` or use the hardened
   posture.
