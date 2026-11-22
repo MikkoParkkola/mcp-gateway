@@ -117,6 +117,14 @@ fn r2d_a_repeated_row_is_written_as_often_as_it_is_missing() {
         Some("# key\tnote\nbeta\nbeta\n")
     );
     assert_eq!(check(root.path(), &want, true), None);
+    // One copy already pinned and two wanted: exactly the missing one is
+    // written, not the wanted count.
+    let root = tree(&["alpha", "beta"], None);
+    check(root.path(), &want, true).expect("the blessed run fails");
+    assert_eq!(
+        fragment(root.path()).as_deref(),
+        Some("# key\tnote\nbeta\n")
+    );
 }
 
 /// R2f: when the fragment cannot be written (the bless root is a plain file,
@@ -260,8 +268,10 @@ fn r7_only_the_live_tests_read_the_switch() {
                 let file = path.file_name().map(|n| n.to_string_lossy().into_owned());
                 let reader = matches!(
                     file.as_deref(),
-                    Some("allow_pins.rs" | "delivery_framing.rs" | "fragments.rs")
+                    Some("allow_pins.rs" | "delivery_framing.rs")
                 );
+                // fragments.rs only defines the reader: a call there (say, in
+                // delta_or_bless) would bypass the helpers' parameter.
                 let calls = text.lines().map(str::trim_start).any(|line| {
                     !line.starts_with("//")
                         && !line.contains("fn bless_ticket")

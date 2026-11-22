@@ -331,22 +331,21 @@ fn append_rows(base: &Path, path: &Path, rows: &[&str]) -> std::io::Result<()> {
 }
 
 /// Every fragment file of table `name` under `root`, by file name, with its
-/// bytes: what a row compares before and after a check.
+/// bytes: what a row compares before and after a check. Listed by
+/// [`fragment_files`], so a missing folder is no fragments and any other
+/// failure fails the row; an unreadable fragment fails it too, so a snapshot
+/// never stands in for a file it could not read.
 pub(super) fn fragment_bytes(root: &Path, name: &str) -> Vec<(String, Vec<u8>)> {
-    let dir = root.join(DIR).join(format!("{name}.d"));
-    let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    (name, std::fs::read(entry.path()).unwrap_or_default())
-                })
-                .collect()
+    let folder = root.join(DIR).join(format!("{name}.d"));
+    let listed = fragment_files(&folder).unwrap_or_else(|e| panic!("{e}"));
+    listed
+        .into_iter()
+        .map(|file| {
+            let held = std::fs::read(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+            (shown(&file), held)
         })
-        .unwrap_or_default();
-    files.sort();
-    files
+        .collect()
 }
 
 /// The live base text of table `name` in this checkout.
