@@ -86,10 +86,8 @@ src/gateway/router/view_judge.rs	admit_listener	via refuse (closure)	2	no-record
 src/gateway/server/account_bindings.rs	install_account_strategies	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/account_bindings.rs	install_account_strategies	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config (as value)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/construct.rs	construct	Error::Config(..)	1	no-record	start-up: building from a config path stops while a write is pending beside it, before any call
 src/gateway/server/construct.rs	new_evaluated_inner	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/construct.rs	new_with_env	Error::Config(..)	1	no-record	start-up: a construction from a config path refuses while a config-write artifact is beside the config; no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
@@ -102,6 +100,9 @@ src/gateway/server/run_steps.rs	start_key_server	Error::Config(..)	1	no-record	s
 src/gateway/server/run_wiring.rs	open_tasks	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run_wiring.rs	open_tasks	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run_wiring.rs	refuse_or_warn_before_bind	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/serving_audit.rs	open	Error::Config(..)	1	no-record	start-up: the serving audit log cannot open, so nothing serves and no call exists
+src/gateway/server/serving_audit.rs	open	Error::Config(..)	2	no-record	start-up: the serving audit log cannot open, so nothing serves and no call exists
+src/gateway/server/serving_audit.rs	open_and_settle	Error::Config(..)	1	no-record	start-up: the served start refuses to settle a pending write, before any call
 src/gateway/server/start_checks.rs	clock	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	http	Error::Config (as value)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/start_checks.rs	http	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
