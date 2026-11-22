@@ -277,4 +277,12 @@ async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
         progress_of(&frames_task).is_empty(),
         "the task call's creating response carries no progress: {frames_task:?}"
     );
+
+    // The task's last record is written after the peer answers it, which can be
+    // after this body ends; let it land before the store directory drops.
+    let task_id = frames_task
+        .iter()
+        .find_map(|frame| frame.pointer("/result/taskId").and_then(Value::as_str))
+        .unwrap_or_else(|| panic!("the creating response carries no taskId: {frames_task:?}"));
+    common::settle_tasks(&state, &[task_id]).await;
 }

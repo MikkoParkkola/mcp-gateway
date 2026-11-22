@@ -177,9 +177,15 @@ pub(super) fn spawn_cost_saver(
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_periodic_save("cost save", every, shutdown, move || {
-        save_costs_unless_busy(&enforcer, &data_dir);
-    })
+    spawn_periodic_save(
+        "cost save",
+        every,
+        shutdown,
+        Some(data_dir.clone()),
+        move || {
+            save_costs_unless_busy(&enforcer, &data_dir);
+        },
+    )
 }
 
 /// Run `save` every `every` until `shutdown` fires, or until the returned
@@ -192,16 +198,33 @@ pub(super) fn spawn_cost_saver(
 /// blocking pool, the runtime's drop (MIK-8157). `save` keeps at most one
 /// write in flight itself (a busy guard), so a slow write skips ticks rather
 /// than piling up threads.
+///
+/// `root` is the file or dir the save writes (none for a saver that writes
+/// nothing): a test's temp dir holding it is kept by the saver for its whole
+/// life, and by each tick's thread until that save returns.
 pub(super) fn spawn_periodic_save(
     name: &'static str,
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    root: Option<PathBuf>,
     save: impl Fn() + Send + Sync + 'static,
 ) -> tokio::task::JoinHandle<()> {
     let save = Arc::new(save);
+    #[cfg(test)]
+    let seams = periodic_seams_for(root.as_deref());
+    // Taken and reported once, here, before the loop: an unkept saver prints
+    // one line, not one per tick. The saver holds it between ticks, so a test
+    // that dropped its share cannot lose the dir before the next tick writes.
+    let kept = root
+        .map(|root| crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PERIODIC_SAVE, &root))
+        .unwrap_or_default();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
         interval.tick().await;
+        #[cfg(test)]
+        if let Some(seams) = &seams {
+            seams.loop_started.notify_one();
+        }
         let stopped = async move {
             match shutdown {
                 Some(mut rx) => drop(rx.recv().await),
@@ -213,17 +236,75 @@ pub(super) fn spawn_periodic_save(
             tokio::select! {
                 _ = interval.tick() => {
                     let save = Arc::clone(&save);
+                    // The tick's thread holds its own clone to its end, past
+                    // a saver that was aborted meanwhile.
+                    let kept = kept.clone();
+                    #[cfg(test)]
+                    let gate = seams.clone();
                     let spawned = std::thread::Builder::new()
                         .name(name.to_owned())
-                        .spawn(move || save());
-                    if let Err(error) = spawned {
-                        warn!(%error, saver = name, "periodic save could not start a thread; skipped");
+                        .spawn(move || {
+                            #[cfg(test)]
+                            if let Some(gate) = gate {
+                                gate.pre_save.pause_on_thread();
+                            }
+                            crate::spawn_keep::holding(kept, || save());
+                        });
+                    match spawned {
+                        Ok(_) => {
+                            #[cfg(test)]
+                            if let Some(seams) = &seams {
+                                seams.writer_spawned.notify_one();
+                            }
+                        }
+                        Err(error) => {
+                            warn!(%error, saver = name, "periodic save could not start a thread; skipped");
+                        }
                     }
                 }
                 () = &mut stopped => break,
             }
         }
     })
+}
+
+/// Test-only signals and a gate for one periodic saver, found by its root
+/// (K8, K11b), so parallel rows each reach their own saver, through any
+/// caller's wiring.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct PeriodicSeams {
+    /// Sent once the loop has consumed the interval's first tick.
+    pub(super) loop_started: tokio::sync::Notify,
+    /// Sent right after a tick's save thread is spawned.
+    pub(super) writer_spawned: tokio::sync::Notify,
+    /// Holds a tick's save thread before the save runs (one-shot).
+    pub(super) pre_save: crate::test_pause::Slot,
+}
+
+/// The seams each row registered, by the root its saver writes.
+#[cfg(test)]
+static PERIODIC_SEAMS: parking_lot::Mutex<Vec<(PathBuf, Arc<PeriodicSeams>)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Register seams for the periodic saver that writes `root`.
+#[cfg(test)]
+pub(super) fn periodic_seams(root: &Path) -> Arc<PeriodicSeams> {
+    let seams = Arc::new(PeriodicSeams::default());
+    PERIODIC_SEAMS
+        .lock()
+        .push((root.to_path_buf(), Arc::clone(&seams)));
+    seams
+}
+
+#[cfg(test)]
+fn periodic_seams_for(root: Option<&Path>) -> Option<Arc<PeriodicSeams>> {
+    let root = root?;
+    PERIODIC_SEAMS
+        .lock()
+        .iter()
+        .find(|(registered, _)| registered == root)
+        .map(|(_, seams)| Arc::clone(seams))
 }
 
 impl super::Gateway {
@@ -459,6 +540,11 @@ mod tests;
 #[cfg(test)]
 #[path = "shutdown_keep_tests.rs"]
 mod shutdown_keep_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "periodic_keep_tests.rs"]
+mod periodic_keep_tests;
 
 // Stays inline: its timing windows are checked as new code at any new path.
 #[cfg(tp4)]
