@@ -7,13 +7,15 @@
 //
 // An entry:
 //   id        the sidebar page id
-//   states    [{ name, action, act?, step(page, tools?) }]: step mocks the API and
+//   states    [{ name, action, act?, trap?, step(page, data?) }]: step mocks the API and
 //             drives the page until the state is settled; `action` names the
 //             state's main motion (G4) and `act`, when present, performs it after
-//             the step. A step takes its tool list as an argument, so a frame can
-//             pass the list its picture was drawn with.
+//             the step. `trap(page)`, for a state that opens a modal surface, is
+//             that surface's locator: the keyboard walk must stay inside it. A step
+//             takes its fixture (`data`) as an argument with a small default, so a
+//             frame can pass the data its picture was drawn with.
 //   journeys  [{ name, step(page) }]: starts at the sidebar, ends on an asserted outcome
-//   frames    [{ file, width, height, scheme, state, tools?, regions, masks }]:
+//   frames    [{ file, width, height, scheme, state, data?, regions, masks }]:
 //             regions as [name, x, y, w, h, ceiling?, cause?]; masks as
 //             [x, y, w, h], painted one colour on both images and left out of the ratio
 import { expect } from './base.mjs';
@@ -95,6 +97,142 @@ function frame48sTools() {
   return [...drawn, ...rest];
 }
 
+// ---- Try a tool (Tools › Actions) ----
+
+const tryTool = (name, cls, schema = {}) => ({
+  name, server: 'maps', description: `The ${name} tool`, class: cls, class_source: 'declared', schema,
+});
+
+// Listed in this order: Try keeps the API's order and starts on the first.
+const TRY_TOOLS = [
+  tryTool('atlas.lookup', 'read', { type: 'object', properties: {
+    place: { type: 'string', description: 'Where to look' }, limit: { type: 'integer', default: 3 },
+  } }),
+  tryTool('atlas.nearby', 'read'),
+  tryTool('atlas.pin', 'write'),
+];
+
+const ranText = (ms, text) => ({ json: { disposition: 'ran', latency_ms: ms, result: { content: [{ type: 'text', text }] } } });
+const refusal = (status, error, message, disposition) => ({
+  status, json: disposition ? { error, message, disposition } : { error, message },
+});
+
+// The ten answer kinds Try draws, a closed list (design section 4): name -> the call's
+// reply and the first line the panel must show for it.
+const ANSWER_KINDS = {
+  ran: [ranText(64, 'Two places found'), 'Answered in 64 ms'],
+  'is-error': [{ json: { ...ranText(64, 'lookup service down').json, is_error: true } }, 'The tool answered with an error'],
+  blocked: [refusal(403, 'refused', 'a rule stopped this call', 'not_run'), 'Blocked'],
+  'bad-request': [refusal(400, 'bad_request', 'limit is not a number'), 'Not run'],
+  missing: [refusal(404, 'not_found', 'that tool is gone'), 'Not run'],
+  failed: [refusal(500, 'failed', 'the call broke after it left', 'may_have_run'), 'The tool may have run'],
+  deadline: [refusal(504, 'deadline', 'no answer in time', 'may_have_run'), 'Timed out; the tool may still be running'],
+  'audit-not-run': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'not_run'), 'Not run'],
+  'audit-may': [refusal(503, 'audit_unavailable', 'the audit log is unavailable', 'may_have_run'), 'The tool may have run'],
+  'no-answer': [{ abort: true }, 'No answer from the gateway; the tool may have run'],
+};
+
+const tryPanel = (page) => page.locator('section.tools-try');
+const tryAnswer = (page) => page.locator('.tools-try-answer');
+const runButton = (page, name) => page.getByRole('button', { name: `Run ${name}`, exact: true });
+
+/**
+ * Open Tools › Actions with `data` = { tools, pick?, fill?, reply?, receipt? }:
+ * pick names the tool to choose, fill maps field labels to values, reply answers the
+ * call ({ status?, json } or { abort: true }), and receipt = { account, results? }
+ * makes the call findable in Activity as row "row-7". `via` is 'address' (go straight
+ * to the tab) or 'sidebar' (start on Overview, then Tools in the sidebar, then Actions).
+ */
+async function openTry(page, data, via = 'address') {
+  await serveTools(page, data.tools);
+  const calls = [];
+  await page.route('**/ui/api/tools/call', async (route) => {
+    calls.push(route.request().postDataJSON());
+    const reply = data.reply ?? ANSWER_KINDS.ran[0];
+    if (reply.abort) return route.abort('failed');
+    const json = data.receipt ? { ...reply.json, receipt: 'trace-7' } : reply.json;
+    return route.fulfill({ status: reply.status ?? 200, json });
+  });
+  if (data.receipt) {
+    await page.route('**/ui/api/activity**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('q') === 'trace-7') {
+        return route.fulfill({ json: { rows: [{ id: 'row-7', trace_id: 'trace-7', who: { account: data.receipt.account } }] } });
+      }
+      return route.fulfill({ json: { answer: { records: [{ findings_listed: 0 }] } } });
+    });
+  }
+  if (via === 'sidebar') {
+    await page.goto('/ui/overview/status');
+    await settled(page);
+    await page.locator('nav.route-nav').getByRole('link', { name: 'Tools', exact: true }).click();
+    await expect(page).toHaveURL('/ui/tools/status');
+    await page.getByRole('link', { name: 'Actions', exact: true }).click();
+    await expect(page).toHaveURL('/ui/tools/actions');
+  } else {
+    await page.goto('/ui/tools/actions');
+  }
+  const name = data.pick ?? data.tools[0].name;
+  if (data.pick) await page.getByLabel('Tool', { exact: true }).selectOption({ label: optionLabel(data.tools, name) });
+  for (const [label, value] of Object.entries(data.fill ?? {})) await page.getByLabel(label, { exact: true }).fill(value);
+  await expect(runButton(page, name)).toBeVisible();
+  return { name, calls };
+}
+
+/** The picker's label for a tool, as Try writes it: name, server, and what it may do. */
+function optionLabel(tools, name) {
+  const t = tools.find((x) => x.name === name);
+  return `${t.name} ${t.server} · ${t.class === 'read' ? 'reads only' : 'writes'}`;
+}
+
+/** Run the picked tool and wait for the answer's first line. */
+async function runAndAnswer(page, data, headline) {
+  const { name } = await openTry(page, data);
+  await runButton(page, name).click();
+  await expect(tryAnswer(page).locator('p').first()).toHaveText(headline);
+  if (data.receipt) await expect(tryAnswer(page)).toContainText(`Recorded in Activity as a call by ${data.receipt.account}`);
+  await settled(page);
+}
+
+const answeredStates = Object.entries(ANSWER_KINDS).map(([kind, [reply, headline]]) => ({
+  name: `try-answered-${kind}`,
+  action: 'Run',
+  async step(page, data = { tools: TRY_TOOLS, reply }) {
+    await runAndAnswer(page, data, kind === 'ran' && data.headline ? data.headline : headline);
+  },
+}));
+
+/** Frame 48: web.search first, the frame's query and answer, recorded by mikko; 1,284 tools on 28 servers. */
+function frame48Data() {
+  const search = tryTool('web.search', 'read', { type: 'object', properties: {
+    query: { type: 'string' }, max_results: { type: 'integer', default: 5 },
+  } });
+  const rest = Array.from({ length: 1283 }, (_, i) => ({ ...tryTool(`zz_try_${i}`, 'read'), server: `zz_group_${i % 27}` }));
+  return {
+    tools: [{ ...search, server: 'Search and web' }, ...rest],
+    fill: { query: 'mcp gateway prompt injection' },
+    reply: ranText(212, '[{"title": "Prompt injection in tool answers", "url": "https://…"},\n'
+      + ' {"title": "Securing MCP servers behind a gateway", "url": "https://…"}, …]'),
+    receipt: { account: 'mikko' },
+    headline: 'Answered in 212 ms',
+  };
+}
+
+/** Frame 48f: filesystem.list_dir first, path ~/Documents, recorded by "you"; 39 tools on 3 servers. */
+function frame48fData() {
+  const list = tryTool('filesystem.list_dir', 'read', { type: 'object', properties: {
+    path: { type: 'string' }, depth: { type: 'integer', default: 1 },
+  } });
+  const rest = Array.from({ length: 38 }, (_, i) => ({ ...tryTool(`zz_first_${i}`, 'read'), server: ['Developer tools', 'Productivity', 'Search and web'][i % 3] }));
+  return {
+    tools: [{ ...list, server: 'Developer tools' }, ...rest],
+    fill: { path: '~/Documents' },
+    reply: ranText(18, '["Invoices/", "Notes/", "plan.md", …]'),
+    receipt: { account: 'you' },
+    headline: 'Answered in 18 ms',
+  };
+}
+
 const mostCalledRows = (page) => page.getByRole('region', { name: 'Most called tools', exact: true }).locator('tbody tr');
 
 export const SCREENS = [
@@ -121,6 +259,38 @@ export const SCREENS = [
           await toggle.click();
           await expect(toggle).toHaveAttribute('aria-expanded', 'true');
           await settled(page);
+        },
+      },
+      {
+        name: 'try-form',
+        action: 'picking another tool',
+        async step(page, data = { tools: TRY_TOOLS }) {
+          await openTry(page, data);
+          await settled(page);
+        },
+        async act(page) {
+          await page.getByLabel('Tool', { exact: true }).selectOption({ label: optionLabel(TRY_TOOLS, 'atlas.nearby') });
+          await expect(runButton(page, 'atlas.nearby')).toBeVisible();
+        },
+      },
+      ...answeredStates,
+      {
+        name: 'try-confirm',
+        action: 'opening the confirm',
+        trap: (page) => page.locator('dialog.confirm'),
+        async step(page, data = { tools: TRY_TOOLS, pick: 'atlas.pin' }) {
+          const { name } = await openTry(page, data);
+          await runButton(page, name).click();
+          await expect(page.locator('dialog.confirm')).toBeVisible();
+          await settled(page);
+        },
+      },
+      {
+        // No key exists yet: the call is recorded as made by "you" (the one-time sign-in link).
+        name: 'try-first-run',
+        action: 'Run',
+        async step(page, data = { tools: TRY_TOOLS, fill: { place: 'harbour' }, receipt: { account: 'you' } }) {
+          await runAndAnswer(page, data, data.headline ?? 'Answered in 64 ms');
         },
       },
     ],
@@ -154,10 +324,37 @@ export const SCREENS = [
           await expect(mostCalledRows(page)).toHaveCount(10);
         },
       },
+      {
+        // The sidebar, Actions, a read tool run, its answer, and where Activity will show it.
+        name: 'J-try',
+        async step(page) {
+          await openTry(page, {
+            tools: TRY_TOOLS, pick: 'atlas.nearby', reply: ranText(41, 'one cafe nearby'), receipt: { account: 'mikko' },
+          }, 'sidebar');
+          await runButton(page, 'atlas.nearby').click();
+          await expect(tryAnswer(page).locator('p').first()).toHaveText('Answered in 41 ms');
+          await expect(tryAnswer(page).locator('pre')).toHaveText('one cafe nearby');
+          await expect(tryAnswer(page).getByRole('link', { name: 'Open', exact: true })).toHaveAttribute('href', '/ui/activity/row-7/status');
+        },
+      },
+      {
+        // A write tool asks first; Cancel sends nothing and gives focus back to Run.
+        name: 'J-try-write',
+        async step(page) {
+          const { calls } = await openTry(page, { tools: TRY_TOOLS, pick: 'atlas.pin' }, 'sidebar');
+          await runButton(page, 'atlas.pin').click();
+          const confirm = page.locator('dialog.confirm');
+          await expect(confirm).toBeVisible();
+          await confirm.getByRole('button', { name: 'Cancel atlas.pin', exact: true }).click();
+          await expect(confirm).toHaveCount(0);
+          await expect(runButton(page, 'atlas.pin')).toBeFocused();
+          expect(calls).toEqual([]);
+        },
+      },
     ],
     frames: [
       {
-        file: '48s-tools-status.png', width: 1440, height: 1000, scheme: 'dark', state: 'most-called', tools: frame48sTools(),
+        file: '48s-tools-status.png', width: 1440, height: 1000, scheme: 'dark', state: 'most-called', data: frame48sTools(),
         regions: [
           ['toolbar', 256, 200, 1160, 50, 0.105, 'the search box is drawn 640 px wide where the frame has 320'],
           // Measured 4.96% masked and 5.79% with the mask removed, so the ceiling catches a lost mask.
@@ -170,7 +367,7 @@ export const SCREENS = [
       {
         file: '48q-tools-status-search-results.png', width: 1440, height: 900, scheme: 'dark', state: 'catalogue-open-row',
         // The catalogue step opens the row marked `open`; the frame draws filesystem.list_dir open.
-        tools: frameTools().map((t) => (t.name === 'filesystem.list_dir' ? { ...t, open: true } : t)),
+        data: frameTools().map((t) => (t.name === 'filesystem.list_dir' ? { ...t, open: true } : t)),
         regions: [
           ['toolbar', 256, 200, 760, 52, 0.15, 'the server filter is a native select where the frame draws a button; '
             + 'the page search shows no ⌘K hint, since ⌘K belongs to the palette'],
@@ -178,6 +375,22 @@ export const SCREENS = [
             + 'an Open link and the class after "Input schema"; a count line stands where the frame has a scroll footer'],
         ],
         // The fixture reproduces every number the frame shows, so nothing is masked.
+        masks: [],
+      },
+      {
+        file: '48-tools-actions-try.png', width: 1440, height: 1000, scheme: 'dark', state: 'try-answered-ran', data: frame48Data(),
+        regions: [['try panel', 256, 205, 880, 470, 0.065, 'labels sit above their fields where the frame sets a '
+          + 'two-column grid; no Run as row (cut 2026-11-15); the tool choice is a native select; the answer heading is a '
+          + 'plain line, not a capitals header with a check mark; the counts line says "1 results" under the receipt']],
+        // The fixture shows the frame's own numbers (212 ms, mikko), so nothing needs masking.
+        masks: [],
+      },
+      {
+        file: '48f-tools-actions-try-first-run.png', width: 1440, height: 1000, scheme: 'dark', state: 'try-first-run', data: frame48fData(),
+        regions: [['try panel', 256, 205, 880, 490, 0.057, 'labels sit above their fields where the frame sets a '
+          + 'two-column grid; no Run as row, so no one-time-link line (cut 2026-11-15); the answer heading is a plain line; '
+          + 'the counts line says "1 results" where the frame says "14 entries"; Connect a client is a link, not a Step 3 button']],
+        // The fixture shows the frame's own numbers (18 ms, "you"), so nothing needs masking.
         masks: [],
       },
     ],

@@ -75,21 +75,40 @@ async function axeFaults(page, state, { width, theme, plant }) {
 
 const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
 
-/** Tab through the page a few presses past its control count; return the controls never focused. */
+/**
+ * Tab through the page a few presses past its control count; return what went wrong: the
+ * controls never focused, or (for a state with a trap) the first press that left the trap.
+ * In a trap only its own controls count, and the walk crosses both ends: Tab past the
+ * last control, then Shift+Tab past the first.
+ */
 async function unreachedControls(page, state, { width, plant }) {
   await page.setViewportSize({ width, height: 900 });
   await state.step(page);
   if (plant) await plant(page);
-  const count = await page.evaluate((sel) => [...document.querySelectorAll(sel)]
-    .filter((el) => el.checkVisibility() && !el.disabled).length, FOCUSABLE);
+  const trap = state.trap?.(page);
+  if (trap) await expect(trap, 'the trap is on screen at this width').toBeVisible();
+  const root = trap ? await trap.elementHandle() : null;
+  const count = await page.evaluate(([sel, scope]) => [...(scope ?? document).querySelectorAll(sel)]
+    .filter((el) => el.checkVisibility() && !el.disabled).length, [FOCUSABLE, root]);
   expect(count, 'the state has controls to reach').toBeGreaterThan(0);
-  for (let i = 0; i < count + 3; i += 1) {
-    await page.keyboard.press('Tab');
-    await page.evaluate(() => document.activeElement?.setAttribute('data-g2b-reached', ''));
+  const keys = Array(count + 3).fill('Tab');
+  if (trap) keys.push(...Array(count + 3).fill('Shift+Tab'));
+  for (const [i, key] of keys.entries()) {
+    await page.keyboard.press(key);
+    // Past either end of a native modal, the browser's own controls take focus and the page
+    // reports none (the body). That is not the page behind, which stays inert; a leak is
+    // focus on a page element outside the trap.
+    const inside = await page.evaluate((scope) => {
+      const el = document.activeElement;
+      el?.setAttribute('data-g2b-reached', '');
+      return !scope || !el || el === document.body || scope.contains(el);
+    }, root);
+    if (!inside) return [`press ${i + 1} (${key}) moved focus out of the trap`];
   }
-  return page.evaluate((sel) => [...document.querySelectorAll(sel)]
+  if (trap) await expect(trap, 'the trap is still open after the walk').toBeVisible();
+  return page.evaluate(([sel, scope]) => [...(scope ?? document).querySelectorAll(sel)]
     .filter((el) => el.checkVisibility() && !el.disabled && !el.hasAttribute('data-g2b-reached'))
-    .map((el) => el.outerHTML.slice(0, 80)), FOCUSABLE);
+    .map((el) => el.outerHTML.slice(0, 80)), [FOCUSABLE, root]);
 }
 
 // ---- G4: record every animation as it starts, then judge them all. ----
@@ -269,6 +288,28 @@ test('G2b plant: a button taken out of the Tab order is reported', async ({ page
     });
   } });
   expect(missed).toEqual(['<button tabindex="-1">Out of reach</button>']);
+});
+
+test('G2b plant: a confirm that lets Tab out to the page behind is reported', async ({ page }) => {
+  const confirmState = tools.states.find((s) => s.name === 'try-confirm');
+  const missed = await unreachedControls(page, confirmState, { width: 1440, plant: async (p) => {
+    // Tab past the confirm's last button hands focus to a control outside it (a second
+    // dialog, opened on top, takes it). Every confirm control stays reachable first.
+    await p.evaluate(() => {
+      const buttons = document.querySelectorAll('dialog.confirm button');
+      buttons[buttons.length - 1].addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Tab' || ev.shiftKey) return;
+        ev.preventDefault();
+        const other = document.createElement('dialog');
+        other.append(Object.assign(document.createElement('button'), { textContent: 'Elsewhere' }));
+        document.body.append(other);
+        other.showModal();
+      });
+      buttons[0].focus();
+    });
+  } });
+  expect(missed).toHaveLength(1);
+  expect(missed[0]).toMatch(/^press \d+ \((Tab|Shift\+Tab)\) moved focus out of the trap$/);
 });
 
 test('G3 plant: a journey whose outcome text is wrong fails', async ({ page }) => {

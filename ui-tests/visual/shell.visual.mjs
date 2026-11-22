@@ -112,7 +112,7 @@ test.describe('frames', () => {
         expect(FRAMES).toBeTruthy();
         await page.setViewportSize({ width: f.width, height: f.height });
         await page.emulateMedia({ colorScheme: f.scheme });
-        await screen.states.find((s) => s.name === f.state).step(page, f.tools);
+        await screen.states.find((s) => s.name === f.state).step(page, f.data);
         // The frames draw no focus ring.
         await page.evaluate(() => document.activeElement?.blur());
         await compareWithFrame(page, f.file, f.regions, f.masks);
