@@ -2119,10 +2119,7 @@ async function newCapability() {
     const template = await t.text();
     const nameLine = /^name:.*$/m;
     if (!nameLine.test(template)) throw new Error('the template has no name line to set');
-    // Quoted, so YAML reads "true", "null" or "123" as the name, not a
-    // boolean, a null or a number. A JSON string is a valid YAML
-    // double-quoted scalar, every quote and backslash escaped.
-    const yaml = template.replace(nameLine, `name: ${JSON.stringify(name)}`);
+    const yaml = template.replace(nameLine, `name: ${name}`);
     const r = await uiFetch('/ui/api/capabilities', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },

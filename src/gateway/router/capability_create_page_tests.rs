@@ -305,8 +305,10 @@ async fn cr7_the_page_holds_the_routes_name_length_limit() {
     assert_eq!(got["sent"], serde_json::json!([]), "{got}");
 }
 
-/// CR8: names YAML would read as another type unquoted (a boolean, a null, a
-/// number) are written as strings, so each creates a capability by that name.
+/// CR8 (a pin): names YAML could read as another type (a boolean, a null, a
+/// number) each create a capability by that name; the loader reads the bare
+/// scalar into the string field, so this passes with the name unquoted and
+/// stands as a pin, not a red row.
 #[tokio::test]
 async fn cr8_names_yaml_would_read_as_another_type_create_by_that_name() {
     let fx = fixture(&capability(CANARY_BEFORE), AuditFailurePolicy::FailClosed).await;
