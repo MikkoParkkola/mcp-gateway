@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/keys_revoke.rs	revoke_response	keyedit_refusal	1	no-record	admin UI key revoke: answers the not_written refusal with the in-place editor's cause, reason and the config file's path, plus its hand-edit steps when they apply; no call delivery
