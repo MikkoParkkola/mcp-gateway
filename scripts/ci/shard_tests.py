@@ -758,6 +758,7 @@ def self_test() -> int:
     with_home_rows()
     export_home_rows()
     home_copies_rows()
+    windows_shared_rows()
     print("shard_tests self-test: ok")
     return 0
 
@@ -1052,6 +1053,71 @@ def prebuilt_rows() -> None:
             f.write("#!/bin/sh\necho '   Compiling x'\n")
         os.chmod(cargo_none, 0o755)
         assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
+
+
+def windows_shared_rows() -> None:
+    """Windows lib legs run from one exported exe: the four-leg table, the run-prebuilt route, the .exe name and
+    its recorded build root, a pairwise overlap check, and no test run once the partition check has failed."""
+    # The four legs and the filters each one runs (cascade form: each skips the filters before it).
+    want = {
+        "lib-a": ["gateway::router::", "gateway::server::"],
+        "lib-d": ["gateway::", "--skip", "gateway::router::", "--skip", "gateway::server::"],
+        "lib-c": ["security::", "--skip", "gateway::router::", "--skip", "gateway::server::", "--skip", "gateway::"],
+        "lib-b": ["--skip", "gateway::router::", "--skip", "gateway::server::", "--skip", "gateway::",
+                  "--skip", "security::"],
+    }
+    libs = {leg: steps[0][2] for leg, steps in SHARDS["windows"].items() if steps[0][1] == ["--lib"]}
+    assert libs == want, f"Windows lib legs are not the four-leg cut: {sorted(libs)}"
+    assert set(SHARED_BUILD.get("windows", ())) == set(want), "every Windows lib leg runs from the shared exe"
+    # Overlap is pairwise: a name two of three legs list is caught even though no name is in all three.
+    saved_listed = globals()["listed"]
+    picks = {(): {"t1", "t2", "t3"}}
+    try:
+        def fake_listed(_binary, args, _os_kind):
+            return picks.get(tuple(args), set())
+        globals()["listed"] = fake_listed
+        saved_win = SHARDS["windows"]
+        SHARDS["windows"] = {"x": [("suite", ["--lib"], ["x"], 1)], "y": [("suite", ["--lib"], ["y"], 1)],
+                             "z": [("suite", ["--lib"], ["z"], 1)]}
+        picks.update({("x",): {"t1"}, ("y",): {"t1", "t2"}, ("z",): {"t3"}})
+        found = union_problems("fake", "windows")
+        assert found and "both" in found[0] and "t1" in found[0], f"a test in two of three legs passed: {found}"
+    finally:
+        globals()["listed"] = saved_listed
+        SHARDS["windows"] = saved_win
+    with tempfile.TemporaryDirectory() as root:
+        art = {"reason": "compiler-artifact", "target": {"kind": ["lib"], "name": "mcp_gateway"},
+               "profile": {"test": True}, "executable": os.path.join(root, "built.exe")}
+        with open(art["executable"], "w") as f:
+            f.write("exe")
+        cargo = os.path.join(root, "cargo")
+        with open(cargo, "w") as f:
+            f.write(f"#!/bin/sh\necho '{json.dumps(art)}'\n")
+        os.chmod(cargo, 0o755)
+        dest = os.path.join(root, "out")
+        assert export_lib(dest, (cargo,), os_name="nt") == 0
+        exe = os.path.join(dest, LIB_BINARY + ".exe")
+        assert open(exe).read() == "exe", "export-lib on Windows did not write lib-tests.exe"
+        assert open(exe + ".root").read().strip() == ROOT, "export-lib did not record the root it built in"
+        # A leg runs only from an exe built in its own checkout: a missing or different root is refused
+        # before the exe runs (it would exit 9 if run).
+        fake = os.path.join(root, "leg-exe")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\nexit 9\n")
+        os.chmod(fake, 0o755)
+        assert run_prebuilt("windows", "lib-a", fake) == 1, "an exe with no recorded root ran"
+        with open(fake + ".root", "w") as f:
+            f.write("/somewhere/else\n")
+        assert run_prebuilt("windows", "lib-a", fake) == 1, "an exe built under another root ran"
+        # A failed partition check stops the leg before any test runs (the exe marks a run).
+        ran = os.path.join(root, "ran")
+        with open(fake, "w") as f:
+            f.write(f'#!/bin/sh\nif [ "$1" = --list ]; then echo "only::one: test"; exit 0; fi\ntouch {ran}\n')
+        with open(fake + ".root", "w") as f:
+            f.write(ROOT + "\n")
+        assert run_prebuilt("windows", "lib-a", fake) == 1 and not os.path.exists(ran), \
+            "a leg ran its tests after the partition check failed"
+    assert main(["shard_tests.py", "run-prebuilt", "windows", "int-a", "x"]) == 2, "a Windows int leg ran prebuilt"
 
 
 def parts_rows() -> None:
