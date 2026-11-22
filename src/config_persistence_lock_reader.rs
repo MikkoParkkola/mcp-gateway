@@ -79,7 +79,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
         Ok(locked) => {
             // The lock moves into the worker and back, so a cancelled caller never leaves a
             // recovery running unlocked.
-            let checked = off_runtime(move || {
+            let checked = off_runtime(Some(config), move || {
                 if let Some(why) = artifact_blocks(&locked.target) {
                     return Err(why.to_owned());
                 }
