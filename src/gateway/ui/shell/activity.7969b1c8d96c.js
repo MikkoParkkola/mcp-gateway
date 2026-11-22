@@ -334,15 +334,27 @@ async function statusTab(body, ctx) {
     readOn();
   }
 
-  // The automatic next page: asked when the list end is in view, measured now, after the
-  // rows are drawn. A failed next page waits for its Retry instead.
-  // A reading taken after a draw waits for a live refresh that is out, so a short list
-  // does not abort its own trailing refresh; the operator scrolling to the end still does.
+  // The automatic next page, asked when the list end is in view (measured after each draw);
+  // a failed next page waits for its Retry instead. A reading that finds a live refresh out
+  // waits for that one refresh, so its rows land first. The reading after it goes ahead even
+  // when a newer refresh has started meanwhile, so a busy gateway cannot starve paging.
+  // The operator scrolling the end into view reads on at once. The observer also fires when
+  // a draw moves the end into view; that is no scroll, so a wait already set stands.
+  let waitedOn = null;
   function readOn(scrolled = false) {
-    if (left || !list.cursor || list.flight?.kind === 'append' || list.notices.includes('next-retry')) return;
-    if (!scrolled && list.flight?.kind === 'live') return;
-    const at = sentinel.getBoundingClientRect();
-    if (at.bottom >= 0 && at.top <= innerHeight) step('next');
+    const prior = waitedOn;
+    waitedOn = null;
+    if (left || !list.cursor) return;
+    const out = list.flight;
+    if (out?.kind === 'append' || list.notices.includes('next-retry')) return;
+    const box = sentinel.getBoundingClientRect();
+    if (box.bottom < 0 || box.top > innerHeight) return;
+    const live = out?.kind === 'live' ? out.handle : null;
+    if (live && (prior ? prior === live : !scrolled)) {
+      waitedOn = live;
+      return;
+    }
+    step('next');
   }
 
   function commit() {

@@ -853,6 +853,41 @@ test.describe('LE list screen', () => {
     await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 trailing: then page 2');
   });
 
+  test('LE5 on a busy gateway a short page 1 reads on after one live refresh', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    const p1 = await screen.request(0, 'LE5 busy: page 1');
+    await stream.send(activityFrame(callRow('a.live1')));
+    await p1.answer({ rows: rowsOf('a', 1), next_cursor: 'c2' });
+    const first = await screen.request(1, 'LE5 busy: the first live refresh');
+    // One more frame while it is out, so another refresh starts the moment it lands.
+    await stream.send(activityFrame(callRow('a.live2')));
+    await screen.quiet(2, 'LE5 busy: waiting on the first refresh');
+    const fresh = rowsOf('b', 1);
+    await first.answer({ rows: fresh, next_cursor: 'c2' });
+    await expect.poll(() => screen.texts(), { message: 'LE5 busy: the first refresh lands' }).toEqual(fresh.map(textOf));
+    // The second refresh stays unanswered: page 2 must not wait for it.
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 busy: page 2 without a second wait');
+  });
+
+  test('LE5 a refresh that shortens the list lets its trailing refresh land', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE5 shorten: page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+    await stream.send(activityFrame(callRow('a.live1')));
+    const first = await screen.request(1, 'LE5 shorten: the first live refresh');
+    await stream.send(activityFrame(callRow('a.live2')));
+    // A one-page answer: the list end comes into view by layout alone, nobody scrolls.
+    await first.answer({ rows: rowsOf('b', 1), next_cursor: 'c2' });
+    const second = await screen.request(2, 'LE5 shorten: the trailing refresh');
+    await screen.quiet(3, 'LE5 shorten: no next page while it is out');
+    expect(screen.failed.has(second.href), 'LE5 shorten: the trailing refresh is not aborted').toBe(false);
+    const fresh = rowsOf('c', 1);
+    await second.answer({ rows: fresh, next_cursor: 'c2' });
+    await expect.poll(() => screen.texts(), { message: 'LE5 shorten: the trailing refresh lands' }).toEqual(fresh.map(textOf));
+    await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 shorten: then page 2');
+  });
+
   test('LE5 the next-page retry asks again with the list end out of view', async ({ page, request }, testInfo) => {
     const { screen, stream } = await screenFor(page, request, testInfo);
     await screen.open(stream);
