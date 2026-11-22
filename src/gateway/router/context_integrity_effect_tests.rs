@@ -191,6 +191,38 @@ async fn team_shared_withholds_guarded_material_on_both_routes() {
     }
 }
 
+/// A clean payload whose round type carries the instruction: the rebuild would send it on.
+fn carried_instruction() -> Value {
+    json!({ "content": [{ "type": "text", "text": CLEAN }], "resultType": INJECTED })
+}
+
+/// The scan of the answer as sent turns the rewrite into a withhold: on the direct route and the
+/// meta route, under Summarize and Strip, nothing of the instruction is delivered, the verdict is
+/// still attached, and the record says refused, not rewritten.
+#[tokio::test]
+async fn a_carried_instruction_turns_the_rewrite_into_a_refusal() {
+    for route in [HttpRoute::Direct, HttpRoute::Mcp] {
+        for answer_with in [
+            ContextIntegrityDecisionKind::Summarize,
+            ContextIntegrityDecisionKind::Strip,
+        ] {
+            let policy = rewriting(answer_with);
+            let (body, row) =
+                Box::pin(recorded(route, Answer::Built(carried_instruction), policy)).await;
+            let case = format!("{route:?} under {answer_with:?}");
+            assert!(
+                !delivered_text(&body).contains(INSTRUCTION),
+                "{case}: nothing of it is delivered: {body}"
+            );
+            assert!(
+                body.to_string().contains("_context_integrity"),
+                "{case}: the verdict is attached: {body}"
+            );
+            assert_eq!(row["response_effect"], "refused", "{case}: {row}");
+        }
+    }
+}
+
 /// One keyed `read` (`r1`) on `route`.
 async fn keyed_read(fx: &fixture::Fx, route: HttpRoute) -> Value {
     match route {
