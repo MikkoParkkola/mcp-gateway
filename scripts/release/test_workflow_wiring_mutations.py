@@ -118,6 +118,11 @@ def _mutate(span, *edits):
     return span, out
 
 
+def _mutate_step(span, step, *edits):
+    """_mutate over `span`, for a step whose own text is not unique in the file; stub until the rows are red."""
+    return _mutate(span, *edits)
+
+
 def _wf_span(workflow, job, first=None, last=None):
     """_span over the workflow file as checked in; the runner mutates a copy of the same bytes."""
     return _span((WORKFLOWS / workflow).read_text(encoding="utf-8"), job, first, last)
@@ -198,6 +203,10 @@ def _self_test():
         ("M5", _mutate("a\nb\n", ("", "x\n")), (STALE, STALE)),
         # An empty span holds the empty string exactly once; the edit is still refused.
         ("M6", _mutate("", ("", "x\n")), (STALE, STALE)),
+        # The edit must land in the named step, the span's last part, not earlier in the job.
+        ("T1", _mutate_step("a\nb\nc\n", "c\n", ("c\n", "C\n")), ("a\nb\nc\n", "a\nb\nC\n")),
+        ("T2", _mutate_step("a\nb\nc\n", "c\n", ("b\n", "B\n")), (STALE, STALE)),
+        ("T3", _mutate_step("a\nb\n", "c\n", ("b\n", "B\n")), (STALE, STALE)),
         # The swap keeps a comment between the two steps with the moved step.
         ("W1", _recheck_moved_before_publish("A\n", "C\n", "A\n\n      # c\nC\n"),
          ("A\n\n      # c\nC\n", "      # c\nC\n\nA\n")),
