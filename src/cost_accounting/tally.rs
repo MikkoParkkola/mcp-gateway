@@ -208,7 +208,6 @@ impl<S: Slot> Buckets<S> {
     /// End the window at `newest`: a slot dated after it is counted in
     /// `newest`'s own slot, amounts summed, and the slots the window no
     /// longer holds are dropped. Afterwards no slot is dated after `newest`.
-    #[cfg(feature = "cost-governance")]
     pub(crate) fn settle(&mut self, newest: S) {
         for (slot, tokens, micro) in std::mem::take(&mut self.0) {
             self.add_slot(slot.min(newest), newest, tokens, micro);
@@ -255,21 +254,35 @@ pub(crate) struct Series {
 impl Series {
     /// Add spend at unix second `at`, the windows ending no earlier than `now`.
     pub(crate) fn add(&mut self, at: u64, now: u64, tokens: u64, micro: u64) {
+        // Recorded spend is never dropped. A record so far behind the newest
+        // held hour or date that a window ending there would not keep it (a
+        // clock that stepped back past the window) settles the series at
+        // `now` first: the held later slots count in `now`'s own slots, and
+        // the record lands in its window. Any other record, a race across a
+        // boundary or a smaller step back, goes in as it comes, every slot
+        // keeping its date.
+        let (hour, date) = (at / 3600, local_date(at));
+        let past_hours = self.hours.newest().is_some_and(|held| hour.expired(held));
+        let past_dates = self.days.newest().is_some_and(|held| date.expired(held));
+        if past_hours || past_dates {
+            self.settle(now / 3600, local_date(now));
+        }
         self.hours.add(at, now, tokens, micro);
-        self.days
-            .add_slot(local_date(at), local_date(now), tokens, micro);
+        self.days.add_slot(date, local_date(now), tokens, micro);
     }
 
     /// End the hours at `hour` and the dates at `date`: see
     /// [`Buckets::settle`].
-    #[cfg(feature = "cost-governance")]
     pub(crate) fn settle(&mut self, hour: u64, date: NaiveDate) {
         self.hours.settle(hour);
         self.days.settle(date);
     }
 
     /// Add each of `other`'s rows into this series' row for the same hour or
-    /// date, so a sum of series is bounded like one series.
+    /// date, so a sum of series is bounded like one series. Both series must
+    /// be settled at one instant first: the window here ends at the newest
+    /// slot either holds, so a slot past the other's window would age the
+    /// other's rows out of the sum.
     #[cfg(any(test, feature = "cost-governance"))]
     pub(crate) fn merge(&mut self, other: &Self) {
         for &(hour, tokens, micro) in &other.hours.0 {

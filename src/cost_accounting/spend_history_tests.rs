@@ -163,3 +163,44 @@ fn a_key_just_created_is_not_swept() {
         "swept an hour later"
     );
 }
+
+/// Clock table rows 1 and 2: a clock that ran 40 days ahead, then stepped
+/// back. A key and the keyless series each spend 5 at the later time, then 2
+/// at the corrected one; both series keep all 7, over hours and dates, and
+/// none of their slots is dated after the corrected time. Red before: the
+/// window ran from the held later slot, and the 2 was dropped.
+#[test]
+fn spend_after_a_clock_steps_back_past_the_window_is_kept() {
+    let _zone = test_zone(Tz::UTC);
+    let fixed = local(Tz::UTC, date(2026, 11, 21), (12, 0));
+    let ahead = fixed + 40 * 24 * 3600;
+    let tracker = CostTracker::new();
+    for key in [Some("k"), None] {
+        spend(&tracker, key, ahead, 5);
+    }
+    for key in [Some("k"), None] {
+        spend(&tracker, key, fixed, 2);
+    }
+    let keyed = tracker.key_series("k").expect("the key");
+    let day = date(2026, 11, 21);
+    for (name, series) in [("keyed", keyed), ("keyless", tracker.keyless_series())] {
+        assert_eq!(series.hours.rows(), vec![(fixed / 3600, 7, 7)], "{name}");
+        assert_eq!(series.days.rows(), vec![(day, 7, 7)], "{name}");
+    }
+}
+
+/// Both seats on the clock table: the gateway's series sums every key's. One
+/// key spent while the clock ran 40 days ahead and another at the corrected
+/// time; the total read at the corrected time holds both. Red before: the
+/// sum ended its window at the later key's slot and lost the other's spend.
+#[test]
+fn the_gateway_total_keeps_a_key_behind_another_keys_later_slot() {
+    let _zone = test_zone(Tz::UTC);
+    let fixed = local(Tz::UTC, date(2026, 11, 21), (12, 0));
+    let tracker = CostTracker::new();
+    spend(&tracker, Some("ran-ahead"), fixed + 40 * 24 * 3600, 5);
+    spend(&tracker, Some("current"), fixed, 2);
+    let _clock = at_secs(fixed);
+    let total = tracker.gateway_series();
+    assert_eq!(total.hours.rows(), vec![(fixed / 3600, 7, 7)]);
+}

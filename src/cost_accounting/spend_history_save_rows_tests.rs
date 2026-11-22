@@ -678,4 +678,9 @@ fn the_fold_keeps_every_folded_keys_spend_when_one_ran_ahead() {
     let hours = overflow["hours"].as_array().expect("hours");
     let not_after_save = |row: &Value| row[0].as_u64() <= Some(T0 / HOUR);
     assert!(hours.iter().all(not_after_save), "{overflow}");
+    // ISO dates order as text.
+    let save_day = date_of(T0).to_string();
+    let on_or_before = |row: &Value| row[0].as_str() <= Some(save_day.as_str());
+    let dates = overflow["days"].as_array().expect("dates");
+    assert!(dates.iter().all(on_or_before), "{overflow}");
 }
