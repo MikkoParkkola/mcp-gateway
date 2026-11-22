@@ -37,7 +37,7 @@ pub(super) fn saved(tracker: &CostTracker, dir: &Path, now: u64) -> Value {
 pub(super) fn restored(dir: &Path, names: &[&str], now: u64) -> CostTracker {
     let tracker = CostTracker::new();
     let _clock = at_secs(now);
-    restore(&tracker, dir, &owned(names), now);
+    restore(&tracker, dir, &owned(names), Some(now));
     tracker
 }
 
@@ -292,6 +292,11 @@ fn a_restore_drops_what_aged_out_while_the_gateway_was_down() {
     saved(&old, dir.path(), T0 - 40 * DAY);
     let back = restored(dir.path(), &["k"], T0);
     assert_eq!(micro(&back.gateway_series()), (0, 0));
+    // grok seat 2: an idle key whose rows all aged out is not reborn empty.
+    assert!(
+        back.key_series("k").is_none(),
+        "an aged-out key got an entry"
+    );
 
     let dir = tempfile::tempdir().expect("dir");
     let recent = CostTracker::new();
@@ -325,4 +330,25 @@ fn a_restore_drops_what_aged_out_while_the_gateway_was_down() {
         "the dates within 30 of today, from a save 2 days back"
     );
     assert!(got_days.iter().all(|d| (today - *d).num_days() < 30));
+}
+
+/// grok seat 2 (CRITICAL): a start whose clock reads before 1970 restores
+/// nothing and saves nothing for the rest of its run, so the file on disk
+/// waits for a start that can read it. Red before: the start skipped the
+/// restore but left saving on, and its next save replaced the file.
+#[test]
+fn a_start_before_1970_neither_restores_nor_replaces_the_history() {
+    let dir = tempfile::tempdir().expect("dir");
+    let before = CostTracker::new();
+    spend(&before, Some("k"), T0, 5);
+    saved(&before, dir.path(), T0);
+    let on_disk = std::fs::read(dir.path().join(FILE_NAME)).expect("the file");
+
+    let dark = CostTracker::new();
+    restore(&dark, dir.path(), &owned(&["k"]), None);
+    assert!(dark.key_series("k").is_none(), "something was restored");
+    spend(&dark, Some("k"), T0 + 60, 7);
+    assert!(!save(&dark, dir.path(), T0 + 60), "the run saved");
+    let after = std::fs::read(dir.path().join(FILE_NAME)).expect("the file");
+    assert_eq!(after, on_disk, "the history on disk was replaced");
 }

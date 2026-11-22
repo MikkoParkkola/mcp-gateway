@@ -535,7 +535,7 @@ fn a_full_file_stays_within_its_stated_size_and_restores() {
     let bound = (MAX_KEYS + 2) * series + MAX_KEYS * (32 + 128 + 64) + 256;
     eprintln!("spend-history.json at its bounds: {bytes} bytes (bound {bound})");
     assert!(
-        bytes <= u64::try_from(bound).expect("fits"),
+        bytes <= u64::try_from(bound).expect("fits") && bytes <= super::MAX_FILE_BYTES,
         "{bytes} > {bound}"
     );
     // The measured size, pinned so a passing run states it: 512 key rows of

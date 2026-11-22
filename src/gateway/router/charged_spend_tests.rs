@@ -178,7 +178,7 @@ async fn a_priced_calls_charge_comes_back_from_the_spend_history() {
         let live = fx.state.meta_mcp.cost_tracker();
         assert!(spend_history::save(&live, dir.path(), now), "saved");
         let back = CostTracker::new();
-        spend_history::restore(&back, dir.path(), &[KEY.to_owned()], now);
+        spend_history::restore(&back, dir.path(), &[KEY.to_owned()], Some(now));
         let report = back.key_snapshot(KEY).expect("the key came back");
         let usd = report.window_24h.cost_usd.expect("a dated window");
         close(usd, 0.25, "restored key window");

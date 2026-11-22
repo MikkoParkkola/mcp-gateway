@@ -257,7 +257,7 @@ impl Gateway {
         // when this run charges nothing. Only API keys are charged per key,
         // so with auth off no saved key row has a key to attach to.
         #[cfg(feature = "cost-governance")]
-        if let Ok(now) = crate::clock::unix_secs() {
+        {
             let auth = &self.config.auth;
             let names: Vec<String> = auth
                 .api_keys
@@ -266,6 +266,7 @@ impl Gateway {
                 .map(|key| key.name.clone())
                 .collect();
             let tracker = meta_mcp_builder.cost_tracker();
+            let now = crate::clock::unix_secs().ok();
             crate::cost_accounting::spend_history::restore(&tracker, &data_dir, &names, now);
         }
 

@@ -149,7 +149,22 @@ impl History {
 /// start. A file that cannot be read or is refused is set aside, as
 /// `counters.json` is, and the tracker starts empty with one warning; when it
 /// cannot be set aside, this run saves no history, so its bytes survive.
-pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[String], now: u64) {
+/// `now` is `None` when the clock reads before 1970: then nothing can be
+/// dated, nothing is restored, and this run never saves, so a later save on a
+/// corrected clock cannot replace the file with a history it never loaded.
+pub(crate) fn restore(
+    tracker: &CostTracker,
+    data_dir: &Path,
+    key_names: &[String],
+    now: Option<u64>,
+) {
+    let Some(now) = now else {
+        tracker.history_off.store(true, Ordering::Relaxed);
+        tracing::warn!(
+            "Clock reads before 1970 at start; the spend history is kept on disk but not restored or saved this run"
+        );
+        return;
+    };
     let path = data_dir.join(FILE_NAME);
     let bytes = match read_capped(&path) {
         Ok(Some(bytes)) => bytes,
@@ -176,11 +191,18 @@ pub(crate) fn restore(tracker: &CostTracker, data_dir: &Path, key_names: &[Strin
             key.rows.replay(&mut carried, now);
             continue;
         };
+        // An idle key whose rows have all aged out gets no entry, so it is
+        // not reborn empty at every start and saved again as an empty row.
+        let mut kept = Series::default();
+        key.rows.replay(&mut kept, now);
+        if kept.hours.newest().is_none() && kept.days.newest().is_none() {
+            continue;
+        }
         let entry = tracker
             .per_key
             .entry((*name).clone())
             .or_insert_with(|| Arc::new(KeyCost::new(name)));
-        key.rows.replay(&mut entry.spend.lock().0, now);
+        entry.spend.lock().0.merge(&kept);
     }
     drop(carried);
     tracing::info!(keys = history.keys.len(), "Restored spend history");
