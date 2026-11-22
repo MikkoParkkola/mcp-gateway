@@ -260,7 +260,7 @@ fn refused_start(config: &Path) -> String {
 /// its chain still opens for the next start.
 #[test]
 fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = dir.path().join("gateway.yaml");
     let (log_a, log_b) = (dir.path().join("a.ndjson"), dir.path().join("b.ndjson"));
     let original = logged(&log_a);
@@ -300,7 +300,7 @@ fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
 /// goes to the new file's log.
 #[test]
 fn a_kept_write_records_its_recovery_in_the_new_files_log() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = dir.path().join("gateway.yaml");
     let (log_a, log_b) = (dir.path().join("a.ndjson"), dir.path().join("b.ndjson"));
     let candidate = logged(&log_b);
@@ -382,7 +382,7 @@ fn a_surviving_config_naming_a_reserved_slot_refuses_the_recovery() {
 #[test]
 fn a_log_that_cannot_open_refuses_the_recovery() {
     for auth in [true, false] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let config = dir.path().join("gateway.yaml");
         let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, "a file, not a directory").unwrap();

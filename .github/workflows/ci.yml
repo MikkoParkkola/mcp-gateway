@@ -593,7 +593,7 @@ jobs:
       # restores only caches saved on its base branch (or its own ref), and this job's cache was
       # saved on pull-request refs alone, so every lane run rebuilt the ~350 dependencies for each
       # of the job's eight cargo steps from cold (all of 3 runs sampled logged "No cache found").
-      # Restore on every run, save only on a push: a save on each PR ref wrote a 310 MB cache nothing
+      # Restore on every run, save only on a release-line push: a save on each PR ref wrote a 310 MB cache nothing
       # else can read (33 such caches held the repository at its 10 GB limit, where eviction can push
       # out the line's own cache).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -1312,6 +1312,14 @@ jobs:
         # Memory every 30 s while it builds (scripts/ci/with-memory-log.sh). No step limit yet: a healthy lib-b run
         # took 52 min on 2026-11-13, so it logs only until its tail is measured (check_swap_jobs.py LOG_ONLY).
         run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
+      # The #[ignore] rows of tests/integration_tests.rs need a live gateway and an admin caller. int-a built both
+      # binaries just above, so this starts that gateway with a per-run admin key, waits for /readyz, and runs the
+      # rows in required mode (a row that cannot reach the gateway fails instead of skipping). The live-API caching
+      # row stays opt-in; the script says why.
+      - name: Ignored integration rows against a live gateway
+        if: matrix.shard == 'int-a'
+        timeout-minutes: 10
+        run: scripts/ci/ignored-integration-rows.sh
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects

@@ -41,7 +41,7 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
     // thread-local subscriber below decides each event instead.
     crate::test_log_capture::keep_interest_open();
 
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), LEAKY_DYING_STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -122,7 +122,7 @@ fn g3_a_failed_start_without_a_repair_logs_after_the_cache_lock() {
     use tracing_subscriber::layer::SubscriberExt;
 
     crate::test_log_capture::keep_interest_open();
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_UNRELATED_STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
