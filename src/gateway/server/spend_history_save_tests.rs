@@ -247,6 +247,6 @@ async fn with_auth_off_a_saved_key_row_attaches_to_no_key() {
         tracker.key_series("k").is_none(),
         "a key row attached with auth off"
     );
-    let total = tracker.gateway_series();
+    let total = tracker.gateway_series(now);
     assert_eq!(total.hours.rows().iter().map(|r| r.2).sum::<u64>(), 3);
 }

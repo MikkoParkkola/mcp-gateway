@@ -98,7 +98,7 @@ fn spend_with_no_key_is_in_the_keyless_series_and_the_gateway_total() {
     let keyless = tracker.keyless_series();
     assert_eq!(keyless.hours.rows(), vec![(at / 3600, 7, 7)]);
     assert_eq!(keyless.days.rows(), vec![(date(2026, 11, 21), 7, 7)]);
-    let gateway = tracker.gateway_series();
+    let gateway = tracker.gateway_series(at);
     assert_eq!(gateway.hours.rows(), vec![(at / 3600, 9, 9)]);
     assert_eq!(gateway.days.rows(), vec![(date(2026, 11, 21), 9, 9)]);
 }
@@ -200,7 +200,12 @@ fn the_gateway_total_keeps_a_key_behind_another_keys_later_slot() {
     let tracker = CostTracker::new();
     spend(&tracker, Some("ran-ahead"), fixed + 40 * 24 * 3600, 5);
     spend(&tracker, Some("current"), fixed, 2);
-    let _clock = at_secs(fixed);
-    let total = tracker.gateway_series();
+    let ahead_before = tracker.key_series("ran-ahead").expect("the key");
+    let total = tracker.gateway_series(fixed);
     assert_eq!(total.hours.rows(), vec![(fixed / 3600, 7, 7)]);
+    assert_eq!(total.days.rows(), vec![(date(2026, 11, 21), 7, 7)]);
+    // The sum settles copies: the key's own series keeps its later slot.
+    let ahead_after = tracker.key_series("ran-ahead").expect("the key");
+    assert_eq!(ahead_after.hours.rows(), ahead_before.hours.rows());
+    assert_eq!(ahead_after.days.rows(), ahead_before.days.rows());
 }

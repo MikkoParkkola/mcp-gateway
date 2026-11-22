@@ -90,7 +90,8 @@ fn a_restart_keeps_every_series_hours_and_days() {
     let (keyless, keyless_back) = (before.keyless_series(), after.keyless_series());
     assert_eq!(keyless_back.hours.rows(), keyless.hours.rows());
     assert_eq!(keyless_back.days.rows(), keyless.days.rows());
-    let (total, total_back) = (before.gateway_series(), after.gateway_series());
+    let at = T0 + 60;
+    let (total, total_back) = (before.gateway_series(at), after.gateway_series(at));
     assert_eq!(total_back.hours.rows(), total.hours.rows());
     assert_eq!(total_back.days.rows(), total.days.rows());
     // The windows the views read are back as well.
@@ -158,8 +159,8 @@ fn keys_past_the_cap_fold_into_the_overflow_which_is_no_key() {
     );
     assert_eq!(micro(&back.carried.lock()), (3, 3));
     assert_eq!(
-        micro(&back.gateway_series()),
-        micro(&tracker.gateway_series())
+        micro(&back.gateway_series(T0 + 60)),
+        micro(&tracker.gateway_series(T0 + 60))
     );
 }
 
@@ -241,8 +242,8 @@ fn a_new_key_named_like_a_removed_keys_display_form_inherits_nothing() {
     );
     assert_eq!(micro(&back.carried.lock()), (5, 5));
     assert_eq!(
-        micro(&back.gateway_series()),
-        micro(&before.gateway_series())
+        micro(&back.gateway_series(T0 + 60)),
+        micro(&before.gateway_series(T0 + 60))
     );
 }
 
@@ -291,7 +292,7 @@ fn a_restore_drops_what_aged_out_while_the_gateway_was_down() {
     spend(&old, None, T0 - 40 * DAY, 3);
     saved(&old, dir.path(), T0 - 40 * DAY);
     let back = restored(dir.path(), &["k"], T0);
-    assert_eq!(micro(&back.gateway_series()), (0, 0));
+    assert_eq!(micro(&back.gateway_series(T0)), (0, 0));
     // grok seat 2: an idle key whose rows all aged out is not reborn empty.
     assert!(
         back.key_series("k").is_none(),

@@ -624,18 +624,15 @@ impl CostTracker {
 
     /// The gateway's series: the sum of the keyless one, every key's and,
     /// with cost governance built, the carried overflow.
-    pub(crate) fn gateway_series(&self) -> Series {
-        // Every input is settled at the clock's instant before the sum: a
-        // merge ends its window at the newest slot either side holds, so one
-        // input holding a slot past another's window would age that one's rows
-        // out of the total.
-        let instant = crate::clock::unix_secs()
-            .ok()
-            .map(|now| (now / 3600, tally::local_date(now)));
+    pub(crate) fn gateway_series(&self, now: u64) -> Series {
+        // Every input is settled at `now`, the caller's instant, before the
+        // sum: a merge ends its window at the newest slot either side holds,
+        // so one input holding a slot past another's window would age that
+        // one's rows out of the total. Taken as an argument, never read from
+        // the wall clock, so a fixture dated in the past stays inside it.
+        let (hour, date) = (now / 3600, tally::local_date(now));
         let settled = |mut series: Series| {
-            if let Some((hour, date)) = instant {
-                series.settle(hour, date);
-            }
+            series.settle(hour, date);
             series
         };
         let mut total = settled(self.keyless_series());

@@ -99,7 +99,7 @@ fn a_bad_file_starts_empty_with_one_warning_and_is_set_aside() {
         let (back, warnings) =
             crate::test_log_capture::capture_warnings(|| restored(dir.path(), &["k"], T0));
         assert_eq!(
-            micro(&back.gateway_series()),
+            micro(&back.gateway_series(T0)),
             (0, 0),
             "{what}: restored something"
         );
@@ -680,7 +680,8 @@ fn the_fold_keeps_every_folded_keys_spend_when_one_ran_ahead() {
     assert!(hours.iter().all(not_after_save), "{overflow}");
     // ISO dates order as text.
     let save_day = date_of(T0).to_string();
-    let on_or_before = |row: &Value| row[0].as_str() <= Some(save_day.as_str());
+    // A date that is not text fails: `None <= Some(..)` would pass it.
+    let on_or_before = |row: &Value| row[0].as_str().is_some_and(|d| d <= save_day.as_str());
     let dates = overflow["days"].as_array().expect("dates");
     assert!(dates.iter().all(on_or_before), "{overflow}");
 }
