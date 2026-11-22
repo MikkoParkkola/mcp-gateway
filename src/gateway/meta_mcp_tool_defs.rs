@@ -204,7 +204,9 @@ pub(crate) fn build_stats_tool() -> Tool {
         name: "gateway_get_stats".to_string(),
         title: Some("Get Gateway Statistics".to_string()),
         description: Some(
-            "Get observed usage statistics including invocations, cache hits, and top tools"
+            "Get observed usage statistics including invocations, cache hits, and top tools. \
+             tools_available is a floor while tools_known is false (a backend not yet enumerated, \
+             or the capability scan still running)."
                 .to_string(),
         ),
         input_schema: json!({

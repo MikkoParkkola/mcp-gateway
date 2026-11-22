@@ -330,11 +330,16 @@ impl<'a> Refused<'a> {
         {
             noted.refused(kind, None);
         }
-        let decision = Box::new(noted.decision(
-            crate::security::decision_record::Decided::Fresh,
-            crate::security::decision_record::Refused::of(refusal.outcome),
-            state.meta_mcp.live_config().as_deref(),
-        ));
+        let decision = Box::new(
+            noted.decision(
+                crate::security::decision_record::Decided::Fresh,
+                crate::security::decision_record::Refused::of(refusal.outcome),
+                state.meta_mcp.live_config().as_deref(),
+                self.who
+                    .credential_kind
+                    .unwrap_or(crate::security::audit::CredentialKind::None),
+            ),
+        );
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
         // Taken here: the blocking append below has no task-locals. Run only

@@ -102,3 +102,14 @@ async fn a_recovered_rewrite_records_rewritten_through_the_real_entry() {
     let clean = Box::pin(recovery_record(Reply::Completed)).await;
     assert!(clean.get("response_effect").is_none(), "{clean}");
 }
+
+/// An upstream task's settlement record carries no decision object: nothing
+/// is decided there, so it has no token to name. The worker's follow, which
+/// settles through this same entry, still runs inside the call's token scope
+/// (worker.rs), so a decision added here later would name its token.
+#[tokio::test]
+async fn a_settlement_record_builds_no_decision() {
+    let record = Box::pin(recovery_record(Reply::Completed)).await;
+    assert_eq!(record["route"], "task_recovery", "premise: {record}");
+    assert!(record.get("decision").is_none(), "{record}");
+}

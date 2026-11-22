@@ -4,7 +4,6 @@
 //! under the trace of that frame's own invocation record.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -34,7 +33,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
 
 #[tokio::test]
 async fn r0_each_stdio_frame_writes_one_record_under_its_own_trace() {
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let fixture = Fixture::start_audited(&log_path(&dir)).await;
     for (id, note) in [("f1", "one"), ("f2", "two")] {
         let answer = dispatch(&fixture, invoke(id, None, json!({"note": note}))).await;
