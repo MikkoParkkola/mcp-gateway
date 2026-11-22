@@ -101,7 +101,7 @@ fn a6_quotes_keep_every_path_one_word_with_nothing_expanded() {
     let cmd = start(ODD_EXE, ODD_CONFIG).expect("quotes and spaces are quotable");
     assert_eq!(
         cmd.as_str(),
-        r#"'/opt/my '\''gw'\''/$(id) bin/mcp-gateway' serve --config '/srv/it'\''s here/$(id).yaml'"#
+        r"'/opt/my '\''gw'\''/$(id) bin/mcp-gateway' serve --config '/srv/it'\''s here/$(id).yaml'"
     );
 }
 

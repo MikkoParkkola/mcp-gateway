@@ -308,14 +308,14 @@ pub(super) async fn settings_save(
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
     let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
     match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
-        Ok(saved) => saved_answer(saved, &fields, &live, &config_path),
+        Ok(saved) => saved_answer(&saved, &fields, &live, &config_path),
         Err(refusal) => answer_for(refusal, &fields),
     }
 }
 
 /// The answer to a completed save, with the restart keys while one is pending.
 fn saved_answer(
-    saved: UiSaved,
+    saved: &UiSaved,
     fields: &[&str],
     live: &crate::config_reload::LiveConfig,
     config_path: &std::path::Path,
