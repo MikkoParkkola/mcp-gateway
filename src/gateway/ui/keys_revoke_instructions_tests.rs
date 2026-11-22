@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! What a refused revocation tells the operator: keyedit's cause, its reason
 //! and the config file's path, plus the expiry-first instructions only when
-//! keyedit wrote them. Every row checks the file is untouched and that no
-//! secret or digest reaches the answer.
+//! keyedit wrote them. Every row checks the file is untouched, that no
+//! secret or digest reaches the answer, and that the answer is not cached.
 
 use std::net::SocketAddr;
 
@@ -46,6 +46,8 @@ fn refused_answer(setup: Setup) -> (Fixture, serde_json::Value) {
         "a digest leaked: {}",
         sent.body
     );
+    // The body names the config file: no cache may keep it.
+    assert_eq!(sent.cache_control.as_deref(), Some("no-store"));
     let answer = sent.json();
     assert_eq!(answer["error"], "not_written", "{answer}");
     assert_eq!(answer["revoked"], false, "{answer}");
