@@ -72,6 +72,7 @@ pub(crate) use config_file::{PENDING_SLOT_PREFIX, reserved_slot_reference};
 pub(crate) use pattern_grammar::check_backend_allowed_tools;
 pub(crate) use pattern_grammar::tool_pattern_matches;
 
+pub(crate) use env_overlay::StartupSlot;
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
@@ -386,6 +387,13 @@ impl Config {
         Self::load_evaluated_with_home(path, &SystemHome)
     }
 
+    /// The built-in defaults plus the environment, with no config file and no search for one:
+    /// for a serve whose one resolution found no file (K1), so a file that appears later is
+    /// never loaded.
+    pub(crate) fn load_evaluated_defaults() -> Result<Evaluated> {
+        Self::evaluate(None, &SystemHome, Tolerance::Fail, Expansion::Resolve)
+    }
+
     /// As [`Config::load_evaluated`], with `~` resolved through `home`.
     pub fn load_evaluated_with_home(
         path: Option<&Path>,
@@ -592,6 +600,7 @@ impl Config {
             secret_refs,
             inputs,
             configured,
+            startup_session: env_overlay::StartupSlot::default(),
         })
     }
 
