@@ -26,7 +26,7 @@ const GZIP_LEVEL: u32 = 6;
 /// equality. Order in the asset table is not part of the budget; the comparison
 /// sorts both sides.
 const CORE_JS_STEMS: &[&str] = &[
-    "activity", "gateway", "overview", "shell", "tools", "tooltip",
+    "activity", "gateway", "overview", "servers", "shell", "tools", "tooltip",
 ];
 
 #[test]
