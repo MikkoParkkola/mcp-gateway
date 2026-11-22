@@ -159,6 +159,19 @@ HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNING = re.compile(r"^running (\d+) tests?$")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
+# test_dir_keep.rs report_unkept: "<kind> at <path> is in a temp dir no test kept; created by <test>",
+# on raw stderr, so it can start mid-line. The kind is read, never listed: a new writer's kind fails too.
+# The path runs to the report's fixed suffix, so a path with spaces is read whole.
+# The kind is one or two lowercase words (every writer's kind is), and the path holds no " at ", so lowercase
+# words or an earlier " at " that raw stderr put before the report on the same line are not read into either.
+UNKEPT = re.compile(r"\b([a-z]+(?: [a-z]+)?) at ((?:(?! at ).)+?) is in a temp dir no test kept; created by (\S+)")
+
+
+def unkept(lines: list[str]) -> list[str]:
+    """One failure per distinct unkept-dir report in a step's output, whatever its kind."""
+    return list(dict.fromkeys(
+        f"unkept temp dir: {m.group(1)} at {m.group(2)}; created by {m.group(3)}"
+        for line in lines for m in UNKEPT.finditer(line)))
 
 
 def selected(lines: list[str]) -> int:
@@ -410,6 +423,8 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
                 failed.append(f"{step}: cargo exited {rc}")
             if n < floor:
                 failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+            # One failure per distinct report, even when two steps print the same one.
+            failed += [u for u in unkept(lines) if u not in failed]
         if EXAMPLES.get(os_kind) == shard:
             rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
             if rc != 0:
@@ -501,6 +516,10 @@ def self_test() -> int:
         "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
         "if os.environ.get('PLANT_LEAK'):\n"
         "    open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()\n"
+        "if os.environ.get('PLANT_UNKEPT'):\n"
+        "    import sys\n"
+        "    sys.stderr.write('shutdown save at /tmp/.tmpZz9Yy8/s.json is in a temp dir no test kept;'\n"
+        "                     ' created by a::b::row\\n')\n"
     ))
     os.environ["PLANT_LEAK"] = "1"
     try:
@@ -521,6 +540,15 @@ def self_test() -> int:
         assert contents(leftover, None).endswith(
             f"{os.path.join('tasks', 'task-d.json')} 2B"), contents(leftover, None)
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
+    # K6 on a cargo shard's run path: a report a test printed (raw stderr, merged into the step's
+    # output) fails the shard once, by its test, beside the control run above that stays green.
+    os.environ["PLANT_UNKEPT"] = "1"
+    try:
+        reported = run_steps("linux", "lib-a", fake)
+    finally:
+        del os.environ["PLANT_UNKEPT"]
+    assert reported == ["unkept temp dir: shutdown save at /tmp/.tmpZz9Yy8/s.json; created by a::b::row"], \
+        f"a cargo shard whose test printed an unkept report did not fail on it: {reported}"
     assert unexpected({"a": ["x"], "b": ["x"]}, [("[ab]", "x", 1, "one allowed")]) == ["b"], \
         "the count bounds a source"
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
@@ -636,6 +664,7 @@ def self_test() -> int:
         assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    unkept_rows()
     built_parts_rows()
     # H1: every shard, on every OS, gives cargo and a prebuilt lib
     # binary a private gateway home beside its TMPDIR, and removes it after the
@@ -731,6 +760,56 @@ def self_test() -> int:
     home_copies_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def unkept_rows() -> None:
+    """K6: every unkept-dir report fails the shard naming its test, whatever its kind, wherever it
+    starts on the line (raw stderr lands mid-line after a `test x ... ` prefix); a clean log passes."""
+    audit = ("test gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and"
+             "_the_stop_is_clean ... audit log at /tmp/.tmpmFJ46f/audit.jsonl is in a temp dir no test kept;"
+             " created by gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_ser"
+             "ving_and_the_stop_is_clean")
+    assert unkept([audit]) == [
+        "unkept temp dir: audit log at /tmp/.tmpmFJ46f/audit.jsonl; created by gateway::server::test_seams::"
+        "health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean"], unkept([audit])
+    # A kind no writer uses today fails the same way: the check reads the report, not a list of kinds.
+    novel = "frobnicator spool at /tmp/.tmpQx12Ab/spool.bin is in a temp dir no test kept; created by a::b::row"
+    assert unkept(["", novel, "test a::b::row ... ok"]) == [
+        "unkept temp dir: frobnicator spool at /tmp/.tmpQx12Ab/spool.bin; created by a::b::row"], unkept([novel])
+    # The same report printed twice by one test is one failure; two tests are two.
+    other = novel.replace("a::b::row", "a::b::other")
+    assert len(unkept([novel, novel, other])) == 2, unkept([novel, novel, other])
+    clean = ["running 2 tests", "test a::b::row ... ok", "test a::b::other ... ok",
+             "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
+    assert unkept(clean) == [], unkept(clean)
+    # One raw line per kind the writers emit, from the full-lib sizing run (only the Spark mirror prefix of each
+    # path is replaced by /tmp), and the worker-thread creator a multi-thread runtime gives.
+    sized = [
+        ("package cache", "/tmp/.tmpOpr9CV/pkg-cache",
+         "backend::package_cache::retry_tests::a_backend_that_dies_for_an_unrelated_reason_is_not_retried"),
+        ("config lock", "/tmp/.tmpTQ6JVm/capabilities",
+         "capability::file_writer::tests::create_race_has_one_winner"),
+        ("shutdown save", "/tmp/.tmpBsItVX/ranker.json",
+         "gateway::server::persistence::shutdown_deadline_tests::the_state_saves_end_at_the_deadline_they_are_given"),
+        ("periodic save", "/tmp/.tmpnwcyRg", "gateway::server::persistence::tests::cost_saver_stops_on_shutdown"),
+        ("skill bundle", "/tmp/.tmp6oTLRb/skills",
+         "skills::watcher::burst_tests::a_pass_that_leaves_changes_behind_warns_once"),
+        ("config lock", "/tmp/.tmpzYfy13/gateway.yaml", "tokio-rt-worker"),
+    ]
+    for kind, path, creator in sized:
+        line = f"{kind} at {path} is in a temp dir no test kept; created by {creator}"
+        assert unkept([line]) == [f"unkept temp dir: {kind} at {path}; created by {creator}"], line
+    # A path with a space is read whole: the report's fixed suffix ends it, so a spaced temp dir and a Windows
+    # user name with a space both fail the shard with the whole path.
+    for path in ("/tmp/with space/.tmpAb12Cd/audit.jsonl", r"C:\Users\Jane Doe\AppData\Local\Temp\.tmpAb12Cd\skills"):
+        line = f"test a::b::row ... audit log at {path} is in a temp dir no test kept; created by a::b::row"
+        assert unkept([line]) == [f"unkept temp dir: audit log at {path}; created by a::b::row"], unkept([line])
+    # Raw stderr ahead of the report on one line: lowercase words, and a panic message with its own " at ",
+    # are read into neither the kind nor the path.
+    tail = "audit log at /tmp/.tmpZz9Yy8/a.jsonl is in a temp dir no test kept; created by a::b::row"
+    want = ["unkept temp dir: audit log at /tmp/.tmpZz9Yy8/a.jsonl; created by a::b::row"]
+    for noise in ("warning some text ", "thread 'x' panicked at src/a.rs:1:2: oops "):
+        assert unkept([noise + tail]) == want, unkept([noise + tail])
 
 
 def with_home_rows() -> None:
@@ -847,6 +926,8 @@ def built_parts_rows() -> None:
                     'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
                     ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
                     ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
+                    ' unkept) echo "test m$k::b ... ok"; echo "skill bundle at /tmp/.tmpQq1Ww2/skills is in a temp dir'
+                    ' no test kept; created by m$k::b" >&2 ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
@@ -892,6 +973,9 @@ def built_parts_rows() -> None:
             # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
             assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
+            # K6 on the built-parts path: a part whose tests all ran and passed still fails the leg when one
+            # printed an unkept report.
+            assert leg_run("lib-b", 8, BEHAVE_2="unkept")[0] == 1, "a part whose test printed an unkept report passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
@@ -939,6 +1023,17 @@ def prebuilt_rows() -> None:
         said = out.buffer.getvalue().decode()
         assert rc == 1 and f"::error::linux lib-a left in TMPDIR: {LIB_TARGET}/stray-file" in said, \
             f"a Linux leg that left a temp file did not fail as `run` does: rc {rc}"
+        # K6 on the prebuilt path: a report the binary's test printed on stderr fails the leg by its test, as
+        # it does a cargo shard, even when nothing is left in TMPDIR.
+        binary(lok + '; echo "shutdown save at /tmp/.tmpPb4Qr5/s.json is in a temp dir no test kept;'
+               ' created by gateway::a" >&2')
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out):
+            rc = run_prebuilt("linux", "lib-a", fake)
+        out.flush()
+        said = out.buffer.getvalue().decode()
+        want = "::error::linux lib-a unkept temp dir: shutdown save at /tmp/.tmpPb4Qr5/s.json; created by gateway::a"
+        assert rc == 1 and want in said, f"a prebuilt leg whose test printed an unkept report passed: rc {rc}"
         # Only the shared-build legs run from the binary on Linux: an integration shard compiles its own.
         assert main(["shard_tests.py", "run-prebuilt", "linux", "int-a", fake]) == 2, "int-a ran prebuilt"
         # export-lib copies the executable cargo names, and fails when cargo names none.
@@ -1235,6 +1330,7 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
     failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
+    failed += unkept(lines)
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return n, failed
@@ -1334,6 +1430,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
             want = {n for n in listed_names if not any(p in n for p in patterns)}
             os.chmod(binary, 0o755)
             reported: dict[str, str] = {}
+            part_lines: list[str] = []
             with private_home(env, None) as home_env:
                 p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=home_env, cwd=ROOT)
@@ -1341,7 +1438,8 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
                 for raw in p.stdout:
                     sys.stdout.buffer.write(raw)
                     sys.stdout.buffer.flush()
-                    m = RESULT_LINE.match(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    part_lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    m = RESULT_LINE.match(part_lines[-1])
                     if m:
                         reported[m.group(1)] = m.group(2)
                 prc = p.wait()
@@ -1354,6 +1452,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
         print(f"::notice::{os_kind} {leg} part {k}: ran {len(reported)}, its list less the skips {len(want)}")
         if prc != 0:
             failed.append(f"part {k}: test binary exited {prc}")
+        failed += [f"part {k}: {u}" for u in unkept(part_lines)]
         if set(reported) != want:
             failed.append(f"part {k}: ran {len(reported)} tests, its list less the skips is {len(want)} "
                           f"(missing e.g. {sorted(want - set(reported))[:3]}, extra e.g. {sorted(set(reported) - want)[:3]})")

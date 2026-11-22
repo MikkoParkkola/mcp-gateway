@@ -1363,6 +1363,10 @@ named an API-key label rather than a person and skipped every refused or failed 
   `account`, and for a verified caller `authority` and `subject`, the `(issuer, sub)`.
   An email or a display label is never written. `caller` stays for one major version as a
   copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
+  A refusal the gateway decides (a spend budget, a response gate) records `denied` with the
+  refusing check's `error_code`, whatever form the caller got it in, so that code can differ
+  from the answer: an answer a gate withheld reaches the caller as a tool result flagged
+  `isError` and records `-32600`.
 - **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
   log volume on a gateway that refuses a lot.
 - **The direct route `POST /mcp/{name}` writes the same invocation record** for every
