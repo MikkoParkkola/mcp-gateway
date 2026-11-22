@@ -463,7 +463,11 @@ def check_windows(jobs: dict) -> list[str]:
     problems += check_gate(WIN_LEGS, lsteps, WIN_BUILD, WIN_GATE)
     fetch = [i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact")
              and with_map(s).get("name") == WIN_ARTIFACT and with_map(s).get("path") == WIN_PATH]
-    runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s) + str(s.get("env") or "")]
+    # Each env value as written: str() of the whole mapping would double the path's backslashes.
+    env_text = lambda s: " ".join(str(v) for v in (s.get("env") or {}).values()) if isinstance(s.get("env"), dict) else ""
+    runs = [i for i, s in enumerate(lsteps) if WIN_EXE in run_text(s) + " " + env_text(s)]
+    if not runs:
+        problems.append(f"{WIN_LEGS} job: no step names {WIN_EXE} in its run text or env, so none runs the exe")
     if not fetch:
         problems.append(f"{WIN_LEGS} job: no actions/download-artifact step for {WIN_ARTIFACT} into {WIN_PATH}")
     elif runs and runs[0] < fetch[0]:
@@ -499,7 +503,11 @@ def _windows_cases(live: dict) -> list[tuple[str, dict]]:
     unjudged[WIN_ROLLUP]["needs"] = [n for n in needs_of(unjudged[WIN_ROLLUP]) if n != WIN_BUILD]
     skippable = fresh()
     skippable[WIN_LEGS]["if"] = str(skippable[WIN_LEGS]["if"]).replace("!cancelled() && ", "", 1)
+    late = fresh()
+    lsteps = late[WIN_LEGS]["steps"]
+    lsteps.append(lsteps.pop(next(i for i, s in enumerate(lsteps) if uses_action(s, "actions/download-artifact"))))
     return [
+        ("the Windows exe is fetched after the steps that run it", late),
         ("Windows upload if-no-files-found 'warn'", warn),
         ("the Windows legs lose their build gate step", ungated),
         ("a Windows leg gains a cargo test step", compiles),
