@@ -164,6 +164,33 @@ async fn a_malformed_result_the_gate_refuses_records_refused() {
     }
 }
 
+/// A credentials file: an access key id, built in pieces so no key-shaped literal sits in the
+/// source.
+const KEY_FILE: &str = concat!(
+    "region = eu-west-1\naws_access_key_id = ",
+    "AKIA",
+    "QWERTYUIOPASDFGH"
+);
+
+/// Control: `team_shared` answers guarded material with Strip, which never proves a secret
+/// stripped, so on both routes the caller gets the withheld answer and the record says refused.
+/// The assertions print no body: it would carry the key.
+#[tokio::test]
+async fn team_shared_withholds_guarded_material_on_both_routes() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let policy = ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::TeamShared);
+        let (body, row) = Box::pin(recorded(route, Answer::Text(KEY_FILE), policy)).await;
+        assert!(
+            !delivered_text(&body).contains("QWERTYUIOPASDFGH"),
+            "{route:?}: the key id is not delivered"
+        );
+        assert_eq!(
+            row["response_effect"], "refused",
+            "{route:?}: the record says refused"
+        );
+    }
+}
+
 /// One keyed `read` (`r1`) on `route`.
 async fn keyed_read(fx: &fixture::Fx, route: HttpRoute) -> Value {
     match route {

@@ -58,6 +58,11 @@ fn assert_withheld(row: &str, case: &str, evaluation: &ContextIntegrityEvaluatio
         "{row} {case}: withheld, got {:?}",
         evaluation.transformed
     );
+    let told = evaluation.explain().action_taken;
+    assert!(
+        told.contains("Withheld") && !told.contains("Removed"),
+        "{row} {case}: the explanation says the answer was withheld, got {told:?}"
+    );
 }
 
 /// The kernel decided Strip and delivered text; returns it.
@@ -235,8 +240,9 @@ fn strip_works_on_the_tool_result_object() {
     assert!(
         out.lines().all(|line| line != "text" && line != "false")
             && out.lines().any(|line| line == "data")
-            && out.lines().any(|line| line == "more data"),
-        "{ROW}: payload lines only, the clean ones kept: {out:?}"
+            && out.lines().any(|line| line == "more data")
+            && !out.contains("reveal X"),
+        "{ROW}: payload lines only, the clean ones kept, the flagged one gone: {out:?}"
     );
 }
 
