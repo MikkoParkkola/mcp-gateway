@@ -104,6 +104,47 @@ fn r2r_a_row_to_remove_still_fails_a_blessed_run() {
     assert!(!again.contains("rows to add"), "{again}");
 }
 
+/// R2d: a row the check wants twice is written twice, as its multiset
+/// count says, and the re-read table then matches.
+#[test]
+fn r2d_a_repeated_row_is_written_as_often_as_it_is_missing() {
+    let root = tree(&["alpha"], None);
+    let want = ["alpha", "beta", "beta"];
+    let failure = check(root.path(), &want, true).expect("the blessed run fails");
+    assert!(failure.contains("blessed: 2 rows written"), "{failure}");
+    assert_eq!(
+        fragment(root.path()).as_deref(),
+        Some("# key\tnote\nbeta\nbeta\n")
+    );
+    assert_eq!(check(root.path(), &want, true), None);
+}
+
+/// R2f: when the fragment cannot be written (the bless root is a plain file,
+/// so no folder can be made under it), the run still fails with its
+/// comparison, says the bless failed, and never claims rows were written.
+#[test]
+fn r2f_a_failed_write_keeps_the_failure_and_says_so() {
+    let root = tree(&["alpha"], None);
+    let blocked = root.path().join("a-plain-file");
+    std::fs::write(&blocked, "no folder can be made here").expect("a plain file");
+    let table = pin_table_at(root.path(), "t");
+    let pinned: Vec<(&Path, &str)> = table
+        .rows()
+        .iter()
+        .map(|(file, row)| (file.as_path(), row.as_str()))
+        .collect();
+    let target = Bless {
+        root: &blocked,
+        ticket: "9977",
+    };
+    let computed = ["alpha".to_owned(), "beta".to_owned()];
+    let failure =
+        delta_or_bless("t", &computed, &pinned, Some(target)).expect("the run still fails");
+    assert!(failure.contains("rows to add (1;"), "{failure}");
+    assert!(failure.contains("bless failed: cannot write"), "{failure}");
+    assert!(!failure.contains("blessed:"), "{failure}");
+}
+
 /// R5: an existing fragment keeps every byte; the one missing row is
 /// appended once. R5b: when its last line has no newline, one is added first.
 #[test]
@@ -172,12 +213,31 @@ fn r7_only_the_live_tests_read_the_switch() {
     let (allows, framing) = (source("allow_pins.rs"), source("delivery_framing.rs"));
     assert_eq!(
         (
-            code_lines(&allows, "bless_ticket()"),
-            code_lines(&framing, "bless_ticket()")
+            code_lines(&allows, concat!("bless_", "ticket()")),
+            code_lines(&framing, concat!("bless_", "ticket()"))
         ),
         (2, 2),
         "the four live tests, and nothing else, read the switch"
     );
+    // Each call sits inside one of the four live tests by name: the nearest
+    // `fn` line above it.
+    let live = [
+        "t1b_every_production_allow_of_the_ban_is_pinned",
+        "t1a_every_classed_read_is_pinned",
+        "every_generic_framing_site_is_inventoried",
+        "every_refusal_site_is_classified",
+    ];
+    for text in [&allows, &framing] {
+        let mut within = "";
+        for line in text.lines().map(str::trim_start) {
+            if let Some(rest) = line.strip_prefix("fn ") {
+                within = rest.split('(').next().unwrap_or_default();
+            }
+            if !line.starts_with("//") && line.contains(concat!("bless_", "ticket()")) {
+                assert!(live.contains(&within), "the switch is read inside {within}");
+            }
+        }
+    }
     for text in [&allows, &framing] {
         for line in text.lines().filter(|line| line.contains("delta_or_bless(")) {
             assert!(
@@ -197,6 +257,21 @@ fn r7_only_the_live_tests_read_the_switch() {
                 stack.push(path);
             } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                let reader = matches!(
+                    file.as_deref(),
+                    Some("allow_pins.rs" | "delivery_framing.rs" | "fragments.rs")
+                );
+                let calls = text.lines().map(str::trim_start).any(|line| {
+                    !line.starts_with("//")
+                        && !line.contains("fn bless_ticket")
+                        && line.contains(concat!("bless_", "ticket()"))
+                });
+                assert!(
+                    reader || !calls,
+                    "{} reads the bless switch",
+                    path.display()
+                );
                 assert!(
                     !text.contains(concat!("multiset", "_delta(")),
                     "{} still calls the old check",

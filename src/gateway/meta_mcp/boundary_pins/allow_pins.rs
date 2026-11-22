@@ -689,63 +689,16 @@ fn the_delta_comes_before_any_dump() {
     assert!(add < dump, "{err}");
 }
 
-/// The negative call R8 and R8b make: the allow check on a scratch table
-/// missing a row, passing no bless. It must fail and write nothing.
-fn negative_allow_call_writes_nothing() {
-    let (shortened, _) = without_first_row(&live_base("allows"));
-    let (scratch, table) = scratch_table("allows", &shortened, &[]);
-    allows_check(&inventory(), &table, None).expect_err("a missing row fails");
-    let written = scratch
-        .path()
-        .join("src/gateway/meta_mcp/boundary_pins/allows.d/9977.tsv");
-    assert!(
-        !written.exists(),
-        "a check passing no bless wrote {}",
-        written.display()
-    );
-}
-
-/// R8: in this process, a negative call writes nothing.
+/// R8: a negative check passes no bless, so it fails and writes nothing:
+/// every fragment of the scratch table is byte-identical before and after,
+/// whatever fragments the checkout already holds. That a helper never reads
+/// the environment itself is R7's source check.
 #[test]
 fn r8_a_negative_check_never_blesses() {
-    negative_allow_call_writes_nothing();
-}
-
-/// R8b's child: does its work only in the child process, which holds the
-/// bless variable; in every other run it returns at once.
-#[test]
-fn r8b_child_negative_check_under_a_set_variable() {
-    if std::env::var(super::fragments::BLESS_VAR).is_ok() {
-        negative_allow_call_writes_nothing();
-    }
-}
-
-/// R8b: the same negative call with `BOUNDARY_PINS_BLESS` really set, in a
-/// child copy of this test binary running that one test alone, so no live
-/// pin test ever shares the variable. The real tree's `allows.d/9977.tsv` must
-/// be byte-identical before and after; a check that read the variable itself
-/// would write it (the file is removed again if the child created it).
-#[test]
-fn r8b_a_set_variable_does_not_reach_a_negative_check() {
-    let before = super::fragments::live_fragment("allows", "9977");
-    let module = module_path!()
-        .split_once("::")
-        .map_or(module_path!(), |(_, rest)| rest);
-    let child = format!("{module}::r8b_child_negative_check_under_a_set_variable");
-    let run = crate::test_home::test_binary()
-        .args([child.as_str(), "--exact", "--test-threads=1"])
-        .env(super::fragments::BLESS_VAR, "9977")
-        .env_remove("CI")
-        .output()
-        .expect("the child test runs");
-    let after = super::fragments::live_fragment("allows", "9977");
-    if before.is_none() && after.is_some() {
-        super::fragments::drop_live_fragment("allows", "9977");
-    }
-    let said = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        run.status.success() && said.contains("1 passed; 0 failed"),
-        "the child must run exactly that one test and pass: {said}"
-    );
-    assert_eq!(before, after, "the child wrote into allows.d/9977.tsv");
+    let (shortened, _) = without_first_row(&live_base("allows"));
+    let (scratch, table) = scratch_table("allows", &shortened, &[]);
+    let before = super::fragments::fragment_bytes(scratch.path(), "allows");
+    allows_check(&inventory(), &table, None).expect_err("a missing row fails");
+    let after = super::fragments::fragment_bytes(scratch.path(), "allows");
+    assert_eq!(before, after, "a check passing no bless changed a fragment");
 }

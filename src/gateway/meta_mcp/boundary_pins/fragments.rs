@@ -330,23 +330,23 @@ fn append_rows(base: &Path, path: &Path, rows: &[&str]) -> std::io::Result<()> {
         .write_all(text.as_bytes())
 }
 
-/// The bytes of this checkout's fragment `<name>.d/<ticket>.tsv`, or `None`
-/// when it is absent: what a row compares before and after a child run.
-pub(super) fn live_fragment(name: &str, ticket: &str) -> Option<Vec<u8>> {
-    std::fs::read(live_fragment_path(name, ticket)).ok()
-}
-
-/// Remove this checkout's fragment `<name>.d/<ticket>.tsv`, which a failing
-/// row found created by a run that must not have written it.
-pub(super) fn drop_live_fragment(name: &str, ticket: &str) {
-    let _ = std::fs::remove_file(live_fragment_path(name, ticket));
-}
-
-fn live_fragment_path(name: &str, ticket: &str) -> PathBuf {
-    crate_root()
-        .join(DIR)
-        .join(format!("{name}.d"))
-        .join(format!("{ticket}.tsv"))
+/// Every fragment file of table `name` under `root`, by file name, with its
+/// bytes: what a row compares before and after a check.
+pub(super) fn fragment_bytes(root: &Path, name: &str) -> Vec<(String, Vec<u8>)> {
+    let dir = root.join(DIR).join(format!("{name}.d"));
+    let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    (name, std::fs::read(entry.path()).unwrap_or_default())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
 }
 
 /// The live base text of table `name` in this checkout.
