@@ -448,7 +448,7 @@ class DropIds(unittest.TestCase):
 
     def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
         HOLDS_CODE = "a tracker id in a parenthetical that holds code"
-        ODD_BACKTICK = "a tracker id on a line with an escaped or unclosed backtick"
+        ODD_BACKTICK = "a tracker id in a bullet with an escaped or unclosed backtick"
         cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
                  (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"),
                  (f"- v (`run {T}60`, {T}61).\n", 1, HOLDS_CODE),
@@ -461,7 +461,9 @@ class DropIds(unittest.TestCase):
                  (f"- c7 (`open ({T}65), #2).\n", 1, HOLDS_CODE),
                  (f"- c5 ``a ` f({T}59)`` here.\n", 1, "a tracker id in prose"),
                  (f"- e \\`x (#1, {T}66) here.\n", 1, ODD_BACKTICK),
-                 (f"- m `f(\n{T}67)`.\n", 2, ODD_BACKTICK))
+                 (f"- m `f(\n{T}67)`.\n", 2, ODD_BACKTICK),
+                 (f"- m2 `f(\n{T}68,\nx)`.\n", 2, ODD_BACKTICK),
+                 (f"- m3 `a\n  f({T}69)\n  b`.\n", 2, ODD_BACKTICK))
         for fragment, line, why in cases:
             with self.subTest(fragment=fragment):
                 with self.assertRaises(ValueError) as caught:
