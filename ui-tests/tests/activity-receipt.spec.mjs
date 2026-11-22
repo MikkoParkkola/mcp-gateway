@@ -291,6 +291,8 @@ test.describe('R receipt', () => {
       const box = await el.boundingBox();
       expect(box.x + box.width <= 390, `R5 ${path} stays inside 390 px (${JSON.stringify(box)})`).toBe(true);
     }
+    // axe waits on timers of its own; under the paused clock they never fire.
+    await page.clock.resume();
     expect(await blockingViolations(page), 'R5 axe at 390').toEqual([]);
   });
 
@@ -320,7 +322,9 @@ test.describe('R receipt', () => {
       const r = await receiptsFor(page);
       await r.open(ID_A);
       await (await r.request(0, `R7 ${status}`)).fail(Number(status));
-      await expect(page.locator(`#content [data-state="${state}"]`), `R7 ${status}: the ${state} state`).toBeVisible();
+      // A 401 is the shell's own sign-in, which takes over the page (as shell-loading checks).
+      const shown = status === '401' ? page.locator('#signin') : page.locator(`#content [data-state="${state}"]`);
+      await expect(shown, `R7 ${status}: the ${state} state`).toBeVisible();
       if (status === '500') {
         await expect(page.locator('#content').getByRole('button', { name: /retry/i }), 'R7 500: a retry').toBeVisible();
       } else {

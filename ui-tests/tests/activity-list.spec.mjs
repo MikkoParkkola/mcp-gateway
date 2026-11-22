@@ -785,6 +785,8 @@ test.describe('LE list screen', () => {
     await screen.quiet(2, 'LE4 three frames while held');
     await expect(screen.control(), 'LE4 the control shows').toBeVisible();
     expect(await screen.control().evaluate((el) => el.tagName), 'LE4 the control is a button').toBe('BUTTON');
+    // The announcer writes after its dwell, and the clock is paused.
+    await page.clock.runFor(2000);
     expect(await screen.said() - before, 'LE4 announced once for three frames').toBe(1);
     const box = await screen.control().boundingBox();
     const { height } = page.viewportSize();
@@ -1088,8 +1090,11 @@ test.describe('LE list screen', () => {
       await screen.request(1, `LE12 ${width}: page 2 held`);
       await stream.send(activityFrame(callRow('a.news')));
       await expect(screen.control(), `LE12 ${width}: the control shows`).toBeVisible();
+      // axe waits on timers of its own; under the paused clock they never fire.
+      await page.clock.resume();
       expect(await blockingViolations(page), `LE12 ${width}: axe`).toEqual([]);
-      expect(await page.locator('#announcer').getAttribute('aria-live'), `LE12 ${width}: polite`).toBe('polite');
+      // role=status is polite by definition; the shell's one live region carries no aria-live of its own.
+      expect(await page.locator('#announcer').getAttribute('role'), `LE12 ${width}: polite`).toBe('status');
     });
   }
 });
