@@ -115,7 +115,7 @@ async fn the_marker_outlives_values_already_back_at_startup() {
         start.cfg.clone(),
         Arc::clone(&live),
         registry,
-        Default::default(),
+        crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     )
     .expect("the reload context builds")

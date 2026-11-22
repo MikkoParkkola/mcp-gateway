@@ -467,7 +467,7 @@ fn rewrite_config(dir: &tempfile::TempDir, edit: impl FnOnce(&mut Config)) {
     };
     edit(&mut config);
     crate::gateway::test_helpers::write_owner_only(
-        &dir.path().join("gateway.yaml"),
+        dir.path().join("gateway.yaml"),
         crate::yaml::to_string(&config).expect("yaml"),
     )
     .expect("config written owner-only");
