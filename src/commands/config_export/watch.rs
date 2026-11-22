@@ -27,12 +27,6 @@ pub(super) async fn run_watch_loop(
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    println!();
-    println!(
-        "Watching {} for changes (Ctrl+C to stop)...",
-        config_path.display()
-    );
-
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = match recommended_watcher(tx) {
         Ok(w) => w,
@@ -54,6 +48,13 @@ pub(super) async fn run_watch_loop(
         eprintln!("Warning: Cannot watch {}: {e}", watch_path.display());
         return;
     }
+    // Printed only once the watch is live, so a reader of this line can edit
+    // the file and rely on the change being seen.
+    println!();
+    println!(
+        "Watching {} for changes (Ctrl+C to stop)...",
+        config_path.display()
+    );
 
     let debounce = Duration::from_millis(500);
     let mut last_event: Option<Instant> = None;

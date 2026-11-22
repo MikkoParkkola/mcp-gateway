@@ -60,31 +60,128 @@ pub(crate) struct GatewayEntry {
     pub(crate) notes: Vec<UrlNote>,
 }
 
-/// The host a client on this machine connects to for a bind host.
-pub(crate) fn connect_host(host: &str) -> String {
-    host.to_string()
+/// Why an export stops before writing anything: the declared address cannot
+/// be handed to a client.
+const PUBLIC_URL_REFUSED: &str = "server.public_url is not a URL a client can use: it must be \
+     http or https, name a host a client can reach, and carry no user, password, query or \
+     fragment. Fix it or remove it.";
+
+/// `host` without one pair of surrounding brackets.
+fn unbracketed(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
-/// The URL written into a proxy entry.
+/// A bind host that serves every interface: empty, or an unspecified IP
+/// (`0.0.0.0`, `::`), brackets allowed. The same rule as the router's own
+/// wildcard test, which is not reachable from here.
+fn is_wildcard(host: &str) -> bool {
+    let host = unbracketed(host);
+    host.is_empty()
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified())
+}
+
+/// The host a client on this machine connects to for a bind host: a wildcard
+/// becomes its family's loopback, an IPv6 address is bracketed once, and
+/// anything else (IPv4, a name) is kept.
+pub(crate) fn connect_host(host: &str) -> String {
+    let bare = unbracketed(host);
+    if is_wildcard(bare) {
+        // An empty host counts as IPv4; a colon means an IPv6 wildcard.
+        let loopback = if bare.contains(':') {
+            "[::1]"
+        } else {
+            "127.0.0.1"
+        };
+        return loopback.to_string();
+    }
+    if bare.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{bare}]")
+    } else {
+        bare.to_string()
+    }
+}
+
+/// Whether a parsed `server.public_url` can be given to a client.
+fn usable(url: &url::Url) -> bool {
+    let reachable = match url.host() {
+        Some(url::Host::Domain(_)) => true,
+        Some(url::Host::Ipv4(ip)) => !ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => !ip.is_unspecified(),
+        None => false,
+    };
+    matches!(url.scheme(), "http" | "https")
+        && reachable
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+/// The URL written into a proxy entry. A declared `server.public_url` decides
+/// scheme, host and port; otherwise the scheme follows TLS on the listener and
+/// the host is [`connect_host`] of the bind host.
 ///
 /// # Errors
 ///
 /// A `server.public_url` no client can use.
 pub(crate) fn gateway_url(config: &Config) -> Result<String, String> {
+    if let Some(declared) = &config.server.public_url {
+        // From the parsed value, never the text as typed: the parser drops
+        // surrounding spaces the text would carry into the entry.
+        let parsed = url::Url::parse(declared)
+            .ok()
+            .filter(usable)
+            .ok_or_else(|| PUBLIC_URL_REFUSED.to_string())?;
+        return Ok(format!("{}/mcp", parsed.as_str().trim_end_matches('/')));
+    }
+    let scheme = if config.mtls.enabled { "https" } else { "http" };
     Ok(format!(
-        "http://{}:{}/mcp",
-        config.server.host, config.server.port
+        "{scheme}://{}:{}/mcp",
+        connect_host(&config.server.host),
+        config.server.port
     ))
 }
 
-/// The notes for a proxy entry of `config`.
-pub(crate) fn url_notes(_config: &Config) -> Vec<UrlNote> {
-    Vec::new()
+/// The notes for a proxy entry of `config`, in the enum's order.
+pub(crate) fn url_notes(config: &Config) -> Vec<UrlNote> {
+    let tls = config.mtls.enabled;
+    let certificates = tls && config.mtls.require_client_cert;
+    // With a declared address the export cannot see what stands there, so it
+    // says only what holds if that address reaches the listener directly.
+    if config.server.public_url.is_some() {
+        return if certificates {
+            vec![UrlNote::ClientCertificateIfDirect]
+        } else {
+            Vec::new()
+        };
+    }
+    let mut notes = Vec::new();
+    if is_wildcard(&config.server.host) {
+        notes.push(UrlNote::WildcardBind);
+    }
+    if tls {
+        notes.push(UrlNote::TlsTrust {
+            host: connect_host(&config.server.host),
+        });
+    }
+    if certificates {
+        notes.push(UrlNote::ClientCertificate);
+    }
+    notes
 }
 
-/// The `host:port` the Auto mode probes for a running gateway.
+/// The `host:port` the Auto mode probes for a running gateway on this
+/// machine. It never reads `server.public_url`, which may name a proxy.
 pub(crate) fn probe_addr(config: &Config) -> String {
-    format!("{}:{}", config.server.host, config.server.port)
+    format!(
+        "{}:{}",
+        connect_host(&config.server.host),
+        config.server.port
+    )
 }
 
 /// Print each note's line once, in order.

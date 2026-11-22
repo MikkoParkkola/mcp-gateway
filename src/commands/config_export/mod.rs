@@ -619,7 +619,10 @@ pub async fn run_config_export(
     }
     println!();
     println!("Entry name: \"{name}\"");
-    println!("Gateway endpoint: configured from server.host/server.port");
+    match &gateway.url {
+        Some(url) => println!("Gateway endpoint: {url}"),
+        None => println!("Gateway endpoint: none (stdio entry)"),
+    }
 
     if watch {
         watch::run_watch_loop(target, mode, name, config_path).await;
