@@ -150,6 +150,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
     ),
     (
         "src/gateway/ui/mod.rs",
+        "config_history::config_history_router()",
+        Some("src/gateway/ui/config_history.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
         "restart::restart_router()",
         Some("src/gateway/ui/restart.rs"),
     ),
