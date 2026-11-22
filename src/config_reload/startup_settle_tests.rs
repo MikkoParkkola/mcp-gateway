@@ -367,8 +367,8 @@ async fn prepare_locks_a_writable_config() {
 /// folder must keep its entries and bytes, and the lock is free again.
 #[tokio::test]
 async fn prepare_refuses_a_retired_manifest_it_can_lock() {
-    let row = "prepare_refuses_a_retired_manifest_it_can_lock";
     const LEFT: &[u8] = b"written by an older gateway";
+    let row = "prepare_refuses_a_retired_manifest_it_can_lock";
     let (dir, config) = fresh_config();
     let manifest = dir.path().join("gateway.yaml.abandoned.retired");
     write_owner_only(&manifest, LEFT).expect("manifest");

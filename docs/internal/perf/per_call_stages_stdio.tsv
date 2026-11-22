@@ -35,6 +35,10 @@ src/gateway/server/construct.rs	new_evaluated_inner	-	Gateway construction, once
 src/gateway/server/construct.rs	new_evaluated_with_account_http	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_with_env	-	Gateway construction, once at startup
 src/gateway/server/construct.rs	new_with_path	-	Gateway construction, once at startup
+src/gateway/server/construct.rs	construct	-	the body all Gateway constructors share, run once at startup
+src/gateway/server/construct.rs	serving_data_dir	-	resolves where the record key and serving log live, once per construction
+src/gateway/server/serving_audit.rs	open	-	the serving log's single open during construction, never per tools/call
+src/gateway/server/serving_audit.rs	open_and_settle	-	settles a crashed write with the serving log at startup, before any backend registers
 src/gateway/server/construct.rs	reload_path	-	startup and config-watcher accessor, not per call
 src/gateway/server/construct.rs	set_retire_cell	-	stores the boot's retirement plan cell at startup, once per boot
 src/gateway/server/construct.rs	shutdown_account_custody	-	account-custody shutdown

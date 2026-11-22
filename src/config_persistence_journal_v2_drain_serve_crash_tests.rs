@@ -79,7 +79,7 @@ async fn serve_start(row: &str, config: &Path) -> crate::Result<crate::gateway::
 
 /// The distinct outcomes the log holds for `token`. A resend after a cut between an append and
 /// its flag repeats an equal record, which collapses here, as `converged` counts it
-/// (crash_f1_terminal); a second distinct outcome would be a terminal settled twice.
+/// (`crash_f1_terminal`); a second distinct outcome would be a terminal settled twice.
 fn outcomes_for(records: &[Value], token: &str) -> usize {
     records
         .iter()
