@@ -236,8 +236,11 @@ test.describe('LC list core', () => {
         const { handle: _a, ...aRest } = a;
         const { handle: _b, ...bRest } = b;
         expect(bRest, `${label}: premise, B is built like A`).toEqual(aRest);
+        // Called on the core itself: this row's own checks are the point, not the step invariants.
         const snapshot = r.state;
-        const late = how === 'answer' ? r.ok(a.handle, answer(Q0, 7, 'c8')) : r.fail(a.handle);
+        const late = core.settle(snapshot, how === 'answer'
+          ? { handle: a.handle, answer: answer(Q0, 7, 'c8'), fresh: {}, now: T3 }
+          : { handle: a.handle, failed: true, fresh: {}, now: T3 });
         expect(late.state, `${label}: state unchanged`).toEqual(snapshot);
         expect(late.abort, `${label}: aborts nothing`).toBeNull();
         expect(late.issue, `${label}: starts nothing`).toBeNull();
@@ -250,7 +253,7 @@ test.describe('LC list core', () => {
     started(r.replace(Q0, T1), 'page1', 'LC2 dirty: B');
     r.frame(T2);
     expect(r.state.dirty, 'LC2 dirty: premise, the frame set dirty').toBe(true);
-    const late = r.ok(a.handle, answer(Q0, 1, 'c2'));
+    const late = core.settle(r.state, { handle: a.handle, answer: answer(Q0, 1, 'c2'), fresh: {}, now: T3 });
     expect(late.state.dirty, 'LC2 dirty: still dirty').toBe(true);
     expect(late.issue, 'LC2 dirty: starts nothing').toBeNull();
   });
@@ -480,6 +483,7 @@ test.describe('LC list core', () => {
     const trailing = started(r.ok(live.handle, answer(Q0, 1, 'c2')), 'live', 'LC10: trailing refresh');
     r.fail(trailing.handle);
     expect(r.state.rows, 'LC10: a failed live refresh keeps the rows').toEqual(tags(Q0, 1));
+    expect(noticeSet(r.state), 'LC10: and fails as a live refresh, not as a page 1').toEqual(['stale']);
     started(r.next(T3), 'append', 'LC10: next page');
   });
 
