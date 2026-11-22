@@ -13,6 +13,10 @@ use super::*;
 
 const PAGE: &str = include_str!("../ui/index.html");
 
+/// How long one press's node run may take: the parent's 30 s bound, stated
+/// here so the timing guard can read it from this file.
+const NODE_WINDOW: Duration = Duration::from_secs(30);
+
 /// The text between the page's two CAP-CREATE comments.
 fn create_part() -> &'static str {
     let (_, rest) = PAGE
@@ -91,7 +95,7 @@ async fn press(addr: SocketAddr, name: &str, scripted: &str) -> Value {
     let mut node = Command::new("node");
     node.args(["--input-type=module", "-e", &program])
         .kill_on_drop(true);
-    let ran = tokio::time::timeout(GUARD, node.output())
+    let ran = tokio::time::timeout(NODE_WINDOW, node.output())
         .await
         .expect("the page's script finished in time")
         .expect("these rows drive the page's script with node, so node must be on PATH");
