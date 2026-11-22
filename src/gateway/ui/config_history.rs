@@ -4,6 +4,7 @@
 //! and an admin's restore of one kept version's gateway.yaml (POST) through
 //! the shared audited writer.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Extension, State, rejection::JsonRejection};
@@ -281,21 +282,15 @@ fn not_restored(kept: &Snapshot, baseline: Option<&Snapshot>, config: &str) -> V
             paths.push(*path);
         }
     }
+    // A path absent from a version reads as no entry, apart from one it
+    // lists with no bytes.
+    let on_restored: BTreeMap<&str, Option<&[u8]>> = restored.iter().copied().collect();
+    let on_served: BTreeMap<&str, Option<&[u8]>> = served.iter().copied().collect();
     paths
         .into_iter()
-        .filter(|path| bytes_at(&restored, path) != bytes_at(&served, path))
+        .filter(|path| on_restored.get(path) != on_served.get(path))
         .map(listed)
         .collect()
-}
-
-/// `path`'s entry in `list`: `None` when that version lists no such path.
-fn bytes_at<'l, 'a>(
-    list: &'l [(&str, Option<&'a [u8]>)],
-    path: &str,
-) -> Option<&'l Option<&'a [u8]>> {
-    list.iter()
-        .find(|(listed, _)| *listed == path)
-        .map(|(_, bytes)| bytes)
 }
 
 #[cfg(tp3)]
@@ -306,6 +301,7 @@ mod restore_scope_tests;
 #[cfg(test)]
 #[path = "config_history_restore_tests.rs"]
 mod restore_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_history_support_tests.rs"]
 mod support_tests;

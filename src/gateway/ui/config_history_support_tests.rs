@@ -296,7 +296,7 @@ impl Rig {
             .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_611))));
         match caller {
             Caller::Root => {
-                request = request.header(header::AUTHORIZATION, format!("Bearer {ROOT}"))
+                request = request.header(header::AUTHORIZATION, format!("Bearer {ROOT}"));
             }
             Caller::Viewer => {
                 request = request.header(header::AUTHORIZATION, format!("Bearer {VIEWER}"));
@@ -360,14 +360,13 @@ impl Rig {
             .await
             .expect("the router answers");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let cookie = response.headers()[header::SET_COOKIE]
+        response.headers()[header::SET_COOKIE]
             .to_str()
             .expect("a cookie")
             .split(';')
             .next()
             .expect("its pair")
-            .to_owned();
-        cookie
+            .to_owned()
     }
 }
 

@@ -13,6 +13,7 @@ use super::support_tests::{Audit, Caller, History, Rig, config_text, env_files, 
 use crate::config_reload::history::{Bounds, Event, Outcome, Source};
 
 /// The fixed text of the answer to a history that cannot be read.
+#[cfg(unix)]
 const UNREADABLE: &str = "the config history could not be read; nothing was changed";
 
 /// The revision of each entry of `list`, in order.
