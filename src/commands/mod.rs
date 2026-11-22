@@ -418,7 +418,7 @@ fn refuse_existing_tls_output(out: &std::path::Path, stem: &str) -> Result<(), E
             Err(e) => {
                 eprintln!(
                     "Error: cannot tell whether {} exists ({e}); nothing was written. \
-                     Check that the directory can be read, or choose a different --out.",
+                     Check the directory's access permissions, or choose a different --out.",
                     path.display()
                 );
                 return Err(ExitCode::FAILURE);
