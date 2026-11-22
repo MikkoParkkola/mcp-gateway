@@ -148,7 +148,7 @@ struct RestoreBody {
 async fn restore(
     State(state): State<Arc<AppState>>,
     guard: Guard,
-    Extension(_arrival): Extension<Arc<crate::config_reload::Generation>>,
+    Extension(arrival): Extension<Arc<crate::config_reload::Generation>>,
     session: Option<Extension<SessionMintedBy>>,
     body: Result<Json<RestoreBody>, JsonRejection>,
 ) -> Response {
@@ -162,8 +162,9 @@ async fn restore(
         .as_ref()
         .and_then(|client| client.quota_principal.as_ref());
     let minted = session.as_ref().map(|Extension(SessionMintedBy(key))| key);
-    let generation = state.live_config.generation();
-    if super::settings::caller_is_cli_key(generation.auth(), quota, minted) {
+    // The table the request was authenticated against, never a later one: a
+    // reload that drops the key mid-request must not lift the ban.
+    if super::settings::caller_is_cli_key(arrival.auth(), quota, minted) {
         return super::guard::Refused::Forbidden.into_response();
     }
     let version = match body {
