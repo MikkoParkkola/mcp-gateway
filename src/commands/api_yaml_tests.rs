@@ -89,7 +89,7 @@ async fn ok_stand() -> Stand {
     stand_in(StatusCode::OK, "application/json", "{}").await
 }
 
-/// T1: a save sends the body as given, from each input, with the ETag.
+/// T1: a save sends the body as given, from each input, with the `ETag`.
 #[tokio::test]
 async fn a_capability_save_sends_its_yaml_unchanged() {
     for body in [YAML, JSON_SHAPED] {
