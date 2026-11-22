@@ -12,7 +12,9 @@ use super::decide::{freeze_records, owner_mut};
 use super::fault;
 use super::{Delivery, DrainError, SettleSink};
 use crate::security::transparency_log::identity::LogId;
-use crate::security::transparency_log::settle::{Role, Unsettled};
+#[cfg(test)]
+use crate::security::transparency_log::settle::Role;
+use crate::security::transparency_log::settle::Unsettled;
 
 /// Every intent first, then the owed terminals frozen, then every record: the one delivery order,
 /// for the journal and for the abandoned file.

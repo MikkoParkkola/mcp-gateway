@@ -257,3 +257,48 @@ async fn reload_skips_before_recovery() {
         "{ROW} control: the original is back"
     );
 }
+
+/// WIRE.8 (#5202 seats): an artifact that cannot be proven absent blocks like one that is there.
+/// A 238-byte config name keeps the lock sidecar (244 bytes), the journal (255) and the abandoned
+/// file (248) inside the usual 255-byte name limit, but the retired manifest's name is 256 bytes,
+/// so its stat fails as too long instead of not found.
+#[cfg(unix)]
+#[tokio::test]
+async fn reload_skips_an_unprovable_artifact() {
+    const ROW: &str = "reload_skips_an_unprovable_artifact";
+    let name = format!("{}.yaml", "g".repeat(233));
+    for route in [Route::Deferred, Route::Recovering] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join(&name);
+        write_owner_only(&config, CONFIG).expect("config");
+        let manifest = dir.path().join(format!("{name}.abandoned.retired"));
+        let stat =
+            std::fs::symlink_metadata(&manifest).expect_err("premise: no such name can exist");
+        assert_ne!(
+            stat.kind(),
+            std::io::ErrorKind::NotFound,
+            "{ROW}: premise: the manifest's stat fails for a reason other than absence"
+        );
+        let sidecar = OsString::from(format!(".{name}.lock"));
+        let unlocked = |list: Listing| -> Listing {
+            list.into_iter()
+                .filter(|(entry, _)| *entry != sidecar)
+                .collect()
+        };
+        let before = unlocked(listing(dir.path()));
+        let outcome = take(route, &config).await;
+        match &outcome {
+            ReaderLock::Skip(why) => assert!(
+                why.contains("could not be checked"),
+                "{ROW} {route:?}: the skip says the check failed: {why}"
+            ),
+            other => panic!("{ROW} {route:?}: must skip, got {}", outcome_name(other)),
+        }
+        drop(outcome);
+        assert_eq!(
+            unlocked(listing(dir.path())),
+            before,
+            "{ROW} {route:?}: config unchanged, nothing written"
+        );
+    }
+}

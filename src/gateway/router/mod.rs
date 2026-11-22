@@ -371,6 +371,10 @@ mod ui_stream_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod canary_tests;
+/// A CLI user edits a capability by the revision the CLI prints.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod capability_cli_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]

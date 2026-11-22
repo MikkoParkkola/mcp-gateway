@@ -215,8 +215,10 @@ mod live_sections_tests;
 #[cfg(test)]
 mod owner_reload_tests;
 
-// The config-write startup gate, compiled for tests only until the serve paths take it.
-#[cfg(test)]
+// The config-write startup gate: path-backed constructors run it now; the serve paths next.
+// Unix only: the rows that stop a served start (a symlink re-point, a child killed) are.
+#[cfg(all(test, unix))]
+pub(crate) mod serve_seams;
 pub(crate) mod startup_settle;
 
 mod apply;
