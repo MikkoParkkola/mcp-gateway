@@ -1,0 +1,13 @@
+head_sha	cb7d5c57233568e9dae79833498fc5c66b317a25
+#mutant m-no-revision-line
+mcp_gateway	commands::api_tests::revision::an_answer_with_an_etag_prints_its_revision	src/commands/api_revision_tests.rs:34
+#mutant m-recipe-never
+mcp_gateway	commands::api_tests::revision::only_a_capability_save_or_delete_gets_a_recovery_recipe	src/commands/api_revision_tests.rs:91
+#mutant m-recipe-any-method
+mcp_gateway	commands::api_tests::revision::only_a_capability_save_or_delete_gets_a_recovery_recipe	src/commands/api_revision_tests.rs:91
+#mutant m-stale-delete-as-save
+mcp_gateway	commands::api_tests::revision::a_stale_write_names_the_recovery_its_method_needs	src/commands/api_revision_tests.rs:138
+#mutant m-stale-generic
+mcp_gateway	commands::api_tests::revision::a_stale_write_names_the_recovery_its_method_needs	src/commands/api_revision_tests.rs:138
+#mutant m-any-depth
+mcp_gateway	commands::api_tests::revision::only_a_capability_save_or_delete_gets_a_recovery_recipe	src/commands/api_revision_tests.rs:91
