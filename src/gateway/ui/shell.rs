@@ -25,8 +25,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.6532f4d1169a.js",
-        include_bytes!("shell/activity.6532f4d1169a.js"),
+        "activity.4bf17ef34e27.js",
+        include_bytes!("shell/activity.4bf17ef34e27.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,24 +49,32 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.31c6a46d61db.js",
-        include_bytes!("shell/gateway.31c6a46d61db.js"),
+        "gateway.1ed44710e747.js",
+        include_bytes!("shell/gateway.1ed44710e747.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.7d6f111a7157.js",
-        include_bytes!("shell/overview.7d6f111a7157.js"),
+        "overview.3f4266093e65.js",
+        include_bytes!("shell/overview.3f4266093e65.js"),
+    ),
+    (
+        "servers.09c536baf668.css",
+        include_bytes!("shell/servers.09c536baf668.css"),
+    ),
+    (
+        "servers.f91c76287b33.js",
+        include_bytes!("shell/servers.f91c76287b33.js"),
+    ),
+    (
+        "shell.9da3ee6648d7.js",
+        include_bytes!("shell/shell.9da3ee6648d7.js"),
     ),
     (
         "shell.c460caebf770.css",
         include_bytes!("shell/shell.c460caebf770.css"),
-    ),
-    (
-        "shell.d0963799aba0.js",
-        include_bytes!("shell/shell.d0963799aba0.js"),
     ),
     (
         "shell.nojs.4e34f233c1ba.css",
@@ -77,12 +85,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.fed6466b7bdc.json"),
     ),
     (
-        "tools.2a290fcdc815.js",
-        include_bytes!("shell/tools.2a290fcdc815.js"),
-    ),
-    (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
+    ),
+    (
+        "tools.c250b0eec9c2.js",
+        include_bytes!("shell/tools.c250b0eec9c2.js"),
     ),
     (
         "tooltip.04e4f1b0ef1f.js",

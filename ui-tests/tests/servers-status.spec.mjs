@@ -68,7 +68,7 @@ const content = (page) => page.locator('#content');
 const block = (page, start) => page.getByRole('region', { name: new RegExp(`^${start} · \\d+`) });
 const statusRow = (scope, name) => scope.locator('tr').filter({ has: scope.page().getByRole('rowheader', { name, exact: true }) });
 const groupButton = (page, label) => block(page, 'Answering').getByRole('button', { name: label, exact: true });
-const groupRow = (page, label) => block(page, 'Answering').locator('tr').filter({ has: groupButton(page, label) });
+const groupRow = (page, label) => block(page, 'Answering').locator('tr').filter({ has: page.getByRole('button', { name: label, exact: true }) });
 const QUIET = 'Could not check this machine for servers outside the gateway.';
 
 // ------------------------------------------------------------ fixtures

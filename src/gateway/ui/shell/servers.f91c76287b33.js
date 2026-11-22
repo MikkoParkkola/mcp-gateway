@@ -1,0 +1,267 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// Servers › Status. Reads /ui/api/status and, once it has servers to show (or
+// an empty list), the registry and discovery once per render. Precedence on
+// the status answer: a failed read shows the error banner, the counts-only
+// shape the forbidden state, an empty list the empty state, and servers the
+// groups. A gateway-status event re-reads status alone, never two at a time:
+// events that arrive during a read ask for one more read after it. The
+// listener goes away at the first event after the screen has left the page
+// (the shell gives a screen no leave hook). Gateway strings go in as text.
+import { register, el, serverBadge, SERVER_STATES } from '/ui/assets/shell.9da3ee6648d7.js';
+
+/** Registry category to group label; a server with no labelled category goes under Other. */
+export const GROUP_LABELS = {
+  cloud: 'Cloud',
+  code: 'Code',
+  communication: 'Communication',
+  crm: 'CRM',
+  database: 'Databases',
+  'dev-tools': 'Developer tools',
+  filesystem: 'Files',
+  finance: 'Finance',
+  knowledge: 'Knowledge',
+  memory: 'Memory',
+  monitoring: 'Monitoring',
+  productivity: 'Productivity',
+  search: 'Search and web',
+  utility: 'Utilities',
+  'vector-db': 'Vector databases',
+};
+const OTHER = 'Other';
+
+/** Needs a look, worst first. Any state that is neither here nor answering sorts after these. */
+const WORST_FIRST = ['paused', 'needs_sign_in', 'refused', 'unhealthy'];
+/** The states grouped under Answering, and the word each member row shows. */
+const MEMBER_WORD = { running: 'Answering', slow: 'Slow', dormant: 'Idle' };
+const answers = (s) => Object.hasOwn(MEMBER_WORD, s.state);
+
+/** States whose `reason` is always one of the gateway's own sentences (server_state.rs). */
+const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
+
+const QUIET_LINE = 'Could not check this machine for servers outside the gateway.';
+
+const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const known = (n) => typeof n === 'number' && Number.isFinite(n);
+const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(1)} s`);
+const notKnown = () => el('td', { 'aria-label': 'not known' }, '—');
+const numberCell = (n) => (known(n) ? el('td', { class: 'num' }, String(n)) : notKnown());
+const p95Cell = (n) => (known(n) ? el('td', { class: 'num' }, ms(n)) : notKnown());
+
+/** The words after a needs-a-look badge: a retry time, the gateway's sentence, or the shell's. */
+function detail(s) {
+  if (s.state === 'paused') {
+    const at = typeof s.next_retry_at === 'string' ? new Date(s.next_retry_at) : null;
+    return at && !Number.isNaN(at.getTime()) ? `retries ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+  }
+  if (SAYS_REASON.has(s.state)) return typeof s.reason === 'string' ? s.reason : '';
+  // A Refused reason can name raw policy codes or setting ids: the shell's words instead.
+  if (s.state === 'refused') return SERVER_STATES.refused.banner(s);
+  return ''; // a state this page does not know: its badge says so
+}
+
+function stateCell(badge, words) {
+  const cell = el('td', {}, badge);
+  if (words) cell.append(' ', el('span', { class: 'sv-why' }, words));
+  return cell;
+}
+
+/** A member row's badge: the state's glyph and tone, with the screen's own word. */
+function memberBadge(state) {
+  const row = SERVER_STATES[state];
+  return el('span', { class: `lb ${row.tone} plain` }, el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', MEMBER_WORD[state]);
+}
+
+const head = () => el('thead', {}, el('tr', {},
+  el('th', { scope: 'col' }, 'Server'), el('th', { scope: 'col' }, 'State'), el('th', { scope: 'col', class: 'num' }, 'Tools'),
+  el('th', { scope: 'col', class: 'num' }, 'Calls, last 24 h'), el('th', { scope: 'col', class: 'num' }, 'p95')));
+
+/** One titled block: its heading names the region, and the table scrolls on its own when narrow. */
+function block(title, count, tbody, ...after) {
+  const id = `sv-${slug(title)}`;
+  return el('section', { class: 'sv-block', 'aria-labelledby': id },
+    el('h2', { id }, `${title} · ${count}`),
+    el('div', { class: 'sv-scroll', tabindex: 0, role: 'region', 'aria-label': `${title}, table` },
+      el('table', { class: 't sv-table' }, head(), tbody)),
+    ...after);
+}
+
+function needsBlock(list) {
+  const rank = (s) => (WORST_FIRST.includes(s.state) ? WORST_FIRST.indexOf(s.state) : WORST_FIRST.length);
+  const sorted = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  return block('Needs a look', sorted.length, el('tbody', {}, ...sorted.map((s) => el('tr', {},
+    el('th', { scope: 'row' }, s.name), stateCell(serverBadge(s.state, { plain: true }), detail(s)),
+    numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)))));
+}
+
+function groupsOf(list, categories) {
+  const byLabel = new Map();
+  for (const s of list) {
+    const cat = categories?.get(s.name);
+    const label = typeof cat === 'string' && Object.hasOwn(GROUP_LABELS, cat) ? GROUP_LABELS[cat] : OTHER;
+    if (!byLabel.has(label)) byLabel.set(label, []);
+    byLabel.get(label).push(s);
+  }
+  return [...byLabel].sort(([a], [b]) => (a === OTHER) - (b === OTHER) || a.localeCompare(b))
+    .map(([label, members]) => ({ label, members: members.sort((a, b) => a.name.localeCompare(b.name)) }));
+}
+
+function groupSummary(members) {
+  const count = (state) => members.filter((s) => s.state === state).length;
+  const slow = count('slow');
+  const idle = count('dormant');
+  let words = `${count('running') + slow} answering`;
+  if (slow) words += ` · ${slow} slow`;
+  if (idle) words += ` · ${idle} idle`;
+  const sum = (key) => members.reduce((n, s) => n + (known(s[key]) ? s[key] : 0), 0);
+  const p95s = members.map((s) => s.latency_p95_ms).filter(known);
+  const top = p95s.length ? Math.max(...p95s) : null;
+  return [
+    el('td', {}, words),
+    el('td', { class: 'num' }, String(sum('tools_cached'))),
+    el('td', { class: 'num' }, String(sum('calls_24h'))),
+    top === null ? notKnown() : el('td', { class: 'num', 'aria-label': `Highest p95 among its servers: ${ms(top)}` }, ms(top)),
+  ];
+}
+
+function answeringBlock(list, categories, view) {
+  const tbody = el('tbody', {});
+  for (const { label, members } of groupsOf(list, categories)) {
+    const key = slug(label);
+    const button = el('button', { type: 'button', class: 'sv-group', 'aria-expanded': 'false', 'data-group': key }, label);
+    button.addEventListener('click', () => {
+      view.open = view.open === key ? null : key;
+      const url = new URL(location.href);
+      if (view.open) url.searchParams.set('open', view.open);
+      else url.searchParams.delete('open');
+      history.replaceState(history.state, '', url);
+      showOpen(tbody, view.open);
+    });
+    tbody.append(el('tr', { class: 'sv-group-row' }, el('th', { scope: 'row' }, button), ...groupSummary(members)));
+    for (const s of members) {
+      const words = s.state === 'slow' && typeof s.reason === 'string' ? s.reason : '';
+      tbody.append(el('tr', { class: 'sv-member', 'data-member-of': key },
+        el('th', { scope: 'row' }, s.name), stateCell(memberBadge(s.state), words),
+        numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)));
+    }
+  }
+  showOpen(tbody, view.open);
+  return block('Answering', list.length, tbody,
+    el('p', { class: 't3 sv-note' }, "A group's p95 is the highest of its servers' p95s, not one pooled across them."));
+}
+
+/** Open the group `key` (or none) and shut every other one, in place. */
+function showOpen(tbody, key) {
+  for (const b of tbody.querySelectorAll('button[data-group]')) b.setAttribute('aria-expanded', String(b.dataset.group === key));
+  for (const r of tbody.querySelectorAll('tr[data-member-of]')) r.hidden = r.dataset.memberOf !== key;
+}
+
+/** Rule D: unmanaged finds no status row names, or the quiet line when discovery failed. */
+function outsideBlock(discovery, statusNames) {
+  if (!discovery.ok) return el('p', { class: 't3 sv-quiet' }, QUIET_LINE);
+  const finds = discovery.servers.filter((f) => f && f.managed === false && typeof f.name === 'string' && !statusNames.has(f.name));
+  if (!finds.length) return null;
+  return block('Not behind the gateway', finds.length, el('tbody', {}, ...finds.map((f) => {
+    const who = el('th', { scope: 'row' }, f.name);
+    if (typeof f.source === 'string' && f.source) who.append(' ', el('span', { class: 't3' }, f.source));
+    return el('tr', {}, who, el('td', {}, serverBadge('unmanaged', { plain: true })), notKnown(), notKnown(), notKnown());
+  })));
+}
+
+async function readOr(ctx, path) {
+  try {
+    return { ok: true, body: await ctx.api(path) };
+  } catch {
+    return { ok: false, body: null };
+  }
+}
+
+function statusTab(body, ctx) {
+  const root = el('div', { class: 'sv' });
+  body.append(root);
+  // Per render: the registry's categories and the discovery answer, each read once.
+  const view = { open: new URL(location.href).searchParams.get('open'), extras: null };
+  let reading = false;
+  let again = false;
+
+  const retry = () => {
+    const button = el('button', { type: 'button', class: 'btn' }, 'Retry');
+    button.addEventListener('click', () => { refresh().catch(() => {}); });
+    return button;
+  };
+  const alone = (kind) => {
+    root.replaceChildren();
+    ctx.show(kind, kind === 'error' ? { body: 'The gateway did not answer with its servers.', action: retry() } : {});
+  };
+
+  async function paint() {
+    let answer;
+    try {
+      answer = await ctx.api('/ui/api/status');
+    } catch (err) {
+      if (err?.status === 401) throw err; // the shell is showing sign-in
+      return alone('error');
+    }
+    if (!root.isConnected) return;
+    if (!Array.isArray(answer?.servers)) return alone('forbidden');
+    if (!view.extras) {
+      view.extras = Promise.all([readOr(ctx, '/ui/api/registry'), readOr(ctx, '/ui/api/discovery')]).then(([registry, found]) => ({
+        categories: registry.ok && Array.isArray(registry.body?.entries)
+          ? new Map(registry.body.entries.filter((e) => e && typeof e.name === 'string').map((e) => [e.name, e.category]))
+          : null,
+        discovery: found.ok && Array.isArray(found.body?.servers) ? { ok: true, servers: found.body.servers } : { ok: false },
+      }));
+    }
+    const { categories, discovery } = await view.extras;
+    if (!root.isConnected) return;
+    const servers = answer.servers.filter((s) => s && typeof s.name === 'string');
+    const focused = document.activeElement?.closest?.('.sv') === root ? document.activeElement.dataset.group : undefined;
+    ctx.show(null);
+    const parts = [];
+    if (!servers.length) {
+      const add = el('a', { class: 'btn', href: '/ui/classic' }, 'Add a server');
+      parts.push(ctx.state('empty', { title: 'No servers behind the gateway yet', body: 'Add one and it shows here with its state.', action: add }));
+    }
+    const needs = servers.filter((s) => !answers(s));
+    if (needs.length) parts.push(needsBlock(needs));
+    const fine = servers.filter(answers);
+    if (fine.length) parts.push(answeringBlock(fine, categories, view));
+    const outside = outsideBlock(discovery, new Set(servers.map((s) => s.name)));
+    if (outside) parts.push(outside);
+    root.replaceChildren(...parts);
+    if (focused) root.querySelector(`button[data-group="${CSS.escape(focused)}"]`)?.focus();
+  }
+
+  async function refresh() {
+    if (reading) {
+      again = true;
+      return;
+    }
+    reading = true;
+    try {
+      do {
+        again = false;
+        await paint();
+      } while (again && root.isConnected);
+    } finally {
+      reading = false;
+    }
+  }
+
+  const onStatus = () => {
+    if (!root.isConnected) {
+      removeEventListener('gateway-status', onStatus);
+      return;
+    }
+    refresh().catch(() => {});
+  };
+  addEventListener('gateway-status', onStatus);
+  return refresh();
+}
+
+register('servers', {
+  title: 'Servers',
+  tabs: { status: statusTab, actions: null, settings: null },
+  entries: [],
+});
