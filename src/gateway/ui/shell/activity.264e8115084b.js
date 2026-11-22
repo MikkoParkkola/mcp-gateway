@@ -121,7 +121,9 @@ async function statusTab(body, ctx) {
   if (filters.key) active.append(h('span', { class: 'activity-label' }, 'Key'), h('span', { class: 'activity-value' }, filters.key));
 
   const empty = h('div', { class: 'activity-empty' });
-  const rowsEl = h('div', { class: 'activity-rows' });
+  // Focusable by script only (outside the Tab order): it holds focus when the end of the
+  // list has nothing left that could, until the next draw offers a real target.
+  const rowsEl = h('div', { class: 'activity-rows', tabindex: '-1' });
   // The observer's target, after the last row. Not focusable: Tab from the
   // search lands on the first row.
   const sentinel = h('div', { class: 'activity-more', 'aria-hidden': 'true' });
@@ -322,8 +324,8 @@ async function statusTab(body, ctx) {
 
   /** Where focus goes when the face it sat in changes: its button, else the last row, else the empty state. */
   const faceTarget = () => moreLine.querySelector('button') ?? rowsEl.lastElementChild ?? empty.querySelector('h2')
-    // Last, the slot itself: a Retry pressed with no rows reads there.
-    ?? (moreLine.hidden ? null : moreLine);
+    // Then the slot itself (a Retry pressed with no rows reads there), else the rows container.
+    ?? (moreLine.hidden ? rowsEl : moreLine);
 
   /** A paging press: focus waits on the row the next page follows, or on the slot with no rows. */
   function pressFrom() {
@@ -395,7 +397,10 @@ async function statusTab(body, ctx) {
         : !list.cursor ? null
           : list.stalled ? 'look' : 'more';
     // Read before the rebuild: a removed button takes focus with it.
-    const refocus = want !== face && !placing && moreLine.contains(document.activeElement);
+    // The end area: the slot, the empty state, or the rows container holding focus for them.
+    const at = document.activeElement;
+    const inEnd = !placing && (moreLine.contains(at) || empty.contains(at) || at === rowsEl);
+    const faceMoved = want !== face;
     if (want !== face) {
       face = want;
       showFace(want);
@@ -415,7 +420,10 @@ async function statusTab(body, ctx) {
     empty.replaceChildren();
     if (!list.flight && rows.length === 0 && !list.cursor && !failedShown) empty.append(emptyNode());
     // The face focus sat in changed: focus stays in the list, after the empty state is drawn.
-    if (refocus) faceTarget()?.focus({ preventScroll: true });
+    // Focus there moves on when the face changed, when its element went or hid, or when the
+    // rows container held it and a real target may exist now.
+    const gone = !at?.isConnected || at.closest('[hidden]') !== null;
+    if (inEnd && (faceMoved || gone || at === rowsEl)) faceTarget()?.focus({ preventScroll: true });
     readOn();
   }
 

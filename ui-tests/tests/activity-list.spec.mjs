@@ -1527,4 +1527,33 @@ test.describe('LE list screen', () => {
     // No button, no row and no empty state remain, so the slot itself holds focus.
     await expect.poll(() => screen.focusOnSlot(), { message: 'LE23 focus waits on the slot' }).toBe(true);
   });
+
+  /** Whether focus sits on the rows container itself. */
+  const focusOnRows = (page) => page.evaluate(() => document.activeElement?.classList.contains('activity-rows') ?? false);
+
+  for (const drive of ['refresh', 'reset']) {
+    test(`LE24 an empty list end keeps focus in the list through a ${drive}`, async ({ page, request }, testInfo) => {
+      const label = `LE24 ${drive}`;
+      const { screen, stream } = await screenFor(page, request, testInfo);
+      await screen.open(stream);
+      await (await screen.request(0, `${label}: page 1`)).answer(stopped([]));
+      await screen.button(KEEP_LOOKING).click();
+      const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', `${label}: the press asks c2`);
+      const heading = screen.emptyState().locator('h2');
+      if (drive === 'refresh') {
+        await p2.answer({ rows: [], next_cursor: null });
+        await expect(heading, `${label}: premise, the heading has focus`).toBeFocused();
+        await stream.send(activityFrame(callRow('a.live')));
+      } else {
+        // News held while the press reads; the reset turns it into one refresh.
+        await stream.send(activityFrame(callRow('a.live')));
+        await p2.answer({ rows: [], next_cursor: null, cursor_reset: true });
+      }
+      const live = await screen.request(2, `${label}: a refresh is out`);
+      await expect(screen.emptyState(), `${label}: no empty state while it reads`).toHaveCount(0);
+      await expect.poll(() => focusOnRows(page), { message: `${label}: the list holds focus` }).toBe(true);
+      await live.answer({ rows: [], next_cursor: null });
+      await expect(heading, `${label}: the heading has focus again`).toBeFocused();
+    });
+  }
 });
