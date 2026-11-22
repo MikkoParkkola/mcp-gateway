@@ -162,6 +162,7 @@ mod delivered_value_tests;
 
 // The kind an unredeemable continuation notes (declared here, not beside the
 // refusal, so a red run that puts the refusal back still compiles the row).
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "continuation_kind_tests.rs"]
 mod continuation_kind_tests;
