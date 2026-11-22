@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_persistence_lock.rs	recover_held	refuse_pending_v2	1	no-record	a config write: recovery under a held lock (the lock's own on-acquire step and a reload's, after its artifact check) refuses a pending v2 journal for a v1 caller; it writes nothing; no call delivery
