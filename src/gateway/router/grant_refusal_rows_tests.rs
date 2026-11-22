@@ -106,10 +106,33 @@ fn identity() -> crate::key_server::oidc::VerifiedIdentity {
     )
 }
 
+/// This rig with message signing switched on (a nonce optional), so a
+/// `gateway_invoke` sent with a nonce is judged while signing is prepared.
+async fn signed_rig(endpoint: &Endpoint) -> Rig {
+    let mut rig = rig(endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+    let signer = crate::security::message_signing::MessageSigner::new(
+        b"grant-refusal-rows-signing-secret".to_vec(),
+        None,
+        "grant-rows".to_owned(),
+    );
+    let state = Arc::get_mut(&mut rig.state).expect("state is unique");
+    let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
+    meta.enable_message_signing(signer, Duration::from_secs(300), false);
+    rig
+}
+
 /// One `tools/call` of `name` by the caller, over `/mcp`.
 async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
-    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    mcp_call_signed(rig, name, arguments, None).await
+}
+
+/// That call, carrying `nonce` as its signing nonce when one is given.
+async fn mcp_call_signed(rig: &Rig, name: &str, arguments: &Value, nonce: Option<&str>) -> Value {
+    let mut meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                       "io.modelcontextprotocol/clientCapabilities": {}});
+    if let Some(nonce) = nonce {
+        meta[crate::gateway::meta_mcp::signing::NONCE_META] = json!(nonce);
+    }
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": name, "arguments": arguments, "_meta": meta}});
     let mut request = Request::builder()
@@ -178,6 +201,33 @@ async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
     assert_eq!(rows[0]["server"], json!(CAPS), "{rows:#?}");
     assert_eq!(rows[0]["tool"], json!(PERSONAL), "{rows:#?}");
+}
+
+/// The same `gateway_invoke`, signed: refused while signing is prepared,
+/// before the route stage. The refusal writes its own invocation record, the
+/// decision says so and names the same trace, and Activity lists the call
+/// once (the stdio twin is `grant_decision_stdio.rs`).
+#[tokio::test]
+async fn a_signing_time_grant_refusal_is_one_activity_row() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = signed_rig(&endpoint).await;
+
+    let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
+    let answer = mcp_call_signed(&rig, "gateway_invoke", &invoke, Some("grant-rows-0001")).await;
+
+    assert!(answer.get("error").is_some(), "premise: refused: {answer}");
+    let held = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}: {answer}");
+    let calls = invocations(&rig.dir);
+    assert_eq!(calls.len(), 1, "the refusal's own record: {answer}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    assert_eq!(
+        calls[0]["trace_id"], held[0]["trace_id"],
+        "{calls:#?} {held:#?}"
+    );
+    let rows = activity(&rig, "").await;
+    assert_eq!(rows.len(), 1, "one call, one row: {rows:#?}");
+    assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
 }
 
 /// A surfaced tool the caller's key withholds (`denied_tools`), where the

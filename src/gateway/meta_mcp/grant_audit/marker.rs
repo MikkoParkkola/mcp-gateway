@@ -42,6 +42,28 @@ impl Landing {
     }
 }
 
+/// Gives a signing refusal's trace to the grant note signing took for its
+/// target. Signing refused before the dispatch minted one, so that note is
+/// still untraced; with the refusal's trace on it, the decision and the
+/// invocation record name one call, and the landed record marks it recorded.
+pub(crate) fn stamp_refused(server: &str, tool: &str, trace_id: &str) {
+    stamp_untraced(server, tool, trace_id.to_owned());
+}
+
+/// Puts `trace` on the open slot's last untraced note for `(server, tool)`.
+pub(super) fn stamp_untraced(server: &str, tool: &str, trace: String) {
+    let _ = super::GRANT_SLOT.try_with(|slot| {
+        let mut notes = slot.notes.lock().expect("grant slot lock");
+        if let Some(note) = notes
+            .iter_mut()
+            .rev()
+            .find(|n| n.trace_id.is_none() && n.server == server && n.tool == tool)
+        {
+            note.trace_id = Some(trace);
+        }
+    });
+}
+
 /// The retry cell of the enclosing [`with_retry_trace`], if any.
 pub(super) fn current_retry() -> Option<RetryCell> {
     RETRY_TRACE.try_with(Clone::clone).ok()

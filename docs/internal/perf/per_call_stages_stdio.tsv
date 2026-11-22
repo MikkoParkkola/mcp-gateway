@@ -119,7 +119,7 @@ src/gateway/server/mod.rs	from	-	on-path, untimed: wraps an early answer of a st
 src/gateway/server/mod.rs	history_hook	-	startup config history hook, not per call
 src/gateway/server/mod.rs	leaky_single_user_backends	-	startup config, not per call
 src/gateway/server/mod.rs	stdio_audit_who	-	on-path, untimed: an early stdio signing refusal only, recorded before the caller context exists; the harness does not configure signing
-src/gateway/server/mod.rs	stdio_record_principal	stdio_invoke_tiny	on the stdio single-request path (build_stdio_caller_context names every stdio record's principal through it)
+src/gateway/server/mod.rs	stdio_record_principal	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/persistence.rs	advance_until_saved	-	shutdown and periodic cost-save catch-up, off the request path
 src/gateway/server/persistence.rs	boot_cost_governance	-	startup cost-governance restore, once per serve
 src/gateway/server/persistence.rs	ensure_data_dir	-	startup data-directory creation, once per serve

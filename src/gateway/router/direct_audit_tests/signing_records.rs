@@ -290,7 +290,7 @@ async fn s6m_mcp_two_nonces_record_syntax() {
 
 /// N2a: a request with no id at all reaches the early nonce refusal
 /// (restore has no id to check, and `/mcp` asks for one only later, in
-/// parse_request_ref): answered with no id and the nonce's own words, as
+/// `parse_request_ref`): answered with no id and the nonce's own words, as
 /// before, and recorded once.
 #[tokio::test]
 async fn n2a_mcp_an_id_less_early_refusal_is_recorded() {
