@@ -190,6 +190,8 @@ fn strip_withholds_what_it_cannot_place() {
     const ROW: &str = "strip_withholds_what_it_cannot_place";
     let destructive = kernel(|policy| {
         policy.destructive_instruction_decision = ContextIntegrityDecisionKind::Strip;
+        // The pipe-to-shell line is also an injection, and the baseline quarantines those.
+        policy.untrusted_instruction_decision = ContextIntegrityDecisionKind::Strip;
     });
     for (case, text) in [
         ("clean", "data\nmore data"),
@@ -203,6 +205,15 @@ fn strip_withholds_what_it_cannot_place() {
         ),
     ] {
         let evaluation = evaluate(&destructive, Value::String(text.to_owned()), true);
+        let from_text = evaluation.classification.findings.iter().any(|f| {
+            f.classifier == ContextIntegrityClassifier::DestructiveInstruction
+                && f.evidence != "destructive tool boundary"
+        });
+        assert_eq!(
+            from_text,
+            case.contains("same-class"),
+            "{ROW} {case}: premise: a text finding of the destructive classifier"
+        );
         assert_withheld(ROW, case, &evaluation);
     }
 }
