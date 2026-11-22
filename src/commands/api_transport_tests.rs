@@ -419,7 +419,7 @@ async fn if_match_controls_capability_delete() {
                     6,
                     "Gateway",
                     "If-Match is required.",
-                    "Load it with api GET /ui/api/capabilities/x, check it is the version to delete, then delete with --if-match set to the revision that load printed.",
+                    "Run api GET /ui/api/capabilities/x, confirm it is the version you mean to remove, and delete with --if-match set to the revision it printed.",
                     Some(428),
                     None,
                 );

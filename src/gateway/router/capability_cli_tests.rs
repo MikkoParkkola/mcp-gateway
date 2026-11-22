@@ -23,8 +23,8 @@ const THEIR_FIELD: (&str, &str) = (
 );
 const MY_FIELD: (&str, &str) = ("path: /alpha", "path: /beta");
 /// The 428 a save meets without a revision, as the CLI prints it.
-const SAVE_RECIPE: &str = "Load it again with api GET /ui/api/capabilities/twofield, reapply your edit to that text, then save with --if-match set to the revision that load printed.";
-const DELETE_RECIPE: &str = "Load it with api GET /ui/api/capabilities/twofield, check it is the version to delete, then delete with --if-match set to the revision that load printed.";
+const SAVE_RECIPE: &str = "Run api GET /ui/api/capabilities/twofield again, apply your change to the text it returns, and save that with --if-match set to the revision it printed.";
+const DELETE_RECIPE: &str = "Run api GET /ui/api/capabilities/twofield, confirm it is the version you mean to remove, and delete with --if-match set to the revision it printed.";
 
 /// The capability both writers start from.
 fn original() -> String {
