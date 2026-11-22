@@ -40,39 +40,49 @@ pub(in crate::gateway) async fn meta_mcp_handler(
     // stream that polls it after this handler returns still has its scope.
     // MIK-8176: every answer is handed off where its bytes leave (the JSON
     // reply, or the stream's answer event), so unsent slots are given back.
-    let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
-        crate::gateway::meta_mcp::grant_audit::slot_http(
-            logger.clone(),
-            // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
-            Box::pin(async move {
-                crate::gateway::outbound::read_scoped(
-                    guard_for_scope,
-                    Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
-                        Arc::clone(&state.meta_mcp),
-                        // One visibility judgement per request (MIK-8340),
-                        // from intake's sanitize exemption (MIK-8154 D1) to
-                        // the dispatch: the scope rides this future, so a
-                        // notification-first stream polling it after the
-                        // handler returns still reads the same answers.
-                        // Boxed first: the memo then wraps a pointer, so no
-                        // frame polled through the dispatch holds a copy of it.
-                        // The minted-receipt scope rides outside the memo.
-                        crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-                            // The caller's hiding judgment, filled at intake.
-                            crate::gateway::meta_mcp::hiding::with_caller_slot(
-                                crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
-                                    // One delivery's facts: the dispatch and its record.
-                                    Box::pin(crate::gateway::delivery_facts::scope(
-                                        meta_mcp_dispatch(state, http_request),
-                                    )),
+    // The exchanged token this request was made with, read before the request
+    // moves into the dispatch. Its scope wraps the dispatch future itself, so a
+    // stream that polls the dispatch after this handler returns still has it.
+    let token = http_request
+        .extensions()
+        .get::<crate::gateway::auth::live::CredentialFacts>()
+        .and_then(crate::gateway::auth::live::CredentialFacts::token_on_call);
+    let dispatch = crate::security::decision_record::with_token(
+        token,
+        crate::gateway::meta_mcp::sealed_hold::scoped(
+            crate::gateway::meta_mcp::grant_audit::slot_http(
+                logger.clone(),
+                // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
+                Box::pin(async move {
+                    crate::gateway::outbound::read_scoped(
+                        guard_for_scope,
+                        Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                            Arc::clone(&state.meta_mcp),
+                            // One visibility judgement per request (MIK-8340),
+                            // from intake's sanitize exemption (MIK-8154 D1) to
+                            // the dispatch: the scope rides this future, so a
+                            // notification-first stream polling it after the
+                            // handler returns still reads the same answers.
+                            // Boxed first: the memo then wraps a pointer, so no
+                            // frame polled through the dispatch holds a copy of it.
+                            // The minted-receipt scope rides outside the memo.
+                            crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
+                                // The caller's hiding judgment, filled at intake.
+                                crate::gateway::meta_mcp::hiding::with_caller_slot(
+                                    crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
+                                        // One delivery's facts: the dispatch and its record.
+                                        Box::pin(crate::gateway::delivery_facts::scope(
+                                            meta_mcp_dispatch(state, http_request),
+                                        )),
+                                    ),
                                 ),
-                            ),
+                            )),
                         )),
-                    )),
-                )
-                .await
-                .0
-            }),
+                    )
+                    .await
+                    .0
+                }),
+            ),
         ),
     );
 

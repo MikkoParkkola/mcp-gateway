@@ -6,6 +6,8 @@ use super::{Decided, Decision, DecisionKind, Effect};
 
 fn decision(kind: DecisionKind, rule_id: Option<&str>) -> Decision {
     Decision {
+        token: None,
+        token_unavailable: false,
         v: 1,
         config_revision: Some("hmac-sha256:00aa".to_owned()),
         config_revision_capabilities: None,
@@ -46,7 +48,12 @@ fn the_wire_names_are_the_agreed_ones() {
 /// The kind `noted` records for a call whose outcome is `outcome`.
 fn recorded(noted: &super::Noted, outcome: crate::security::audit::AuditOutcome) -> DecisionKind {
     noted
-        .decision(Decided::Fresh, super::Refused::of(outcome), None)
+        .decision(
+            Decided::Fresh,
+            super::Refused::of(outcome),
+            None,
+            crate::security::audit::CredentialKind::None,
+        )
         .kind
 }
 

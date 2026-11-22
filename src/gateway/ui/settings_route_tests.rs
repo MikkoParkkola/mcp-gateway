@@ -126,6 +126,12 @@ async fn s7_restart_parent() {
     let next = BASE.replace("enabled: false", "enabled: true");
     let (status, body) = route.save(json!([set("auth.enabled", &json!(true))])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The advice keys a pending restart adds are R2's (restart_advice_route_tests.rs);
+    // start_refusal is not removed, so a refusal here still fails this row.
+    let mut body = body;
+    for key in ["restart_advice", "start_command"] {
+        body.as_object_mut().expect("an object").remove(key);
+    }
     assert_eq!(
         body,
         json!({"revision": FileRevision::of(next.as_bytes()).as_str(), "changed":true,

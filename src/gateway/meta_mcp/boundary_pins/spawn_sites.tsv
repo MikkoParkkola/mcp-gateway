@@ -113,6 +113,7 @@ src/preview_sandbox/proxy.rs	bind	spawn	1	outside-calls	the preview proxy's acce
 src/preview_sandbox/proxy.rs	serve_connection	spawn	1	outside-calls	serves one connection to the preview sandbox's allowlist proxy (the fetch's npm/uv traffic); its 407/403 answers go to the sandbox, not to a tool call
 src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
 src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed
+src/skills/installer.rs	kept_blocking	spawn-blocking	1	raised-at-join	a single blocking install-path file operation that holds a clone of the regen loop keep while it runs; an io error comes back with the join, which maps it
 src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes
 src/transport/http/listen.rs	open_listen_as	spawn	1	no-refusal-inside	reads a backend's listen response into a channel of unsolicited notifications
 src/transport/http/listen.rs	open_session_stream_as	spawn	1	no-refusal-inside	reads a backend's session SSE stream into a channel of admitted notifications

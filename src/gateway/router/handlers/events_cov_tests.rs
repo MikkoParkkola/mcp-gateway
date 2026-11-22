@@ -37,6 +37,7 @@ fn presented(facts: Option<CredentialFacts>, session_sha256: Option<String>) -> 
 /// Facts that name `jti` and an expiry a day out.
 fn facts(jti: Option<&str>) -> CredentialFacts {
     CredentialFacts {
+        issuance_row: None,
         expires_at: Some(
             crate::clock::utc_now().expect("the test host's clock reads after 1970")
                 + crate::duration_bound::delta!(days, 1),

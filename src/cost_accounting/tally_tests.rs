@@ -62,6 +62,8 @@ fn a_clock_stepping_back_lands_in_its_own_hour() {
     assert_eq!(hours.totals(NOW, HOUR).0, 1);
     assert_eq!(hours.totals(NOW, DAY).0, 2);
     // AND: spend stamped before the month, behind the newest bucket, is dropped
+    // here, by the buckets alone; `Series::add`, the live add, settles the
+    // series first and keeps it (the rows below).
     hours.add(NOW - MONTH - 2 * HOUR, NOW - MONTH - 2 * HOUR, 1, 0);
     assert_eq!(hours.len(), 2);
 }
@@ -185,4 +187,161 @@ fn the_float_next_to_a_whole_micro_rounds_the_right_way() {
     assert_eq!(micro(whole), 150);
     assert_eq!(micro(above), 151, "a fraction above 150 micro-USD was lost");
     assert_eq!(micro(below), 150);
+}
+
+/// Micro-USD summed over a series' hours, and over its dates.
+fn sums(series: &Series) -> (u64, u64) {
+    let hourly = series.hours.rows().into_iter().map(|(_, _, m)| m);
+    let daily = series.days.rows().into_iter().map(|(_, _, m)| m);
+    (hourly.sum(), daily.sum())
+}
+
+/// Clock table row 3 (series level): spend now, two hours back, then a month
+/// back, each at its own clock. Every amount is kept; the month-back record,
+/// which a window measured from the newest held slot would drop, settles the
+/// held slots into its own hour and date first. Red before: it was dropped.
+#[test]
+fn a_series_keeps_spend_recorded_a_month_behind_its_newest_slot() {
+    let mut series = Series::default();
+    for at in [NOW, NOW - 2 * HOUR, NOW - MONTH - 2 * HOUR] {
+        series.add(at, at, 1, 1);
+    }
+    assert_eq!(sums(&series), (3, 3), "{series:?}");
+    let back = NOW - MONTH - 2 * HOUR;
+    assert_eq!(series.hours.newest(), Some(back / HOUR));
+    assert_eq!(series.days.newest(), Some(local_date(back)));
+}
+
+/// Clock table row 4 (lead): two records across an hour boundary that take
+/// the lock out of order, 11:00:00 first and 10:59:59 after it, both stay in
+/// their own hours. A race is never re-dated.
+#[test]
+fn records_racing_an_hour_boundary_keep_their_own_hours() {
+    let boundary = (NOW / HOUR + 1) * HOUR;
+    let mut series = Series::default();
+    series.add(boundary, boundary, 1, 1);
+    series.add(boundary - 1, boundary - 1, 1, 1);
+    let hours: Vec<u64> = series.hours.rows().iter().map(|r| r.0).collect();
+    assert_eq!(hours, vec![boundary / HOUR - 1, boundary / HOUR]);
+    assert_eq!(sums(&series), (2, 2));
+}
+
+/// Clock table row 5 (lead), under the chosen trigger: a step back of five
+/// hours, more than one slot but less than a window, drops nothing, and the
+/// held later hour keeps its date (only a record the window would drop
+/// settles the series).
+#[test]
+fn a_step_back_inside_the_window_drops_nothing_and_moves_nothing() {
+    let mut series = Series::default();
+    series.add(NOW, NOW, 1, 1);
+    series.add(NOW - 5 * HOUR, NOW - 5 * HOUR, 1, 1);
+    let hours: Vec<u64> = series.hours.rows().iter().map(|r| r.0).collect();
+    assert_eq!(hours, vec![NOW / HOUR - 5, NOW / HOUR]);
+    assert_eq!(sums(&series), (2, 2));
+}
+
+/// Clock table row 6, the correction to a seat's "smaller step" case: a
+/// record 100 hours ahead ages the series from its own clock (the forward
+/// jump), and after the step back nothing more is lost: the later record
+/// keeps its spend and the slot the jump left stays.
+#[test]
+fn after_a_jump_ahead_and_back_only_the_jump_aged_anything() {
+    let mut series = Series::default();
+    for at in [NOW - 700 * HOUR, NOW - 600 * HOUR, NOW, NOW + 100 * HOUR] {
+        series.add(at, at, 1, 1);
+    }
+    // The jump aged out 700 hours back (older than 100 + 720 hours ago).
+    assert_eq!(series.hours.len(), 3);
+    series.add(NOW + HOUR, NOW + HOUR, 1, 1);
+    let held: Vec<u64> = series.hours.rows().iter().map(|r| r.0).collect();
+    let base = NOW / HOUR;
+    assert_eq!(held, vec![base - 600, base, base + 1, base + 100]);
+}
+
+/// gpt table review: the hour trigger alone. Pacific/Chatham's April has a
+/// 25-hour day, so local midnight on the 1st and 23:59 on the 30th are 721
+/// hour slots apart (past the hour window) yet only 29 dates apart (inside
+/// the date window). The earlier record settles the series by its hour, and
+/// nothing is lost over the hours or the dates.
+#[test]
+fn a_record_past_only_the_hour_window_settles_the_series() {
+    use crate::cost_accounting::spend_history_tests::{date, local};
+    let tz = chrono_tz::Pacific::Chatham;
+    let _zone = crate::local_day::test_zone(tz);
+    let late = local(tz, date(2026, 4, 30), (23, 59));
+    let early = local(tz, date(2026, 4, 1), (0, 0));
+    assert_eq!(late / HOUR - early / HOUR, 721, "premise: 721 slots");
+    let dates = local_date(late) - local_date(early);
+    assert_eq!(dates.num_days(), 29, "premise: 29 dates");
+    let mut series = Series::default();
+    series.add(late, late, 1, 1);
+    series.add(early, early, 1, 1);
+    assert_eq!(sums(&series), (2, 2), "{series:?}");
+    assert_eq!(series.hours.newest(), Some(early / HOUR));
+}
+
+/// The windows' shared edge: a record 29 dates and 696 hours behind the
+/// newest held one is inside both windows and is inserted in its own hour
+/// and date, with nothing settled.
+#[test]
+fn a_record_inside_both_windows_keeps_its_own_slots() {
+    let _zone = crate::local_day::test_zone(chrono_tz::Tz::UTC);
+    let late = 1_000 * DAY + 23 * HOUR;
+    let early = late - 29 * DAY;
+    let mut series = Series::default();
+    series.add(late, late, 1, 1);
+    series.add(early, early, 1, 1);
+    let hours: Vec<u64> = series.hours.rows().iter().map(|r| r.0).collect();
+    assert_eq!(hours, vec![early / HOUR, late / HOUR]);
+    assert_eq!(series.days.len(), 2);
+}
+
+/// gpt table review: the date trigger alone. In UTC, a record 719.5 hours
+/// behind the newest held one is inside the hour window but 30 dates back,
+/// past the date window, so it settles the series by its date; nothing is
+/// lost over the hours or the dates.
+#[test]
+fn a_record_past_only_the_date_window_settles_the_series() {
+    let _zone = crate::local_day::test_zone(chrono_tz::Tz::UTC);
+    let late = 1_000 * DAY + 23 * HOUR;
+    let early = late - 30 * DAY + HOUR / 2;
+    let mut series = Series::default();
+    series.add(late, late, 1, 1);
+    series.add(early, early, 1, 1);
+    assert_eq!(sums(&series), (2, 2), "{series:?}");
+    assert_eq!(series.days.newest(), Some(local_date(early)));
+}
+
+/// gpt table review: two corrections in a row, 80 days ahead, then 40, then
+/// the true time; each settles the series again, and every amount is kept.
+#[test]
+fn repeated_steps_back_keep_every_amount() {
+    let mut series = Series::default();
+    for at in [NOW + 80 * DAY, NOW + 40 * DAY, NOW] {
+        series.add(at, at, 1, 1);
+    }
+    assert_eq!(sums(&series), (3, 3), "{series:?}");
+    assert_eq!(series.hours.rows(), vec![(NOW / HOUR, 3, 3)]);
+}
+
+/// gpt delta 3 improvement: `settle` on a series holding an expired slot, the
+/// oldest kept slot, the cut's own slot and two later ones (one at the
+/// largest amount) keeps the window, counts the later slots in the cut's
+/// slot with saturating sums, and changes nothing when run again.
+#[test]
+fn settle_keeps_the_window_and_counts_later_slots_in_the_cut() {
+    let cut = NOW / HOUR;
+    let held = [
+        (cut - BUCKET_HOURS - 1, 1, 1),
+        (cut - BUCKET_HOURS, 2, 2),
+        (cut, 3, 3),
+        (cut + 1, 4, u64::MAX),
+        (cut + 5, 5, 5),
+    ];
+    let mut hours: HourBuckets = Buckets(std::collections::VecDeque::from(held));
+    hours.settle(cut);
+    let once = hours.rows();
+    assert_eq!(once, vec![(cut - BUCKET_HOURS, 2, 2), (cut, 12, u64::MAX)]);
+    hours.settle(cut);
+    assert_eq!(hours.rows(), once, "a second settle changed the series");
 }
