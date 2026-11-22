@@ -46,13 +46,7 @@ const CASES = [
     ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
   ['32-sign-in-390.png', 390, 800, 'dark', [
     ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
-  // Frame 48q exists only at 1440 px, dark. The Tools screen is served with
-  // the frame's own six rows, padded with filler tools that sort after them
-  // to the frame's totals (1,284 tools, 28 servers), with filesystem.list_dir
-  // open, as drawn.
-  ['48q-tools-status-search-results.png', 1440, 900, 'dark', [
-    ['toolbar', 256, 200, 760, 52, 0.15, 'the server choice is a native select, not a drawn button; no ⌘K hint in a page search (the palette owns ⌘K)'],
-    ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page and the tool's class beside \"Input schema\" in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
+  // Frame 48q moved to the screen table (tests/screens.mjs), drawn through its catalogue state.
   // Frame 36 draws its tooltips as a sheet. The tooltip module's own tip()
   // draws the "Calls today" one with the frame's copy, its box placed on the frame's.
   ['36-tooltip-sheet.png', 1440, 1000, 'dark', [
@@ -67,25 +61,6 @@ const FRAME_COPY = {
     ['Source', "The gateway's call log."],
     ['Compared', '↘ 48% against yesterday by the same time.']] },
 };
-
-/** The tools frame 48q draws, then filler to its totals. */
-function frameTools() {
-  const drawn = [
-    ['aws.describe_instances', 'aws', 'List EC2 instances with state and tags'],
-    ['aws.get_object', 'aws', 'Read an object from an S3 bucket'],
-    ['context7.get_docs', 'context7', 'Fetch current documentation for a library'],
-    ['docker.list_containers', 'docker', 'List containers and their state'],
-    ['filesystem.list_dir', 'filesystem', 'List a folder inside the allowed paths'],
-    ['filesystem.read_file', 'filesystem', 'Read a text file inside the allowed paths'],
-  ].map(([name, server, description]) => ({ name, server, description, class: 'read', class_source: 'declared',
-    schema: name === 'filesystem.list_dir'
-      ? { type: 'object', properties: { path: { type: 'string', description: 'Folder to list' }, depth: { type: 'integer', default: 1 } }, required: ['path'] }
-      : { type: 'object' } }));
-  const filler = Array.from({ length: 1284 - drawn.length }, (_, i) => ({
-    name: `zz_filler_${i}`, server: `zz_server_${i % 24}`, description: 'Filler', class: 'read', class_source: 'declared', schema: {},
-  }));
-  return [...drawn, ...filler];
-}
 
 test.describe('frames', () => {
   test('FRAMES_DIR points at the r6 frames', () => {
@@ -103,19 +78,10 @@ test.describe('frames', () => {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
       }
       if (act === 'tooltip') await page.route('**/ui/assets/tips.*.json', (r) => r.fulfill({ json: FRAME_COPY }));
-      if (act === 'tools') {
-        await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
-        await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: frameTools() } }));
-        // Frame 48q is the catalogue, which lives at ?view=all (its own address bar).
-        await page.goto('/ui/tools/status?view=all');
-        await page.getByRole('button', { name: 'filesystem.list_dir', exact: true }).click();
-      } else {
-        // The fixture pages give Overview its subtitle, as a real screen will.
-        await withFixturePages(page);
-        await page.goto('/ui/overview/status');
-      }
+      // The fixture pages give Overview its subtitle, as a real screen will.
+      await withFixturePages(page);
+      await page.goto('/ui/overview/status');
       await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
-      if (act === 'tools') await page.evaluate(() => document.activeElement?.blur());
       if (act === 'tooltip') {
         await page.evaluate(async (url) => {
           const tips = await import(url);

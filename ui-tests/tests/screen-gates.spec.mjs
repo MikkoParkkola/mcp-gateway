@@ -223,13 +223,13 @@ test('G0 plant: a frame drawn in a state the entry lacks is reported', () => {
 });
 
 test('G0 plant: a state with no main action is reported', () => {
-  const states = [{ ...plainState, action: undefined }];
+  const states = tools.states.map((s) => (s === plainState ? { ...s, action: undefined } : s));
   expect(tableProblems([{ ...tools, states }])).toEqual(['tools most-called: no main action']);
 });
 
 test('G0 plant: two states with one name give rows one title, which is reported', () => {
   const problems = tableProblems([{ ...tools, states: [plainState, plainState] }]);
-  expect(problems).toContain(`two rows titled "${titles.axe('tools', 'most-called', 390, 'dark')}"`);
+  expect(problems).toContain('two rows titled "tools most-called axe at 390 px, dark"');
 });
 
 test('G2 plant: a button with no name is reported', async ({ page }) => {

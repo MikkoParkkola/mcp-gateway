@@ -55,6 +55,30 @@ const TOOLS_SMALL = [
   called('attic.vent', 'house', 0, 0, 'Air the attic'),
 ];
 
+// The catalogue step opens the row a fixture marks `open`; by default one with a real schema.
+const TOOLS_CATALOGUE = TOOLS_SMALL.map((t) => (t.name !== 'kettle.boil' ? t : {
+  ...t, open: true, schema: { type: 'object', properties: { celsius: { type: 'integer', default: 95 } } },
+}));
+
+/** The tools frame 48q draws, then filler to its totals. */
+function frameTools() {
+  const drawn = [
+    ['aws.describe_instances', 'aws', 'List EC2 instances with state and tags'],
+    ['aws.get_object', 'aws', 'Read an object from an S3 bucket'],
+    ['context7.get_docs', 'context7', 'Fetch current documentation for a library'],
+    ['docker.list_containers', 'docker', 'List containers and their state'],
+    ['filesystem.list_dir', 'filesystem', 'List a folder inside the allowed paths'],
+    ['filesystem.read_file', 'filesystem', 'Read a text file inside the allowed paths'],
+  ].map(([name, server, description]) => ({ name, server, description, class: 'read', class_source: 'declared',
+    schema: name === 'filesystem.list_dir'
+      ? { type: 'object', properties: { path: { type: 'string', description: 'Folder to list' }, depth: { type: 'integer', default: 1 } }, required: ['path'] }
+      : { type: 'object' } }));
+  const filler = Array.from({ length: 1284 - drawn.length }, (_, i) => ({
+    name: `zz_filler_${i}`, server: `zz_server_${i % 24}`, description: 'Filler', class: 'read', class_source: 'declared', schema: {},
+  }));
+  return [...drawn, ...filler];
+}
+
 /** Frame 48s: its six ranked rows (server = the frame's group), padded to 1,284 tools on 28 servers. */
 function frame48sTools() {
   const drawn = [
@@ -82,6 +106,18 @@ export const SCREENS = [
           await serveTools(page, tools);
           await page.goto('/ui/tools/status');
           await expect(mostCalledRows(page).first()).toBeVisible();
+          await settled(page);
+        },
+      },
+      {
+        name: 'catalogue-open-row',
+        action: 'opening the row',
+        async step(page, tools = TOOLS_CATALOGUE) {
+          await serveTools(page, tools);
+          await page.goto('/ui/tools/status?view=all');
+          const toggle = page.getByRole('button', { name: tools.find((t) => t.open).name, exact: true });
+          await toggle.click();
+          await expect(toggle).toHaveAttribute('aria-expanded', 'true');
           await settled(page);
         },
       },
@@ -128,6 +164,19 @@ export const SCREENS = [
         ],
         // The live band of every row: call counts, the frame's sparklines, the change words.
         masks: [[1030, 337, 386, 248]],
+      },
+      {
+        file: '48q-tools-status-search-results.png', width: 1440, height: 900, scheme: 'dark', state: 'catalogue-open-row',
+        // The catalogue step opens the row marked `open`; the frame draws filesystem.list_dir open.
+        tools: frameTools().map((t) => (t.name === 'filesystem.list_dir' ? { ...t, open: true } : t)),
+        regions: [
+          ['toolbar', 256, 200, 760, 52, 0.15, 'the server filter is a native select where the frame draws a button; '
+            + 'the page search shows no ⌘K hint, since ⌘K belongs to the palette'],
+          ['list', 256, 258, 1160, 448, 0.06, 'table.t puts uppercase headings inside the card padding; the open row adds '
+            + 'an Open link and the class after "Input schema"; a count line stands where the frame has a scroll footer'],
+        ],
+        // The fixture reproduces every number the frame shows, so nothing is masked.
+        masks: [],
       },
     ],
   },
