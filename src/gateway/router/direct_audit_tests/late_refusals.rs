@@ -124,6 +124,12 @@ async fn an_unchained_answer_refused_records_refused_on_both_routes() {
             "{route} premise: sent once"
         );
         assert_last_refused(&fx);
+        // The check that refused is named in the call's one record.
+        let record = only_invocation(&fx);
+        assert_eq!(
+            record["decision"]["kind"], "signature_chain",
+            "{route}: {record}"
+        );
     }
 }
 

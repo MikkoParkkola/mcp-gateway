@@ -20,7 +20,8 @@ use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, grants, invocations, logger, wait_for_decisions,
+    CAPS, Endpoint, PERSONAL, capability_backend, grant, grants, invocations, logger,
+    wait_for_decisions,
 };
 use crate::gateway::routes;
 use crate::security::audit::AuditFailurePolicy;
@@ -106,6 +107,22 @@ fn identity() -> crate::key_server::oidc::VerifiedIdentity {
     )
 }
 
+/// This rig with message signing switched on (a nonce optional), so a
+/// `gateway_invoke` carrying a nonce argument is judged while signing is
+/// prepared.
+async fn signed_rig(endpoint: &Endpoint) -> Rig {
+    let mut rig = rig(endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+    let signer = crate::security::message_signing::MessageSigner::new(
+        b"grant-refusal-rows-signing-secret".to_vec(),
+        None,
+        "grant-rows".to_owned(),
+    );
+    let state = Arc::get_mut(&mut rig.state).expect("state is unique");
+    let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
+    meta.enable_message_signing(signer, Duration::from_secs(300), false);
+    rig
+}
+
 /// One `tools/call` of `name` by the caller, over `/mcp`.
 async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
     let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -178,6 +195,90 @@ async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
     assert_eq!(rows[0]["server"], json!(CAPS), "{rows:#?}");
     assert_eq!(rows[0]["tool"], json!(PERSONAL), "{rows:#?}");
+}
+
+/// On `/mcp` the route stage judges the grant before signing runs, so a
+/// signing refusal meets a grant note only after the grant allowed the call:
+/// here a granted, signed `gateway_invoke` is sent twice with one nonce. The
+/// replay's grant note was taken before any trace existed; the refusal's
+/// record and that decision must still name one trace, and the decision must
+/// read recorded, so Activity lists two calls as two rows (the stdio twin is
+/// `grant_decision_stdio.rs`).
+#[tokio::test]
+async fn a_replay_refused_after_a_granted_route_shares_its_decisions_trace() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = signed_rig(&endpoint).await;
+    let owner = (ISSUER, SUBJECT);
+    rig.state
+        .meta_mcp
+        .set_identity_grants(grants(vec![grant("g-replay", owner, owner)]));
+    // Outside hardened, a `gateway_invoke` carries its nonce as an argument.
+    let invoke =
+        json!({"server": CAPS, "tool": PERSONAL, "arguments": {}, "nonce": "grant-rows-0001"});
+
+    let served = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert!(
+        served.get("error").is_none(),
+        "premise: granted and served: {served}"
+    );
+    let replay = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert_eq!(
+        replay["error"]["code"],
+        json!(-32001),
+        "premise: a replay: {replay}"
+    );
+
+    let held = wait_for_decisions(&rig.dir, 2).await;
+    let calls = invocations(&rig.dir);
+    assert_eq!((held.len(), calls.len()), (2, 2), "{held:#?} {calls:#?}");
+    let refused = calls
+        .iter()
+        .find(|call| call["outcome"] != json!("ok"))
+        .expect("the replay's own record");
+    let decision = held
+        .iter()
+        .find(|decision| decision["trace_id"] == refused["trace_id"])
+        .unwrap_or_else(|| panic!("no decision names the refusal's trace: {held:#?} {calls:#?}"));
+    assert_eq!(decision["invocation_recorded"], json!(true), "{held:#?}");
+    let rows = activity(&rig, "").await;
+    assert_eq!(rows.len(), 2, "two calls, two rows: {rows:#?}");
+}
+
+/// That replay with its record's append failing, under a best-effort log:
+/// answered as decided, and the replay's decision reads unrecorded, since
+/// nothing landed: the refusal's trace on a note never marks it recorded.
+#[tokio::test]
+async fn a_replay_whose_record_fails_leaves_its_decision_unrecorded() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = signed_rig(&endpoint).await;
+    let owner = (ISSUER, SUBJECT);
+    rig.state
+        .meta_mcp
+        .set_identity_grants(grants(vec![grant("g-replay", owner, owner)]));
+    let invoke =
+        json!({"server": CAPS, "tool": PERSONAL, "arguments": {}, "nonce": "grant-rows-0002"});
+    let served = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert!(served.get("error").is_none(), "premise: served: {served}");
+    let _ = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(
+        invocations(&rig.dir).len(),
+        1,
+        "premise: the served call's record"
+    );
+    let log = rig.state.transparency_log.as_ref().expect("the rig logs");
+    // The next append of route `meta` is the replay's invocation record.
+    log.fail_next_append_of_kind_for_test("meta");
+
+    let replay = mcp_call(&rig, "gateway_invoke", &invoke).await;
+    assert_eq!(
+        replay["error"]["code"],
+        json!(-32001),
+        "answered as decided: {replay}"
+    );
+    let held = wait_for_decisions(&rig.dir, 2).await;
+    assert_eq!(invocations(&rig.dir).len(), 1, "the replay's append failed");
+    let marks: Vec<&Value> = held.iter().map(|d| &d["invocation_recorded"]).collect();
+    assert_eq!(marks, [&json!(true), &json!(false)], "{held:#?}");
 }
 
 /// A surfaced tool the caller's key withholds (`denied_tools`), where the

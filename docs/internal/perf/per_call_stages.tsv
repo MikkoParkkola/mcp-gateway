@@ -58,6 +58,9 @@ src/gateway/meta_mcp/grant_audit/marker.rs	invocation_landing	-	on-path, untimed
 src/gateway/meta_mcp/grant_audit/marker.rs	in_delivery_scope	-	finished-task and recovery re-checks only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/marker.rs	land	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/marker.rs	note_retry_trace	-	retry-to-origin path only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_refused	-	on-path, untimed: signing refusals only; the timed rows are unsigned and admitted
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_untraced	-	on-path, untimed: signed calls only (a prepared call's note); the timed rows are unsigned
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_written_untraced	-	on-path, untimed: only when signing refuses a call that has grant notes; the timed rows are unsigned
 src/gateway/meta_mcp/grant_audit/marker.rs	with_retry_trace	-	retry-to-origin path only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	eq	-	equality impl; not on the dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	fmt	-	Debug formatting; not called per call
@@ -603,6 +606,7 @@ src/gateway/router/handlers/dispatch_intake.rs	params	http_invoke_tiny	the reque
 src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	-	on-path, untimed: refused /mcp intakes only; the timed rows are admitted
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	http_invoke_tiny	the HTTP request prelude
+src/gateway/router/handlers/dispatch_intake_run.rs	intake_refused	-	on-path, untimed: refused /mcp intakes and early signing refusals only; the timed rows are admitted and the harness does not configure signing
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	http_invoke_tiny	the HTTP request prelude: opens or resumes the session the request runs under (MIK-8504)
 src/gateway/router/handlers/dispatch_intake_session.rs	record_client_name	-	on-path, untimed: runs on an HTTP `initialize` only (one JSON pointer read and one short sanitize under a read lock); the timed rows carry no initialize
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	capture	http_invoke_tiny	the HTTP request prelude

@@ -213,11 +213,10 @@ pub(super) async fn tools_call(
         Err(end) => return *end,
     };
     #[cfg(feature = "firewall")]
-    if let Err(refusal) = route.scan_targets(refused, &caller_key).await {
-        return Err(*refusal);
-    }
-    #[cfg(not(feature = "firewall"))]
-    let _ = refused;
+    let refused = match route.scan_targets(refused, &caller_key).await {
+        Ok(kept) => kept,
+        Err(refusal) => return Err(*refusal),
+    };
     // The route stage is done; the window a catalogue change must not reach
     // (MIK-8340, one judgement per request).
     #[cfg(test)]
@@ -461,13 +460,18 @@ pub(super) async fn tools_call(
         )
     {
         delivery_facts::outlet(&error);
-        return Err(build_error_response(
-            Some(id),
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            session_id,
-            StatusCode::BAD_REQUEST,
-        ));
+        // Recorded before it is answered, as every pre-admission refusal is.
+        return Err(refused
+            .answer_signing(
+                state,
+                tool_name,
+                (
+                    crate::gateway::router::AnswerId::Present(id.clone()),
+                    crate::gateway::router::SigningSite::Check,
+                ),
+                error,
+            )
+            .await);
     }
     caller.signing = signing_context.as_ref();
     let admission = state.meta_mcp.admit_meta_sync(
