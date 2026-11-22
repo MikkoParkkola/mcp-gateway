@@ -194,7 +194,8 @@ fn one_key_config(dir: &Path) -> crate::config::Config {
 /// inside the governance boot, which returns early when governance is off.
 #[tokio::test]
 async fn the_history_restores_with_cost_governance_off() {
-    let dir = tempfile::tempdir().expect("dir");
+    // The gateway opens its audit log here: a kept dir outlives the log.
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).expect("data dir");
     let now = crate::clock::unix_secs().expect("a clock");
@@ -221,7 +222,8 @@ async fn the_history_restores_with_cost_governance_off() {
 /// Mutant: the names passed whatever `auth.enabled` says.
 #[tokio::test]
 async fn with_auth_off_a_saved_key_row_attaches_to_no_key() {
-    let dir = tempfile::tempdir().expect("dir");
+    // The gateway opens its audit log here: a kept dir outlives the log.
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).expect("data dir");
     let now = crate::clock::unix_secs().expect("a clock");
