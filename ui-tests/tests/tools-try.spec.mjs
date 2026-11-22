@@ -5,7 +5,7 @@
 // Every expected string is written in the row. The screen under test is a
 // stub: each row sees the marker, then fails on its own check.
 import { test, expect, blockingViolations } from './base.mjs';
-import { shellReady, shellModuleUrl } from './shell.mjs';
+import { shellReady, shellModuleUrl, trackTimers, advanceArmed } from './shell.mjs';
 
 const HOSTILE = '<img src=x onerror="window.__pwned=1">';
 
@@ -169,7 +169,10 @@ async function install(page, cfg) {
 }
 
 async function open(page, cfg, { clock = false } = {}) {
-  if (clock) await page.clock.install();
+  if (clock) {
+    await page.clock.install();
+    await trackTimers(page);
+  }
   const bag = await install(page, cfg);
   await page.goto('/ui/tools/actions');
   await shellReady(page);
@@ -690,10 +693,10 @@ test('S2 a late record is read on the third try', async ({ page }) => {
   await run.click();
   await expect.poll(() => bag.listings.length).toBe(1);
   expect(bag.listings.map((l) => l.path)).toEqual(['/ui/api/activity?q=t-abc']);
-  await page.clock.runFor(500);
+  await advanceArmed(page, 500, 'wait');
   await expect.poll(() => bag.listings.length).toBe(2);
   expect(bag.listings.map((l) => l.path)).toEqual(['/ui/api/activity?q=t-abc', '/ui/api/activity?q=t-abc']);
-  await page.clock.runFor(500);
+  await advanceArmed(page, 500, 'wait');
   await expect.poll(() => bag.listings.length).toBe(3);
   expect(bag.listings.map((l) => l.path)).toEqual([
     '/ui/api/activity?q=t-abc',
@@ -714,12 +717,12 @@ test('S3 a record that never arrives stops after the fourth try', async ({ page 
   await pauseClock(page);
   await run.click();
   await expect.poll(() => bag.listings.length).toBe(1);
-  await page.clock.runFor(500);
+  await advanceArmed(page, 500, 'wait');
   await expect.poll(() => bag.listings.length).toBe(2);
-  await page.clock.runFor(500);
+  await advanceArmed(page, 500, 'wait');
   await expect.poll(() => bag.listings.length).toBe(3);
   expect(await panel(page).innerText()).not.toContain('Firewall steps not recorded yet');
-  await page.clock.runFor(500);
+  await advanceArmed(page, 500, 'wait');
   await expect.poll(() => bag.listings.length).toBe(4);
   await expect(panel(page)).toContainText('Firewall steps not recorded yet');
   await expect(panel(page)).toContainText('t-abc');
