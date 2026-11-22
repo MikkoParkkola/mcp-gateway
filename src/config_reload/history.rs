@@ -235,8 +235,8 @@ impl ConfigHistory {
     /// event names it. Otherwise `Unknown`. Test-only until the history page
     /// reads it.
     #[cfg(test)]
-    pub(crate) fn lookup(&self, revision: &str) -> Lookup {
-        self.with_state(|state| {
+    pub(crate) fn lookup(&self, revision: &str) -> Result<Lookup, String> {
+        Ok(self.with_state(|state| {
             if let Some(snapshot) = state
                 .snapshots
                 .iter()
@@ -252,7 +252,7 @@ impl ConfigHistory {
                 return Lookup::NoLongerKept;
             }
             Lookup::Unknown
-        })
+        }))
     }
 
     /// Memory-only reads the held state; otherwise the file. Test-only. A
@@ -528,6 +528,10 @@ mod deadline_tests;
 #[cfg(test)]
 #[path = "history_order_tests.rs"]
 mod order_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "history_read_tests.rs"]
+mod read_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "history_record_tests.rs"]
