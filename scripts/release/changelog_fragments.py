@@ -144,7 +144,8 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
     label; a parenthetical left empty goes with the space before it. An id in
     prose, or among other words in a part, would leave a broken sentence: it is
     returned as `<line>: <why>` for the fragment to be reworded, and the text is
-    returned unchanged.
+    returned unchanged. An id beside code is refused the same way, so the fold
+    never rewrites a code span.
     """
 
     def scan(t: str):
@@ -158,9 +159,22 @@ def drop_ids(text: str) -> tuple[str, list[str]]:
             if span is None:
                 problems.append(f"{line}: a tracker id in prose; reword the line without it")
                 continue
-            if any(span[0] < u < span[1] for u in unclosed):
-                # Where its code ends is unknown, so no split of it can be trusted.
-                problems.append(f"{line}: a tracker id beside an unclosed code span; close the span or reword the line")
+            # The fold never rewrites a parenthetical that holds code, at any depth
+            # around the id: it refuses, so no reading of the backticks can change a command.
+            around = span
+            while around is not None and "`" not in t[around[0]:around[1]]:
+                around = _enclosing(blind, around[0])
+            if around is not None:
+                problems.append(f"{line}: a tracker id in a parenthetical that holds code; "
+                                "move the id out of the parenthetical that holds code, or reword")
+                continue
+            # An escaped or unclosed backtick on the id's line leaves where code
+            # starts or ends in doubt (a span may also run across a line break).
+            start, end = t.rfind("\n", 0, at) + 1, t.find("\n", at)
+            end = len(t) if end < 0 else end
+            if "\\`" in t[start:end] or any(start <= u < end for u in unclosed):
+                problems.append(f"{line}: a tracker id on a line with an escaped or unclosed backtick; "
+                                "close the span or reword the line")
                 continue
             part = next(p for p in _parts(blind, *span) if p[0] <= at < p[1])
             if not ID_PART.fullmatch(" ".join(masked[part[0]:part[1]].split())):
