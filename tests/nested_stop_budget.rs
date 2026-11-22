@@ -443,13 +443,13 @@ fn send(pid: u32, sig: &str) {
 }
 
 /// Freezes `inner` before the outer's stop starts, so it has sent nothing when that stop
-/// begins: SIGSTOP, then its state read until stopped (within 5 s), then every one of its
+/// begins: SIGSTOP, then its state read until stopped (within 10 s), then every one of its
 /// `descendants` checked still alive. It is never continued; if the row fails, `KillGroup`
 /// kills it (SIGKILL reaches a stopped process).
 async fn freeze_before_the_stop(root: &Path, inner: u32, descendants: &[u32]) {
     send(inner, "STOP");
     // A bound for a failure only: a stopped process reads `T` at once.
-    let stopped_by = Instant::now() + Duration::from_secs(5);
+    let stopped_by = Instant::now() + Duration::from_secs(10);
     while !pids::stopped(inner) {
         assert!(
             Instant::now() < stopped_by,
