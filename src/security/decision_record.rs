@@ -353,6 +353,28 @@ impl Noted {
         self.refusal().is_some()
     }
 
+    /// The record's outcome class for a call whose result reads `outcome`:
+    /// a refusal a gate noted is `denied`, whatever form it was answered in.
+    /// The one rule every writer applies; a converted backend failure is the
+    /// caller's to class first (`DispatchNotes::outcome`).
+    pub(crate) fn refused_outcome(
+        &self,
+        outcome: crate::security::audit::AuditOutcome,
+    ) -> crate::security::audit::AuditOutcome {
+        use crate::security::audit::AuditOutcome;
+        match outcome {
+            // R1: a refusal some gate noted, answered with an error code.
+            AuditOutcome::Error(code) if self.has_refusal() => AuditOutcome::Denied(code),
+            // R6: such a refusal answered as an error-flagged tool result
+            // instead; it carries the code an outright response-gate refusal
+            // answers, since the wire answer has none.
+            AuditOutcome::ToolError if self.has_refusal() => {
+                AuditOutcome::Denied(crate::Error::ResponseFirewallRefused.to_rpc_code())
+            }
+            outcome => outcome,
+        }
+    }
+
     /// The check that refused and its rule, if one did.
     pub(crate) fn refusal_pair(&self) -> Option<Refusal> {
         self.refusal().cloned()

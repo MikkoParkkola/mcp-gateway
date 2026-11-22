@@ -160,7 +160,7 @@ fn assert_last_attempt_said(transport: &StdioTransport, needle: &str) {
 
 #[tokio::test]
 async fn a_cache_shaped_failure_clears_the_cache_and_retries_exactly_once() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -193,7 +193,7 @@ async fn a_cache_shaped_failure_clears_the_cache_and_retries_exactly_once() {
 
 #[tokio::test]
 async fn a_non_cache_shaped_failure_is_returned_unchanged_without_a_retry() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -229,7 +229,7 @@ async fn a_non_cache_shaped_failure_is_returned_unchanged_without_a_retry() {
 
 #[tokio::test]
 async fn a_cache_that_cannot_be_removed_is_not_retried() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     // Not a directory, so remove_dir_all cannot succeed however the test runs
     // (a permission-based "cannot remove" depends on the caller's uid). It
@@ -260,7 +260,7 @@ async fn a_cache_that_cannot_be_removed_is_not_retried() {
 
 #[tokio::test]
 async fn a_removal_that_failed_does_not_use_up_the_repair() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     // The first start finds a path the removal refuses, so it is not retried.
     let cache = temp_root(workspace.path()).join(unique_leaf());
@@ -308,7 +308,7 @@ async fn a_removal_that_failed_does_not_use_up_the_repair() {
 
 #[tokio::test]
 async fn a_retry_that_succeeds_reports_success_to_the_caller() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -345,7 +345,7 @@ async fn a_retry_that_succeeds_reports_success_to_the_caller() {
 
 #[tokio::test]
 async fn a_first_start_that_succeeds_never_touches_the_cache() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -375,7 +375,7 @@ async fn a_first_start_that_succeeds_never_touches_the_cache() {
 
 #[tokio::test]
 async fn a_cache_shaped_failure_without_an_assigned_cache_is_not_retried() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     // Nothing assigns this one; it stands in for any unrelated path a wrong
     // fallback might reach for.
@@ -410,7 +410,7 @@ async fn a_cache_shaped_failure_without_an_assigned_cache_is_not_retried() {
 
 #[tokio::test]
 async fn a_backend_that_dies_reporting_a_missing_module_retries_itself() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -447,7 +447,7 @@ async fn a_backend_that_dies_reporting_a_missing_module_retries_itself() {
 
 #[tokio::test]
 async fn a_backend_that_dies_for_an_unrelated_reason_is_not_retried() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_UNRELATED_STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -475,7 +475,7 @@ async fn a_backend_that_dies_for_an_unrelated_reason_is_not_retried() {
 
 #[tokio::test]
 async fn an_operators_cache_under_pkg_cache_is_never_cleared() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_STUB);
     // A path of the shape the gateway assigns, under the root it owns, set by
     // the backend's own `env:` — which is what makes it the operator's, not
@@ -527,7 +527,7 @@ async fn an_operators_cache_under_pkg_cache_is_never_cleared() {
 async fn an_operator_cache_written_with_a_trailing_separator_is_never_cleared() {
     use std::os::unix::fs::symlink;
 
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_STUB);
     // `…/pkg-cache/<backend>/` reads as one path component below the root, and
     // the trailing separator is exactly what makes the OS resolve the final
@@ -583,7 +583,7 @@ async fn an_operator_cache_written_with_a_trailing_separator_is_never_cleared() 
 async fn an_assigned_cache_that_is_a_symlink_is_not_followed() {
     use std::os::unix::fs::symlink;
 
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), DYING_STUB);
     // The gateway assigned this path, so provenance alone says it may be
     // cleared. A link at the leaf is what the removal has to refuse: following
@@ -625,7 +625,7 @@ async fn an_assigned_cache_that_is_a_symlink_is_not_followed() {
 
 #[tokio::test]
 async fn a_cache_is_cleared_once_until_a_start_succeeds() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -679,7 +679,7 @@ async fn a_cache_is_cleared_once_until_a_start_succeeds() {
 
 #[tokio::test]
 async fn an_assignment_the_child_never_received_is_not_cleared() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -709,7 +709,7 @@ async fn an_assignment_the_child_never_received_is_not_cleared() {
 
 #[tokio::test]
 async fn a_retry_that_succeeds_arms_the_next_repair() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let path = cache.root.clone();
