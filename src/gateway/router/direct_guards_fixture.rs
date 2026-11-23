@@ -26,6 +26,10 @@ pub(crate) enum Answer {
     /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
     /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
+    /// Like `WithNote` without `read`: its `tools/list` names only `note` and
+    /// `gateway_invoke`, the names `k-deny` sees of `WithNote`'s list, so a
+    /// call for `read` here is the missing twin of `k-deny`'s withheld one.
+    WithoutRead,
     /// Like `Ok`, its `tools/list` giving `read` a structurally invalid input
     /// schema, so a surfaced `read` is withheld for it (MIK-8353 3d-2, K5).
     InvalidRead,

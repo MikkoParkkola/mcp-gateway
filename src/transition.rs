@@ -167,11 +167,11 @@ impl TransitionTracker {
 
     /// Every learned pair and its count. A router test compares two snapshots
     /// of this map; the seeded pairs stay, and one admitted step adds one.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn pair_counts_for_test(&self) -> std::collections::BTreeMap<(String, String), u64> {
         let mut counts = std::collections::BTreeMap::new();
-        for outer in self.transitions.iter() {
-            for inner in outer.value().iter() {
+        for outer in &self.transitions {
+            for inner in outer.value() {
                 counts.insert(
                     (outer.key().clone(), inner.key().clone()),
                     inner.value().load(Ordering::Relaxed),

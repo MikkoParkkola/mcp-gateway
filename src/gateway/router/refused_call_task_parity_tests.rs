@@ -100,6 +100,24 @@ fn assert_challenge(status: StatusCode, body: &Value) {
     );
 }
 
+/// Every string in an answer that carries the challenge sentence: the text
+/// the caller is asked, without the sealed state and ids beside it, which
+/// differ from call to call. A withheld probe and a missing one must leave
+/// the challenge that follows them worded the same.
+fn challenge_texts(body: &Value) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::String(text) if text.contains(CHALLENGE_PROMPT) => out.push(text.clone()),
+            Value::Array(items) => items.iter().for_each(|item| walk(item, out)),
+            Value::Object(fields) => fields.values().for_each(|field| walk(field, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, &mut out);
+    out
+}
+
 fn assert_budget_refused(status: StatusCode, body: &Value) {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body, &budget_refusal_body(), "{body}");
@@ -233,7 +251,6 @@ fn headers(name: &'static str) -> [(&'static str, &'static str); 3] {
 fn task_params(name: &str, arguments: Value, idempotency: &str) -> Value {
     let mut params = json!({
         "name": name,
-        "arguments": arguments,
         "task": {},
         "_meta": {
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -243,6 +260,7 @@ fn task_params(name: &str, arguments: Value, idempotency: &str) -> Value {
             }
         }
     });
+    params["arguments"] = arguments;
     params["_meta"][IDEMPOTENCY_KEY_META] = json!(idempotency);
     params
 }
@@ -334,7 +352,7 @@ async fn task_withheld_and_missing_do_not_spend_one_call_budget() {
     let (status, body) =
         task_call(&withheld, WITHHELD_KEY, PROBE, json!({}), "budget-w-probe").await;
     assert_absent(status, &body);
-    let (status, body) = task_call(
+    let (status, withheld_visible) = task_call(
         &withheld,
         WITHHELD_KEY,
         VISIBLE,
@@ -342,15 +360,19 @@ async fn task_withheld_and_missing_do_not_spend_one_call_budget() {
         "budget-w-visible",
     )
     .await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &withheld_visible);
     assert_eq!(withheld_calls.load(Ordering::SeqCst), 0);
 
     let (missing, missing_calls, _missing_dir) = open(TaskFirewall::Budget(1), Surface::Read).await;
     let (status, body) = task_call(&missing, OPEN_KEY, PROBE, json!({}), "budget-m-probe").await;
     assert_absent(status, &body);
-    let (status, body) =
+    let (status, missing_visible) =
         task_call(&missing, OPEN_KEY, VISIBLE, json!({}), "budget-m-visible").await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &missing_visible);
+    assert_eq!(
+        challenge_texts(&missing_visible),
+        challenge_texts(&withheld_visible)
+    );
     assert_eq!(missing_calls.load(Ordering::SeqCst), 0);
 
     let (control, control_calls, _control_dir) = open(TaskFirewall::Budget(1), Surface::Read).await;
@@ -378,7 +400,7 @@ async fn task_withheld_and_missing_do_not_reach_a_second_tenant() {
     )
     .await;
     assert_absent(status, &body);
-    let (status, body) = task_call(
+    let (status, withheld_visible) = task_call(
         &withheld,
         WITHHELD_KEY,
         VISIBLE,
@@ -386,7 +408,7 @@ async fn task_withheld_and_missing_do_not_reach_a_second_tenant() {
         "tenant-w-visible",
     )
     .await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &withheld_visible);
     assert_eq!(withheld_calls.load(Ordering::SeqCst), 0);
 
     let (missing, missing_calls, _missing_dir) = open(TaskFirewall::Tenant(1), Surface::Read).await;
@@ -399,7 +421,7 @@ async fn task_withheld_and_missing_do_not_reach_a_second_tenant() {
     )
     .await;
     assert_absent(status, &body);
-    let (status, body) = task_call(
+    let (status, missing_visible) = task_call(
         &missing,
         OPEN_KEY,
         VISIBLE,
@@ -407,7 +429,11 @@ async fn task_withheld_and_missing_do_not_reach_a_second_tenant() {
         "tenant-m-visible",
     )
     .await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &missing_visible);
+    assert_eq!(
+        challenge_texts(&missing_visible),
+        challenge_texts(&withheld_visible)
+    );
     assert_eq!(missing_calls.load(Ordering::SeqCst), 0);
 
     let (control, control_calls, _control_dir) = open(TaskFirewall::Tenant(1), Surface::Read).await;
@@ -450,7 +476,7 @@ async fn task_withheld_and_missing_record_no_anomaly_pair() {
         "the withheld probe changed the pair map"
     );
     let before_visible = learned_pairs(&withheld);
-    let (status, body) = task_call(
+    let (status, withheld_visible) = task_call(
         &withheld,
         WITHHELD_KEY,
         VISIBLE,
@@ -458,7 +484,7 @@ async fn task_withheld_and_missing_record_no_anomaly_pair() {
         "anomaly-w-visible",
     )
     .await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &withheld_visible);
     assert!(
         pair_deltas(&before_visible, &learned_pairs(&withheld)).is_empty(),
         "the visible call recorded a pair, so the probe had left it a predecessor"
@@ -474,9 +500,13 @@ async fn task_withheld_and_missing_record_no_anomaly_pair() {
         "the missing probe changed the pair map"
     );
     let before_visible = learned_pairs(&missing);
-    let (status, body) =
+    let (status, missing_visible) =
         task_call(&missing, OPEN_KEY, VISIBLE, json!({}), "anomaly-m-visible").await;
-    assert_challenge(status, &body);
+    assert_challenge(status, &missing_visible);
+    assert_eq!(
+        challenge_texts(&missing_visible),
+        challenge_texts(&withheld_visible)
+    );
     assert!(
         pair_deltas(&before_visible, &learned_pairs(&missing)).is_empty(),
         "the visible call recorded a pair, so the probe had left it a predecessor"
