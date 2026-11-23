@@ -219,6 +219,11 @@ pub(crate) mod test_source_text;
 #[cfg(tp3)]
 #[cfg(test)]
 mod test_source_text_tests;
+#[cfg(all(test, unix))]
+pub(crate) mod test_stub;
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+mod test_stub_tests;
 #[cfg(test)]
 mod test_tls;
 #[cfg(test)]

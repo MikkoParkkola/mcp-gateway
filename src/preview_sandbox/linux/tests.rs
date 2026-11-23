@@ -557,7 +557,7 @@ fn a_system_npms_builtin_npmrc_is_covered() {
 /// own directory, where `env node` finds it.
 #[test]
 fn a_linked_node_is_found_on_path_through_its_real_directory() {
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::fs::symlink;
     let scratch = scratch();
     let versions = scratch.path().join(".nvm/versions/node");
     let (linked, real) = (versions.join("v1"), versions.join("v2"));
@@ -570,8 +570,7 @@ fn a_linked_node_is_found_on_path_through_its_real_directory() {
         package.join("bin/npm-cli.js"),
         package.join("bin/npx-cli.js"),
     ] {
-        std::fs::write(&file, "#!/bin/sh\n").expect("file");
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        crate::test_stub::write_executable(&file, "#!/bin/sh\n");
     }
     symlink(real.join("bin/node"), linked.join("bin/node")).expect("node link");
     let base = build_plan(&target("sh"), &[], system_path().as_deref()).expect("sh on PATH");
