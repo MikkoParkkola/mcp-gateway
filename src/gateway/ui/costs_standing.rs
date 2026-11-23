@@ -63,9 +63,13 @@ pub(crate) fn standing(inputs: &Inputs<'_>) -> Standing {
     let blocking = inputs.cheapest.is_some_and(|cheapest| {
         evaluate_alerts(inputs.rules, inputs.judged + cheapest, limit) == Some(AlertAction::Block)
     });
+    // The record's limit is the config value it was refused under, compared
+    // bit for bit: a reload to any other limit drops it.
     let blocked_since = inputs
         .refusal
-        .filter(|refusal| blocking && refusal.day == inputs.today && refusal.limit == limit)
+        .filter(|refusal| {
+            blocking && refusal.day == inputs.today && refusal.limit.to_bits() == limit.to_bits()
+        })
         .map(|refusal| refusal.at_secs);
     Standing {
         at_limit,

@@ -46,7 +46,8 @@ impl BudgetEnforcer {
         self.key_refused
             .entry(key.to_owned())
             .and_modify(|held| {
-                if held.day == today && held.limit == limit {
+                // The same config value, bit for bit: no margin is wanted.
+                if held.day == today && held.limit.to_bits() == limit.to_bits() {
                     held.at_secs = held.at_secs.min(now);
                 } else {
                     *held = fresh;
