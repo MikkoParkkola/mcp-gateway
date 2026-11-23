@@ -24,6 +24,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 
 use super::Transport;
 use super::stdio::read_frame;
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -172,9 +173,9 @@ fn refusal_line(id: &Value) -> String {
     )
 }
 
-#[async_trait]
-impl Transport for PreviewPipe {
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+impl PreviewPipe {
+    /// One request: its line out, then frames until its own answer.
+    async fn exchange(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let mut wire = self.wire.lock().await;
         self.still_open()?;
         let id = wire.next_id;
@@ -204,7 +205,8 @@ impl Transport for PreviewPipe {
         }
     }
 
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+    /// One notification's line out.
+    async fn send_note(&self, method: &str, params: Option<Value>) -> Result<()> {
         let mut wire = self.wire.lock().await;
         self.still_open()?;
         let mut note = serde_json::json!({"jsonrpc": "2.0", "method": method});
@@ -212,6 +214,18 @@ impl Transport for PreviewPipe {
             note["params"] = params;
         }
         self.write_line(&mut wire, note.to_string()).await
+    }
+}
+
+// Each send is measured as a wait on the server, as for every transport.
+#[async_trait]
+impl Transport for PreviewPipe {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        backend_request(self.exchange(method, params)).await
+    }
+
+    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        backend_wait(self.send_note(method, params)).await
     }
 
     fn is_connected(&self) -> bool {
