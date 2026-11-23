@@ -208,7 +208,8 @@ fn stand_in(lines: &[&str], hold: bool) -> impl FnOnce(&Plan) -> Result<Child, R
             .arg(&script)
             .arg(&plan.control)
             .kill_on_drop(true)
-            .stdin(std::process::Stdio::null())
+            // Piped, as the real launch's is, so a row can see the launch keep it.
+            .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| Refusal::Step(format!("the stand-in ({e})")))
@@ -306,6 +307,24 @@ async fn r41_each_status_ending_at_the_launch() {
     assert!(wrong.is_empty(), "{wrong:#?}");
     let (started, _) = launch_against(&[done], false, roomy).await;
     assert!(started.is_ok(), "one setup_done then the close starts");
+}
+
+/// Kills m-wait-closes-stdin: a started preview still holds its stdin. The
+/// caller speaks MCP on it, and a held helper or a target reading it would
+/// otherwise see the end of input at once. tokio's `Child::wait` closes the
+/// child's stdin when first polled, and the launch races it against the
+/// session.
+#[tokio::test]
+async fn a_started_preview_keeps_its_stdin_open() {
+    let done = r#"{"setup_done":true}"#;
+    let (launched, _) = launch_against(&[done], false, Duration::from_secs(20)).await;
+    let Ok(started) = launched else {
+        panic!("one setup_done then the close should start");
+    };
+    assert!(
+        started.child.stdin.is_some(),
+        "the launch closed the preview's stdin"
+    );
 }
 
 /// D3, pins where the fetch step's clock starts: at the launch, so a fetch
