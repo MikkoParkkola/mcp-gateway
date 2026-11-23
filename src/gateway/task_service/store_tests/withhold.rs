@@ -5,7 +5,7 @@
 //! anyway (written by hand, or by another build) still loads, and is served
 //! withheld.
 use super::*;
-use crate::gateway::task_service::record::UpstreamRecord;
+use crate::gateway::task_service::record::{InputRound, UpstreamRecord};
 
 /// A prompt text that appears nowhere but in the stored request.
 const PROMPT: &str = "stored-prompt-91ad finish with key legacy-secret-c3e0";
@@ -70,6 +70,60 @@ async fn a_handle_is_never_written_onto_a_row_waiting_on_input() {
         .mark_upstream(OWNER, working.id(), 1, (handle("none"), Vec::new()))
         .await
         .expect("a working row takes its handle");
+    store.close().await.unwrap();
+}
+
+/// The other order: a row that holds a handle never parks a round, and stays
+/// as it was. A row without one still parks (the control).
+#[tokio::test]
+async fn a_row_holding_a_handle_never_parks_a_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    store.set_clock_for_test(Some(at(1)));
+    let round = || InputRound {
+        request_state: Some("sealed".to_owned()),
+        tool: "gateway_invoke".to_owned(),
+        arguments: json!({}),
+        accepted_inputs: serde_json::Map::new(),
+        continuation_deadline: None,
+        surfaced_server: None,
+    };
+    let ask = || InputRequired {
+        requests: vec![(
+            KEY.to_owned(),
+            json!({"method": "elicitation/create", "params": {}}),
+        )],
+        request_state: None,
+    };
+    let held = task();
+    store
+        .create(PreparedTask::for_test(&held, OWNER, 1))
+        .await
+        .unwrap();
+    store
+        .mark_upstream(OWNER, held.id(), 1, (handle("none"), Vec::new()))
+        .await
+        .expect("a working row takes its handle");
+    let revision = store.get(OWNER, held.id()).unwrap().revision;
+    let before = files(&path);
+    let refused = store
+        .require_input(OWNER, held.id(), revision, ask(), round(), at(1))
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::InvalidTransition)),
+        "{refused:?}"
+    );
+    assert_eq!(files(&path), before, "a refused round wrote something");
+    let plain = task();
+    store
+        .create(PreparedTask::for_test(&plain, OWNER, 2))
+        .await
+        .unwrap();
+    store
+        .require_input(OWNER, plain.id(), 1, ask(), round(), at(1))
+        .await
+        .expect("a row without a handle parks its round");
     store.close().await.unwrap();
 }
 
