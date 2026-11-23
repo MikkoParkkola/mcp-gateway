@@ -374,7 +374,8 @@ async fn c3_the_override_writes_the_key_and_is_recorded() {
     let detail: Value = serde_json::from_str(&detail.expect("an audit detail")).expect("json");
     assert_eq!(detail["cleartext_override"], true, "{detail}");
     assert_eq!(detail["allowed_tools"]["backend"], "ot", "{detail}");
-    for (name, flag) in [("f", json!(false)), ("a", Value::Null)] {
+    // Not `a`: the panel's starting config already holds a backend `a`.
+    for (name, flag) in [("f", json!(false)), ("absent", Value::Null)] {
         let mut body = json!({"name": name, "url": "https://host.example/mcp"});
         if !flag.is_null() {
             body["allow_cleartext_credentials"] = flag;
