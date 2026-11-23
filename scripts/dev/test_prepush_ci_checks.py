@@ -76,6 +76,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/shard_tests.py", ("which", "config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked",
                                    "<TMP>/lib-bin", "--", "--ignored")):
         "artifact: finds a test's part binary among the ones linux-lib-build built",
+    ("scripts/dev/runtime-provider-docker-smoke.sh", ("--prebuilt", "<TMP>/lib-bin")):
+        "artifact: runs two lib rows from the part binaries linux-lib-build built, against a live Docker daemon",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-dead.rs", "--integrity", "scripts/dev/testdata/registry-dead.integrity.json")): "network: live lookups, CI expects exit 1 (registry-packages.yml, known-dead step)",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-integrity.rs", "--integrity", "scripts/dev/testdata/registry-integrity.integrity.json")): "network: live digest lookup, CI expects exit 1 (MIK-8513 wrong-digest step)",
