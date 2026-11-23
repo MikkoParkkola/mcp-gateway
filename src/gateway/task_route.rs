@@ -283,6 +283,9 @@ fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
         TaskStatus::Cancelled => "cancelled",
         TaskStatus::Working | TaskStatus::InputRequired => return no_round(id),
     };
+    // The raw status message, not `delivered_wire`: safe only while the gateway
+    // alone writes it. A backend-sourced message would have to go through the
+    // withhold of an unvouched row first.
     let reason = task
         .status_message()
         .map_or_else(String::new, |message| format!(": {message}"));

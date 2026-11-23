@@ -192,6 +192,9 @@ test('ST8 leaving the page closes the stream, a restore reopens it once, and cyc
 const UNAVAILABLE = 'Updates unavailable · reconnecting';
 
 test('ST9a a first connect that fails shows Updates unavailable on the page and in the top bar', async ({ page, request }, testInfo) => {
+  // The retry after the failed first connect waits on the paused fake clock, so the connect
+  // count cannot reach 2 before it is read, however slow the host.
+  await pausedAt1402(page);
   const stream = await heldStream(page, request, testInfo, { next: [{ status: 500 }] });
   await withFixturePages(page);
   await page.goto('/ui/servers/status');
@@ -245,7 +248,10 @@ test('ST9c a 404 first connect shows Updates unavailable and retries at the 30 s
 /** Drop an open stream and wait for its stale state. */
 async function drop(page, stream) {
   await stream.end();
-  await expect(page.locator(STALE)).toHaveCount(1);
+  // The page learns of the end only when the response body closes, which a loaded host
+  // delivers late (one stress run drew the banner just past 5 s). This waits for an event,
+  // it does not time one, so the wait is long.
+  await expect(page.locator(STALE)).toHaveCount(1, { timeout: 15_000 });
 }
 
 test('ST10 a page opened while the stream is down shows the stale state, and the reconnect clears it', async ({ page, request }, testInfo) => {

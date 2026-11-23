@@ -25,13 +25,6 @@ use crate::secret_store::{SecretStore, StoreError, StoreKind};
 /// How long one child may take (ADR-028 rule 7).
 const BOUND: Duration = Duration::from_secs(2);
 
-/// Test-only: stub programs are written while this is held for writing, and
-/// every spawn holds it for reading, so no fork happens while a stub's write
-/// descriptor is open. A child forked then would inherit that descriptor, and
-/// exec of the stub would answer ETXTBSY.
-#[cfg(test)]
-pub(super) static SPAWN_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
-
 /// The largest value the Secret Service store takes (ADR-028 rule 2).
 const LIMIT: usize = 8_192;
 
@@ -286,13 +279,7 @@ fn run(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(test)]
-    let gate = SPAWN_GATE
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let spawned = command.spawn();
-    #[cfg(test)]
-    drop(gate);
     // Any spawn error is final: a missing or unusable tool is unavailable.
     let mut child = spawned
         .map_err(|_| KeychainError::Unavailable(format!("{} could not start", display(program))))?;

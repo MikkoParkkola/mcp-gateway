@@ -801,6 +801,9 @@ async fn reading_an_unvouched_row_stages_no_receipt() {
     }
 }
 
+#[path = "relay_withhold_tests.rs"]
+mod withhold;
+
 #[path = "relay_live_tests.rs"]
 mod live;
 

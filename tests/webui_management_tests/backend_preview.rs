@@ -634,6 +634,14 @@ async fn a_modern_server_that_refuses_initialize_previews() {
 
 /// T11b: an over-budget answer to the era probe is the budget's 502, not a
 /// silence that falls back to the handshake.
+///
+/// Only the budget may decide. The probe's window is the cap from exec, 20 s:
+/// it opens once the transport has connected, and the preview's 35 s request
+/// timeout and 30 s outer cap are both longer. The outer cap starts before the
+/// connect, so the full 20 s window fits only while the connect takes under
+/// 10 s; a slower one leaves the probe less than 20 s before the outer cap.
+/// A 5 MB answer over loopback takes well under a second; the 2 s default cap
+/// is what a loaded runner could outlast, so this row does not run under it.
 #[tokio::test]
 async fn an_over_budget_discovery_answer_is_a_502() {
     fn huge_discover(request: &Value) -> Response {
@@ -644,6 +652,10 @@ async fn an_over_budget_discovery_answer_is_a_502() {
         Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": {"pad": padding}}))
             .into_response()
     }
+    if crate::era_probe_cap::in_child_with_cap() {
+        return;
+    }
+    crate::era_probe_cap::widen_probe_cap();
     let log = Log::default();
     let url = stub_with(&log, huge_discover).await;
     let (router, _store) = router_with(false).await;

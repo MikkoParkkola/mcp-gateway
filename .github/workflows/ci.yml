@@ -1669,6 +1669,8 @@ jobs:
   # reads an entry stored by `secret-tool` byte-exact; the writer creates,
   # reads back, refuses a taken name and deletes; each is refused once the
   # collection is locked. The shards run both against stub programs only.
+  # The job also runs the Docker runtime provider's two #[ignore] rows against the runner's own Docker daemon
+  # (start, inspect, logs, restart, rm, and the restart policy); a missing daemon fails it, never skips.
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: [scope, linux-lib-build]
@@ -1691,6 +1693,7 @@ jobs:
           pattern: linux-lib-tests-p*
           path: ${{ runner.temp }}/lib-bin
           merge-multiple: false
+        id: lib_parts
       - name: Install gnome-keyring, secret-tool and gdbus
         run: |
           sudo apt-get update
@@ -1725,6 +1728,14 @@ jobs:
             "$LIB_TEST_BIN" --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
+      # Runs after a red keychain step too, so one cannot hide the other; skipped only when the part binaries never
+      # arrived, and then the shared-build gate above has already failed the job.
+      - name: "Docker runtime provider: both rows pass against the runner's daemon"
+        if: ${{ !cancelled() && steps.lib_parts.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
+        run: scripts/dev/runtime-provider-docker-smoke.sh --prebuilt "$RUNNER_TEMP/lib-bin"
 
   # Runs one SDK journey test that reads no documentation file, so a docs-only
   # pull request skips it; a failed scope decision runs it (fail-open).

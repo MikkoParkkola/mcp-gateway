@@ -511,6 +511,11 @@ impl Shared {
         if record.revision != revision {
             return Err(StoreError::RevisionConflict);
         }
+        // A row holding an upstream handle never parks a round as well: the
+        // handle write refuses a waiting row, and this refuses the other order.
+        if record.upstream.is_some() {
+            return Err(StoreError::InvalidTransition);
+        }
         task.transition(TaskTransition::RequireInput(requested), at)
             .map_err(|_| StoreError::InvalidTransition)?;
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
