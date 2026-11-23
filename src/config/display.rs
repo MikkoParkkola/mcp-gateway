@@ -30,25 +30,73 @@ pub fn secret_slot(literal: &str) -> String {
 pub(crate) fn backend_secret_references(
     config: &super::Config,
 ) -> std::collections::BTreeMap<String, String> {
-    let mut references = std::collections::BTreeMap::new();
-    for (name, backend) in &config.backends {
-        let slots = backend
-            .env
-            .iter()
-            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value))
-            .chain(
-                backend
-                    .headers
-                    .iter()
-                    .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value)),
-            );
-        for (field, value) in slots {
-            if super::secret_ref::is_reference(value) {
-                references.insert(field, secret_slot(value));
-            }
-        }
-    }
-    references
+    // Two slots can join to one key (a server name and a field name may both
+    // hold dots); the one walked last wins, as it always has.
+    reference_slots(config)
+        .map(|(server, kind, field, value)| {
+            (
+                format!("backends.{server}.{kind}.{field}"),
+                secret_slot(value),
+            )
+        })
+        .collect()
+}
+
+/// One backend secret slot that holds a reference, with its parts unjoined, so
+/// a reader never has to split the flat key to learn whose slot it is.
+#[cfg(feature = "webui")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct SecretReferenceRecord {
+    /// The server's name as written in the config.
+    pub(crate) server: String,
+    /// `env` or `headers`.
+    pub(crate) kind: &'static str,
+    /// The environment or header name, whole.
+    pub(crate) field: String,
+    /// The reference as `secret_slot` shows it; never a value.
+    pub(crate) reference: String,
+}
+
+/// Every backend slot of `config` that holds a reference, as records sorted by
+/// server, then kind, then field, each compared by bytes. `config` must be the
+/// literal config, as for [`backend_secret_references`].
+#[cfg(feature = "webui")]
+pub(crate) fn backend_secret_reference_records(
+    config: &super::Config,
+) -> Vec<SecretReferenceRecord> {
+    let mut records: Vec<SecretReferenceRecord> = reference_slots(config)
+        .map(|(server, kind, field, value)| SecretReferenceRecord {
+            server: server.to_owned(),
+            kind,
+            field: field.to_owned(),
+            reference: secret_slot(value),
+        })
+        .collect();
+    records.sort_by(|a, b| (&a.server, a.kind, &a.field).cmp(&(&b.server, b.kind, &b.field)));
+    records
+}
+
+/// Each backend `env` and `headers` slot that holds a reference, as (server,
+/// kind, field, value), in the order the backends and their maps iterate.
+#[cfg(feature = "webui")]
+fn reference_slots(
+    config: &super::Config,
+) -> impl Iterator<Item = (&str, &'static str, &str, &str)> {
+    config
+        .backends
+        .iter()
+        .flat_map(|(name, backend)| {
+            let env = backend
+                .env
+                .iter()
+                .map(move |(key, value)| (name.as_str(), "env", key.as_str(), value.as_str()));
+            let headers = backend
+                .headers
+                .iter()
+                .map(move |(key, value)| (name.as_str(), "headers", key.as_str(), value.as_str()));
+            env.chain(headers)
+        })
+        .filter(|(_, _, _, value)| super::secret_ref::is_reference(value))
 }
 
 #[cfg(tp3)]

@@ -621,20 +621,26 @@ async fn config(
         .collect();
 
     // Each backend secret slot that holds a reference, as written, read from
-    // the literal file: never a resolved value (ADR-028).
-    let secret_references = match state.config_path.clone() {
+    // the literal file: never a resolved value (ADR-028). The flat map and the
+    // records come from one load; either way out, both are empty, never absent.
+    let (secret_references, secret_reference_records) = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path)).map_or_else(
                 |e| {
                     tracing::warn!(error = %e, "secret references hidden: config did not load");
-                    std::collections::BTreeMap::new()
+                    Default::default()
                 },
-                |literal| crate::config::display::backend_secret_references(&literal),
+                |literal| {
+                    (
+                        crate::config::display::backend_secret_references(&literal),
+                        crate::config::display::backend_secret_reference_records(&literal),
+                    )
+                },
             )
         })
         .await
         .unwrap_or_default(),
-        None => std::collections::BTreeMap::new(),
+        None => Default::default(),
     };
 
     Json(json!({
@@ -646,6 +652,7 @@ async fn config(
         "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
+        "secret_reference_records": secret_reference_records,
     }))
     .into_response()
 }
