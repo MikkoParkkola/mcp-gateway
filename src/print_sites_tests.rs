@@ -21,7 +21,8 @@ use std::path::{Component, Path};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::Visit;
 
-use crate::test_source_text::{rust_files, test_only};
+use crate::test_source_files::rust_files;
+use crate::test_source_text::test_only;
 
 /// Macros that print to stdout or stderr themselves.
 const PRINT_MACROS: [&str; 5] = ["println", "eprintln", "print", "eprint", "dbg"];
