@@ -561,7 +561,9 @@ test.describe('code review round 1', () => {
     // Only the dialog's own clocks count: timers armed from its start function. The
     // announcer also arms 10 s timers once a slow page announces, and those are not the dialog's.
     await trackTimers(page);
-    const dialogClocks = async () => (await pendingFrom(page, 'start')).filter((ms) => ms === 10_000 || ms === 30_000);
+    // Sorted, so the row does not depend on the order start arms its two clocks.
+    const dialogClocks = async () => (await pendingFrom(page, 'start'))
+      .filter((ms) => ms === 10_000 || ms === 30_000).sort((a, b) => a - b);
     const h = held();
     await page.route(PROBE, h.answer);
     await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));

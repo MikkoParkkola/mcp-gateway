@@ -6,16 +6,24 @@
 // and no error. The name comes from GET /ui/api/gateway (fixtures/api/gateway.json,
 // overridden per test).
 import { test, expect, blockingViolations } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, shellModuleUrl } from './shell.mjs';
 
 const chip = (page) => page.locator('.top .env');
 
+/** What a slow Overview rightly says (the page's name from the shell's NAV, as a sentence). */
+const LOADING_OVERVIEW = 'Loading Overview.';
+
 /**
- * What the announcer says other than "Loading <page>". A slow page may rightly say it is
- * loading; an error or a refusal is anything else, so the rows expect this to be empty.
+ * What the announcer has said, once its queue is written out, other than that Overview is
+ * loading. Messages landing in one dwell share an entry ("Loading Overview. <refusal>."),
+ * so the loading sentence is cut out of each entry rather than the entry skipped: an
+ * error or a refusal beside it is left, and the rows expect nothing left.
  */
-const saidBesidesLoading = (page) => page.locator('#announcer').evaluate((el) => [...el.childNodes]
-  .map((n) => (n.textContent ?? '').trim()).filter((t) => t && !t.startsWith('Loading ')));
+const saidBesidesLoading = async (page) => {
+  await page.evaluate(async (url) => (await import(url)).announcerIdle(), await shellModuleUrl(page));
+  return page.locator('#announcer').evaluate((el, loading) => [...el.childNodes]
+    .map((n) => (n.textContent ?? '').replaceAll(loading, '').trim()).filter(Boolean), LOADING_OVERVIEW);
+};
 const gateway = (page, environment) => page.route('**/ui/api/gateway', (r) => r.fulfill({ json: { environment } }));
 
 /** True when neither the top bar nor the page scrolls sideways. */
