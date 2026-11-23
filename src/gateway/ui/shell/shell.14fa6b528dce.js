@@ -252,8 +252,9 @@ export function stateWord(value) {
 /**
  * One table for every server state the gateway reports (UI1.22): the badge's
  * glyph and tone, and the banner and next step, which may read the row's own
- * fields (`circuit_state`, `running`, `next_retry_at`). The gateway's `reason`
- * is never shown: a Refused reason carries raw policy codes.
+ * fields (`circuit_state`, `running`, `next_retry_at`). Banners never quote
+ * `reason`, since a Refused one can name raw policy codes; Servers › Status
+ * shows it only for the states whose reason is always a full sentence.
  */
 export const SERVER_STATES = {
   running: { glyph: '✓', tone: 'success', banner: () => null, next: () => null },
@@ -1878,7 +1879,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.04e4f1b0ef1f.js');
+    m = await import('/ui/assets/tooltip.cd1750e8bd65.js');
   } catch {
     return;
   }
