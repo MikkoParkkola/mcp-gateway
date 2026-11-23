@@ -218,7 +218,11 @@ async fn a_re_pinned_change_clears_its_record() {
     let mismatches = backend.current_mismatches();
 
     assert!(mismatches.changes.is_empty(), "{:?}", mismatches.changes);
-    assert!(!mismatches.incomplete);
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
     assert!(
         backend.rug_pull_records().is_empty(),
         "the record is cleared"
@@ -240,7 +244,11 @@ async fn an_unreadable_change_keeps_its_record() {
     let mismatches = backend.current_mismatches();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-    assert!(mismatches.incomplete);
+    assert_eq!(
+        judged(&mismatches),
+        [("rugtest.yaml".to_owned(), super::ReadFault::NoPermission)]
+    );
+    assert!(mismatches.changes.is_empty(), "{:?}", mismatches.changes);
     assert_eq!(backend.rug_pull_records().len(), 1, "the record stays");
 }
 
@@ -309,7 +317,12 @@ async fn garbled_bytes_keep_the_record() {
 
         let mismatches = backend.current_mismatches();
 
-        assert!(mismatches.incomplete, "{garbled:?}");
+        assert_eq!(
+            judged(&mismatches),
+            [("rugtest.yaml".to_owned(), super::ReadFault::Garbled)],
+            "{garbled:?}"
+        );
+        assert!(mismatches.changes.is_empty(), "{garbled:?}");
         assert_eq!(backend.rug_pull_records().len(), 1, "{garbled:?}");
     }
 }
@@ -330,6 +343,92 @@ async fn a_tagged_pin_key_keeps_the_record() {
 
     let mismatches = backend.current_mismatches();
 
-    assert!(mismatches.incomplete);
+    assert_eq!(
+        judged(&mismatches),
+        [("rugtest.yaml".to_owned(), super::ReadFault::Garbled)]
+    );
     assert_eq!(backend.rug_pull_records().len(), 1);
+}
+
+/// The files a pass could not judge, by file name, with why.
+#[cfg(feature = "webui")]
+fn judged(mismatches: &super::Mismatches) -> Vec<(String, super::ReadFault)> {
+    mismatches
+        .unreadable
+        .iter()
+        .map(|(record, fault)| {
+            let name = std::path::Path::new(&record.file)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (name, *fault)
+        })
+        .collect()
+}
+
+/// B3: a recorded file that is gone clears its record and is judged nothing.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_removed_change_clears_its_record_and_is_not_unreadable() {
+    let (_dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+    std::fs::remove_file(&path).unwrap();
+
+    let mismatches = backend.current_mismatches();
+
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
+    assert!(mismatches.changes.is_empty());
+    assert!(
+        backend.rug_pull_records().is_empty(),
+        "the record is cleared"
+    );
+}
+
+/// B3: changed bytes that declare no pin at all resolve the change.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_change_with_no_pin_clears_its_record_and_is_not_unreadable() {
+    let (_dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+    std::fs::write(&path, BODY.replace("Initially legit", "Changed, unpinned")).unwrap();
+
+    let mismatches = backend.current_mismatches();
+
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
+    assert!(mismatches.changes.is_empty());
+    assert!(
+        backend.rug_pull_records().is_empty(),
+        "the record is cleared"
+    );
+}
+
+/// B4: a recorded file replaced by a directory cannot be read for a reason
+/// that is neither permission nor absence; its record stays. Unix only:
+/// Windows answers a read of a directory with access denied.
+#[cfg(all(unix, feature = "webui"))]
+#[tokio::test]
+async fn a_change_replaced_by_a_directory_is_unreadable_and_kept() {
+    let (_dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+
+    let mismatches = backend.current_mismatches();
+
+    assert_eq!(
+        judged(&mismatches),
+        [("rugtest.yaml".to_owned(), super::ReadFault::Unreadable)]
+    );
+    assert_eq!(backend.rug_pull_records().len(), 1, "the record stays");
 }
