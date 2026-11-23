@@ -370,7 +370,6 @@ mod config_error_leak_tests;
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
-#[cfg(tp3)]
 #[cfg(test)]
 mod reload_test_support;
 #[cfg(tp3)]
