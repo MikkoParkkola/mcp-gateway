@@ -372,6 +372,9 @@ mod empty_backends_reload_tests;
 mod reload_pause;
 #[cfg(tp3)]
 #[cfg(test)]
+mod reload_test_support;
+#[cfg(tp3)]
+#[cfg(test)]
 mod server_name_reload_tests;
 /// For the admin audit layer's cancel rows, which pause a UI write between
 /// writing the file and publishing its reload.
