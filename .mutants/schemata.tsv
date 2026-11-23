@@ -1,0 +1,17 @@
+head_sha	2bf8bd5c627fee666f71478d05d22c6d085623b3
+#mutant M1
+mcp_gateway	gateway::ui::decisions::tests::onefile::f1_an_unreadable_changed_file_leaves_list_count_and_resolve_working	src/gateway/ui/decisions_onefile_tests.rs:184
+#mutant M2
+mcp_gateway	gateway::ui::decisions::tests::onefile::f6_every_recorded_file_is_listed_exactly_once	src/gateway/ui/decisions_onefile_tests.rs:470
+mcp_gateway	gateway::ui::decisions::tests::onefile::f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes	src/gateway/ui/decisions_onefile_tests.rs:269
+#mutant M3
+mcp_gateway	gateway::ui::decisions::tests::onefile::f5b_one_file_keeps_one_item_through_every_state	src/gateway/ui/decisions_onefile_tests.rs:403
+#mutant M4
+mcp_gateway	gateway::ui::decisions::tests::onefile::f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes	src/gateway/ui/decisions_onefile_tests.rs:295
+#mutant M5
+mcp_gateway	gateway::ui::decisions::tests::onefile::f7_a_request_for_the_bad_tool_waits_on_its_item	src/gateway/ui/decisions_onefile_tests.rs:499
+#mutant M6
+mcp_gateway	gateway::ui::decisions::tests::onefile::f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes	src/gateway/ui/decisions_onefile_tests.rs:269
+mcp_gateway	capability::backend::rug_pull::tests::an_unreadable_change_keeps_its_record	src/capability/backend_rug_pull_tests.rs:247
+#mutant M7
+mcp_gateway	gateway::ui::decisions::tests::onefile::f6_every_recorded_file_is_listed_exactly_once	src/gateway/ui/decisions_onefile_tests.rs:470
