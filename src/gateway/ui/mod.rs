@@ -27,6 +27,7 @@ pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+mod config_history;
 /// Every UI API answer type is classified for the api command.
 #[cfg(tp3)]
 #[cfg(test)]
@@ -180,6 +181,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(decisions::decisions_router())
         .merge(policies::policies_router())
         .merge(history::history_router())
+        .merge(config_history::config_history_router())
         .merge(restart::restart_router())
         .merge(stream::stream_router());
 

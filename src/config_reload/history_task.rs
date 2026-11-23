@@ -18,6 +18,9 @@ pub(crate) enum PendingRecord {
         revision: String,
         pending_restart: Vec<&'static str>,
         previous: Option<String>,
+        /// The served version after this publish (the live config's recorded
+        /// revision): what the record's eviction keeps.
+        pin: String,
         source: Source,
     },
     Refused {
