@@ -27,8 +27,7 @@ use crate::transport::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
-    negotiate_best_version, parse_supported_versions_from_error,
+    RequestId,
 };
 use crate::{Error, Result};
 

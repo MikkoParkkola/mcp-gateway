@@ -3,6 +3,7 @@
 //! Transport implementations for MCP backends
 
 mod command_split;
+mod handshake;
 mod http;
 mod lender;
 pub(crate) mod notification_sink;
