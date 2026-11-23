@@ -400,10 +400,13 @@ pub(super) async fn dashboard_link(
 /// An address a browser on this machine can open. Redemption is loopback
 /// only, so a wildcard bind becomes the loopback address.
 fn loopback_authority(host: &str, port: u16) -> String {
-    let host = match host.parse::<std::net::IpAddr>() {
+    // A bracketed bind host (`[::]`) is judged as its address, as the
+    // wildcard test judges it.
+    let bare = crate::gateway::router::strip_brackets(host);
+    let host = match bare.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V6(ip)) if ip.is_unspecified() => "::1",
-        _ if crate::gateway::router::is_wildcard_bind(host) => "127.0.0.1",
-        _ => host,
+        _ if crate::gateway::router::is_wildcard_bind(bare) => "127.0.0.1",
+        _ => bare,
     };
     if host.parse::<std::net::Ipv6Addr>().is_ok() {
         format!("[{host}]:{port}")

@@ -18,7 +18,7 @@ use crate::gateway::routes;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Kind {
     /// A config change, by area (backends, discovery, capabilities, import,
-    /// previews, settings, reload).
+    /// previews, settings, reload, history).
     Config(&'static str),
     /// Not a config change, with the reason.
     Other(&'static str),
@@ -118,6 +118,7 @@ pub(crate) const UI_CHANGES: &[UiChange] = &[
         routes::UI_SETTINGS_UNUSED_ENTRY,
         Config("settings"),
     ),
+    change("POST", routes::UI_CONFIG_RESTORE, Config("history")),
     change("POST", routes::UI_DISCOVERY_ADOPT, Config("discovery")),
     change("POST", routes::UI_IMPORT_PREVIEW, Config("import")),
     change("POST", routes::UI_IMPORT, Config("import")),

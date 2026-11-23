@@ -608,3 +608,61 @@ fn rf8_no_helper_stderr_reaches_the_caller_after_the_credential() {
         super::classify(&stderr)
     );
 }
+
+/// R33, kills "the denied flag is ignored" and "the mount class is wrong":
+/// every step crossed with `denied` and the host fact. `AppArmorRestricted`
+/// exactly for a mount step that was denied on a restricting host; every
+/// other cell is the step's own words.
+#[test]
+fn r33_a_reported_step_maps_to_apparmor_only_when_a_mount_was_denied_there() {
+    use super::super::control_msg::SetupStep;
+    let mounts = [
+        SetupStep::Mounting,
+        SetupStep::Binding,
+        SetupStep::Masking,
+        SetupStep::Remounting,
+        SetupStep::Pivoting,
+    ];
+    let words = [
+        (SetupStep::Namespaces, "namespaces"),
+        (SetupStep::Descriptors, "descriptors"),
+        (SetupStep::Mounting, "mounting"),
+        (SetupStep::Binding, "binding"),
+        (SetupStep::Masking, "masking"),
+        (SetupStep::Remounting, "remounting"),
+        (SetupStep::Pivoting, "pivoting"),
+        (SetupStep::Loopback, "loopback"),
+        (SetupStep::Limits, "limits"),
+        (SetupStep::TargetMissing, "target_missing"),
+    ];
+    assert_eq!(words.len(), SetupStep::ALL.len());
+    for (step, word) in words {
+        for denied in [true, false] {
+            for restricts in [true, false] {
+                let want = if mounts.contains(&step) && denied && restricts {
+                    Refusal::AppArmorRestricted
+                } else {
+                    Refusal::Step(word.to_owned())
+                };
+                assert_eq!(
+                    step.refusal(denied, restricts),
+                    want,
+                    "{step:?} denied={denied} restricts={restricts}"
+                );
+            }
+        }
+    }
+}
+
+/// R26l and R35l, kill "the exemption covers a range" and "the strict check
+/// after the close still exempts": the one exempt number on both sides of it,
+/// and the strict check with nothing exempt.
+#[test]
+fn r26l_r35l_only_the_one_control_descriptor_is_exempt() {
+    use super::helper::extra_descriptors;
+    assert_eq!(extra_descriptors(&[0, 1, 2, 9], Some(9)), Vec::<u32>::new());
+    assert_eq!(extra_descriptors(&[0, 1, 2, 4, 9], Some(9)), vec![4]);
+    assert_eq!(extra_descriptors(&[0, 1, 2, 9, 10], Some(9)), vec![10]);
+    assert_eq!(extra_descriptors(&[0, 1, 2, 9], None), vec![9]);
+    assert_eq!(extra_descriptors(&[0, 1, 2], None), Vec::<u32>::new());
+}
