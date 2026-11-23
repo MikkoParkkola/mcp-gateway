@@ -38,8 +38,9 @@ pub(super) struct Standing {
     key: Option<String>,
 }
 
-/// The live standing of `principal`: the static bearer (an admin), or the
-/// one unexpired API key whose digest derives it. `None` for anyone else, and
+/// The live standing of `principal`, a subscriber's owner key: the static
+/// bearer's (an admin), or the one unexpired API key's whose digest derives
+/// that owner key (`credential_owner_key`). `None` for anyone else, and
 /// whenever more than one of those credentials derives it: an ambiguous
 /// principal fails closed rather than taking whichever matched first
 /// (MIK-8062). Every key's expiry is judged on the one reading `now`, so a
