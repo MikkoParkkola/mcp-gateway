@@ -756,6 +756,9 @@ mod test_callers;
 #[cfg(test)]
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
+#[cfg(tp2)]
+#[cfg(test)]
+mod admission_deferred_note_tests;
 #[cfg(test)]
 mod boundary_pins;
 #[cfg(tp2)]
