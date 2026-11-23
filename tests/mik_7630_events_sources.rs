@@ -391,6 +391,66 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     assert_eq!(for_sub(&rx, &bob_all).len(), 1);
 }
 
+/// A gateway with only the operational source on, trusting `rx`, once the
+/// budget types are listed (the shared `start` waits for `task.settled`).
+async fn operational_gateway(root: &std::path::Path, rx: &Receiver) -> Gateway {
+    let cfg = delivery_config(
+        root,
+        &json!({"sources": {
+            "operational": true, "backend_notifications": false, "task_settled": false}}),
+    );
+    let trust = rx.trust_env();
+    let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
+    let gw = Gateway::start_with_env(root, cfg, &env).await;
+    gw.event_names(Some(ALICE), Some("gateway.budget.threshold"))
+        .await;
+    gw
+}
+
+/// The subscriber's principal over `/mcp` is the one the transport derives
+/// for its key; standing is judged on that, so a key holder's subscription
+/// to its own key's budget events is admitted.
+#[tokio::test]
+async fn a_key_holder_subscribes_to_its_own_budget_events_over_mcp() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = operational_gateway(root.path(), &rx).await;
+    for name in ["gateway.budget.threshold", "gateway.budget.exhausted"] {
+        let answer = subscribe(&gw, ALICE, name, &rx.url, json!({"scope": "key:alice"})).await;
+        assert!(
+            answer.get("error").is_none(),
+            "{name}: own budget refused: {answer}"
+        );
+        sub_id(&answer);
+    }
+}
+
+/// Over `/mcp`, a gateway-wide admin key is admitted to the health and
+/// kill-switch types; a key without admin standing is refused them (the
+/// catalogue does not show it the types, so the refusal is "not found").
+#[tokio::test]
+async fn an_admin_key_subscribes_to_operator_events_over_mcp() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = operational_gateway(root.path(), &rx).await;
+    for name in [
+        "gateway.backend.health_changed",
+        "gateway.kill_switch.changed",
+    ] {
+        let admitted = subscribe(&gw, ADMIN, name, &rx.url, json!({})).await;
+        assert!(
+            admitted.get("error").is_none(),
+            "{name}: admin refused: {admitted}"
+        );
+        sub_id(&admitted);
+        let refused = subscribe(&gw, ALICE, name, &rx.url, json!({})).await;
+        assert!(
+            refused.get("error").is_some(),
+            "{name}: a non-admin was admitted: {refused}"
+        );
+    }
+}
+
 /// MIK-7720 U5 over `/mcp`: health and kill-switch types are listed to an
 /// admin key only (standing set by the transport from the authenticated
 /// key), while every API-key holder sees the budget types.
