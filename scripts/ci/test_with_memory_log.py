@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -408,6 +409,8 @@ def rows() -> list[tuple[str, bool, str]]:
         out.append(("W13 a command killed before the first wait: exit 137, no hang",
                     rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]}"))
     out.extend(gap_rows())
+    out.extend(sampler_rows())
+    out.extend(text_rule_rows())
     out.extend(classifier_rows())
     out.extend(adopter_rows())
     return out
@@ -498,9 +501,108 @@ def gap_rows() -> list[tuple[str, bool, str]]:
     return out
 
 
+_ALL = ("memory HH:MM:SS start: Mem total 15983 used 1502 available 14200; Swap total 11263 used 12; "
+        "pressure mem some 1.50 full 0.75; io some 2.25; load 3.99; cgroup MB 9216 oom_kill 2")
+
+
+def _sampler_cases() -> list[tuple[str, object, str]]:
+    """W20's cases: a name, a change made to fresh stubs (a function of the stubs' folder), and the start line the
+    wrapper prints on them, its time masked. The literals were captured from the wrapper before its sampler was
+    rewritten; every printed number in the full stubs differs from every other, so two fields swapped show."""
+    def write(rel: str, text: str):
+        return lambda tmp: (tmp / rel).write_text(text)
+
+    def gone(*rels: str):
+        return lambda tmp: [(tmp / rel).unlink() for rel in rels]
+
+    no_swap = "".join(l + "\n" for l in FREE.splitlines() if not l.startswith("echo 'Swap:"))
+    spaced = ("#!/bin/sh\nprintf 'Mem:\\t15983  \\t 1502\\t\\t6800 10   7680\\t14200\\n'\n"
+              "printf 'Swap: \\t 11263\\t\\t12   11251\\n'\n")
+    return [
+        ("every source present", None, _ALL),
+        ("no free", write("bin/free", "#!/bin/sh\nexit 127\n"), _ALL.replace(
+            "Mem total 15983 used 1502 available 14200; Swap total 11263 used 12", "Mem n/a; Swap n/a")),
+        ("no pressure files", gone("proc/pressure/memory", "proc/pressure/io"), _ALL.replace(
+            "some 1.50 full 0.75; io some 2.25", "some n/a full n/a; io some n/a")),
+        ("no loadavg", gone("proc/loadavg"), _ALL.replace("load 3.99", "load n/a")),
+        ("no cgroup files", gone("cgroup/memory.current", "cgroup/memory.events"), _ALL.replace(
+            "cgroup MB 9216 oom_kill 2", "cgroup MB n/a oom_kill n/a")),
+        ("free without its Swap line", write("bin/free", no_swap), _ALL.replace(
+            "Swap total 11263 used 12", "Swap n/a")),
+        ("a pressure file with its some line only", write("proc/pressure/memory",
+            "some avg10=1.50 avg60=0.40 avg300=0.10 total=1\n"), _ALL.replace("full 0.75", "full n/a")),
+        ("a pressure line without avg10", write("proc/pressure/memory",
+            "some avg60=0.40 avg300=0.10 total=1\nfull avg10=0.75 avg60=0.20 avg300=0.05 total=1\n"),
+         _ALL.replace("some 1.50", "some n/a")),
+        ("free with tabs and runs of spaces", write("bin/free", spaced), _ALL),
+        ("memory.current of 2097151 bytes", write("cgroup/memory.current", "2097151\n"), _ALL.replace(
+            "cgroup MB 9216", "cgroup MB 1")),
+    ]
+
+
+def sampler_rows() -> list[tuple[str, bool, str]]:
+    """W20: the sampler prints, for each case of stubs, exactly the start line written in _sampler_cases (time
+    masked). It pins the wrapper's output across a rewrite of its sampler."""
+    out = []
+    w = str(WRAPPER)
+    for name, change, want in _sampler_cases():
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            env = stubs(tmp)
+            if change:
+                change(tmp)
+            rc, so, se, t = run(f"{w} true", env)
+            first = next((l for l in se.splitlines() if l.startswith("memory ")), "")
+            got = re.sub(r"^memory \d\d:\d\d:\d\d ", "memory HH:MM:SS ", first)
+            out.append((f"W20 the sampler's line, {name}", rc == 0 and got == want, f"rc {rc}, got {got!r}"))
+    return out
+
+
+# Every form in which bash 5.x reads a nested command (the two "${" forms are bash 5.3's); "$((" is caught by "$(".
+_NESTED = ("$(", "`", "<(", ">(", "${ ", "${|", "$[")
+_NESTED_WORDS = re.compile(r"\b(eval|coproc|lastpipe)\b")
+
+
+def nested_lines(text: str) -> list[str]:
+    """The lines of a wrapper text that break W19's rule: from the trap line to the end, and in every function body
+    (from "name() {" to the closing "}"), none of the nested-command forms. A text rule about this one script, not a
+    parser: comments count too."""
+    lines = text.splitlines()
+    checked: set[int] = set()
+    start = next((i for i, l in enumerate(lines) if l.startswith("trap ")), 0)
+    checked.update(range(start, len(lines)))
+    inside = False
+    for i, l in enumerate(lines):
+        if re.match(r"^\w+\(\) \{", l):
+            inside = True
+        if inside:
+            checked.add(i)
+        if l == "}":
+            inside = False
+    return [f":{i + 1} {lines[i].strip()}" for i in sorted(checked)
+            if any(f in lines[i] for f in _NESTED) or _NESTED_WORDS.search(lines[i])]
+
+
+def text_rule_rows() -> list[tuple[str, bool, str]]:
+    """W19: no nested command can be open when a signal arrives, because the wrapper has none once its trap is set
+    (bash parses a trap's action while handling the signal; a command substitution open then breaks the parse, the
+    W4 hang seen twice on Spark). It reads the file and runs nothing. A second row shows the check sees each listed form."""
+    text = WRAPPER.read_text()
+    hits = nested_lines(text)
+    out = [("W19 no nested command once the trap is set, nor in any function", not hits, "; ".join(hits))]
+    fixtures = ("v=$(date)", "v=`date`", "read -r v < <(date)", "echo x > >(cat)", "eval x", "shopt -s lastpipe",
+                "v=$[1+1]", "coproc cat", "v=${ date; }", "v=${| REPLY=1; }", "v=$((1+1))")
+    lines = text.splitlines()
+    at = next((i + 1 for i, l in enumerate(lines) if l.startswith("sample() {")), None)
+    missed = [f for f in fixtures if at is None or not any(
+        h.endswith(" " + f) for h in nested_lines("\n".join(lines[:at] + ["  " + f] + lines[at:])))]
+    out.append(("W19 each nested form put into sample() is seen", not missed, f"missed: {missed}"))
+    return out
+
+
 def classify_hang(record: dict) -> str:
     """A W4 hang record's cause class: the first row of this ordered list that matches. The class names where the cause
-    is; it designs no fix. K1 to K6 are named causes; K7 to K10 are not (K7 and K8 are snapshots of one moment, K9 has
+    is; it designs no fix. K1 to K6 and K11 are named causes; K7 to K10 are not (K7 and K8 are snapshots of one moment, K9 has
     two stories a snapshot cannot tell apart), and neither is K0, a capture that failed."""
     r6 = record.get("R6")
     if (any(record.get(f) is None for f in ("R1", "R2", "R3", "R4", "R5", "R7", "R8", "R9"))
@@ -520,6 +622,11 @@ def classify_hang(record: dict) -> str:
         return "K4"
     if record["R3"]["trap_ran"]:
         return "K5"
+    # K11, row 7: the wrapper's trap action failed to parse (a signal landed while a command substitution was open), so
+    # the signal was never passed on. Both endings: the wrapper alive with its trap lost, or bash's abort. Fixed by the
+    # sampler having no substitution (row W19); this row names it if it ever returns.
+    if any("trap:" in l and "unexpected EOF" in l for l in record["R8"]["stderr"].splitlines()):
+        return "K11"
     if r6 is None:
         return "K6 to K9, not separable here"
     w, c = r6["wrapper"], r6["command"]
@@ -580,8 +687,17 @@ def _role(record: dict, role: str) -> dict:
     return next(p for p in record["R7"] if p["role"] == role)
 
 
-# One setter per class row of the ordered list: each makes the canned record meet that row's condition. "K7p" and "K8p"
-# put the signal in the process-wide pending set instead of the thread's.
+# The wrapper's stderr line when bash failed to parse its trap action, as two real W4 hangs printed it.
+_PARSE = "with-memory-log.sh: trap: line 2: unexpected EOF while looking for matching `)'"
+
+
+def _cls(name: str) -> str:
+    """The class a _MEETS key stands for: "K7p" is K7."""
+    return name.rstrip("p")
+
+
+# One setter per class row of the ordered list, in the list's order: each makes the canned record meet that row's
+# condition. "K7p" and "K8p" put the signal in the process-wide pending set instead of the thread's.
 _MEETS = {
     "K0": lambda r: r.update(R9=None),
     "K1": lambda r: _role(r, "wrapper").update(state="T"),
@@ -589,6 +705,7 @@ _MEETS = {
     "K3": lambda r: r["R2"].update(reached=False, status=None),
     "K4": lambda r: r["R2"].update(status=1),
     "K5": lambda r: r["R3"].update(trap_ran=True),
+    "K11": lambda r: r["R8"].update(stderr=r["R8"]["stderr"] + "\n" + _PARSE),
     "K6": lambda r: r["R6"]["wrapper"].update(ign=_bit(r["signal"])),
     "K7": lambda r: r["R6"]["wrapper"].update(pnd=_bit(r["signal"])),
     "K7p": lambda r: r["R6"]["wrapper"].update(shd=_bit(r["signal"])),
@@ -612,10 +729,10 @@ def _met(*classes: str) -> dict:
 def classifier_rows() -> list[tuple[str, bool, str]]:
     """W16: the ordered list of classes, on canned records only (no timing)."""
     order = list(_MEETS)
-    checks = [(c, (c,), c[:2]) for c in order] + [("K10", (), "K10")]
+    checks = [(c, (c,), _cls(c)) for c in order] + [("K10", (), "K10")]
     # Every pair of rows a record can meet together, neighbours or not, must print the upper row.
-    checks += [(f"{a}+{b}", (a, b), a[:2]) for i, a in enumerate(order) for b in order[i + 1:]
-               if a[:2] != b[:2] and (a, b) not in _EXCLUSIVE]
+    checks += [(f"{a}+{b}", (a, b), _cls(a)) for i, a in enumerate(order) for b in order[i + 1:]
+               if _cls(a) != _cls(b) and (a, b) not in _EXCLUSIVE]
     wrong = []
     for name, classes, want in checks:
         got = classify_hang(_met(*classes))
@@ -698,6 +815,21 @@ def classifier_rows() -> list[tuple[str, bool, str]]:
         if (got := classify_hang(r)) != want:
             off.append(f"{c or 'none'}: {got}, want {want}")
     out.append(("W16 off Linux: R6 n/a is not K0, and K6 to K9 are one answer", not off, "; ".join(off)))
+    # W18: K11's two endings as recorded. The abort: the wrapper dead, the outer shell exited 134 after bash's "bad
+    # jump" (K10 without the row). The lost trap, the second real hang: HUP, the wrapper alive and catching it with
+    # nothing pending, both parse lines among the samples (K9 without the row).
+    abort = _canned("TERM")
+    abort["R4"] = {"running": False, "status": 134}
+    abort["R6"]["wrapper"] = {"identity": "dead"}
+    abort["R8"]["stderr"] = _PARSE + "\nreader_loop: bad jump: 26\n"
+    lost = _met("K9")
+    lost["signal"] = "HUP"
+    lost["R6"]["wrapper"].update(cgt=_bit("HUP") | _bit("TERM") | _bit("INT"))
+    lost["R8"]["stderr"] = "\n".join((
+        "memory 18:00:00 start: Mem n/a", _PARSE, "memory 18:00:30 running: Mem n/a",
+        "with-memory-log.sh: line 36: unexpected EOF while looking for matching `)'", "memory 18:01:00 running: Mem n/a"))
+    got = (classify_hang(abort), classify_hang(lost))
+    out.append(("W18 K11 names both endings: the abort and the lost trap", got == ("K11", "K11"), f"got {got}"))
     return out
 
 
