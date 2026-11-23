@@ -114,8 +114,8 @@ pub(crate) fn waiting_first_key(
     }
 }
 
-/// The waiting keys of a restart-pending answer. Built only by [`decide`]
-/// and [`create_guard`], so every such answer names what they found.
+/// The waiting keys of a restart-pending answer. Built only by [`restart_pending_decision`]
+/// and [`restart_pending_guard`], so every such answer names what they found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WaitingKeys(Vec<String>);
 
@@ -166,7 +166,7 @@ pub(crate) enum Decision {
         reason = "shape: the routes call it once the decision is built"
     )
 )]
-pub(crate) fn decide(candidate: &Waiting, file_waiting: Vec<String>) -> Decision {
+pub(crate) fn restart_pending_decision(candidate: &Waiting, file_waiting: Vec<String>) -> Decision {
     let _ = (candidate, file_waiting);
     Decision::Continue
 }
@@ -180,7 +180,10 @@ pub(crate) fn decide(candidate: &Waiting, file_waiting: Vec<String>) -> Decision
         reason = "shape: the routes call it once the decision is built"
     )
 )]
-pub(crate) fn create_guard(file: &Waiting, file_waiting: Vec<String>) -> Option<WaitingKeys> {
+pub(crate) fn restart_pending_guard(
+    file: &Waiting,
+    file_waiting: Vec<String>,
+) -> Option<WaitingKeys> {
     let _ = (file, file_waiting);
     None
 }
