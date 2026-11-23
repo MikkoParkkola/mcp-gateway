@@ -30,7 +30,11 @@ fn a_cost_save_stamps_saved_at_with_its_own_reading() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let _clock = at_secs(T);
-        save_costs(&enforcer, dir.path());
+        save_costs(
+            &enforcer,
+            &crate::cost_accounting::CostTracker::new(),
+            dir.path(),
+        );
     }
     let loaded = persistence::load(&dir.path().join("costs.json")).expect("load");
     assert_eq!(loaded.saved_at, T);

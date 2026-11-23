@@ -171,10 +171,11 @@ async fn a_replayed_stored_failure_is_noted_as_served() {
     );
 }
 
-/// MIK-8914.API2A.13: a chain-refused call notes no kind, since none names
-/// that check before PR2, so its record reads `unrecorded`, never an allow.
+/// A chain-refused call's record names the check that refused it,
+/// `signature_chain`, never an allow (it read `unrecorded` while that check
+/// had no kind of its own).
 #[tokio::test]
-async fn a_chain_refusal_records_unrecorded() {
+async fn a_chain_refusal_records_signature_chain() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let meta = chained_meta(&dir);
     let who = api_key_caller();
@@ -188,7 +189,7 @@ async fn a_chain_refusal_records_unrecorded() {
     assert_eq!(all.len(), 1, "{all:?}");
     assert_eq!(
         all[0]["decision"]["kind"],
-        json!("unrecorded"),
+        json!("signature_chain"),
         "{}",
         all[0]
     );

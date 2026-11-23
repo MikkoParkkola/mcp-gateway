@@ -12,6 +12,9 @@ mod accounts;
 mod add_remove;
 #[cfg(feature = "webui")]
 mod api;
+// The router's rows drive the real CLI against a served router (test-only).
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use api::run_api_for_tests;
 mod api_key_rewrite;
 mod audit;
 #[cfg(feature = "webui")]
@@ -395,7 +398,43 @@ pub fn run_tls_command(cmd: TlsCommand) -> ExitCode {
     }
 }
 
+/// Refuses a tls command whose output would replace something: `out` already
+/// holds `<stem>.crt` or `<stem>.key`. Each path is looked at itself, never
+/// through it, so any entry there (a file, a directory, a link even when it
+/// dangles) refuses, and so does a lookup that fails for any reason other
+/// than "not found". Called first, before any key is generated or read, so a
+/// refusal writes nothing. The check runs once, when the command starts:
+/// anything that creates these files while it runs, another tls command or
+/// any other process, can still race; the rerun case is closed.
+fn refuse_existing_tls_output(out: &std::path::Path, stem: &str) -> Result<(), ExitCode> {
+    for extension in ["crt", "key"] {
+        let path = out.join(format!("{stem}.{extension}"));
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                eprintln!(
+                    "Error: {} already exists. Remove it first or choose a different --out.",
+                    path.display()
+                );
+                return Err(ExitCode::FAILURE);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error: cannot tell whether {} exists ({e}); nothing was written. \
+                     Check the directory's access permissions, or choose a different --out.",
+                    path.display()
+                );
+                return Err(ExitCode::FAILURE);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn tls_init_ca(cn: &str, validity_days: u32, out: &std::path::Path) -> ExitCode {
+    if let Err(code) = refuse_existing_tls_output(out, "ca") {
+        return code;
+    }
     println!("Generating Root CA: {cn}");
     let params = CaParams { cn, validity_days };
     match CertGenerator::init_ca(&params) {
@@ -428,6 +467,9 @@ fn tls_issue_server(
     validity_days: u32,
     out: &std::path::Path,
 ) -> ExitCode {
+    if let Err(code) = refuse_existing_tls_output(out, "server") {
+        return code;
+    }
     println!("Issuing server certificate for: {cn}");
     let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
         Ok(pair) => pair,
@@ -477,6 +519,12 @@ fn tls_issue_client(
     validity_days: u32,
     out: &std::path::Path,
 ) -> ExitCode {
+    // One stem for both the check and the write, so they cannot name
+    // different files.
+    let stem = cn.replace(['/', ' '], "-");
+    if let Err(code) = refuse_existing_tls_output(out, &stem) {
+        return code;
+    }
     println!("Issuing client certificate for: {cn}");
     let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
         Ok(pair) => pair,
@@ -490,7 +538,6 @@ fn tls_issue_client(
         san_uris,
         validity_days,
     };
-    let stem = cn.replace(['/', ' '], "-");
     match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
         Ok(cert) => {
             if let Err(e) = CertGenerator::write_to_dir(&cert, out, &stem) {
@@ -675,20 +722,44 @@ mod admin_credential_tests {
     }
 }
 
-/// The serve paths' first load of the config. A byte write a crash left
-/// behind is recovered first ([`mcp_gateway::config_reload::recover_before_start`]),
-/// so the gateway never starts on bytes no reload accepted; an unresolvable
-/// one refuses the start. Read-only commands load without it.
-pub(crate) fn load_for_serve(
+/// The serve paths' first load of the config, given the one path config resolution found. The
+/// startup gate runs first: it takes the config lock (or proves none is needed), repairs what a
+/// crashed write left and refuses what it cannot settle. The config is then loaded from the path
+/// the gate checked, and the session rides in the result, still holding the lock, to the
+/// construction that finishes it. With no path, the built-in defaults load and nothing is
+/// searched for. Read-only commands load without the gate.
+pub(crate) async fn load_for_serve(
     path: Option<&std::path::Path>,
 ) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
-    if let Some(path) = path {
-        mcp_gateway::config_reload::recover_before_start(path)
-            .map_err(mcp_gateway::Error::Config)?;
-    }
-    mcp_gateway::config::Config::load_evaluated(path)
+    // Boxed: the gated load holds the startup session and the loaded config across its await,
+    // which would otherwise sit inline in both serve paths' futures.
+    Box::pin(gated_load(path)).await
 }
 
+async fn gated_load(
+    path: Option<&std::path::Path>,
+) -> mcp_gateway::Result<mcp_gateway::config::Evaluated> {
+    let Some(path) = path else {
+        return mcp_gateway::config::Config::load_evaluated_defaults();
+    };
+    let session = crate::config_reload::startup_settle::prepare_start(path)
+        .await
+        .map_err(|class| mcp_gateway::Error::Config(class.to_string()))?;
+    #[cfg(all(test, unix))]
+    crate::config_reload::serve_seams::reached(
+        session.target(),
+        crate::config_reload::serve_seams::Point::AfterPrepare,
+    );
+    let mut evaluated = mcp_gateway::config::Config::load_evaluated(Some(session.target()))?;
+    evaluated.startup_session = crate::config::StartupSlot::holding(session);
+    Ok(evaluated)
+}
+
+#[cfg(test)]
+pub(crate) mod serve_fixture;
 #[cfg(tp2)]
 #[cfg(test)]
 mod serve_load_tests;
+#[cfg(tp2)]
+#[cfg(test)]
+mod serve_session_tests;

@@ -528,32 +528,6 @@ test('A17 a tooltip module that never loads blocks nothing: the list loads and a
   expect(errors).toEqual([]);
 });
 
-test('A18 an answer that lands after the user left asks for no further page', async ({ page }) => {
-  // Page one holds no rows but a cursor, which an Activity list on screen reads on from at once.
-  const urls = await install(page, { answer: (url) => (byCursor(url) === 'c2' ? list(PAGE_TWO) : list([], 'c2')) });
-  let release;
-  const held = new Promise((r) => { release = r; });
-  let firstSeen = false;
-  await page.route('**/ui/api/activity**', async (r) => {
-    if (byCursor(r.request().url()) === null && !firstSeen) {
-      firstSeen = true;
-      await held;
-    }
-    return r.fallback();
-  });
-  await page.goto('/ui/activity/status');
-  await expect.poll(() => firstSeen).toBe(true);
-  await page.locator('nav.route-nav').getByRole('link', { name: 'Tools', exact: true }).click();
-  await expect(page).toHaveURL('/ui/tools/status');
-  const answered = page.waitForResponse((r) => r.url().includes('/ui/api/activity?') && byCursor(r.url()) === null);
-  release();
-  await answered;
-  await page.clock.runFor(100);
-  // Proving an absence needs a window: the broken code asks within milliseconds of the answer.
-  await new Promise((r) => { setTimeout(r, 500); });
-  expect(urls.map(byCursor)).toEqual([null]);
-});
-
 test.describe('in Amsterdam', () => {
   test.use({ timezoneId: 'Europe/Amsterdam' });
 

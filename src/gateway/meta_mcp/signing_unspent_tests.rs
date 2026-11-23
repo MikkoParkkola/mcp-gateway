@@ -570,6 +570,10 @@ fn r3_the_send_order_spent_then_dispatched_is_not_due() {
     assert!(!context.refund_due(), "R3: the send-order refund was due");
 }
 
+// The decision kind a signing or chain refusal notes, read where it is noted.
+#[path = "signing_kind_rows_tests.rs"]
+mod kind_rows;
+
 // MIK-8353 3d-2: the K7 and K8 refusal kinds at the dispatcher.
 #[path = "signing_refusal_kind_tests.rs"]
 mod refusal_kinds;

@@ -278,8 +278,10 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
 /// against, and a reload does not re-expand them. Early beats absent: an
 /// operator who restarts for nothing loses a restart, one who is not told
 /// silently reads a file the running process never opened.
-#[tokio::test]
-async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required() {
+///
+/// The start that case needs, shared with the pending-restart read's marker
+/// row: startup has run through a recording home, which has not finished.
+pub(super) fn tilde_home_start() -> TildeHomeStart {
     let home_a = tempfile::tempdir().unwrap();
     let home_b = tempfile::tempdir().unwrap();
 
@@ -297,6 +299,37 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required()
 
     let home = RecordingHome::based_at(home_a.path());
     let startup = startup_through(&cfg, &home);
+    TildeHomeStart {
+        _dirs: [home_a, cfg_dir],
+        home_b,
+        recorded_path,
+        cfg,
+        home,
+        startup,
+    }
+}
+
+/// What `tilde_home_start` staged; its temp dirs live as long as this does.
+pub(super) struct TildeHomeStart {
+    _dirs: [tempfile::TempDir; 2],
+    pub(super) home_b: tempfile::TempDir,
+    pub(super) recorded_path: std::path::PathBuf,
+    pub(super) cfg: std::path::PathBuf,
+    pub(super) home: RecordingHome,
+    pub(super) startup: crate::config::Evaluated,
+}
+
+/// ENVFILE.19g, on `tilde_home_start` (its comment gives the reasoning).
+#[tokio::test]
+async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required() {
+    let TildeHomeStart {
+        _dirs,
+        home_b,
+        recorded_path,
+        cfg,
+        home,
+        startup,
+    } = tilde_home_start();
 
     // WHEN: the file is rewritten with the SAME `HOME` and a rotated value
     home.finish_startup();
