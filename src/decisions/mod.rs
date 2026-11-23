@@ -105,6 +105,18 @@ pub(crate) struct CapabilityChange {
     pub(crate) content: String,
 }
 
+/// A changed capability's file that one pass could neither read nor parse:
+/// still a recorded change, so it is listed, never left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityUnreadable {
+    /// The capability's path on disk; never shown.
+    pub(crate) file: String,
+    /// The name it was last loaded under while its pin matched.
+    pub(crate) loaded_as: Option<String>,
+    /// Why it could not be judged.
+    pub(crate) reason: UnreadableReason,
+}
+
 /// The list route's whole answer, read under one lock.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct View {
@@ -177,6 +189,8 @@ pub(crate) struct DecisionSet {
     /// log's replay must run again before its source can be ready.
     held_lost: std::collections::BTreeSet<Source>,
     changes: BTreeMap<(String, String), CapabilityChange>,
+    /// Each backend's changed files its last pass could not judge.
+    unjudged: BTreeMap<(String, String), CapabilityUnreadable>,
     adopt: Vec<AdoptFind>,
     unreadable: Vec<UnreadableFile>,
     /// The generation of the discovery listing `adopt` and `unreadable`
@@ -200,6 +214,7 @@ impl DecisionSet {
             held: Vec::new(),
             held_lost: std::collections::BTreeSet::new(),
             changes: BTreeMap::new(),
+            unjudged: BTreeMap::new(),
             adopt: Vec::new(),
             unreadable: Vec::new(),
             discovery_generation: None,
@@ -256,6 +271,22 @@ impl DecisionSet {
         }
         self.refresh();
         true
+    }
+
+    /// Replace one backend's changed files that its pass could not read or
+    /// parse. Listed from the next refresh: the tick calls this, then
+    /// [`Self::set_capability_changes`], under one lock, so one pass is one
+    /// refresh and the source never goes unavailable over a bad file.
+    pub(crate) fn set_capability_unreadable(
+        &mut self,
+        backend: &str,
+        files: Vec<CapabilityUnreadable>,
+    ) {
+        self.unjudged.retain(|(owner, _), _| owner != backend);
+        for file in files {
+            self.unjudged
+                .insert((backend.to_string(), file.file.clone()), file);
+        }
     }
 
     /// Replace one backend's capability changes; the source is `Ready` once
