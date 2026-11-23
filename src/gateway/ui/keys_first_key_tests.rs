@@ -45,22 +45,31 @@ fn digest_of(secret: &str) -> String {
     format!("sha256:{}", crate::hashing::sha256_hex(secret.as_bytes()))
 }
 
-/// How this test binary would be started again on the fixture's file.
-fn start_command(fx: &Fixture) -> String {
+/// How this test binary would be started again on the fixture's file; a
+/// Windows gateway has no such command, so the answer carries none there.
+fn start_command(fx: &Fixture) -> Value {
+    if cfg!(windows) {
+        return Value::Null;
+    }
     let exe = std::env::current_exe().expect("the test binary");
-    format!(
+    let config = std::path::absolute(fx.path()).expect("an absolute config path");
+    json!(format!(
         "'{}' serve --config '{}'",
         exe.display(),
-        fx.path().display()
-    )
+        config.display()
+    ))
 }
 
-/// Asserts `value` is an object with exactly the members `names`.
+/// Asserts `value` is an object with exactly the members `names`, less
+/// `start_command` on a platform that has none.
 fn members(value: &Value, names: &[&str]) {
     let object = value.as_object().expect("an object");
+    let names: Vec<&str> = (names.iter().copied())
+        .filter(|name| !(cfg!(windows) && *name == "start_command"))
+        .collect();
     assert_eq!(object.len(), names.len(), "{value}");
     for name in names {
-        assert!(object.contains_key(*name), "no {name}: {value}");
+        assert!(object.contains_key(name), "no {name}: {value}");
     }
 }
 
@@ -232,15 +241,21 @@ fn l5_a_settings_save_while_a_key_waits_is_restart_pending() {
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
-/// L5 (the backend half): adding a backend while the key is pending keeps
-/// the key, so it gets the same 409 and the file stays as it is.
+/// L5 (the backend half): editing a backend while the key is pending keeps
+/// the key, so it gets the same 409 and the file stays as it is. The
+/// backend is written as a block, which the in-place editor can change.
 #[test]
-fn l5_a_backend_add_while_a_key_waits_is_restart_pending() {
-    let fx = Fixture::new(starter(""));
+fn l5_a_backend_edit_while_a_key_waits_is_restart_pending() {
+    let mut setup = starter("");
+    setup.text = setup.text.replace(
+        "backends: {}\n",
+        "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    );
+    let fx = Fixture::new(setup);
     create_first(&fx);
     let before = fx.bytes();
-    let body = json!({"name": "b", "url": "http://127.0.0.1:9/mcp"});
-    let (status, answer) = call(&fx, "POST", super::routes::UI_BACKENDS, &body);
+    let body = json!({"description": "edited while pending"});
+    let (status, answer) = call(&fx, "PATCH", "/ui/api/backends/a", &body);
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     members(
         &answer,

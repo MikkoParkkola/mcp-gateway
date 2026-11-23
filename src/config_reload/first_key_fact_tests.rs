@@ -33,7 +33,9 @@ fn w8_a_collision_and_a_start_fault_report_the_collision() {
             1,
         )
     );
-    let hook = crate::config_reload::refuse_hook::arm("first-key-tests: a generation was built");
+    let hook = crate::config_reload::generation::refuse_hook::arm(
+        "first-key-tests: a generation was built",
+    );
     let answer = ask(&gw, &candidate);
     assert!(
         !hook.load(Ordering::SeqCst),
