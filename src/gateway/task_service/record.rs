@@ -602,7 +602,8 @@ pub(crate) enum Vouching {
     Unvouched,
 }
 
-/// Swap a stored outcome for the fixed withheld answer; state is kept.
+/// Swap a stored outcome (result, error or parked input requests) for the
+/// fixed withheld answer; state is kept.
 fn withhold_outcome(wire: &mut serde_json::Value) {
     let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
     if let Some(result) = wire.get_mut("result") {
@@ -616,6 +617,12 @@ fn withhold_outcome(wire: &mut serde_json::Value) {
             "code": crate::error::rpc_codes::INTERNAL_ERROR,
             "message": reason,
         });
+    }
+    // A waiting row's requests are the backend's too, keys included: none is
+    // served, and the status message says why the round asks for nothing.
+    if let Some(requests) = wire.get_mut("inputRequests") {
+        *requests = serde_json::json!({});
+        wire["statusMessage"] = serde_json::json!(reason);
     }
 }
 
@@ -717,18 +724,25 @@ impl CommittedTask {
 
     /// The stored error when the peer wrote it (MIK-7887.RECEIPT.1): only a
     /// Failed row whose error the gateway established as the peer's. A gateway
-    /// error, a substitute, or an older row whose author is unknown has none.
+    /// error, a substitute, or an older row whose author is unknown has none,
+    /// and so has a row that withholds its outcome: no reader is served it.
     pub(crate) fn backend_error(&self) -> Option<&crate::protocol::JsonRpcError> {
-        (!self.output_free && self.error_author == Some(ErrorAuthor::Peer))
-            .then(|| self.task.error())
-            .flatten()
+        (!self.output_free
+            && !self.withholds_outcome()
+            && self.error_author == Some(ErrorAuthor::Peer))
+        .then(|| self.task.error())
+        .flatten()
     }
 
     /// The stored result when it is backend output. A row holding only the
     /// gateway's own sentence (a bounded failure, an interrupted or abandoned
     /// round, a round refused before its backend) has none: nothing the
-    /// backend said was delivered with it.
+    /// backend said was delivered with it. Nor has a row that withholds its
+    /// outcome: the withheld answer is what every reader is served.
     pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
+        if self.withholds_outcome() {
+            return None;
+        }
         let result = self.task.result()?;
         let gateway_authored = self.error_author == Some(ErrorAuthor::Gateway)
             || result

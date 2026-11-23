@@ -504,6 +504,11 @@ mod sweep;
 /// production constant, which itself stays visible to the transport module only.
 #[cfg(all(test, unix))]
 pub(crate) const NESTED_TERM_NEED_FOR_TEST: std::time::Duration = child_tree::NESTED_TERM_NEED;
+/// The margin inside that floor: a row's nested peer waits the floor less
+/// this, the inner gateway's slowest hurried path.
+#[cfg(all(test, unix))]
+pub(crate) const NESTED_TERM_MARGIN_FOR_TEST: std::time::Duration =
+    child_tree::NESTED_TERM_MARGIN_FOR_TEST;
 #[cfg(all(test, unix))]
 pub(crate) use child_tree::signal_log;
 #[cfg(all(test, unix))]

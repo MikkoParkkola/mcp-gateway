@@ -1,0 +1,211 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+/ui/api/config/restore	DELETE	plain	AdminKey	405
+/ui/api/config/restore	DELETE	plain	AdminKeyUnmapped	405
+/ui/api/config/restore	DELETE	plain	AuthOff	405
+/ui/api/config/restore	DELETE	plain	Bearer	405
+/ui/api/config/restore	DELETE	plain	NoKey	401:error.code=-32000
+/ui/api/config/restore	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	DELETE	plain	OidcAdmin	405
+/ui/api/config/restore	DELETE	plain	OidcAuditor	405
+/ui/api/config/restore	DELETE	plain	OidcDeveloper	405
+/ui/api/config/restore	DELETE	plain	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	DELETE	plain	OidcDeveloperNoSubject	405
+/ui/api/config/restore	DELETE	plain	OidcReviewer	405
+/ui/api/config/restore	DELETE	plain	OidcUnmapped	405
+/ui/api/config/restore	DELETE	plain	Session	405
+/ui/api/config/restore	DELETE	plain	StandardKey	405
+/ui/api/config/restore	GET	bad-query	AdminKey	405
+/ui/api/config/restore	GET	bad-query	AdminKeyUnmapped	405
+/ui/api/config/restore	GET	bad-query	AuthOff	405
+/ui/api/config/restore	GET	bad-query	Bearer	405
+/ui/api/config/restore	GET	bad-query	NoKey	401:error.code=-32000
+/ui/api/config/restore	GET	bad-query	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	GET	bad-query	OidcAdmin	405
+/ui/api/config/restore	GET	bad-query	OidcAuditor	405
+/ui/api/config/restore	GET	bad-query	OidcDeveloper	405
+/ui/api/config/restore	GET	bad-query	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	GET	bad-query	OidcDeveloperNoSubject	405
+/ui/api/config/restore	GET	bad-query	OidcReviewer	405
+/ui/api/config/restore	GET	bad-query	OidcUnmapped	405
+/ui/api/config/restore	GET	bad-query	Session	405
+/ui/api/config/restore	GET	bad-query	StandardKey	405
+/ui/api/config/restore	GET	plain	AdminKey	405
+/ui/api/config/restore	GET	plain	AdminKeyUnmapped	405
+/ui/api/config/restore	GET	plain	AuthOff	405
+/ui/api/config/restore	GET	plain	Bearer	405
+/ui/api/config/restore	GET	plain	NoKey	401:error.code=-32000
+/ui/api/config/restore	GET	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	GET	plain	OidcAdmin	405
+/ui/api/config/restore	GET	plain	OidcAuditor	405
+/ui/api/config/restore	GET	plain	OidcDeveloper	405
+/ui/api/config/restore	GET	plain	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	GET	plain	OidcDeveloperNoSubject	405
+/ui/api/config/restore	GET	plain	OidcReviewer	405
+/ui/api/config/restore	GET	plain	OidcUnmapped	405
+/ui/api/config/restore	GET	plain	Session	405
+/ui/api/config/restore	GET	plain	StandardKey	405
+/ui/api/config/restore	HEAD	plain	AdminKey	405
+/ui/api/config/restore	HEAD	plain	AdminKeyUnmapped	405
+/ui/api/config/restore	HEAD	plain	AuthOff	405
+/ui/api/config/restore	HEAD	plain	Bearer	405
+/ui/api/config/restore	HEAD	plain	NoKey	401
+/ui/api/config/restore	HEAD	plain	NoKeyPublicStatus	401
+/ui/api/config/restore	HEAD	plain	OidcAdmin	405
+/ui/api/config/restore	HEAD	plain	OidcAuditor	405
+/ui/api/config/restore	HEAD	plain	OidcDeveloper	405
+/ui/api/config/restore	HEAD	plain	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	HEAD	plain	OidcDeveloperNoSubject	405
+/ui/api/config/restore	HEAD	plain	OidcReviewer	405
+/ui/api/config/restore	HEAD	plain	OidcUnmapped	405
+/ui/api/config/restore	HEAD	plain	Session	405
+/ui/api/config/restore	HEAD	plain	StandardKey	405
+/ui/api/config/restore	OPTIONS	plain	AdminKey	405
+/ui/api/config/restore	OPTIONS	plain	AdminKeyUnmapped	405
+/ui/api/config/restore	OPTIONS	plain	AuthOff	405
+/ui/api/config/restore	OPTIONS	plain	Bearer	405
+/ui/api/config/restore	OPTIONS	plain	NoKey	401:error.code=-32000
+/ui/api/config/restore	OPTIONS	plain	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	OPTIONS	plain	OidcAdmin	405
+/ui/api/config/restore	OPTIONS	plain	OidcAuditor	405
+/ui/api/config/restore	OPTIONS	plain	OidcDeveloper	405
+/ui/api/config/restore	OPTIONS	plain	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	OPTIONS	plain	OidcDeveloperNoSubject	405
+/ui/api/config/restore	OPTIONS	plain	OidcReviewer	405
+/ui/api/config/restore	OPTIONS	plain	OidcUnmapped	405
+/ui/api/config/restore	OPTIONS	plain	Session	405
+/ui/api/config/restore	OPTIONS	plain	StandardKey	405
+/ui/api/config/restore	PATCH	bad-json	AdminKey	405
+/ui/api/config/restore	PATCH	bad-json	AdminKeyUnmapped	405
+/ui/api/config/restore	PATCH	bad-json	AuthOff	405
+/ui/api/config/restore	PATCH	bad-json	Bearer	405
+/ui/api/config/restore	PATCH	bad-json	NoKey	401:error.code=-32000
+/ui/api/config/restore	PATCH	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PATCH	bad-json	OidcAdmin	405
+/ui/api/config/restore	PATCH	bad-json	OidcAuditor	405
+/ui/api/config/restore	PATCH	bad-json	OidcDeveloper	405
+/ui/api/config/restore	PATCH	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PATCH	bad-json	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PATCH	bad-json	OidcReviewer	405
+/ui/api/config/restore	PATCH	bad-json	OidcUnmapped	405
+/ui/api/config/restore	PATCH	bad-json	Session	405
+/ui/api/config/restore	PATCH	bad-json	StandardKey	405
+/ui/api/config/restore	PATCH	bad-type	AdminKey	405
+/ui/api/config/restore	PATCH	bad-type	AdminKeyUnmapped	405
+/ui/api/config/restore	PATCH	bad-type	AuthOff	405
+/ui/api/config/restore	PATCH	bad-type	Bearer	405
+/ui/api/config/restore	PATCH	bad-type	NoKey	401:error.code=-32000
+/ui/api/config/restore	PATCH	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PATCH	bad-type	OidcAdmin	405
+/ui/api/config/restore	PATCH	bad-type	OidcAuditor	405
+/ui/api/config/restore	PATCH	bad-type	OidcDeveloper	405
+/ui/api/config/restore	PATCH	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PATCH	bad-type	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PATCH	bad-type	OidcReviewer	405
+/ui/api/config/restore	PATCH	bad-type	OidcUnmapped	405
+/ui/api/config/restore	PATCH	bad-type	Session	405
+/ui/api/config/restore	PATCH	bad-type	StandardKey	405
+/ui/api/config/restore	PATCH	json	AdminKey	405
+/ui/api/config/restore	PATCH	json	AdminKeyUnmapped	405
+/ui/api/config/restore	PATCH	json	AuthOff	405
+/ui/api/config/restore	PATCH	json	Bearer	405
+/ui/api/config/restore	PATCH	json	NoKey	401:error.code=-32000
+/ui/api/config/restore	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PATCH	json	OidcAdmin	405
+/ui/api/config/restore	PATCH	json	OidcAuditor	405
+/ui/api/config/restore	PATCH	json	OidcDeveloper	405
+/ui/api/config/restore	PATCH	json	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PATCH	json	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PATCH	json	OidcReviewer	405
+/ui/api/config/restore	PATCH	json	OidcUnmapped	405
+/ui/api/config/restore	PATCH	json	Session	405
+/ui/api/config/restore	PATCH	json	StandardKey	405
+/ui/api/config/restore	POST	bad-json	AdminKey	422
+/ui/api/config/restore	POST	bad-json	AdminKeyUnmapped	422
+/ui/api/config/restore	POST	bad-json	AuthOff	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	Bearer	422
+/ui/api/config/restore	POST	bad-json	NoKey	401:error.code=-32000
+/ui/api/config/restore	POST	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	POST	bad-json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-json	Session	422
+/ui/api/config/restore	POST	bad-json	StandardKey	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	AdminKey	422
+/ui/api/config/restore	POST	bad-type	AdminKeyUnmapped	422
+/ui/api/config/restore	POST	bad-type	AuthOff	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	Bearer	422
+/ui/api/config/restore	POST	bad-type	NoKey	401:error.code=-32000
+/ui/api/config/restore	POST	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	POST	bad-type	OidcAdmin	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcAuditor	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcReviewer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/config/restore	POST	bad-type	Session	422
+/ui/api/config/restore	POST	bad-type	StandardKey	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	AdminKey	422
+/ui/api/config/restore	POST	json	AdminKeyUnmapped	422
+/ui/api/config/restore	POST	json	AuthOff	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	Bearer	422
+/ui/api/config/restore	POST	json	NoKey	401:error.code=-32000
+/ui/api/config/restore	POST	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	POST	json	OidcAdmin	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcAuditor	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcDeveloper	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcDeveloperNoIssuer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcReviewer	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	OidcUnmapped	403:error="Admin authentication required"
+/ui/api/config/restore	POST	json	Session	422
+/ui/api/config/restore	POST	json	StandardKey	403:error="Admin authentication required"
+/ui/api/config/restore	PUT	bad-json	AdminKey	405
+/ui/api/config/restore	PUT	bad-json	AdminKeyUnmapped	405
+/ui/api/config/restore	PUT	bad-json	AuthOff	405
+/ui/api/config/restore	PUT	bad-json	Bearer	405
+/ui/api/config/restore	PUT	bad-json	NoKey	401:error.code=-32000
+/ui/api/config/restore	PUT	bad-json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PUT	bad-json	OidcAdmin	405
+/ui/api/config/restore	PUT	bad-json	OidcAuditor	405
+/ui/api/config/restore	PUT	bad-json	OidcDeveloper	405
+/ui/api/config/restore	PUT	bad-json	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PUT	bad-json	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PUT	bad-json	OidcReviewer	405
+/ui/api/config/restore	PUT	bad-json	OidcUnmapped	405
+/ui/api/config/restore	PUT	bad-json	Session	405
+/ui/api/config/restore	PUT	bad-json	StandardKey	405
+/ui/api/config/restore	PUT	bad-type	AdminKey	405
+/ui/api/config/restore	PUT	bad-type	AdminKeyUnmapped	405
+/ui/api/config/restore	PUT	bad-type	AuthOff	405
+/ui/api/config/restore	PUT	bad-type	Bearer	405
+/ui/api/config/restore	PUT	bad-type	NoKey	401:error.code=-32000
+/ui/api/config/restore	PUT	bad-type	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PUT	bad-type	OidcAdmin	405
+/ui/api/config/restore	PUT	bad-type	OidcAuditor	405
+/ui/api/config/restore	PUT	bad-type	OidcDeveloper	405
+/ui/api/config/restore	PUT	bad-type	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PUT	bad-type	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PUT	bad-type	OidcReviewer	405
+/ui/api/config/restore	PUT	bad-type	OidcUnmapped	405
+/ui/api/config/restore	PUT	bad-type	Session	405
+/ui/api/config/restore	PUT	bad-type	StandardKey	405
+/ui/api/config/restore	PUT	json	AdminKey	405
+/ui/api/config/restore	PUT	json	AdminKeyUnmapped	405
+/ui/api/config/restore	PUT	json	AuthOff	405
+/ui/api/config/restore	PUT	json	Bearer	405
+/ui/api/config/restore	PUT	json	NoKey	401:error.code=-32000
+/ui/api/config/restore	PUT	json	NoKeyPublicStatus	401:error.code=-32000
+/ui/api/config/restore	PUT	json	OidcAdmin	405
+/ui/api/config/restore	PUT	json	OidcAuditor	405
+/ui/api/config/restore	PUT	json	OidcDeveloper	405
+/ui/api/config/restore	PUT	json	OidcDeveloperNoIssuer	405
+/ui/api/config/restore	PUT	json	OidcDeveloperNoSubject	405
+/ui/api/config/restore	PUT	json	OidcReviewer	405
+/ui/api/config/restore	PUT	json	OidcUnmapped	405
+/ui/api/config/restore	PUT	json	Session	405
+/ui/api/config/restore	PUT	json	StandardKey	405

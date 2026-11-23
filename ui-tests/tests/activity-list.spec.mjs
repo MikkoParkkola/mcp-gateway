@@ -48,7 +48,9 @@ const Q2 = { name: 'q2', spanMs: HOUR };
 /** The window a page 1 asked at `t` proposes for query `q`. */
 const span = (q, t) => ({ from: t - q.spanMs, to: t });
 /** What initial(q) must hold, written out here rather than read from the core. */
-const FRESH = (q) => ({ query: q, rows: [], cursor: null, window: null, dirty: false, held: false, newer: false, notices: [], flight: null });
+const FRESH = (q) => ({ query: q, rows: [], cursor: null, window: null, dirty: false, held: false, newer: false, notices: [], flight: null, stalled: false });
+/** An answer whose scan stopped before the end of the log: the cursor keeps looking. */
+const stalledAnswer = (q, page, next) => ({ ...answer(q, page, next), scan_exhausted: true });
 /** Fields that may survive an operator replace. None. */
 const CARRY_OVER = [];
 /** Rows of this test's own making, each naming its query, its page and its place. */
@@ -171,6 +173,11 @@ test.describe('LC list core', () => {
         const live = started(r.frame(T2), 'live', 'dirty: frame');
         r.frame(T2);
         return { inFlight: live.handle, moved: ['rows', 'cursor', 'window', 'dirty'] };
+      },
+      'stopped scan': (r) => {
+        const p1 = started(r.replace(Q0, T1), 'page1', 'stopped scan: open');
+        r.ok(p1.handle, stalledAnswer(Q0, 1, 'c2'));
+        return { inFlight: null, moved: ['rows', 'cursor', 'window', 'stalled'] };
       },
   };
 
@@ -303,7 +310,8 @@ test.describe('LC list core', () => {
           fn = 'settle';
           target = name.startsWith('late') ? (lastAborted ?? ghost(state.query)) : (current ?? ghost(state.query));
           input = name.endsWith('ok')
-            ? { handle: target.handle, answer: answer(target.query, pageOf(target), `c${pageOf(target) + 1}`), fresh: {}, now }
+            // Every other depth answers with a stopped scan, so both values reach every input.
+            ? { handle: target.handle, answer: { ...answer(target.query, pageOf(target), `c${pageOf(target) + 1}`), scan_exhausted: path.length % 2 === 1 }, fresh: {}, now }
             : { handle: target.handle, failed: true, fresh: {}, now };
         }
         let out;
@@ -333,6 +341,10 @@ test.describe('LC list core', () => {
         if (target && input.answer && open.has(target.handle)) stats.applied += 1;
         const why = broken({ name: fn, input, before: state, out, openBefore: open, open: after });
         if (why) { bad = `${seq}: ${why}`; return; }
+        // I6: stopped only when the last applied answer said so; a replace starts unstopped.
+        const applied = fn === 'settle' && input.answer && open.has(target.handle);
+        const wantStalled = name === 'replace' ? false : applied ? input.answer.scan_exhausted === true : state.stalled;
+        if (out.state.stalled !== wantStalled) { bad = `${seq}: I6 stalled is ${out.state.stalled}, want ${wantStalled}`; return; }
         if (!chainOk(out.state)) { bad = `${seq}: P1 rows are not pages 1..k of ${out.state.query?.name}: ${JSON.stringify(out.state.rows)}`; return; }
         if (state.held && (name === 'frame' || name.startsWith('late')) && !isDeepStrictEqual(out.state.rows, state.rows)) {
           bad = `${seq}: P4 rows moved while held`;
@@ -347,6 +359,29 @@ test.describe('LC list core', () => {
     expect(stats.applied, 'LC3 premise: some answers apply').toBeGreaterThan(0);
     expect(bad, 'LC3 first counterexample').toBeNull();
     expect(stats.sequences, 'LC3 sequences walked (8^6)').toBe(262_144);
+  });
+
+  test('LC12 a stopped scan marks the list stalled until the next answer', async () => {
+    const core = await loadCore();
+    const r = new Run(core, Q0, 'LC12');
+    r.ok(started(r.replace(Q0, T1), 'page1', 'LC12: open').handle, stalledAnswer(Q0, 1, 'c2'));
+    expect(r.state.stalled, 'LC12 page 1 stopped short').toBe(true);
+    r.fail(started(r.next(T2), 'append', 'LC12: next').handle);
+    expect(r.state.stalled, 'LC12 a failed next page leaves it').toBe(true);
+    r.ok(started(r.next(T2), 'append', 'LC12: retry').handle, answer(Q0, 2, 'c3'));
+    expect(r.state.stalled, 'LC12 an answer that read to its end clears it').toBe(false);
+    r.ok(started(r.next(T3), 'append', 'LC12: next again').handle, stalledAnswer(Q0, 3, 'c4'));
+    expect(r.state.stalled, 'LC12 a next page that stopped short sets it').toBe(true);
+    const again = started(r.replace(Q0, T3), 'page1', 'LC12: reopen');
+    expect(r.state.stalled, 'LC12 a replace clears it').toBe(false);
+    r.ok(again.handle, answer(Q0, 1, 'c2'));
+    const reset = started(r.next(T3), 'append', 'LC12: next before a reset');
+    r.ok(reset.handle, { ...stalledAnswer(Q0, 1, 'c2'), cursor_reset: true });
+    expect(r.state.stalled, 'LC12 a cursor reset takes it from its own answer').toBe(true);
+    // A live refresh applies its answer as page 1 does.
+    const live = shown(core, Q0, 'LC12 live');
+    live.ok(started(live.frame(T2), 'live', 'LC12 live: frame').handle, stalledAnswer(Q0, 1, 'c2'));
+    expect(live.state.stalled, 'LC12 a live refresh that stopped short sets it').toBe(true);
   });
 
   test('LC4 on an idle page 1, no frame asks nothing and one frame asks one refresh', async () => {
@@ -592,6 +627,18 @@ const CONTROL = 'Newer activity · show';
 const MORE_FAILED = 'More calls could not be read.';
 const UNAVAILABLE = 'Activity is unavailable';
 const NOT_FINAL = 'delivery not yet recorded';
+// The slot's faces and what it says (the frozen spec's words).
+const LOAD_MORE = 'Load more';
+const KEEP_LOOKING = 'Keep looking';
+const READING = 'Reading more…';
+const NONE_YET = 'No matching call in the part of the log searched so far.';
+const STOPPED = 'The search stopped before the end of the log.';
+const SAY_NONE_YET = 'Nothing found yet. You can keep looking.';
+const SAY_NO_MORE_YET = 'No more matching calls yet. You can keep looking.';
+const SAY_NONE = 'No calls found.';
+const SAY_NO_MORE = 'No more matching calls.';
+/** A list answer that stopped short of the end of the log, with a cursor to keep looking. */
+const stopped = (rows, next = 'c2') => ({ rows, next_cursor: next, scan_exhausted: true });
 
 /** A call row as the list answers it. Every row of a page has its own tool, so its text is its own. */
 function callRow(tool, extra = {}) {
@@ -704,6 +751,28 @@ class Screen {
   control() { return this.page.getByRole('button', { name: CONTROL, exact: true }); }
 
   said() { return this.page.evaluate(() => window.__said.length); }
+
+  /** A button of the screen by its exact name. */
+  button(name) { return this.page.locator('#content').getByRole('button', { name, exact: true }); }
+
+  /** The one line after the rows that says how to get more. */
+  slot() { return this.page.locator('#content .activity-more-error'); }
+
+  emptyState() { return this.page.locator('#content [data-state="empty"]'); }
+
+  /** What the focused element says, spaces folded as texts() folds a row. */
+  focusedText() { return this.page.evaluate(() => (document.activeElement?.textContent ?? '').replace(/\s+/g, ' ').trim()); }
+
+  /** Whether focus sits on the slot element itself. */
+  focusOnSlot() { return this.page.evaluate(() => document.activeElement?.classList.contains('activity-more-error') ?? false); }
+
+  /** Whether the observer's target after the rows is inside the viewport. */
+  endInView() {
+    return this.page.evaluate(() => {
+      const box = document.querySelector('#content .activity-more').getBoundingClientRect();
+      return box.bottom >= 0 && box.top <= innerHeight;
+    });
+  }
 
   /** How many times `text` was said: one announcer entry can join several messages. */
   heard(text) { return this.page.evaluate((t) => window.__said.join(' ').split(t).length - 1, text); }
@@ -1167,6 +1236,335 @@ test.describe('LE list screen', () => {
       expect(await blockingViolations(page), `LE12 ${width}: axe`).toEqual([]);
       // role=status is polite by definition; the shell's one live region carries no aria-live of its own.
       expect(await page.locator('#announcer').getAttribute('role'), `LE12 ${width}: polite`).toBe('status');
+    });
+  }
+
+  // ---- The slot after the rows: Load more, Keep looking, Reading more…
+
+  /** Focus an element without scrolling, so the list end stays where it was. */
+  const focusInPlace = (locator) => locator.evaluate((el) => el.focus({ preventScroll: true }));
+  /** Let the announcer's dwell pass: the clock is paused. */
+  const letSay = (page) => page.clock.runFor(2000);
+  const searchField = (page) => page.locator('#content .activity-search');
+  const asked = (screen, cursor) => screen.sent.filter((r) => r.params.cursor === cursor).length;
+
+  test('LE5 Load more asks one next page while the end is hidden', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const one = rowsOf('a', 1, 60);
+    const two = rowsOf('a', 2);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE5 load more: page 1')).answer({ rows: one, next_cursor: 'c2' });
+    await expect(screen.button(LOAD_MORE), 'LE5 load more: the button shows').toBeVisible();
+    expect(await screen.endInView(), 'LE5 load more: premise, the end is out of view').toBe(false);
+    await screen.quiet(1, 'LE5 load more: premise, nothing asked yet');
+    // A click event: a pointer click would first scroll the end into view.
+    await screen.button(LOAD_MORE).dispatchEvent('click');
+    const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE5 load more: the press asks page 2');
+    expect(await screen.endInView(), 'LE5 load more: the end is still out of view').toBe(false);
+    await screen.quiet(2, 'LE5 load more: one press, one request');
+    await expect.poll(() => screen.focusedText(), { message: 'LE5 load more: focus on page 1\'s last row' }).toBe(textOf(one.at(-1)));
+    await p2.answer({ rows: two, next_cursor: null });
+    await expect.poll(() => screen.texts(), { message: 'LE5 load more: page 2 follows page 1' }).toEqual([...one, ...two].map(textOf));
+    await letSay(page);
+    expect(await screen.heard('2 more calls.'), 'LE5 load more: the new rows are said').toBe(1);
+  });
+
+  test('LE13 Tab reaches Load more; it reads, then goes at the end', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE13 page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+    const more = screen.button(LOAD_MORE);
+    await expect(more, 'LE13 Load more shows after the rows').toBeVisible();
+    // Chromium centres a focused element that is out of view. With the slot's bottom on the
+    // window's, the button is in view and the end below it is not, so focus scrolls nothing.
+    await screen.slot().evaluate((el) => el.scrollIntoView({ block: 'end' }));
+    expect(await screen.endInView(), 'LE13 premise: the end is out of view').toBe(false);
+    await focusInPlace(screen.rows().last());
+    await page.keyboard.press('Tab');
+    await expect(more, 'LE13 Tab from the last row reaches Load more').toBeFocused();
+    await screen.quiet(1, 'LE13 premise: reaching it asked nothing');
+    await page.keyboard.press('Enter');
+    const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE13 Enter asks page 2');
+    await expect(screen.slot(), 'LE13 the slot says it is reading').toHaveText(READING);
+    await expect(more, 'LE13 no Load more while a page is out').toHaveCount(0);
+    await p2.answer({ rows: rowsOf('a', 2), next_cursor: null });
+    await expect.poll(() => screen.rows().count(), { message: 'LE13 page 2 lands' }).toBe(62);
+    await expect(screen.slot(), 'LE13 the slot hides at the list end').toBeHidden();
+    await expect(more, 'LE13 no Load more at the end').toHaveCount(0);
+  });
+
+  for (const end of ['rows', 'stopped', 'end', 'moved']) {
+    test(`LE14 an empty stopped scan offers Keep looking; ending: ${end}`, async ({ page, request }, testInfo) => {
+      const label = `LE14 ${end}`;
+      const { screen, stream } = await screenFor(page, request, testInfo);
+      await screen.open(stream);
+      await (await screen.request(0, `${label}: page 1`)).answer(stopped([]));
+      const look = screen.button(KEEP_LOOKING);
+      await expect(look, `${label}: Keep looking shows`).toBeVisible();
+      await expect(screen.slot(), `${label}: the no-match sentence`).toContainText(NONE_YET);
+      await expect(screen.emptyState(), `${label}: no empty state`).toHaveCount(0);
+      await screen.quiet(1, `${label}: nothing asked by itself`);
+      await look.click();
+      const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', `${label}: the press asks c2`);
+      await expect(screen.slot(), `${label}: the slot says it is reading`).toHaveText(READING);
+      await expect.poll(() => screen.focusOnSlot(), { message: `${label}: focus waits on the slot` }).toBe(true);
+      if (end === 'rows') {
+        const found = rowsOf('b', 2);
+        await p2.answer({ rows: found, next_cursor: null });
+        await expect.poll(() => screen.texts(), { message: `${label}: the found rows show` }).toEqual(found.map(textOf));
+        await expect.poll(() => screen.focusedText(), { message: `${label}: focus on the first new row` }).toBe(textOf(found[0]));
+        await letSay(page);
+        expect(await screen.heard('2 more calls.'), `${label}: the rows are said`).toBe(1);
+        return;
+      }
+      if (end === 'end') {
+        await p2.answer({ rows: [], next_cursor: null });
+        await expect(screen.emptyState(), `${label}: the empty state shows`).toBeVisible();
+        await expect(screen.emptyState().locator('h2'), `${label}: its heading has focus`).toBeFocused();
+        await letSay(page);
+        expect(await screen.heard(SAY_NONE), `${label}: said once`).toBe(1);
+        return;
+      }
+      if (end === 'moved') await searchField(page).focus();
+      await p2.answer(stopped([], 'c3'));
+      await expect(look, `${label}: Keep looking is back`).toBeVisible();
+      await expect(screen.emptyState(), `${label}: still no empty state`).toHaveCount(0);
+      if (end === 'moved') {
+        await expect(searchField(page), `${label}: focus stays on the search`).toBeFocused();
+      } else {
+        await expect(look, `${label}: focus back on the button`).toBeFocused();
+        await letSay(page);
+        expect(await screen.heard(SAY_NONE_YET), `${label}: said once`).toBe(1);
+      }
+      await screen.quiet(2, `${label}: c3 waits for a press`);
+    });
+  }
+
+  test('LE15 a stopped scan with rows offers Keep looking, not Load more', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const one = rowsOf('a', 1, 3);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE15 page 1')).answer(stopped(one));
+    await expect(screen.button(KEEP_LOOKING), 'LE15 Keep looking shows').toBeVisible();
+    await expect(screen.slot(), 'LE15 the stopped sentence').toContainText(STOPPED);
+    await expect(screen.slot(), 'LE15 not the no-match one').not.toContainText(NONE_YET);
+    await expect(screen.button(LOAD_MORE), 'LE15 no Load more').toHaveCount(0);
+    await screen.quiet(1, 'LE15 nothing asked by itself');
+    expect(await screen.texts(), 'LE15 the rows stay').toEqual(one.map(textOf));
+  });
+
+  for (const face of [LOAD_MORE, KEEP_LOOKING]) {
+    test(`LE16 one ${face} press sends one request, even scrolled to the end`, async ({ page, request }, testInfo) => {
+      const label = `LE16 ${face}`;
+      const { screen, stream } = await screenFor(page, request, testInfo);
+      const one = rowsOf('a', 1, 60);
+      await screen.open(stream);
+      await (await screen.request(0, `${label}: page 1`)).answer(face === LOAD_MORE ? { rows: one, next_cursor: 'c2' } : stopped(one));
+      await expect(screen.button(face), `${label}: the button shows`).toBeVisible();
+      await screen.button(face).dispatchEvent('click');
+      await screen.requestWhere((r) => r.params.cursor === 'c2', `${label}: the press asks c2`);
+      await screen.toEnd();
+      await screen.quiet(2, `${label}: still one next page`);
+    });
+  }
+
+  test('LE17 a failed page after Load more shows Retry in its place', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE17 page 1')).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+    await expect(screen.button(LOAD_MORE), 'LE17 Load more shows').toBeVisible();
+    await screen.button(LOAD_MORE).dispatchEvent('click');
+    await (await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE17 the press asks c2')).fail();
+    await expect(screen.slot(), 'LE17 the slot says the page failed').toContainText(MORE_FAILED);
+    const retry = screen.button('Retry');
+    await expect(retry, 'LE17 Retry shows').toBeVisible();
+    await expect(screen.button(LOAD_MORE), 'LE17 no Load more beside it').toHaveCount(0);
+    await retry.dispatchEvent('click');
+    await expect.poll(() => asked(screen, 'c2'), { message: 'LE17 Retry asks c2 again' }).toBe(2);
+  });
+
+  test('LE18 Keep looking with rows never shows the empty state', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const one = rowsOf('a', 1, 3);
+    const lastRow = textOf(one.at(-1));
+    await screen.open(stream);
+    await (await screen.request(0, 'LE18 page 1')).answer(stopped(one));
+    const look = screen.button(KEEP_LOOKING);
+    await expect(look, 'LE18 Keep looking shows').toBeVisible();
+    await look.click();
+    const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE18 the first press asks c2');
+    await expect.poll(() => screen.focusedText(), { message: 'LE18 the press puts focus on the last row' }).toBe(lastRow);
+    await p2.answer(stopped([], 'c3'));
+    await expect(look, 'LE18 still stopped: Keep looking is back').toBeVisible();
+    await expect(look, 'LE18 still stopped: and has focus').toBeFocused();
+    expect(await screen.texts(), 'LE18 still stopped: the rows stay').toEqual(one.map(textOf));
+    await letSay(page);
+    expect(await screen.heard(SAY_NO_MORE_YET), 'LE18 still stopped: said once').toBe(1);
+    expect(await screen.heard(SAY_NONE_YET), 'LE18 still stopped: not the no-rows words').toBe(0);
+    await look.click();
+    const p3 = await screen.requestWhere((r) => r.params.cursor === 'c3', 'LE18 the second press asks c3');
+    await p3.answer({ rows: [], next_cursor: null });
+    await expect(screen.slot(), 'LE18 at the end the slot hides').toBeHidden();
+    await expect(screen.emptyState(), 'LE18 at the end no empty state').toHaveCount(0);
+    expect(await screen.texts(), 'LE18 at the end the rows stay').toEqual(one.map(textOf));
+    await expect.poll(() => screen.focusedText(), { message: 'LE18 at the end focus stays on the last row' }).toBe(lastRow);
+    await letSay(page);
+    expect(await screen.heard(SAY_NO_MORE), 'LE18 at the end said once').toBe(1);
+    expect(await screen.heard(SAY_NONE), 'LE18 at the end not the no-rows words').toBe(0);
+  });
+
+  test('LE19 live rows on an empty stopped list keep the focused button', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE19 page 1')).answer(stopped([]));
+    const look = screen.button(KEEP_LOOKING);
+    await expect(look, 'LE19 Keep looking shows').toBeVisible();
+    await look.focus();
+    // The node itself: a locator finds a rebuilt button too.
+    const before = await look.elementHandle();
+    await stream.send(activityFrame(callRow('a.live')));
+    const live = await screen.request(1, 'LE19 the frame asks a refresh');
+    expect(live.params.cursor ?? null, 'LE19 premise: a page 1 refresh').toBeNull();
+    const fresh = rowsOf('b', 1);
+    await live.answer(stopped(fresh));
+    await expect.poll(() => screen.texts(), { message: 'LE19 the live rows show' }).toEqual(fresh.map(textOf));
+    await expect(screen.slot(), 'LE19 the stopped sentence').toContainText(STOPPED);
+    await expect(screen.slot(), 'LE19 the no-match sentence is gone').not.toContainText(NONE_YET);
+    await expect(look, 'LE19 one Keep looking').toHaveCount(1);
+    expect(await before.evaluate((el) => el.isConnected && el === document.activeElement), 'LE19 the same button, still focused').toBe(true);
+  });
+
+  for (const to of [LOAD_MORE, 'the end']) {
+    test(`LE20 a live refresh turning Keep looking into ${to} keeps focus`, async ({ page, request }, testInfo) => {
+      const label = `LE20 ${to}`;
+      const { screen, stream } = await screenFor(page, request, testInfo);
+      await screen.open(stream);
+      await (await screen.request(0, `${label}: page 1`)).answer(stopped(rowsOf('a', 1, 60)));
+      const look = screen.button(KEEP_LOOKING);
+      await expect(look, `${label}: Keep looking shows`).toBeVisible();
+      expect(await screen.endInView(), `${label}: premise, the end is out of view`).toBe(false);
+      await focusInPlace(look);
+      await expect(look, `${label}: premise, Keep looking has focus`).toBeFocused();
+      await stream.send(activityFrame(callRow('a.live')));
+      const live = await screen.request(1, `${label}: the frame asks a refresh`);
+      const fresh = rowsOf('b', 1, 60);
+      if (to === LOAD_MORE) {
+        await live.answer({ rows: fresh, next_cursor: 'c2' });
+        await expect(screen.button(LOAD_MORE), `${label}: focus moves to Load more`).toBeFocused();
+        await screen.quiet(2, `${label}: nothing asked`);
+      } else {
+        await live.answer({ rows: fresh, next_cursor: null });
+        await expect(screen.slot(), `${label}: the slot hides`).toBeHidden();
+        await expect.poll(() => screen.focusedText(), { message: `${label}: focus moves to the last row` }).toBe(textOf(fresh.at(-1)));
+      }
+    });
+  }
+
+  // How each face is reached for the axe rows.
+  const FACES = {
+    [LOAD_MORE]: async (screen, label) => {
+      await (await screen.request(0, `${label}: page 1`)).answer({ rows: rowsOf('a', 1, 60), next_cursor: 'c2' });
+      await expect(screen.button(LOAD_MORE), `${label}: Load more shows`).toBeVisible();
+    },
+    [KEEP_LOOKING]: async (screen, label) => {
+      await (await screen.request(0, `${label}: page 1`)).answer(stopped([]));
+      await expect(screen.button(KEEP_LOOKING), `${label}: Keep looking shows`).toBeVisible();
+    },
+    [READING]: async (screen, label) => {
+      await FACES[LOAD_MORE](screen, label);
+      await screen.button(LOAD_MORE).dispatchEvent('click');
+      await screen.requestWhere((r) => r.params.cursor === 'c2', `${label}: page 2 is out`);
+      await expect(screen.slot(), `${label}: the slot says it is reading`).toHaveText(READING);
+    },
+  };
+  for (const [face, reach] of Object.entries(FACES)) {
+    for (const width of WIDTHS) {
+      for (const scheme of ['light', 'dark']) {
+        test(`LE21 the ${face} face passes axe at ${width} in ${scheme}`, async ({ page, request }, testInfo) => {
+          const label = `LE21 ${face} ${width} ${scheme}`;
+          await page.setViewportSize({ width, height: 900 });
+          await page.emulateMedia({ colorScheme: scheme });
+          const { screen, stream } = await screenFor(page, request, testInfo);
+          await screen.open(stream);
+          await reach(screen, label);
+          // axe waits on timers of its own; under the paused clock they never fire.
+          await page.clock.resume();
+          expect(await blockingViolations(page), `${label}: axe`).toEqual([]);
+        });
+      }
+    }
+  }
+
+  test('LE22 Tab from the search walks the rows to Keep looking', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const one = rowsOf('a', 1, 3);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE22 page 1')).answer(stopped(one));
+    await expect(screen.button(KEEP_LOOKING), 'LE22 Keep looking shows').toBeVisible();
+    await searchField(page).focus();
+    const walked = [];
+    for (let i = 0; i < one.length; i += 1) {
+      await page.keyboard.press('Tab');
+      walked.push(await screen.focusedText());
+    }
+    expect(walked, 'LE22 Tab walks the rows in order, nothing between').toEqual(one.map(textOf));
+    await page.keyboard.press('Tab');
+    await expect(screen.button(KEEP_LOOKING), 'LE22 the next Tab reaches Keep looking').toBeFocused();
+  });
+
+  test('LE23 Retry on an empty stopped list keeps focus on the slot', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE23 page 1')).answer(stopped([]));
+    await screen.button(KEEP_LOOKING).click();
+    await (await screen.requestWhere((r) => r.params.cursor === 'c2', 'LE23 the press asks c2')).fail();
+    const retry = screen.button('Retry');
+    await expect(retry, 'LE23 Retry replaces Keep looking').toBeVisible();
+    await focusInPlace(retry);
+    await page.keyboard.press('Enter');
+    await expect.poll(() => asked(screen, 'c2'), { message: 'LE23 Retry asks c2 again' }).toBe(2);
+    await expect(screen.slot(), 'LE23 the slot says it is reading').toHaveText(READING);
+    // No button, no row and no empty state remain, so the slot itself holds focus.
+    await expect.poll(() => screen.focusOnSlot(), { message: 'LE23 focus waits on the slot' }).toBe(true);
+  });
+
+  /** Whether focus sits on the rows container itself. */
+  const focusOnRows = (page) => page.evaluate(() => document.activeElement?.classList.contains('activity-rows') ?? false);
+
+  for (const drive of ['redraw', 'refresh', 'reset']) {
+    test(`LE24 an empty list end keeps focus in the list through a ${drive}`, async ({ page, request }, testInfo) => {
+      const label = `LE24 ${drive}`;
+      const { screen, stream } = await screenFor(page, request, testInfo);
+      await screen.open(stream);
+      const heading = screen.emptyState().locator('h2');
+      if (drive === 'refresh') {
+        // Nothing held on a plain empty list: a frame asks a refresh, which hides the empty state.
+        await (await screen.request(0, `${label}: page 1`)).answer({ rows: [], next_cursor: null });
+        await focusInPlace(heading);
+        await expect(heading, `${label}: premise, the heading has focus`).toBeFocused();
+        await stream.send(activityFrame(callRow('a.live')));
+      } else {
+        await (await screen.request(0, `${label}: page 1`)).answer(stopped([]));
+        await screen.button(KEEP_LOOKING).click();
+        const p2 = await screen.requestWhere((r) => r.params.cursor === 'c2', `${label}: the press asks c2`);
+        if (drive === 'redraw') {
+          await p2.answer({ rows: [], next_cursor: null });
+          await expect(heading, `${label}: premise, the heading has focus`).toBeFocused();
+          // Still held from paging: the frame only marks news, and that draw rebuilds the empty state.
+          await stream.send(activityFrame(callRow('a.live')));
+          await expect(page.locator('#content').getByRole('button', { name: CONTROL }), `${label}: the news is marked`).toBeVisible();
+          await expect(heading, `${label}: focus moves to the rebuilt heading`).toBeFocused();
+          return;
+        }
+        // News held while the press reads; the reset turns it into one refresh.
+        await stream.send(activityFrame(callRow('a.live')));
+        await p2.answer({ rows: [], next_cursor: null, cursor_reset: true });
+      }
+      const live = await screen.request(drive === 'refresh' ? 1 : 2, `${label}: a refresh is out`);
+      await expect(screen.emptyState(), `${label}: no empty state while it reads`).toHaveCount(0);
+      await expect.poll(() => focusOnRows(page), { message: `${label}: the list holds focus` }).toBe(true);
+      await live.answer({ rows: [], next_cursor: null });
+      await expect(heading, `${label}: the heading has focus again`).toBeFocused();
     });
   }
 });

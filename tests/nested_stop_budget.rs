@@ -14,6 +14,8 @@ use std::{
     time::Duration,
 };
 use tokio::{io::AsyncWriteExt as _, time::Instant};
+#[path = "nested_stop_budget/fixtures.rs"]
+mod fixtures;
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "common/pids.rs"]
@@ -27,6 +29,10 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
 /// poll interval and a loaded host's scheduling, not a second stop.
 const BUDGET_SLACK: Duration = Duration::from_secs(2);
+/// When a supervisor kills a gateway still running past its stop total. The
+/// kill reaches only the gateway's own process, so the backend tree must be
+/// gone by then.
+const EXTERNAL_KILL_AFTER: Duration = Duration::from_secs(1);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
 /// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
@@ -37,37 +43,6 @@ const HTTP_MINIMUM: Duration = Duration::from_secs(13);
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
 /// host. A 45 s bound sat on the typical path (30 s drain, about 5 s teardown, 10 s runtime).
 const STDIO_SIGTERM_EXIT_BOUND: Duration = Duration::from_secs(75);
-const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
-name = sys.argv[1]
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-with open("leaf-" + name + ".pid", "w") as f:
-    f.write(str(os.getpid()))
-# A descendant in the leaf's process group. It inherits the ignored SIGTERM,
-# so only the gateway's kill of the whole group ends it.
-grandchild = subprocess.Popen(["sleep", "600"])
-with open("leaf-" + name + ".grandchild.pid", "w") as f:
-    f.write(str(grandchild.pid))
-for line in sys.stdin:
-    msg = json.loads(line)
-    if "id" not in msg:
-        continue
-    method = msg.get("method")
-    if method == "initialize":
-        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
-                  "serverInfo": {"name": name, "version": "1"}}
-    elif method == "tools/list":
-        result = {"tools": [{"name": "hold", "inputSchema": {"type": "object"},
-                             "annotations": {"readOnlyHint": True}}]}
-    elif method == "tools/call" and msg["params"]["name"] == "hold":
-        open("called-" + name, "w").close()
-        time.sleep(600)
-        continue
-    else:
-        result = {}
-    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
-time.sleep(600)
-"#;
-
 fn base_config(root: &Path, name: &str) -> Config {
     let mut config = Config::default();
     config.auth.enabled = false;
@@ -98,7 +73,7 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     path
 }
 fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
-    std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
+    std::fs::write(root.join("leaf.py"), fixtures::LEAF_SCRIPT).expect("leaf script");
     let mut config = base_config(root, "inner");
     config.server.shutdown_timeout = inner_stop;
     for name in leaves {
@@ -631,13 +606,24 @@ const PARENT_30S: Duration = Duration::from_secs(30);
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
+    // The row runs at the floor the binary states; a constant keeps the windows
+    // below readable to the timing check, and this pin keeps it from going stale.
+    assert_eq!(
+        fixtures::http_floor_from_binary().await,
+        HTTP_MINIMUM,
+        "the binary's HTTP stop floor moved: HTTP_MINIMUM must follow it"
+    );
     let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
     let gone = stop.gone_at.duration_since(stop.sent);
-    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    // Every recorded pid of the tree (inner, leaf, the leaf's own child) must
+    // be gone before a supervisor's kill one second past the total, which
+    // would end the outer gateway alone and orphan the rest. The poll can
+    // only see the end late, so a pass is never early.
+    // timing-oracle: vs EXTERNAL_KILL_AFTER (why: the kill a supervisor sends past the total reaches the outer gateway only)
     assert!(
-        gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
-        HTTP_MINIMUM + BUDGET_SLACK,
+        gone <= HTTP_MINIMUM + EXTERNAL_KILL_AFTER,
+        "the chain outlived an external kill at the total plus {EXTERNAL_KILL_AFTER:?}: \
+         {gone:?} against a {HTTP_MINIMUM:?} total\n{}",
         stop.logs
     );
     // P4 (RETIRE.4): a full-budget stop, measured to the outer process's exit, ends inside

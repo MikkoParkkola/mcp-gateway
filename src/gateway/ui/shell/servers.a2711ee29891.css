@@ -1,0 +1,29 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* Servers › Status: three titled tables and the group toggles. Numbers use the shell's .t .n. */
+/* One column that may shrink below its content, so a wide table scrolls in its own box. */
+.sv { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5, 1.5rem); }
+.sv-head { display: flex; align-items: center; gap: var(--space-1, .25rem); margin: 0 0 var(--space-2, .5rem); }
+.sv-head h2 { margin: 0; font-size: 1rem; }
+.sv-scroll { overflow-x: auto; }
+/* A value or heading never breaks mid-word ("310 / ms"); the State column takes the wrapping. */
+.sv-table th, .sv-table .n { white-space: nowrap; }
+.sv-group { text-align: left; }
+.sv-table .has-tip { white-space: normal; }
+/* Row headers carry server names, which are case-sensitive: plain text, not the column-heading style. */
+.sv-table tbody th {
+  font: inherit; font-family: var(--font-family-mono); letter-spacing: normal; text-transform: none;
+  color: var(--color-text-primary); border-bottom-color: var(--color-border-subtle);
+}
+.sv-table tbody th .t3 { margin-left: var(--space-1, .25rem); }
+.sv-why { color: var(--color-text-secondary); }
+.sv-member th { padding-left: var(--space-6, 1.5rem); }
+.sv-group {
+  font: inherit; font-weight: 600; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--space-1, .4rem); min-height: 24px;
+}
+.sv-group::before { content: '▸' / ''; display: inline-block; transition: transform .15s; }
+.sv-group[aria-expanded="true"]::before { transform: rotate(90deg); }
+.sv-group:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.sv-note, .sv-quiet { margin: var(--space-2, .5rem) 0 0; }
+@media (prefers-reduced-motion: reduce) { .sv-group::before { transition: none; } }

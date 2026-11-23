@@ -369,6 +369,24 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/config_history.rs (history; this gateway has no config
+    // file and so no history, so the admin's answer is no_config_file)
+    row(
+        "/ui/api/config/history",
+        Method::GET,
+        "/ui/api/config/history",
+        Payload::None,
+        [401, 403, 403, 409],
+    ),
+    // src/gateway/ui/config_history.rs (restore; no config file, so the
+    // admin's answer is no_config_file before any read or write)
+    row(
+        "/ui/api/config/restore",
+        Method::POST,
+        "/ui/api/config/restore",
+        Payload::Json("{\"version\": \"rv-table-row\"}"),
+        [401, 403, 403, 409],
+    ),
     // src/gateway/ui/mod.rs:556 (reload; no reload context in the fixture)
     row(
         "/ui/api/reload",

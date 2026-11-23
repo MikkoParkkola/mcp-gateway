@@ -21,6 +21,8 @@ const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
 const UNUSED_ROUTES: &str = "src/gateway/ui/settings_unused_tests.rs";
+const CONFIG_HISTORY: &str = "src/gateway/ui/config_history_tests.rs";
+const CONFIG_RESTORE: &str = "src/gateway/ui/config_history_restore_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 /// The resolve route's rows, in their own file under the decisions tests.
@@ -197,6 +199,25 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         "/ui/api/settings/diff",
         Method::POST,
         &[(SETTINGS_ROUTES, "s1_budget_diff")],
+    ),
+    // The table's gateway has no config file and so no history (409); these
+    // rows run on a gateway that keeps one and pin the served read and the
+    // served restore.
+    (
+        "/ui/api/config/history",
+        Method::GET,
+        &[(
+            CONFIG_HISTORY,
+            "g1_versions_and_events_come_newest_first_and_the_served_one_is_marked",
+        )],
+    ),
+    (
+        "/ui/api/config/restore",
+        Method::POST,
+        &[(
+            CONFIG_RESTORE,
+            "r1_a_restore_writes_the_stored_bytes_back_and_keeps_the_replaced_file",
+        )],
     ),
     // The table's gateway has no reload context, so its admin answer is 503;
     // this test lists from a gateway with one and pins the served listing.
