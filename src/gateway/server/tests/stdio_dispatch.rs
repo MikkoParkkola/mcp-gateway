@@ -234,6 +234,63 @@ async fn stdio_refuses_a_malformed_idempotency_key() {
     );
 }
 
+/// The row above with the log on and another malformed field: stdio answers
+/// exactly as it does today, and, like `/mcp` (`meta_malformed_retry`), the
+/// refusal leaves one `invalid` -32602 record of the request's form, with no
+/// target.
+#[tokio::test]
+async fn malformed_retry_fields_are_recorded_on_stdio() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.enable_transparency_log(crate::gateway::meta_mcp::grant_audit_fixture::logger(
+        &dir,
+        crate::security::audit::AuditFailurePolicy::BestEffort,
+    ));
+    let meta = Arc::new(meta);
+    let response = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &test_mtls_policy(),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "gateway_list_servers",
+                "arguments": {},
+                "inputResponses": "not an object"
+            }
+        }),
+        "stdio-session",
+    )
+    .await
+    .expect("a tools/call carrying an id must return a response");
+    assert_eq!(
+        response
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(-32602),
+        "{response}"
+    );
+    assert!(
+        response
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|m| m.starts_with("malformed request fields:")),
+        "{response}"
+    );
+    assert_eq!(response["id"], json!(1), "{response}");
+    let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(&dir);
+    let [record] = records.as_slice() else {
+        panic!("exactly one record: {records:#?}; answer {response}");
+    };
+    assert_eq!(record["outcome"], json!("invalid"), "{record}");
+    assert_eq!(record["error_code"], json!(-32602), "{record}");
+    assert_eq!(record["decision"]["kind"], json!("syntax"), "{record}");
+    assert_eq!(record["server"], json!(""), "{record}");
+    assert!(record.get("tool").is_none(), "{record}");
+}
+
 #[tokio::test]
 async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
     // Bound rather than inlined: the kill switch is the execution sentinel,
