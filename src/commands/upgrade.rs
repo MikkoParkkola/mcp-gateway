@@ -438,7 +438,8 @@ fn check_upgrade_with(data_dir: &Path, notices: &mut impl std::io::Write) -> std
     };
 
     let Some(installed) = SemVer::parse(&raw) else {
-        eprintln!("Warning: unreadable version stamp '{raw}'; treating as fresh install.");
+        // Through the log, which escapes it: the stamp file's text must not start a stderr line of its own.
+        tracing::warn!(stamp = %raw, "unreadable version stamp; treating as a fresh install");
         write_stamp(&stamp, current_str)?;
         return webhook_notice::mark(data_dir);
     };
