@@ -113,8 +113,11 @@ mod operational_standing {
     fn a_standing_is_judged_on_one_generation() {
         let (services, old, holder) = restored_root();
         assert!(services.binding_test_admin(&holder.principal, at()));
-        assert!(
-            standing_in_generation(&services.credentials, &old, &holder.principal, at()).is_none()
+        // Judged on the owner key the transport presents, so the old generation
+        // refuses it for the key's sake, not for its form.
+        let owner = crate::gateway::auth::credential_owner_key(
+            &crate::gateway::record_principal::InternalPrincipal::new(holder.principal.clone()),
         );
+        assert!(standing_in_generation(&services.credentials, &old, &owner, at()).is_none());
     }
 }

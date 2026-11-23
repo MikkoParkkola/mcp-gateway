@@ -53,14 +53,17 @@ const SCOPES: [&str; 3] = ["src/transport/", "src/a2a/", "src/backend/"];
 
 /// The production transports. A2A raises no MCP notification: its replies
 /// are task answers, scrubbed as answers (the a2a rows of
-/// `inbound_parse_sites.tsv`), so it has no [`EGRESS`] row.
-const TRANSPORTS: [&str; 4] = [
+/// `inbound_parse_sites.tsv`), so it has no [`EGRESS`] row. The command
+/// preview's pipe drops every notification its server sends and hands none
+/// toward a client, so it has none either.
+const TRANSPORTS: [&str; 5] = [
     "A2aTransport",
     "HttpTransport",
+    "PreviewPipe",
     "StdioTransport",
     "WebSocketTransport",
 ];
-const NO_NOTIFICATIONS: [&str; 1] = ["A2aTransport"];
+const NO_NOTIFICATIONS: [&str; 2] = ["A2aTransport", "PreviewPipe"];
 
 /// The helpers a scrub call may be, and the needle-set primitives each must
 /// reach.

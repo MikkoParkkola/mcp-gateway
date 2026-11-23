@@ -217,3 +217,17 @@ fn a_live_call_and_its_task_name_one_credential_owner() {
     let empty = caller(Some(""), Authentication::Authenticated);
     assert_eq!(credential_owner(&empty), None);
 }
+
+/// One builder of a credential's owner key: the MCP child's owner and the
+/// owner key the task and events owners use are one string for one credential.
+#[test]
+fn the_child_owner_and_the_owner_key_are_one_string() {
+    use crate::gateway::meta_mcp::support::credential_owner;
+    let bare = "5e1f0a2b3c4d";
+    let child = credential_owner(&caller(Some(bare), Authentication::Authenticated));
+    let owner_key = crate::gateway::auth::credential_owner_key(
+        &crate::gateway::record_principal::InternalPrincipal::new(bare.to_owned()),
+    );
+    assert_eq!(owner_key, "credential:5e1f0a2b3c4d");
+    assert_eq!(child.as_deref(), Some(owner_key.as_str()));
+}
