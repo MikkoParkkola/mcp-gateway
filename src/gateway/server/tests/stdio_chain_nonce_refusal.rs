@@ -231,8 +231,9 @@ async fn a_malformed_chain_nonce_on_another_method_is_refused() {
 }
 
 /// The fixture's invocation records, with the one refusal record every
-/// envelope row expects: denied (the envelope error is a `Forbidden`),
-/// -32600, the request's form (`syntax`).
+/// envelope row expects: denied, -32600, the request's form (`syntax`).
+/// The envelope error is a plain -32600; it reads denied because the intake
+/// site notes the refusal before the writer classes it.
 fn assert_one_envelope_record(dir: &tempfile::TempDir, response: &Value) {
     let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(dir);
     let [record] = records.as_slice() else {
