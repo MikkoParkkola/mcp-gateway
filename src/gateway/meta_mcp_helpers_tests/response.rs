@@ -113,6 +113,40 @@ fn extract_required_str_fails_on_non_string_value() {
     assert!(err.to_string().contains("Missing 'server' parameter"));
 }
 
+/// The refusing helper notes its refusal as the request's form, and hands
+/// the same error on.
+#[tokio::test]
+async fn refuse_missing_str_notes_a_syntax_refusal() {
+    use crate::gateway::meta_mcp::invoke::audit::{take_refusal_kind, with_route_scope};
+    let (err, kind) = with_route_scope(async {
+        let err = refuse_missing_str(&json!({"tool": "t"}), "server").unwrap_err();
+        (err, take_refusal_kind())
+    })
+    .await;
+    assert!(
+        err.to_string().contains("Missing 'server' parameter"),
+        "{err}"
+    );
+    assert_eq!(
+        kind,
+        Some(crate::security::decision_record::DecisionKind::Syntax)
+    );
+}
+
+/// Guard: the probing helper notes nothing, so a caller that only looks a
+/// string up never marks its call refused (the mutant: the note moved into
+/// `extract_required_str` itself).
+#[tokio::test]
+async fn a_probe_that_finds_no_name_leaves_no_note() {
+    use crate::gateway::meta_mcp::invoke::audit::{take_refusal_kind, with_route_scope};
+    let kind = with_route_scope(async {
+        assert!(extract_required_str(&json!({}), "name").is_err());
+        take_refusal_kind()
+    })
+    .await;
+    assert_eq!(kind, None);
+}
+
 // ── parse_tool_arguments ────────────────────────────────────────────
 
 #[test]

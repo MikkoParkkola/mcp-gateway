@@ -480,9 +480,8 @@ impl MetaMcp {
         session: Option<&str>,
     ) -> Result<Option<(&'v str, &'v str, std::borrow::Cow<'v, Value>)>> {
         let target = if tool_name == "gateway_invoke" {
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-            let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
+            let server = crate::gateway::meta_mcp_helpers::refuse_missing_str(arguments, "server")?;
+            let tool = crate::gateway::meta_mcp_helpers::refuse_missing_str(arguments, "tool")?;
             Some((
                 server,
                 tool,

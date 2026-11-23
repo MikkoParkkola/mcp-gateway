@@ -582,11 +582,17 @@ impl Gateway {
             // replay protection it does not have, and for a destructive tool
             // that is the duplicate side effect it asked to be spared.
             if retry.is_malformed() {
-                break 'tool_call JsonRpcResponse::error(
-                    Some(id),
-                    INVALID_PARAMS,
+                // Recorded before it is answered, as on `/mcp`, by the one
+                // writer; the caller is the stdio caller every early stdio
+                // refusal names.
+                break 'tool_call crate::gateway::router::answer_stdio_malformed(
+                    meta_mcp,
+                    super::stdio_audit_who(meta_mcp.record_key()),
+                    (arguments.unwrap_or(&empty_arguments), session_id),
+                    id,
                     format!("malformed request fields: {}", retry.malformed.join(", ")),
-                );
+                )
+                .await;
             }
             // Verified evidence only: stdio echoes no header, so the session's
             // negotiated revision is the whole reading. The body is not

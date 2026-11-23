@@ -200,7 +200,6 @@ pub(crate) async fn answer_stdio_signing_refusal(
     let code = error.to_rpc_code();
     let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
     let refusal = signing_refusal(error, request_target(arguments, called), (id, site));
-    let id = refusal.context.id.clone().frame_id();
     crate::security::security_metrics::meta_refused(code);
     let refused = Refused {
         arguments,
@@ -210,6 +209,43 @@ pub(crate) async fn answer_stdio_signing_refusal(
         trace: None,
     }
     .traced_for_grant();
+    answer_stdio_refusal(meta, refused, refusal, (code, message)).await
+}
+
+/// A stdio call refused for malformed retry fields, recorded the way `/mcp`
+/// records it ([`malformed_refusal`]) and answered -32602 with `message`.
+/// No grant decision exists for it, so it carries no grant trace.
+pub(crate) async fn answer_stdio_malformed(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    who: AuditWho,
+    (arguments, session_id): (&Value, &str),
+    id: RequestId,
+    message: String,
+) -> crate::protocol::JsonRpcResponse {
+    crate::security::security_metrics::meta_refused(INVALID_PARAMS);
+    let refused = Refused {
+        arguments,
+        who,
+        session_id,
+        firewall: false,
+        trace: None,
+    };
+    let refusal = malformed_refusal(AnswerId::Present(id));
+    answer_stdio_refusal(meta, refused, refusal, (INVALID_PARAMS, message)).await
+}
+
+/// The one stdio settle-and-answer: `refusal` is written through the meta
+/// layer's own log, then answered with its code and words, or as the log's
+/// unavailability when the log fails closed and the record could not be
+/// written. Stdio has no router state, so the meta layer stands in for it.
+async fn answer_stdio_refusal(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    refused: Refused<'_>,
+    refusal: Refusal<'_>,
+    (code, message): (i32, String),
+) -> crate::protocol::JsonRpcResponse {
+    use crate::protocol::JsonRpcResponse;
+    let id = refusal.context.id.clone().frame_id();
     match refused
         .settle(meta, meta.transparency_logger.as_ref(), refusal)
         .await
@@ -221,6 +257,24 @@ pub(crate) async fn answer_stdio_signing_refusal(
         Settled::Recorded(_) | Settled::Unrecorded => {
             JsonRpcResponse::gateway_error(id, code, message)
         }
+    }
+}
+
+/// The record of a call refused for malformed retry fields, on either
+/// transport: `invalid` -32602 of kind `syntax`, with no target (none is
+/// resolved yet), answered as the log's unavailability when a fail-closed
+/// log could not take it.
+fn malformed_refusal(id: AnswerId) -> Refusal<'static> {
+    Refusal {
+        outcome: AuditOutcome::Invalid(INVALID_PARAMS),
+        server: "",
+        tool: None,
+        tenants: BTreeSet::new(),
+        context: RefusalContext {
+            policy: IfUnwritten::FollowLog,
+            kind: KindSource::Site(crate::security::decision_record::DecisionKind::Syntax),
+            id,
+        },
     }
 }
 
@@ -335,17 +389,7 @@ impl<'a> Refused<'a> {
         id: RequestId,
         message: String,
     ) -> axum::response::Response {
-        let refusal = Refusal {
-            outcome: AuditOutcome::Invalid(INVALID_PARAMS),
-            server: "",
-            tool: None,
-            tenants: BTreeSet::new(),
-            context: RefusalContext {
-                policy: IfUnwritten::FollowLog,
-                kind: KindSource::Site(crate::security::decision_record::DecisionKind::Syntax),
-                id: AnswerId::Present(id),
-            },
-        };
+        let refusal = malformed_refusal(AnswerId::Present(id));
         self.record(
             state,
             refusal,
