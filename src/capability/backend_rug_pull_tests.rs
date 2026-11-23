@@ -218,7 +218,11 @@ async fn a_re_pinned_change_clears_its_record() {
     let mismatches = backend.current_mismatches();
 
     assert!(mismatches.changes.is_empty(), "{:?}", mismatches.changes);
-    assert!(mismatches.unreadable.is_empty(), "{:?}", mismatches.unreadable);
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
     assert!(
         backend.rug_pull_records().is_empty(),
         "the record is cleared"
@@ -373,9 +377,16 @@ async fn a_removed_change_clears_its_record_and_is_not_unreadable() {
 
     let mismatches = backend.current_mismatches();
 
-    assert!(mismatches.unreadable.is_empty(), "{:?}", mismatches.unreadable);
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
     assert!(mismatches.changes.is_empty());
-    assert!(backend.rug_pull_records().is_empty(), "the record is cleared");
+    assert!(
+        backend.rug_pull_records().is_empty(),
+        "the record is cleared"
+    );
 }
 
 /// B3: changed bytes that declare no pin at all resolve the change.
@@ -389,9 +400,16 @@ async fn a_change_with_no_pin_clears_its_record_and_is_not_unreadable() {
 
     let mismatches = backend.current_mismatches();
 
-    assert!(mismatches.unreadable.is_empty(), "{:?}", mismatches.unreadable);
+    assert!(
+        mismatches.unreadable.is_empty(),
+        "{:?}",
+        mismatches.unreadable
+    );
     assert!(mismatches.changes.is_empty());
-    assert!(backend.rug_pull_records().is_empty(), "the record is cleared");
+    assert!(
+        backend.rug_pull_records().is_empty(),
+        "the record is cleared"
+    );
 }
 
 /// B4: a recorded file replaced by a directory cannot be read for a reason

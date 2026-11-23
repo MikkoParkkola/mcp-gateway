@@ -4,6 +4,7 @@
 //! line does not parse, is its own To do item: the list, the count and every
 //! other resolve keep answering (rows F1-F8 of the design).
 
+#[cfg(unix)]
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -28,6 +29,8 @@ fn spec(name: &str) -> String {
 /// mismatch recorded per file), an open access request, and the tick running.
 struct Bench {
     state: Arc<AppState>,
+    // Read only by the unix rows (the capability-loaded checks).
+    #[cfg(unix)]
     backend: Arc<CapabilityBackend>,
     folder: Arc<tempfile::TempDir>,
     request: String,
@@ -73,7 +76,8 @@ impl Bench {
             state.control_plane_store.clone(),
         );
         let body = served_when(&state, |body| {
-            of_kind(body, "access_request").len() == 1 && of_kind(body, CHANGED).len() == tools.len()
+            of_kind(body, "access_request").len() == 1
+                && of_kind(body, CHANGED).len() == tools.len()
         })
         .await;
         let asked = of_kind(&body, "access_request")[0];
@@ -81,6 +85,7 @@ impl Bench {
         let digest = asked["scope_digest"].as_str().expect("a digest").to_owned();
         Self {
             state,
+            #[cfg(unix)]
             backend,
             folder,
             request,
@@ -125,7 +130,9 @@ impl Bench {
         )
         .await;
         let code = reply.status();
-        let raw = to_bytes(reply.into_body(), usize::MAX).await.expect("the reply");
+        let raw = to_bytes(reply.into_body(), usize::MAX)
+            .await
+            .expect("the reply");
         (code, serde_json::from_slice(&raw).unwrap_or_default())
     }
 }
@@ -139,6 +146,7 @@ fn of_kind<'a>(body: &'a Value, kind: &str) -> Vec<&'a Value> {
 }
 
 /// The `tool` of each listed item of `kind`.
+#[cfg(unix)]
 fn tools_of(body: &Value, kind: &str) -> BTreeSet<String> {
     of_kind(body, kind)
         .iter()
@@ -215,7 +223,10 @@ async fn f2b_an_unreadable_and_a_garbled_file_together_leave_everything_working(
     let (count_status, counted) = count(&bench.state, true).await;
     assert_eq!(
         (count_status, counted["count"].clone()),
-        (StatusCode::OK, json!(body["decisions"].as_array().map_or(0, Vec::len)))
+        (
+            StatusCode::OK,
+            json!(body["decisions"].as_array().map_or(0, Vec::len))
+        )
     );
     let (denied, reply) = bench.deny(&bench.request, &bench.digest).await;
     unlock(&bench.file("charlie"));
@@ -268,7 +279,10 @@ async fn f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes() {
         ])
     );
     let text = body.to_string();
-    assert!(!text.contains(&*bench.folder.path().to_string_lossy()), "{text}");
+    assert!(
+        !text.contains(&*bench.folder.path().to_string_lossy()),
+        "{text}"
+    );
     assert!(!text.contains(SENTINEL), "{text}");
 }
 
@@ -284,7 +298,10 @@ async fn f4_the_other_items_stay_listed_beside_a_bad_file() {
         .await;
     unlock(&bench.file("hotel"));
     assert_eq!(
-        (of_kind(&body, "access_request").len(), tools_of(&body, CHANGED)),
+        (
+            of_kind(&body, "access_request").len(),
+            tools_of(&body, CHANGED)
+        ),
         (1, BTreeSet::from(["india".to_owned()]))
     );
 }
@@ -301,8 +318,14 @@ async fn f5_the_item_lasts_while_the_file_is_bad_and_then_goes() {
         let (_, body) = bench
             .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 1)
             .await;
-        assert_eq!(tools_of(&body, UNREADABLE), BTreeSet::from(["juliet".to_owned()]));
-        assert!(!bench.backend.has_capability("juliet"), "stays off while listed");
+        assert_eq!(
+            tools_of(&body, UNREADABLE),
+            BTreeSet::from(["juliet".to_owned()])
+        );
+        assert!(
+            !bench.backend.has_capability("juliet"),
+            "stays off while listed"
+        );
         unlock(&file);
         if removed {
             std::fs::remove_file(&file).expect("removed");
@@ -343,7 +366,9 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
         1,
         "listed while unreadable: {first}"
     );
-    let unreadable = of_kind(&first, UNREADABLE).first().map(|item| (*item).clone());
+    let unreadable = of_kind(&first, UNREADABLE)
+        .first()
+        .map(|item| (*item).clone());
     unlock(&file);
     garble(&file);
     let (_, garbled) = bench
@@ -359,7 +384,9 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
         1,
         "listed while garbled: {garbled}"
     );
-    let as_garbled = of_kind(&garbled, UNREADABLE).first().map(|item| (*item).clone());
+    let as_garbled = of_kind(&garbled, UNREADABLE)
+        .first()
+        .map(|item| (*item).clone());
     assert_eq!(
         (
             as_garbled.as_ref().map(|item| item["id"].clone()),
@@ -376,7 +403,10 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
         .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).is_empty())
         .await;
     assert_eq!(
-        (of_kind(&changed, UNREADABLE).len(), tools_of(&changed, CHANGED)),
+        (
+            of_kind(&changed, UNREADABLE).len(),
+            tools_of(&changed, CHANGED)
+        ),
         (0, BTreeSet::from(["kilo".to_owned()]))
     );
     lock(&file);
@@ -385,18 +415,25 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
         .await;
     unlock(&file);
     assert_eq!(
-        of_kind(&again, UNREADABLE).first().map(|item| item["id"].clone()),
+        of_kind(&again, UNREADABLE)
+            .first()
+            .map(|item| item["id"].clone()),
         unreadable.as_ref().map(|item| item["id"].clone()),
         "the same file is the same item"
     );
     std::fs::write(&file, spec("kilo")).expect("matching bytes");
     let (_, settled) = bench
         .settle(|code, body| {
-            code == StatusCode::OK && of_kind(body, UNREADABLE).is_empty() && of_kind(body, CHANGED).is_empty()
+            code == StatusCode::OK
+                && of_kind(body, UNREADABLE).is_empty()
+                && of_kind(body, CHANGED).is_empty()
         })
         .await;
     assert_eq!(
-        (of_kind(&settled, UNREADABLE).len(), of_kind(&settled, CHANGED).len()),
+        (
+            of_kind(&settled, UNREADABLE).len(),
+            of_kind(&settled, CHANGED).len()
+        ),
         (0, 0)
     );
 }

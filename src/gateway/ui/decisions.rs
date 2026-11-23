@@ -500,7 +500,10 @@ fn publish_discovery(config_path: Option<&Path>, shared: &Shared, listing: &List
 /// reason class.
 fn capability_changes(
     backend: &CapabilityBackend,
-) -> (Vec<CapabilityChange>, Vec<crate::decisions::CapabilityUnreadable>) {
+) -> (
+    Vec<CapabilityChange>,
+    Vec<crate::decisions::CapabilityUnreadable>,
+) {
     let mismatches = backend.current_mismatches();
     let unjudged = mismatches
         .unreadable
