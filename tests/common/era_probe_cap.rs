@@ -33,7 +33,9 @@ pub fn widen_probe_cap() {
 /// parent's log.
 #[must_use]
 pub fn in_child_with_cap() -> bool {
-    if std::env::var_os(PROBE_CAP_ENV).is_some() {
+    // Only this helper's own value marks the child: a cap set from outside
+    // (a forced 1 ms run) is replaced on the child's command, never kept.
+    if std::env::var(PROBE_CAP_ENV).as_deref() == Ok(PROBE_CAP_MS) {
         return false;
     }
     let test = std::thread::current()

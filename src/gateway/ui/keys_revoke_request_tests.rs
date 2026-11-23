@@ -175,3 +175,6 @@ mod keys_revoke_writer_tests;
 
 #[path = "keys_revoke_outcome_tests.rs"]
 mod keys_revoke_outcome_tests;
+
+#[path = "keys_revoke_instructions_tests.rs"]
+mod keys_revoke_instructions_tests;

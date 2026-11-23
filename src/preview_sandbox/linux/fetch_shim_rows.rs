@@ -7,7 +7,7 @@
 //! way out of the root's tmpfs.
 
 use std::ffi::OsString;
-use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -77,8 +77,7 @@ fn run_bin_in(tree: &Path) -> PathBuf {
 }
 
 fn script(path: &Path, body: &str) {
-    std::fs::write(path, body).expect("script");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    crate::test_stub::write_executable(path, body);
 }
 
 /// A fake node install outside `/tmp` (the plan refuses to bind a program

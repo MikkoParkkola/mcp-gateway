@@ -42,6 +42,13 @@ for (const width of WIDTHS) {
         if (fixtures) await withFixturePages(page);
         // The fixture server has no tool list, so the built Tools screen gets one here and draws its toolbar.
         await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
+        // Its status fixture lists no servers, so Servers › Status would draw only its empty
+        // state and none of its tips: add one running server to the real fixture answer.
+        await page.route('**/ui/api/status', async (r) => {
+          const json = await (await r.fetch()).json();
+          json.servers = [{ name: 'web', state: 'running', reason: 'Running.', tools_cached: 2, calls_24h: 5, latency_p95_ms: 90 }];
+          return r.fulfill({ json });
+        });
         const found = [];
         for (const [id] of PAGES) {
           for (const tab of TABS) {

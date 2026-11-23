@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.1010a68154f6.js';
+import { register, segmented } from '/ui/assets/shell.14fa6b528dce.js';
 import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
@@ -163,7 +163,7 @@ async function statusTab(body, ctx) {
   // every page's first paint. Not awaited: the controls are live from here, and a
   // slow or failing module must neither hold the list back nor open a window in
   // which a click reaches state not yet set up; it only leaves the labels without (i).
-  import('/ui/assets/tooltip.04e4f1b0ef1f.js').then(({ tip }) => {
+  import('/ui/assets/tooltip.cd1750e8bd65.js').then(({ tip }) => {
     outcomeTip.append(tip('activity.status.outcome'));
     blockedTip.append(tip('activity.status.blocked'));
     memberTip.append(tip('activity.status.calls-made-with-your-key'));
