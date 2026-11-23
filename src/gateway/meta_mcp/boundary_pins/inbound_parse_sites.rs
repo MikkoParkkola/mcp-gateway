@@ -15,6 +15,11 @@
 //!   function instead: `by <file>::<function> via <file>::<function>:`.
 //! - `post-transport`: parses a result the transport already scrubbed.
 //! - `not-backend-data`: reads no backend content (a log level).
+//! - `no-injected-values`: reads a command preview's server, whose launch
+//!   carries no value a backend's rules inject, so there is nothing to
+//!   scrub. Allowed only in the preview pipe's file, and held true by
+//!   `a_preview_target_carries_only_a_program_and_its_arguments`: a new
+//!   field on the preview Target breaks that pin's build.
 //!
 //! Syntax scan, per function body, like the other pins. Its limits: order
 //! is source order (a call counts after its arguments), not flow analysis;
@@ -546,6 +551,42 @@ fn a_disconnected_scrubber_fails() {
             .any(|w| w.starts_with("src/transport/fake.rs\tfake_parse: ")
                 && w.contains("does not reach")),
         "a disconnected scrubber passed"
+    );
+}
+
+/// The premise of `no-injected-values`: a preview's launch is a program and
+/// its arguments, nothing a backend's rules could inject. The destructure
+/// names every field and has no `..`, so a field added to the Target (an
+/// environment, a secret) stops this build until the class is reviewed again.
+#[test]
+fn a_preview_target_carries_only_a_program_and_its_arguments() {
+    let target = crate::preview_sandbox::Target {
+        program: "server".into(),
+        args: vec!["--stdio".into()],
+    };
+    let crate::preview_sandbox::Target { program, args } = target;
+    assert_eq!(program, std::path::PathBuf::from("server"));
+    assert_eq!(args, vec![std::ffi::OsString::from("--stdio")]);
+}
+
+/// The class's own proof: a `no-injected-values` row outside the preview
+/// pipe's file fails.
+#[test]
+fn a_no_injected_values_row_elsewhere_fails() {
+    let mut sites = scanned();
+    let planted: syn::Block = syn::parse_quote!({
+        let _v: serde_json::Value = serde_json::from_str(text)?;
+    });
+    sites.function("src/transport/fake.rs", "fake_parse", &planted);
+    let table = format!(
+        "{LISTED}\nsrc/transport/fake.rs\tfake_parse\tfrom_str\t1\tno-injected-values\tplanted\n"
+    );
+    assert!(
+        differences(&sites, &table)
+            .iter()
+            .any(|w| w
+                .starts_with("no-injected-values outside the preview pipe: src/transport/fake.rs")),
+        "a no-injected-values row outside the preview pipe passed"
     );
 }
 

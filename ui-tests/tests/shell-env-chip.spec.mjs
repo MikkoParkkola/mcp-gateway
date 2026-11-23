@@ -6,9 +6,24 @@
 // and no error. The name comes from GET /ui/api/gateway (fixtures/api/gateway.json,
 // overridden per test).
 import { test, expect, blockingViolations } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, shellModuleUrl } from './shell.mjs';
 
 const chip = (page) => page.locator('.top .env');
+
+/** What a slow Overview rightly says (the page's name from the shell's NAV, as a sentence). */
+const LOADING_OVERVIEW = 'Loading Overview.';
+
+/**
+ * What the announcer has said, once its queue is written out, other than that Overview is
+ * loading. Messages landing in one dwell share an entry ("Loading Overview. <refusal>."),
+ * so the loading sentence is cut out of each entry rather than the entry skipped: an
+ * error or a refusal beside it is left, and the rows expect nothing left.
+ */
+const saidBesidesLoading = async (page) => {
+  await page.evaluate(async (url) => (await import(url)).announcerIdle(), await shellModuleUrl(page));
+  return page.locator('#announcer').evaluate((el, loading) => [...el.childNodes]
+    .map((n) => (n.textContent ?? '').replaceAll(loading, '').trim()).filter(Boolean), LOADING_OVERVIEW);
+};
 const gateway = (page, environment) => page.route('**/ui/api/gateway', (r) => r.fulfill({ json: { environment } }));
 
 /** True when neither the top bar nor the page scrolls sideways. */
@@ -66,7 +81,7 @@ test('E4 a key that is not admin sees no chip and no error', async ({ page }) =>
   await expect(chip(page)).toHaveCount(0);
   await expect(page.locator('.top .has-tip')).toHaveCount(0);
   await expect(page.locator('#content [data-state="error"], #content [data-state="forbidden"], [role="alert"]')).toHaveCount(0);
-  await expect(page.locator('#announcer')).toBeEmpty();
+  expect(await saidBesidesLoading(page)).toEqual([]);
   expect(asked, 'the admin-only route is never asked for by another key').toEqual([]);
 });
 
@@ -81,9 +96,34 @@ test('E4b an admin whose gateway answers 403 or 404 sees no chip and no error', 
     await expect(page.locator('.top .who')).toHaveText('Signed in · admin');
     await expect(chip(page)).toHaveCount(0);
     await expect(page.locator('#content [data-state="error"], #content [data-state="forbidden"], [role="alert"]')).toHaveCount(0);
-    await expect(page.locator('#announcer')).toBeEmpty();
+    expect(await saidBesidesLoading(page)).toEqual([]);
     await page.unroute('**/ui/api/gateway');
   }
+});
+
+// E4c and E4d hold the check E4 and E4b lean on to the two ways a refusal once slipped past it.
+test('E4c the announcer check reports a refusal that shares an entry with the loading sentence', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const before = await saidBesidesLoading(page);
+  await page.locator('#announcer').evaluate((region, text) => {
+    region.append(Object.assign(document.createElement('p'), { textContent: text }));
+  }, `${LOADING_OVERVIEW} Not available to this key.`);
+  expect(await saidBesidesLoading(page)).toEqual([...before, 'Not available to this key.']);
+});
+
+test('E4d the announcer check waits for a refusal still queued behind the loading sentence', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const before = await saidBesidesLoading(page);
+  await page.evaluate(async (url) => {
+    const shell = await import(url);
+    shell.announce('Loading Overview', { subject: 'shell' });
+    // Once that is written, a message said inside the dwell is queued rather than joined to it.
+    await shell.announcerIdle();
+    shell.announce('Not available to this key', { subject: 'shell' });
+  }, await shellModuleUrl(page));
+  expect(await saidBesidesLoading(page)).toEqual([...before, 'Not available to this key.']);
 });
 
 test('E5 a name with markup renders as literal text', async ({ page }) => {

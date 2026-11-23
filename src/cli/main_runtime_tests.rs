@@ -394,3 +394,11 @@ fn a_stuck_stop_logs_one_line_naming_what_was_still_running() {
         "the line does not name the known candidates: {line:?}"
     );
 }
+
+/// The stdio stop has no budget plan, so this fixed cap is its whole runtime
+/// wait. The stop-budget work leaves it alone: pinned by value, since every
+/// other row names the constant and would follow a change to it.
+#[test]
+fn the_runtime_cap_without_a_plan_stays_ten_seconds() {
+    assert_eq!(SERVE_RUNTIME_SHUTDOWN_TIMEOUT, Duration::from_secs(10));
+}

@@ -8,7 +8,10 @@
 //! admins only. A budget event reaches admins, and the holder of the API key
 //! whose budget it reports (`key:<name>`); a caller without an API key has no
 //! budget of its own. Standing is read from the live config at every check,
-//! so a key demoted or removed after subscribing stops receiving. Health is
+//! so a key demoted or removed after subscribing stops receiving. Standing
+//! belongs to a credential, judged on the owner key the transport gives a
+//! credential caller; an owner that is no credential (an mTLS subject, an
+//! OIDC or key-server identity) has none. Health is
 //! reported for each backend's shared slot, not for per-user slots. Budget
 //! deliveries are not charged, so exhausting a budget never charges the event
 //! that reports it.
@@ -35,8 +38,9 @@ pub(super) struct Standing {
     key: Option<String>,
 }
 
-/// The live standing of `principal`: the static bearer (an admin), or the
-/// one unexpired API key whose digest derives it. `None` for anyone else, and
+/// The live standing of `principal`, a subscriber's owner key: the static
+/// bearer's (an admin), or the one unexpired API key's whose digest derives
+/// that owner key (`credential_owner_key`). `None` for anyone else, and
 /// whenever more than one of those credentials derives it: an ambiguous
 /// principal fails closed rather than taking whichever matched first
 /// (MIK-8062). Every key's expiry is judged on the one reading `now`, so a
@@ -58,14 +62,20 @@ pub(super) fn standing_in_generation(
     principal: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Standing> {
-    let bearer = credentials.bearer_principal.as_deref() == Some(principal);
+    use crate::gateway::auth::credential_owner_key;
+    use crate::gateway::record_principal::InternalPrincipal;
+    // `principal` is the subscriber's events owner, which for a credential is
+    // its owner key; every credential is judged in that one form.
+    let bearer = credentials.bearer_principal.as_deref().is_some_and(|bare| {
+        credential_owner_key(&InternalPrincipal::new(bare.to_owned())) == principal
+    });
     let config = generation.config();
     let mut keys = config.auth.api_keys.iter().filter(|k| {
         !k.is_expired_at(now)
             && k.key_sha256
                 .as_deref()
                 .and_then(crate::config::parse_api_key_digest)
-                .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
+                .is_some_and(|digest| credential_owner_key(&k.principal_for(&digest)) == principal)
     });
     match (bearer, keys.next(), keys.next()) {
         (true, None, _) => Some(Standing {
@@ -80,7 +90,7 @@ pub(super) fn standing_in_generation(
             if key.approved_by.is_some()
                 && !generation.auth().api_keys().iter().any(|resolved| {
                     resolved.name == key.name
-                        && resolved.principal().storage_form() == principal
+                        && credential_owner_key(&resolved.principal()) == principal
                         && generation.auth().binding_live(resolved, Some(now))
                 }) =>
         {
