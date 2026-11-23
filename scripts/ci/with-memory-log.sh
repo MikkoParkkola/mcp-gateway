@@ -45,11 +45,15 @@ if [ "${BASH_VERSINFO[0]}" -lt 5 ] || { [ "${BASH_VERSINFO[0]}" -eq 5 ] && [ "${
   exec "$@"
 fi
 # Any of TERM, INT or HUP reaches CMD as TERM: a command started with & in a non-interactive shell ignores INT
-# and cannot trap it, so passing INT on as INT would do nothing. Set before the launch, so no signal falls between.
+# and cannot trap it, so passing INT on as INT would do nothing. The trap is set before the launch;
+# one that lands before CMD's pid is known is held in `pending` and sent on the line after (rows W14, W15).
 cmd=
-trap '[ -n "$cmd" ] && kill -TERM "$cmd" 2>/dev/null' TERM INT HUP
+pending=
+trap 'if [ -z "$cmd" ]; then pending=1; else kill -TERM "$cmd" 2>/dev/null; fi' TERM INT HUP
 "$@" &
+# Keep the next line a single simple command: row W14's hook matches its exact text.
 cmd=$!
+[ -z "$pending" ] || kill -TERM "$cmd" 2>/dev/null
 sample start
 nap=
 while :; do
