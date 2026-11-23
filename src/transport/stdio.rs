@@ -27,8 +27,7 @@ use crate::transport::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
-    negotiate_best_version, parse_supported_versions_from_error,
+    RequestId,
 };
 use crate::{Error, Result};
 
@@ -523,7 +522,9 @@ mod tree;
 #[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
-use tree::{read_frame, spawn_in_own_tree};
+// The preview pipe reads frames the same way.
+pub(in crate::transport) use tree::read_frame;
+use tree::spawn_in_own_tree;
 
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
