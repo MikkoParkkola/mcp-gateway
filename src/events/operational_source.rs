@@ -89,7 +89,7 @@ pub(super) fn standing_in_generation(
             if key.approved_by.is_some()
                 && !generation.auth().api_keys().iter().any(|resolved| {
                     resolved.name == key.name
-                        && credential_owner_key(resolved.principal()) == principal
+                        && credential_owner_key(&resolved.principal()) == principal
                         && generation.auth().binding_live(resolved, Some(now))
                 }) =>
         {
