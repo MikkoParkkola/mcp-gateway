@@ -476,6 +476,11 @@ use rounds::{after_dispatch, run_prepare};
 mod tests;
 
 #[cfg(tp4)]
+#[cfg(all(test, unix))]
+#[path = "mcp_stop_tests.rs"]
+mod stop_tests;
+
+#[cfg(tp4)]
 #[cfg(test)]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;

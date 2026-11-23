@@ -11,14 +11,17 @@ Tools:
   grandchild    starts a sleeping grandchild and returns its pid
   open_file     opens `path` only inside OPENPENCIL_MCP_ROOT, else the cwd, as
                 @open-pencil/mcp does; structuredContent {opened, pid}
+  deaf          answers {pid}, then ignores SIGTERM and never reads stdin again
 """
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 
 TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_binaries",
-         "open_file"]
+         "open_file", "deaf"]
 POLLS = {"n": 0}
 
 
@@ -94,6 +97,13 @@ for line in sys.stdin:
         elif name == "grandchild":
             child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
             result(req_id, {"content": [], "structuredContent": {"pid": child.pid}})
+        elif name == "deaf":
+            # From here on SIGTERM does nothing and stdin is never read again:
+            # only the kill at the stop's deadline ends this server.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            result(req_id, {"content": [], "structuredContent": {"pid": os.getpid()}})
+            while True:
+                time.sleep(3600)
         else:
             send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "unknown tool"}})
     else:

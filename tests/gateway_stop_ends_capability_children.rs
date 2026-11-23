@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The real binary, one capability MCP child, then SIGTERM: once the gateway
-//! has exited, the child and its process group must be gone, and the child
-//! must have been stopped the MCP way (its stdin closed first), not only killed.
+//! The real binary, one capability MCP child, then the gateway's stop: SIGTERM
+//! for the HTTP gateway, the end of its stdin for the stdio one. Once the
+//! gateway has exited, the child and its process group must be gone, and the
+//! child must have been stopped the MCP way (its stdin closed first), not only
+//! killed.
 
 #![cfg(unix)]
 
@@ -12,6 +14,7 @@ use std::time::Duration;
 
 use mcp_gateway::config::{Config, ProcessCommand};
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -285,4 +288,120 @@ async fn sigterm_ends_an_idle_capability_child_by_closing_its_stdin() {
         logs(&root)
     );
     gateway.stop().await;
+}
+
+/// The same child under the stdio gateway, stopped the way its client stops
+/// it: the gateway's own stdin ends, and it exits by itself.
+#[tokio::test]
+async fn closing_stdin_ends_an_idle_capability_child_by_closing_its_stdin() {
+    let dir = tempfile::tempdir().expect("a temp root");
+    let root = dir.path().to_path_buf();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("a home dir");
+    let config = write_config(&root);
+    let mark = root.join("child-read-eof");
+    let log = std::fs::File::create(root.join("gateway.log")).expect("a log file");
+
+    let mut command = gateway_bin::command(&home, gateway_bin::Inherit::Environment);
+    command
+        .arg("--config")
+        .arg(&config)
+        .arg("serve")
+        .arg("--stdio")
+        .envs(gateway_bin::checked_env([(
+            "CAP_EXEC_TEST_EOF_MARK",
+            mark.as_os_str(),
+        )]))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(log);
+    let mut gateway = gateway_bin::Reaped::new(
+        tokio::process::Command::from(command)
+            .spawn()
+            .expect("the gateway binary starts"),
+    );
+    let mut stdin = gateway.child_mut().stdin.take().expect("its stdin");
+    let mut stdout = BufReader::new(gateway.child_mut().stdout.take().expect("its stdout")).lines();
+
+    let messages = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "capability-stop-row", "version": "1" }
+            }
+        }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "gateway_invoke",
+                "arguments": {
+                    "server": CAPS,
+                    "tool": CAPABILITY,
+                    "arguments": { "operation": "say", "text": "before the stop" }
+                }
+            }
+        }),
+    ];
+    for message in &messages {
+        stdin
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .expect("the gateway reads its stdin");
+    }
+    stdin.flush().await.expect("stdin flushes");
+    // The answer to the call: skip the initialize answer and any other line.
+    let answer = tokio::time::timeout(READY_BOUND, async {
+        loop {
+            let line = stdout
+                .next_line()
+                .await
+                .expect("stdout reads")
+                .unwrap_or_else(|| panic!("the gateway closed stdout\n{}", logs(&root)));
+            if serde_json::from_str::<Value>(&line).is_ok_and(|value| value["id"] == json!(2)) {
+                break line;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the call was never answered\n{}", logs(&root)));
+    let pid = pid_in(&answer)
+        .unwrap_or_else(|| panic!("the call named no child pid: {answer}\n{}", logs(&root)));
+    let group = foreign_group(pid);
+
+    // The child now sits idle; end the gateway's input and wait for its exit.
+    drop(stdin);
+    let exited = tokio::time::timeout(EXIT_BOUND, gateway.child_mut().wait()).await;
+
+    let child_gone = gone_within(&pid.to_string(), Duration::from_secs(1)).await;
+    let group_gone = match group {
+        Some(g) => gone_within(&format!("-{g}"), Duration::from_secs(1)).await,
+        None => true,
+    };
+    let read_eof = mark.exists();
+    if !child_gone {
+        kill_leftover(&pid.to_string());
+    }
+    if let Some(g) = group.filter(|_| !group_gone) {
+        kill_leftover(&format!("-{g}"));
+    }
+    assert!(
+        exited.is_ok(),
+        "the stdio gateway did not exit within {EXIT_BOUND:?} of its stdin ending\n{}",
+        logs(&root)
+    );
+    assert!(
+        child_gone && group_gone && read_eof,
+        "after the gateway exited: child {pid} gone {child_gone}, its group {group:?} gone \
+         {group_gone}, child saw its stdin end {read_eof}\n{}",
+        logs(&root)
+    );
+    gateway.stop().await;
+    drop(dir);
 }

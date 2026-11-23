@@ -54,6 +54,10 @@ pub(crate) struct McpChildren {
     /// The gateway's stop deadline, joined by every child backend built here.
     pub(in crate::capability::executor) stop_deadline:
         std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
+    /// Test-only pause in `evict`, with the children out of the map and the
+    /// map lock still held, for the row that races a gateway stop against it.
+    #[cfg(test)]
+    pub(super) evict_holds_the_lock: crate::test_pause::Slot,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
@@ -183,6 +187,8 @@ impl McpChildren {
             .collect();
         let revoked: Vec<Child> = unloaded.iter().filter_map(|k| map.remove(k)).collect();
         let idled: Vec<Child> = idle_keys.iter().filter_map(|k| map.remove(k)).collect();
+        #[cfg(test)]
+        self.evict_holds_the_lock.pause_on_thread();
         drop(map);
         stop_all(revoked, ChildEnd::Now);
         stop_all(idled, ChildEnd::Graceful);
