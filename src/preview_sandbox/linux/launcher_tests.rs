@@ -174,9 +174,11 @@ async fn r15b_the_record_names_the_proxys_own_allowlist() {
 }
 
 /// The bounds the R41 rows run under: short, so a held connection ends fast.
+/// The frame bound is a whole second: the rows that must start also run under
+/// it, and a loaded host must not turn their prompt status line into a refusal.
 const SHORT: ControlBounds = ControlBounds {
     accept: Duration::from_secs(5),
-    frame: Duration::from_millis(300),
+    frame: Duration::from_secs(1),
     setup: Duration::from_secs(5),
 };
 

@@ -310,6 +310,7 @@ fn r45_the_helper_reports_then_waits_for_the_gateways_close() {
             "{name}: the write half was shut"
         );
         assert!(
+            // limit-under-test (fires-only): the row asserts only that this wait times out while the gateway is open
             rx.recv_timeout(Duration::from_millis(200)).is_err(),
             "{name}: returned while the gateway was still open"
         );
