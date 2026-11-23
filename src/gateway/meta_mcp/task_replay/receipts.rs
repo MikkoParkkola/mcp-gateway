@@ -23,7 +23,10 @@ impl MetaMcp {
     ) {
         // A withheld row's caller received the gateway's answer, not the
         // stored outcome: there is nothing delivered to receipt.
-        if !self.relay_active() || !stored.serves_backend_output() || stored.withholds_outcome() {
+        if !self.relay_active()
+            || !stored.serves_backend_output()
+            || mutant!("m5", false, stored.withholds_outcome())
+        {
             return;
         }
         let [target] = stored.targets.as_slice() else {

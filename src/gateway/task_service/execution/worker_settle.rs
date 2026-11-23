@@ -237,7 +237,7 @@ fn stored_backend_output(stored: &CommittedTask) -> bool {
     // A withheld row serves no reader its output, so nothing of it is relayed.
     // The completed arm is not `backend_result()`: that would also drop a
     // result carrying the gateway's execution-outcome marker.
-    !stored.withholds_outcome()
+    mutant!("m4", true, !stored.withholds_outcome())
         && ((stored.task.status() == TaskStatus::Completed
             && !stored.output_free
             && stored.error_author != Some(ErrorAuthor::Gateway))

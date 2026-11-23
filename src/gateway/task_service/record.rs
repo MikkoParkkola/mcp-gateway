@@ -620,7 +620,7 @@ fn withhold_outcome(wire: &mut serde_json::Value) {
     }
     // A waiting row's requests are the backend's too, keys included: none is
     // served, and the status message says why the round asks for nothing.
-    if let Some(requests) = wire.get_mut("inputRequests") {
+    if let Some(requests) = mutant!("m1", None, wire.get_mut("inputRequests")) {
         *requests = serde_json::json!({});
         wire["statusMessage"] = serde_json::json!(reason);
     }
@@ -728,7 +728,7 @@ impl CommittedTask {
     /// and so has a row that withholds its outcome: no reader is served it.
     pub(crate) fn backend_error(&self) -> Option<&crate::protocol::JsonRpcError> {
         (!self.output_free
-            && !self.withholds_outcome()
+            && mutant!("m2", true, !self.withholds_outcome())
             && self.error_author == Some(ErrorAuthor::Peer))
         .then(|| self.task.error())
         .flatten()
@@ -740,7 +740,7 @@ impl CommittedTask {
     /// backend said was delivered with it. Nor has a row that withholds its
     /// outcome: the withheld answer is what every reader is served.
     pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
-        if self.withholds_outcome() {
+        if mutant!("m3", false, self.withholds_outcome()) {
             return None;
         }
         let result = self.task.result()?;

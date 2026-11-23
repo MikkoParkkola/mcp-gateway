@@ -531,10 +531,11 @@ impl Shared {
             // sit on one row.
             if matches!(
                 entry.task.status(),
-                TaskStatus::Completed
-                    | TaskStatus::Failed
-                    | TaskStatus::Cancelled
-                    | TaskStatus::InputRequired
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) || mutant!(
+                "m6",
+                false,
+                entry.task.status() == TaskStatus::InputRequired
             ) {
                 return Err(StoreError::InvalidTransition);
             }

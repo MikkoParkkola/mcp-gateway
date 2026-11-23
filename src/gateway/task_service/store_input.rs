@@ -513,7 +513,7 @@ impl Shared {
         }
         // A row holding an upstream handle never parks a round as well: the
         // handle write refuses a waiting row, and this refuses the other order.
-        if record.upstream.is_some() {
+        if mutant!("m8", false, record.upstream.is_some()) {
             return Err(StoreError::InvalidTransition);
         }
         task.transition(TaskTransition::RequireInput(requested), at)
