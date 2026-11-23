@@ -186,3 +186,33 @@ async fn t2_a_head_over_eight_kib_is_refused() {
     assert_eq!(status(&head), 400);
     assert!(rig.connect.dials().is_empty());
 }
+
+/// R15b, proxy half; kills "the list reported apart from the one enforced"
+/// and "joined some other way": a proxy from plain `bind` reports its three
+/// registries with their ports, in order.
+#[tokio::test]
+async fn r15b_the_proxy_reports_the_list_it_enforces() {
+    let rig = rig().await;
+    assert_eq!(
+        rig.proxy.allowlist(),
+        "registry.npmjs.org:443, pypi.org:443, files.pythonhosted.org:443"
+    );
+}
+
+/// R15b, proxy half: a swapped list is both what the proxy reports and what
+/// it admits, so a report kept apart from the check fails here.
+#[tokio::test]
+async fn r15b_a_swapped_list_is_reported_and_enforced_alike() {
+    let rig = rig().await;
+    rig.proxy
+        .set_allowlist_for_test(&["a.test:443", "b.test:443"]);
+    assert_eq!(rig.proxy.allowlist(), "a.test:443, b.test:443");
+    rig.resolve.set("a.test", vec![GLOBAL]);
+    let cred = begin(&rig);
+    assert_eq!(connect_status(&rig, "a.test:443", &cred).await, 200);
+    assert_eq!(
+        connect_status(&rig, "registry.npmjs.org:443", &cred).await,
+        403,
+        "a registry no longer on the list"
+    );
+}

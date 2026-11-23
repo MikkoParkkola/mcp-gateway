@@ -110,11 +110,9 @@ src/gateway/router/tests/task_execution_adapter/input_round_races.rs	1
 src/gateway/router/tests/task_execution_adapter/slot_release_tasks.rs	2
 src/gateway/router/tests/task_execution_adapter/submit_authz_audit.rs	1
 src/gateway/router/ui_stream_tests/live_logs/visibility_tests.rs	1
-src/gateway/server/listener_tests.rs	1
 src/gateway/server/persistence_tests.rs	1
 src/gateway/server/stdio_channel.rs	2
 src/gateway/server/stdio_shutdown.rs	1
-src/gateway/server/support_tests.rs	1
 src/gateway/server/tests/boot.rs	1
 src/gateway/server/tests/life1_stdio_cancel.rs	2
 src/gateway/server/tests/stdio_cost_persistence.rs	1
