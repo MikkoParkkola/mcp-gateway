@@ -244,10 +244,15 @@ pub(super) async fn launch_with(
                     .map_err(Ended::Status)?;
                 serve_control_marked(stream, proxy, deadline, bounds).await
             };
+            // tokio's `Child::wait` closes the child's stdin when first polled,
+            // and the race below polls it at once: the preview's stdin stays out
+            // of its reach until the race is over.
+            let stdin = child.stdin.take();
             let served = tokio::select! {
                 served = session => Some(served),
                 _ = child.wait() => None,
             };
+            child.stdin = stdin;
             match served {
                 Some(Ok(SetupStatus::Done)) => {
                     let isolation = prepared.isolation();
