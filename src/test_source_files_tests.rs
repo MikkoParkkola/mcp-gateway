@@ -36,6 +36,11 @@ fn the_walk_adds_every_rs_file_at_every_depth_and_nothing_else() {
     let mut found = vec![held.clone()];
     rust_files(&root.join("one"), &mut found);
     rust_files(&root.join("two"), &mut found);
+    assert_eq!(
+        found.first(),
+        Some(&held),
+        "the held path stays first: the walk appends"
+    );
 
     expected.push(held);
     found.sort();
@@ -62,9 +67,10 @@ fn a_directory_the_walk_cannot_list_panics_naming_it() {
         (None, Some(text)) => (*text).to_owned(),
         (None, None) => String::from("<a payload that is not text>"),
     };
-    let want = missing.display().to_string();
+    // The walk's own message, not any panic that happens to carry the path (an io error can name it too).
+    let want = format!("cannot list {}: ", missing.display());
     assert!(
-        said.contains(&want),
-        "the panic should name {want}, it said: {said}"
+        said.starts_with(&want),
+        "the panic should start {want:?}, it said: {said}"
     );
 }
