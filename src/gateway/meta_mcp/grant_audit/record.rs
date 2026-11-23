@@ -167,7 +167,11 @@ impl Drop for SlotGuard {
         let best_effort =
             std::mem::take(&mut *self.slot.best_effort.lock().expect("grant slot lock"));
         if !pending.is_empty() || !best_effort.is_empty() {
-            spawn_write(&self.logger, pending, best_effort);
+            spawn_write(
+                &self.logger,
+                mutant!("m3", Vec::new(), pending),
+                best_effort,
+            );
         }
     }
 }
