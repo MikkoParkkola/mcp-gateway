@@ -422,9 +422,12 @@ fn tick(
     shared.update(|set| {
         set.set_grants(grants, now);
         match changes {
-            Some((backend, Some(changes))) => set.set_capability_changes(&backend, changes, now),
-            // A recorded file could not be read: never a list missing it.
-            Some((_, None)) => set.set_health(Source::Capability, Health::Unavailable),
+            // A recorded file that could not be read or parsed is its own
+            // item: never a list missing it, and never a list taken down.
+            Some((backend, (changes, unjudged))) => {
+                set.set_capability_unreadable(&backend, unjudged);
+                set.set_capability_changes(&backend, changes, now);
+            }
             None => set.set_health(Source::Capability, Health::Absent),
         }
         if let Some(edge) = edge {
@@ -493,12 +496,24 @@ fn publish_discovery(config_path: Option<&Path>, shared: &Shared, listing: &List
 }
 
 /// The backend's pin mismatches as decisions, each from one read of its
-/// bytes, or `None` when a recorded file could not be read.
-fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChange>> {
+/// bytes, and each recorded file the pass could not read or parse, by its
+/// reason class.
+fn capability_changes(
+    backend: &CapabilityBackend,
+) -> (
+    Vec<CapabilityChange>,
+    Vec<crate::decisions::CapabilityUnreadable>,
+) {
     let mismatches = backend.current_mismatches();
-    if mismatches.incomplete {
-        return None;
-    }
+    let unjudged = mismatches
+        .unreadable
+        .into_iter()
+        .map(|(record, fault)| crate::decisions::CapabilityUnreadable {
+            file: record.file,
+            loaded_as: record.loaded_as,
+            reason: fault.reason(),
+        })
+        .collect();
     let changes = mismatches
         .changes
         .into_iter()
@@ -509,7 +524,7 @@ fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChang
             content,
         })
         .collect();
-    Some(changes)
+    (changes, unjudged)
 }
 
 /// The chain counter of the oldest record the log at `path` still keeps: a
