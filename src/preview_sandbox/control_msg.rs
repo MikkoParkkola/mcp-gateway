@@ -167,7 +167,7 @@ impl SetupStep {
             Self::Namespaces => "namespaces",
             Self::Descriptors => "descriptors",
             Self::Mounting => "mounting",
-            Self::Binding => "binding",
+            Self::Binding => "mounting", // PROBE m-wrong-step
             Self::Masking => "masking",
             Self::Remounting => "remounting",
             Self::Pivoting => "pivoting",

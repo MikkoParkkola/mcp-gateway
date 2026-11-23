@@ -158,7 +158,8 @@ pub(super) fn npm(
         &npm.run_args,
         &npm.node_dir,
     )
-    .map_err(|r| FetchError::Setup(SetupFailure::new(SetupStep::TargetMissing, r.to_string())))
+    // PROBE m-post-fetch-reported: a package with no entry point names no step.
+    .map_err(|r| FetchError::Reported(r.to_string()))
 }
 
 /// How a fetch step failed, by where: before `fetch_start` it is a setup

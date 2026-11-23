@@ -124,7 +124,8 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
     fault::trace("closed");
     let _late = fault::plant(Point::AfterClose);
     // Strict now: the control descriptor is gone, so nothing is exempt.
-    if let Err(why) = check_descriptors(None) {
+    // PROBE m-skip-strict: the strict check's answer is ignored.
+    if let Err(why) = check_descriptors(None).or(Ok::<(), String>(())) {
         return refused(&why);
     }
     fault::trace("strict-check");
@@ -207,7 +208,8 @@ fn set_up(
     let _early = fault::plant(Point::BeforeStatus);
     // The control connection is the one descriptor above 2 allowed here.
     let own = u32::try_from(control.as_raw_fd()).ok();
-    check_descriptors(own).map_err(|why| SetupFailure::new(SetupStep::Descriptors, why))?;
+    // PROBE m-skip-exempt-check: the check before the status is skipped.
+    let _ = own;
     Ok(Ready { limits, run })
 }
 
@@ -458,7 +460,8 @@ mod fault {
     /// ending, the end of input or an error of any kind, is a refusal, so a
     /// hold that was not released never goes on to start the target.
     pub(super) fn hold() -> Result<(), String> {
-        if ARMED.get() != Some(Fault::TraceAndHold) {
+        // PROBE m-hold-ignored: the hold never waits.
+        if ARMED.get() != Some(Fault::TraceAndHold) || cfg!(debug_assertions) {
             return Ok(());
         }
         let mut byte = [0_u8; 1];
