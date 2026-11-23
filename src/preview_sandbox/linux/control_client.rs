@@ -164,15 +164,18 @@ pub(super) fn finish_fetch(
 
 /// Send `status`, if any, then shut this side's writes and park until the
 /// gateway closes, so the gateway always reads the line and the end before
-/// `unshare` can exit. A failed write returns at once.
+/// `unshare` can exit. `sent` runs once the line is out, before the wait. A
+/// failed write returns at once.
 pub(super) fn report_and_leave(
     stream: &mut UnixStream,
     status: Option<SetupStatus>,
     bound: Duration,
+    sent: impl FnOnce(),
 ) -> Result<(), String> {
     if let Some(status) = status {
         write_line(stream, &status.encode(), bound)?;
     }
+    sent();
     let _ = stream.shutdown(std::net::Shutdown::Write);
     wait_for_close(stream);
     Ok(())

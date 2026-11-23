@@ -289,9 +289,9 @@ fn r45_the_helper_reports_then_waits_for_the_gateways_close() {
         std::thread::spawn(move || {
             let reported = if refused_fetch {
                 finish_fetch(&mut helper, HELPER_BOUNDS, Some(FetchStep::NpmCi))
-                    .and_then(|()| report_and_leave(&mut helper, None, HELPER_BOUNDS.write))
+                    .and_then(|()| report_and_leave(&mut helper, None, HELPER_BOUNDS.write, || {}))
             } else {
-                report_and_leave(&mut helper, status, HELPER_BOUNDS.write)
+                report_and_leave(&mut helper, status, HELPER_BOUNDS.write, || {})
             };
             let _ = tx.send(reported);
         });

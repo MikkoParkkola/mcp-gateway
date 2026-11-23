@@ -433,6 +433,15 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
     );
 }
 
+/// What a target's shell prints about itself: its descriptors, one per line,
+/// listed by a separate `ls` writing straight to stdout (a glob would open
+/// the directory, and `$(...)` a pipe, in the shell itself, and list that
+/// descriptor too; the path is absolute, as a fetched run's PATH holds only
+/// node's and the package's bins), then the path it was given and whether
+/// that path exists.
+const FD_REPORT: &str =
+    r#"/bin/ls /proc/$$/fd; echo "arg=$1"; test -e "$1" && echo control-visible; echo end"#;
+
 /// R24 and R27, kill m-keep-connection: the target holds no descriptor above
 /// 2, and the control socket's path does not exist inside the root.
 #[cfg(tp4)]
@@ -441,10 +450,9 @@ async fn r24_r27_the_target_holds_nothing_of_the_control_connection() {
     let Some(gateway) = helper().await else {
         return;
     };
-    let script = r#"cd /proc/$$/fd && echo *; test -e "$1" && echo control-visible; echo end"#;
-    let mut rig = rig(&target("/bin/sh", &["-c", script, "sh"]));
+    let mut rig = rig(&target("/bin/sh", &["-c", FD_REPORT, "sh"]));
     let control = rig.prepared.plan.control.clone();
-    rig.prepared.plan.target.push(control);
+    rig.prepared.plan.target.push(control.clone());
     let mut started = launch_prepared(&mut rig.prepared, &gateway, deadline())
         .await
         .expect("started");
@@ -455,7 +463,7 @@ async fn r24_r27_the_target_holds_nothing_of_the_control_connection() {
         .await
         .expect("ended within the guard")
         .expect("stdout");
-    assert_eq!(out, "0 1 2\nend\n");
+    assert_eq!(out, format!("0\n1\n2\narg={control}\nend\n"));
 }
 
 /// R24 and R27, the fetching half: the run after an npm fetch holds no
@@ -463,16 +471,17 @@ async fn r24_r27_the_target_holds_nothing_of_the_control_connection() {
 #[cfg(tp4)]
 #[tokio::test]
 async fn r24_r27_a_fetched_run_holds_nothing_of_the_control_connection() {
-    const FDS: &[u8] =
-        b"#!/bin/sh\ncd /proc/$$/fd && echo *\ntest -e \"$1\" && echo control-visible\necho end\n";
     let Some(gateway) = helper().await else {
         return;
     };
+    // A script's own shell keeps the script open (dash on descriptor 10), so
+    // the bin execs a `sh -c`, which holds nothing but what it inherited.
+    let fds = format!("#!/bin/sh\nexec /bin/sh -c '{FD_REPORT}' sh \"$@\"\n");
     let fake = super::fetch_registry::Package {
         name: "mcp-fds",
         version: "1.0.0",
         manifest: serde_json::json!({"bin": {"mcp-fds": "bin/fds.sh"}}),
-        files: vec![("bin/fds.sh", FDS.to_vec(), 0o755)],
+        files: vec![("bin/fds.sh", fds.into_bytes(), 0o755)],
     };
     let registry = Registry::start(vec![fake], "r24 CA").await;
     let scratch = tempfile::tempdir().expect("scratch");
@@ -496,7 +505,7 @@ async fn r24_r27_a_fetched_run_holds_nothing_of_the_control_connection() {
         .as_mut()
         .and_then(|f| f.npm.as_mut())
         .expect("an npm fetch was planned");
-    npm.run_args = vec![control];
+    npm.run_args = vec![control.clone()];
     let mut started = launch_prepared(&mut prepared, &gateway, deadline())
         .await
         .expect("started");
@@ -507,7 +516,7 @@ async fn r24_r27_a_fetched_run_holds_nothing_of_the_control_connection() {
         .await
         .expect("ended within the guard")
         .expect("stdout");
-    assert_eq!(out, "0 1 2\nend\n");
+    assert_eq!(out, format!("0\n1\n2\narg={control}\nend\n"));
 }
 
 /// R29, kills m-reap-unshare-only: a process the target leaves in a session

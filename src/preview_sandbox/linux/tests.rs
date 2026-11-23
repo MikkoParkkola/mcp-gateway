@@ -703,6 +703,16 @@ async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
         probe_with(fake_launcher(DENIED), &apparmor).await,
         Err(Refusal::AppArmorRestricted)
     );
+    // A helper's own non-mount refusal: only a probe that read the words can
+    // name it; one that dropped them falls through to the host's facts.
+    const HELPER_LINE: &str =
+        "echo 'preview-sandbox: refused at checking descriptors (inherited: [5])' >&2; exit 97";
+    assert_eq!(
+        probe_with(fake_launcher(HELPER_LINE), &apparmor).await,
+        Err(Refusal::Step(
+            "checking descriptors (inherited: [5])".into()
+        ))
+    );
     let container = HostFacts {
         in_container: true,
         ..HostFacts::default()

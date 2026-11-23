@@ -103,22 +103,22 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
                 step: failure.step,
                 denied: failure.denied,
             };
-            let _ =
-                control_client::report_and_leave(&mut control, Some(status), HELPER_BOUNDS.write);
+            let bound = HELPER_BOUNDS.write;
+            let _ = control_client::report_and_leave(&mut control, Some(status), bound, || {});
             return ExitCode::from(super::REFUSED);
         }
         Err(FetchError::Reported(detail)) => {
             eprintln!("preview-sandbox: refused at {detail}");
-            let _ = control_client::report_and_leave(&mut control, None, HELPER_BOUNDS.write);
+            let _ =
+                control_client::report_and_leave(&mut control, None, HELPER_BOUNDS.write, || {});
             return ExitCode::from(super::REFUSED);
         }
     };
-    if control_client::report_and_leave(&mut control, Some(SetupStatus::Done), HELPER_BOUNDS.write)
-        .is_err()
-    {
+    let done = Some(SetupStatus::Done);
+    let sent = || fault::trace("sent");
+    if control_client::report_and_leave(&mut control, done, HELPER_BOUNDS.write, sent).is_err() {
         return ExitCode::from(super::REFUSED);
     }
-    fault::trace("sent");
     // The gateway has taken the status; the target must not inherit this.
     drop(control);
     fault::trace("closed");
