@@ -203,6 +203,9 @@ pub(super) async fn launch_with(
     bounds: ControlBounds,
     reap: Reap,
 ) -> (Result<Started, StartFailed>, Option<Ending>) {
+    // The fetch step's clock starts here, at the launch: a fetch's refusal
+    // says how far into the fetch step it came, and the prepare (plan,
+    // sockets, version probes) is not part of that step.
     let begun = tokio::time::Instant::now();
     let Some(listener) = prepared.listener.take() else {
         let refusal = Refusal::Step("launching the preview (it was launched already)".into());

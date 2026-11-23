@@ -307,3 +307,31 @@ async fn r41_each_status_ending_at_the_launch() {
     let (started, _) = launch_against(&[done], false, roomy).await;
     assert!(started.is_ok(), "one setup_done then the close starts");
 }
+
+/// D3, pins where the fetch step's clock starts: a fetching launch whose
+/// prepare ended 1.5 s before it refuses with the time since the launch,
+/// well under that, not the time since the prepare.
+#[tokio::test]
+async fn the_fetch_steps_clock_starts_at_the_launch() {
+    let runtime = tempfile::tempdir().expect("runtime");
+    let mut prepared = prepared_with(proxy(runtime.path()), Some(npm()));
+    let control = runtime.path().join("control.sock");
+    prepared.listener = Some(tokio::net::UnixListener::bind(&control).expect("listener"));
+    prepared.plan.control = control.to_str().expect("UTF-8 runtime path").to_owned();
+    // The prepare is over; the launch comes 1.5 s later.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    // Not fetch_start: the fetch half refuses, so its words carry the time.
+    let spawn = stand_in(&[r#"{"not":"fetch_start"}"#], false);
+    let (launched, _) = launch_with(&mut prepared, spawn, deadline, SHORT, reap_exit).await;
+    let refusal = launched.err().expect("refused").refusal;
+    let Refusal::Step(text) = &refusal else {
+        panic!("{refusal:?}");
+    };
+    let ms: u64 = text
+        .strip_prefix("the sandbox sent something other than fetch_start (")
+        .and_then(|rest| rest.strip_suffix(" ms into the fetch step)"))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(ms < 1000, "{ms} ms: the clock started before the launch");
+}

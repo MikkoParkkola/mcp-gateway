@@ -401,6 +401,9 @@ fn mask(plan: &Plan, path: &Path, bind_backs: BindBacks) -> Step {
         .map(Path::new)
         .filter(|b| bind_backs == BindBacks::Restore && b.starts_with(path))
     {
+        // A bind-back is bind_read_only's own call: its failures report as
+        // binding (and its remounts as remounting), not as this mask's
+        // masking, which covers only mask()'s own calls.
         bind_read_only(back)?;
     }
     // A tmpfs remount (no bind flag) makes the mask's superblock read-only.
