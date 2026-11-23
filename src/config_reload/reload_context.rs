@@ -590,8 +590,29 @@ impl ReloadContext {
         }
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
+        // A first key only a restart applies is refused as a status change
+        // naming its keys; a first key with another fault, by that fault.
+        let waiting = super::first_key::waiting_first_key(
+            self.live_config.running(),
+            &self.live_config.generation(),
+            &new_config,
+            &overlay,
+        );
+        if let super::first_key::Waiting::Faulty { reason } = &waiting {
+            return Err(nothing_published(reason).into());
+        }
         let prepared = self.live_config.prepare(new_config, &overlay);
-        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
+        let generation = Arc::new(prepared.map_err(|reason| {
+            let text = nothing_published(&reason);
+            match waiting {
+                super::first_key::Waiting::Yes { keys } => ReloadRefusal {
+                    kind: ReloadRefusalKind::StatusChange,
+                    text,
+                    waiting: keys,
+                },
+                _ => text.into(),
+            }
+        })?);
 
         let outcome = patch.outcome();
         // After every refusal: a backend `apply_patch` registers is seeded

@@ -10,11 +10,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{RefusalClass, ReplaceError, SecretStep};
+use super::{RefusalClass, ReplaceError, SecretStep, StatusChange};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
+use crate::config_reload::first_key::{Waiting, waiting_first_key};
 use crate::config_reload::reload_context::EvaluatedReload;
 use crate::config_reload::reload_context::refusals::BeforeApplyKind;
 
@@ -93,7 +94,11 @@ impl ReloadContext {
     /// anything, in its order, for a candidate the config writer validates
     /// before any store entry exists. The reload still runs them again on the
     /// written bytes; this only refuses earlier.
-    fn refuse_candidate(&self, evaluated: EvaluatedReload) -> Result<(), ReplaceError> {
+    fn refuse_candidate(
+        &self,
+        evaluated: EvaluatedReload,
+        status_change: StatusChange,
+    ) -> Result<(), ReplaceError> {
         let invalid = |reason| ReplaceError::ReloadRefused {
             class: RefusalClass::Invalid,
             reason,
@@ -104,6 +109,30 @@ impl ReloadContext {
             return Err(invalid(refusal));
         }
         self.restart_only_refusal(&evaluated).map_err(invalid)?;
+        // The status refusal alone is replaced, and asked before the
+        // empty-patch return, so the answer never depends on whether a key
+        // change shows in the patch. Every other refusal decides as before.
+        let held = match waiting_first_key(
+            self.live_config.running(),
+            &self.live_config.generation(),
+            &evaluated.config,
+            &evaluated.overlay,
+        ) {
+            Waiting::No => false,
+            Waiting::Yes { .. } if status_change == StatusChange::HoldForRestart => true,
+            Waiting::Yes { .. } => {
+                // The status rule's own sentence, as the build states it.
+                let reason = (self.live_config)
+                    .prepare(evaluated.config, &evaluated.overlay)
+                    .err()
+                    .unwrap_or_default();
+                return Err(ReplaceError::ReloadRefused {
+                    class: RefusalClass::RestartPending,
+                    reason: crate::config_reload::reload_context::nothing_published(&reason),
+                });
+            }
+            Waiting::Faulty { reason } => return Err(invalid(reason)),
+        };
         if evaluated.patch.is_empty() {
             return Ok(());
         }
@@ -117,6 +146,10 @@ impl ReloadContext {
                 },
                 reason: refusal.text,
             });
+        }
+        // Held: the question already built its key table and judged its start.
+        if held {
+            return Ok(());
         }
         self.live_config
             .prepare(evaluated.config, &evaluated.overlay)
@@ -136,6 +169,7 @@ impl ReloadContext {
         target: &Path,
         template: &Template,
         step: Option<&SecretStep>,
+        status_change: StatusChange,
     ) -> Result<(), ReplaceError> {
         // The loader's rule: a reference, never a comment that mentions it.
         let reserved = std::str::from_utf8(template.bytes()).ok();
@@ -191,14 +225,17 @@ impl ReloadContext {
                 .map_err(refused)?;
         }
         let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
-        self.refuse_candidate(EvaluatedReload {
-            config: evaluated.config,
-            patch,
-            overlay: evaluated.overlay,
-            secret_refs: evaluated.secret_refs,
-            inputs: evaluated.inputs,
-            configured: evaluated.configured,
-        })
+        self.refuse_candidate(
+            EvaluatedReload {
+                config: evaluated.config,
+                patch,
+                overlay: evaluated.overlay,
+                secret_refs: evaluated.secret_refs,
+                inputs: evaluated.inputs,
+                configured: evaluated.configured,
+            },
+            status_change,
+        )
     }
 
     /// `Err(NoConfigFile)` when the file read under this lock is gone now.

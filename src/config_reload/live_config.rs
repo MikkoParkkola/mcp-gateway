@@ -91,6 +91,9 @@ pub struct LiveConfig {
     published: crate::observer::Observer<Arc<Generation>>,
     /// The configuration history each applied publish is recorded into.
     history: Option<Arc<crate::config_reload::history::HistoryHook>>,
+    /// The keys a first-key file waits on: the most recent file-reading
+    /// reload's verdict, set and cleared by the reload alone.
+    first_key: RwLock<Option<Vec<String>>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -142,6 +145,7 @@ impl LiveConfig {
             admission: RwLock::new(()),
             published: crate::observer::Observer::default(),
             history: None,
+            first_key: RwLock::new(None),
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
@@ -319,27 +323,34 @@ impl LiveConfig {
             let inner = self.inner.read();
             (inner.applied.clone(), Arc::clone(&inner.generation))
         };
-        match applied {
+        let mut fields = match applied {
             Some(applied) => applied.pending_restart.clone(),
             // No revision published (a config built in memory): no reload of
             // an env file can have happened, so the config fields are all.
             None => pending_restart_fields(&self.running, generation.config()),
+        };
+        // A waiting first key is in the file and not in the published config.
+        if self.first_key.read().is_some() && !fields.contains(&"auth.api_keys") {
+            fields.push("auth.api_keys");
         }
+        fields
     }
 
     /// The keys a first-key file waits on for a restart: the verdict of the
     /// most recent reload that read the file. `None` when nothing waits.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "served once the first-key hold lands")
-    )]
-    #[expect(
-        clippy::unused_self,
-        reason = "read from the reload's verdict once the hold lands"
+        expect(dead_code, reason = "the gateway route serves it with the banner")
     )]
     #[must_use]
     pub(crate) fn waiting_keys(&self) -> Option<Vec<String>> {
-        None
+        self.first_key.read().clone()
+    }
+
+    /// Record a file-reading reload's verdict on a first key: the waiting
+    /// keys, or `None` for every other outcome of a reload that read the file.
+    pub(crate) fn note_first_key(&self, waiting: Option<Vec<String>>) {
+        *self.first_key.write() = waiting;
     }
 
     /// Clone the current active configuration snapshot.

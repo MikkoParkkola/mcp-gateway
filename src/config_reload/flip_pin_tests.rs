@@ -6,9 +6,10 @@
 
 use std::path::Path;
 
-/// Each production call of the flip check, by file: the reload's
-/// `Generation::prepare`, and the web UI key create's compute.
+/// Each production call of the flip check, by file: the first-key question,
+/// the reload's `Generation::prepare`, and the web UI key create's compute.
 const CALLERS: &[(&str, usize)] = &[
+    ("src/config_reload/first_key.rs", 1),
     ("src/config_reload/generation.rs", 1),
     ("src/gateway/ui/keys_create.rs", 1),
     ("src/gateway/ui/keys_revoke.rs", 1),

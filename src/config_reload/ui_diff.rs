@@ -417,7 +417,8 @@ async fn validate(
     target: &std::path::Path,
     template: &keyedit::Template,
 ) -> Result<(), UiRefused> {
-    ctx.validate_template(target, template, None)
+    // A preview judges as the save does: settings never hold for a restart.
+    ctx.validate_template(target, template, None, super::StatusChange::Refuse)
         .await
         .map_err(|error| validate_refusal(&error))
 }

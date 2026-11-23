@@ -234,7 +234,10 @@ async fn w1_a_held_first_key_keeps_its_bytes_until_a_restart() {
         .await
         .expect("a held first key answers");
     match reload {
-        ReplaceReload::HeldForRestart { keys, .. } => assert_eq!(keys, ["first"]),
+        ReplaceReload::HeldForRestart { refusal, keys } => {
+            assert_eq!(keys, ["first"]);
+            assert!(says_status_change(&refusal), "{refusal}");
+        }
         ReplaceReload::Applied(_) => panic!("the status changed while running"),
     }
     assert_eq!(gw.file(), candidate);
@@ -293,7 +296,7 @@ async fn w3_a_colliding_first_key_is_refused_with_the_collision() {
 /// file keeps the fact; a reload that applies (the key removed) clears it.
 /// Red today: the write is refused.
 #[tokio::test]
-async fn l1_the_waiting_fact_follows_each_reload_of_the_file() {
+async fn l1_the_waiting_fact_follows_each_reload() {
     let gw = Gw::start(&starter(&[]));
     let candidate = starter(&[("first", FIRST)]);
     gw.write(&candidate, StatusChange::HoldForRestart)

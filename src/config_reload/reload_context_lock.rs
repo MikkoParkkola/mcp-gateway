@@ -17,10 +17,6 @@ pub(crate) enum ReloadRefusalKind {
     Posture,
     Other,
     /// The file is a first key that only a restart applies (`waiting` names it).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "raised by the reload once the hold lands")
-    )]
     StatusChange,
 }
 
@@ -173,10 +169,28 @@ impl ReloadContext {
             Ok(_) => {
                 self.reload_owed
                     .store(false, std::sync::atomic::Ordering::SeqCst);
+                self.live_config.note_first_key(None);
                 refusals.reload_applied();
                 self.reporting.tally.applied();
             }
+            // The file waits only for a restart: the fact names its keys, and
+            // the ledger row has its own code.
+            Err(refusal) if refusal.kind == ReloadRefusalKind::StatusChange => {
+                self.live_config
+                    .note_first_key(Some(refusal.waiting.clone()));
+                refusals.record_first_key_waiting();
+                self.reporting.tally.refused();
+                let pending = self.live_config.refused_record(source, None);
+                slot.spawn(&self.live_config, pending);
+            }
             Err(refusal) => {
+                // Every other verdict of a reload that read the file clears
+                // the fact; one stopped by shutdown read nothing and leaves it.
+                if crate::config_reload::reload_failure(&refusal.text)
+                    != crate::config_reload::ReloadFailure::ShuttingDown
+                {
+                    self.live_config.note_first_key(None);
+                }
                 // The typed error was flattened to text on the way here.
                 // Parse the file once more and pass that error's location.
                 // Never a line taken out of the text.

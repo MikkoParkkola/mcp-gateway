@@ -31,16 +31,12 @@ pub(crate) enum ReplaceReload {
     Applied(ReloadOutcome),
     /// The reload refused the bytes only for the status change; they stay on
     /// disk and a restart applies them. `keys` are the waiting keys' names.
-    #[expect(dead_code, reason = "the writer answers it once the hold lands")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "the create route reads it"))]
     HeldForRestart { refusal: String, keys: Vec<String> },
 }
 
 /// Whether a candidate is a first key that only a restart can apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "asked by the writer once the hold lands")
-)]
 pub(crate) enum Waiting {
     /// The status rule accepts the candidate.
     No,
@@ -53,19 +49,41 @@ pub(crate) enum Waiting {
 }
 
 /// The one question every writer, reload and route asks about a candidate.
-#[expect(
-    unused_variables,
-    reason = "answered for real once the first-key hold lands"
-)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "asked by the writer once the hold lands")
-)]
+///
+/// Checked in this order, the first failure winning, so a file with two
+/// faults is reported by its real fault and never told to restart: the key
+/// table builds on the running auth settings (resolution, collisions); a
+/// start from the candidate is not refused; it adds at least one key. The key
+/// table is built directly rather than through `Generation::prepare`, which
+/// would ask the status rule again.
 pub(crate) fn waiting_first_key(
     running: &Config,
     published: &Generation,
     candidate: &Config,
     overlay: &EnvOverlay,
 ) -> Waiting {
-    Waiting::No
+    let Err(status) = super::refuse_multi_user_flip(running, &candidate.auth) else {
+        return Waiting::No;
+    };
+    if let Err(e) = published.auth().with_keys_of(&candidate.auth, overlay) {
+        return Waiting::Faulty {
+            reason: format!("auth.api_keys: {e}"),
+        };
+    }
+    if let Some(reason) = crate::gateway::next_start_refusal(candidate) {
+        return Waiting::Faulty { reason };
+    }
+    let held: std::collections::BTreeSet<&str> = (published.config().auth.api_keys.iter())
+        .map(|key| key.name.as_str())
+        .collect();
+    let keys: Vec<String> = (candidate.auth.api_keys.iter())
+        .filter(|key| !held.contains(key.name.as_str()))
+        .map(|key| key.name.clone())
+        .collect();
+    if keys.is_empty() {
+        // A change that only removes keys: the existing refusal, unchanged.
+        Waiting::Faulty { reason: status }
+    } else {
+        Waiting::Yes { keys }
+    }
 }

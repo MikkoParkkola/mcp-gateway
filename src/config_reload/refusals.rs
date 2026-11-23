@@ -41,10 +41,6 @@ pub enum RefusalCode {
     RuntimeDenied,
     InvalidConfig,
     /// The file holds a first key that only a restart applies.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "recorded by the reload once the hold lands")
-    )]
     FirstKeyWaiting,
 }
 
@@ -232,6 +228,28 @@ impl RefusalLedger {
         }
         let (code, named) = classify(error);
         let backend = named.or_else(|| backend_hint.map(str::to_owned));
+        self.record_coded(kind, backend, code, line);
+    }
+
+    /// Record a reload refused only because the file holds a first key that
+    /// a restart applies: its own code, never classified from text.
+    pub(crate) fn record_first_key_waiting(&self) {
+        self.record_coded(
+            RefusalKind::Reload,
+            None,
+            RefusalCode::FirstKeyWaiting,
+            None,
+        );
+    }
+
+    /// Record one refusal whose code is already known.
+    fn record_coded(
+        &self,
+        kind: RefusalKind,
+        backend: Option<String>,
+        code: RefusalCode,
+        line: Option<u32>,
+    ) {
         let (cause, fix) = explain(code, kind, backend.as_deref());
         // Both fields belong to an invalid-config reload. An admin write
         // classified the same way, and every other code, serve neither.
