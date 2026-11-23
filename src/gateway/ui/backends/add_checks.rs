@@ -77,7 +77,11 @@ pub(in crate::gateway::ui) fn put_headers(
     if !headers.is_empty() {
         backend.headers = headers;
     }
-    if allow_cleartext == Some(true) {
+    if mutant!(
+        "M3",
+        allow_cleartext.is_some(),
+        allow_cleartext == Some(true)
+    ) {
         backend.allow_cleartext_credentials = true;
     }
 }
@@ -102,11 +106,23 @@ pub(super) fn cleartext_answer(
     };
     // A URL that does not parse was refused by field before this point.
     let url = url::Url::parse(url).ok()?;
-    let as_enabled = BackendConfig {
-        enabled: true,
-        ..backend.clone()
-    };
-    let refused = Config::reject_cleartext_credentials(name, &as_enabled, &url).err()?;
+    let as_enabled = mutant!(
+        "M1",
+        BackendConfig {
+            enabled: true,
+            headers: HashMap::new(),
+            ..backend.clone()
+        },
+        BackendConfig {
+            enabled: true,
+            ..backend.clone()
+        }
+    );
+    let refused = mutant!(
+        "M2",
+        None,
+        Config::reject_cleartext_credentials(name, &as_enabled, &url).err()
+    )?;
     WriteTicket::new(state).record(RefusalKind::Add, name, &refused.to_string());
     let (message, fix) = cleartext_words(name);
     Some(
@@ -135,9 +151,13 @@ pub(super) fn attach_add_detail(
         return;
     }
     let extensions = response.extensions_mut();
-    let mut detail = extensions
-        .remove::<AuditDetail>()
-        .map_or_else(serde_json::Map::new, |AuditDetail(map)| map);
+    let mut detail = mutant!(
+        "M4",
+        serde_json::Map::new(),
+        extensions
+            .remove::<AuditDetail>()
+            .map_or_else(serde_json::Map::new, |AuditDetail(map)| map)
+    );
     detail.insert("cleartext_override".into(), json!(true));
     detail.insert("backend".into(), json!(name));
     extensions.insert(AuditDetail(detail));
