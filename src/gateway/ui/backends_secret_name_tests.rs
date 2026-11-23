@@ -276,9 +276,11 @@ fn t22_the_panel_stores_no_header_shorter_than_the_bound() {
     let env = std::collections::HashMap::new();
     let headers =
         std::collections::HashMap::from([("X-Short".to_owned(), under), ("X-Long".to_owned(), at)]);
-    let picked: Vec<(bool, String)> = super::super::slotting::literals(env.iter(), headers.iter())
-        .into_iter()
-        .map(|l| (l.header, l.key))
-        .collect();
+    let held = std::collections::BTreeSet::new();
+    let picked: Vec<(bool, String)> =
+        super::super::slotting::literals(env.iter(), headers.iter(), &held)
+            .into_iter()
+            .map(|l| (l.header, l.key))
+            .collect();
     assert_eq!(picked, [(true, "X-Long".to_owned())]);
 }
