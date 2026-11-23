@@ -236,11 +236,29 @@ fn production_sources() -> Vec<(String, String)> {
     sources
 }
 
+/// Where the protocol's `Task` is declared.
+const PROTOCOL_TASKS: &str = "src/protocol/tasks.rs";
+
+/// Whether `code` declares a type, alias or trait of its own named `Task`.
+fn declares_own_task(code: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    ["struct Task", "enum Task", "type Task", "trait Task"]
+        .iter()
+        .any(|decl| {
+            code.match_indices(decl).any(|(at, found)| {
+                !code[..at].ends_with(ident) && !code[at + found.len()..].starts_with(ident)
+            })
+        })
+}
+
 #[test]
 fn task_methods_are_classified() {
-    // An inherent impl may sit in any module of the crate, so every block counts.
+    // An inherent impl may sit in any module of the crate, so every block counts,
+    // except in a module that declares a `Task` of its own: there `impl Task`
+    // names that other type.
     let found: Vec<String> = production_sources()
         .iter()
+        .filter(|(file, code)| file == PROTOCOL_TASKS || !declares_own_task(code))
         .flat_map(|(_, code)| {
             code.match_indices("impl Task {")
                 .flat_map(|(at, _)| public_task_methods(&code[at..]))
@@ -373,8 +391,6 @@ fn outcome_exposing_task_methods_are_called_only_where_listed() {
 /// file that never names `Task` is left out; a new accessor anywhere still
 /// fails `task_methods_are_classified`.
 const SNAPSHOT_USES: &[(&str, usize)] = &[
-    // `delivery_facts::snapshot()`: the dispatch facts, not a task.
-    ("src/gateway/task_service/execution/worker_inspect.rs", 1),
     // The record's model: `set_model`, and the admitted record.
     ("src/gateway/task_service/record.rs", 2),
     // The store's writes of its row, and the cap probe's clone of it.
@@ -432,6 +448,10 @@ fn the_task_method_and_receiver_matchers_read_what_they_should() {
     assert_eq!(public_task_methods(&more[second..]), ["second"]);
     assert!(names_task("let t: Task = x;") && names_task("Task::create()"));
     assert!(!names_task("CommittedTask TaskStatus tasks"));
+    assert!(declares_own_task("pub(crate) struct Task {") && declares_own_task("enum Task<T>"));
+    assert!(!declares_own_task(
+        "struct TaskSnapshot; struct MyTask; impl Task {"
+    ));
     assert_eq!(
         path_uses(
             "answered.snapshot(); Task::snapshot(&t); map(Task::snapshot)",
