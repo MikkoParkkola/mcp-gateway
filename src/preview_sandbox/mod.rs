@@ -219,6 +219,13 @@ pub(crate) const TEARDOWN_CAP: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub(crate) struct StartFailed {
     pub(crate) refusal: Refusal,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the preview route keeps a process a refused start could not reap"
+        )
+    )]
     pub(crate) unreaped: Option<tokio::process::Child>,
 }
 

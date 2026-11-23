@@ -64,7 +64,8 @@ pub(super) struct Prepared {
     /// Taken by the one launch.
     pub(super) listener: Option<tokio::net::UnixListener>,
     pub(super) proxy: Option<AllowlistProxy>,
-    pub(super) control_dir: Option<ControlDir>,
+    /// Held for its drop alone, which removes the directory.
+    pub(super) _control_dir: Option<ControlDir>,
 }
 
 impl Prepared {
@@ -146,7 +147,7 @@ pub(super) fn prepare(
         plan,
         listener: Some(listener),
         proxy,
-        control_dir,
+        _control_dir: control_dir,
     })
 }
 

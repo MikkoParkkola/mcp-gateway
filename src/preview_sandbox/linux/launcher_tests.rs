@@ -126,7 +126,7 @@ fn prepared_with(proxy: AllowlistProxy, npm: Option<NpmFetch>) -> Prepared {
         plan,
         listener: None,
         proxy: Some(proxy),
-        control_dir: None,
+        _control_dir: None,
     }
 }
 
