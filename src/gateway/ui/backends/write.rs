@@ -162,13 +162,17 @@ where
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
             Err(Box::new(flat_error(code, message).into_response()))
         }
-        (Ok(outcome), Some(Ok(value))) => Ok(Written {
-            value,
-            reload: match outcome.reload {
-                crate::config_reload::ReplaceReload::Applied(reload) => reload,
-            },
-            secrets: outcome.secrets,
-        }),
+        (Ok(outcome), Some(Ok(value))) => match outcome.reload {
+            crate::config_reload::ReplaceReload::Applied(reload) => Ok(Written {
+                value,
+                reload,
+                secrets: outcome.secrets,
+            }),
+            // A backend write passes `Refuse`; the writer never holds it.
+            crate::config_reload::ReplaceReload::HeldForRestart { .. } => {
+                Err(Box::new(incomplete("held_for_restart")))
+            }
+        },
         (Ok(_), _) => Err(Box::new(incomplete("no_answer"))),
         (Err(e), _) => Err(Box::new(refused_write(&e))),
     }

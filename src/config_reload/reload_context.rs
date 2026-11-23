@@ -585,6 +585,7 @@ impl ReloadContext {
                     }
                 },
                 text: refusal.text,
+                waiting: Vec::new(),
             });
         }
         // Every view this config compiles to is built before `apply_patch`, so a

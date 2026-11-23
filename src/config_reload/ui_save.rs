@@ -140,6 +140,13 @@ pub(crate) async fn ui_save(
                 revision: outcome.revision.unwrap_or(base),
                 reload: match outcome.reload {
                     super::ReplaceReload::Applied(reload) => reload,
+                    // A settings save passes `Refuse`; the writer never holds it.
+                    super::ReplaceReload::HeldForRestart { .. } => {
+                        tracing::error!("a settings save came back held for a restart");
+                        return Err(UiRefused::ReloadRefused {
+                            class: super::RefusalClass::Internal,
+                        });
+                    }
                 },
             });
         }

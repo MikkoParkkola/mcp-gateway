@@ -25,9 +25,9 @@ use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
-use crate::config_reload::history::Source;
 use crate::config_reload::ConfigWriteError;
 pub(crate) use crate::config_reload::first_key::{ReplaceReload, StatusChange};
+use crate::config_reload::history::Source;
 use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
 };
@@ -120,7 +120,10 @@ pub(crate) struct Replace {
     pub(crate) replaced: Replaced,
     pub(crate) secrets: Option<SecretStep>,
     /// What a candidate that changes the single-user status gets.
-    #[expect(dead_code, reason = "read by the pre-check once the first-key hold lands")]
+    #[expect(
+        dead_code,
+        reason = "read by the pre-check once the first-key hold lands"
+    )]
     pub(crate) status_change: StatusChange,
 }
 

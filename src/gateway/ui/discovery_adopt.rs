@@ -31,8 +31,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
-    StatusChange,
+    Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced,
+    SecretStep, StatusChange,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};

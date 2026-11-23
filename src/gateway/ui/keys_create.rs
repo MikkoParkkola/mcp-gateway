@@ -30,8 +30,7 @@ use crate::config_persistence::keyedit::{
 use crate::config_reload::{
     AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, NO_AUDIT_LOG,
     RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, StatusChange,
-    refuse_multi_user_flip,
-    replace_audited,
+    refuse_multi_user_flip, replace_audited,
 };
 use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;

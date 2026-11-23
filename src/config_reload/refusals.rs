@@ -40,6 +40,12 @@ pub enum RefusalCode {
     Posture,
     RuntimeDenied,
     InvalidConfig,
+    /// The file holds a first key that only a restart applies.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "recorded by the reload once the hold lands")
+    )]
+    FirstKeyWaiting,
 }
 
 /// One refusal as served.
@@ -490,6 +496,12 @@ fn explain(code: RefusalCode, kind: RefusalKind, backend: Option<&str>) -> (Stri
                 }
                 _ => "Correct gateway.yaml; the previous configuration is still running.",
             },
+        ),
+        RefusalCode::FirstKeyWaiting => (
+            "gateway.yaml holds API keys that change the gateway between single-user and \
+             multi-user, which applies only at a restart."
+                .to_owned(),
+            "Restart the gateway.",
         ),
     }
 }

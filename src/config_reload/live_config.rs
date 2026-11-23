@@ -327,6 +327,21 @@ impl LiveConfig {
         }
     }
 
+    /// The keys a first-key file waits on for a restart: the verdict of the
+    /// most recent reload that read the file. `None` when nothing waits.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "served once the first-key hold lands")
+    )]
+    #[expect(
+        clippy::unused_self,
+        reason = "read from the reload's verdict once the hold lands"
+    )]
+    #[must_use]
+    pub(crate) fn waiting_keys(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Clone the current active configuration snapshot.
     #[must_use]
     pub fn get(&self) -> Arc<Config> {

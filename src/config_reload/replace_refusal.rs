@@ -10,6 +10,8 @@ pub(crate) enum RefusalClass {
     Invalid,
     ShuttingDown,
     Internal,
+    /// A first key waits for a restart and this candidate still holds it.
+    RestartPending,
 }
 
 /// Only the typed reload refusal establishes a posture refusal.
@@ -23,5 +25,6 @@ pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
             RefusalClass::ShuttingDown
         }
         ReloadRefusalKind::Other => RefusalClass::Internal,
+        ReloadRefusalKind::StatusChange => RefusalClass::RestartPending,
     }
 }

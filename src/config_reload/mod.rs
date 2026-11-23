@@ -307,6 +307,10 @@ pub(crate) use reload_context::{RELOAD_RESTARTING, RELOAD_STOPPING, is_gate_refu
 pub fn recover_before_start(config: &std::path::Path) -> Result<(), String> {
     crate::config_persistence::recover_before_start(config, &startup_recovery_intent)
 }
+#[cfg(feature = "webui")]
+pub(crate) use first_key::ReplaceReload;
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use first_key::StatusChange;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
@@ -315,10 +319,6 @@ pub(crate) use reload_context::replace::{
     RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, RevokeCheck, SecretStep,
     replace_audited, replace_audited_revoke,
 };
-#[cfg(feature = "webui")]
-pub(crate) use first_key::ReplaceReload;
-#[cfg(any(test, feature = "webui"))]
-pub(crate) use first_key::StatusChange;
 // The settings routes' reach into the save core: these named items only, each
 // already pub(crate) in its module; the rest of the two modules stays private.
 #[cfg(feature = "webui")]
@@ -389,6 +389,9 @@ mod writer_lock_tests;
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
 
+#[cfg(tp3)]
+#[cfg(test)]
+mod first_key_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 mod flip_pin_tests;

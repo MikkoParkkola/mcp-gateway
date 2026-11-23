@@ -16,12 +16,20 @@ use super::{EvaluatedReload, ReloadContext, STOPPED};
 pub(crate) enum ReloadRefusalKind {
     Posture,
     Other,
+    /// The file is a first key that only a restart applies (`waiting` names it).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "raised by the reload once the hold lands")
+    )]
+    StatusChange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReloadRefusal {
     pub(crate) kind: ReloadRefusalKind,
     pub(crate) text: String,
+    /// The waiting keys of a `StatusChange` refusal; empty for every other kind.
+    pub(crate) waiting: Vec<String>,
 }
 
 impl From<String> for ReloadRefusal {
@@ -29,6 +37,7 @@ impl From<String> for ReloadRefusal {
         Self {
             kind: ReloadRefusalKind::Other,
             text,
+            waiting: Vec::new(),
         }
     }
 }
@@ -279,6 +288,7 @@ mod tests {
         let refusal = ReloadRefusal {
             kind: ReloadRefusalKind::Posture,
             text: "neutral".into(),
+            waiting: Vec::new(),
         };
         assert_eq!(post_write_class(&refusal), RefusalClass::Posture);
     }
@@ -292,6 +302,7 @@ mod tests {
                 "{} refusing to serve HTTP",
                 crate::config_reload::POSTURE_REFUSED_PREFIX
             ),
+            waiting: Vec::new(),
         };
         assert_eq!(post_write_class(&refusal), RefusalClass::Internal);
     }
@@ -302,6 +313,7 @@ mod tests {
         let refusal = ReloadRefusal {
             kind: ReloadRefusalKind::Other,
             text: crate::config_reload::SHUTDOWN_ABORTED_ERROR.to_owned(),
+            waiting: Vec::new(),
         };
         assert_eq!(post_write_class(&refusal), RefusalClass::ShuttingDown);
     }
