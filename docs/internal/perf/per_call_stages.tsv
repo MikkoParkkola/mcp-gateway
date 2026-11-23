@@ -58,6 +58,9 @@ src/gateway/meta_mcp/grant_audit/marker.rs	invocation_landing	-	on-path, untimed
 src/gateway/meta_mcp/grant_audit/marker.rs	in_delivery_scope	-	finished-task and recovery re-checks only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/marker.rs	land	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/marker.rs	note_retry_trace	-	retry-to-origin path only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_refused	-	on-path, untimed: signing refusals only; the timed rows are unsigned and admitted
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_untraced	-	on-path, untimed: signed calls only (a prepared call's note); the timed rows are unsigned
+src/gateway/meta_mcp/grant_audit/marker.rs	stamp_written_untraced	-	on-path, untimed: only when signing refuses a call that has grant notes; the timed rows are unsigned
 src/gateway/meta_mcp/grant_audit/marker.rs	with_retry_trace	-	retry-to-origin path only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	eq	-	equality impl; not on the dispatch path
 src/gateway/meta_mcp/grant_audit/repeat.rs	fmt	-	Debug formatting; not called per call
@@ -156,6 +159,7 @@ src/gateway/meta_mcp/invoke/bridge_settle.rs	refuse_if_killed	-	on-path, untimed
 src/gateway/meta_mcp/invoke/budget.rs	apply_context_integrity	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/budget.rs	attach_context_integrity_metadata	-	on-path, untimed: only when context integrity finds or enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/budget.rs	capability_context_flags	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	checked_as_sent	-	untimed: runs only after an enforced rewrite, which a clean timed call never reaches
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_delivered_result	-	on-path, untimed: only when context integrity enforces on a result; the timed result is clean and passes through
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_enforces	-	on-path, untimed: the egress scan's content check, on error frames and non-tools/call answers; a tools/call result met it at dispatch
 src/gateway/meta_mcp/invoke/budget.rs	context_integrity_input	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -217,6 +221,7 @@ src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, u
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/denial.rs	backend_miss	http_invoke_tiny	on the HTTP gateway_invoke path (the dispatch's miss of an unheld backend)
 src/gateway/meta_mcp/invoke/denial.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
+src/gateway/meta_mcp/invoke/denial.rs	withheld	http_invoke_tiny	on the HTTP gateway_invoke path (a withheld target's class, read once before both counts)
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
@@ -601,6 +606,7 @@ src/gateway/router/handlers/dispatch_intake.rs	params	http_invoke_tiny	the reque
 src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	-	on-path, untimed: refused /mcp intakes only; the timed rows are admitted
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	http_invoke_tiny	the HTTP request prelude
+src/gateway/router/handlers/dispatch_intake_run.rs	intake_refused	-	on-path, untimed: refused /mcp intakes and early signing refusals only; the timed rows are admitted and the harness does not configure signing
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	http_invoke_tiny	the HTTP request prelude: opens or resumes the session the request runs under (MIK-8504)
 src/gateway/router/handlers/dispatch_intake_session.rs	record_client_name	-	on-path, untimed: runs on an HTTP `initialize` only (one JSON pointer read and one short sanitize under a read lock); the timed rows carry no initialize
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	capture	http_invoke_tiny	the HTTP request prelude

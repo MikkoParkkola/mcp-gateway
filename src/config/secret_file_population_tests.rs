@@ -178,6 +178,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cost ledger; no secret",
     ),
     (
+        "src/cost_accounting/spend_history.rs",
+        "spend history: hourly and daily spend per API key name; no secret",
+    ),
+    (
         "src/counters/persist.rs",
         "call counters and markers; no secret",
     ),
@@ -220,6 +224,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the gateway's own health.json in its data directory: numbers and fixed words, never a client's data; nothing secret",
     ),
     (
+        "src/heartbeat.rs",
+        "the heartbeat's own random install id under the data directory; neither a secret nor an input to any trust decision",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/heartbeat_scans.rs",
+        "cfg(test) heartbeat scans reading the crate's own sources, the privacy page, and the launch scripts, workflows and root Makefile they check; no secret",
+    ),
+    (
         "src/transport/stdio_cache.rs",
         "writability probe for a backend's package cache: creates, writes and removes its own marker; reads nothing",
     ),
@@ -233,7 +245,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/fragments.rs",
-        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; under BOUNDARY_PINS_BLESS it appends the rows a check lists to add to one <name>.d/<ticket>.tsv fragment, and reads a scratch table's fragments back for a row to compare; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",

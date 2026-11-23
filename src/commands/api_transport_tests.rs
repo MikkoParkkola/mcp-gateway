@@ -419,7 +419,7 @@ async fn if_match_controls_capability_delete() {
                     6,
                     "Gateway",
                     "If-Match is required.",
-                    "Send the request with If-Match set to the current revision.",
+                    "Run api GET /ui/api/capabilities/x, confirm it is the version you mean to remove, and delete with --if-match set to the revision it printed.",
                     Some(428),
                     None,
                 );
@@ -452,7 +452,7 @@ async fn control_characters_in_if_match_are_refused_before_send() {
                 2,
                 "Usage",
                 "If-Match value is not a valid header value.",
-                "Pass the ETag exactly as the gateway returned it.",
+                "Pass the revision api GET printed.",
                 None,
                 None,
             );
@@ -602,7 +602,10 @@ async fn request_sources_accept_exactly_sixteen_mib() {
             credential,
             || Ok(body.clone()),
             |request| async move {
-                assert_eq!(request.body, Some(json!({})));
+                assert_eq!(
+                    request.body,
+                    Some(crate::commands::dashboard_link::AdminBody::Json(json!({})))
+                );
                 Ok(AdminResponse {
                     status: StatusCode::OK,
                     headers: reqwest::header::HeaderMap::new(),

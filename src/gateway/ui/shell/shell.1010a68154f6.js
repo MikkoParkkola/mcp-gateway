@@ -1324,7 +1324,8 @@ function draw(seq, held = null) {
       held.loading.release();
       content.removeAttribute('aria-busy');
     }
-    go(pathFor({ ...route, tab: tabs[0][0] }), { replace: true });
+    // Same page, so a link's query (a list filter, say) still applies on the tab.
+    go(pathFor({ ...route, tab: tabs[0][0] }) + location.search + location.hash, { replace: true });
     return;
   }
   for (const [t, tabLabel] of tabs) {
@@ -1766,7 +1767,8 @@ function streamFrame(frame) {
   // Hello on every connect, the status the page shows and an applied reload, for
   // screens to follow. The To do count is not in a status frame, so refreshCounts()
   // is not run here.
-  if (frame.event !== 'hello' && frame.event !== 'status' && frame.event !== 'reload') return;
+  // An activity frame only tells Activity that the log moved; the screen asks its list again.
+  if (!['hello', 'status', 'reload', 'activity'].includes(frame.event)) return;
   let detail;
   try {
     detail = JSON.parse(frame.data);

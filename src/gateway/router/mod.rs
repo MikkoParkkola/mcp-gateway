@@ -50,6 +50,10 @@ mod hardened_identity;
 mod identity;
 pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
+// Stdio records its signing refusals with the same writer as `/mcp`.
+pub(crate) use meta_refusal_audit::{
+    AnswerId, SigningSite, answer_stdio_signing_refusal, call_name_and_arguments,
+};
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
@@ -367,10 +371,18 @@ mod ui_stream_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod canary_tests;
+/// A CLI user edits a capability by the revision the CLI prints.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod capability_cli_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
+/// The costs views report the USD the enforcer charged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "cost-governance"))]
+mod charged_spend_tests;
 /// A context-integrity rewrite is recorded as the gateway's rewrite.
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
@@ -654,10 +666,15 @@ mod ui_capability_reload_tests;
 mod ui_tool_call_cell_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_deadline_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_gates_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_receipt_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_stub;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_tests;

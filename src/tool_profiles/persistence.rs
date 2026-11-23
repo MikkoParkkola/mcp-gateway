@@ -45,7 +45,12 @@ pub struct PersistedUserProfile {
 ///
 /// Returns an error if the directory cannot be created or the file
 /// cannot be written.
-// In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
+// Atomic: the shared writer replaces the file by rename, so a crash or kill
+// mid-save leaves the old file or the new one. Never wider by mode on Linux;
+// on macOS a directory-inherited ACE can apply and the file's own deny ACEs
+// are not carried over; a file another user owned becomes the writer's.
+// Other hard links keep the old bytes. The writer's owner and macOS ACL
+// handling is a known gap.
 pub fn save(path: &Path, profiles: &PersistedProfiles) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -53,8 +58,13 @@ pub fn save(path: &Path, profiles: &PersistedProfiles) -> crate::Result<()> {
     }
     let json = serde_json::to_string_pretty(profiles)
         .map_err(|e| crate::Error::Config(format!("Failed to serialize profiles: {e}")))?;
-    std::fs::write(path, json)
-        .map_err(|e| crate::Error::Config(format!("Failed to write profiles: {e}")))?;
+    crate::config_persistence::write_atomic(
+        path,
+        json.as_bytes(),
+        crate::config_persistence::FileMode::Inherit,
+        crate::config_persistence::Symlink::Follow,
+    )
+    .map_err(|e| crate::Error::Config(format!("Failed to write profiles: {e}")))?;
     tracing::info!(path = %path.display(), users = profiles.profiles.len(), "Saved tool profiles");
     Ok(())
 }

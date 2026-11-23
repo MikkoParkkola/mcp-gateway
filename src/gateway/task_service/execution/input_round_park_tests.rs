@@ -123,6 +123,7 @@ fn owned_context(fx: &Fixture) -> OwnedCallerContext {
         None,
         None,
         None,
+        None,
     )
 }
 

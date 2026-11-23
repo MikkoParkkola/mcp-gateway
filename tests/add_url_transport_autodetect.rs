@@ -250,6 +250,37 @@ async fn an_exit_before_ready_ends_the_wait_while_a_grandchild_holds_stderr() {
     );
 }
 
+/// A capture ends while a process the launcher left behind still holds the
+/// gateway's stderr open after the gateway is killed: `finish_capturing` joins the
+/// stderr drain for a bounded time and keeps what arrived. With that join
+/// unbounded the call would wait for the sleeper; the outer bound turns that
+/// into a failure. The sleeper's pid is written down and it is killed at the end.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_ends_while_a_grandchild_holds_stderr() {
+    let home = tempfile::tempdir().expect("home");
+    let pid_file = home.path().join("sleeper.pid");
+    let launcher = format!(
+        "sleep 120 & echo $! > '{}'; exec \"$0\" \"$@\"",
+        pid_file.display()
+    );
+    let (session, captured) =
+        StdioSession::spawn_capturing_through(&["sh", "-c", &launcher], home.path());
+    let lines = tokio::time::timeout(
+        std::time::Duration::from_secs(50),
+        session.finish_capturing(captured),
+    )
+    .await;
+    if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
+    let lines = lines.expect("finish_capturing waited on a grandchild holding stderr open");
+    assert!(
+        lines.iter().any(|l| l.contains(stdio_session::READY_LINE)),
+        "the capture lost the gateway's own lines: {lines:?}"
+    );
+}
+
 /// The line the session waits for is the one the gateway logs, at info, from
 /// the module whose target `gateway_bin` keeps visible: a changed wording or a
 /// moved module fails here by name, not as every stdio row's 120 s "never

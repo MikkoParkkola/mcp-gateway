@@ -10,6 +10,10 @@ mod gateway_bin;
 #[path = "common/private_home.rs"]
 #[macro_use]
 mod private_home;
+// Only the Windows rows can skip (R9: a volume with 8.3 names off).
+#[cfg(windows)]
+#[path = "common/required.rs"]
+mod required;
 
 use private_home::{Expect, fresh_private_dir, literal_env_command, run_row_child};
 use std::path::Path;
@@ -86,10 +90,12 @@ fn golden_child() -> Command {
     command
 }
 
-/// What every isolated command removes and passes through, given the child's env.
+/// What every isolated command removes, sets whatever its home (the heartbeat
+/// opt-out, docs/PRIVACY.md), and passes through, given the child's env.
 fn removals_and_switch(expected: &mut std::collections::BTreeMap<String, Option<String>>) {
     expected.insert("MCP_GATEWAY_FOO".into(), None);
     expected.insert("MCP_GATEWAY_CONFIG_DIR".into(), None);
+    expected.insert("DO_NOT_TRACK".into(), Some("1".into()));
     if let Ok(mutant) = std::env::var("MCP_GATEWAY_MUTANT") {
         expected.insert("MCP_GATEWAY_MUTANT".into(), Some(mutant));
     }

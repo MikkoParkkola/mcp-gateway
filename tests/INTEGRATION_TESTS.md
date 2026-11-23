@@ -41,10 +41,17 @@ You should see a successful JSON-RPC response with the list of meta-tools.
 ### Run All Integration Tests
 
 ```bash
-cargo test --test integration_tests -- --ignored
+scripts/ci/ignored-integration-rows.sh
 ```
 
-**Note**: Tests are marked with `#[ignore]` by default because they require the gateway to be running.
+The script is what CI runs after the Linux `int-a` shard: it starts `target/debug/mcp-gateway` with a fresh admin
+key (the stats rows answer only an admin caller), waits for `/readyz`, and runs the `#[ignore]` rows in required
+mode. It needs a debug build (`cargo build --all-features`), `openssl` and `curl`. `test_invoke_caching` is left out
+because it calls the live Open-Meteo API; run it by hand (below) against a gateway you started, with
+`MCP_GATEWAY_TEST_ADMIN_KEY` set to an admin key that gateway accepts.
+
+**Note**: The rows are marked `#[ignore]` because they need a running gateway. `test_cap_registry_list` is not: it
+runs the binary itself and runs with the other integration tests.
 
 ### Run Individual Tests
 
@@ -62,19 +69,16 @@ cargo test --test integration_tests test_invoke_caching -- --ignored --nocapture
 cargo test --test integration_tests test_gateway_list_servers -- --ignored --nocapture
 
 # Test 5: CLI commands
-cargo test --test integration_tests test_cap_registry_list -- --ignored --nocapture
+cargo test --test integration_tests test_cap_registry_list -- --nocapture
 
 # Test 6: Integration flow (combines multiple features)
 cargo test --test integration_tests test_gateway_integration_flow -- --ignored --nocapture
 ```
 
-### Skip Gateway-Required Tests
+### Without a Gateway
 
-If the gateway is not running, tests will gracefully skip with a warning:
-
-```
-⚠️  Gateway not running on http://localhost:39400/mcp, skipping test
-```
+With no gateway on port 39400 (or, for the stats rows, no `MCP_GATEWAY_TEST_ADMIN_KEY`), a row prints a `skipped:`
+line and passes. With `TESTS_REQUIRE_ALL=1`, as in CI, the same row fails instead.
 
 ## Test Descriptions
 

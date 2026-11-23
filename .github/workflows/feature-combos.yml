@@ -161,7 +161,7 @@ jobs:
       # image's key would pin its older packages here. A lost race with
       # another run on the same image only warns.
       - name: Save the mingw packages
-        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-install.outputs.downloaded == 'true'
+        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-install.outputs.downloaded == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/mingw-debs
@@ -173,6 +173,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ${{ matrix.target && 'feature-combos-windows' || 'feature-combos' }}
+          # Only the release line saves: a PR's own cache helps no other PR and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # Every target, tests included: a test names a gated item only under
       # its gate. Every combination runs even after one fails; the step fails
       # at the end, naming them all.
@@ -262,6 +264,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: feature-combos-no-debug-assertions
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Compile every test target with debug assertions off
         # A healthy check takes about 5 min; a stall ends here with its log, and the memory log samples it every
         # 30 s (scripts/ci/check_swap_jobs.py).

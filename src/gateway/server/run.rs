@@ -9,6 +9,7 @@ use tokio::net::TcpListener;
 
 use super::Gateway;
 use super::control_plane_store::{build_control_plane_store_with_log, control_plane_base};
+use super::stop_checkpoints;
 #[cfg(not(test))]
 use super::support;
 use super::support::log_startup_banner;
@@ -28,7 +29,7 @@ use crate::gateway::proxy::ProxyManager;
 use crate::gateway::router::{
     AppState, ProcessFacts, ProcessStart, account_handles_of, create_router_with_accounts,
 };
-use crate::gateway::stop_budget::{DRAIN_CAP, StopBudget};
+use crate::gateway::stop_budget::StopBudget;
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
 use crate::retire::{Exit, RetirePlan};
@@ -395,7 +396,7 @@ impl Gateway {
             control_plane_base: Some(control_plane_base),
             tasks: task_service,
             task_executor,
-            subscriptions,
+            subscriptions: Arc::clone(&subscriptions),
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
@@ -492,6 +493,15 @@ impl Gateway {
             true,
         ));
 
+        // The daily heartbeat (docs/PRIVACY.md, "Daily heartbeat"): after the
+        // bind, so a refused start sends nothing; never awaited, and ended by
+        // the shutdown signal.
+        let _heartbeat = crate::heartbeat::start(
+            self.config.security.posture,
+            data_dir.clone(),
+            shutdown_tx.subscribe(),
+        );
+
         // After boot warm-start is scheduled, so no reload precedes it
         // (`MIK-8054`). Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the
@@ -532,6 +542,7 @@ impl Gateway {
             .map(|enforcer| {
                 persistence::spawn_cost_saver(
                     Arc::clone(enforcer),
+                    meta_mcp_for_shutdown.cost_tracker(),
                     data_dir.clone(),
                     persistence::COST_SAVE_INTERVAL,
                     Some(shutdown_tx.subscribe()),
@@ -566,14 +577,48 @@ impl Gateway {
             .await
         };
 
+        // From the trigger until the drains end, every class of state
+        // the stop saves is saved once a second, so a kill inside a container's
+        // grace loses at most the last second of records.
+        #[cfg(feature = "cost-governance")]
+        let cost_state = meta_mcp_for_shutdown
+            .budget_enforcer
+            .clone()
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
+        #[cfg(not(feature = "cost-governance"))]
+        let cost_state = None;
+        let checkpoints = Arc::new(stop_checkpoints::Checkpoints::new(
+            stop_checkpoints::classes(
+                (Arc::clone(&ranker_for_shutdown), ranker_path.clone()),
+                (Arc::clone(&tracker_for_shutdown), transition_path.clone()),
+                cost_state,
+                &counters,
+                &health,
+            ),
+        ));
+
         // The stop's total starts at the trigger, however the listener returns.
         let total = self.config.server.shutdown_timeout;
         let fired = Arc::new(std::sync::OnceLock::<tokio::time::Instant>::new());
         let shutdown = {
             let fired = Arc::clone(&fired);
+            let checkpoints = Arc::clone(&checkpoints);
+            let streams = Arc::clone(&multiplexer);
             async move {
                 shutdown.await;
                 let _ = fired.set(tokio::time::Instant::now());
+                // The first pass at once, detached; and open event streams end
+                // now, so a streaming client does not hold the listener for its
+                // grace.
+                checkpoints.start();
+                streams.stop_streams();
+                subscriptions.stop_listeners();
             }
         };
         let std_listener = listener.into_std()?;
@@ -601,7 +646,13 @@ impl Gateway {
         let cost = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, data_dir.clone()));
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
         // It ends on the shutdown broadcast; a write in flight finishes or
         // is abandoned on its own thread.
         #[cfg(feature = "cost-governance")]
@@ -632,9 +683,9 @@ impl Gateway {
                 .await;
         }
 
-        // Each drain waits at most DRAIN_CAP and never past Dp; time an earlier
-        // stage left over is available to the next one.
-        let drain_window = || budget.stage_window(tokio::time::Instant::now(), DRAIN_CAP);
+        // Each drain waits at most DRAIN_CAP and never past Dp less the last
+        // pass's slice; time an earlier stage left over is available to the next.
+        let drain_window = || stop_checkpoints::drain_window(&budget, tokio::time::Instant::now());
         Self::drain_inflight(&inflight, drain_window()).await;
         // Every reload entry point has stopped: the listener has returned and
         // the watcher goes now. What they queued is written, or named.
@@ -652,6 +703,11 @@ impl Gateway {
             task_runtime::ShutdownBudget::within(tasks_window, tasks_window),
         )
         .await;
+        // The passes stop; the last one waits each class's turn and ends by Dp,
+        // so the backend stage still starts by Dp.
+        checkpoints
+            .finish(stop_checkpoints::last_deadline(&budget))
+            .await;
 
         self.stop_custody_and_backends(&budget, total, warmer).await;
 

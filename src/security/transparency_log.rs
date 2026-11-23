@@ -298,6 +298,8 @@ impl TransparencyLogger {
         home: Option<&Path>,
     ) -> io::Result<Self> {
         let path = resolved_path(&config.path, home.map(Path::to_path_buf));
+        #[cfg(test)]
+        open_attempts::note(&path);
         // Before any filesystem call: hold every registered temp dir that
         // contains the log, so none can be removed while it opens or writes.
         #[cfg(test)]
@@ -389,10 +391,6 @@ impl TransparencyLogger {
     /// The log's identity: reused from the log's own records on open, minted
     /// (and recorded once) only when it has none.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the settle step, which binds to it")
-    )]
     pub(crate) fn log_id(&self) -> identity::LogId {
         // A poisoned lock still holds the last id a rebuild adopted.
         let inner = self
@@ -487,6 +485,7 @@ impl TransparencyLogger {
     ) -> io::Result<String> {
         Self::reject_reserved_keys(&fields)?;
         self.append_core(fields, envelope, false)
+            .map(|(_, hash)| hash)
     }
 
     /// Like [`Self::append_event`], but re-syncs chain state (`counter`,
@@ -508,6 +507,16 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
     ) -> io::Result<String> {
+        self.append_event_synced_row(fields, envelope)
+            .map(|(_, hash)| hash)
+    }
+
+    /// Append a synced event and return its assigned counter and hash.
+    pub(crate) fn append_event_synced_row(
+        &self,
+        fields: serde_json::Map<String, serde_json::Value>,
+        envelope: &AuditEnvelope,
+    ) -> io::Result<(u64, String)> {
         Self::reject_reserved_keys(&fields)?;
         self.append_core(fields, envelope, true)
     }
@@ -594,7 +603,8 @@ impl TransparencyLogger {
     }
 
     /// Chain one entry from caller-supplied domain `fields`, returning its
-    /// `entry_hash`. Shared by [`Self::log_invocation`], [`Self::append_event`],
+    /// assigned counter and `entry_hash`. Shared by [`Self::log_invocation`],
+    /// [`Self::append_event`],
     /// and [`Self::append_event_synced`] so the chain logic exists exactly once.
     ///
     /// When `resync` is set, the in-memory `counter`/`last_entry_hash` are first
@@ -606,7 +616,7 @@ impl TransparencyLogger {
         fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
         resync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         let fields = self.keyed_caller_key(fields)?;
         let result = self.append_chained(fields, envelope, resync);
         // An oversized record is refused for that call only: it is an
@@ -622,7 +632,7 @@ impl TransparencyLogger {
         mut fields: serde_json::Map<String, serde_json::Value>,
         envelope: &AuditEnvelope,
         resync: bool,
-    ) -> io::Result<String> {
+    ) -> io::Result<(u64, String)> {
         envelope.write_into(&mut fields);
         #[cfg(test)]
         {
@@ -848,4 +858,34 @@ pub(crate) fn without_log_identified(
             r.get("event").and_then(serde_json::Value::as_str) != Some(identity::EV_IDENTIFIED)
         })
         .collect()
+}
+
+/// Test support: how many times a log was opened, or an open was tried, at each resolved path,
+/// counted before any filesystem call so a failed open counts too. A row asserts the serving
+/// path opens its log once, whatever the outcome.
+#[cfg(test)]
+pub(crate) mod open_attempts {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static ATTEMPTS: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    pub(super) fn note(path: &Path) {
+        let mut attempts = ATTEMPTS.lock().unwrap_or_else(PoisonError::into_inner);
+        *attempts
+            .get_or_insert_with(HashMap::new)
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+    }
+
+    /// Opens tried at `path` so far in this process.
+    pub(crate) fn at(path: &Path) -> usize {
+        ATTEMPTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|attempts| attempts.get(path).copied())
+            .unwrap_or(0)
+    }
 }

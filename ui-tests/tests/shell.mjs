@@ -76,6 +76,76 @@ export function tooltipCssUrl() {
 // after mount, before anything arms a timer, so the jump fires nothing.
 export const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 5000));
 
+// A runFor() only fires the timers that exist when it starts. A timer the page arms
+// after some answer comes back (a retry wait, a reconnect backoff) may not exist yet
+// when the test has seen the request go out, and then the advance moves time past
+// nothing. trackTimers() lets a test wait for that one timer first (advanceArmed).
+//
+// trackTimers() must be called after page.clock.install(): its init script wraps the
+// clock's fake setTimeout and clearTimeout. Called before, it would wrap the real ones,
+// which the clock then replaces, and it would see no timer at all: advanceArmed() then
+// fails loudly instead of passing.
+export async function trackTimers(page) {
+  await page.addInitScript(() => {
+    const pending = new Map();
+    const arm = window.setTimeout;
+    const disarm = window.clearTimeout;
+    window.setTimeout = function (fn, ms, ...rest) {
+      if (typeof fn !== 'function') return arm.call(this, fn, ms, ...rest);
+      const entry = { ms: Number(ms) || 0, stack: new Error().stack ?? '' };
+      // A plain function, so the callback gets whatever receiver the clock calls it with.
+      const id = arm.call(this, function (...a) { pending.delete(id); return Reflect.apply(fn, this, a); }, ms, ...rest);
+      pending.set(id, entry);
+      return id;
+    };
+    window.clearTimeout = function (id) {
+      pending.delete(id);
+      return disarm.call(this, id);
+    };
+    window.__pendingTimers = () => [...pending.values()];
+  });
+}
+
+/** The function names on a recorded stack, below the tracker's own frame. */
+function callersOf(stack) {
+  return stack.split('\n').slice(2)
+    .map((line) => line.match(/^\s*at (?:async )?(.+?) \(/)?.[1] ?? '<anonymous>');
+}
+
+/**
+ * Wait, in real time, until the page has a pending timer of exactly `ms` that was armed
+ * from the function named `from`; only then run the clock for `by` (default `ms`).
+ * Delay alone is not enough to know it is the right timer: other timers in the shell
+ * share delays (the announcer's 500 ms dwell, the 2000 ms refusal body). On a timeout it
+ * throws with every pending timer listed, and the clock has not moved.
+ */
+export async function advanceArmed(page, ms, from, by = ms) {
+  if (await page.evaluate(() => typeof window.__pendingTimers !== 'function')) {
+    throw new Error('advanceArmed needs trackTimers(page), called after page.clock.install()');
+  }
+  let pending = [];
+  let broke = null; // a failure of the read itself (a closed page, a thrown evaluate)
+  const armed = async () => {
+    try {
+      const timers = await page.evaluate(() => window.__pendingTimers());
+      pending = timers.map((t) => ({ ms: t.ms, callers: callersOf(t.stack) }));
+      broke = null;
+    } catch (err) {
+      broke = err;
+      throw err;
+    }
+    return pending.some((t) => t.ms === ms && t.callers.includes(from));
+  };
+  try {
+    await expect.poll(armed).toBe(true);
+  } catch {
+    if (broke) throw broke; // its own error, not "no timer armed"
+    const list = pending.map((t) => `${t.ms} ms from ${t.callers.slice(0, 3).join(' < ')}`).join('; ') || 'none';
+    throw new Error(`no ${ms} ms timer armed from ${from}; pending: ${list}`);
+  }
+  await page.clock.runFor(by);
+}
+
 /** Wait until the shell has rendered something into its content area. */
 export async function shellReady(page) {
   await page.waitForSelector('#content [data-rendered]');
@@ -151,4 +221,28 @@ export function serverStates() {
     variants.push(unit[1]);
   }
   return variants.map((v) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
+}
+
+/**
+ * A held stream for this test. The fixture-stream cookie only names the
+ * channel on the fixture server; it is test plumbing, not a session.
+ */
+export async function heldStream(page, request, testInfo, setup = {}) {
+  const name = testInfo.testId.replace(/[^\w-]/g, '-');
+  await request.post(`/__stream/${name}/setup`, { data: setup });
+  const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
+  await page.context().addCookies([{ name: 'fixture-stream', value: name, url }]);
+  const log = async () => (await request.get(`/__stream/${name}/log`)).json();
+  return {
+    log,
+    connects: async () => (await log()).length,
+    send: (text) => request.post(`/__stream/${name}/send`, { data: text, headers: { 'content-type': 'text/plain' } }),
+    end: () => request.post(`/__stream/${name}/end`),
+  };
+}
+
+/** One SSE frame as the gateway writes it (conn.rs); hello carries a retry hint and no id. */
+export function frame(event, data, id = null) {
+  const head = event === 'hello' ? 'retry: 3000\n' : '';
+  return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
 }

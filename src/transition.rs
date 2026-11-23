@@ -63,6 +63,10 @@ pub struct TransitionTracker {
     /// Distinct pairs added through [`Self::record_pair`], for its cap.
     #[cfg(feature = "firewall")]
     distinct_pairs: AtomicUsize,
+    /// One write of the transitions file at a time, held from the snapshot
+    /// through the rename: the last write to land holds the newest counts, so
+    /// the file never goes back.
+    write_turn: Mutex<()>,
 }
 
 impl TransitionTracker {
@@ -74,6 +78,7 @@ impl TransitionTracker {
             last_per_session: DashMap::new(),
             #[cfg(feature = "firewall")]
             distinct_pairs: AtomicUsize::new(0),
+            write_turn: Mutex::new(()),
         }
     }
 
@@ -274,8 +279,33 @@ impl TransitionTracker {
     /// # Errors
     ///
     /// Returns an error if serialization fails or the file cannot be written.
-    // In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
+    // Atomic: the shared writer replaces the file by rename, so a crash or kill
+    // mid-save leaves the old file or the new one. Never wider by mode on Linux;
+    // on macOS a directory-inherited ACE can apply and the file's own deny ACEs
+    // are not carried over; a file another user owned becomes the writer's.
+    // Other hard links keep the old bytes. The writer's owner and macOS ACL
+    // handling is a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        let turn = self.write_turn.lock();
+        self.write(path, &turn)
+    }
+
+    /// The stop checkpoint's save: `None`, skipped, while another write of
+    /// this file holds its turn, so writes stalled on a slow disk never pile up.
+    pub(crate) fn save_unless_busy(&self, path: &Path) -> Option<std::io::Result<()>> {
+        let turn = self.write_turn.try_lock()?;
+        Some(self.write(path, &turn))
+    }
+
+    /// Hold the write turn, as a write does: a row's stand-in for a write in
+    /// flight.
+    #[cfg(test)]
+    pub(crate) fn hold_write_turn(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.write_turn.lock()
+    }
+
+    /// The write itself, snapshot through rename, under the caller's turn.
+    fn write(&self, path: &Path, _turn: &parking_lot::MutexGuard<'_, ()>) -> std::io::Result<()> {
         let entries: Vec<TransitionEntry> = self
             .transitions
             .iter()
@@ -295,7 +325,12 @@ impl TransitionTracker {
 
         let json = serde_json::to_string_pretty(&entries)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+        crate::config_persistence::write_atomic(
+            path,
+            json.as_bytes(),
+            crate::config_persistence::FileMode::Inherit,
+            crate::config_persistence::Symlink::Follow,
+        )
     }
 
     /// Load transition data from a JSON file.

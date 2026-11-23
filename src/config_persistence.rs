@@ -103,7 +103,8 @@ mod scratch;
 
 /// Flush `path`'s directory, so a create, rename or remove in it is durable;
 /// on Windows through the shared helper that opens the directory for it.
-fn sync_dir_of(path: &Path) -> std::io::Result<()> {
+/// Also the heartbeat's directory sync (one copy of the platform rule).
+pub(crate) fn sync_dir_of(path: &Path) -> std::io::Result<()> {
     sync_dir_for(path, None)
 }
 
@@ -193,7 +194,7 @@ pub(crate) fn recover_before_start(
         return Ok(());
     }
     match lock::lock_config_blocking_deferred(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
-        Ok(locked) => recover_recorded(&locked, record),
+        Ok(locked) => recover_recorded(&locked, record).map_err(Unrecovered::into_message),
         Err(lock::NotLocked::Busy) => Err(format!(
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
@@ -210,14 +211,33 @@ pub(crate) fn recover_before_start(
     }
 }
 
+/// Why a pending journal was not recovered. Both carry the message that says what to do; the
+/// start gate classes them apart, so an unloadable config is never blamed on a log.
+pub(crate) enum Unrecovered {
+    /// The config the recovery would leave does not load.
+    Unloadable(String),
+    /// Any other reason: the recovery could not be recorded, or the journal refused it.
+    Other(String),
+}
+
+impl Unrecovered {
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::Unloadable(why) | Self::Other(why) => why,
+        }
+    }
+}
+
 /// [`recover_before_start`] under the lock: `record` given the config the
 /// recovery leaves, then the recovery.
 pub(crate) fn recover_recorded(
     locked: &lock::Locked,
     record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<(), Unrecovered> {
     let message = |e: journal::NotRecovered| match e {
-        journal::NotRecovered::Refused(why) | journal::NotRecovered::Failed(why) => why,
+        journal::NotRecovered::Refused(why) | journal::NotRecovered::Failed(why) => {
+            Unrecovered::Other(why)
+        }
     };
     if locked.journal_pending {
         // `None`: the journal went after the lock reported it, so recovery
@@ -225,10 +245,13 @@ pub(crate) fn recover_recorded(
         if let Some(text) = journal::surviving_text(&locked.target).map_err(message)? {
             let config = crate::config::Config::load_evaluated_text(&locked.target, &text)
                 .map_err(|e| {
-                    unrecorded(locked, &format!("the config it leaves does not load: {e}"))
+                    Unrecovered::Unloadable(unrecorded(
+                        locked,
+                        &format!("the config it leaves does not load: {e}"),
+                    ))
                 })?
                 .config;
-            record(locked, &config).map_err(|why| unrecorded(locked, &why))?;
+            record(locked, &config).map_err(|why| Unrecovered::Other(unrecorded(locked, &why)))?;
         }
     }
     journal::recover(&locked.target).map(drop).map_err(message)

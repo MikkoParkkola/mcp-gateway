@@ -59,7 +59,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
     }
 }
 
-/// The gateway to ask: `--url` when given, otherwise the listener the config
+/// The gateway to ask: `--gateway` (or `MCP_GATEWAY_URL`) when given, otherwise the listener the config
 /// describes (`https` when it serves TLS).
 ///
 /// Unlike `stats`, a config that fails to load is an error, not a fallback to
@@ -68,7 +68,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
 ///
 /// # Errors
 ///
-/// The config load failure, when no `--url` was given.
+/// The config load failure, when no `--gateway` was given.
 pub fn dashboard_link_base(
     url: Option<String>,
     flags: DashboardLinkTls,
@@ -81,13 +81,14 @@ pub fn dashboard_link_base(
         (None, None) => None,
         _ => return Err("--client-cert and --client-key go together".to_string()),
     };
-    // `--url` describes the target: no config is read, so its trust anchor
+    // `--gateway` describes the target: no config is read, so its trust anchor
     // is `--ca-cert` or the built-in roots.
     if let Some(url) = url {
         let ca = flags.ca_cert;
         return Ok((url, LinkTls { ca, identity }));
     }
-    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
+    let mut config =
+        load().map_err(|e| format!("could not load the config ({e}); pass --gateway"))?;
     if let Some(port) = port_override {
         config.server.port = port;
     }
@@ -115,7 +116,7 @@ pub fn dashboard_link_base(
     }
     // The listener's own CA when none is named. It becomes the only root, so
     // a public CA cannot vouch for this name; a server certificate from a
-    // public CA is reached with `--url` instead.
+    // public CA is reached with `--gateway` instead.
     let ca = flags
         .ca_cert
         .or_else(|| (!mtls.ca_cert.is_empty()).then(|| PathBuf::from(&mtls.ca_cert)));
@@ -165,9 +166,9 @@ use super::cli_exit::{
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
 pub(crate) use admin::{
-    AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, Remedies,
-    UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link, gateway_reason,
-    origin_of, redact_body, refusal, transport,
+    AdminBody, AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream,
+    Remedies, UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link,
+    gateway_reason, origin_of, redact_body, refusal, transport,
 };
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
@@ -312,7 +313,7 @@ pub(crate) async fn dashboard_link_outcome(
     let render = crate::cli::output::Render::from_json_flag(args.json);
     let json = render == crate::cli::output::Render::Json;
     let (base, tls, token) = match resolved(
-        args.url,
+        args.gateway.url,
         args.tls,
         load,
         port_override,
@@ -369,7 +370,7 @@ pub(crate) async fn events_outcome(
 ) -> CliOutcome {
     use mcp_gateway::cli::events::DeadLetterAction;
     let (base, tls, token) = match resolved(
-        args.url.clone(),
+        args.gateway.url.clone(),
         args.tls.clone(),
         load,
         port_override,

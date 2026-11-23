@@ -110,7 +110,6 @@ src/gateway/meta_mcp/task_confirmation.rs	redeem	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_replay.rs	retry_later	error_response_preserving_status	1
 src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	JsonRpcResponse::error	1
-src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	3
 src/gateway/meta_mcp/task_replay/judging.rs	stored_withheld	error_response_preserving_status	1
 src/gateway/meta_mcp/visibility.rs	grant_evaluation	Error::json_rpc	1
 src/gateway/meta_mcp/visibility.rs	settle_grant	Error::json_rpc	1
@@ -182,12 +181,10 @@ src/gateway/router/direct_guards.rs	refusal	delivery_refusal_error	1
 src/gateway/router/direct_guards.rs	run	Error::json_rpc	1
 src/gateway/router/handlers.rs	meta_mcp_dispatch	JsonRpcResponse::error	5
 src/gateway/router/handlers.rs	meta_mcp_dispatch	build_error_response	3
-src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_error_response	7
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_error_response_with_data	1
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_http_error_response	3
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_response	3
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	JsonRpcResponse::error	1
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response	4
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response_with_data	1
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_response	1
 src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	error_response_preserving_status	1
@@ -223,8 +220,6 @@ src/gateway/router/helpers.rs	session_capacity_refusal	build_error_response_with
 src/gateway/router/helpers.rs	window_sealed_response	build_http_error_response	1
 src/gateway/router/identity.rs	identity_refusal_response	build_http_error_response	1
 src/gateway/router/inflight_calls.rs	explicitly_cancellable	Error::JsonRpc{}	1
-src/gateway/router/meta_refusal_audit.rs	answer_intake	build_error_response	1
-src/gateway/router/meta_refusal_audit.rs	record	build_error_response	4
 src/gateway/router/view_judge.rs	admit_listener	build_error_response	1
 src/gateway/search_disclosure.rs	parse_detail	Error::json_rpc	1
 src/gateway/search_disclosure.rs	resolve_search_disclosure	Error::json_rpc	1
@@ -232,7 +227,6 @@ src/gateway/server/stdio_catalogue.rs	dispatch_catalogue	JsonRpcResponse::error	
 src/gateway/server/stdio_dispatch.rs	dispatch_relay_scoped	JsonRpcResponse::error	1
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	JsonRpcResponse::error	3
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	JsonRpcResponse::error_with_data	1
-src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	gateway_error	1
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	to_value_lossy	3
 src/gateway/server/stdio_dispatch.rs	prepare_signing	JsonRpcResponse::error	2
 src/gateway/server/stdio_dispatch.rs	prepare_signing	to_value_lossy	2
