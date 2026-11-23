@@ -192,6 +192,34 @@ fn invalid_polls_one_hundred_per_gateway_per_minute() {
     );
 }
 
+/// A caller reads its time before the start lock, so two starts can be
+/// counted out of order. A start counted earlier than one already held must
+/// still leave the window when its time is up: then exactly one more start
+/// fits under the cap, and a start the cap admits is counted.
+#[test]
+fn starts_counted_out_of_order_still_fill_the_cap() {
+    let limits = Limits::new();
+    let t0 = Instant::now();
+    let later = t0 + Duration::from_secs(1);
+    for k in 1..PER_KEY {
+        assert!(limits.admit_start(peer(1), later), "start {k} of peer 1");
+    }
+    assert!(
+        limits.admit_start(peer(1), t0),
+        "the 5th start, counted after the others but timed before them"
+    );
+    // At 60 s the start timed t0 has left the window; the four timed 1 s
+    // later have not, so one start fits, and it must be counted.
+    assert!(
+        limits.admit_start(peer(1), t0 + MINUTE),
+        "one start fits once t0 leaves the window"
+    );
+    assert!(
+        !limits.admit_start(peer(1), t0 + MINUTE),
+        "the cap is full again: the admitted start was counted"
+    );
+}
+
 /// L2.9: 300 keys over three windows are all admitted and no per-key map
 /// (start peers, lookup sessions, invalid-poll peers) ever tracks more than
 /// its bound: idle keys are shed.
