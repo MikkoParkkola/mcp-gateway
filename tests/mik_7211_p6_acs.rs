@@ -8,11 +8,14 @@
 
 #[path = "common/record_key.rs"]
 mod record_key;
+#[path = "../src/test_source_files.rs"]
+mod test_source_files;
 
 use std::path::Path;
 
 mod source_checks {
     use super::*;
+    use crate::test_source_files::rust_files;
 
     const CACHEABLE: &str = include_str!("../src/protocol/cacheable.rs");
     const MESSAGES: &str = include_str!("../src/protocol/messages.rs");
@@ -42,17 +45,6 @@ mod source_checks {
             "JsonRpcError.data (MIK-7702)"
         );
         assert!(TASKS.contains(ATTRIBUTE), "task snapshot result");
-    }
-
-    fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("source dir reads") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                rust_files(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push(path);
-            }
-        }
     }
 
     /// Whether `text` names the key outside a line comment, full-line or
