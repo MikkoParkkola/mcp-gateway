@@ -126,7 +126,6 @@ where
 /// Top-level gateway configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
 pub struct Config {
     /// Environment files to load before processing config.
     /// Paths support ~ expansion. Loaded in order, later files override earlier.
@@ -202,6 +201,46 @@ pub struct Config {
     /// Optional managed personal-account custody. Omitted enables none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounts: Option<AccountsConfig>,
+}
+
+// Written out, not derived: `default_routing_profile` takes the same function
+// the loader's field attribute names, so `Config::default()` and an empty file
+// agree (a row pins it). Every other field is its type's own default, which is
+// also what the loader fills in; a new field must be added here to compile.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            env_files: Vec::default(),
+            environment: None,
+            server: ServerConfig::default(),
+            auth: AuthConfig::default(),
+            meta_mcp: MetaMcpConfig::default(),
+            streaming: StreamingConfig::default(),
+            failsafe: FailsafeConfig::default(),
+            error_budget: ErrorBudgetSection::default(),
+            backends: HashMap::default(),
+            capabilities: CapabilityConfig::default(),
+            cache: CacheConfig::default(),
+            idempotency: IdempotencyConfig::default(),
+            playbooks: PlaybooksConfig::default(),
+            security: SecurityConfig::default(),
+            secrets: SecretsConfig::default(),
+            webhooks: WebhookConfig::default(),
+            routing_profiles: HashMap::default(),
+            default_routing_profile: default_routing_profile(),
+            code_mode: CodeModeConfig::default(),
+            mtls: MtlsConfig::default(),
+            key_server: KeyServerConfig::default(),
+            agent_auth: AgentAuthConfig::default(),
+            runtime: RuntimeConfig::default(),
+            control_plane: crate::control_plane::ControlPlaneConfig::default(),
+            #[cfg(feature = "cost-governance")]
+            cost_governance: crate::cost_accounting::config::CostGovernanceConfig::default(),
+            tasks: TasksConfig::default(),
+            events: EventsConfig::default(),
+            accounts: None,
+        }
+    }
 }
 
 fn default_routing_profile() -> String {
