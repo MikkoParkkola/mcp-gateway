@@ -174,6 +174,17 @@ class Sections(unittest.TestCase):
             )
         with self.subTest("[Unreleased] with the same spacing stays exempt"):
             self.assertEqual(check(["##  [Unreleased]"], [], "9.0.0"), (0, ""))
+        with self.subTest("tabs around the date dash still read the date"):
+            self.assertEqual(check(["## [2.0.0]\t-\tUnreleased"], [], "9.0.0"), (0, ""))
+        with self.subTest("an unreadable heading with wide spacing still fails"):
+            self.assertEqual(
+                check(["##  [v1.2.0] - 2026-01-02"], ["v1.2.0"], "9.0.0"),
+                (
+                    1,
+                    "CHANGELOG.md:3: heading is neither [Unreleased] nor a version section:"
+                    " ##  [v1.2.0] - 2026-01-02\n",
+                ),
+            )
 
     def test_r6_the_cargo_exemption_covers_only_that_exact_version(self):
         with self.subTest("final version beside a beta manifest"):
