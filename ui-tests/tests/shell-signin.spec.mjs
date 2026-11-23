@@ -213,6 +213,8 @@ test.describe('sign-in on a touch screen', () => {
   test('S11 the sign-in button is at least 44 px tall', async ({ page }) => {
     await gate(page);
     await page.goto('/ui/overview/status');
+    // The sign-in view draws only once the status answer arrives; a hidden button measures 0.
+    await expect(page.locator('#signin')).toBeVisible();
     const h = await page.locator('#signin button[type="submit"]').evaluate((b) => b.getBoundingClientRect().height);
     expect(h).toBeGreaterThanOrEqual(44);
   });

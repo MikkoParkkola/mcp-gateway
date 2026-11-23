@@ -153,6 +153,19 @@ fn check_namespaces(host: HostNamespaces) -> Result<(), String> {
     Ok(())
 }
 
+/// The descriptors above 2 in `open` other than `exempt`, sorted: what the
+/// descriptor check refuses (D13: before the status, the helper's own control
+/// descriptor is exempt; after the close, nothing is).
+pub(super) fn extra_descriptors(open: &[u32], exempt: Option<u32>) -> Vec<u32> {
+    let mut extra: Vec<u32> = open
+        .iter()
+        .copied()
+        .filter(|fd| *fd > 2 && Some(*fd) != exempt)
+        .collect();
+    extra.sort_unstable();
+    extra
+}
+
 /// Refuse if any descriptor other than 0 to 2 is open: closing a raw one
 /// would need `unsafe`, so a descriptor inherited without close-on-exec fails
 /// the preview closed instead of leaking into it.
@@ -183,10 +196,10 @@ fn check_descriptors() -> Result<(), String> {
     if let Some(own) = own {
         extra.swap_remove(own);
     }
+    let extra = extra_descriptors(&extra, None);
     if extra.is_empty() {
         Ok(())
     } else {
-        extra.sort_unstable();
         Err(format!("checking descriptors (inherited: {extra:?})"))
     }
 }

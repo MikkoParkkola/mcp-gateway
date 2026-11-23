@@ -90,26 +90,6 @@ pub(crate) fn part_tag(attr: &syn::Attribute) -> bool {
         })
 }
 
-/// Every `.rs` file under `dir`, at any depth, appended to `out` (unsorted).
-/// A directory that cannot be read adds nothing.
-#[allow(
-    dead_code,
-    reason = "the binary's and integration tests' copies use only production_text"
-)]
-pub(crate) fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// `text` with every item compiled only under test blanked: spaces in place
 /// of its bytes, newlines kept, so positions and line numbers still match
 /// `text` and literals outside test items survive. An item is test-only when

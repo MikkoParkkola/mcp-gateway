@@ -1,8 +1,11 @@
-# Sources under src/preview_sandbox that still carry expect(dead_code): <path><TAB><the part that wires it up>.
+# Sources under src/preview_sandbox, plus the preview's two transport files, that still carry expect(dead_code): <path><TAB><the part that wires it up>.
 # The ratchet row in staged_tests.rs keeps this list exact; the sandbox ticket closes when it is empty.
 src/preview_sandbox/control.rs	the macOS fetch step (live on Linux since the helper's handshake)
-src/preview_sandbox/control_msg.rs	the macOS fetch step (live on Linux since the helper's handshake)
+src/preview_sandbox/control_msg.rs	the macOS fetch step (live on Linux since the helper's handshake); the setup status's refusal and encoder, the launch split
 src/preview_sandbox/fetch.rs	the macOS fetch step (live on Linux since the npm fetch)
 src/preview_sandbox/fetch_output.rs	the macOS fetch step (live on Linux since the npm fetch)
+src/preview_sandbox/mod.rs	the preview route (it calls check before a preview starts)
 src/preview_sandbox/install.rs	the macOS fetch step (live on Linux since the uv fetch)
 src/preview_sandbox/proxy.rs	the fetch session (the sandbox fetch part)
+src/transport/handshake.rs	the preview route (the command preview's describe call)
+src/transport/preview_pipe.rs	the preview route (the command preview's describe call)
