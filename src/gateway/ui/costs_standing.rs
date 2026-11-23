@@ -6,18 +6,10 @@
 //! so every answer is pinned by a row with literal inputs.
 
 use crate::cost_accounting::config::{AlertAction, AlertRule};
+use crate::cost_accounting::enforcer::evaluate_alerts;
 
 /// The enforcer's record of a key's first refusal under its own limit.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Refusal {
-    /// The day key the refusal fell on.
-    pub(crate) day: u64,
-    /// When it happened, in unix seconds.
-    pub(crate) at_secs: u64,
-    /// The key's limit at the time, as the config gave it: compared exactly,
-    /// since an unchanged limit is the same parsed value.
-    pub(crate) limit: f64,
-}
+pub(crate) use crate::cost_accounting::enforcer::standing::KeyRefusal as Refusal;
 
 /// What [`standing`] reads: the figures the enforcer judges a call by, in
 /// USD as its check converts them, so the two add up the same way.
@@ -53,23 +45,61 @@ pub(crate) struct Standing {
 
 /// The key's standing.
 pub(crate) fn standing(inputs: &Inputs<'_>) -> Standing {
-    let _ = inputs;
+    let Some(limit) = inputs.limit else {
+        return Standing {
+            at_limit: None,
+            blocking: false,
+            blocked_since: None,
+        };
+    };
+    // Spend exactly at the limit: the rule the enforcer applies there.
+    let at_limit = match evaluate_alerts(inputs.rules, limit, limit) {
+        Some(AlertAction::Block) => Some("block"),
+        Some(AlertAction::Notify) => Some("notify"),
+        Some(AlertAction::Log) | None => None,
+    };
+    // The check's own sum: judged spend plus the call's price, against the
+    // limit, under the same rules.
+    let blocking = inputs.cheapest.is_some_and(|cheapest| {
+        evaluate_alerts(inputs.rules, inputs.judged + cheapest, limit) == Some(AlertAction::Block)
+    });
+    let blocked_since = inputs
+        .refusal
+        .filter(|refusal| blocking && refusal.day == inputs.today && refusal.limit == limit)
+        .map(|refusal| refusal.at_secs);
     Standing {
-        at_limit: None,
-        blocking: false,
-        blocked_since: None,
+        at_limit,
+        blocking,
+        blocked_since,
     }
 }
 
 /// Whether the rules never get milder as the percent rises (log, then
 /// notify, then block), read through the enforcer's own choice of rule.
 pub(crate) fn ordered(rules: &[AlertRule]) -> bool {
-    let _ = rules;
-    let _ = AlertAction::Log;
-    true
+    let mut percents: Vec<u32> = rules.iter().map(|rule| rule.at_percent).collect();
+    percents.sort_unstable();
+    percents.dedup();
+    // Half a percent past each rule's own: every rule at or below it is
+    // reached and none above it, clear of the float noise an exact percent
+    // would carry through the enforcer's spend / limit * 100.
+    let severity = |percent: u32| match evaluate_alerts(rules, f64::from(percent) + 0.5, 100.0) {
+        None => 0,
+        Some(AlertAction::Log) => 1,
+        Some(AlertAction::Notify) => 2,
+        Some(AlertAction::Block) => 3,
+    };
+    percents
+        .windows(2)
+        .all(|pair| severity(pair[0]) <= severity(pair[1]))
 }
 
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "costs_standing_tests.rs"]
 mod tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "costs_standing_enforcer_tests.rs"]
+mod enforcer_tests;

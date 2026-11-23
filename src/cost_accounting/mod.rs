@@ -245,10 +245,23 @@ impl KeyCost {
     /// The key's spend rate over the last three complete hours before `now`,
     /// in USD per hour. The hour holding `now` is left out; an hour with no
     /// spend counts as zero.
+    #[cfg(any(test, feature = "cost-governance"))]
     #[must_use]
-    pub fn rate_3h(&self, now: u64) -> f64 {
-        let _ = now;
-        0.0
+    pub(crate) fn rate_3h(&self, now: u64) -> f64 {
+        let hour = now / 3600;
+        let first = hour.saturating_sub(3);
+        let micro = self
+            .spend
+            .lock()
+            .0
+            .hours
+            .rows()
+            .into_iter()
+            .filter(|(h, ..)| (first..hour).contains(h))
+            .fold(0u64, |sum, (.., micro)| sum.saturating_add(micro));
+        #[allow(clippy::cast_precision_loss)]
+        let usd = micro as f64 / 1_000_000.0;
+        usd / 3.0
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock

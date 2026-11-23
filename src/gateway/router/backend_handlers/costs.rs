@@ -96,3 +96,8 @@ pub(in crate::gateway::router) async fn costs_handler(
 #[cfg(test)]
 #[path = "costs_views_tests.rs"]
 mod views_tests;
+
+#[cfg(tp2)]
+#[cfg(all(test, feature = "cost-governance", feature = "webui"))]
+#[path = "costs_standing_route_tests.rs"]
+mod standing_route_tests;
