@@ -49,11 +49,28 @@ pub(crate) enum Waiting {
     /// The status rule refuses it, it adds keys the running table lacks, those
     /// keys build, and a start from it is not refused. `keys` is never empty;
     /// `status` is the status rule's own sentence, so no caller asks it again.
-    Yes { keys: Vec<String>, status: String },
+    Yes {
+        keys: Vec<String>,
+        #[expect(
+            dead_code,
+            reason = "the rule's sentence stays inside the question; no answer shows it"
+        )]
+        status: String,
+    },
     /// The status rule refuses it and some other check fails as well; the text
     /// is that check's own, and `cause` says which check, so no caller reads
     /// the text to tell them apart.
-    Faulty { reason: String, cause: FaultCause },
+    Faulty {
+        reason: String,
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "no route branches on the cause yet; its rows read it"
+            )
+        )]
+        cause: FaultCause,
+    },
 }
 
 /// Which check a faulty candidate failed, first failure winning.

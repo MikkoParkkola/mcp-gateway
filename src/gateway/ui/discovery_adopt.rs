@@ -147,7 +147,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::ReloadRefused {
             class: crate::config_reload::RefusalClass::RestartPending { waiting },
             ..
-        }) => super::errors::restart_pending(waiting.names()),
+        }) => super::super::errors::restart_pending(waiting.names()),
         Err(ReplaceError::ReloadRefused { .. }) => failed("reload_refused"),
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),

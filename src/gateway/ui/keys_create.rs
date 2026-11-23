@@ -212,7 +212,7 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     }
     Ok(Checked {
         revision,
-        config,
+        config: *config,
         context,
     })
 }
