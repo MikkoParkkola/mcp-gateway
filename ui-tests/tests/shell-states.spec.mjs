@@ -241,6 +241,30 @@ for (const width of WIDTHS) {
   });
 }
 
+test('T10 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
+  await open(page);
+  const got = await inShell(page, (m) => {
+    const banner = m.serverBanner({ name: 'github', state: 'off', reason: '', next_retry_at: null });
+    return {
+      word: m.stateWord('off'),
+      offWord: m.OFF_WORD,
+      banner: banner?.querySelector('h2')?.textContent ?? null,
+      offBanner: m.OFF_BANNER('github'),
+      next: banner?.querySelector('p')?.textContent ?? null,
+      offNext: m.OFF_NEXT,
+      glyph: m.SERVER_STATES.off?.glyph ?? null,
+      tone: m.SERVER_STATES.off?.tone ?? null,
+    };
+  });
+  expect(got.word).toBe(got.offWord);
+  expect(got.word).not.toBe('Unknown state');
+  expect(got.banner).toBe(got.offBanner);
+  expect(got.banner).toContain('github');
+  expect(got.next).toBe(got.offNext);
+  expect(got.glyph).toBe('ⓘ');
+  expect(got.tone).toBe('neutral');
+});
+
 test('T9 the half-open breaker value the paused copy reads is the gateway\'s own wire value', () => {
   const file = fileURLToPath(new URL('../../src/failsafe/circuit_breaker.rs', import.meta.url));
   const source = readFileSync(file, 'utf8');
