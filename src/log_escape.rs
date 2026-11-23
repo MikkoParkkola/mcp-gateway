@@ -62,7 +62,11 @@ fn hostile(c: char) -> bool {
 /// `text` with each hostile character written as its escape (`\n`,
 /// `\u{1b}`, `\u{202e}`); every other character, backslashes and quotes
 /// included, is left as it is, so a clean value is unchanged.
-fn escaped(text: &str) -> std::borrow::Cow<'_, str> {
+///
+/// The one escape rule for every line the gateway writes: the log layer here,
+/// a fatal error printed while logging is off, and a config refusal that
+/// quotes a server name.
+pub(crate) fn escaped(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.chars().any(hostile) {
         return text.into();
     }
