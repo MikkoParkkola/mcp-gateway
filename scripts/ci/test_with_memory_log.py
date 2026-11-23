@@ -147,17 +147,20 @@ def bound_read(pid: int, parents: set[int], low: float, high: float) -> dict:
     except OSError:
         return {"identity": "not confirmed"}
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-        status = Path(f"/proc/{pid}/status").read_text()
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            status = Path(f"/proc/{pid}/status").read_text()
+        except OSError:
+            stat = status = None
         poll = select.poll()
         poll.register(handle, select.POLLIN)
         exited = bool(poll.poll(0))  # a pidfd reads as ready once its process has exited
-    except OSError:
-        exited = True
     finally:
         os.close(handle)
     if exited:
         return {"identity": "dead"}
+    if stat is None or status is None:  # alive, but its facts could not be read
+        return {"identity": "not confirmed"}
     fields = stat.rsplit(")", 1)[1].split()  # after the name: state, ppid, pgrp, ...; starttime is field 22
     state, ppid, started = fields[0], int(fields[1]), int(fields[19])
     if not (low - 1 <= started <= high + 1) or ppid not in parents:
@@ -185,28 +188,41 @@ def _pids(path: Path) -> list[int] | None:
     return None
 
 
-def processes(roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None) -> list[dict]:
+def processes(roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None,
+              refused: set[int]) -> list[dict] | None:
     """R7: the named pids, every descendant of the wrapper, and, only when the wrapper's group is the row's own,
-    every other member of that group. Names only: never a process's arguments."""
+    every other member of that group. A pid in `refused` (one whose identity was not confirmed, or whose process is
+    gone and its number may be reused) is never listed, by any route. Names only: never a process's arguments.
+    None when ps gave no table: a missing R7, not an empty one."""
     ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,etime=,comm="], capture_output=True, text=True)
+    return None if ps.returncode != 0 else _select(ps.stdout, roles, wrapper, group_private, group, refused)
+
+
+def _select(ps: str, roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None,
+            refused: set[int]) -> list[dict] | None:
+    """processes() on ps's output, apart so W16 can give it a canned table."""
     table = {}
-    for line in ps.stdout.splitlines():
+    for line in ps.splitlines():
         f = line.split(None, 5)
         if len(f) == 6:
             table[int(f[0])] = {"pid": int(f[0]), "ppid": int(f[1]), "pgid": int(f[2]), "state": f[3],
                                 "etime": f[4], "comm": f[5]}
-    found = dict(roles)
+    if not table:
+        return None
+    found = {pid: role for pid, role in roles.items() if pid not in refused}
     if wrapper is not None:
-        frontier = [wrapper]
+        # Walked apart from the roles: a named command or sleeper is walked through, keeping its role.
+        visited, frontier = {wrapper}, [wrapper]
         while frontier:
             parent = frontier.pop()
             for pid, row in table.items():
-                if row["ppid"] == parent and pid not in found:
-                    found[pid] = "descendant"
+                if row["ppid"] == parent and pid not in visited and pid not in refused:
+                    visited.add(pid)
+                    found.setdefault(pid, "descendant")
                     frontier.append(pid)
     if group_private and group is not None:
         for pid, row in table.items():
-            if row["pgid"] == group:
+            if row["pgid"] == group and pid not in refused:
                 found.setdefault(pid, "group")
     return [dict(table[pid], role=role) for pid, role in sorted(found.items()) if pid in table]
 
@@ -226,9 +242,7 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
         tail = files.wrapper.read_text().rsplit(")", 1)
         group = int(tail[1].split()[2]) if len(tail) == 2 else None
         r5 = {"pid": wrapper_pid, "group": group}
-    post = None
-    with contextlib.suppress(OSError, ValueError):
-        post = int(files.post.read_text().split()[0])
+    post = (_pids(files.post) or [None])[0]  # an empty file: kill's status not yet written
     reached = files.pre.exists()
     r2 = {"reached": reached, "status": post} if (not reached or post is not None) else None
     record = {
@@ -257,15 +271,19 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
             sleeper, {command} | (adopters if c["identity"] == "dead" else set()), low, clock.ticks_at(files.marker) or low)
         record["R6"] = {"wrapper": w, "command": c}
         record["adopter"] = adopter
-        # No fact is kept from a pid whose identity is not confirmed.
+        # No fact is kept from a pid whose identity is not confirmed, nor from a dead one's number, which the system
+        # may already have handed to another process.
+        refused = set()
         for pid, seen in ((wrapper, w), (command, c), (sleeper, s)):
-            if pid and seen["identity"] == "not confirmed":
-                roles.pop(pid, None)
-                record.setdefault("not_confirmed", []).append(pid)
+            if pid and seen["identity"] != "confirmed":
+                refused.add(pid)
+                if seen["identity"] == "not confirmed":
+                    record.setdefault("not_confirmed", []).append(pid)
         record["R7"] = processes(roles, wrapper if w["identity"] == "confirmed" else None,
-                                 r5["group"] == wrapper, r5["group"])
+                                 r5["group"] == wrapper, r5["group"], refused)
     else:
-        record["R7"] = processes(roles, wrapper, bool(r5) and r5["group"] == wrapper, r5["group"] if r5 else None)
+        record["R7"] = processes(roles, wrapper, bool(r5) and r5["group"] == wrapper, r5["group"] if r5 else None,
+                                 set())
     return record
 
 
@@ -377,7 +395,16 @@ def adopter_rows() -> list[tuple[str, bool, str]]:
         return [(label, True, "skipped: not Linux")]
     seen = orphan_adopter(set())
     refused = orphan_adopter({seen})
-    return [(label, seen is not None and refused is None, f"measured {seen}, with it excluded {refused}")]
+    out = [(label, seen is not None and refused is None, f"measured {seen}, with it excluded {refused}")]
+    # This Python is never the adopter, unasked: a child Python that makes itself the adopter of its orphans (Linux
+    # prctl 36, the child subreaper flag) must still get None. It prints prctl's status, then the measurement.
+    code = ("import ctypes, sys; sys.path.insert(0, sys.argv[1]); import test_with_memory_log as t; "
+            "print(ctypes.CDLL(None).prctl(36, 1, 0, 0, 0), t.orphan_adopter(set()))")
+    own = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parent)],
+                         capture_output=True, text=True, timeout=30)
+    out.append(("W17 this Python, made the adopter of its own orphans, is refused too", own.stdout.split() == ["0", "None"],
+                f"rc {own.returncode}, {own.stdout.strip()!r}, {own.stderr[-200:]}"))
+    return out
 
 
 def gap_rows() -> list[tuple[str, bool, str]]:
@@ -450,7 +477,8 @@ def classify_hang(record: dict) -> str:
     r6 = record.get("R6")
     if (any(record.get(f) is None for f in ("R1", "R2", "R3", "R4", "R5", "R7", "R8", "R9"))
             or (record["linux"] and r6 is None)
-            or (r6 is not None and any(r6[w]["identity"] == "not confirmed" for w in ("wrapper", "command")))):
+            or (r6 is not None and any(r6[w]["identity"] == "not confirmed" for w in ("wrapper", "command")))
+            or _r9_incomplete(record)):
         return "K0"
     # A stopped process that is only a fellow member of the wrapper's group selects nothing.
     if any(p["state"].startswith("T") for p in record["R7"] if p["role"] != "group"):
@@ -480,6 +508,15 @@ def classify_hang(record: dict) -> str:
     if w_alive and w["cgt"] & sig and not (w["pnd"] | w["shd"]):
         return "K9"
     return "K10"
+
+
+def _r9_incomplete(record: dict) -> bool:
+    """R9 lacks a fact it must hold: either load, the marker's time when the marker was written, or the kill's time
+    when the kill line was reached. A time is n/a only for an event that did not happen."""
+    r9 = record["R9"]
+    return (r9["load_start"] is None or r9["load_limit"] is None
+            or (record["R1"]["written"] and r9["to_marker"] is None)
+            or (record["R2"]["reached"] and r9["to_kill"] is None))
 
 
 def _bit(sig: str) -> int:
@@ -587,8 +624,38 @@ def classifier_rows() -> list[tuple[str, bool, str]]:
         r = _canned()
         r["R6"][who] = {"identity": "not confirmed"}
         k0.append((who + " identity not confirmed", r))
+    # R9's own facts: a load missing, or a time missing for an event that happened.
+    for key in ("load_start", "load_limit", "to_marker", "to_kill"):
+        r = _canned()
+        r["R9"][key] = None
+        k0.append(("R9 " + key + " missing", r))
     bad = [f"{n}: {got}" for n, r in k0 if (got := classify_hang(r)) != "K0"]
     out.append(("W16 every K0 form prints K0", not bad, "; ".join(bad)))
+    # A time is n/a for an event that did not happen: no marker (K2), no kill line (K3); neither is K0.
+    na = []
+    for c, key in (("K2", "to_marker"), ("K3", "to_kill")):
+        r = _met(c)
+        r["R9"][key] = None
+        if (got := classify_hang(r)) != c:
+            na.append(f"{c} with {key} n/a: {got}")
+    out.append(("W16 a time for an event that did not happen may be n/a", not na, "; ".join(na)))
+    # R7 on a canned ps table: the walk goes through the named command to its stopped child outside the group (so the
+    # record is K1), a lone member of the private group is listed, and a refused pid is listed by no route (as the
+    # sleeper, as a descendant, or as a group member). No table at all is a missing R7.
+    ps = "\n".join(" ".join(map(str, f)) for f in (
+        (1001, 1000, 1001, "S", "00:10", "bash"), (1002, 1001, 1001, "S", "00:10", "bash"),
+        (1003, 1002, 1001, "S", "00:10", "sleep"), (1006, 1002, 2000, "T", "00:10", "sleep"),
+        (1007, 1, 1001, "S", "00:10", "sh"), (1008, 1002, 1001, "S", "00:10", "sleep"),
+        (1009, 1, 1001, "S", "00:10", "sh")))
+    listed = _select(ps, {1001: "wrapper", 1002: "command", 1003: "sleeper"}, 1001, True, 1001, {1003, 1008, 1009})
+    roles = {p["pid"]: p["role"] for p in listed or []}
+    want = {1001: "wrapper", 1002: "command", 1006: "descendant", 1007: "group"}
+    stopped = _canned()
+    stopped["R7"] = listed
+    got = classify_hang(stopped) if listed else None
+    out.append(("W16 R7 walks through the command, lists the group, never a refused pid; no table is missing",
+                roles == want and got == "K1" and _select("", {}, None, False, None, set()) is None,
+                f"roles {roles}, want {want}; class {got}"))
     # Off Linux R6 is n/a: K0 to K5 are still told apart, rows 7 to 10 are one answer.
     off = []
     for c, want in (("K5", "K5"), (None, "K6 to K9, not separable here")):
