@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use crate::test_source_files::rust_files;
+
 /// Where production code calls the flip check, per file. The key routes no
 /// longer call it themselves: they ask the first-key question, which does.
 const CALLERS: &[(&str, usize)] = &[
@@ -14,19 +16,9 @@ const CALLERS: &[(&str, usize)] = &[
 ];
 
 fn production_sources() -> Vec<(String, String)> {
-    fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("src is readable") {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(&root.join("src"), &mut files);
+    rust_files(&root.join("src"), &mut files);
     files
         .into_iter()
         .filter_map(|path| {

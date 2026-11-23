@@ -215,6 +215,12 @@ mod test_pause;
 #[cfg(test)]
 mod test_ports;
 #[cfg(test)]
+#[allow(dead_code, reason = "parts without a scan never call it")]
+pub(crate) mod test_source_files;
+#[cfg(tp3)]
+#[cfg(test)]
+mod test_source_files_tests;
+#[cfg(test)]
 pub(crate) mod test_source_text;
 #[cfg(tp3)]
 #[cfg(test)]
