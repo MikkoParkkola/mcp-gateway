@@ -160,6 +160,13 @@ mod settlement_tests;
 #[path = "audit_delivered_value_tests.rs"]
 mod delivered_value_tests;
 
+// The kind an unredeemable continuation notes (declared here, not beside the
+// refusal, so a red run that puts the refusal back still compiles the row).
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "continuation_kind_tests.rs"]
+mod continuation_kind_tests;
+
 mod settlement;
 
 tokio::task_local! {
@@ -362,11 +369,13 @@ impl DispatchNotes {
     }
 
     /// The outcome of a call whose result read as `outcome`: a backend failure
-    /// delivered as a tool result is still an `error`.
+    /// delivered as a tool result is still an `error`; a gate's noted refusal
+    /// is `denied`, however it was answered. A backend's own error
+    /// notes no refusal, so its class stands.
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (outcome, self.failure) {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
-            (outcome, _) => outcome,
+            (outcome, _) => self.decision.refused_outcome(outcome),
         }
     }
 
@@ -592,15 +601,20 @@ impl MetaMcp {
         mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
-        let withheld = super::denial::count_meta_denial(args, &result, notes.not_found);
-        self.count_invocation(args, caller, &result, &notes, withheld);
+        // The record's class is worked out once, the refusal
+        // rule applied, and both counts take it.
+        let withheld = super::denial::withheld(args, notes.not_found);
+        let class = withheld
+            .or_else(|| AuditOutcome::from_result(&result))
+            .map(|outcome| notes.outcome(outcome));
+        super::denial::count_meta_denial(withheld.is_some(), class, &result);
+        self.count_invocation(args, caller, &result, &notes, class);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };
-        let Some(outcome) = withheld.or_else(|| AuditOutcome::from_result(&result)) else {
+        let Some(outcome) = class else {
             return result;
         };
-        let outcome = notes.outcome(outcome);
         // A withheld target's record carries the memo's code, so its check.
         if withheld.is_some()
             && let Some(refusal) = args
@@ -614,7 +628,7 @@ impl MetaMcp {
             notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
-        let decision = Box::new(notes.decided(self, outcome));
+        let decision = Box::new(notes.decided(self, outcome, caller.credential_kind));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));

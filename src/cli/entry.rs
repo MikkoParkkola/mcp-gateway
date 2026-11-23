@@ -544,7 +544,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
@@ -603,7 +603,7 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;

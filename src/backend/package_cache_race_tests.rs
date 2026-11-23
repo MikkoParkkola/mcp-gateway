@@ -16,7 +16,7 @@ use super::*;
 async fn two_repairs_of_one_cache_never_enter_the_guarded_section_together() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let cache = seed_cache(workspace.path());
     let path = cache.root.clone();
 
@@ -66,7 +66,7 @@ async fn two_repairs_of_one_cache_never_enter_the_guarded_section_together() {
 /// guarded section here, so the assertion holds whether the lock is taken or not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_attempts_of_one_backend_leave_one_repair_to_clear_the_cache() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -112,7 +112,7 @@ async fn two_attempts_of_one_backend_leave_one_repair_to_clear_the_cache() {
 /// the same cache must not run underneath it, and the reverse.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_waits_for_its_caches_lock_before_spawning() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -151,7 +151,7 @@ async fn a_start_waits_for_its_caches_lock_before_spawning() {
 /// the backend could install into the tree the rename is still moving.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let lock = repair_lock(&dir);
     let held = Arc::clone(&lock).lock_owned().await;
@@ -204,7 +204,7 @@ async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
 /// is exactly the deadline the start chose, whatever the machine's load.
 #[tokio::test(start_paused = true)]
 async fn a_start_gives_up_waiting_for_a_held_cache() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -242,7 +242,7 @@ async fn a_start_gives_up_waiting_for_a_held_cache() {
 /// locked until the orphaned rename really ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rename_past_its_limit_is_abandoned_but_keeps_the_lock() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let lock = repair_lock(&dir);
     let held = Arc::clone(&lock).lock_owned().await;
@@ -285,7 +285,7 @@ fn park_discard(tombstone: PathBuf) {
 /// waiting to be deleted: deleting it holds no lock.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_after_a_repair_does_not_wait_for_the_old_tree_to_go() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let log = workspace.path().join("spawns.log");
@@ -368,7 +368,7 @@ async fn orphaned_rename(dir: &Path, retire: Retired) {
 /// its cache is never repaired again until restart (MIK-8831.REL.8).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_panicking_rename_re_arms_the_repair() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     assert!(
         mark_repaired(&dir),
@@ -395,7 +395,7 @@ async fn a_panicking_rename_re_arms_the_repair() {
 /// is not left marked as repaired with nothing cleared.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_orphaned_refused_rename_re_arms_the_repair() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     assert!(
         mark_repaired(&dir),
@@ -413,7 +413,7 @@ async fn an_orphaned_refused_rename_re_arms_the_repair() {
 /// A moved tree nobody waited for is still handed on for deletion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_orphaned_moved_rename_still_discards_its_tombstone() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let tombstone = temp_root(workspace.path()).join(format!("{}.tombstone-x", unique_leaf()));
 
@@ -473,7 +473,7 @@ async fn cancelled_rename(dir: &Path, retire: Retired) {
 /// A refused rename whose caller was cancelled still re-arms the repair.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_refused_rename_re_arms_the_repair() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     assert!(
         mark_repaired(&dir),
@@ -491,7 +491,7 @@ async fn a_cancelled_refused_rename_re_arms_the_repair() {
 /// A moved tree whose caller was cancelled is still handed on for deletion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_moved_rename_still_discards_its_tombstone() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let tombstone = temp_root(workspace.path()).join(format!("{}.tombstone-y", unique_leaf()));
 
@@ -514,7 +514,7 @@ async fn a_cancelled_moved_rename_still_discards_its_tombstone() {
 /// on a paused clock by `a_start_gives_up_waiting_for_a_held_cache`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_arriving_mid_repair_succeeds_after_it() {
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_dir_keep::kept_tempdir();
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
     let release = workspace.path().join("release");

@@ -15,6 +15,7 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
+use crate::security::transparency_log::issuance::TokenOnCall;
 
 /// Snapshot of the creating request's identity, rebuilt as a borrowed caller
 /// context at dispatch. `task` is always `None` on the rebuilt context so the
@@ -73,6 +74,7 @@ pub(crate) struct OwnedCallerContext {
     /// taken from that request's memo when this context is built. In memory
     /// only: a restart settles a task rather than running it again.
     judged: crate::gateway::meta_mcp::visible::memo::Judged,
+    token: Option<TokenOnCall>,
 }
 
 impl OwnedCallerContext {
@@ -94,6 +96,7 @@ impl OwnedCallerContext {
         session_id: Option<String>,
         protocol_revision: Option<String>,
         attestation: Option<String>,
+        token: Option<TokenOnCall>,
     ) -> Self {
         // The very string the admission request is keyed on, passed in from the
         // one construction site: it is the durable task's owner, not a display
@@ -122,6 +125,7 @@ impl OwnedCallerContext {
             },
             dispatch_log: std::sync::Arc::default(),
             judged: crate::gateway::meta_mcp::visible::memo::judged(),
+            token,
         }
     }
 
@@ -168,6 +172,13 @@ impl OwnedCallerContext {
     }
 
     /// What the caller proved at submit, to find its own catalogue slot.
+    /// The exchanged token the creating request was made with: each step's
+    /// dispatch reopens it as the call's token, since a task-local does not
+    /// reach the spawned worker.
+    pub(crate) fn token(&self) -> Option<&TokenOnCall> {
+        self.token.as_ref()
+    }
+
     pub(crate) fn verified_identity(&self) -> Option<&VerifiedIdentity> {
         self.verified_identity.as_ref()
     }

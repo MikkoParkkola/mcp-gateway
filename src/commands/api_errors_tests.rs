@@ -15,7 +15,7 @@ async fn invalid_data_is_a_usage_error_before_sending() {
             2,
             "Usage",
             "Request body is not valid JSON.".to_string(),
-            "Correct the JSON or select the body's actual Content-Type.".to_string(),
+            "Send JSON: only the capability save and validate routes take YAML.".to_string(),
         ),
         (
             format!("@{}", absent.display()),
@@ -167,7 +167,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
             6,
             "Gateway",
             "Capability 'x' changed on disk since it was loaded; reload it",
-            "Read capability \"x\" again and reapply the edit using its current revision. Gateway reason: stale.",
+            "Run api GET /ui/api/capabilities/x again, apply your change to the text it returns, and save that with --if-match set to the revision it printed. Gateway reason: stale.",
         ),
         (
             StatusCode::PRECONDITION_REQUIRED,

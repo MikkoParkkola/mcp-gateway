@@ -188,14 +188,15 @@ fn transitions(tracker: Arc<TransitionTracker>, path: PathBuf) -> Class {
 
 /// Today's spend's class.
 #[cfg(feature = "cost-governance")]
-fn cost((enforcer, data_dir): CostShutdown) -> Class {
+fn cost((enforcer, costs, data_dir): CostShutdown) -> Class {
     use super::persistence::{save_costs, save_costs_unless_busy};
     let (last_enforcer, last_dir) = (Arc::clone(&enforcer), data_dir.clone());
+    let last_costs = Arc::clone(&costs);
     Class {
         name: "cost",
         root: Some(data_dir.clone()),
-        checkpoint: Arc::new(move || save_costs_unless_busy(&enforcer, &data_dir)),
-        last: Arc::new(move || save_costs(&last_enforcer, &last_dir)),
+        checkpoint: Arc::new(move || save_costs_unless_busy(&enforcer, &costs, &data_dir)),
+        last: Arc::new(move || save_costs(&last_enforcer, &last_costs, &last_dir)),
     }
 }
 

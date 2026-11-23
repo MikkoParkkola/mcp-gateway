@@ -24,6 +24,13 @@ const PINNED: &str = "2025-06-18";
 /// The stdio client's own revision: neither the pin nor the gateway's
 /// latest, so what the backend sees cannot be the client's echo.
 const CLIENT: &str = "2024-11-05";
+/// A hang guard, not a measured bound: one deadline for the whole exchange on
+/// stdout (the gateway is already booted; the tool call's answer includes HTTP
+/// round trips to the backend), which a full parallel test run on a loaded host
+/// can stretch past 10 s. The row asserts what the backend saw, never how
+/// fast, so the guard only has to stop a real hang, and one deadline cannot be
+/// reset by lines that are not the awaited answer.
+const ANSWER_HANG_GUARD: Duration = Duration::from_secs(120);
 
 /// What the backend saw: `initialize`'s proposed revision, and the
 /// `MCP-Protocol-Version` header of each `tools/call`.
@@ -116,15 +123,19 @@ async fn call_through_config(extra: &str) -> Seen {
             "params": {"name": "gateway_invoke",
                        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}}}}),
     ];
+    let deadline = tokio::time::Instant::now() + ANSWER_HANG_GUARD;
     for (id, frame) in (1_i64..).zip(frames) {
         client
             .write_all(format!("{frame}\n").as_bytes())
             .await
             .expect("stdin");
         loop {
-            let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            let line = tokio::time::timeout_at(deadline, lines.next_line())
                 .await
-                .expect("an answer within the bound")
+                .unwrap_or_else(|_| {
+                    let case = if extra.is_empty() { "unset" } else { "pinned" };
+                    panic!("no answer to request {id} ({case} config) before the hang guard")
+                })
                 .expect("stdout readable")
                 .expect("stdout open");
             let answer: Value = serde_json::from_str(&line).expect("one JSON frame per line");
