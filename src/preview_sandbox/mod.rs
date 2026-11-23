@@ -195,6 +195,7 @@ pub(crate) const UV_NOT_ENABLED: &str = "uvx previews are not enabled in this bu
 /// # Errors
 ///
 /// The plan's [`Refusal::Command`], or the uv gate's.
+#[cfg_attr(not(test), expect(dead_code, reason = "the preview route calls it"))]
 pub(crate) fn check(target: &Target) -> Result<(), Refusal> {
     let phases = fetch::plan(target)?;
     if matches!(phases.fetch, Some(fetch::Fetch::Uv(_))) {
