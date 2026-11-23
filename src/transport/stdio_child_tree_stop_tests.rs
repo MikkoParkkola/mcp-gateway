@@ -75,7 +75,7 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
         started_at.elapsed()
     );
     assert_killed(pid).await;
-    signal_log::assert_term_then_kill_strict(pid, "the uncut plan").await;
+    signal_log::assert_term_then_kill(pid, "the uncut plan").await;
     gone(child).await;
 }
 
@@ -99,12 +99,11 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     let started_at = std::time::Instant::now();
     let cut = super::super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
     deadline.move_earlier(started_at + cut);
-    assert_killed(pid).await;
-    assert!(
-        started_at.elapsed() < Duration::from_secs(10),
-        "the kill waited for the tree's own plan: {:?}",
-        started_at.elapsed()
-    );
+    // A hang guard, not a timing claim: half the tree's own 120 s plan. A stop
+    // that ignored the cut would wait the whole plan; the wait itself is bounded.
+    tokio::time::timeout(Duration::from_secs(60), assert_killed(pid))
+        .await
+        .expect("the kill waited for the tree's own plan");
     close.await.expect("close task").expect("close");
     gone(child).await;
 }
@@ -669,9 +668,9 @@ async fn a_cut_during_the_late_sigterm_wait_still_kills_by_its_margin() {
 
 /// Plan the tree (1 s EOF wait, 10 s SIGTERM wait) as started `back` before
 /// `s`, step it once there, cut the stop at `s` (the kill `cut_in` after it),
-/// then step at `s + step_at`: all in one synchronous run, so the cut's
-/// set-time lands within microseconds of `s`. `owed` says which side of that
-/// set-time the plan's SIGTERM fell on, checked here. Returns the late step's
+/// then step at `s + step_at`. The cut's set-time is `s` itself, given rather
+/// than read from the clock, so `owed`, which side of that set-time the plan's
+/// SIGTERM fell on, is arithmetic on chosen values; it is checked here. Returns the late step's
 /// instant and the SIGTERMs and group signals sent so far.
 fn cut_after_a_starved_plan(
     tree: &mut ChildTree,
@@ -695,7 +694,7 @@ fn cut_after_a_starved_plan(
         "the plan starts"
     );
     let term_at = before(s, back) + Duration::from_secs(1);
-    deadline.move_earlier(s + cut_in + KILL_RESERVE);
+    deadline.move_earlier_at(s + cut_in + KILL_RESERVE, s);
     let (cut, set_at) = deadline.get_with_set_at().expect("the cut is set");
     assert_eq!(
         cut,

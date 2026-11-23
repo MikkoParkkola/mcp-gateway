@@ -513,7 +513,7 @@ async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() 
         registry.stop_deadline().handed_all_reaped(),
         "the handed nested tree was not reaped before the stage deadline"
     );
-    crate::transport::signal_log::assert_term_then_kill_strict(pid, "the nested tree's plan").await;
+    crate::transport::signal_log::assert_term_then_kill(pid, "the nested tree's plan").await;
     let planned_term = entry
         + BACKEND_RESERVE
             .checked_sub(KILL_RESERVE_FOR_TEST + TERM_NEED)

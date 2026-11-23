@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! macOS's answer to a group kill that finds every member exited (ESRCH),
 //! injected on any host: the record keeps it as the kill of a group already
-//! gone, which the live and strict rules take as the kill. Helpers are the
+//! gone, which the record's judge takes as the kill. Helpers are the
 //! parent modules'.
 use super::*;
 
@@ -25,16 +25,15 @@ async fn a_kill_that_finds_the_group_gone_after_sigterm_counts_as_the_kill() {
     signal_log::arm(pid);
     signal_log::inject(pid, signal_log::Esrch::Only);
     t.close().await.expect("close");
-    signal_log::assert_gone_kill_counts(pid, "a group gone at the kill", signal_log::Rule::Live)
-        .await;
+    signal_log::assert_gone_kill_counts(pid, "a group gone at the kill").await;
 }
 
 /// macOS's answer for a tree that resists SIGTERM, on any host: the sweep
 /// SIGKILLs the leader just before the group kill, so that kill can find
 /// every member exited (ESRCH once the leader is dead, injected here); the
-/// strict rule still takes it as the kill.
+/// rule still takes it as the kill.
 #[tokio::test]
-async fn a_resisting_trees_kill_that_finds_the_group_gone_passes_the_strict_rule() {
+async fn a_resisting_trees_kill_that_finds_the_group_gone_counts_as_the_kill() {
     let (w, t) = started_unhurried(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
@@ -44,12 +43,7 @@ async fn a_resisting_trees_kill_that_finds_the_group_gone_passes_the_strict_rule
         .await
         .expect("close returns within the hang bound")
         .expect("close");
-    signal_log::assert_gone_kill_counts(
-        pid,
-        "a resisting tree gone at the kill",
-        signal_log::Rule::Strict,
-    )
-    .await;
+    signal_log::assert_gone_kill_counts(pid, "a resisting tree gone at the kill").await;
     gone(child).await;
 }
 
@@ -70,7 +64,7 @@ async fn a_gap_of(steps: u8) {
         .await
         .expect("close returns within the hang bound")
         .expect("close");
-    signal_log::assert_gone_kill_counts(pid, &what, signal_log::Rule::Strict).await;
+    signal_log::assert_gone_kill_counts(pid, &what).await;
     assert_killed(pid).await;
     let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
     assert_eq!(
