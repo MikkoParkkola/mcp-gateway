@@ -694,6 +694,10 @@ async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
     const DENIED: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; exit 1";
     const CANARY: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; \
                           echo 'preview-sandbox: refused at CANARY' >&2; exit 1";
+    // A helper's own non-mount refusal: only a probe that read the words can
+    // name it; one that dropped them falls through to the host's facts.
+    const HELPER_LINE: &str =
+        "echo 'preview-sandbox: refused at checking descriptors (inherited: [5])' >&2; exit 97";
     let apparmor = HostFacts {
         apparmor_restricts_userns: Some("1".into()),
         ..HostFacts::default()
@@ -702,10 +706,6 @@ async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
         probe_with(fake_launcher(DENIED), &apparmor).await,
         Err(Refusal::AppArmorRestricted)
     );
-    // A helper's own non-mount refusal: only a probe that read the words can
-    // name it; one that dropped them falls through to the host's facts.
-    const HELPER_LINE: &str =
-        "echo 'preview-sandbox: refused at checking descriptors (inherited: [5])' >&2; exit 97";
     assert_eq!(
         probe_with(fake_launcher(HELPER_LINE), &apparmor).await,
         Err(Refusal::Step(
@@ -733,10 +733,7 @@ async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
     let bounds = super::super::control::CONTROL_BOUNDS;
     let (launched, _) =
         launcher::launch_with(&mut prepared, spawn, deadline, bounds, launcher::reap_exit).await;
-    let refusal = launched
-        .err()
-        .expect("a fake launcher never starts")
-        .refusal;
+    let refusal = launched.expect_err("a fake launcher never starts").refusal;
     assert_eq!(
         refusal,
         Refusal::Step("the sandbox helper sent no valid status".into())

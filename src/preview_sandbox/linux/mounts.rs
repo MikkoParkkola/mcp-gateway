@@ -310,7 +310,7 @@ fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
 /// submount, or recreate it as a symlink when the host's is one.
 fn bind_read_only(path: &Path) -> Step {
     let target = staged(&path.to_string_lossy());
-    let meta = match call(SetupStep::Binding, "reading", path, || {
+    let Some(meta) = call(SetupStep::Binding, "reading", path, || {
         fs::symlink_metadata(path)
             .map(Some)
             .or_else(|e| match e.kind() {
@@ -318,9 +318,9 @@ fn bind_read_only(path: &Path) -> Step {
                 io::ErrorKind::NotFound => Ok(None),
                 _ => Err(e),
             })
-    })? {
-        Some(meta) => meta,
-        None => return Ok(()),
+    })?
+    else {
+        return Ok(());
     };
     if let Some(parent) = target.parent() {
         call(SetupStep::Binding, "creating", parent, || {

@@ -96,11 +96,11 @@ fn children_of(parent: u32) -> Vec<u32> {
             continue;
         };
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-        let ppid = stat
+        let its_parent = stat
             .rsplit_once(") ")
             .and_then(|(_, rest)| rest.split_whitespace().nth(1))
             .and_then(|p| p.parse::<u32>().ok());
-        if ppid == Some(parent) {
+        if its_parent == Some(parent) {
             found.push(pid);
         }
     }
@@ -156,6 +156,7 @@ fn outside_tmp_file() -> (tempfile::TempDir, String) {
 #[cfg(tp4)]
 #[tokio::test]
 async fn r25_each_setup_step_is_reported_by_its_name() {
+    type PlanEdit = Box<dyn FnOnce(&mut Plan)>;
     let Some(gateway) = helper().await else {
         return;
     };
@@ -166,12 +167,12 @@ async fn r25_each_setup_step_is_reported_by_its_name() {
             plan.fault = Some(Fault::FailAt {
                 step,
                 denied: false,
-            })
+            });
         }
     };
     let binding = file.clone();
     let masking = file.clone();
-    let cases: Vec<(&str, Box<dyn FnOnce(&mut Plan)>)> = vec![
+    let cases: Vec<(&str, PlanEdit)> = vec![
         (
             "binding",
             Box::new(move |p: &mut Plan| p.read_only.push(format!("{binding}/x"))),
@@ -299,7 +300,7 @@ async fn r26e_a_stray_descriptor_before_the_status_is_refused() {
     };
     let sleeper = target("/bin/sleep", &[MARKER]);
     let planted = start_edited(&gateway, &sleeper, |p| {
-        p.fault = Some(Fault::PlantBeforeStatus)
+        p.fault = Some(Fault::PlantBeforeStatus);
     });
     assert_eq!(
         planted.await.err(),
@@ -327,7 +328,7 @@ async fn r35e_a_stray_descriptor_after_the_close_stops_the_target() {
     };
     let sleeper = target("/bin/sleep", &[MARKER]);
     let mut started = start_edited(&gateway, &sleeper, |p| {
-        p.fault = Some(Fault::PlantAfterClose)
+        p.fault = Some(Fault::PlantAfterClose);
     })
     .await
     .expect("started before the strict check");

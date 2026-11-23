@@ -193,7 +193,7 @@ fn stand_in(lines: &[&str], hold: bool) -> impl FnOnce(&Plan) -> Result<Child, R
          s=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\n\
          s.sendall({:?}.encode())\n\
          {}\n",
-        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        lines.iter().flat_map(|l| [*l, "\n"]).collect::<String>(),
         if hold { "s.recv(1)" } else { "s.close()" }
     );
     move |plan: &Plan| {
@@ -350,7 +350,7 @@ async fn the_fetch_steps_clock_starts_at_the_launch() {
         helper(plan)
     };
     let (launched, _) = launch_with(&mut prepared, spawn, deadline, SHORT, reap_exit).await;
-    let refusal = launched.err().expect("refused").refusal;
+    let refusal = launched.expect_err("refused").refusal;
     let Refusal::Step(text) = &refusal else {
         panic!("{refusal:?}");
     };

@@ -185,12 +185,14 @@ pub(super) async fn launch_prepared(
     prepared: &mut Prepared,
     helper: &Path,
     deadline: tokio::time::Instant,
-) -> Result<Started, StartFailed> {
+) -> Result<Started, Box<StartFailed>> {
     let unshare = prepared.unshare;
     let spawn = |plan: &Plan| super::launch(unshare, helper, plan);
     let (launched, _ending) =
         launch_with(prepared, spawn, deadline, CONTROL_BOUNDS, reap_exit).await;
-    launched
+    // Boxed: a refusal may carry the unreaped process, which makes the error
+    // large beside a started preview.
+    launched.map_err(Box::new)
 }
 
 /// [`launch_prepared`] with the spawn, the bounds and the reap given, and,
