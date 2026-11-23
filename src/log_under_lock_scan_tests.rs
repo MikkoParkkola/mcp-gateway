@@ -14,10 +14,12 @@
 //! result, a `match` or `if` whose arm yields one, `Some(..)` and moves.
 
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::visit::Visit;
 use types::bound_names;
+
+use crate::test_source_files::rust_files;
 
 /// Macros that write a tracing line.
 const LOG_MACROS: &[&str] = &["trace", "debug", "info", "warn", "error", "event"];
@@ -678,20 +680,6 @@ fn scan(files: &[(String, syn::File)]) -> Vec<Hit> {
         hits.extend(s.hits);
     }
     hits
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Non-test source under src/, parsed, keyed by its path from the crate root.
