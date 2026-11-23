@@ -94,10 +94,15 @@ impl CapabilityBackend {
                     self.clear_rug_pull_if(&record.file, &record.actual);
                     continue;
                 }
-                // Unreadable is not resolved: the record stays, and the
-                // list is incomplete until the file reads again.
-                Err(_) => {
-                    mismatches.incomplete = true;
+                // Unreadable is not resolved: the record stays, and the file
+                // is reported as one the pass could not judge.
+                Err(error) => {
+                    let fault = if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        ReadFault::NoPermission
+                    } else {
+                        ReadFault::Unreadable
+                    };
+                    mismatches.unreadable.push((record, fault));
                     continue;
                 }
             };
@@ -116,9 +121,9 @@ impl CapabilityBackend {
                 }
                 Ok(_) => {}
                 // Garbled bytes resolve nothing: the record stays, and its
-                // summary cannot be built, so the list is incomplete.
+                // summary cannot be built, so it is reported as unjudged.
                 Err(()) => {
-                    mismatches.incomplete = true;
+                    mismatches.unreadable.push((record, ReadFault::Garbled));
                     continue;
                 }
             }
@@ -173,8 +178,34 @@ use std::path::Path;
 pub(crate) struct Mismatches {
     /// Each mismatch still on disk: its record, the bytes read and their hash.
     pub(crate) changes: Vec<(RugPullRecord, String, String)>,
-    /// A recorded file could not be read: the list is missing it.
-    pub(crate) incomplete: bool,
+    /// Each recorded file this pass could not judge, and why: never left out,
+    /// so a list built from both parts names every recorded file.
+    pub(crate) unreadable: Vec<(RugPullRecord, ReadFault)>,
+}
+
+#[cfg(feature = "webui")]
+impl ReadFault {
+    /// The reason class a To do item shows, shared with an unreadable client
+    /// config file's item.
+    pub(crate) const fn reason(self) -> crate::decisions::UnreadableReason {
+        match self {
+            Self::NoPermission => crate::decisions::UnreadableReason::NoPermission,
+            Self::Unreadable => crate::decisions::UnreadableReason::NotAReadableFile,
+            Self::Garbled => crate::decisions::UnreadableReason::DidNotParse,
+        }
+    }
+}
+
+/// Why a recorded changed file could not be judged on one pass.
+#[cfg(feature = "webui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadFault {
+    /// The gateway may not read it.
+    NoPermission,
+    /// It could not be read for another reason (it is a directory, say).
+    Unreadable,
+    /// It was read, but its pin line does not parse.
+    Garbled,
 }
 
 /// The `sha256:` pin a capability file declares: `Ok(None)` for none,

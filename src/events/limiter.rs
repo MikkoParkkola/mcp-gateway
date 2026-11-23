@@ -10,36 +10,39 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-const WINDOW: Duration = Duration::from_secs(60);
+/// The events verification window.
+pub(crate) const WINDOW: Duration = Duration::from_secs(60);
 
-/// A sliding one-minute window per host.
+/// A sliding window per key.
 pub(crate) struct HostLimiter {
-    per_minute: usize,
+    limit: usize,
+    window: Duration,
     max_hosts: usize,
     hosts: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
 
 impl HostLimiter {
-    pub(crate) fn new(per_minute: u32, max_hosts: usize) -> Self {
+    /// At most `limit` admissions per key in any `window`.
+    pub(crate) fn new(limit: u32, window: Duration, max_hosts: usize) -> Self {
         Self {
-            per_minute: usize::try_from(per_minute).unwrap_or(usize::MAX),
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+            window,
             max_hosts,
             hosts: Mutex::new(HashMap::new()),
         }
     }
 
     /// Take one slot for `host` at `now`; `false` when the host is at its
-    /// limit, or is new while the map is full of hosts active this minute.
+    /// limit, or is new while the map is full of hosts active in the window.
+    /// Expired entries are dropped wherever they sit, not only from the
+    /// front: callers read `now` before this lock, so entries can arrive out
+    /// of order, and `would_admit` counts the same live entries.
     pub(crate) fn admit(&self, host: &str, now: Instant) -> bool {
+        let live = |t: &Instant| now.duration_since(*t) < self.window;
         let mut hosts = self.hosts.lock();
         if !hosts.contains_key(host) && hosts.len() >= self.max_hosts {
             hosts.retain(|_, sent| {
-                while sent
-                    .front()
-                    .is_some_and(|t| now.duration_since(*t) >= WINDOW)
-                {
-                    sent.pop_front();
-                }
+                sent.retain(live);
                 !sent.is_empty()
             });
             if hosts.len() >= self.max_hosts {
@@ -47,17 +50,36 @@ impl HostLimiter {
             }
         }
         let sent = hosts.entry(host.to_owned()).or_default();
-        while sent
-            .front()
-            .is_some_and(|t| now.duration_since(*t) >= WINDOW)
-        {
-            sent.pop_front();
-        }
-        if sent.len() >= self.per_minute {
+        sent.retain(live);
+        if sent.len() >= self.limit {
             return false;
         }
         sent.push_back(now);
         true
+    }
+
+    /// Whether `admit` would let `host` in at `now`, recording nothing: for
+    /// limits that count only failures, checked before the work is done.
+    #[cfg(feature = "webui")] // only the UI's CLI login limits use it
+    pub(crate) fn would_admit(&self, host: &str, now: Instant) -> bool {
+        let live = |t: &Instant| now.duration_since(*t) < self.window;
+        let hosts = self.hosts.lock();
+        match hosts.get(host) {
+            Some(sent) => sent.iter().filter(|t| live(t)).count() < self.limit,
+            // A new key: `admit` takes it if the map has room or would shed
+            // an idle key to make some.
+            None => {
+                self.limit > 0
+                    && (hosts.len() < self.max_hosts
+                        || hosts.values().any(|sent| !sent.iter().any(live)))
+            }
+        }
+    }
+
+    /// Keys in the map now, live or not yet shed.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn tracked(&self) -> usize {
+        self.hosts.lock().len()
     }
 }
 
@@ -68,7 +90,7 @@ mod tests {
 
     #[test]
     fn limits_per_host_per_minute_and_recovers() {
-        let limiter = HostLimiter::new(2, 10);
+        let limiter = HostLimiter::new(2, WINDOW, 10);
         let t0 = Instant::now();
         assert!(limiter.admit("a", t0));
         assert!(limiter.admit("a", t0));
@@ -79,7 +101,7 @@ mod tests {
 
     #[test]
     fn a_full_map_refuses_only_new_hosts_and_sheds_idle_ones() {
-        let limiter = HostLimiter::new(5, 2);
+        let limiter = HostLimiter::new(5, WINDOW, 2);
         let t0 = Instant::now();
         assert!(limiter.admit("a", t0));
         assert!(limiter.admit("b", t0));
