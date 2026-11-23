@@ -25,7 +25,7 @@ async fn missing_server_is_recorded_as_syntax_on_mcp() {
         assert_eq!(answer["error"]["code"], -32602, "{missing}: {answer}");
         assert_eq!(
             answer["error"]["message"],
-            format!("Missing '{missing}' parameter"),
+            format!("JSON-RPC error -32602: Missing '{missing}' parameter"),
             "{missing}: {answer}"
         );
         assert_eq!(answer["id"], 5, "{missing}: {answer}");

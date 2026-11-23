@@ -343,7 +343,7 @@ async fn missing_server_is_recorded_as_syntax_on_stdio() {
             response
                 .pointer("/error/message")
                 .and_then(serde_json::Value::as_str),
-            Some(format!("Missing '{missing}' parameter").as_str()),
+            Some(format!("JSON-RPC error -32602: Missing '{missing}' parameter").as_str()),
             "{missing}: {response}"
         );
         assert_eq!(response["id"], json!(1), "{missing}: {response}");
