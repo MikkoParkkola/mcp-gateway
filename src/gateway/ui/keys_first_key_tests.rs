@@ -557,6 +557,8 @@ fn f11_a_hand_added_key_on_a_multi_user_gateway_is_no_pending_first_key() {
 fn fu_a_held_create_whose_journal_mark_fails_is_uncertain_without_a_secret() {
     use crate::config_persistence::journal::fault::{self, Fault};
     let fx = Fixture::new(starter(""));
+    // The file the next writer puts back, and so the base its save names.
+    let original = fx.revision();
     let armed = fault::set(&fx.path(), Fault::FailJournalMark);
     let sent = fx.post(Call::new(&fx.body("first")));
     assert_eq!(
@@ -579,7 +581,11 @@ fn fu_a_held_create_whose_journal_mark_fails_is_uncertain_without_a_secret() {
     assert!(recovery.contains("revoke"), "{recovery}");
     assert!(recovery.contains("by hand"), "{recovery}");
     assert!(recovery.contains("gateway.yaml"), "{recovery}");
-    let (status, answer) = save_environment(&fx, "settles-it");
+    // A save made against the file before the create: the writer restores
+    // that file first, then applies the save to it.
+    let field = json!({"field": "environment", "value": {"set": "settles-it"}});
+    let body = json!({"base_revision": original, "fields": [field]});
+    let (status, answer) = call(&fx, "POST", super::routes::UI_SETTINGS, &body);
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert!(fx.file_keys().is_empty(), "{}", fx.text());
     assert_eq!(revoke(&fx, "first"), revoke(&fx, "never-there"));

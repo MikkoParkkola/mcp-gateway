@@ -51,9 +51,13 @@ pub(crate) enum Waiting {
     /// `status` is the status rule's own sentence, so no caller asks it again.
     Yes {
         keys: Vec<String>,
-        #[expect(
-            dead_code,
-            reason = "the rule's sentence stays inside the question; no answer shows it"
+        // Read only by the derived `PartialEq`, which the rows use.
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "the rule's sentence stays inside the question; no answer shows it"
+            )
         )]
         status: String,
     },

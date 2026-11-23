@@ -327,7 +327,7 @@ struct Judge {
 }
 
 impl Judge {
-    fn decided(&self) -> std::sync::MutexGuard<'_, Decided> {
+    fn cell(&self) -> std::sync::MutexGuard<'_, Decided> {
         self.outcome
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -339,7 +339,7 @@ impl Judge {
             Refusal::Waiting(_) => "keys_waiting",
             Refusal::NotWritten => "not_written",
         };
-        self.decided().refusal = Some(why);
+        self.cell().refusal = Some(why);
         label.to_owned()
     }
 
@@ -366,7 +366,7 @@ impl Judge {
         }
         let mut candidate = self.file.clone();
         candidate.auth.api_keys.push(entry.as_key());
-        self.decided().held = matches!(
+        self.cell().held = matches!(
             waiting_first_key(running, &generation, &candidate, &overlay),
             Waiting::Yes { keys, .. } if keys.contains(&entry.name)
         );
@@ -485,12 +485,11 @@ fn held_unconfirmed() -> Response {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({
             "error": "state_uncertain",
-            "recovery": "the key was not created for use, and no secret was issued. Make a \
-                configuration change before restarting the gateway: that settles which \
-                gateway.yaml stands, and until then the key may be listed and the banner may \
-                show. If the key is then listed, revoke it before restarting, since no one \
-                holds its secret. If the gateway was already restarted and the web UI cannot \
-                be reached, remove the key's entry from gateway.yaml by hand and restart.",
+            "recovery": "nobody received this key's value, so it cannot be used. Which \
+                gateway.yaml is in place is not known yet: save any other setting first, which \
+                settles it. If the key then shows in the list, revoke it, and only then restart. \
+                Already restarted and the web UI no longer answers? Delete that key's entry \
+                from gateway.yaml by hand, then start the gateway again.",
         })),
     )
         .into_response()

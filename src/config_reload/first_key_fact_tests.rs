@@ -111,7 +111,8 @@ async fn w5_a_rolled_back_hold_traces_intent_then_write_and_restores() {
         matches!(answer, Err(ReplaceError::ReloadRefused { .. })),
         "{answer:?}"
     );
-    assert_eq!(trace, ["intent", "commit"]);
+    // The writer's trace names the roll-back step since the line added it.
+    assert_eq!(trace, ["intent", "commit", "rollback"]);
     assert_eq!(gw.file(), starter(&[]));
 }
 
