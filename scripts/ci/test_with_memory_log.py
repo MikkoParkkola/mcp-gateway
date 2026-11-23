@@ -9,7 +9,9 @@ status. It never limits time (the step's timeout-minutes does) and never prints 
 """
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -76,13 +78,14 @@ def rows() -> list[tuple[str, bool, str]]:
               and "Mem total 15983 used 1502 available 14200" in lines[0] and "Swap total 11263 used 12" in lines[0]
               and "pressure mem some 1.50 full 0.75" in lines[0] and "io some 2.25" in lines[0]
               and "load 3.99" in lines[0] and "cgroup MB 9216 oom_kill 2" in lines[0])
-        out.append(("W1 an 8 s command: start, 2+ samples, end exit 0, numbers parsed", ok, se[-400:]))
+        out.append(("W1 an 8 s command: start, 2+ samples, end exit 0, numbers parsed", ok, f"rc {rc}, {se[-400:]}"))
         # W2: the command's own failure status.
         rc, so, se, t = run(f"{w} bash -c 'exit 3'", env)
-        out.append(("W2 exit 3 passes through", rc == 3 and "end, exit 3:" in se.splitlines()[-1], se[-200:]))
+        out.append(("W2 exit 3 passes through", rc == 3 and "end, exit 3:" in se.splitlines()[-1], f"rc {rc}, {se[-200:]}"))
         # W3: a signal death is reported as a status, never as a limit.
         rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env)
-        out.append(("W3 SIGKILL: exit 137, no 'limit' wording", rc == 137 and "end, exit 137" in se and "limit" not in se, se[-200:]))
+        out.append(("W3 SIGKILL: exit 137, no 'limit' wording", rc == 137 and "end, exit 137" in se and "limit" not in se,
+                    f"rc {rc}, {se[-200:]}"))
         # W4: TERM, INT and HUP sent to the wrapper reach the command as TERM; it cleans up its child and exits 42.
         # `set -m` gives the backgrounded wrapper a normal INT (without job control, & ignores INT). The command sets its
         # trap, then writes its marker; the signal is sent when the marker exists (the command's own "ready" event, not a
@@ -95,16 +98,19 @@ def rows() -> list[tuple[str, bool, str]]:
             rc, so, se, t = run(cmd, env)
             child = marker.read_text().strip() if marker.exists() else ""
             gone = bool(child) and subprocess.run(["kill", "-0", child], capture_output=True).returncode != 0
-            out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone, se[-200:]))
+            out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone,
+                        f"rc {rc}, {t:.1f}s, child {'gone' if gone else 'still there or never written'}, {se[-200:]}"))
         # W11: a command that ignores the forwarded TERM keeps running and its own later status is the result.
         cmd = (f"set -m; {w} bash -c 'trap \"\" TERM; sleep 2; exit 7' & wp=$!; sleep 0.5; kill -TERM $wp; wait $wp")
         rc, so, se, t = run(cmd, env)
-        out.append(("W11 TERM ignored by the command: it finishes, rc 7", rc == 7 and "end, exit 7:" in se and t >= 1.8, se[-200:]))
+        out.append(("W11 TERM ignored by the command: it finishes, rc 7", rc == 7 and "end, exit 7:" in se and t >= 1.8,
+                    f"rc {rc}, {t:.1f}s, {se[-200:]}"))
         # W12: a bad interval falls back to the default (30 s) instead of sampling in a tight loop.
         for bad in ("abc", "00"):
             rc, so, se, t = run(f"{w} sleep 2", dict(env, MEM_LOG_EVERY=bad))
             n = sum(l.startswith("memory ") for l in se.splitlines())
-            out.append((f"W12 MEM_LOG_EVERY={bad} falls back to 30 s: start and end lines only", rc == 0 and n == 2, f"{n} lines"))
+            out.append((f"W12 MEM_LOG_EVERY={bad} falls back to 30 s: start and end lines only", rc == 0 and n == 2,
+                        f"rc {rc}, {n} lines"))
         # W6: the command's arguments never reach the wrapper's own output.
         rc, so, se, t = run(f"{w} true sk-SECRET-not-printed", env)
         out.append(("W6 no argv in the wrapper's output", "SECRET" not in se and "SECRET" not in so, se[-200:]))
@@ -119,9 +125,9 @@ def rows() -> list[tuple[str, bool, str]]:
         out.append(("W7 returns before the 60 s interval ends (no sampler left)", rc == 0, f"rc {rc}, {t:.1f}s"))
         # W8, W9: the caller shapes keep the failure status.
         rc, so, se, t = run(f"set -o pipefail; {w} false 2>&1 | tee {tmp}/x.log >/dev/null", env)
-        out.append(("W8 tee pipeline under pipefail keeps rc 1", rc == 1, ""))
+        out.append(("W8 tee pipeline under pipefail keeps rc 1", rc == 1, f"rc {rc}"))
         rc, so, se, t = run(f"bash -euo pipefail -c '{w} false'", env)
-        out.append(("W9 bash -euo pipefail -c keeps rc 1", rc == 1, ""))
+        out.append(("W9 bash -euo pipefail -c keeps rc 1", rc == 1, f"rc {rc}"))
         # W10: the command's stdout is byte-identical; samples go to stderr only.
         rc, so, se, t = run(f"{w} printf 'a\\nb c\\n'", env)
         out.append(("W10 stdout byte-identical, samples on stderr", so == "a\nb c\n" and "memory " in se, repr(so)))
@@ -129,7 +135,8 @@ def rows() -> list[tuple[str, bool, str]]:
         env = stubs(Path(d), with_free=False, with_proc=False)
         # W5: missing sources print n/a and never change the status.
         rc, so, se, t = run(f"{w} bash -c 'exit 5'", env)
-        out.append(("W5 no free, no /proc files: n/a, rc unchanged", rc == 5 and "n/a" in se and "end, exit 5" in se, se[-300:]))
+        out.append(("W5 no free, no /proc files: n/a, rc unchanged", rc == 5 and "n/a" in se and "end, exit 5" in se,
+                    f"rc {rc}, {se[-300:]}"))
     with tempfile.TemporaryDirectory() as d:
         env = stubs(Path(d))
         # W13: a command a signal kills before the wrapper first waits (here, while a slow `free` takes the start
@@ -139,20 +146,96 @@ def rows() -> list[tuple[str, bool, str]]:
         (Path(d) / "bin" / "free").write_text("#!/bin/sh\nsleep 1\n" + FREE.split("\n", 1)[1])
         rc, so, se, t = run(f"{w} bash -c 'kill -9 $$'", env, timeout=60)
         out.append(("W13 a command killed before the first wait: exit 137, no hang",
-                    rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]!r}"))
+                    rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]}"))
+    out.extend(gap_rows())
     return out
+
+
+def gap_rows() -> list[tuple[str, bool, str]]:
+    """W14, W15: a signal that reaches the wrapper before it has the command's pid is still passed on.
+
+    A BASH_ENV hook places the signal at one exact point from inside the wrapper: a DEBUG trap fires before each
+    command, and the hook's $0 guard leaves every other bash alone. W14 sends it just before `cmd=$!` (once per signal
+    kind), W15 just after the wrapper's trap line, before the launch. A dropped signal leaves `sleep 120` running and
+    the run hits its 30 s timeout; a forwarded one ends the command with TERM at once (exit 143). A hang is the
+    expected red only when the hook's own line is in stderr; without it the hook never fired and the row is broken."""
+    out = []
+    w = str(WRAPPER)
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        env = stubs(tmp)
+        ver = subprocess.run(["bash", "-c", "echo ${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"], env=env,
+                             capture_output=True, text=True).stdout.split()
+        # Below 5.1 the wrapper execs the command and never reaches the gap.
+        old = len(ver) < 2 or (int(ver[0]), int(ver[1])) < (5, 1)
+        cases = []
+        for sig in ("TERM", "INT", "HUP"):
+            said = "hook: " + sig + " now, next is cmd=$!"
+            body = ('case $BASH_COMMAND in "cmd=\\$!") trap - DEBUG; echo "hook: ' + sig
+                    + ' now, next is $BASH_COMMAND" >&2; kill -' + sig + ' $$ ;; esac')
+            cases.append(("W14 " + sig + " between the launch and cmd=$! reaches the command: exit 143", said, body))
+        said = "hook: HUP now, the trap is set"
+        body = ('if [ -n "${hook_armed-}" ]; then trap - DEBUG; echo "' + said + '" >&2; kill -HUP $$; '
+                'else case $BASH_COMMAND in "trap "*" TERM INT HUP") hook_armed=1 ;; esac; fi')
+        cases.append(("W15 HUP between the trap line and the launch reaches the command: exit 143", said, body))
+        for n, (label, said, body) in enumerate(cases):
+            if old:
+                out.append((label, True, "skipped: bash older than 5.1"))
+                continue
+            hook = tmp / f"hook-{n}.sh"
+            hook.write_text("case $0 in *with-memory-log.sh) trap '" + body + "' DEBUG ;; esac\n")
+            # Its own session, so the whole group can be killed afterwards: run() kills only its direct child, and a
+            # `sleep 120` left behind would hold the captured pipes open.
+            p = subprocess.Popen([w, "sleep", "120"], env=dict(env, BASH_ENV=str(hook)), cwd=ROOT, text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            try:
+                so, se = p.communicate(timeout=30)
+                rc = p.returncode
+            except subprocess.TimeoutExpired:
+                rc = -1
+            # Matched by process group, never by name alone: other runs on the host own sleeps too. Names only, as W7:
+            # never a process's arguments. A wrapper that ended has already stopped its own nap, so any sleep still
+            # in the group is the command's.
+            # The group is killed even if the scan itself fails, so nothing is left holding the pipes.
+            try:
+                ps = subprocess.run(["ps", "-A", "-o", "pgid=,comm="], capture_output=True, text=True).stdout
+                left = any(f[0] == str(p.pid) and f[-1].endswith("sleep")
+                           for f in map(str.split, ps.splitlines()) if f)
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(p.pid, signal.SIGKILL)
+            if rc == -1:
+                so, se = p.communicate()
+                se += "\nHUNG past 30 s"
+            lines = se.splitlines()
+            ok = (rc == 143 and se.count(said) == 1 and bool(lines) and "end, exit 143" in lines[-1] and not left)
+            out.append((label, ok, f"rc {rc}, hook line {se.count(said)}x, "
+                                   f"{'a sleep was left' if left else 'no sleep left'}, {se[-200:]}"))
+    return out
+
+
+def summary(results: list[tuple[str, bool, str]]) -> str:
+    """The script's last line: the count of wrong rows, then each one's label and detail (cut to 200 characters, ending
+    "..." when cut). A caller that keeps only the tail of the output (the kit's cheap stage keeps 12 lines) still learns
+    which row failed and what it saw."""
+    wrong = []
+    for label, ok, detail in results:
+        if not ok:
+            flat = " ".join(detail.split())
+            seen = flat if len(flat) <= 200 else flat[:197] + "..."
+            wrong.append(f"{label} [{seen}]" if seen else label)
+    return f"with-memory-log rows: {len(wrong)} wrong" + (": " + " | ".join(wrong) if wrong else "")
 
 
 def main() -> int:
     if not WRAPPER.is_file():
         print(f"WRONG {WRAPPER.relative_to(ROOT)} is missing")
         return 1
-    wrong = 0
-    for label, ok, detail in rows():
-        wrong += not ok
+    results = rows()
+    for label, ok, detail in results:
         print(f"{'ok   ' if ok else 'WRONG'} {label}" + ("" if ok else f"\n      {detail!r}"))
-    print(f"with-memory-log rows: {wrong} wrong")
-    return 1 if wrong else 0
+    print(summary(results))
+    return 0 if all(ok for _, ok, _ in results) else 1
 
 
 if __name__ == "__main__":
