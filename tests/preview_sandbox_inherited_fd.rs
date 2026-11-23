@@ -16,10 +16,9 @@ mod private_home;
 mod gateway_bin;
 
 use std::os::fd::AsFd as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use mcp_gateway::preview_sandbox::{Target, start_with_helper};
-use tokio::io::AsyncReadExt as _;
+use mcp_gateway::preview_sandbox::{Refusal, probe_with_helper};
 
 /// The two tests here never overlap: the descriptor the preview row leaks on
 /// purpose would reach the child the routing row starts. Each holds this lock
@@ -32,43 +31,30 @@ async fn an_inherited_descriptor_makes_the_preview_refuse() {
     let _alone = ALONE.lock().await;
     let file = tempfile::tempfile().unwrap();
     rustix::io::fcntl_setfd(file.as_fd(), rustix::io::FdFlags::empty()).unwrap();
-    let target = Target {
-        program: PathBuf::from("/bin/true"),
-        args: Vec::new(),
-    };
-    let mut started = match start_with_helper(Path::new(gateway_bin::path()), &target, &[]) {
-        Ok(started) => started,
-        Err(refusal) => {
-            assert!(
-                std::env::var_os("PREVIEW_SANDBOX_REQUIRED").is_none(),
-                "the sandbox is required here but refused: {refusal}"
-            );
-            return;
+    // The descriptor check before the helper connects is host-level, so the
+    // probe, which reads the sandbox's own words, is what reports it.
+    let refused = probe_with_helper(Path::new(gateway_bin::path())).await;
+    drop(file);
+    // Only the host refusing the namespaces may skip, and not where the
+    // sandbox is required; any other answer is this row's own.
+    let host_refused = match &refused {
+        Err(Refusal::AppArmorRestricted | Refusal::UserNamespacesDisabled | Refusal::Container) => {
+            true
         }
+        Err(Refusal::Step(step)) => step.starts_with("starting the namespaces"),
+        _ => false,
     };
-    let mut stderr = String::new();
-    started
-        .child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .await
-        .unwrap();
-    let status = started.child.wait().await.unwrap();
-    if stderr.starts_with("unshare:") {
+    if host_refused {
         assert!(
             std::env::var_os("PREVIEW_SANDBOX_REQUIRED").is_none(),
-            "the sandbox is required here but refused: {stderr}"
+            "the sandbox is required here but refused: {refused:?}"
         );
         return;
     }
-    assert!(!status.success());
     assert!(
-        stderr.contains("refused at checking descriptors (inherited:"),
-        "{stderr}"
+        matches!(&refused, Err(Refusal::Step(step)) if step.starts_with("checking descriptors (inherited")),
+        "{refused:?}"
     );
-    drop(file);
 }
 
 /// T3-T5: this binary's gateway home routes to the test-home override.

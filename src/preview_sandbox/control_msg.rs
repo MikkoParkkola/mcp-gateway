@@ -191,10 +191,6 @@ impl SetupStep {
     /// `AppArmor` only for a mount step the kernel denied on a host whose
     /// `AppArmor` blocks unprivileged mounts; any other case names the step.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the launch reads the helper's status")
-    )]
     pub(crate) fn refusal(self, denied: bool, host_restricts: bool) -> super::Refusal {
         match (self.mounts() && denied, host_restricts) {
             (true, true) => super::Refusal::AppArmorRestricted,
@@ -229,10 +225,6 @@ struct SetupRefusedLine {
 
 impl SetupStatus {
     /// The status as one control line, without its newline.
-    #[cfg_attr(
-        all(not(test), target_os = "linux"),
-        expect(dead_code, reason = "the helper sends its status in the launch split")
-    )]
     pub(crate) fn encode(self) -> String {
         let line = match self {
             Self::Done => serde_json::to_string(&SetupDoneLine { setup_done: true }),

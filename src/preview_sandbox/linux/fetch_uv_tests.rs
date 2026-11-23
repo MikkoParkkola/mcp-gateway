@@ -7,10 +7,11 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use super::super::plan::{FetchPaths, NpmFetch, UvFetch};
 use super::{WRAPPER, write_wrapper};
-use crate::preview_sandbox::control_msg::FetchStep;
+use crate::preview_sandbox::control_msg::SetupStep;
 
 /// U-wrapper, kills m-late-setup: a home the wrapper cannot be written in
-/// (it lies under a regular file, so ENOTDIR for any euid) fails at setup.
+/// (it lies under a regular file, so ENOTDIR for any euid) fails as a setup
+/// step before any `fetch_start`: the helper's mounting status, not denied.
 #[test]
 fn u_wrapper_a_write_failure_is_setup() {
     let root = tempfile::tempdir().expect("root");
@@ -18,7 +19,7 @@ fn u_wrapper_a_write_failure_is_setup() {
     std::fs::write(&file, "").expect("file");
     let failed =
         write_wrapper(&file.join("home"), "/usr/bin/python3.12").expect_err("the write fails");
-    assert_eq!(failed.step, FetchStep::Setup);
+    assert_eq!((failed.step, failed.denied), (SetupStep::Mounting, false));
 }
 
 /// U-wrapper, kills m-no-wrapper-flag, m-unquoted-wrapper and m-wrapper-mode:
@@ -81,7 +82,6 @@ fn uv() -> UvFetch {
 #[test]
 fn u_both_a_plan_with_npm_and_uv_refuses() {
     let paths = |npm: Option<NpmFetch>, uv: Option<UvFetch>| FetchPaths {
-        control: "/run/x/control.sock".into(),
         ca: "/run/x/ca.pem".into(),
         npm,
         uv,

@@ -72,12 +72,14 @@ fn fetch_plan(fetch: bool) -> Plan {
         env: Vec::new(),
         program: "/bin/true".into(),
         target: vec!["true".into()],
+        control: "/run/x/control.sock".into(),
         fetch: fetch.then(|| plan::FetchPaths {
-            control: "/run/x/control.sock".into(),
             ca: "/run/x/ca.pem".into(),
             npm: None,
             uv: None,
         }),
+        #[cfg(debug_assertions)]
+        fault: None,
     }
 }
 

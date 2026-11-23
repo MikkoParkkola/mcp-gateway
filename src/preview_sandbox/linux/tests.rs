@@ -588,25 +588,26 @@ fn a_linked_node_is_found_on_path_through_its_real_directory() {
     assert_eq!(node_dir, real_bin);
 }
 
-/// RF8 (G2), kills "the helper's stderr reaches the caller after the
-/// credential": once the credential is out, a sandbox that ended first is
-/// refused in fixed words whatever its stderr held; before it, the helper's
-/// own refusal is still classified from its stderr.
+/// RF8 (G2), kills "the helper's stderr reaches the caller": a sandbox that
+/// ended before any status is refused in fixed words, with no stderr to take
+/// them from, before the credential as after it; only the after-credential
+/// case says the fetch began, and only the silent one lets the probe read.
 #[test]
-fn rf8_no_helper_stderr_reaches_the_caller_after_the_credential() {
-    let url = ["https", "://x", ":0123abcd", "@registry.npmjs.org/p"].concat();
-    let stderr = format!(
-        "preview-sandbox: refused at fetching the package (npm ERR! {url} /home/runner/.npmrc)"
-    );
-    let after = super::ended_refusal(true, &stderr);
-    let text = format!("{after:?} {after}");
-    for leaked in ["0123abcd", "registry.npmjs.org", ".npmrc", "npm ERR"] {
-        assert!(!text.contains(leaked), "{text}");
-    }
-    assert_eq!(after, super::ended_refusal(true, ""));
+fn rf8_no_helper_stderr_reaches_the_caller() {
+    use super::launcher::{How, ended_first};
     assert_eq!(
-        super::ended_refusal(false, &stderr),
-        super::classify(&stderr)
+        ended_first(true),
+        (
+            Refusal::Step("the fetch (the sandbox ended before it finished)".into()),
+            How::Reported
+        )
+    );
+    assert_eq!(
+        ended_first(false),
+        (
+            Refusal::Step("the sandbox helper sent no valid status".into()),
+            How::EndedSilently
+        )
     );
 }
 
