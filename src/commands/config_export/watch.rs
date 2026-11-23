@@ -11,7 +11,7 @@ use std::path::Path;
 
 use mcp_gateway::{cli::ConnectionMode, config::Config};
 
-use super::{ExportTarget, build_gateway_entry, client_specs, export_one};
+use super::{ExportTarget, build_gateway_entry, client_specs, entry_url::print_notes, export_one};
 
 /// Watch `config_path` for changes and re-export whenever it is modified.
 ///
@@ -26,12 +26,6 @@ pub(super) async fn run_watch_loop(
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
-
-    println!();
-    println!(
-        "Watching {} for changes (Ctrl+C to stop)...",
-        config_path.display()
-    );
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = match recommended_watcher(tx) {
@@ -54,6 +48,13 @@ pub(super) async fn run_watch_loop(
         eprintln!("Warning: Cannot watch {}: {e}", watch_path.display());
         return;
     }
+    // Printed only once the watch is live, so a reader of this line can edit
+    // the file and rely on the change being seen.
+    println!();
+    println!(
+        "Watching {} for changes (Ctrl+C to stop)...",
+        config_path.display()
+    );
 
     let debounce = Duration::from_millis(500);
     let mut last_event: Option<Instant> = None;
@@ -87,7 +88,17 @@ pub(super) async fn run_watch_loop(
 
             match Config::load(Some(config_path)) {
                 Ok(config) => {
-                    let entry = build_gateway_entry(&config, Some(config_path), mode);
+                    // A URL no client can use skips this regeneration and
+                    // touches no file; the loop goes on, so the next good
+                    // edit regenerates.
+                    let gateway = match build_gateway_entry(&config, Some(config_path), mode) {
+                        Ok(gateway) => gateway,
+                        Err(e) => {
+                            eprintln!("  Cannot regenerate: {e}");
+                            continue;
+                        }
+                    };
+                    let entry = gateway.value.clone();
                     let specs = client_specs(target);
                     let mut updated = 0usize;
                     for spec in specs {
@@ -103,6 +114,7 @@ pub(super) async fn run_watch_loop(
                         }
                     }
                     println!("[{now}] Done ({updated} client(s) updated).");
+                    print_notes(&gateway, &mut std::io::stderr());
                 }
                 Err(e) => eprintln!("  Cannot reload config: {e}"),
             }
