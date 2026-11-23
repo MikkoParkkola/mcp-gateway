@@ -679,6 +679,20 @@ impl Gateway {
                 }
                 Err(error) => {
                     crate::gateway::delivery_facts::outlet(&error);
+                    // Written before it is answered, with the who the stdio
+                    // signing refusal records; the answer below is today's.
+                    let error = match crate::gateway::router::settle_stdio_admission(
+                        meta_mcp,
+                        super::stdio_audit_who(meta_mcp.record_key()),
+                        (arguments.as_ref(), &tool_name, session_id),
+                        id.clone(),
+                        error,
+                    )
+                    .await
+                    {
+                        std::ops::ControlFlow::Continue(error) => error,
+                        std::ops::ControlFlow::Break(unavailable) => break 'tool_call unavailable,
+                    };
                     // MIK-8747: gateway-authored refusal data (the cross-era
                     // replay refusal) stays on the frame.
                     if let crate::Error::JsonRpc {
