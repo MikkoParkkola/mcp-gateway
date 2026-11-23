@@ -70,6 +70,16 @@ fn the_staged_dark_list_is_exactly_the_sources_that_carry_the_attribute() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
     staged_sources(&root.join("src/preview_sandbox"), root, &mut found);
+    // The preview's transport half lives beside the other transports.
+    for file in [
+        "src/transport/handshake.rs",
+        "src/transport/preview_pipe.rs",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).expect("read a transport source");
+        if carries_staged_dark(&text) {
+            found.push(file.to_owned());
+        }
+    }
     found.sort();
     let mut named: Vec<String> = listed().into_iter().map(|(path, _)| path).collect();
     named.sort();
