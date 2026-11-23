@@ -177,13 +177,77 @@ impl<'ast> Visit<'ast> for Finder {
 /// The sites in one file's text, or why it could not be read as Rust.
 fn sites_in(file: &str, text: &str) -> Result<Vec<Site>, String> {
     let parsed = syn::parse_file(text).map_err(|e| format!("{file} does not parse: {e}"))?;
+    Ok(sites_of(file, &parsed))
+}
+
+fn sites_of(file: &str, parsed: &syn::File) -> Vec<Site> {
     let mut finder = Finder {
         file: file.to_owned(),
         owner: Vec::new(),
         found: Vec::new(),
     };
-    finder.visit_file(&parsed);
-    Ok(finder.found)
+    finder.visit_file(parsed);
+    finder.found
+}
+
+/// The directory a file's out-of-line child modules live in: its own folder for `lib.rs`, `main.rs` and `mod.rs`,
+/// otherwise a folder named after the file.
+fn module_dir(rel: &str) -> String {
+    let (folder, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    match name {
+        "lib.rs" | "main.rs" | "mod.rs" => folder.to_owned(),
+        _ => rel.trim_end_matches(".rs").to_owned(),
+    }
+}
+
+/// The `#[path = ".."]` of a module item, if it has one.
+fn path_attr(attrs: &[syn::Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| match &attr.meta {
+        syn::Meta::NameValue(pair) if pair.path.is_ident("path") => match &pair.value {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) => Some(text.value()),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// The module stems (a path without `.rs`) that `items` declare under a test-only cfg, or declare at all when
+/// `inherited` (the declaring file or module compiles only under test): the stem's own file and every file below it
+/// compile only under test. `dir` is where `items`' out-of-line children live and `folder` is the declaring file's
+/// own folder, which a `#[path]` is relative to.
+fn test_module_stems(
+    items: &[syn::Item],
+    dir: &str,
+    folder: &str,
+    inherited: bool,
+    out: &mut Vec<String>,
+) {
+    for item in items {
+        let syn::Item::Mod(module) = item else {
+            continue;
+        };
+        let name = module.ident.to_string();
+        match (&module.content, inherited || test_only(&module.attrs)) {
+            (None, true) => out.push(match path_attr(&module.attrs) {
+                Some(path) => format!("{folder}/{}", path.trim_end_matches(".rs")),
+                None => format!("{dir}/{name}"),
+            }),
+            (Some(_), true) => out.push(format!("{dir}/{name}")),
+            (Some((_, inner)), false) => {
+                test_module_stems(inner, &format!("{dir}/{name}"), folder, false, out);
+            }
+            (None, false) => {}
+        }
+    }
+}
+
+/// Whether `rel` is the file of module `stem` or below it.
+fn under_stem(rel: &str, stem: &str) -> bool {
+    rel.strip_prefix(stem)
+        .is_some_and(|rest| rest == ".rs" || rest.starts_with('/'))
 }
 
 /// A file that only tests compile, by its path: the same rule LOGINJ.6 uses for its scan.
@@ -262,20 +326,44 @@ fn covered(site: &Site, rows: &[Allowed]) -> bool {
     })
 }
 
-/// Every site in the production tree, sorted.
+/// Every site in the production tree, sorted. A file is left out when only tests compile it: by its path (the rule
+/// above), or because the `mod` item that declares it is under a test-only cfg, which covers every file below it.
 fn production_sites() -> Vec<Site> {
     let base = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut sites = Vec::new();
+    let mut parsed = Vec::new();
     for tree in TREES {
         let mut paths = Vec::new();
         rust_files(&base.join(tree), &mut paths);
         for file in paths {
             let rel = slash_path(base, &file);
-            if !test_file(&rel) {
-                let source =
-                    std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{rel}: {e}"));
-                sites.extend(sites_in(&rel, &source).unwrap_or_else(|e| panic!("{e}")));
-            }
+            let source = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let tree =
+                syn::parse_file(&source).unwrap_or_else(|e| panic!("{rel} does not parse: {e}"));
+            parsed.push((rel, tree));
+        }
+    }
+    // A module a test-only file declares is test-only too, so repeat until no new stem appears.
+    let mut stems: Vec<String> = Vec::new();
+    let test_only_file =
+        |rel: &str, stems: &[String]| test_file(rel) || stems.iter().any(|s| under_stem(rel, s));
+    loop {
+        let mut found = Vec::new();
+        for (rel, tree) in &parsed {
+            let folder = rel.rsplit_once('/').map_or("", |(folder, _)| folder);
+            let inherited = test_only_file(rel, &stems);
+            test_module_stems(&tree.items, &module_dir(rel), folder, inherited, &mut found);
+        }
+        found.sort();
+        found.dedup();
+        if found == stems {
+            break;
+        }
+        stems = found;
+    }
+    let mut sites = Vec::new();
+    for (rel, tree) in &parsed {
+        if !test_only_file(rel, &stems) {
+            sites.extend(sites_of(rel, tree));
         }
     }
     sites.sort();
@@ -408,6 +496,41 @@ fn test_only_prints_are_skipped_and_methods_are_keyed_by_type() {
     );
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].0, "S::m", "{hits:?}");
+}
+
+/// L2j: a file whose declaring `mod` item is test-only is not scanned, nor anything below it, nor what a test-only
+/// file declares in turn; a `#[path]` is read from the declaring file's folder.
+#[test]
+fn modules_declared_under_test_are_found_from_their_declaration() {
+    let declaring = syn::parse_file(
+        "#[cfg(test)] mod a; #[cfg(test)] #[path = \"b_rows.rs\"] mod b; \
+         mod c { #[cfg(test)] mod d; } mod e;",
+    )
+    .expect("parses");
+    let mut stems = Vec::new();
+    test_module_stems(
+        &declaring.items,
+        &module_dir("src/x/y.rs"),
+        "src/x",
+        false,
+        &mut stems,
+    );
+    assert_eq!(
+        stems,
+        ["src/x/y/a", "src/x/b_rows", "src/x/y/c/d"],
+        "{stems:?}"
+    );
+    let mut inherited = Vec::new();
+    test_module_stems(&declaring.items, "src/t", "src", true, &mut inherited);
+    assert!(
+        inherited.contains(&String::from("src/t/e")),
+        "{inherited:?}"
+    );
+    assert!(under_stem("src/x/y/a.rs", "src/x/y/a"));
+    assert!(under_stem("src/x/y/a/deep.rs", "src/x/y/a"));
+    assert!(!under_stem("src/x/y/ab.rs", "src/x/y/a"));
+    assert_eq!(module_dir("src/lib.rs"), "src");
+    assert_eq!(module_dir("src/x/mod.rs"), "src/x");
 }
 
 /// A production file that syn cannot parse fails the scan rather than hiding a print.
