@@ -3,7 +3,6 @@ src/backend/package_cache.rs	retire_now	helper:create_new_private	1	helper	calls
 src/capability/executor/cli_run.rs	create	helper:create_dir_private	1	helper	calls the crate's create_dir_private
 src/capability/executor/save_file.rs	create_new	open-create	1	no-secret	user-fetched content, saved where the user directs; inherits that folder's access like any file the user saves; not a gateway credential
 src/capability/file_writer.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic
-src/capability/openapi/generated.rs	write_to_file	fs-write	1	no-secret	generated capability YAML; public
 src/capability/pin_file.rs	pin_file_until	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/chains/checkpoint.rs	append	open-create	1	no-secret	chain checkpoints; not a trust decision
 src/cli_support/init.rs	write_init_files_with	file-create	1	no-secret	starter sample capability files; public (the config goes through the config writer)

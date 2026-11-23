@@ -6,6 +6,7 @@ src/capability/executor/save_file.rs	create_new	.open	1	write-only	creates a fet
 src/capability/file_writer.rs	read_current	.open	1	not-config	reads a capability YAML under the directory lock; public definitions
 src/capability/loader.rs	load_capability_file	fs::read	1	not-config	capability YAML, read once; the same bytes are parsed and digested; public definitions
 src/capability/openapi/convert.rs	convert_file	fs::read_to_string	1	not-config	OpenAPI spec input; public
+src/capability/openapi/generated.rs	write_to_file	.open	1	write-only	creates a generated capability YAML only if absent (create_new); reads nothing
 src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	capability YAML; public definitions
 src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
 src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing

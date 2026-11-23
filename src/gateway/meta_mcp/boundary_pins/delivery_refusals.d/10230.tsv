@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/import.rs	import_handler	refusal	2	no-record	admin UI import: a tool whose capability file name is taken is named in the answer's errors; no call delivery
