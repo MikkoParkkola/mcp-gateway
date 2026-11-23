@@ -478,7 +478,8 @@ async fn buffered(
         headers,
         body: bytes,
     };
-    render_response(&response, token, json, origin, path, super::Request::Read)
+    let target = (path, &reqwest::Method::GET);
+    render_response(&response, token, json, origin, target, super::Request::Read)
 }
 
 /// Writes and flushes one printed piece: `Ok(true)` to go on, `Ok(false)`

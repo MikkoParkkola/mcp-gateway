@@ -52,7 +52,12 @@ fn decided(allows: &[Allow]) -> Decision {
     for allow in allows {
         noted.allowed(allow.clone());
     }
-    noted.decision(Decided::Fresh, Refused::No, None)
+    noted.decision(
+        Decided::Fresh,
+        Refused::No,
+        None,
+        crate::security::audit::CredentialKind::None,
+    )
 }
 
 /// What a record names: kind, rule id and grant id.
@@ -120,7 +125,12 @@ fn not_redecided_loses_to_any_check() {
     let mtls = weaker()[0].clone();
     let mut noted = Noted::not_redecided();
     noted.allowed(mtls.clone());
-    let got = noted.decision(Decided::Fresh, Refused::No, None);
+    let got = noted.decision(
+        Decided::Fresh,
+        Refused::No,
+        None,
+        crate::security::audit::CredentialKind::None,
+    );
     assert_eq!(named(&got), expected(&mtls));
 }
 
@@ -135,6 +145,7 @@ fn a_refusal_wins_over_any_allow() {
         Decided::Fresh,
         Refused::of(crate::security::audit::AuditOutcome::Denied(-32600)),
         None,
+        crate::security::audit::CredentialKind::None,
     );
     assert_eq!(
         named(&got),
@@ -153,8 +164,11 @@ fn a_refusal_wins_over_any_allow() {
 fn a_cache_hit_names_no_check_and_no_grant() {
     let mut noted = Noted::default();
     noted.allowed(grant());
-    let got = noted
-        .as_not_redecided()
-        .decision(Decided::CacheHitNotRedecided, Refused::No, None);
+    let got = noted.as_not_redecided().decision(
+        Decided::CacheHitNotRedecided,
+        Refused::No,
+        None,
+        crate::security::audit::CredentialKind::None,
+    );
     assert_eq!(named(&got), (DecisionKind::NotRedecided, None, None));
 }

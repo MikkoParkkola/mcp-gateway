@@ -11,7 +11,8 @@ use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
 use super::fragments::{
-    Table, live_base, multiset_delta, pin_table, scratch_table, without_first_row,
+    Bless, Table, bless_ticket, delta_or_bless, live_base, pin_table, scratch_table,
+    without_first_row,
 };
 use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
@@ -76,8 +77,9 @@ fn root_keys() -> &'static std::collections::BTreeMap<String, Family> {
 }
 
 /// The reasons' class words a randomness allow may give; `credential` only in
-/// `src/random_secret.rs`.
-const RANDOMNESS_CLASSES: [&str; 9] = [
+/// `src/random_secret.rs`. `user code`: a short code a person types (the CLI
+/// login code, 50 bits, live 600 s); not a secret the gateway keeps.
+const RANDOMNESS_CLASSES: [&str; 10] = [
     "id",
     "jitter",
     "record key",
@@ -87,6 +89,7 @@ const RANDOMNESS_CLASSES: [&str; 9] = [
     "sample",
     "key",
     "credential",
+    "user code",
 ];
 
 /// The names `banned` must read, a row against a misparse of the span.
@@ -322,7 +325,7 @@ fn inventory() -> Vec<String> {
 #[test]
 fn t1b_every_production_allow_of_the_ban_is_pinned() {
     let actual = inventory();
-    allows_check(&actual, &pin_table("allows")).unwrap_or_else(|m| panic!("{m}"));
+    allows_check(&actual, &pin_table("allows"), bless_ticket()).unwrap_or_else(|m| panic!("{m}"));
     let classes = [
         "Visibility",
         "Discovery",
@@ -545,30 +548,34 @@ fn t1a_every_classed_read_is_pinned() {
         "unclassifiable operation use: {:?}",
         found.bad
     );
-    classes_check(&found.rows, &pin_table("scoped_backends_classes"))
-        .unwrap_or_else(|m| panic!("{m}"));
+    classes_check(
+        &found.rows,
+        &pin_table("scoped_backends_classes"),
+        bless_ticket(),
+    )
+    .unwrap_or_else(|m| panic!("{m}"));
 }
 
 /// The allow table check: `actual` against the pinned rows of `table`.
-fn allows_check(actual: &[String], table: &Table) -> Result<(), String> {
+fn allows_check(actual: &[String], table: &Table, bless: Option<Bless<'_>>) -> Result<(), String> {
     let pinned: Vec<(&Path, &str)> = table
         .rows()
         .iter()
         .filter(|(_, l)| !l.trim().is_empty())
         .map(|(file, l)| (file.as_path(), l.as_str()))
         .collect();
-    multiset_delta("allows", actual, &pinned).map_or(Ok(()), Err)
+    delta_or_bless("allows", actual, &pinned, bless).map_or(Ok(()), Err)
 }
 
 /// The class table check: the found rows against the pinned rows of `table`.
-fn classes_check(found: &[String], table: &Table) -> Result<(), String> {
+fn classes_check(found: &[String], table: &Table, bless: Option<Bless<'_>>) -> Result<(), String> {
     let pinned: Vec<(&Path, &str)> = table
         .rows()
         .iter()
         .filter(|(_, l)| !l.trim().is_empty())
         .map(|(file, l)| (file.as_path(), l.as_str()))
         .collect();
-    multiset_delta("scoped_backends_classes", found, &pinned).map_or(Ok(()), Err)
+    delta_or_bless("scoped_backends_classes", found, &pinned, bless).map_or(Ok(()), Err)
 }
 
 /// T1d: the `Registry::new` call sites. Mutant T1d-m1: a second one.
@@ -590,7 +597,7 @@ fn t1d_registry_construction_sites_are_pinned() {
 fn allows_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("allows"));
     let (_root, table) = scratch_table("allows", &base, &[("0.tsv", &moved)]);
-    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+    allows_check(&inventory(), &table, None).unwrap_or_else(|m| panic!("{m}"));
 }
 
 /// FRAG.2: a stale row in a fragment fails the allow check, naming the
@@ -599,7 +606,7 @@ fn allows_reads_a_required_row_from_a_fragment() {
 fn allows_rejects_a_stale_fragment_row() {
     let stale = "src/nowhere.rs\tnothing\tstatement\tLifecycle\tgetx1\n";
     let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", stale)]);
-    let err = allows_check(&inventory(), &table).expect_err("a stale fragment row fails");
+    let err = allows_check(&inventory(), &table, None).expect_err("a stale fragment row fails");
     assert!(err.contains("0.tsv"), "{err}");
 }
 
@@ -609,7 +616,7 @@ fn allows_rejects_a_stale_fragment_row() {
 fn scoped_classes_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("scoped_backends_classes"));
     let (_root, table) = scratch_table("scoped_backends_classes", &base, &[("0.tsv", &moved)]);
-    classes_check(&ops().rows, &table).unwrap_or_else(|m| panic!("{m}"));
+    classes_check(&ops().rows, &table, None).unwrap_or_else(|m| panic!("{m}"));
 }
 
 /// FRAG.2: a stale row in a fragment fails the class check, naming the
@@ -622,7 +629,7 @@ fn scoped_classes_rejects_a_stale_fragment_row() {
         &live_base("scoped_backends_classes"),
         &[("0.tsv", stale)],
     );
-    let err = classes_check(&ops().rows, &table).expect_err("a stale fragment row fails");
+    let err = classes_check(&ops().rows, &table, None).expect_err("a stale fragment row fails");
     assert!(err.contains("0.tsv"), "{err}");
 }
 
@@ -643,7 +650,7 @@ fn a_legitimate_repeat_may_split_across_files() {
         .expect("the second copy");
     let rest = format!("{}{}", &base[..at], &base[at + repeated.len() + 1..]);
     let (_root, table) = scratch_table("allows", &rest, &[("0.tsv", &format!("{repeated}\n"))]);
-    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+    allows_check(&inventory(), &table, None).unwrap_or_else(|m| panic!("{m}"));
 }
 
 /// A row the table lacks is listed to add, in the reader's own fragment.
@@ -651,7 +658,7 @@ fn a_legitimate_repeat_may_split_across_files() {
 fn a_missing_allow_row_is_listed_to_add_in_your_fragment() {
     let (base, _) = without_first_row(&live_base("allows"));
     let (_root, table) = scratch_table("allows", &base, &[]);
-    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    let err = allows_check(&inventory(), &table, None).expect_err("a missing row fails");
     assert!(err.contains("rows to add"), "{err}");
     assert!(err.contains("allows.d/<ticket>.tsv"), "{err}");
 }
@@ -662,7 +669,7 @@ fn a_missing_allow_row_is_listed_to_add_in_your_fragment() {
 fn a_surplus_copy_across_files_fails_naming_both() {
     let (_, moved) = without_first_row(&live_base("allows"));
     let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", &moved)]);
-    let err = allows_check(&inventory(), &table).expect_err("a surplus copy fails");
+    let err = allows_check(&inventory(), &table, None).expect_err("a surplus copy fails");
     assert!(err.contains("1 x "), "{err}");
     assert!(
         err.contains("allows.tsv") && err.contains("allows.d/0.tsv"),
@@ -676,10 +683,24 @@ fn a_surplus_copy_across_files_fails_naming_both() {
 fn the_delta_comes_before_any_dump() {
     let (base, _) = without_first_row(&live_base("allows"));
     let (_root, table) = scratch_table("allows", &base, &[]);
-    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    let err = allows_check(&inventory(), &table, None).expect_err("a missing row fails");
     let add = err.find("rows to add").expect("a rows-to-add section");
     let dump = err
         .find("for comparison only; do not paste into any table")
         .expect("the comparison warning");
     assert!(add < dump, "{err}");
+}
+
+/// R8: a negative check passes no bless, so it fails and writes nothing:
+/// every fragment of the scratch table is byte-identical before and after,
+/// whatever fragments the checkout already holds. That a helper never reads
+/// the environment itself is R7's source check.
+#[test]
+fn r8_a_negative_check_never_blesses() {
+    let (shortened, _) = without_first_row(&live_base("allows"));
+    let (scratch, table) = scratch_table("allows", &shortened, &[]);
+    let before = super::fragments::fragment_bytes(scratch.path(), "allows");
+    allows_check(&inventory(), &table, None).expect_err("a missing row fails");
+    let after = super::fragments::fragment_bytes(scratch.path(), "allows");
+    assert_eq!(before, after, "a check passing no bless changed a fragment");
 }

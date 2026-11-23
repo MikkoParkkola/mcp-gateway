@@ -177,7 +177,7 @@ async fn t13b_mcp_bytes_are_unchanged_by_a_ui_call_in_scope() {
 /// Spawns on the path that are not the send: (file, line text, why).
 const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
     (
-        "src/gateway/meta_mcp/grant_audit.rs",
+        "src/gateway/meta_mcp/grant_audit/record.rs",
         "handle.spawn(async move {",
         "spawn_write: a bounded write of grant records, after the call",
     ),
@@ -219,6 +219,7 @@ fn t20_no_spawn_wraps_the_send() {
     }
     files.push(root.join("src/gateway/meta_mcp/call_dispatch.rs"));
     files.push(root.join("src/gateway/meta_mcp/grant_audit.rs"));
+    files.push(root.join("src/gateway/meta_mcp/grant_audit/record.rs"));
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("a scanned directory") {
             let path = entry.expect("entry").path();
@@ -357,8 +358,11 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
         calls: Arc::clone(&fx.calls),
         declares_read: true,
         list_gate: Some(Arc::clone(&gate)),
+        list_entered: None,
+        slow_gate: None,
     }));
     assert!(fx.state.backends.register(backend), "registration");
+    // limit-under-test (fires-only): the call waits on the held list, so the deadline alone decides it
     crate::gateway::ui::DEADLINE_FOR_TEST
         .with(|d| d.set(Some(std::time::Duration::from_millis(50))));
     let request = Request::builder()

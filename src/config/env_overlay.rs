@@ -527,6 +527,8 @@ pub struct LiveEnv {
     /// The startup load's configured backend credentials, taken once by the
     /// gateway's registry before it registers a backend.
     startup_configured: std::sync::Mutex<Option<super::configured_secrets::ConfiguredByBackend>>,
+    /// The serve load's startup session, taken once by the construction that finishes it.
+    startup_session: std::sync::Mutex<Option<crate::config_reload::startup_settle::StartupSession>>,
 }
 
 impl Default for LiveEnv {
@@ -548,7 +550,18 @@ impl LiveEnv {
             env_paths,
             startup_inputs: std::sync::Mutex::new(None),
             startup_configured: std::sync::Mutex::new(None),
+            startup_session: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The serve load's startup session, once: every later call returns `None`.
+    pub(crate) fn take_startup_session(
+        &self,
+    ) -> Option<crate::config_reload::startup_settle::StartupSession> {
+        self.startup_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// The grants startup served, into the startup inputs not yet taken.
@@ -648,6 +661,25 @@ pub struct Evaluated {
     /// redacted. Crate-private and beside the config, never on
     /// it.
     pub(crate) configured: super::configured_secrets::ConfiguredByBackend,
+    /// The serve load's startup session, carried privately to the construction that finishes it.
+    pub(crate) startup_session: StartupSlot,
+}
+
+/// Where an [`Evaluated`] keeps its startup session. A clone of the slot is empty: the session
+/// holds the config lock and is finished exactly once, so a copied `Evaluated` carries none.
+#[derive(Debug, Default)]
+pub(crate) struct StartupSlot(Option<crate::config_reload::startup_settle::StartupSession>);
+
+impl StartupSlot {
+    pub(crate) fn holding(session: crate::config_reload::startup_settle::StartupSession) -> Self {
+        Self(Some(session))
+    }
+}
+
+impl Clone for StartupSlot {
+    fn clone(&self) -> Self {
+        Self(None)
+    }
 }
 
 impl Evaluated {
@@ -665,6 +697,9 @@ impl Evaluated {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(std::mem::take(&mut self.configured));
+        *env.startup_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = self.startup_session.0.take();
         env
     }
 }

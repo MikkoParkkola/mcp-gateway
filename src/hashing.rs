@@ -51,13 +51,6 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
 ///
 /// The first read error other than `Interrupted`; no digest is returned for
 /// a read that failed part way.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the config commit primitive's read-back, called by a later step"
-    )
-)]
 pub(crate) fn sha256_hex_reader(mut reader: impl std::io::Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -103,9 +96,32 @@ pub(crate) fn sha256_tagged(bytes: &[u8]) -> String {
 }
 
 /// Hash a JSON value after canonical serialization.
+///
+/// The serialized bytes reach the hasher as the serializer writes them, so
+/// the digest is the one [`canonical_json`]'s string would give but no copy
+/// the size of `value` is made: hashing a refused call's arguments must not
+/// cost memory that grows with its payload.
 pub(crate) fn canonical_json_sha256(value: &Value) -> String {
-    let canonical = canonical_json(value);
-    sha256_hex(canonical.as_bytes())
+    let mut digest = DigestWriter(Sha256::new());
+    if serde_json::to_writer(&mut digest, value).is_err() {
+        // As `canonical_json` falls back to an empty string.
+        return sha256_hex(b"");
+    }
+    hex::encode(digest.0.finalize())
+}
+
+/// Feeds whatever is written to it into a SHA-256 hasher; never fails.
+struct DigestWriter(Sha256);
+
+impl std::io::Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(tp3)]
@@ -120,6 +136,23 @@ mod tests {
         let first = canonical_json_sha256(&json!({"a": 1, "b": 2}));
         let second = canonical_json_sha256(&json!({"b": 2, "a": 1}));
         assert_eq!(first, second);
+    }
+
+    /// The streamed digest is the digest of the canonical string, for nested
+    /// values, escapes and non-ASCII text alike.
+    #[test]
+    fn canonical_json_sha256_is_the_hash_of_the_canonical_string() {
+        for value in [
+            json!(null),
+            json!("quote \" and \u{e9}"),
+            json!({"b": [1, 2.5, {"c": true}], "a": {"z": null, "y": "\n"}}),
+        ] {
+            assert_eq!(
+                canonical_json_sha256(&value),
+                sha256_hex(canonical_json(&value).as_bytes()),
+                "{value}"
+            );
+        }
     }
 
     #[test]

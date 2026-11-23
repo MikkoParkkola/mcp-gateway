@@ -22,11 +22,13 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod cli_login;
 /// Every web UI change has a CLI form; CLI commands and config writes are
 /// classified for remote use.
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+mod config_history;
 /// Every UI API answer type is classified for the api command.
 #[cfg(tp3)]
 #[cfg(test)]
@@ -180,6 +182,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(decisions::decisions_router())
         .merge(policies::policies_router())
         .merge(history::history_router())
+        .merge(config_history::config_history_router())
         .merge(restart::restart_router())
         .merge(stream::stream_router());
 
@@ -621,20 +624,26 @@ async fn config(
         .collect();
 
     // Each backend secret slot that holds a reference, as written, read from
-    // the literal file: never a resolved value (ADR-028).
-    let secret_references = match state.config_path.clone() {
+    // the literal file: never a resolved value (ADR-028). The flat map and the
+    // records come from one load; either way out, both are empty, never absent.
+    let (secret_references, secret_reference_records) = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path)).map_or_else(
                 |e| {
                     tracing::warn!(error = %e, "secret references hidden: config did not load");
-                    std::collections::BTreeMap::new()
+                    Default::default()
                 },
-                |literal| crate::config::display::backend_secret_references(&literal),
+                |literal| {
+                    (
+                        crate::config::display::backend_secret_references(&literal),
+                        crate::config::display::backend_secret_reference_records(&literal),
+                    )
+                },
             )
         })
         .await
         .unwrap_or_default(),
-        None => std::collections::BTreeMap::new(),
+        None => Default::default(),
     };
 
     Json(json!({
@@ -646,6 +655,7 @@ async fn config(
         "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
+        "secret_reference_records": secret_reference_records,
     }))
     .into_response()
 }
@@ -671,16 +681,28 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         })
         .await
     {
-        Ok(outcome) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(outcome) => {
+            let pending = outcome.restart_required;
+            let mut body = json!({
                 "status": "ok",
                 "changes": outcome.changes,
-                "restart_required": outcome.restart_required,
+                "restart_required": pending,
                 "restart_reason": outcome.restart_reason,
-            })),
-        )
-            .into_response(),
+            });
+            // What a restart would boot is the published config.
+            let refusal = pending
+                .then(|| crate::gateway::next_start_refusal(&reload_context.live_config.get()))
+                .flatten();
+            if let Some(keys) = restart_confirm::restart_advice(
+                pending,
+                refusal.as_deref(),
+                Some(&reload_context.config_path),
+            ) && let Some(answer) = body.as_object_mut()
+            {
+                answer.extend(keys);
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(error) => {
             // Whose fault, not just that it failed (MIK-8058): a file the
             // network posture refuses is the operator's config, a shutdown is

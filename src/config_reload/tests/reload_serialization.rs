@@ -4,6 +4,34 @@
 
 use super::*;
 
+/// The hang guard: past this a queued call that never finishes fails its row
+/// instead of wedging the shard. It is the only time bound in the queued rows
+/// below, above every budget they wait on (the reload-lock wait and the
+/// config-file lock's deadline, 5 s each), and not derived from either: a
+/// margin over a budget can be outrun on a loaded host.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
+/// Polls `call` once while the test holds the reload lock. Its first await is
+/// the reload-lock wait, so a call that is still pending after one poll is
+/// parked in that lock's queue: queued, with no sleep to hope it got there.
+async fn poll_into_the_queue<F: std::future::Future>(call: std::pin::Pin<&mut F>, what: &str) {
+    assert!(
+        futures::poll!(call).is_pending(),
+        "{what} finished while the reload lock was held"
+    );
+}
+
+/// Right after the test drops its guard: the reload lock cannot be taken,
+/// because tokio hands a released permit straight to the first queued waiter
+/// and returns only leftovers to the count `try_lock` reads. So the lock went
+/// to the queued call, which holds it before it reads anything.
+fn handed_to_the_queued_call(ctx: &ReloadContext, what: &str) {
+    assert!(
+        ctx.registry.reload_lock_handle().try_lock().is_err(),
+        "the released reload lock went to no queued call: {what} was not waiting on it"
+    );
+}
+
 // -------------------------------------------------------------------------
 // Reload serialization (#397)
 // -------------------------------------------------------------------------
@@ -51,50 +79,32 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
     // WHEN: two reloads start while the reload lock is held, so both are queued
     // before either can read the config.
     //
-    // The barrier is what makes that claim checkable. Spawning alone proves
-    // nothing: a task that the runtime has not scheduled yet has also not read
-    // the config, so releasing the guard before it starts would let this test
-    // pass even with the lock in the wrong place. Waiting on a barrier that only
-    // opens once all three parties have arrived proves both tasks are running
-    // and inside the closure. The sleep that follows covers the remaining few
-    // instructions between the barrier and the lock, which is a window no
-    // synchronisation primitive can close from outside the function under test.
-    let started = Arc::new(tokio::sync::Barrier::new(3));
+    // Starting them proves nothing on its own: a reload that has not reached the
+    // lock has also not read the config, so releasing the guard before it gets
+    // there would let this test pass even with the lock in the wrong place. One
+    // poll each runs a reload to its first await, the reload-lock wait (no
+    // grants sink here, so the grants step returns at once), and the handover
+    // check after the release proves the first of them was waiting on the lock.
     let guard = ctx.registry.lock_reload().await;
-    let first = tokio::spawn({
-        let ctx = Arc::clone(&ctx);
-        let started = Arc::clone(&started);
-        async move {
-            started.wait().await;
-            ctx.reload_outcome().await
-        }
-    });
-    let second = tokio::spawn({
-        let ctx = Arc::clone(&ctx);
-        let started = Arc::clone(&started);
-        async move {
-            started.wait().await;
-            ctx.reload_outcome().await
-        }
-    });
-    started.wait().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut first = std::pin::pin!(ctx.reload_outcome());
+    let mut second = std::pin::pin!(ctx.reload_outcome());
+    poll_into_the_queue(first.as_mut(), "the first reload").await;
+    poll_into_the_queue(second.as_mut(), "the second reload").await;
     assert!(
         ctx.registry.get("svc").is_none(),
         "a reload applied while the reload lock was held"
     );
     drop(guard);
+    handed_to_the_queued_call(&ctx, "the first reload");
 
-    let first = tokio::time::timeout(Duration::from_secs(5), first)
+    // Both run on from here, polled together as two callers would be. The
+    // second stays queued behind the lock the first now holds; the checks
+    // below show it read the config the first published, not the old one.
+    let (first, second) = tokio::time::timeout(HANG_GUARD, async { tokio::join!(first, second) })
         .await
-        .expect("first reload did not finish")
-        .expect("first reload task panicked")
-        .expect("first reload failed");
-    let second = tokio::time::timeout(Duration::from_secs(5), second)
-        .await
-        .expect("second reload did not finish")
-        .expect("second reload task panicked")
-        .expect("second reload failed");
+        .expect("hang guard: the reloads never finished");
+    let first = first.expect("first reload failed");
+    let second = second.expect("second reload failed");
 
     // THEN: exactly one of them added the backend; the other saw an up-to-date
     // config and did nothing
@@ -140,21 +150,12 @@ async fn a_config_write_waits_for_the_reload_lock() {
         .expect("the registry pairs with the config"),
     );
 
-    // WHEN: a write starts while the reload lock is held
-    let started = Arc::new(tokio::sync::Barrier::new(2));
+    // WHEN: a write starts while the reload lock is held, and is polled into the
+    // lock's queue
     let guard = ctx.registry.lock_reload().await;
-    let writer = tokio::spawn({
-        let ctx = Arc::clone(&ctx);
-        let started = Arc::clone(&started);
-        let path = config_path.clone();
-        async move {
-            started.wait().await;
-            ctx.write_and_reload_outcome(&path, &Config::default())
-                .await
-        }
-    });
-    started.wait().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let empty = Config::default();
+    let mut writer = std::pin::pin!(ctx.write_and_reload_outcome(&config_path, &empty));
+    poll_into_the_queue(writer.as_mut(), "the write").await;
 
     // THEN: nothing has been written - the writer is queued behind the lock
     assert!(
@@ -163,12 +164,12 @@ async fn a_config_write_waits_for_the_reload_lock() {
          is outside the critical section and two edits can still interleave"
     );
 
-    // AND: releasing the lock lets it finish
+    // AND: releasing the lock hands it to the writer, which then finishes
     drop(guard);
-    let outcome = tokio::time::timeout(Duration::from_secs(5), writer)
+    handed_to_the_queued_call(&ctx, "the write");
+    let outcome = tokio::time::timeout(HANG_GUARD, writer)
         .await
-        .expect("write did not finish after the lock was released")
-        .unwrap();
+        .expect("hang guard: the write never finished after the lock was released");
     assert!(outcome.is_ok(), "write failed: {outcome:?}");
     assert!(config_path.exists(), "config was never written");
 }
@@ -195,24 +196,16 @@ async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
         .expect("the registry pairs with the config"),
     );
 
-    // WHEN: an edit adding "beta" is queued behind the reload lock
-    let started = Arc::new(tokio::sync::Barrier::new(2));
+    // WHEN: an edit adding "beta" is polled into the reload lock's queue
     let guard = ctx.registry.lock_reload().await;
-    let queued_edit = tokio::spawn({
-        let ctx = Arc::clone(&ctx);
-        let started = Arc::clone(&started);
-        let path = config_path.clone();
-        async move {
-            started.wait().await;
-            ctx.mutate_and_reload_outcome(&path, |config: &mut Config| {
-                config.backends.insert("beta".to_string(), test_backend());
-                Ok::<(), ()>(())
-            })
-            .await
+    let mut queued_edit = std::pin::pin!(ctx.mutate_and_reload_outcome(
+        &config_path,
+        |config: &mut Config| {
+            config.backends.insert("beta".to_string(), test_backend());
+            Ok::<(), ()>(())
         }
-    });
-    started.wait().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    ));
+    poll_into_the_queue(queued_edit.as_mut(), "the queued edit").await;
 
     // AND: the edit that holds the lock adds "alpha" and finishes first
     let mut won_the_lock = Config::default();
@@ -221,11 +214,11 @@ async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
         .insert("alpha".to_string(), test_backend());
     crate::gateway::test_helpers::write_config_fixture(&config_path, &won_the_lock).unwrap();
     drop(guard);
+    handed_to_the_queued_call(&ctx, "the queued edit");
 
-    let result = tokio::time::timeout(Duration::from_secs(5), queued_edit)
+    let result = tokio::time::timeout(HANG_GUARD, queued_edit)
         .await
-        .expect("the queued edit never finished")
-        .unwrap();
+        .expect("hang guard: the queued edit never finished");
     assert!(result.is_ok(), "the queued edit failed: {:?}", result.err());
 
     // THEN: the saved config has both, not just the queued edit's own change
@@ -327,7 +320,7 @@ async fn a_config_write_reports_busy_instead_of_waiting_forever() {
     let guard = ctx.registry.lock_reload().await;
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        HANG_GUARD,
         ctx.mutate_and_reload_outcome_within(
             &config_path,
             std::time::Duration::from_millis(50),
@@ -365,7 +358,7 @@ async fn a_whole_config_write_reports_busy_instead_of_waiting_forever() {
     let guard = ctx.registry.lock_reload().await;
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        HANG_GUARD,
         ctx.write_and_reload_outcome_within(
             &config_path,
             std::time::Duration::from_millis(50),
@@ -394,31 +387,23 @@ async fn a_write_that_gets_the_lock_within_its_bound_still_succeeds() {
 
     let guard = ctx.registry.lock_reload().await;
 
-    let writer = tokio::spawn({
-        let ctx = std::sync::Arc::clone(&ctx);
-        let config_path = config_path.clone();
-        async move {
-            ctx.mutate_and_reload_outcome_within(
-                &config_path,
-                std::time::Duration::from_secs(5),
-                |config: &mut Config| -> std::result::Result<(), ()> {
-                    config
-                        .backends
-                        .insert("patient".to_string(), test_backend());
-                    Ok(())
-                },
-            )
-            .await
-        }
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut writer = std::pin::pin!(ctx.mutate_and_reload_outcome_within(
+        &config_path,
+        std::time::Duration::from_secs(5),
+        |config: &mut Config| -> std::result::Result<(), ()> {
+            config
+                .backends
+                .insert("patient".to_string(), test_backend());
+            Ok(())
+        },
+    ));
+    poll_into_the_queue(writer.as_mut(), "the write").await;
     drop(guard);
+    handed_to_the_queued_call(&ctx, "the write");
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+    let result = tokio::time::timeout(HANG_GUARD, writer)
         .await
-        .expect("the write never completed after the lock was released")
-        .expect("the write task panicked");
+        .expect("hang guard: the write never completed after the lock was released");
 
     assert!(
         matches!(result, Ok(ConfigMutation::Applied((), _))),

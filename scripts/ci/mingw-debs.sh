@@ -38,11 +38,32 @@ case "${1:-}" in
     update_limit=${MINGW_UPDATE_SECONDS:-180}
     scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/mingw-apt.XXXXXX")
     mkdir -p "$scratch/partial" "$dir"
+    # Refresh and read only the Ubuntu archive's sources, where the mingw packages come from: with --error-on=any
+    # below, an unrelated source the runner image adds (packages.microsoft.com) would otherwise fail the attempt.
+    # Runner images keep the Ubuntu sources in sources.list.d/ubuntu.sources from 24.04, in sources.list before.
+    etc=$(apt-config shell ETC Dir::Etc/d | sed -n "s/^ETC='\(.*\)'\$/\1/p")
+    mkdir -p "$scratch/sources.list.d"
+    if [ -f "${etc%/}/sources.list.d/ubuntu.sources" ]; then
+      cp "${etc%/}/sources.list.d/ubuntu.sources" "$scratch/sources.list.d/"
+      apt_opts+=(-o Dir::Etc::SourceList=/dev/null)
+    elif grep -Eq '^[[:space:]]*deb[[:space:]]' "${etc%/}/sources.list" 2>/dev/null; then
+      apt_opts+=(-o "Dir::Etc::SourceList=${etc%/}/sources.list")
+    else
+      # Two attempts with no source would only read the image's old index and look like a mirror outage.
+      echo "::error::mingw packages: no Ubuntu apt source in ${etc%/}/sources.list.d/ubuntu.sources or ${etc%/}/sources.list" >&2
+      exit 1
+    fi
+    apt_opts+=(-o "Dir::Etc::SourceParts=$scratch/sources.list.d")
     ok=""
     for attempt in 1 2; do
-      # The index refresh is bounded too: a trickling mirror stalls it as easily as the download.
+      # The index refresh is bounded too: a trickling mirror stalls it as easily as the download. --error-on=any
+      # makes a refresh that could not fetch every index fail the attempt: without it apt-get warns, exits 0 and
+      # keeps the image's old index, which can name versions the archive no longer carries (noble's apt 2.8.4
+      # with an unreachable mirror: exit 0 without the flag, 100 with it). List-Cleanup off: a refresh that reads
+      # only the Ubuntu sources would otherwise delete the other sources' cached indexes, which later apt steps on
+      # the same runner still read.
       rc=0
-      sudo timeout "$update_limit" apt-get "${apt_opts[@]}" update || rc=$?
+      sudo timeout "$update_limit" apt-get "${apt_opts[@]}" -o APT::Get::List-Cleanup=0 update --error-on=any || rc=$?
       if [ "$rc" -eq 0 ]; then
         sudo timeout "$limit" apt-get "${apt_opts[@]}" -o Dir::Cache::Archives="$scratch" \
           install -y --download-only --no-install-recommends "$pkg" || rc=$?

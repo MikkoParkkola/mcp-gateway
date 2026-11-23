@@ -89,15 +89,22 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         Some(Command::Accounts(accounts_cmd)) => {
             commands::run_accounts_command(&accounts_cmd, config_path.as_deref())
         }
-        Some(Command::HashKey { verify }) => commands::run_hash_key_command(verify.as_deref()),
-        Some(Command::Stats { url }) => {
+        Some(Command::HashKey { verify, json }) => commands::run_hash_key_command(
+            verify.as_deref(),
+            crate::cli::output::Render::from_json_flag(json),
+        ),
+        Some(Command::Stats { gateway, json }) => {
             let effective_url = resolve_stats_url(
-                url,
+                gateway.url,
                 config_path.as_deref(),
                 port_override,
                 host_override.as_deref(),
             );
-            commands::run_stats_command(&effective_url).await
+            commands::run_stats_command(
+                &effective_url,
+                crate::cli::output::Render::from_json_flag(json),
+            )
+            .await
         }
         #[cfg(feature = "webui")]
         Some(Command::DashboardLink(args)) => {
@@ -172,15 +179,27 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         Some(Command::Skills(SkillsCommand::Import { source, registry })) => {
             commands::run_skills_import(source, registry).await
         }
-        Some(Command::Skills(SkillsCommand::List { registry })) => {
-            commands::run_skills_list(registry)
+        Some(Command::Skills(SkillsCommand::List { registry, json })) => {
+            commands::run_skills_list(registry, crate::cli::output::Render::from_json_flag(json))
         }
-        Some(Command::Skills(SkillsCommand::Search { query, registry })) => {
-            commands::run_skills_search(&query, registry)
-        }
-        Some(Command::Skills(SkillsCommand::Show { name, registry })) => {
-            commands::run_skills_show(&name, registry)
-        }
+        Some(Command::Skills(SkillsCommand::Search {
+            query,
+            registry,
+            json,
+        })) => commands::run_skills_search(
+            &query,
+            registry,
+            crate::cli::output::Render::from_json_flag(json),
+        ),
+        Some(Command::Skills(SkillsCommand::Show {
+            name,
+            registry,
+            json,
+        })) => commands::run_skills_show(
+            &name,
+            registry,
+            crate::cli::output::Render::from_json_flag(json),
+        ),
         Some(Command::Skills(SkillsCommand::Remove { name, registry })) => {
             commands::run_skills_remove(&name, registry)
         }
@@ -292,15 +311,19 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Get { name }) => {
+        Some(Command::Get { name, json }) => {
             let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
-                commands::run_get_command(&name, &config)
+                commands::run_get_command(
+                    &name,
+                    &config,
+                    crate::cli::output::Render::from_json_flag(json),
+                )
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (name, config);
+                let _ = (name, config, json);
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }
@@ -408,7 +431,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Resolve the base URL the `stats` command should query when `--url` was
+/// Resolve the base URL the `stats` command should query when `--gateway` was
 /// not given explicitly.
 ///
 /// `stats` used to hardcode `http://127.0.0.1:39400` as its `--url` default,
@@ -420,7 +443,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
 /// `server.host`/`server.port` (plus `--port`/`--host` overrides) that
 /// `serve` binds to, so `stats` targets the gateway `--config` describes.
 ///
-/// An explicit `url` (the `--url` flag) always wins and is returned as-is.
+/// An explicit `url` (`--gateway`, or `MCP_GATEWAY_URL`) always wins and is returned as-is.
 fn resolve_stats_url(
     url: Option<String>,
     config_path: Option<&Path>,
@@ -521,7 +544,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
@@ -580,7 +603,7 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;

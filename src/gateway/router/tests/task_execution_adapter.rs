@@ -167,7 +167,7 @@ mod drain;
 /// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
 #[cfg(tp5)]
 mod enforced_round;
-mod input_round;
+pub(crate) mod input_round;
 #[cfg(tp5)]
 mod input_round_clock;
 #[cfg(tp5)]

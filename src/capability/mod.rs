@@ -108,6 +108,7 @@ pub(crate) use execution_context::{
 };
 pub use executor::CapabilityExecutor;
 pub(crate) use executor::ProcessNote;
+pub(crate) use executor::credential_form;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
 #[cfg(target_os = "linux")]

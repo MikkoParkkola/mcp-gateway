@@ -696,6 +696,7 @@ mod env_files;
 mod env_secrets;
 mod env_support;
 mod key_only_report;
+mod pending_restart_read;
 mod posture_refusal;
 mod reload_marker;
 mod reload_serialization;

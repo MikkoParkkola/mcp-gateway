@@ -16,13 +16,13 @@ fn key(i: usize) -> FieldPath {
     ])
 }
 
-fn revoke(i: usize) -> (FieldPath, Change) {
+pub(super) fn revoke(i: usize) -> (FieldPath, Change) {
     (key(i), Change::Remove)
 }
 
 /// The edited text and the comment lines it dropped; the edit must prove.
 #[track_caller]
-fn revoked(original: &str, changes: &[(FieldPath, Change)]) -> (String, Vec<usize>) {
+pub(super) fn revoked(original: &str, changes: &[(FieldPath, Change)]) -> (String, Vec<usize>) {
     let template = edit_in_place(original, changes).expect("a provable revocation");
     let text = String::from_utf8(template.bytes().to_vec()).expect("utf-8");
     (text, template.dropped_comments().to_vec())
@@ -30,7 +30,7 @@ fn revoked(original: &str, changes: &[(FieldPath, Change)]) -> (String, Vec<usiz
 
 /// The refusal's code and reason.
 #[track_caller]
-fn refused(original: &str, changes: &[(FieldPath, Change)]) -> (GiveUp, String) {
+pub(super) fn refused(original: &str, changes: &[(FieldPath, Change)]) -> (GiveUp, String) {
     match edit_in_place(original, changes) {
         Err(ComputeRefusal::Unprovable { code, reason }) => (code, reason),
         other => panic!("expected a refusal, got {other:?}"),
@@ -206,7 +206,7 @@ fn r12_an_emptied_auth_is_removed_and_its_comment_reported() {
 
 /// The S9 instructions a refused revocation of `name` must carry.
 #[track_caller]
-fn instructs(reason: &str, name: &str) {
+pub(super) fn instructs(reason: &str, name: &str) {
     assert!(reason.contains(name), "names the key: {reason}");
     assert!(reason.contains("expires_at"), "expiry first: {reason}");
     let expiry = reason.find("expires_at").expect("expiry");
@@ -265,7 +265,7 @@ fn expiry_only(reason: &str, name: &str) {
 
 /// `text`'s `auth` section, loaded as the gateway loads it.
 #[track_caller]
-fn loads_auth(text: &str) -> crate::config::AuthConfig {
+pub(super) fn loads_auth(text: &str) -> crate::config::AuthConfig {
     let doc: crate::yaml::Value = crate::yaml::from_str(text).expect("loads");
     let auth = doc.get("auth").cloned().unwrap_or(crate::yaml::Value::Null);
     if auth.is_null() {
@@ -275,7 +275,7 @@ fn loads_auth(text: &str) -> crate::config::AuthConfig {
 }
 
 /// `text` without its 0-based `lines`.
-fn drop_lines(text: &str, lines: std::ops::Range<usize>) -> String {
+pub(super) fn drop_lines(text: &str, lines: std::ops::Range<usize>) -> String {
     let mut out = String::new();
     for (_, line) in text.lines().enumerate().filter(|(i, _)| !lines.contains(i)) {
         out.push_str(line);

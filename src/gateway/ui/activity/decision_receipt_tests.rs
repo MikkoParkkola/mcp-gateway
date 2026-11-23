@@ -14,13 +14,18 @@ use crate::security::decision_record::read as evidence;
 
 /// The receipt body of one call carrying `decision` (or none).
 fn receipt_of(decision: Option<Value>) -> Value {
+    receipt_of_last(&mut [call("srv", "t", decision)])
+}
+
+/// The receipt body of the last of `entries`, chained in order into a fresh
+/// log, as a caller who may read every row; no planted sentinel may show.
+pub(super) fn receipt_of_last(entries: &mut [Value]) -> Value {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("inv.jsonl");
-    let mut entries = vec![call("srv", "t", decision)];
-    write_chained(&path, &mut entries);
+    write_chained(&path, entries);
     let line = Line {
         log: Which::Invocation,
-        entry: entries[0].clone(),
+        entry: entries[entries.len() - 1].clone(),
         segment: 0,
         span: None,
     };

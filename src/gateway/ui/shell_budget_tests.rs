@@ -25,7 +25,16 @@ const GZIP_LEVEL: u32 = 6;
 /// stem: a script that joins the table, or one left out of the sum, fails this
 /// equality. Order in the asset table is not part of the budget; the comparison
 /// sorts both sides.
-const CORE_JS_STEMS: &[&str] = &["activity", "gateway", "shell", "tools", "tooltip"];
+const CORE_JS_STEMS: &[&str] = &[
+    "activity",
+    "activity-list",
+    "gateway",
+    "overview",
+    "servers",
+    "shell",
+    "tools",
+    "tooltip",
+];
 
 #[test]
 fn core_js_stays_under_200_kb_compressed() {

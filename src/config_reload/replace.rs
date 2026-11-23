@@ -62,7 +62,7 @@ pub(crate) enum Expected {
 /// What happens to the bytes a successful write replaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -123,7 +123,7 @@ pub(crate) struct Replace {
 /// A replacement that was written and accepted.
 #[derive(Debug)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -719,6 +719,9 @@ impl ReloadContext {
     /// (the same recovery the next lock holder would run), and report
     /// `error`; or `RollbackFailed` when that fails too.
     fn roll_back(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+        // Test-only: a write that is undone still leaves its mark in the trace.
+        #[cfg(test)]
+        order::record(target, "rollback");
         match journal::recover(target) {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {

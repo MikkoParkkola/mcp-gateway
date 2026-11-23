@@ -563,5 +563,7 @@ async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
     assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
 }
 
+#[path = "decisions_onefile_tests.rs"]
+mod onefile;
 #[path = "decisions_resolve_tests.rs"]
 mod resolve;

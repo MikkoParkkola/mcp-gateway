@@ -40,6 +40,58 @@ impl Slot {
             tokio::runtime::Handle::current().block_on(release.notified());
         }
     }
+
+    /// [`Self::pause`] for a plain thread with no Tokio runtime, such as a
+    /// detached save thread. Only an armed point blocks, and for at most 30 s:
+    /// a row that fails before its release never parks the thread for good.
+    pub(crate) fn pause_on_thread(&self) {
+        let armed = self.0.lock().take();
+        if let Some((reached, release)) = armed {
+            reached.notify_one();
+            let waiter = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a pause runtime builds");
+            // The timeout is built inside block_on: creating its timer needs
+            // the runtime's context, which a plain thread has only there.
+            let _ = waiter.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(30), release.notified()).await
+            });
+        }
+    }
+}
+
+/// Releases a pause point when dropped, so a row that fails before its own
+/// release never leaves a writer parked.
+pub(crate) struct Release(pub(crate) Arc<Notify>);
+
+impl Release {
+    /// Release now; dropping it later is then a no-op for the writer.
+    pub(crate) fn now(&self) {
+        self.0.notify_one();
+    }
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+/// Wait for `reached` without a runtime, or with the caller's runtime
+/// thread blocked (so a paused clock cannot auto-advance meanwhile), failing
+/// after 30 s. A helper thread turns the notification into a bounded receive.
+pub(crate) fn reached_blocking(what: &str, reached: &Arc<Notify>) {
+    let (sent, got) = std::sync::mpsc::channel();
+    let reached = Arc::clone(reached);
+    std::thread::spawn(move || {
+        futures::executor::block_on(reached.notified());
+        let _ = sent.send(());
+    });
+    assert!(
+        got.recv_timeout(std::time::Duration::from_secs(30)).is_ok(),
+        "{what} was not reached within 30 s"
+    );
 }
 
 /// Await `step`, failing the test after 30 s so a broken handshake shows as
@@ -117,5 +169,29 @@ mod tests {
         release.notify_one();
         let done = within("first blocking finishes", first).await;
         assert!(done.is_ok(), "parked blocking task panicked: {done:?}");
+    }
+
+    /// A plain thread with no runtime parks at an armed point until the
+    /// release; a second caller passes straight through.
+    #[tokio::test]
+    async fn slot_pause_on_thread_holds_a_plain_thread() {
+        let slot = Arc::new(Slot::default());
+        let (reached, release) = slot.arm();
+        let parked = Arc::clone(&slot);
+        let (done, mut finished) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            parked.pause_on_thread();
+            let _ = done.send(());
+        });
+        within("thread reached", reached.notified()).await;
+        slot.pause_on_thread();
+        // limit-under-test (fires-only): the parked thread cannot finish before the release, so this window always expires; a slow runner only delays it.
+        let window = std::time::Duration::from_millis(100);
+        // timing: absence
+        let early = tokio::time::timeout(window, &mut finished).await;
+        assert!(early.is_err(), "the armed thread did not wait for release");
+        release.notify_one();
+        let after = within("thread finishes", finished).await;
+        assert!(after.is_ok(), "the parked thread ended without finishing");
     }
 }

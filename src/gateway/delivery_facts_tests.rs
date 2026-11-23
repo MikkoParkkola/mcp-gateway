@@ -341,7 +341,8 @@ const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
     (
         "context_integrity_delivered_result(",
         "src/gateway/meta_mcp/invoke/budget.rs",
-        2,
+        // The as-sent check re-enters it to build its withhold, in the same delivery.
+        3,
         TransformUse::Inside,
     ),
     (

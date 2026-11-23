@@ -56,16 +56,16 @@ impl DispatchNotes {
 
 impl MetaMcp {
     /// Count the call `args` names, finished as `result`, for `caller`.
-    /// `withheld` is the refusal a withheld target's record keeps.
+    /// `class` is the outcome its record carries; `None` counts nothing.
     pub(super) fn count_invocation(
         &self,
         args: &Value,
         caller: &MetaMcpCallerContext<'_>,
         result: &crate::Result<Value>,
         notes: &DispatchNotes,
-        withheld: Option<AuditOutcome>,
+        class: Option<AuditOutcome>,
     ) {
-        let Some(outcome) = withheld.or_else(|| AuditOutcome::from_result(result)) else {
+        let Some(outcome) = class else {
             return;
         };
         let firewall = matches!(result, Err(Error::ResponseFirewallRefused));
@@ -75,7 +75,7 @@ impl MetaMcp {
                 .unwrap_or_default(),
             args.get("tool").and_then(Value::as_str),
             &AuditWho::from_caller(caller),
-            notes.counted(notes.outcome(outcome), firewall),
+            notes.counted(outcome, firewall),
             notes.backend_sample(),
         );
     }

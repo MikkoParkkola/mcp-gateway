@@ -112,7 +112,7 @@ backend" and "fails a capability file" first.**
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
 | 86 | `kubernetes controller --watch --format json` prints one compact JSON document per line, one line per cycle | Read the output as JSON Lines: parse each line on its own |
 | 87 | `mcp-gateway cap import-url` refuses a URL whose host name resolves to a private, loopback or reserved address, and pins every name it fetches | Download an internal spec and run `mcp-gateway cap import <file>` |
-| 88 | After SIGTERM the HTTP listener waits at most `server.shutdown_timeout` for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` above your longest request, and your orchestrator's kill timeout above twice that |
+| 88 | After SIGTERM the HTTP listener waits at most its share of `server.shutdown_timeout` (the total less 12.9 s kept for the rest of the stop: 17.1 s at the 30 s default) for open requests, then cuts them; mTLS uses the same bound instead of a fixed 30 s | Set `server.shutdown_timeout` so that its listener share covers your longest request, and your orchestrator's kill timeout to at least `server.shutdown_timeout` + 1 s |
 | 89 | A remote backend that runs without signed provenance is named in a startup warning and in `doctor` | None; to verify these backends, set `require_for_remote_backends` and add signed metadata |
 | 90 | A `POST /mcp` whose `MCP-Protocol-Version` header names a revision the gateway does not serve is refused with HTTP 400 / `-32022` | Send a served revision in the header, or omit it |
 | 91 | With agent identity on, only a proven principal satisfies `require_id` and `known_agents`; a self-declared label no longer does; `require_id` with no proof source (no `agent_auth`, no `mtls`, no hatch) now fails at load instead of refusing every call | Move callers to mTLS or validated agent tokens, or set `allow_unverified_agent_identity: true` |
@@ -145,7 +145,7 @@ backend" and "fails a capability file" first.**
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
-| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None. Over HTTP a running task gets at most 8 s to finish at shutdown; see below for when a larger `server.shutdown_timeout` still lengthens it |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 19 built-in entries that `add` could not set up are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed, but an `asana` backend still on `https://mcp.asana.com/sse` must be replaced (see the item) |
@@ -192,7 +192,7 @@ backend" and "fails a capability file" first.**
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
-| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits for disk work still running only until 2 s before `server.shutdown_timeout` ends, then exits; work still running then is logged at ERROR and the exit status is 75; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running, with exit status 75, points at the storage to check |
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
@@ -1363,6 +1363,10 @@ named an API-key label rather than a person and skipped every refused or failed 
   `account`, and for a verified caller `authority` and `subject`, the `(issuer, sub)`.
   An email or a display label is never written. `caller` stays for one major version as a
   copy of `who.account`. Entries without `schema_version` are v1; both verify in one file.
+  A refusal the gateway decides (a spend budget, a response gate) records `denied` with the
+  refusing check's `error_code`, whatever form the caller got it in, so that code can differ
+  from the answer: an answer a gate withheld reaches the caller as a tool result flagged
+  `isError` and records `-32600`.
 - **Refused and failed tool calls now write a record**, and so do cache hits. Expect more
   log volume on a gateway that refuses a lot.
 - **The direct route `POST /mcp/{name}` writes the same invocation record** for every
@@ -2748,7 +2752,7 @@ by URL already do:
 **Action:** to build capabilities from an internal API, download its spec and run
 `mcp-gateway cap import <file>`.
 
-## 88. The HTTP listener gives open requests `server.shutdown_timeout`, then stops
+## 88. The HTTP listener gives open requests its share of `server.shutdown_timeout`, then stops
 
 **Startup:** no notice
 
@@ -2760,12 +2764,16 @@ a fixed 30 seconds whatever the config said.
 In 4.0 both listeners stop the same way (#2147):
 
 - New connections are refused as soon as the signal arrives.
-- Open requests get `server.shutdown_timeout` (default 30 s) to finish. Requests still
-  running at the deadline, including open event streams, are cut.
-- The gateway then saves its state and waits, within the same bound, for any in-flight
+- Open requests get the listener's share of `server.shutdown_timeout`: the total less the
+  12.9 s kept for the saves, the backend stop and the exit (17.1 s at the 30 s default). Requests still
+  running at the deadline are cut; open event streams (`GET /mcp`, `subscriptions/listen`) end
+  at the stop signal itself.
+- The gateway then saves its state and waits, within the same total (at most 10 s, and never
+  past the point where the backend stop's share begins), for any in-flight
   work the cut released, before it stops its backends.
 
-**Action:** if some requests run longer than `server.shutdown_timeout`, raise it. Keep the
+**Action:** if some requests run longer than the listener's share, raise `server.shutdown_timeout`
+(open event streams do not count: they end at the stop signal). Keep the
 orchestrator's kill timeout (for example Kubernetes `terminationGracePeriodSeconds`) at
 least `server.shutdown_timeout` + 1 s, so the gateway can finish its own shutdown; the
 shipped templates give 31 s (docs/DEPLOYMENT.md, Stop grace).
@@ -3586,15 +3594,23 @@ row). Nothing for an upgrade from 3.5.x.
 
 Before, a task whose backend call outlasted `server.shutdown_timeout` kept running after the task
 store closed, and could still call its backend while the backends were stopping. Now the drain
-cancels it, waits a bounded time for it to end, and only then closes the store; on HTTP the drain
-and the cancellation together take at most nine tenths of `server.shutdown_timeout`, so the drain
-itself now gets four fifths of it; on stdio both fit what is left of the EOF teardown window. The record stays `working` until the next start settles it through the
+cancels it, waits a bounded time for it to end, and only then closes the store; on HTTP the
+task stage works inside a window of at most 10 s (less when the stop's earlier stages used up
+more of the total), giving the drain four fifths of it and the cancellation one tenth, so a
+running task gets at most 8 s; on stdio both fit what is left of the EOF teardown window. The record stays `working` until the next start settles it through the
 interrupted-task table (`gateway_restart_after_dispatch`, or `gateway_restart_before_dispatch` when
 the task was cancelled before it reached the backend); a task whose backend is a configured `tasks.recovery_adapters`
 entry with a durable upstream handle stays managed `working`, as after any restart, and an owner
 `tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
 
-**Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
+**Action:** none. A task that needs more than 8 s to finish at an HTTP shutdown is cancelled and
+settled as interrupted at the next start (unless a recovery adapter keeps it managed, as above).
+Raising `server.shutdown_timeout` lengthens the drain only until it reaches those 8 s, at a total of
+about 23 s when the stages before it are quick; past that, a larger timeout no longer lengthens
+the task drain: it goes to the listener's share and the backend stop. A listener that uses its
+whole share, held by a request that does not finish, leaves the drains after it a single window
+of about 150 ms, which all of them share, whatever the timeout, so one setting cannot give both a
+long request grace and the full 8 s task drain.
 
 ## 122. Capability fallback providers are warned as not executed
 
@@ -4475,21 +4491,32 @@ without an identity.
 An `mcp` capability with `cache:` set also keys its cached answers on that same
 per-caller name, so one caller is never served another caller's cached answer.
 
-## 168. An HTTP gateway exits within 10 seconds of finishing its shutdown
+## 168. An HTTP gateway's last wait for disk work ends inside its stop timeout
 
 **Startup:** no notice
 
-After an HTTP gateway's shutdown steps return (draining requests and closing
-the task store, under `server.shutdown_timeout`), the gateway now waits at
-most 10 more seconds for disk work still running (a task-store or
-audit write) and then exits. Before, it waited for that work without limit, so
-a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
-an orchestrator had to kill it. `serve --stdio` already exited this way.
+In 3.5.x nothing limited how long the gateway waited for leftover disk work once
+its stop was done, so one write hung on a stalled NFS or FUSE mount could keep it
+running until something outside killed it.
 
-Work that finishes within the 10 seconds completes as before. When the wait
-runs the full 10 seconds, one ERROR line says the gateway exited with blocking
-work still running. That is a timeout, not a diagnosis: check the storage
-behind the task store and the audit log.
+In 4.0 that last wait belongs to the stop timeout. When the stop's stages are over
+(requests drained, state saved, backends stopped), blocking work that is still going,
+such as a task-store or audit-log write, gets until 2 s before
+`server.shutdown_timeout` expires, counted from the stop signal. The log writer is
+then shut down by the end of the timeout, and a watchdog terminates the process
+0.5 s past it, whatever is left (the item "HTTP stop: `server.shutdown_timeout` is
+now one total" explains the shares). A write that completes during the wait is
+unaffected.
+
+Work still going when the wait ends is reported in two ERROR lines: first
+`shutdown reached the end of its wait with blocking work still running`, with the
+time waited and the counts of live threads and tasks, then
+`the stop's runtime wait left blocking work running; exiting 75`. The process exits
+with status 75 rather than 0 (it also does when the log writer misses the end of the
+timeout). The lines mark a write that did not return in time, not
+its cause: look first at the storage under the task store and the audit log. A
+stdio gateway (`serve --stdio`) is unchanged: its wait stays a fixed 10 s and its
+exit status is not altered.
 
 ## 169. The per-backend route seals a backend's input-round state
 
@@ -4820,6 +4847,8 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/backends/{name}/signin` | hidden | an admin with a valid dashboard session starts an OAuth backend's sign-in (POST, JSON only; the state is read on GET `/ui/api/status`, in each `servers[]` row, as `sign_in.status`: `not_oauth`, `not_yet_checked`, `signed_in`, `expired`, `never_signed_in`, `re_sign_in_after_upgrade`, `waiting_elsewhere` or `provider_changed`); 403 `dashboard_session_required`, 409 `not_oauth`, 409 `gateway_host_required` off the gateway host, 409 `sign_in_in_progress` while another login holds the backend; the link and the flow are the starter's only; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/backends/{name}/signin/confirm` | hidden | the starter confirms (saves the held token) or cancels the sign-in by its attempt id; cancel works in any phase; 404 `no_sign_in` for another session or attempt, 409 `sign_in_not_ready` before the callback; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/config` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; each `servers[]` entry carries `owner` (`backends.<name>.owner`, trimmed, or `null`), read from the published config; `owner` is never on `/ui/api/status` |  |
+| `/ui/api/config/history` | hidden | admin only; the kept config versions and reload events, newest first, with the version the gateway serves marked; never a stored byte or diff; a history that cannot be read answers 503 `history_unreadable` |  |
+| `/ui/api/config/restore` | hidden | admin only, never a CLI key or a session it minted; writes one kept version's gateway.yaml back byte for byte through the audited writer, keeps the replaced file beside it as `gateway.yaml.<time>.rejected`, and lists the env files and grants it did not write; a 4xx answer wrote nothing, a 5xx answer leaves the result unconfirmed |  |
 | `/ui/api/decisions` | hidden | admin only; the decisions an admin has open (access requests refused for a missing grant, capabilities whose file no longer matches its pin, unmanaged servers another MCP client's config file names, and client config files that could not be read), each with an opaque id, what it waits on and display-safe fields only; read-only, answered from memory, 503 naming each source still being read |  |
 | `/ui/api/decisions/count` | hidden | admin only; how many decisions an admin has open, and their revision; read-only, answered from memory with no item copied, the list's 503 while a source is still being read |  |
 | `/ui/api/decisions/{id}/resolve` | hidden | `POST`; the grant-mutation permission, then a strict body; one resolve at a time; 404, 409 `scope_changed`, and for now 422 `not_available_yet` |  |
@@ -4829,7 +4858,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
 | `/ui/api/events/leases` | hidden | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token |  |
 | `/ui/api/gateway` | hidden | admin only; the Gateway page's facts: version, uptime, environment, reload counts, TLS state, upgrade, clients by the name they reported, and what was refused at start |  |
-| `/ui/api/gateway/restart` | hidden | admin only; GET reports available=false with platform-specific recovery guidance and no token; POST requires strict JSON {confirm: string}, answers 422 for an invalid body and an attributed, audited 409 for a well-formed body; the call is refused and the process does not restart |  |
+| `/ui/api/gateway/restart` | hidden | admin only; GET reports available=false with platform-specific recovery guidance and no token; POST requires strict JSON {confirm: string}, answers 422 for an invalid body and an attributed, audited 409 for a well-formed body; the call is refused and the process does not restart. 4.0.0 has no in-process restart: a reload or settings save that leaves restart-only settings pending says how to restart instead (`restart_advice`, plus `start_command` on Unix, or `start_refusal` alone; beside `start_refusal` the answer's `changes` still says a restart is required, so a UI shows the refusal in its place) |  |
 | `/ui/api/key-server/audit/lookup-email` | hidden | POST, gateway-wide admin only: takes an email in the body (first page) or the sealed cursor of the previous page (next pages, never both) and answers the key server's retained issuance rows whose keyed email hash matches (subject, issuer, token id, scopes, time), newest first with a sealed single-use cursor bound to the caller's credential; the email is hashed for the request and never stored, logged or echoed, and never sent again; every authorized attempt is charged to one process-wide budget (two at once, then one every six seconds; 429 with Retry-After) |  |
 | `/ui/api/keys` | hidden | admin only, like the config view; GET answers the file's revision and its API keys in file order (name, backends, tool lists, admin, expiry, rate limit, last use, whether live), never a secret, digest or principal; POST write: creates one key, its secret generated by the gateway and returned once, only its digest written to gateway.yaml; the body names a revision and never a secret or digest |  |
 | `/ui/api/keys/{name}` | hidden | DELETE requires gateway admin credentials and a body revision, with optional expected_key_tag; removes the exact key through the audited config writer and reports success only after a lock-held receipt confirms its identities are absent from live authorization; no secret is returned |  |

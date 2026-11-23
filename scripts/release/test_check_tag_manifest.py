@@ -715,12 +715,16 @@ LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build
 # rerun within the day reuses it; after that the shard fails red at the download until linux-gateway-bin reruns.
 # Nothing published depends on it.
 LINUX_GATEWAY_BINARY = ("1", "a shard rerun after a day fails red until the build reruns; a large debug binary per run")
+# ci.yml's Windows lib test exe (windows-lib-build): only the four lib legs of the same run download it. A leg rerun
+# later than that is red at the download, never green, until windows-lib-build runs again. Nothing published reads it.
+WINDOWS_LIB_EXE = ("1", "a Windows leg rerun after a day is red until windows-lib-build reruns; one large test exe per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-lists-${{ matrix.shard }}"): MACOS_LIB_LISTS,
     ("ci.yml", "linux-lib-tests-p${{ matrix.part }}"): LINUX_LIB_BINARY,
     ("ci.yml", "linux-gateway-bin"): LINUX_GATEWAY_BINARY,
+    ("ci.yml", "windows-lib-tests"): WINDOWS_LIB_EXE,
 }
 
 
@@ -828,6 +832,31 @@ class WorkflowWiring(unittest.TestCase):
     `test_workflow_wiring_mutations.py`, which is what keeps the list honest:
     a spelling nobody thought of fails loudly instead of passing silently.
     """
+
+    def test_the_mingw_fill_downloads_under_its_own_bound(self):
+        # The fill job (mingw-debs.yml) exists to ride out a slow Ubuntu mirror, so it may not inherit the windows
+        # shard's 600 s download bound (scripts/ci/mingw-debs.sh): it sets its own, fixed in the workflow, and its
+        # job timeout fits two attempts of that bound plus the script's 180 s index refresh each. The shard sets
+        # no bound and keeps the script's 600 s. A workflow- or job-level env is the same setting as a step's.
+        def env_of(workflow, job, step, name):
+            return str({**(workflow.get("env") or {}), **(job.get("env") or {}),
+                        **(step.get("env") or {})}.get(name, ""))
+
+        fill_workflow = yaml.safe_load((WORKFLOWS / "mingw-debs.yml").read_text())
+        fill = fill_workflow["jobs"]["fill"]
+        downloads = [s for s in fill["steps"] if "mingw-debs.sh download" in (s.get("run") or "")]
+        self.assertEqual(1, len(downloads), "the fill downloads in exactly one step")
+        self.assertEqual("3000", env_of(fill_workflow, fill, downloads[0], "MINGW_DOWNLOAD_SECONDS"))
+        self.assertEqual("", env_of(fill_workflow, fill, downloads[0], "MINGW_UPDATE_SECONDS"))
+        self.assertGreaterEqual(int(fill["timeout-minutes"]) * 60, 2 * (3000 + 180) + 300,
+                                "two attempts and their index refreshes, plus 5 min for setup and the cache steps")
+        shard_workflow = yaml.safe_load((WORKFLOWS / "feature-combos.yml").read_text())
+        shard_downloads = [(job, s) for job in shard_workflow["jobs"].values() for s in job.get("steps") or []
+                           if "mingw-debs.sh download" in (s.get("run") or "")]
+        self.assertTrue(shard_downloads, "the windows shard downloads on a cache miss")
+        for job, step in shard_downloads:
+            for name in ("MINGW_DOWNLOAD_SECONDS", "MINGW_UPDATE_SECONDS"):
+                self.assertEqual("", env_of(shard_workflow, job, step, name), f"the shard keeps the script's {name}")
 
     def test_every_reader_of_verify_outputs_needs_verify_directly(self):
         # `needs` exposes direct dependencies only. A job that reads

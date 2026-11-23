@@ -95,6 +95,18 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         "gateway::meta_mcp::task_replay::judging::MetaMcp::authorize_stored",
         1,
     ),
+    // A stored task read answering the lender refusal its cold fill
+    // recorded: the call was never sent, and the read sends nothing.
+    (
+        "gateway::meta_mcp::task_replay::judging::MetaMcp::refuse_stored",
+        1,
+    ),
+    // A cold fill matching the lender's refusal to keep it on the slot: a
+    // pattern, not a construction; the refusal came before any send.
+    (
+        "gateway::meta_mcp::invoke::caller_verdict::ColdFill::run",
+        1,
+    ),
     // A stored task read this process cannot track, refused under `block`
     // when the read starts: a stored result, no send.
     (
@@ -138,7 +150,7 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
     // `Self::Forbidden` here is the preview proxy's own `Status::Forbidden`
     // (a fixed 403 status line to the sandbox), not `Error::Forbidden`:
     // matched by name, reviewed as no denial.
-    ("preview_sandbox::proxy::Status::head", 1),
+    ("preview_sandbox::proxy::admission::Status::head", 1),
     // The lender's refusal while a lent send's headers are built, before the
     // request leaves: the import, the no-lender check, the per-loan checks,
     // and the counted builder and its builder (definitions and calls).

@@ -61,7 +61,7 @@ fn keyless_config(dir: &Path) -> PathBuf {
 #[cfg(tp2)]
 #[test]
 fn a_signed_record_written_between_the_passes_refuses_the_run() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     append(&logger(&log, ""), 3);
     let config = keyless_config(dir.path());
@@ -72,22 +72,47 @@ fn a_signed_record_written_between_the_passes_refuses_the_run() {
         }));
     });
 
-    let exit = super::run_audit_verify(&log, true, None, Some(&config));
+    let exit = super::run_audit_verify(&log, true, None, Some(&config), super::Render::Text);
 
     assert_eq!(exit, ExitCode::FAILURE, "a signed record passed hash-only");
+}
+
+/// The same race under `--json` (MIK-9764.JSONF.1, design D6): the guard after an ok result is not a verdict, so
+/// the run still fails; were the guard skipped, the ok arm would print its document and exit 0.
+#[cfg(tp2)]
+#[test]
+fn a_signed_record_written_between_the_passes_refuses_the_json_run() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let log = dir.path().join("audit.jsonl");
+    append(&logger(&log, ""), 3);
+    let config = keyless_config(dir.path());
+    let target = log.clone();
+    BETWEEN.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            append(&logger(&target, "tlog-9060-race-key-0123456789abcdef"), 2);
+        }));
+    });
+
+    let exit = super::run_audit_verify(&log, true, None, Some(&config), super::Render::Json);
+
+    assert_eq!(
+        exit,
+        ExitCode::FAILURE,
+        "a signed record passed hash-only under --json"
+    );
 }
 
 /// The control: an unsigned log verifies without a key, as before.
 #[cfg(tp2)]
 #[test]
 fn an_unsigned_log_verifies_without_a_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     append(&logger(&log, ""), 3);
     let config = keyless_config(dir.path());
 
     assert_eq!(
-        super::run_audit_verify(&log, true, None, Some(&config)),
+        super::run_audit_verify(&log, true, None, Some(&config), super::Render::Text),
         ExitCode::SUCCESS
     );
 }

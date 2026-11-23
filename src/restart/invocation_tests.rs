@@ -105,8 +105,7 @@ mod unix {
 
     fn exe(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, b"#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_stub::write_executable(path, "#!/bin/sh\n");
     }
 
     fn plain(path: &Path) {

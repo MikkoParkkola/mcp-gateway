@@ -336,3 +336,8 @@ async fn caped11_a_refused_delete_record_withholds_the_answer() {
 
 #[path = "capability_header_secret_tests.rs"]
 mod header_secrets;
+
+/// The classic page's create code against this router, and the route's
+/// answers to the bodies that let a create read as done.
+#[path = "capability_create_page_tests.rs"]
+mod create_page;

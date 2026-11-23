@@ -56,6 +56,41 @@ pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> 
     command
 }
 
+/// The running test binary with an empty environment plus the named
+/// variables the parent has, for a child that must see only them (the
+/// private-home rule's probe children). It builds its own command, so it
+/// can never clear an isolated gateway command. A pure addition: no
+/// existing caller changes.
+pub fn test_binary_with_only_env(names: &[&str]) -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    command.env_clear();
+    for name in names {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
+/// Any `command` isolated as [`command`] isolates the gateway binary, with
+/// `home` as the test-home override and every platform-home variable (`HOME`,
+/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) under a second directory,
+/// `env_home`. A pure addition: no existing caller changes.
+pub fn isolated_with_env_home(
+    command: Command,
+    home: &Path,
+    env_home: &Path,
+    inherit: Inherit,
+) -> Command {
+    let mut command = isolated(command, home, inherit);
+    command
+        .env("HOME", env_home)
+        .env("USERPROFILE", env_home)
+        .env("APPDATA", env_home.join("AppData").join("Roaming"))
+        .env("LOCALAPPDATA", env_home.join("AppData").join("Local"));
+    command
+}
+
 /// The binary run through `wrapper` (for example `sh -c '...; exec "$0" "$@"'`),
 /// isolated the same way: the wrapper's child inherits it.
 pub fn wrapped(wrapper: &[&str], home: &Path, inherit: Inherit) -> Command {
@@ -78,10 +113,14 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
                     command.env_remove(name);
                 }
             }
-            // The bound port is read from an info-level banner, so an
-            // inherited filter keeps its own directives but may not hide it.
+            // The bound port is read from an info-level banner, and stdio
+            // sessions wait for an info-level ready line, so an inherited
+            // filter keeps its own directives but may not hide either.
             if let Ok(filter) = std::env::var("RUST_LOG") {
-                command.env("RUST_LOG", format!("{filter},{BANNER_TARGET}=info"));
+                command.env(
+                    "RUST_LOG",
+                    format!("{filter},{BANNER_TARGET}=info,{STDIO_READY_TARGET}=info"),
+                );
             }
         }
         Inherit::Nothing => {
@@ -108,6 +147,9 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         // real keychain. A test that wants another setting passes it through
         // `checked_env`, which is applied after this.
         .env("MCP_GATEWAY_SECRETS__STORE", "files")
+        // A release-profile test run spawns a binary that is not a dev build:
+        // it must never send the daily heartbeat (docs/PRIVACY.md).
+        .env("DO_NOT_TRACK", "1")
         .env("APPDATA", home.join("AppData").join("Roaming"))
         .env("LOCALAPPDATA", home.join("AppData").join("Local"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
@@ -145,6 +187,10 @@ where
 
 /// The module that logs the `Listening` banner [`logged_port`] reads.
 const BANNER_TARGET: &str = "mcp_gateway::gateway::server::support";
+
+/// The module that logs the ready line `stdio_session` waits for; a row
+/// derives it from the source file that logs the line.
+pub const STDIO_READY_TARGET: &str = "mcp_gateway::gateway::server::stdio_loop";
 
 /// `server.port: 0` (or `-p 0`): the child binds an OS-chosen port and logs
 /// the one it got, so no port is picked here and dropped before the child
@@ -397,4 +443,30 @@ fn wait_blocking(child: &mut tokio::process::Child, bound: std::time::Duration) 
     while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+/// Starts the CLI in a throwaway isolated home, which is also where it looks
+/// for configuration, adds just the given variables, waits for it to exit and
+/// hands back its output. Given bytes are piped to stdin and the pipe closed;
+/// with none, stdin is closed from the start. Not for `serve`, which runs on.
+pub fn run_cli(args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> std::process::Output {
+    use std::io::Write as _;
+    let home = tempfile::tempdir().expect("isolated home for the command");
+    let mut cmd = command(home.path(), Inherit::Nothing);
+    cmd.stdin(if stdin.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    });
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.env("MCP_GATEWAY_CONFIG_DIR", home.path());
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
+    let mut child = cmd.args(args).spawn().expect("start mcp-gateway");
+    if let (Some(mut pipe), Some(bytes)) = (child.stdin.take(), stdin) {
+        let _ = pipe.write_all(bytes);
+    }
+    child.wait_with_output().expect("wait for mcp-gateway")
 }

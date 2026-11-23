@@ -172,6 +172,7 @@ impl DispatchNotes {
         &self,
         meta: &MetaMcp,
         outcome: crate::security::audit::AuditOutcome,
+        credential_kind: crate::security::audit::CredentialKind,
     ) -> crate::security::decision_record::Decision {
         use crate::security::decision_record::Decided;
         let live = meta.live_config();
@@ -185,12 +186,14 @@ impl DispatchNotes {
                 decided,
                 crate::security::decision_record::Refused::No,
                 live.as_deref(),
+                credential_kind,
             )
         } else {
             self.decision.decision(
                 Decided::Fresh,
                 crate::security::decision_record::Refused::of(outcome),
                 live.as_deref(),
+                credential_kind,
             )
         }
     }

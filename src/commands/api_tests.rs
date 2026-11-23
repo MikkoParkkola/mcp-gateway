@@ -40,7 +40,7 @@ fn args(path: &str) -> ApiArgs {
         if_match: None,
         limit: None,
         json: false,
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: DashboardLinkTls::default(),
     }
 }
@@ -98,6 +98,7 @@ struct Seen {
     path: String,
     authorization: String,
     content_type: Option<String>,
+    if_match: Option<String>,
     body: Vec<u8>,
 }
 
@@ -138,7 +139,9 @@ async fn stand_in_with_headers(
         let headers = headers.clone();
         async move {
             let (parts, incoming) = request.into_parts();
-            let incoming = to_bytes(incoming, 1024 * 1024).await.expect("request body");
+            let incoming = to_bytes(incoming, 17 * 1024 * 1024)
+                .await
+                .expect("request body");
             requests.lock().expect("requests").push(Seen {
                 method: parts.method,
                 path: parts.uri.to_string(),
@@ -150,6 +153,10 @@ async fn stand_in_with_headers(
                     .headers
                     .get("content-type")
                     .map(|v| v.to_str().expect("type").to_string()),
+                if_match: parts
+                    .headers
+                    .get("if-match")
+                    .map(|v| v.to_str().expect("if-match").to_string()),
                 body: incoming.to_vec(),
             });
             (status, headers, body)
@@ -343,7 +350,7 @@ async fn a12_existing_admin_call_callers_unchanged() {
         all: false,
         subscription: Some("orders & returns".to_string()),
         reason: None,
-        url: None,
+        gateway: mcp_gateway::cli::dashboard_link::GatewayArg::default(),
         tls: DashboardLinkTls::default(),
     };
     let (method, path) = dead_letters_request(&list).expect("list");
@@ -746,3 +753,9 @@ mod redaction;
 
 #[path = "api_matrix_tests.rs"]
 mod matrix;
+
+#[path = "api_yaml_tests.rs"]
+mod yaml;
+
+#[path = "api_revision_tests.rs"]
+mod revision;

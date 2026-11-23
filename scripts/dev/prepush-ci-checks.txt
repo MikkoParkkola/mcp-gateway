@@ -20,6 +20,11 @@ python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
 python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/test_required_mode.py	0	closed
+python3 scripts/ci/check_python_skips.py	0	closed
+python3 scripts/ci/check_python_skips.py --self-test	1	closed
+python3 scripts/ci/check_rust_skips.py	0	closed
+python3 scripts/ci/check_rust_skips.py --self-test	0	closed
 python3 scripts/ci/check_shared_lib.py	0	closed
 python3 scripts/ci/check_shared_lib.py --self-test	0	closed
 python3 scripts/ci/check_swap_jobs.py	0	closed
@@ -37,6 +42,10 @@ python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_lib_union.py	0	closed
 python3 scripts/ci/test_lib_parts.py	1	closed
+python3 scripts/ci/test_lib_parts_cov.py	3	closed
+python3 scripts/ci/test_compile_cgroup.py	83	closed
+python3 scripts/ci/test_coverage_parts_wiring.py	2	closed
+python3 scripts/ci/test_coverage_union_merge.py	10	closed
 python3 scripts/ci/test_memory_tripwire.py	0	closed
 python3 scripts/ci/test_lib_gates_wiring.py	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
@@ -65,6 +74,9 @@ python3 scripts/dev/check_cfg_reader_copies.py	1	closed
 python3 scripts/dev/check_cfg_reader_copies.py --base <BASE_TIP> --compare merge-base	1	closed
 python3 scripts/dev/check-registry-packages.py --offline	1	closed
 "$GATE_PY" scripts/dev/check-timing-asserts.py --base <BASE_TIP> --compare merge-base	1	closed
+python3 scripts/dev/check_test_wallclock.py --self-test	0	closed
+python3 scripts/dev/check_test_wallclock.py	3	closed
+python3 scripts/dev/check_test_wallclock.py --base <MERGE_BASE>	3	closed
 python3 scripts/dev/cwe532-leak-lint.py src crates	5	closed
 python3 scripts/dev/test_bless_ui_matrix.py	1	closed
 python3 scripts/dev/test_check_control_drift.py	7	closed
@@ -87,6 +99,7 @@ python3 -I scripts/dev/test_rehash_ui_assets.py	0	closed
 python3 scripts/perf/test_per_call_gate.py	1	closed
 python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
 python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
+python3 scripts/release/check_changelog_sections.py	0	closed
 python3 scripts/release/check_identity_sources.py	47	closed
 "$GATE_PY" scripts/release/check_inventory_rows.py --all	35	closed
 "$GATE_PY" scripts/release/check_inventory_rows.py <BASE_TIP>	1	closed
@@ -101,6 +114,7 @@ python3 scripts/release/test_c6_killer_drift.py	2	closed
 python3 scripts/release/test_c6_mutation_sample.py	1	closed
 python3 scripts/release/test_c6_resolve.py	26	closed
 python3 scripts/release/test_changelog_fragments.py	2	closed
+python3 scripts/release/test_check_changelog_sections.py	1	closed
 python3 scripts/release/test_check_identity_sources.py	73	closed
 "$GATE_PY" scripts/release/test_check_inventory_rows.py	21	closed
 python3 scripts/release/test_check_keyless_read_only.py	1	closed
@@ -150,3 +164,7 @@ scripts/dev/check-commit-message-hygiene.sh <BASE_TIP>..HEAD	0	closed
 scripts/dev/check-public-repo-hygiene.sh	0	closed
 tests/artifact_licenses.sh	3	closed
 tests/commit_message_hygiene.sh	8	closed
+python3 scripts/dev/check_clippy_textlints.py	0	closed
+python3 scripts/dev/check_clippy_textlints.py --self-test	0	closed
+python3 scripts/ci/test_coverage_union.py	30	closed
+python3 scripts/release/test_coverage_grade.py	25	closed

@@ -43,6 +43,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
+    ("scripts/ci/ignored-integration-rows.sh", ()):
+        "cargo: runs the ignored integration rows against the gateway the int-a shard built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-b", "--build", "<TMP>/parts")):
         "cargo: builds and runs macOS lib test parts 1-4, one at a time",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "int-lib", "--build", "<TMP>/parts")):
@@ -74,6 +76,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/shard_tests.py", ("which", "config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked",
                                    "<TMP>/lib-bin", "--", "--ignored")):
         "artifact: finds a test's part binary among the ones linux-lib-build built",
+    ("scripts/dev/runtime-provider-docker-smoke.sh", ("--prebuilt", "<TMP>/lib-bin")):
+        "artifact: runs two lib rows from the part binaries linux-lib-build built, against a live Docker daemon",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-dead.rs", "--integrity", "scripts/dev/testdata/registry-dead.integrity.json")): "network: live lookups, CI expects exit 1 (registry-packages.yml, known-dead step)",
     ("scripts/dev/check-registry-packages.py", ("scripts/dev/testdata/registry-integrity.rs", "--integrity", "scripts/dev/testdata/registry-integrity.integrity.json")): "network: live digest lookup, CI expects exit 1 (MIK-8513 wrong-digest step)",
@@ -92,15 +96,21 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/coverage_shard_merge.sh", ("${expected[@]}",)): "artifact: unpacks the parts' coverage bundles into target/",
     ("scripts/ci/coverage_shards.py", ("canary", "linux.lcov")): "artifact: reads the merged coverage report",
     ("scripts/ci/coverage_shards.py", ("check", "$COVERAGE_PARTS", "metadata.json")): "cargo: reads cargo metadata output",
-    ("scripts/ci/coverage_shards.py", ("objects", "$log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_shards.py", ("objects", "report-lcov.log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_union.py", ("report-lcov.log", "linux-single.lcov", "linux.lcov")): "artifact: re-runs the grade's logged llvm-cov export per lib part and joins the exports",
     ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
-    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "$PART"),
-     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1', "tee run.log")): (
-        "cargo: runs an instrumented cargo test part"),
+    ("scripts/ci/coverage_shards.py", ("lists", "<TMP>/lib-lists", "shards")): (
+        "artifact: reads the downloaded coverage lib parts' test lists"),
+    ("scripts/ci/shard_tests.py", ("export-home", "$GITHUB_ENV")): (
+        "ci-env: makes a gateway home in RUNNER_TEMP and appends its variables to GITHUB_ENV"),
+    ("scripts/ci/lib-parts.sh", ("cov", "$COVERAGE_PARTS", "$PART")): (
+        "cargo: builds and runs one instrumented coverage part under the memory gate"),
+    ("scripts/ci/lib_union.py", ("<TMP>/lib-lists", "<TMP>/expected")): (
+        "artifact: compares the coverage lib parts' lists with the source's sets"),
     ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "sdk"),
      ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1', "tee run.log")): (
         "cargo: runs the instrumented SDK journey"),
-    ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
+    ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/linux.lcov",)): "artifact: reads a CI coverage artifact",
     ("scripts/dev/test_run_prepush_ci_checks.py", ()): (
         "budget: tests the runner itself; 22.5 s would put the CI-checks stage at about 114 s of its "
         "120 s budget on every push; CI runs it on every PR"

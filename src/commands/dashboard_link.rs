@@ -59,7 +59,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
     }
 }
 
-/// The gateway to ask: `--url` when given, otherwise the listener the config
+/// The gateway to ask: `--gateway` (or `MCP_GATEWAY_URL`) when given, otherwise the listener the config
 /// describes (`https` when it serves TLS).
 ///
 /// Unlike `stats`, a config that fails to load is an error, not a fallback to
@@ -68,7 +68,7 @@ pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<Stri
 ///
 /// # Errors
 ///
-/// The config load failure, when no `--url` was given.
+/// The config load failure, when no `--gateway` was given.
 pub fn dashboard_link_base(
     url: Option<String>,
     flags: DashboardLinkTls,
@@ -81,13 +81,14 @@ pub fn dashboard_link_base(
         (None, None) => None,
         _ => return Err("--client-cert and --client-key go together".to_string()),
     };
-    // `--url` describes the target: no config is read, so its trust anchor
+    // `--gateway` describes the target: no config is read, so its trust anchor
     // is `--ca-cert` or the built-in roots.
     if let Some(url) = url {
         let ca = flags.ca_cert;
         return Ok((url, LinkTls { ca, identity }));
     }
-    let mut config = load().map_err(|e| format!("could not load the config ({e}); pass --url"))?;
+    let mut config =
+        load().map_err(|e| format!("could not load the config ({e}); pass --gateway"))?;
     if let Some(port) = port_override {
         config.server.port = port;
     }
@@ -115,7 +116,7 @@ pub fn dashboard_link_base(
     }
     // The listener's own CA when none is named. It becomes the only root, so
     // a public CA cannot vouch for this name; a server certificate from a
-    // public CA is reached with `--url` instead.
+    // public CA is reached with `--gateway` instead.
     let ca = flags
         .ca_cert
         .or_else(|| (!mtls.ca_cert.is_empty()).then(|| PathBuf::from(&mtls.ca_cert)));
@@ -159,13 +160,15 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 #[path = "dashboard_link_admin.rs"]
 mod admin;
 
-use super::cli_exit::{CliError, CliExit, CliOutcome, Request, StdoutRule, emit, resolve_token};
+use super::cli_exit::{
+    CliError, CliExit, CliOutcome, Request, StdoutRule, emit, emit_to, resolve_token,
+};
 #[cfg(test)]
 pub(crate) use admin::admin_call_url_with_options;
 pub(crate) use admin::{
-    AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream, Remedies,
-    UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link, gateway_reason,
-    origin_of, redact_body, refusal, transport,
+    AdminBody, AdminCallError, AdminClientOptions, AdminFailureKind, AdminResponse, AdminStream,
+    Remedies, UNSUPPORTED_REMEDY, admin_call, admin_call_url, admin_stream_url, fetch_link,
+    gateway_reason, origin_of, redact_body, refusal, transport,
 };
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
@@ -220,9 +223,35 @@ pub async fn run_dashboard_link_args(
     host_override: Option<&str>,
 ) -> ExitCode {
     let token = read_token(|name| std::env::var(name).ok());
+    // Stderr unlocked: the fetch awaits before anything prints, and a held lock would stall other threads' writes.
+    let exit = print_dashboard_link(
+        args,
+        load,
+        port_override,
+        host_override,
+        token,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await;
+    ExitCode::from(exit.code())
+}
+
+/// `dashboard-link` once its token is read: the outcome, printed through the shared emitter in the run's form, so a
+/// failed stdout write is the shared JSON error under `--json` too (MIK-9764.JSONF.1, design D5).
+pub(crate) async fn print_dashboard_link(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+    token: Result<String, TokenError>,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+) -> CliExit {
     let secret = token.as_deref().unwrap_or_default().to_owned();
+    let json = args.json;
     let out = dashboard_link_outcome(args, load, port_override, host_override, token).await;
-    emit(&out, false, &[&secret])
+    emit_to(&out, json, &[&secret], stdout, stderr)
 }
 
 /// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
@@ -254,7 +283,9 @@ pub(crate) fn resolved(
     port_override: Option<u16>,
     host_override: Option<&str>,
     token: Result<String, TokenError>,
+    render: crate::cli::output::Render,
 ) -> Result<(String, LinkTls, String), CliOutcome> {
+    let json = render == crate::cli::output::Render::Json;
     let secret = token.as_deref().unwrap_or_default().to_owned();
     let (base, tls) =
         dashboard_link_base(url, tls, load, port_override, host_override).map_err(|message| {
@@ -263,10 +294,10 @@ pub(crate) fn resolved(
                 message,
                 "Check the gateway settings, then retry.",
             )
-            .outcome(false, &[&secret])
+            .outcome(json, &[&secret])
         })?;
-    let token = resolve_token(token, &origin_of(&base))
-        .map_err(|error| error.outcome(false, &[&secret]))?;
+    let token =
+        resolve_token(token, &origin_of(&base)).map_err(|error| error.outcome(json, &[&secret]))?;
     Ok((base, tls, token))
 }
 
@@ -279,26 +310,52 @@ pub(crate) async fn dashboard_link_outcome(
     host_override: Option<&str>,
     token: Result<String, TokenError>,
 ) -> CliOutcome {
+    let render = crate::cli::output::Render::from_json_flag(args.json);
+    let json = render == crate::cli::output::Render::Json;
     let (base, tls, token) = match resolved(
-        args.url,
+        args.gateway.url,
         args.tls,
         load,
         port_override,
         host_override,
         token,
+        render,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return out,
     };
     match fetch_link(&base, &token, &tls).await {
-        Ok(link) => CliOutcome::success(
-            format!("{link}\n").into_bytes(),
-            "Opens once, from this machine only.\n",
-            false,
-            &[&token],
-            StdoutRule::RefuseToken,
-        ),
-        Err(error) => error.outcome(false, &[&token]),
+        Ok(link) => {
+            // Under `--json` the document goes through the same RefuseToken gate, which then also scans its
+            // decoded strings (design D9).
+            let stdout = if json {
+                #[derive(serde::Serialize)]
+                struct View<'a> {
+                    url: &'a str,
+                }
+                match crate::cli::output::document(&View { url: &link }) {
+                    Ok(doc) => doc,
+                    Err(why) => {
+                        return CliError::new(
+                            CliExit::LocalFailure,
+                            format!("Could not print the link: {why}"),
+                            "Repeat the command.",
+                        )
+                        .outcome(json, &[&token]);
+                    }
+                }
+            } else {
+                format!("{link}\n")
+            };
+            CliOutcome::success(
+                stdout.into_bytes(),
+                "Opens once, from this machine only.\n",
+                json,
+                &[&token],
+                StdoutRule::RefuseToken,
+            )
+        }
+        Err(error) => error.outcome(json, &[&token]),
     }
 }
 
@@ -313,12 +370,13 @@ pub(crate) async fn events_outcome(
 ) -> CliOutcome {
     use mcp_gateway::cli::events::DeadLetterAction;
     let (base, tls, token) = match resolved(
-        args.url.clone(),
+        args.gateway.url.clone(),
         args.tls.clone(),
         load,
         port_override,
         host_override,
         token,
+        crate::cli::output::Render::Text,
     ) {
         Ok(resolved) => resolved,
         Err(out) => return out,

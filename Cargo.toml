@@ -82,6 +82,7 @@ include = [
     "deploy/kubernetes/enterprise-alpha/values.enterprise.example.yaml",
     "deploy/single-node/docker-compose.yaml",
     "Dockerfile",
+    "docs/CLI.md",
     "docs/CLIENTS.md",
     "docs/DEPLOYMENT.md",
     "docs/identity_grants.md",
@@ -398,7 +399,7 @@ strip = true
 
 [lints.rust]
 unsafe_code = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)', 'cfg(mutants)', 'cfg(reads_token_probe)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)', 'cfg(mutants)', 'cfg(reads_token_probe)', 'cfg(tokio_unstable)'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

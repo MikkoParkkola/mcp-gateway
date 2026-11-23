@@ -69,8 +69,25 @@ pub async fn regenerate_for_capability(
     out_dir: &Path,
     agent_paths: &[std::path::PathBuf],
 ) -> Result<()> {
+    regenerate_for_capability_kept(
+        cap,
+        out_dir,
+        agent_paths,
+        &installer::InstallKeep::silent(out_dir, agent_paths),
+    )
+    .await
+}
+
+/// [`regenerate_for_capability`] with the keep its writes hold (the skills
+/// watcher's regen loop passes its own).
+pub(crate) async fn regenerate_for_capability_kept(
+    cap: &CapabilityDefinition,
+    out_dir: &Path,
+    agent_paths: &[std::path::PathBuf],
+    keep: &installer::InstallKeep,
+) -> Result<()> {
     let bundle = renderer::render_bundle(&effective_category(cap), &[cap]);
-    installer::install_bundle(&bundle, out_dir, agent_paths).await?;
+    installer::install_bundle_kept(&bundle, out_dir, agent_paths, keep).await?;
 
     info!(
         capability = %cap.name,

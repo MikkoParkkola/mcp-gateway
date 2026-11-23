@@ -82,12 +82,13 @@ async fn stdio_admission_refusal_writes_one_record() {
 
 /// A signed stdio `gateway_invoke` of a personal capability whose grant is
 /// missing is refused while signing is prepared (before the route stage):
-/// one denied decision, no invocation record, so Activity lists it.
+/// the refusal writes its own invocation record, and the one denied decision
+/// says so and names the same trace, so Activity lists the call once.
 #[test]
-fn a_signed_stdio_refusal_writes_one_unrecorded_decision() {
+fn a_signed_stdio_refusal_is_one_recorded_call() {
     use super::signing_nonce_allocations_support::{Fixture, SESSION, runtime};
     let runtime = runtime();
-    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.jsonl");
     runtime.block_on(async {
         let fixture = Fixture::start_audited_signed(&log).await;
@@ -139,8 +140,15 @@ fn a_signed_stdio_refusal_writes_one_unrecorded_decision() {
             .filter(|e| e["kind"] == json!("identity_grant_decision"))
             .collect();
         assert_eq!(held.len(), 1, "{entries:#?}");
-        assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-        let calls = entries.iter().filter(|e| e.get("route").is_some()).count();
-        assert_eq!(calls, 0, "no invocation record of its own: {entries:#?}");
+        assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+        let calls: Vec<&Value> = entries
+            .iter()
+            .filter(|e| e.get("route").is_some())
+            .collect();
+        assert_eq!(calls.len(), 1, "one invocation record: {entries:#?}");
+        assert_eq!(
+            calls[0]["trace_id"], held[0]["trace_id"],
+            "the decision and the record name one call: {entries:#?}"
+        );
     });
 }

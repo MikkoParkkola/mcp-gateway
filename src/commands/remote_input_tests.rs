@@ -198,7 +198,7 @@ async fn lookup_window_faults_and_the_equal_boundary() {
 async fn the_first_failing_check_decides() {
     use super::super::dashboard_link::TokenError;
     let broken = || -> Result<mcp_gateway::config::Config, String> { Err("planted".to_string()) };
-    let what = "could not load the config (planted); pass --url";
+    let what = "could not load the config (planted); pass --gateway";
     let Command::Audit(AuditCommand::LookupEmail(args)) =
         parse(&["audit", "lookup-email", "--email-stdin"])
     else {

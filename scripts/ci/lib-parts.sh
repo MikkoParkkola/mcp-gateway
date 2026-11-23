@@ -4,6 +4,11 @@
 # lib-parts.sh export PARTS DEST: build the lib test binary for each part in PARTS (one, or a comma list for the
 # grouped rollback legs) and write DEST/pK/lib-tests-pK and DEST/pK/list.txt (its unfiltered --list) for each.
 #
+# lib-parts.sh cov PLAN PART: run one coverage part (scripts/ci/coverage_shards.py run PLAN PART). A lib part, lib-K,
+# runs with its test part set and under the memory gate (scripts/ci/compile-cgroup.sh), then its lib test executable
+# is moved to deps/pK/mcp_gateway-HASH so the merge keeps each part's executable apart. Any other part runs with
+# the part variable removed, without the gate or the move. A failed run keeps its status and moves nothing.
+#
 # lib-parts.sh run [CARGO_FLAGS...] -- [TEST_ARGS...]: run the test suite of the crate in the current directory the
 # way `cargo test CARGO_FLAGS -- TEST_ARGS` would, with the lib test binary one part at a time: parts 1..N (N from
 # that crate's build script), then every other test target, then the doctests, each with --no-fail-fast. Every phase
@@ -17,7 +22,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 export PARTS DEST | run [CARGO_FLAGS...] -- [TEST_ARGS...]" >&2
+  echo "usage: $0 export PARTS DEST | cov PLAN PART | run [CARGO_FLAGS...] -- [TEST_ARGS...]" >&2
   exit 2
 }
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -39,6 +44,11 @@ part_count() {
 }
 
 mode="${1:-}"
+if [ "$mode" = run ] && [ -z "${MCP_GATEWAY_TEST_HOME_DIR:-}" ]; then
+  # Tests that resolve the gateway home in-process refuse to run without a private one: run the whole suite once
+  # more inside a home of its own (the shards' implementation, removed afterwards). A home the caller set is kept.
+  exec python3 "$root/scripts/ci/shard_tests.py" with-home -- bash "$0" "$@"
+fi
 if [ "$mode" = run ]; then
   shift
   flags=()
@@ -60,18 +70,77 @@ if [ "$mode" = run ]; then
   exit "$status"
 fi
 
-if [ "$mode" != export ] || [ $# -ne 3 ]; then
+if { [ "$mode" != export ] && [ "$mode" != cov ]; } || [ $# -ne 3 ]; then
   usage
 fi
+
+# Both modes check a part number the same way, before anything builds: digits with no leading zero, and 1..N. The
+# length check keeps a huge number out of the arithmetic comparison.
+check_part() {
+  local k="$1" n="$2"
+  if ! [[ "$k" =~ ^[1-9][0-9]*$ ]] || [ "${#k}" -gt "${#n}" ] || [ "$k" -gt "$n" ]; then
+    echo "::error::lib-parts: part '$k' is outside 1..$n" >&2
+    return 1
+  fi
+}
+
+if [ "$mode" = cov ]; then
+  plan="$2"
+  part="$3"
+  deps=target/llvm-cov-target/debug/deps
+  if [[ "$part" = lib-* ]]; then
+    k="${part#lib-}"
+    n="$(part_count)"
+    check_part "$k" "$n"
+  fi
+  # cargo llvm-cov clean leaves these folders; a restored cache would put an earlier run's part executable
+  # into this run's bundle. Match the whole directory name so p256 crate artifacts survive.
+  for directory in "$deps"/p[0-9]*/; do
+    name="${directory%/}"
+    name="${name##*/}"
+    if [[ -d "$directory" && "$name" =~ ^p[0-9]+$ ]]; then
+      rm -rf -- "$directory"
+    fi
+  done
+  if [[ "$part" = lib-* ]]; then
+    mkdir -p "$deps"
+    # mktemp creates the marker now, so its mtime is this run's start.
+    marker="$(mktemp "$deps/.coverage-start.XXXXXX")"
+    trap 'rm -f "$marker"' EXIT
+    MCP_GATEWAY_TEST_PART="$k" "$root/scripts/ci/compile-cgroup.sh" \
+      python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
+    # The one lib test executable this run built: an executable mcp_gateway-HASH with no extension. A binary already
+    # in a per-part subdirectory, or older than this run's marker, is never a candidate even in a reused target dir.
+    executables=()
+    while IFS= read -r -d '' executable; do
+      executables+=("$executable")
+    done < <(find "$deps" -maxdepth 1 -type f -perm -u+x -newer "$marker" \
+      -name 'mcp_gateway-*' ! -name '*.*' -print0)
+    if [ "${#executables[@]}" -ne 1 ]; then
+      hint=""
+      # In a reused target dir cargo may not relink an unchanged binary, so it stays older than the marker.
+      if [ "${#executables[@]}" -eq 0 ]; then
+        hint=" (only executables newer than this run's start count; delete stale $deps/mcp_gateway-* and rerun)"
+      fi
+      echo "::error::lib-parts: expected one lib test executable, found ${#executables[@]}$hint" >&2
+      exit 1
+    fi
+    # cargo llvm-cov report only reads executables named like cargo names them (mcp_gateway-HASH).
+    # It searches deps recursively, so a per-part folder keeps the five executables apart.
+    mkdir -p "$deps/p$k"
+    mv "${executables[0]}" "$deps/p$k/"
+  else
+    env -u MCP_GATEWAY_TEST_PART python3 "$root/scripts/ci/coverage_shards.py" run "$plan" "$part"
+  fi
+  exit 0
+fi
+
 parts="$2"
 dest="$3"
 n="$(part_count)"
 IFS=, read -r -a list <<< "$parts"
 for k in "${list[@]}"; do
-  if ! [[ "$k" =~ ^[1-9][0-9]*$ ]] || [ "$k" -gt "$n" ]; then
-    echo "::error::lib-parts: part '$k' is outside 1..$n" >&2
-    exit 1
-  fi
+  check_part "$k" "$n"
 done
 for k in "${list[@]}"; do
   out="$dest/p$k"

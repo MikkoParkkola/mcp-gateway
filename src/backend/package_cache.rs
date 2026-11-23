@@ -376,6 +376,10 @@ async fn retire_cache_dir<F>(
 where
     F: FnOnce(&Path) -> Retired + Send + 'static,
 {
+    // Taken here, while the start (in a test, the test) still holds its share
+    // of the dir: a start that gives up leaves this task running, and the
+    // rename, the proof file and the tombstone's delete all land in that dir.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, dir);
     let target = dir.to_path_buf();
     let renamed = tokio::task::spawn_blocking(move || {
         // Locals drop in reverse order, so on a panic in `retire` the latch is
@@ -390,7 +394,8 @@ where
             Retired::Refused => arm_again(&target),
             Retired::AlreadyGone => {}
         }
-        (retired, held)
+        // Held to the task's last step: after the rename and the discard's spawn.
+        crate::spawn_keep::holding(kept, || (retired, held))
     });
     match renamed.await {
         Ok((retired, held)) => (retired, Some(held)),
@@ -473,10 +478,17 @@ fn retire_now(dir: &Path) -> Retired {
 /// Deletes a tombstone in the background, holding no lock: how long a large or
 /// slow tree takes no longer blocks any start.
 fn discard_tombstone(tombstone: PathBuf) {
+    // Taken before the task exists, while the caller (a test) still holds its
+    // share of the dir; the task holds it until the delete returns.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, &tombstone);
     drop(tokio::task::spawn_blocking(move || {
-        if !remove_now(&tombstone) {
-            warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
-        }
+        #[cfg(test)]
+        crate::spawn_keep::pause_if_held(&tombstone);
+        crate::spawn_keep::holding(kept, || {
+            if !remove_now(&tombstone) {
+                warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
+            }
+        });
     }));
 }
 
@@ -492,7 +504,13 @@ fn sweep_tombstones_once(root: &Path) {
         return;
     }
     let root = root.to_path_buf();
-    drop(tokio::task::spawn_blocking(move || sweep_now(&root)));
+    // Taken before the task exists; the task holds it until the sweep returns.
+    let kept = crate::spawn_keep::kept_at_spawn(crate::spawn_keep::PACKAGE_CACHE, &root);
+    drop(tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        crate::spawn_keep::pause_if_held(&root);
+        crate::spawn_keep::holding(kept, || sweep_now(&root));
+    }));
 }
 
 /// One pass of the sweep over `root`, on the caller's thread: deletes the
@@ -564,3 +582,8 @@ mod tests;
 #[cfg(test)]
 #[path = "package_cache_retry_tests.rs"]
 mod retry_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "package_cache_keep_tests.rs"]
+mod keep_tests;
