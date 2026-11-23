@@ -42,10 +42,20 @@ struct Child {
     _workdir: Workdir,
 }
 
+/// The children and the gateway stop's latch, under one lock: the stop sets
+/// the latch in the same hold that takes every child, so no call can put a new
+/// child in behind it.
+#[derive(Default)]
+struct Children {
+    by_key: HashMap<(String, String), Child>,
+    stopped: bool,
+}
+
 /// The executor's private MCP children, keyed by (capability, caller).
 #[derive(Default)]
 pub(crate) struct McpChildren {
-    map: Mutex<HashMap<(String, String), Child>>,
+    /// Never held across blocking I/O: a gateway stop takes it plainly.
+    map: Mutex<Children>,
     sweeping: AtomicBool,
     next_id: std::sync::atomic::AtomicU64,
     /// Bumped on every unload, reload and quarantine; see
@@ -89,78 +99,123 @@ impl McpChildren {
         start: impl FnOnce() -> Result<(Arc<Backend>, Workdir)>,
     ) -> Result<Lease> {
         let key = (capability.name.clone(), principal.to_owned());
-        let mut stale = Vec::new();
+        let current = |child: &Child| {
+            child.config == *config && child.env_fp == env_fp && child.timeout == timeout
+        };
+        {
+            let mut map = self.map.lock();
+            self.admit(&map, &capability.name, &epoch_current)?;
+            if let Some(child) = map.by_key.get_mut(&key).filter(|child| current(child)) {
+                return Ok(lease(child));
+            }
+        }
+        // Built with the map lock released: its directory and its program's
+        // PATH lookup are file-system calls a stalled mount can hold, and a
+        // gateway stop must never wait on them. A start that fails returns
+        // here, before any child has left the map.
+        let candidate = start()?;
+        // Declared after the candidate, so dropped before it: an unused
+        // candidate's directory is removed only once the lock is released.
         let mut map = self.map.lock();
-        // Under the map lock: an unload bumps the epoch and then evicts under
-        // this same lock, so a call from before the unload either gets its child
-        // evicted or is refused here; none starts one that outlives the unload.
-        if !epoch_current(self.generation(&capability.name)) {
+        // Read again right before the insert: an unload (epoch) or a stop
+        // (latch) while the candidate was built refuses it here.
+        self.admit(&map, &capability.name, &epoch_current)?;
+        if let Some(child) = map.by_key.get_mut(&key).filter(|child| current(child)) {
+            // Another call put one in meanwhile; the candidate goes unused.
+            return Ok(lease(child));
+        }
+        // Every check that can refuse comes before the first removal, so
+        // nothing returns between a removal and its handover.
+        let others = map
+            .by_key
+            .keys()
+            .filter(|(cap, caller)| *cap == capability.name && *caller != key.1)
+            .count();
+        let victim = if others >= MAX_CHILDREN_PER_CAPABILITY {
+            // The least recently used IDLE child; never a busy one.
+            let victim = map
+                .by_key
+                .iter()
+                .filter(|((cap, caller), child)| {
+                    *cap == capability.name
+                        && *caller != key.1
+                        && child.in_flight.load(Ordering::Acquire) == 0
+                })
+                .min_by_key(|(_, child)| *child.last_used.lock())
+                .map(|(k, _)| k.clone());
+            let Some(victim) = victim else {
+                return Err(Error::RateLimited(format!(
+                    "capability '{}' already serves {MAX_CHILDREN_PER_CAPABILITY} busy callers; \
+                     retry shortly",
+                    capability.name
+                )));
+            };
+            Some(victim)
+        } else {
+            None
+        };
+        // The key's stale child (a changed config) and the victim: healthy,
+        // so the graceful end, handed over before the lock is released.
+        let removed: Vec<Child> = std::iter::once(&key)
+            .chain(victim.as_ref())
+            .filter_map(|k| map.by_key.remove(k))
+            .collect();
+        hand_over(&removed, ChildEnd::Graceful);
+        let (backend, workdir) = candidate;
+        if let Some(deadline) = self.stop_deadline.get() {
+            let _ = backend.stop_deadline.set(Arc::clone(deadline));
+        }
+        let child = map.by_key.entry(key).insert_entry(Child {
+            backend,
+            config: config.clone(),
+            env_fp,
+            timeout,
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            last_used: Arc::new(Mutex::new(Instant::now())),
+            runtime: tokio::runtime::Handle::try_current().ok(),
+            _workdir: workdir,
+        });
+        let lease = lease(child.into_mut());
+        drop(map);
+        finish(removed);
+        Ok(lease)
+    }
+
+    /// Whether a call may have a child now: refused once the gateway stop has
+    /// run, or when the capability changed since the call read it. Read under
+    /// the map lock: an unload bumps the epoch and then evicts under it, and a
+    /// stop latches under it, so a call is either refused here or its child
+    /// is in the map when they look.
+    fn admit(
+        &self,
+        children: &Children,
+        capability: &str,
+        epoch_current: &impl Fn(u64) -> bool,
+    ) -> Result<()> {
+        if children.stopped {
             return Err(Error::Config(format!(
-                "capability '{}' changed while this call was starting; retry",
-                capability.name
+                "capability '{capability}': the gateway is stopping"
             )));
         }
-        if map.get(&key).is_some_and(|child| {
-            child.config != *config || child.env_fp != env_fp || child.timeout != timeout
-        }) && let Some(old) = map.remove(&key)
-        {
-            stale.push(old);
+        if !epoch_current(self.generation(capability)) {
+            return Err(Error::Config(format!(
+                "capability '{capability}' changed while this call was starting; retry"
+            )));
         }
-        if !map.contains_key(&key) {
-            let live = map
-                .keys()
-                .filter(|(cap, _)| *cap == capability.name)
-                .count();
-            if live >= MAX_CHILDREN_PER_CAPABILITY {
-                // Evict the least recently used IDLE child; never a busy one.
-                let victim = map
-                    .iter()
-                    .filter(|((cap, _), child)| {
-                        *cap == capability.name && child.in_flight.load(Ordering::Acquire) == 0
-                    })
-                    .min_by_key(|(_, child)| *child.last_used.lock())
-                    .map(|(k, _)| k.clone());
-                let Some(victim) = victim else {
-                    return Err(Error::RateLimited(format!(
-                        "capability '{}' already serves {MAX_CHILDREN_PER_CAPABILITY} busy callers; \
-                         retry shortly",
-                        capability.name
-                    )));
-                };
-                stale.extend(map.remove(&victim));
-            }
-            let (backend, workdir) = start()?;
-            if let Some(deadline) = self.stop_deadline.get() {
-                let _ = backend.stop_deadline.set(Arc::clone(deadline));
-            }
-            map.insert(
-                key.clone(),
-                Child {
-                    backend,
-                    config: config.clone(),
-                    env_fp,
-                    timeout,
-                    id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                    in_flight: Arc::new(AtomicUsize::new(0)),
-                    last_used: Arc::new(Mutex::new(Instant::now())),
-                    runtime: tokio::runtime::Handle::try_current().ok(),
-                    _workdir: workdir,
-                },
-            );
-        }
-        let child = map.get_mut(&key).expect("present: inserted above");
-        *child.last_used.lock() = Instant::now();
-        child.in_flight.fetch_add(1, Ordering::AcqRel);
-        let lease = Lease {
-            backend: Arc::clone(&child.backend),
-            busy: InFlight(Arc::clone(&child.in_flight), Arc::clone(&child.last_used)),
-            id: child.id,
-        };
+        Ok(())
+    }
+
+    /// End every child for the gateway stop, by `deadline`: the latch and the
+    /// handover in one hold of the map lock, busy children included (each
+    /// backend's `stopping` latch refuses a leased call's later start).
+    pub(crate) fn stop_for_gateway(&self, deadline: tokio::time::Instant) {
+        let mut map = self.map.lock();
+        map.stopped = true;
+        let all: Vec<Child> = map.by_key.drain().map(|(_, child)| child).collect();
+        hand_over(&all, ChildEnd::By(deadline));
         drop(map);
-        // A changed config or the least recently used idle child: healthy, so
-        // the graceful stop.
-        stop_all(stale, ChildEnd::Graceful);
-        Ok(lease)
+        finish(all);
     }
 
     /// Stop children idle for at least `idle`, and every child of a
@@ -172,11 +227,13 @@ impl McpChildren {
         // revocation. An idle one only when it has no call in flight, and
         // gracefully.
         let unloaded: Vec<_> = map
+            .by_key
             .keys()
             .filter(|(cap, _)| !loaded(cap))
             .cloned()
             .collect();
         let idle_keys: Vec<_> = map
+            .by_key
             .iter()
             .filter(|((cap, _), child)| {
                 loaded(cap)
@@ -185,13 +242,23 @@ impl McpChildren {
             })
             .map(|(k, _)| k.clone())
             .collect();
-        let revoked: Vec<Child> = unloaded.iter().filter_map(|k| map.remove(k)).collect();
-        let idled: Vec<Child> = idle_keys.iter().filter_map(|k| map.remove(k)).collect();
+        let revoked: Vec<Child> = unloaded
+            .iter()
+            .filter_map(|k| map.by_key.remove(k))
+            .collect();
+        let idled: Vec<Child> = idle_keys
+            .iter()
+            .filter_map(|k| map.by_key.remove(k))
+            .collect();
         #[cfg(test)]
         self.evict_holds_the_lock.pause_on_thread();
+        // Handed over before the unlock: a gateway stop that takes the lock
+        // after this finds them already in the reaper's hands.
+        hand_over(&revoked, ChildEnd::Now);
+        hand_over(&idled, ChildEnd::Graceful);
         drop(map);
-        stop_all(revoked, ChildEnd::Now);
-        stop_all(idled, ChildEnd::Graceful);
+        finish(revoked);
+        finish(idled);
     }
 
     /// Start the once-a-minute idle sweep. It holds only a `Weak`, so it
@@ -228,8 +295,8 @@ impl McpChildren {
 
     /// Revoke the calls of one capability that read an earlier generation.
     pub(crate) fn bump_generation(&self, capability: &str) {
-        // Under the map lock `acquire` holds from its epoch check to the
-        // lease, so a reload cannot land between the two. Same
+        // Under the map lock `acquire` holds from its last epoch check to the
+        // insert, so a reload cannot land between the two. Same
         // order as `acquire`: map, then generations.
         let _admission = self.map.lock();
         *self
@@ -244,14 +311,15 @@ impl McpChildren {
         let key = (capability.to_owned(), principal.to_owned());
         let mut map = self.map.lock();
         // Only the child that timed out: a newer one under the same key stays.
-        let gone = if map.get(&key).is_some_and(|child| child.id == id) {
-            map.remove(&key)
+        let gone: Vec<Child> = if map.by_key.get(&key).is_some_and(|child| child.id == id) {
+            map.by_key.remove(&key).into_iter().collect()
         } else {
-            None
+            Vec::new()
         };
-        drop(map);
         // It timed out: unresponsive, so the kill at once.
-        stop_all(gone.into_iter().collect(), ChildEnd::Now);
+        hand_over(&gone, ChildEnd::Now);
+        drop(map);
+        finish(gone);
     }
 
     /// Mark the caller's child busy, as a call in flight would.
@@ -259,6 +327,7 @@ impl McpChildren {
     pub(crate) fn hold_for_test(&self, _caller: &str) -> Vec<InFlight> {
         self.map
             .lock()
+            .by_key
             .values()
             .map(|child| {
                 child.in_flight.fetch_add(1, Ordering::AcqRel);
@@ -273,6 +342,7 @@ impl McpChildren {
     pub(crate) fn lease_backends_for_test(&self) -> Vec<Arc<Backend>> {
         self.map
             .lock()
+            .by_key
             .values()
             .map(|child| Arc::clone(&child.backend))
             .collect()
@@ -283,6 +353,7 @@ impl McpChildren {
     pub(crate) fn id_for_test(&self, capability: &str) -> u64 {
         let map = self.map.lock();
         let (_, child) = map
+            .by_key
             .iter()
             .find(|((cap, _), _)| cap == capability)
             .expect("a child exists");
@@ -294,7 +365,8 @@ impl McpChildren {
     pub(crate) fn discard_for_test(&self, capability: &str, id: u64) {
         let principal = {
             let map = self.map.lock();
-            map.keys()
+            map.by_key
+                .keys()
                 .find(|(cap, _)| cap == capability)
                 .map(|(_, p)| p.clone())
                 .expect("a child exists")
@@ -305,7 +377,18 @@ impl McpChildren {
     /// Live children, for tests.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.map.lock().len()
+        self.map.lock().by_key.len()
+    }
+}
+
+/// Mark `child` busy for one call.
+fn lease(child: &mut Child) -> Lease {
+    *child.last_used.lock() = Instant::now();
+    child.in_flight.fetch_add(1, Ordering::AcqRel);
+    Lease {
+        backend: Arc::clone(&child.backend),
+        busy: InFlight(Arc::clone(&child.in_flight), Arc::clone(&child.last_used)),
+        id: child.id,
     }
 }
 
@@ -317,25 +400,35 @@ enum ChildEnd {
     Graceful,
     /// Revoked or unresponsive: the kill at once.
     Now,
+    /// The gateway stop: the MCP stdio order, planned to end by the stage's
+    /// deadline rather than the close budget.
+    By(tokio::time::Instant),
 }
 
-/// Stop each child's backend (which ends its process tree), then drop its
-/// directory. Runs off the caller's path.
-fn stop_all(children: Vec<Child>, end: ChildEnd) {
-    // Each child stops on the runtime that drives it: the current one may be
-    // entered but never driven, and a stop spawned there would never run.
-    let current = tokio::runtime::Handle::try_current().ok();
+/// Hand every process tree the children's backends own, pooled or held by a
+/// busy caller, to the reaper: synchronously and without any runtime, under
+/// the map lock that removed them, so no child is ever out of the map and out
+/// of the reaper's hands at once. The async stop in [`finish`] may never run
+/// on an idle or dropped runtime.
+fn hand_over(children: &[Child], end: ChildEnd) {
     for child in children {
-        // First, synchronously and without any runtime: hand every process tree
-        // the child's backend owns, pooled or held by a busy caller, to the
-        // reaper. The async stop below may never run on an idle or dropped
-        // runtime.
         match end {
             ChildEnd::Graceful => child
                 .backend
                 .hand_over_now(tokio::time::Instant::now() + child.backend.budgets.close_stage),
+            ChildEnd::By(deadline) => child.backend.hand_over_now(deadline),
             ChildEnd::Now => child.backend.retire_now(),
         }
+    }
+}
+
+/// After the unlock: stop each handed-over child's backend (which waits for
+/// its reaps), then drop its directory. Runs off the caller's path.
+fn finish(children: Vec<Child>) {
+    // Each child stops on the runtime that drives it: the current one may be
+    // entered but never driven, and a stop spawned there would never run.
+    let current = tokio::runtime::Handle::try_current().ok();
+    for child in children {
         let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
             continue;
         };
