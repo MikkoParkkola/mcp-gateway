@@ -33,17 +33,16 @@ impl HostLimiter {
     }
 
     /// Take one slot for `host` at `now`; `false` when the host is at its
-    /// limit, or is new while the map is full of hosts active this minute.
+    /// limit, or is new while the map is full of hosts active in the window.
+    /// Expired entries are dropped wherever they sit, not only from the
+    /// front: callers read `now` before this lock, so entries can arrive out
+    /// of order, and `would_admit` counts the same live entries.
     pub(crate) fn admit(&self, host: &str, now: Instant) -> bool {
+        let live = |t: &Instant| now.duration_since(*t) < self.window;
         let mut hosts = self.hosts.lock();
         if !hosts.contains_key(host) && hosts.len() >= self.max_hosts {
             hosts.retain(|_, sent| {
-                while sent
-                    .front()
-                    .is_some_and(|t| now.duration_since(*t) >= self.window)
-                {
-                    sent.pop_front();
-                }
+                sent.retain(live);
                 !sent.is_empty()
             });
             if hosts.len() >= self.max_hosts {
@@ -51,12 +50,7 @@ impl HostLimiter {
             }
         }
         let sent = hosts.entry(host.to_owned()).or_default();
-        while sent
-            .front()
-            .is_some_and(|t| now.duration_since(*t) >= self.window)
-        {
-            sent.pop_front();
-        }
+        sent.retain(live);
         if sent.len() >= self.limit {
             return false;
         }
