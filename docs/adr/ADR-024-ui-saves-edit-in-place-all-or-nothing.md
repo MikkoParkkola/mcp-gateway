@@ -33,3 +33,11 @@ An operator's hand-commented `gateway.yaml` is theirs, and one UI save that drop
 - Keychain entry names change on every secret change; the file is the only place that says which is current, and unused entries accumulate until an admin removes them.
 - Saves that touch unusual YAML (anchors, merge keys) fall back to the patch more often; that is the intended cost.
 - History (U21) keeps exact bytes, so restore is byte for byte and comments come back; restoring a version whose secret entry an admin has since deleted asks for the secret again.
+
+## Amendment, 2026-11-23: a first key kept for the next start
+
+- **Status**: maintainer decision, 2026-11-22.
+- **What changes.** The replace journal used to promise that whatever a crash or a refused reload leaves in `gateway.yaml` is something a reload accepted. One write now breaks that on purpose: the first API key added from the UI to a gateway with a single credential. ADR-008 forbids a running gateway from turning multi-user, so its reload turns the new key list down; the file keeps the key anyway and the next start puts it in force.
+- **How far it goes.** The file keeps such bytes only when that status change is the reload's sole objection, and only after the writer has checked, before writing, that the key table builds and that starting from the new file would succeed. Any other objection rolls the write back exactly as before, and a write interrupted before its reload answered is restored by whoever next takes the config lock, also as before.
+- **The journal's guarantee now reads:** a reload's refusal undoes the write, unless the refusal is only that a restart is needed and a restart would take the file. The kept write finishes its journal the same way an accepted one does (marked `all_renamed`, then removed).
+- **Until the restart**, any other edit of `gateway.yaml` that still contains the waiting key is turned away with `restart_pending`, and every UI page shows a banner saying so. Revoking the key ends the wait.
