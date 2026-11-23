@@ -333,6 +333,10 @@ fn not_restored(kept: &Snapshot, baseline: Option<&Snapshot>, config: &str) -> V
 mod cli_tests;
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "config_history_first_key_tests.rs"]
+mod first_key_tests;
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_history_restore_scope_tests.rs"]
 mod restore_scope_tests;
 #[cfg(tp3)]
