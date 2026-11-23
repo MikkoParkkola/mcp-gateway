@@ -160,7 +160,8 @@ impl SetupStep {
     ];
 
     /// The gateway's fixed words for the step, read after "failed at" in the
-    /// caller's refusal.
+    /// caller's refusal. Linux only, as its one caller.
+    #[cfg(target_os = "linux")]
     pub(crate) fn describe(self) -> &'static str {
         match self {
             Self::Namespaces => "namespaces",
@@ -177,6 +178,8 @@ impl SetupStep {
     }
 
     /// Whether the step mounts, the class an `AppArmor` restriction denies.
+    /// Linux only, as its one caller.
+    #[cfg(target_os = "linux")]
     pub(crate) fn mounts(self) -> bool {
         matches!(
             self,
