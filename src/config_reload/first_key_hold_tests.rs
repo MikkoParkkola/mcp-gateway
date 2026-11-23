@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{BEARER, FIRST, Gw, replace, starter};
+use super::{BEARER, FIRST, Gw, starter};
 use crate::config_persistence::commit::FileRevision;
 use crate::config_persistence::journal::Recovered;
 use crate::config_persistence::journal::fault::{self, Fault};
@@ -199,7 +199,7 @@ async fn w7_a_held_write_whose_link_moves_is_rolled_back() {
     let write = tokio::spawn(
         crate::config_reload::reload_context::replace::replace_detached(
             Arc::clone(&gw.ctx),
-            replace(&starter(&[("first", FIRST)]), StatusChange::HoldForRestart),
+            super::replace(&starter(&[("first", FIRST)]), StatusChange::HoldForRestart),
             super::WAIT,
         ),
     );
