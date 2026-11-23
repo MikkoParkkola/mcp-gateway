@@ -217,53 +217,109 @@ fn imports_other_task(tree: &syn::UseTree, prefix: &mut Vec<String>, in_protocol
 
 /// Whether a module's own items declare a `Task` (struct, enum, union, alias or
 /// trait) or import another one: a bare `impl Task` there names that type.
+/// A test-only declaration or import is left out, since a production build
+/// never sees it.
 fn module_has_other_task(items: &[syn::Item], in_protocol: bool) -> bool {
+    use crate::test_source_text::test_only;
     items.iter().any(|item| match item {
-        syn::Item::Struct(decl) => decl.ident == "Task",
-        syn::Item::Enum(decl) => decl.ident == "Task",
-        syn::Item::Union(decl) => decl.ident == "Task",
-        syn::Item::Type(decl) => decl.ident == "Task",
-        syn::Item::Trait(decl) => decl.ident == "Task",
-        syn::Item::Use(decl) => imports_other_task(&decl.tree, &mut Vec::new(), in_protocol),
+        syn::Item::Struct(decl) => !test_only(&decl.attrs) && decl.ident == "Task",
+        syn::Item::Enum(decl) => !test_only(&decl.attrs) && decl.ident == "Task",
+        syn::Item::Union(decl) => !test_only(&decl.attrs) && decl.ident == "Task",
+        syn::Item::Type(decl) => !test_only(&decl.attrs) && decl.ident == "Task",
+        syn::Item::Trait(decl) => !test_only(&decl.attrs) && decl.ident == "Task",
+        syn::Item::Use(decl) => {
+            !test_only(&decl.attrs) && imports_other_task(&decl.tree, &mut Vec::new(), in_protocol)
+        }
         _ => false,
     })
 }
 
+/// A walk over one parsed file that reaches every inherent impl wherever it
+/// sits: modules, function bodies, `const _: () = { .. }` blocks. Test-only
+/// items are skipped with everything under them.
+struct TaskImplWalk<'a> {
+    in_protocol: bool,
+    /// For each enclosing module, innermost last: whether a bare `Task` there
+    /// is the protocol's.
+    bare_counts: Vec<bool>,
+    out: &'a mut Vec<String>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for TaskImplWalk<'_> {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if crate::test_source_text::test_only(&module.attrs) {
+            return;
+        }
+        if let Some((_, items)) = &module.content {
+            self.bare_counts
+                .push(!module_has_other_task(items, self.in_protocol));
+            syn::visit::visit_item_mod(self, module);
+            self.bare_counts.pop();
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !crate::test_source_text::test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
+        if !crate::test_source_text::test_only(&item.attrs) {
+            syn::visit::visit_item_const(self, item);
+        }
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if !crate::test_source_text::test_only(&item.attrs) {
+            syn::visit::visit_item_static(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        if !crate::test_source_text::test_only(&method.attrs) {
+            syn::visit::visit_impl_item_fn(self, method);
+        }
+    }
+
+    fn visit_item_impl(&mut self, block: &'ast syn::ItemImpl) {
+        if crate::test_source_text::test_only(&block.attrs) {
+            return;
+        }
+        let bare = self.bare_counts.last().copied().unwrap_or(false);
+        if block.trait_.is_none() && names_protocol_task(&block.self_ty, bare) {
+            for member in &block.items {
+                if let syn::ImplItem::Fn(method) = member
+                    && !matches!(method.vis, syn::Visibility::Inherited)
+                    && !crate::test_source_text::test_only(&method.attrs)
+                {
+                    self.out.push(method.sig.ident.to_string());
+                }
+            }
+        }
+        syn::visit::visit_item_impl(self, block);
+    }
+}
+
 /// The names of the non-private methods (any `pub` form) in the protocol
-/// `Task`'s inherent impls among `items` and the inline modules under them;
-/// test-only items are skipped. `declares_protocol_task`: these are
-/// src/protocol/tasks.rs's own items, whose `Task` is the protocol's.
+/// `Task`'s inherent impls anywhere in a file's `items` (see [`TaskImplWalk`]).
+/// `declares_protocol_task`: these are src/protocol/tasks.rs's own items,
+/// whose `Task` is the protocol's.
 fn task_methods_in(
     items: &[syn::Item],
     declares_protocol_task: bool,
     in_protocol: bool,
     out: &mut Vec<String>,
 ) {
-    use crate::test_source_text::test_only;
-    let bare_counts = declares_protocol_task || !module_has_other_task(items, in_protocol);
+    use syn::visit::Visit as _;
+    let root = declares_protocol_task || !module_has_other_task(items, in_protocol);
+    let mut walk = TaskImplWalk {
+        in_protocol,
+        bare_counts: vec![root],
+        out,
+    };
     for item in items {
-        match item {
-            syn::Item::Impl(block)
-                if block.trait_.is_none()
-                    && !test_only(&block.attrs)
-                    && names_protocol_task(&block.self_ty, bare_counts) =>
-            {
-                for member in &block.items {
-                    if let syn::ImplItem::Fn(method) = member
-                        && !matches!(method.vis, syn::Visibility::Inherited)
-                        && !test_only(&method.attrs)
-                    {
-                        out.push(method.sig.ident.to_string());
-                    }
-                }
-            }
-            syn::Item::Mod(module) if !test_only(&module.attrs) => {
-                if let Some((_, inner)) = &module.content {
-                    task_methods_in(inner, false, in_protocol, out);
-                }
-            }
-            _ => {}
-        }
+        walk.visit_item(item);
     }
 }
 
@@ -536,6 +592,16 @@ fn the_task_method_and_receiver_matchers_read_what_they_should() {
     assert!(methods(imported, false).is_empty());
     let protocol_use = "use crate::protocol::tasks::{Task, TaskStatus};\nimpl Task {\n    pub fn mine(&self) {}\n}";
     assert_eq!(methods(protocol_use, false), ["mine"]);
+    // Impls nested anywhere count: in a const block and in a function body.
+    // A test-only one is skipped with what is under it.
+    let nested = "const _: () = {\n    impl crate::protocol::tasks::Task {\n        pub fn in_const(&self) {}\n    }\n};\n\
+                  fn helper() {\n    impl Task {\n        pub fn in_body(&self) {}\n    }\n}\n\
+                  #[cfg(test)]\nconst _: () = {\n    impl Task {\n        pub fn test_built(&self) {}\n    }\n};";
+    assert_eq!(methods(nested, false), ["in_const", "in_body"]);
+    // A test-only Task declaration or import shadows nothing in production.
+    let test_shadow = "#[cfg(test)]\nstruct Task;\n#[cfg(test)]\nuse crate::a2a::types::Task as Task;\n\
+                       impl Task {\n    pub fn kept(&self) {}\n}";
+    assert_eq!(methods(test_shadow, false), ["kept"]);
     let calls = "task.snapshot(); self.task.result(); entry . task . error (); stats.snapshot(); \
                  task.snapshot_of(); fn snapshot(&self) {} task.snapshot";
     assert_eq!(task_receiver_calls(calls, "snapshot"), 1);
