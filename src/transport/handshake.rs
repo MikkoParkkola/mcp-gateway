@@ -108,12 +108,11 @@ pub(crate) async fn preview_handshake(
     transport: &dyn Transport,
     configured: Option<&str>,
 ) -> Result<String> {
-    // STUB for the rows commit: always the latest, and no settle.
-    let _ = configured;
-    negotiate(
-        crate::protocol::PROTOCOL_VERSION,
-        "the command preview",
-        |params| transport.request("initialize", Some(params)),
-    )
-    .await
+    let first = configured.unwrap_or(crate::protocol::PROTOCOL_VERSION);
+    let agreed = negotiate(first, "the command preview", |params| {
+        transport.request("initialize", Some(params))
+    })
+    .await?;
+    settle(transport).await?;
+    Ok(agreed)
 }

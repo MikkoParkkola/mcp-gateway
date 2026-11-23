@@ -3,8 +3,13 @@
 //! The command preview's transport: one child's stdin and stdout, used for a
 //! handful of sequential calls and then dropped.
 //!
-//! STUB for the rows commit: it takes the first frame as the answer, keeps no
-//! failure and has no size limits. The next commit replaces it.
+//! A preview asks one question at a time, so there is no reader task and no
+//! table of waiting calls: a request writes its line and reads frames until
+//! its own answer arrives. What the server sends besides that answer is
+//! answered (its own requests get a fixed refusal) or dropped, and nothing of
+//! it is kept. The first failure ends the pipe for good and is kept as a
+//! closed kind, so a caller can say what went wrong without repeating
+//! anything the server wrote.
 #![cfg_attr(
     not(all(test, unix)),
     expect(dead_code, reason = "the preview route calls it")
@@ -19,8 +24,13 @@ use tokio::process::{ChildStdin, ChildStdout};
 
 use super::Transport;
 use super::stdio::read_frame;
-use crate::protocol::JsonRpcResponse;
+use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
+
+/// Longest single frame the preview reads.
+const FRAME_CAP: usize = 4 * 1024 * 1024;
+/// Most bytes the preview reads from one server, over all its frames.
+const TOTAL_CAP: usize = 8 * 1024 * 1024;
 
 /// Why a preview pipe stopped. Closed set: none of these carries anything the
 /// server sent.
@@ -32,9 +42,9 @@ pub(crate) enum PipeFailure {
     InputClosed,
     /// A frame that is no JSON-RPC message.
     NotJsonRpc,
-    /// One frame longer than the preview's frame limit.
+    /// One frame longer than [`FRAME_CAP`].
     FrameOverCap,
-    /// More than the preview's total read in all.
+    /// More than [`TOTAL_CAP`] read in all.
     OverBudget,
 }
 
@@ -55,12 +65,14 @@ struct Wire {
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     next_id: i64,
+    left: usize,
     frame: Vec<u8>,
 }
 
 /// A [`Transport`] over a preview child's stdin and stdout.
 pub(crate) struct PreviewPipe {
     wire: tokio::sync::Mutex<Wire>,
+    failure: parking_lot::Mutex<Option<PipeFailure>>,
     closed: AtomicBool,
     refused: AtomicU64,
 }
@@ -73,17 +85,18 @@ impl PreviewPipe {
                 stdin: Some(stdin),
                 stdout: BufReader::new(stdout),
                 next_id: 1,
+                left: TOTAL_CAP,
                 frame: Vec::new(),
             }),
+            failure: parking_lot::Mutex::new(None),
             closed: AtomicBool::new(false),
             refused: AtomicU64::new(0),
         }
     }
 
-    /// The first failure, once there is one (stub: never).
+    /// The first failure, once there is one.
     pub(crate) fn failure(&self) -> Option<PipeFailure> {
-        let _ = self;
-        None
+        *self.failure.lock()
     }
 
     /// How many of the server's own requests got the fixed refusal.
@@ -91,50 +104,118 @@ impl PreviewPipe {
         self.refused.load(Ordering::Relaxed)
     }
 
-    async fn write_line(wire: &mut Wire, line: String) -> Result<()> {
+    /// Keeps `kind` unless an earlier failure is already kept, and returns
+    /// the error every later call gets too.
+    fn fail(&self, kind: PipeFailure) -> Error {
+        let kept = *self.failure.lock().get_or_insert(kind);
+        Error::Transport(kept.to_string())
+    }
+
+    /// Refuses a call on a pipe that already failed or was closed.
+    fn still_open(&self) -> Result<()> {
+        match self.failure() {
+            Some(kind) => Err(Error::Transport(kind.to_string())),
+            None if self.closed.load(Ordering::Relaxed) => {
+                Err(Error::Transport("the preview pipe is closed".to_string()))
+            }
+            None => Ok(()),
+        }
+    }
+
+    async fn write_line(&self, wire: &mut Wire, line: String) -> Result<()> {
         let Some(stdin) = wire.stdin.as_mut() else {
-            return Err(Error::Transport("stub".to_string()));
+            return Err(self.fail(PipeFailure::InputClosed));
         };
         let mut bytes = line.into_bytes();
         bytes.push(b'\n');
-        stdin
-            .write_all(&bytes)
-            .await
-            .map_err(|_| Error::Transport("stub".to_string()))
+        if stdin.write_all(&bytes).await.is_err() || stdin.flush().await.is_err() {
+            return Err(self.fail(PipeFailure::InputClosed));
+        }
+        Ok(())
     }
+
+    /// The next frame, counted against the total before it is parsed.
+    async fn read_value(&self, wire: &mut Wire) -> Result<Value> {
+        let Wire {
+            stdout,
+            frame,
+            left,
+            ..
+        } = wire;
+        let line = match read_frame(stdout, frame, FRAME_CAP).await {
+            Ok(Some(line)) => line,
+            Ok(None) => return Err(self.fail(PipeFailure::OutputEnded)),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                let not_utf8 = error
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<std::string::FromUtf8Error>());
+                return Err(self.fail(if not_utf8 {
+                    PipeFailure::NotJsonRpc
+                } else {
+                    PipeFailure::FrameOverCap
+                }));
+            }
+            Err(_) => return Err(self.fail(PipeFailure::OutputEnded)),
+        };
+        let Some(rest) = left.checked_sub(line.len()) else {
+            return Err(self.fail(PipeFailure::OverBudget));
+        };
+        *left = rest;
+        serde_json::from_str(&line).map_err(|_| self.fail(PipeFailure::NotJsonRpc))
+    }
+}
+
+/// The fixed answer to a server's own request, echoing its id as sent.
+fn refusal_line(id: &Value) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32601,"message":"the preview does not serve client methods"}}}}"#
+    )
 }
 
 #[async_trait]
 impl Transport for PreviewPipe {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let mut wire = self.wire.lock().await;
+        self.still_open()?;
         let id = wire.next_id;
         wire.next_id += 1;
         let mut call = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method});
         if let Some(params) = params {
             call["params"] = params;
         }
-        Self::write_line(&mut wire, call.to_string()).await?;
-        let Wire { stdout, frame, .. } = &mut *wire;
-        let line = read_frame(stdout, frame, 16 * 1024 * 1024)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| Error::Transport("stub".to_string()))?;
-        serde_json::from_str(&line).map_err(|_| Error::Transport("stub".to_string()))
+        self.write_line(&mut wire, call.to_string()).await?;
+        loop {
+            let value = self.read_value(&mut wire).await?;
+            if value.get("method").is_some() {
+                // A request gets the refusal; a notification is dropped.
+                if let Some(their_id) = value.get("id") {
+                    let line = refusal_line(their_id);
+                    self.write_line(&mut wire, line).await?;
+                    self.refused.fetch_add(1, Ordering::Relaxed);
+                }
+                continue;
+            }
+            let answer: JsonRpcResponse =
+                serde_json::from_value(value).map_err(|_| self.fail(PipeFailure::NotJsonRpc))?;
+            // An answer to an id this pipe never sent is dropped.
+            if answer.id == Some(RequestId::Number(id)) {
+                return Ok(answer);
+            }
+        }
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let mut wire = self.wire.lock().await;
+        self.still_open()?;
         let mut note = serde_json::json!({"jsonrpc": "2.0", "method": method});
         if let Some(params) = params {
             note["params"] = params;
         }
-        Self::write_line(&mut wire, note.to_string()).await
+        self.write_line(&mut wire, note.to_string()).await
     }
 
     fn is_connected(&self) -> bool {
-        !self.closed.load(Ordering::Relaxed)
+        !self.closed.load(Ordering::Relaxed) && self.failure().is_none()
     }
 
     async fn close(&self) -> Result<()> {
