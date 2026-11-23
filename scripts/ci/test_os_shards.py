@@ -36,7 +36,7 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "windows": ("windows-shards", "windows-check", "Windows check", "Windows shard "),
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
-EXTRA_NEEDS = {"windows-check": ["windows-clippy"], "test": ["test-shards-lib", "linux-lib-build", "linux-lib-union"],
+EXTRA_NEEDS = {"windows-check": ["windows-clippy", "windows-lib-shards", "windows-lib-build"], "test": ["test-shards-lib", "linux-lib-build", "linux-lib-union"],
                "macos-check": ["macos-lib-union"]}
 # Union jobs: they run when a build failed too (`!cancelled()` and the shards' guard, no train skip), so a failed
 # part turns them red, never skipped.
@@ -46,7 +46,14 @@ INNER_LEGS = {"macos": {"int-lib": "int"}}
 # An OS whose lib legs run from one shared lib test binary: (their job, the build job). The legs are the runner's
 # SHARED_BUILD; they keep the shard job's name, so the check names stay; the build job's own wiring is
 # check_shared_lib.py's.
-SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build")}
+SHARED_LIB = {"linux": ("test-shards-lib", "linux-lib-build"), "windows": ("windows-lib-shards", "windows-lib-build")}
+# The one shard call each shared-lib job makes: Linux runs its part binaries, Windows the one exported exe
+# (from pwsh, as every Windows test step runs: Git Bash enables a privilege that writes through DACL denies).
+SHARED_CALL = {
+    "linux": 'python3 scripts/ci/shard_tests.py run-prebuilt-parts linux ${{ matrix.shard }} "$RUNNER_TEMP/lib-bin"',
+    # The exe's path is the step's env.LIB_EXE (check_shared_lib.py finds the step by it).
+    "windows": 'python scripts/ci/shard_tests.py run-prebuilt windows ${{ matrix.shard }} "$env:LIB_EXE"',
+}
 # Every aggregate skips on a same-repo merge-train PR into the release line: merge-train judges its needs
 # itself from the base copy of this workflow (the ROLLUP_EXPECTS ids below).
 TRAIN_SKIP = ("!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
@@ -255,7 +262,7 @@ def workflow_problems(jobs: dict, st) -> list[str]:
                 out.append(f"{shared_key}: must need {build_key}")
             # The shard run itself (the UPGRADING step's single-module run-one is not a shard run).
             scalls = [s.get("run", "").strip() for s in sj.get("steps", []) if "shard_tests.py run-prebuilt" in s.get("run", "")]
-            swant = [f'{py} scripts/ci/shard_tests.py run-prebuilt-parts {os_kind} ${{{{ matrix.shard }}}} "$RUNNER_TEMP/lib-bin"']
+            swant = [SHARED_CALL[os_kind]]
             if scalls != swant:
                 out.append(f"{shared_key}: runner calls {scalls}, want exactly {swant!r}")
             for s in sj.get("steps", []):
