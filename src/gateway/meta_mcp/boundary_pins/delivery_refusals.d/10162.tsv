@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/preview_sandbox/linux/launcher.rs	launch_with	refusal	1	no-record	sandbox preview: a setup step the helper reported refused, mapped to its words; the refusal goes to the preview's caller, no call delivery exists
