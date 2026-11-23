@@ -391,14 +391,18 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     assert_eq!(for_sub(&rx, &bob_all).len(), 1);
 }
 
+/// The static bearer the operational rows configure beside the keys.
+const BEARER: &str = "events-test-static-bearer-0123456789abcdef";
+
 /// A gateway with only the operational source on, trusting `rx`, once the
 /// budget types are listed (the shared `start` waits for `task.settled`).
 async fn operational_gateway(root: &std::path::Path, rx: &Receiver) -> Gateway {
-    let cfg = delivery_config(
+    let mut cfg = delivery_config(
         root,
         &json!({"sources": {
             "operational": true, "backend_notifications": false, "task_settled": false}}),
     );
+    cfg["auth"]["bearer_token"] = json!(BEARER);
     let trust = rx.trust_env();
     let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
     let gw = Gateway::start_with_env(root, cfg, &env).await;
@@ -425,11 +429,11 @@ async fn a_key_holder_subscribes_to_its_own_budget_events_over_mcp() {
     }
 }
 
-/// Over `/mcp`, a gateway-wide admin key is admitted to the health and
-/// kill-switch types; a key without admin standing is refused them (the
-/// catalogue does not show it the types, so the refusal is "not found").
+/// Over `/mcp`, a gateway-wide admin key and the static bearer are admitted to
+/// the health and kill-switch types; a key without admin standing is refused
+/// them with not_found (-32011): the catalogue does not show it the types.
 #[tokio::test]
-async fn an_admin_key_subscribes_to_operator_events_over_mcp() {
+async fn admins_and_the_bearer_subscribe_to_operator_events_over_mcp() {
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
     let gw = operational_gateway(root.path(), &rx).await;
@@ -437,17 +441,16 @@ async fn an_admin_key_subscribes_to_operator_events_over_mcp() {
         "gateway.backend.health_changed",
         "gateway.kill_switch.changed",
     ] {
-        let admitted = subscribe(&gw, ADMIN, name, &rx.url, json!({})).await;
-        assert!(
-            admitted.get("error").is_none(),
-            "{name}: admin refused: {admitted}"
-        );
-        sub_id(&admitted);
+        for (who, credential) in [("admin key", ADMIN), ("bearer", BEARER)] {
+            let admitted = subscribe(&gw, credential, name, &rx.url, json!({})).await;
+            assert!(
+                admitted.get("error").is_none(),
+                "{name}: {who} refused: {admitted}"
+            );
+            sub_id(&admitted);
+        }
         let refused = subscribe(&gw, ALICE, name, &rx.url, json!({})).await;
-        assert!(
-            refused.get("error").is_some(),
-            "{name}: a non-admin was admitted: {refused}"
-        );
+        assert_eq!(error(&refused)["code"], -32011, "{name}: {refused}");
     }
 }
 

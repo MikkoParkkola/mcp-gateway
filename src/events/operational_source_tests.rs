@@ -22,9 +22,19 @@ use crate::config_reload::LiveConfig;
 use chrono::Utc;
 
 impl Services {
-    pub(crate) fn binding_test_admin(&self, principal: &str, at: chrono::DateTime<Utc>) -> bool {
-        standing(self, principal, at).is_some_and(|s| s.admin)
+    /// Admin standing of the key holder whose stored (bare) principal is
+    /// `holder`, judged as the transport presents it: as its owner key.
+    pub(crate) fn binding_test_admin(&self, holder: &str, at: chrono::DateTime<Utc>) -> bool {
+        standing(self, &owner_key(holder), at).is_some_and(|s| s.admin)
     }
+}
+
+/// The owner key the transport gives the credential whose bare principal is
+/// `bare` (handlers/tasks/owner.rs `session_owner_key`).
+fn owner_key(bare: &str) -> String {
+    crate::gateway::auth::credential_owner_key(
+        &crate::gateway::record_principal::InternalPrincipal::new(bare.to_owned()),
+    )
 }
 
 fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
@@ -54,10 +64,18 @@ fn keys(ops_admin: bool) -> Vec<ApiKeyConfig> {
     vec![key("ops", "s-ops", ops_admin), key("dev", "s-dev", false)]
 }
 
-fn principal(secret: &str) -> String {
+/// The bare stored principal of the credential with `secret`: what the
+/// bearer and a key's record hold.
+fn bare(secret: &str) -> String {
     crate::gateway::auth::principal_of(secret)
         .storage_form()
         .to_owned()
+}
+
+/// The subscriber principal of the credential with `secret`, as the transport
+/// passes it: its owner key, not its bare stored form.
+fn principal(secret: &str) -> String {
+    owner_key(&bare(secret))
 }
 
 /// A hub whose controls read `keys` from a live config the test can swap.
@@ -310,7 +328,9 @@ async fn a_spent_budget_becomes_threshold_and_exhaustion_events() {
 
 /// Admit a live API-key subscription to `name` for the key `key`/`secret`.
 fn admit(hub: &EventsHub, key: &str, secret: &str, name: &str) {
-    let principal = principal(secret);
+    // The row's owner is what /mcp subscribe stores (the owner key); its key
+    // binding holds the key's bare principal.
+    let (principal, key_principal) = (principal(secret), bare(secret));
     let row: super::super::records::Subscription = serde_json::from_value(json!({
         "v": 1, "principal": principal, "id": format!("sub_{key}"),
         "url": format!("https://h/{key}"), "name": name, "arguments": {},
@@ -318,7 +338,7 @@ fn admit(hub: &EventsHub, key: &str, secret: &str, name: &str) {
         "granted_at": Utc::now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null,
         // Opened with the key's secret now: bound to that secret.
-        "api_key": {"name": key, "principal": principal, "digest_tag": crate::gateway::auth::secret_tag(secret)},
+        "api_key": {"name": key, "principal": key_principal, "digest_tag": crate::gateway::auth::secret_tag(secret)},
         "credential_kind": serde_json::to_value(crate::security::audit::CredentialKind::ApiKey)
             .expect("kind"),
     }))
@@ -429,7 +449,7 @@ fn a_principal_two_live_keys_share_has_no_standing() {
 #[test]
 fn a_principal_the_bearer_and_a_key_share_has_no_standing() {
     let credentials = LiveCredentials {
-        bearer_principal: Some(principal("s-dev")),
+        bearer_principal: Some(bare("s-dev")),
         ..LiveCredentials::default()
     };
     let dir = tempfile::tempdir().expect("dir");
@@ -474,7 +494,7 @@ fn the_bearer_alone_keeps_its_admin_standing() {
     expired.expires_at = Some(Utc::now() - crate::duration_bound::delta!(hours, 1));
     for keys in [vec![], vec![expired]] {
         let credentials = LiveCredentials {
-            bearer_principal: Some(principal("s-dev")),
+            bearer_principal: Some(bare("s-dev")),
             ..LiveCredentials::default()
         };
         let dir = tempfile::tempdir().expect("dir");
@@ -573,7 +593,7 @@ async fn markers_and_events_share_the_one_observer_slot() {
 #[test]
 fn a_rotated_key_keeps_its_standing_under_its_explicit_principal() {
     let mut dev = key("dev", "s-dev-new", false);
-    dev.principal = Some(principal("s-dev-old"));
+    dev.principal = Some(bare("s-dev-old"));
     let dir = tempfile::tempdir().expect("dir");
     let (hub, _live) = hub(dir.path(), vec![dev]);
     let now = crate::clock::utc_now().expect("clock");
@@ -622,4 +642,37 @@ async fn a_backend_scoped_admin_key_holds_no_operator_standing() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Standing is judged on a credential's owner key alone (the form /mcp gives a
+/// credential caller). For a key and the static bearer the owner key has it;
+/// the bare stored form, the length-prefixed caller-key form, an OIDC owner, a
+/// subject owner and the empty string have none. The owner keys are spelled
+/// out here, never built with the helper under test.
+#[test]
+fn standing_is_judged_on_the_owner_key_alone() {
+    let credentials = LiveCredentials {
+        bearer_principal: Some(bare("s-bearer")),
+        ..LiveCredentials::default()
+    };
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _live) = hub_with(dir.path(), vec![key("dev", "s-dev", false)], credentials);
+    let now = crate::clock::utc_now().expect("clock");
+    let has = |p: &str| source(&hub).standing(p, now).map(|s| (s.admin, s.key));
+    let (dev, bearer) = (bare("s-dev"), bare("s-bearer"));
+    assert_eq!(
+        has(&format!("credential:{dev}")),
+        Some((false, Some("dev".to_owned())))
+    );
+    assert_eq!(has(&format!("credential:{bearer}")), Some((true, None)));
+    for other in [
+        dev.clone(),
+        bearer,
+        format!("credential:{}:{dev}", dev.len()),
+        format!("oidc:{dev}"),
+        format!("subject:{dev}"),
+        String::new(),
+    ] {
+        assert!(has(&other).is_none(), "{other:?} has standing");
+    }
 }
