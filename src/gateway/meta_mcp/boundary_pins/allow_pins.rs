@@ -77,8 +77,9 @@ fn root_keys() -> &'static std::collections::BTreeMap<String, Family> {
 }
 
 /// The reasons' class words a randomness allow may give; `credential` only in
-/// `src/random_secret.rs`.
-const RANDOMNESS_CLASSES: [&str; 9] = [
+/// `src/random_secret.rs`. `user code`: a short code a person types (the CLI
+/// login code, 50 bits, live 600 s); not a secret the gateway keeps.
+const RANDOMNESS_CLASSES: [&str; 10] = [
     "id",
     "jitter",
     "record key",
@@ -88,6 +89,7 @@ const RANDOMNESS_CLASSES: [&str; 9] = [
     "sample",
     "key",
     "credential",
+    "user code",
 ];
 
 /// The names `banned` must read, a row against a misparse of the span.
