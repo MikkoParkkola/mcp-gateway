@@ -17,7 +17,7 @@ pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext 
 /// Why loading refuses a server's name, if it does; `kind` says which setting holds it. A control character could
 /// start a forged line wherever the name is printed, and the message itself names the server escaped. No address can
 /// reach a server called `.` or `..`: clients fold those path segments before the request is sent.
-fn name_refusal(kind: &str, name: &str) -> Option<String> {
+pub(super) fn name_refusal(kind: &str, name: &str) -> Option<String> {
     if name.chars().any(char::is_control) {
         let shown = crate::log_escape::escaped(name);
         return Some(format!(

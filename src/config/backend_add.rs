@@ -113,6 +113,11 @@ pub(crate) fn validate_backend_name(name: &str) -> Result<(), String> {
     if name.len() > 128 {
         return Err("Backend name exceeds 128 characters".to_string());
     }
+    // The load's own refusals first, in the load's words: `.` and `..` pass the character set below, and without this
+    // a route that adds a server would answer the load's later refusal as a failed write (a 500), not a 422.
+    if let Some(why) = super::validation::name_refusal("Backend name", name) {
+        return Err(why);
+    }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')

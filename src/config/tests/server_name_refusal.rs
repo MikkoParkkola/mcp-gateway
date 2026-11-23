@@ -86,6 +86,19 @@ fn the_names_dot_and_dot_dot_are_refused_as_unreachable() {
     assert!(message.contains("no address can name"), "{message:?}");
 }
 
+/// NAME.2 on the routes that add a server: their name check refuses `.` and `..` itself, with the load's sentence,
+/// so the add and preview routes answer 422 before any write instead of a failed write's 500.
+#[test]
+fn the_add_check_refuses_dot_names_in_the_load_s_words() {
+    for name in [".", ".."] {
+        let Err(why) = crate::config::backend_add::validate_backend_name(name) else {
+            panic!("{name:?} passes the add check");
+        };
+        assert!(why.contains("no address can name"), "{name:?}: {why:?}");
+    }
+    assert!(crate::config::backend_add::validate_backend_name("server.prod").is_ok());
+}
+
 /// NAME.3: no new refusal for a sane install.
 #[test]
 fn a_name_with_a_space_or_a_non_ascii_letter_still_loads() {
