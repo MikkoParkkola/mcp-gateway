@@ -231,13 +231,14 @@ async fn a_malformed_chain_nonce_on_another_method_is_refused() {
 }
 
 /// The fixture's invocation records, with the one refusal record every
-/// envelope row expects: invalid, -32600, the request's form (`syntax`).
+/// envelope row expects: denied (the envelope error is a `Forbidden`),
+/// -32600, the request's form (`syntax`).
 fn assert_one_envelope_record(dir: &tempfile::TempDir, response: &Value) {
     let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(dir);
     let [record] = records.as_slice() else {
         panic!("exactly one record: {records:#?}; answer {response}");
     };
-    assert_eq!(record["outcome"], json!("invalid"), "{record}");
+    assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["error_code"], json!(-32600), "{record}");
     assert_eq!(record["decision"]["kind"], json!("syntax"), "{record}");
 }

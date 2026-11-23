@@ -358,7 +358,7 @@ async fn e1_mcp_an_unusable_id_is_recorded_as_syntax() {
     let [record] = all.as_slice() else {
         panic!("exactly one record: {all:?}");
     };
-    assert_meta_refusal(record, "invalid", -32600, "syntax");
+    assert_meta_refusal(record, "denied", -32600, "syntax");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
 }
 
@@ -396,7 +396,7 @@ async fn e2_mcp_a_changed_origin_is_recorded_as_syntax() {
     let [record] = all.as_slice() else {
         panic!("exactly one record: {all:?}");
     };
-    assert_meta_refusal(record, "invalid", -32600, "syntax");
+    assert_meta_refusal(record, "denied", -32600, "syntax");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
 }
 
