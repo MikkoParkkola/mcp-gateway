@@ -83,6 +83,7 @@ impl Sent {
                 &conn.state,
                 StatusView::CountsOnly,
                 BackendGrant::of_list(backends),
+                None,
             ),
             None if conn.admin => snap.full.clone(),
             None => snap.counts.clone(),

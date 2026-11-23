@@ -30,9 +30,10 @@ pub(super) async fn status(
     let client = guard.client;
     // A caller with no credential (a public status path) has no scope to
     // narrow by. A scoped admin gets the counts, within its scope: the full
-    // view lists every backend.
+    // view lists every backend, and every server the request's config holds
+    // switched off.
     let (view, scope) = StatusView::for_client(client.as_ref());
-    let mut body = status_body(&state, view, scope);
+    let mut body = status_body(&state, view, scope, Some(generation.config().as_ref()));
     body["auth"] = auth_facts(&state, client.as_ref());
     // An auth-on caller with no credential gets no `access` member at all.
     if let Some(access) = access {
@@ -69,8 +70,15 @@ impl StatusView {
 }
 
 /// The status body without the caller's `auth` member, which the caller adds.
-/// `CountsOnly` counts only the backends `scope` admits.
-pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGrant<'_>) -> Value {
+/// `CountsOnly` counts only the backends `scope` admits. `Full` lists the
+/// registry's backends, then each server `config` holds with `enabled: false`
+/// that the registry does not hold, by name; `config` is read for `Full` only.
+pub(super) fn status_body(
+    state: &AppState,
+    view: StatusView,
+    scope: BackendGrant<'_>,
+    config: Option<&crate::config::Config>,
+) -> Value {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
@@ -150,6 +158,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
             latency_p99_ms: hm.latency_p99_ms,
         });
     }
+    servers.extend(switched_off(config, &backends));
 
     let labels: Vec<crate::counters::Filter<'_>> = servers
         .iter()
@@ -162,7 +171,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
     }
 
     let mut body = json!({
-        "server_count": total,
+        "server_count": servers.len(),
         "tool_count": tool_count,
         "uptime_secs": state.process.uptime_secs(),
         "version": env!("CARGO_PKG_VERSION"),
@@ -176,6 +185,54 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
     });
     add_restart(&mut body, view, state.meta_mcp.restart_board().status());
     body
+}
+
+/// A row for each server `config` holds with `enabled: false` and the
+/// registry does not hold, sorted by name so two reads of one config give one
+/// body. It states only what is known without a live backend: no tools, the
+/// configured transport, and null where a breaker or a live counter would
+/// answer. Its persisted calls are filled in with every other row's.
+fn switched_off(
+    config: Option<&crate::config::Config>,
+    registered: &[Arc<crate::backend::Backend>],
+) -> Vec<ServerStatus> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+    let mut rows: Vec<ServerStatus> = config
+        .backends
+        .iter()
+        .filter(|(name, server)| {
+            !server.enabled && !registered.iter().any(|b| b.name == name.as_str())
+        })
+        .map(|(name, server)| ServerStatus {
+            name: name.clone(),
+            running: false,
+            transport: server.transport.transport_type().to_owned(),
+            tools_cached: 0,
+            request_count: None,
+            calls_24h: None,
+            calls_prev_24h: None,
+            circuit_state: None,
+            circuit_trips: None,
+            current_failures: None,
+            healthy: None,
+            success_count: None,
+            failure_count: None,
+            latency_p50_ms: None,
+            latency_p95_ms: None,
+            latency_p99_ms: None,
+            state: crate::backend::server_state::ServerState::Off,
+            reason: String::new(),
+            next_retry_at: None,
+            cleartext_credentials_accepted: false,
+            needs_sign_in: false,
+            sign_in: None,
+            sign_in_flow: None,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows
 }
 
 /// Add the restart member to a status body: the latest attempt's wire form,

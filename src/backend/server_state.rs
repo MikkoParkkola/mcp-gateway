@@ -42,6 +42,10 @@ pub enum ServerState {
         )
     )]
     Unmanaged,
+    /// Written in the config with `enabled: false`: the gateway does not start
+    /// it. Only the status route's rows for such servers carry it; this read
+    /// model never produces it.
+    Off,
 }
 
 /// The signals [`decide`] reads. Flags and counts only.
