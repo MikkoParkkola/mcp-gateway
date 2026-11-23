@@ -418,12 +418,11 @@ struct Clocked {
 
 impl Clocked {
     fn at(&self, method: &str) -> tokio::time::Instant {
-        self.calls
-            .lock()
-            .iter()
-            .find(|(seen, _)| seen == method)
-            .map(|(_, at)| *at)
-            .unwrap_or_else(|| panic!("no {method} call"))
+        let calls = self.calls.lock();
+        let Some((_, at)) = calls.iter().find(|(seen, _)| seen == method) else {
+            panic!("no {method} call");
+        };
+        *at
     }
 }
 
