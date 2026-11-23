@@ -34,14 +34,14 @@ impl Home {
         Self { _dir: dir, root }
     }
 
-    /// Where the zed target writes, under the helper's XDG_CONFIG_HOME.
+    /// Where the zed target writes, under the helper's `XDG_CONFIG_HOME`.
     fn zed_settings(&self) -> PathBuf {
         let leaf = if cfg!(windows) { "Zed" } else { "zed" };
         self.root.join(".config").join(leaf).join("settings.json")
     }
 
     fn config(&self, body: &str) {
-        mcp_gateway::gateway::test_helpers::write_owner_only(&self.root.join("gateway.yaml"), body)
+        mcp_gateway::gateway::test_helpers::write_owner_only(self.root.join("gateway.yaml"), body)
             .expect("write gateway.yaml");
     }
 
