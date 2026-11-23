@@ -49,3 +49,52 @@ async fn missing_server_is_recorded_as_syntax_on_mcp() {
         assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{missing}: never sent");
     }
 }
+
+/// An admission refusal that is not a missing target: a modern (sessionless)
+/// `gateway_set_profile` is refused in admission as a protocol limit. Its
+/// answer is as before; it now leaves one record, outcome `invalid` (an
+/// `Error::Protocol`), kind `unrecorded` (admission notes no kind for it).
+#[tokio::test]
+async fn an_admission_refusal_is_recorded_on_mcp() {
+    let fx = fixture(Setup::default()).await;
+    let call = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_set_profile", "arguments": {"profile": "p"}}});
+    let (status, answer) = post_to(&fx, "/mcp", &call.to_string(), &Caller::Modern).await;
+    let code = crate::Error::Protocol(String::new()).to_rpc_code();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["error"]["code"], code, "{answer}");
+    assert_eq!(answer["id"], 5, "{answer}");
+    let all = invocations(&fx);
+    let [entry] = all.as_slice() else {
+        panic!("exactly one record (HTTP {status}): {all:?}; answer {answer}");
+    };
+    assert_eq!(entry["outcome"], "invalid", "{entry}");
+    assert_eq!(entry["error_code"], code, "{entry}");
+    assert_eq!(entry["decision"]["kind"], "unrecorded", "{entry}");
+    assert_eq!(entry["tool"], "gateway_set_profile", "{entry}");
+}
+
+/// The missing-target admission refusal under a fail-closed log that cannot
+/// be written: answered as the log being unavailable, with no record.
+#[tokio::test]
+async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavailable_on_mcp() {
+    let fx = fixture(Setup {
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log.set_append_failure_for_test(true);
+    let (status, answer) = post_to(
+        &fx,
+        "/mcp",
+        &invoke_with(&json!({"tool": "t"})),
+        &Caller::Anonymous,
+    )
+    .await;
+    assert_eq!(
+        (status, answer["error"]["code"].as_i64()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some(-32005)),
+        "{answer}"
+    );
+    assert!(invocations(&fx).is_empty(), "no record: {answer}");
+}

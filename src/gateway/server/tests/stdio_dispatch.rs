@@ -402,6 +402,69 @@ async fn malformed_retry_fields_under_an_unwritable_fail_closed_log_answer_unava
     );
 }
 
+/// The `_meta` of a modern (2026-07-28) call: no session-bound tool runs.
+fn modern_meta() -> serde_json::Value {
+    json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+           "io.modelcontextprotocol/clientCapabilities": {}})
+}
+
+/// An admission refusal that is not a missing target, on stdio: a modern
+/// `gateway_set_profile` is refused as a protocol limit; one record,
+/// outcome `invalid`, kind `unrecorded`; the answer's code as before.
+#[tokio::test]
+async fn an_admission_refusal_is_recorded_on_stdio() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let meta = logged_meta(&dir, crate::security::audit::AuditFailurePolicy::BestEffort);
+    let response = stdio_call(
+        &meta,
+        json!({"name": "gateway_set_profile", "arguments": {"profile": "p"}, "_meta": modern_meta()}),
+    )
+    .await;
+    let code = crate::Error::Protocol(String::new()).to_rpc_code();
+    assert_eq!(
+        response
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(i64::from(code)),
+        "{response}"
+    );
+    let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(&dir);
+    let [record] = records.as_slice() else {
+        panic!("exactly one record: {records:#?}; answer {response}");
+    };
+    assert_eq!(record["outcome"], json!("invalid"), "{record}");
+    assert_eq!(record["error_code"], json!(code), "{record}");
+    assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
+    assert_eq!(record["tool"], json!("gateway_set_profile"), "{record}");
+}
+
+/// The missing-target admission refusal on stdio under a fail-closed log
+/// that cannot be written: the log's unavailability, no record.
+#[tokio::test]
+async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavailable_on_stdio() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let meta = logged_meta(&dir, crate::security::audit::AuditFailurePolicy::FailClosed);
+    meta.transparency_log()
+        .expect("the fixture logs")
+        .set_append_failure_for_test(true);
+    let response = stdio_call(
+        &meta,
+        json!({"name": "gateway_invoke", "arguments": {"tool": "t"}}),
+    )
+    .await;
+    assert_eq!(
+        response
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(-32005),
+        "{response}"
+    );
+    assert!(
+        crate::gateway::meta_mcp::grant_audit_fixture::invocations(&dir).is_empty(),
+        "no record: {response}"
+    );
+}
+
 #[tokio::test]
 async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
     // Bound rather than inlined: the kill switch is the execution sentinel,
