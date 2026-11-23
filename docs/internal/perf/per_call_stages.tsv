@@ -23,9 +23,10 @@ src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	http_inv
 src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only helper
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	drop	-	on-path, untimed: a grant slot guard exists only with a transparency logger, which the harness does not configure; the other drop is the test-only guard
-src/gateway/meta_mcp/grant_audit.rs	envelope	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
-src/gateway/meta_mcp/grant_audit.rs	fingerprint	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	drop	-	test-only guard (UnslottedCheckAllowed); the grant slot guard's drop is in grant_audit/record.rs
+src/gateway/meta_mcp/grant_audit/record.rs	drop	-	on-path, untimed: a grant slot guard exists only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	envelope	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	fingerprint	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	flush_open_slot	-	on-path, untimed: grant-audit write path; flushes the open slot before task work, only with a transparency logger and noted decisions, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helper
 src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	finished-task re-checks only, off the timed dispatch path
@@ -34,18 +35,18 @@ src/gateway/meta_mcp/grant_audit.rs	invoke_tool_with_source	http_invoke_tiny	on 
 src/gateway/meta_mcp/grant_audit/repeat.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	project	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	project	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/repeat.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
-src/gateway/meta_mcp/grant_audit.rs	select_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	select_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_rpc	stdio_invoke_tiny	the slot wrap the stdio tools/call dispatch runs inside
-src/gateway/meta_mcp/grant_audit.rs	spawn_write	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	spawn_write	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	stamp_prepared	-	on-path, untimed: signed calls only, when signing prepared the call; the timed rows are unsigned
 src/gateway/meta_mcp/grant_audit.rs	with_grant_slot	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	write_owned	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
-src/gateway/meta_mcp/grant_audit.rs	write_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
-src/gateway/meta_mcp/grant_audit.rs	invocation_recorded	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	write_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit/record.rs	invocation_recorded	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	open_slot_recorded	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/marker.rs	add	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit/marker.rs	contains	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
