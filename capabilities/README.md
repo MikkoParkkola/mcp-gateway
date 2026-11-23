@@ -1,6 +1,6 @@
 # MCP Gateway Built-in Capabilities
 
-mcp-gateway currently ships **119 built-in capabilities** (marketed publicly as **110+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
+mcp-gateway currently ships **118 built-in capabilities** (marketed publicly as **110+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
 
 ## Categories
 
@@ -12,7 +12,6 @@ mcp-gateway currently ships **119 built-in capabilities** (marketed publicly as 
 | **finance/** | 6 |
 | **food/** | 1 |
 | **google/** | 21 |
-| **infrastructure/** | 1 |
 | **knowledge/** | 22 |
 | **linear/** | 13 |
 | **media/** | 10 |

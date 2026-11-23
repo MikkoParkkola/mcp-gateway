@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`cloudflare_manage`, a built-in capability that failed on every call.** It
+  declared a stdio server (`npx @anthropic/cloudflare-mcp`), which 3.x
+  capabilities cannot start, so every call failed with `URL "" is not
+  absolute` while search still listed the tool. The package it named was not
+  available on the npm registry when checked in November 2026, and its npm
+  scope belongs to an unrelated project, so the
+  capability is removed rather than repointed. 3.5 now ships 118 built-in
+  capabilities. ([#5168](https://github.com/MikkoParkkola/mcp-gateway/pull/5168))
+
 ## [3.5.2] - 2026-10-26
 
 ### Added
