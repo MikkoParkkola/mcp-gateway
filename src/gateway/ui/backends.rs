@@ -42,6 +42,7 @@ use crate::registry::server_registry;
 
 // ── Request / response types ────────────────────────────────────────────────
 
+pub(super) mod add_checks;
 mod requests;
 mod update_refusals;
 pub use requests::{AddBackendRequest, UpdateBackendRequest};
@@ -176,6 +177,9 @@ async fn add_backend(
     {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
     }
+    if let Some(answer) = add_checks::request_answer(&req) {
+        return answer;
+    }
 
     // A credential in the saved command or URL is refused by field before
     // anything is resolved (it would land in gateway.yaml as text).
@@ -190,7 +194,7 @@ async fn add_backend(
     }
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
-    let resolved = match resolve_backend(
+    let mut resolved = match resolve_backend(
         req.registry.as_deref().unwrap_or(&req.name),
         req.command.as_deref(),
         req.url.as_deref(),
@@ -202,6 +206,15 @@ async fn add_backend(
             return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
     };
+    add_checks::put_headers(
+        &mut resolved.backend,
+        req.headers,
+        req.allow_cleartext_credentials,
+    );
+    let cleartext_override = resolved.backend.allow_cleartext_credentials;
+    if let Some(answer) = add_checks::cleartext_answer(&state, &req.name, &resolved.backend) {
+        return answer;
+    }
 
     // The shared value rule: a refused value is answered by field and code,
     // and each literal goes to the secret store (gateway.yaml holds its
@@ -274,9 +287,8 @@ async fn add_backend(
         })),
     )
         .into_response();
-    if selected.is_some() {
-        attach_selection(&mut response, &req.name, None, selected.as_deref());
-    }
+    let selection = selected.as_deref();
+    add_checks::attach_add_detail(&mut response, &req.name, selection, cleartext_override);
     response
 }
 

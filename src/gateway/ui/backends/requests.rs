@@ -29,6 +29,14 @@ pub struct AddBackendRequest {
     /// Absent: every tool.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+    /// Headers a URL server sends (`backends.<name>.headers`); a value that
+    /// reads as a secret goes to the secret store. Refused for a command or
+    /// registry add, which sends none.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Accept that this URL server's credentials travel readable to a host
+    /// off this machine (`allow_cleartext_credentials`). Only `true` sets it.
+    pub allow_cleartext_credentials: Option<bool>,
 }
 
 /// Request body for `PATCH /ui/api/backends/:name`.

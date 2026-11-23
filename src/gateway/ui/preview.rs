@@ -218,12 +218,15 @@ pub(super) async fn preview_backend(
     if let Err(message) = validate_backend_name(&add.name) {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
     }
+    if let Some(answer) = super::backends::add_checks::request_answer(&add) {
+        return answer;
+    }
     let refused =
         super::backend_ops::credential_refusals(add.command.as_deref(), add.url.as_deref());
     if !refused.is_empty() {
         return super::secret_slots::refused_values(&refused);
     }
-    let resolved = match resolve_backend(
+    let mut resolved = match resolve_backend(
         add.registry.as_deref().unwrap_or(&add.name),
         add.command.as_deref(),
         add.url.as_deref(),
@@ -235,6 +238,9 @@ pub(super) async fn preview_backend(
             return flat_error(StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
         }
     };
+    // The typed headers ride on the backend so the value rule and the scrub
+    // below see them; the override is the add's alone (no credential is sent).
+    super::backends::add_checks::put_headers(&mut resolved.backend, add.headers, None);
     // The add's own value rule, before anything is scrubbed for display: a
     // preview never accepts what the save would refuse.
     let refused = super::backend_ops::literal_refusals(&resolved.backend);
