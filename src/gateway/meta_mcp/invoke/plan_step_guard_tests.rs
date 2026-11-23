@@ -124,6 +124,7 @@ fn the_step_dispatch_path_names_no_plan_entry_point() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for rel in [
         "src/gateway/meta_mcp/grant_audit.rs",
+        "src/gateway/meta_mcp/grant_audit/record.rs",
         "src/gateway/meta_mcp/invoke/policy.rs",
         "src/gateway/meta_mcp/invoke.rs",
     ] {

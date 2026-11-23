@@ -329,7 +329,7 @@ fn canonical_authority(authority: &str, default_port: u16) -> (String, u16) {
 }
 
 /// Strip the brackets from an IPv6 literal, leaving anything else alone.
-fn strip_brackets(host: &str) -> &str {
+pub(crate) fn strip_brackets(host: &str) -> &str {
     host.strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host)
@@ -339,11 +339,7 @@ fn strip_brackets(host: &str) -> &str {
 ///
 /// An IPv6 literal arrives bracketed and parses only once the brackets are off.
 fn is_numeric_host(host: &str) -> bool {
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    bare.parse::<std::net::IpAddr>().is_ok()
+    strip_brackets(host).parse::<std::net::IpAddr>().is_ok()
 }
 
 /// Strip a `:port` suffix, leaving an IPv6 literal's brackets intact.

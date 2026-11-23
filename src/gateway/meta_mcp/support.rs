@@ -258,7 +258,10 @@ pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Opti
     Some(if principal.starts_with(prefix) {
         principal.to_owned()
     } else {
-        format!("{prefix}{principal}")
+        // The bare form is built by the one owner-key builder.
+        crate::gateway::auth::credential_owner_key(
+            &crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned()),
+        )
     })
 }
 

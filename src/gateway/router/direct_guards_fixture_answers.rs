@@ -54,6 +54,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         )),
         Answer::Ok
         | Answer::WithNote
+        | Answer::WithoutRead
         | Answer::InvalidRead
         | Answer::Paged(..)
         | Answer::Unreadable(_)
@@ -124,6 +125,12 @@ pub(super) fn listing(answer: Answer, params: Option<&Value>) -> Value {
         Answer::WithNote => {
             result["tools"] = json!([
                 {"name": "read", "inputSchema": {"type": "object"}},
+                {"name": "note", "inputSchema": {"type": "object"}},
+                {"name": "gateway_invoke", "inputSchema": {"type": "object"}}
+            ]);
+        }
+        Answer::WithoutRead => {
+            result["tools"] = json!([
                 {"name": "note", "inputSchema": {"type": "object"}},
                 {"name": "gateway_invoke", "inputSchema": {"type": "object"}}
             ]);
