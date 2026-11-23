@@ -446,6 +446,13 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_CONFIG_HISTORY_DIFF,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
+    row(
         routes::UI_CONFIG_RESTORE,
         Post,
         Admin(AdminRequired),

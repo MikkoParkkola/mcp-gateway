@@ -23,6 +23,7 @@ const SETTINGS_ROUTES: &str = "src/gateway/ui/settings_route_tests.rs";
 const UNUSED_ROUTES: &str = "src/gateway/ui/settings_unused_tests.rs";
 const CONFIG_HISTORY: &str = "src/gateway/ui/config_history_tests.rs";
 const CONFIG_RESTORE: &str = "src/gateway/ui/config_history_restore_tests.rs";
+const CONFIG_HISTORY_DIFF: &str = "src/gateway/ui/config_history_diff_tests.rs";
 const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 /// The resolve route's rows, in their own file under the decisions tests.
@@ -209,6 +210,14 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             CONFIG_HISTORY,
             "g1_versions_and_events_come_newest_first_and_the_served_one_is_marked",
+        )],
+    ),
+    (
+        "/ui/api/config/history/{revision}/diff",
+        Method::GET,
+        &[(
+            CONFIG_HISTORY_DIFF,
+            "d1_the_diff_of_a_version_is_against_the_one_before",
         )],
     ),
     (

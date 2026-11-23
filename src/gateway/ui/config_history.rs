@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Extension, State, rejection::JsonRejection};
+use axum::extract::{Extension, Path, State, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -34,6 +34,7 @@ const RESTORE_WRITE: WriteRoute = WriteRoute {
 pub(super) fn config_history_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_CONFIG_HISTORY, get(history))
+        .route(routes::UI_CONFIG_HISTORY_DIFF, get(diff))
         .route(routes::UI_CONFIG_RESTORE, post(restore))
 }
 
@@ -134,6 +135,152 @@ fn event(event: &Event) -> Value {
         out.insert("location".into(), json!(line));
     }
     Value::Object(out)
+}
+
+/// What the page prints above every diff, so an edit to a comment alone is
+/// never taken for no edit.
+const SHOWS: &str = "keys and values only: comments and formatting are not part of this view";
+/// One side could not be masked; none of it is served.
+const WITHHELD_UNSAFE: &str =
+    "this version's file could not be read safely, so its changes are not shown";
+const WITHHELD_LARGE: &str = "the change is too large to show";
+/// The stored bytes differ while the two renderings are equal.
+const NOTE_UNSHOWN: &str =
+    "changed only in comments, layout or env references, which this view does not show";
+/// A diff past this many bytes is not served.
+const DIFF_MAX_BYTES: usize = 256 * 1024;
+
+/// One kept version against its predecessor in the store, every file
+/// masked, then diffed. A read only, never audited; the store read, both
+/// renderings and the diff all run on a blocking thread from one read.
+async fn diff(
+    State(state): State<Arc<AppState>>,
+    guard: Guard,
+    Path(revision): Path<String>,
+) -> Response {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
+    }
+    let Some(hook) = state.live_config.history_hook() else {
+        return no_config_file().into_response();
+    };
+    let (store, config) = (Arc::clone(&hook.store), hook.config_path.clone());
+    let read = tokio::task::spawn_blocking(move || {
+        store
+            .lookup_with_previous(&revision)
+            .map(|(found, previous)| match found {
+                Lookup::Kept(kept) => Ok(compared(&kept, previous.as_ref(), &config)),
+                missing => Err(missing),
+            })
+    })
+    .await;
+    match read {
+        Ok(Ok(Ok(answer))) => Json(answer).into_response(),
+        Ok(Ok(Err(Lookup::NoLongerKept))) => refusal(
+            StatusCode::GONE,
+            "no_longer_kept",
+            "that config version is no longer kept, so its changes cannot be shown",
+        ),
+        Ok(Ok(Err(_))) => refusal(
+            StatusCode::NOT_FOUND,
+            "unknown_version",
+            "no kept or recorded config version has that id",
+        ),
+        Ok(Err(_)) => unreadable(UNREADABLE_STORE),
+        Err(_) => unreadable(UNREADABLE_TASK),
+    }
+}
+
+/// The answer: each path held by either version, `kept`'s own first.
+fn compared(kept: &Snapshot, previous: Option<&Snapshot>, config: &str) -> Value {
+    let mut paths: Vec<&str> = kept.files.iter().map(|file| file.path.as_str()).collect();
+    for file in previous.iter().flat_map(|version| &version.files) {
+        if !paths.contains(&file.path.as_str()) {
+            paths.push(&file.path);
+        }
+    }
+    let bytes_in = |version: Option<&Snapshot>, path: &str| {
+        version
+            .and_then(|version| version.files.iter().find(|file| file.path == path))
+            .and_then(|file| file.bytes.as_deref())
+    };
+    let files: Vec<Value> = paths
+        .into_iter()
+        .map(|path| {
+            let kind = if path == config {
+                FileKind::GatewayYaml
+            } else {
+                FileKind::EnvFile
+            };
+            let (before, now) = (bytes_in(previous, path), bytes_in(Some(kept), path));
+            compared_file(path, kind, before, now)
+        })
+        .collect();
+    json!({
+        "revision": kept.revision,
+        "against": previous.map(|version| &version.revision),
+        "shows": SHOWS,
+        "files": files,
+    })
+}
+
+/// Which renderer reads a version's file.
+#[derive(Clone, Copy)]
+enum FileKind {
+    GatewayYaml,
+    EnvFile,
+}
+
+/// One file's entry. Whether it changed is judged on the stored bytes, so
+/// an edit the rendering drops still reads `changed`, with the note.
+fn compared_file(path: &str, kind: FileKind, before: Option<&[u8]>, now: Option<&[u8]>) -> Value {
+    use crate::config_reload::history_mask::{
+        Rendered, Withheld, mark_changed, rendered_env, rendered_yaml, unified,
+    };
+    let change = match (before, now) {
+        (None, Some(_)) => "added",
+        (Some(_), None) => "removed",
+        (before, now) if before == now => "same",
+        _ => "changed",
+    };
+    let render = |bytes: Option<&[u8]>| -> Result<Rendered, Withheld> {
+        let Some(bytes) = bytes else {
+            return Ok(Rendered { lines: Vec::new() });
+        };
+        let text = std::str::from_utf8(bytes).map_err(|_| Withheld)?;
+        match kind {
+            FileKind::GatewayYaml => rendered_yaml(text),
+            FileKind::EnvFile => rendered_env(text),
+        }
+    };
+    let (mut diff, mut withheld, mut note) = (Value::Null, Value::Null, Value::Null);
+    match (render(before), render(now)) {
+        (Ok(older), Ok(mut newer)) => {
+            mark_changed(&older.lines, &mut newer.lines);
+            let text = unified(&older.text(), &newer.text());
+            if text.len() > DIFF_MAX_BYTES {
+                withheld = json!(WITHHELD_LARGE);
+            } else {
+                if change == "changed" && text.is_empty() {
+                    note = json!(NOTE_UNSHOWN);
+                }
+                diff = json!(text);
+            }
+        }
+        _ => withheld = json!(WITHHELD_UNSAFE),
+    }
+    let kind = match kind {
+        FileKind::GatewayYaml => "gateway_yaml",
+        FileKind::EnvFile => "env_file",
+    };
+    json!({
+        "path": path,
+        "kind": kind,
+        "change": change,
+        "diff": diff,
+        "withheld": withheld,
+        "note": note,
+    })
 }
 
 #[derive(Deserialize)]
@@ -314,6 +461,10 @@ fn not_restored(kept: &Snapshot, baseline: Option<&Snapshot>, config: &str) -> V
 #[cfg(test)]
 #[path = "config_history_cli_tests.rs"]
 mod cli_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_history_diff_tests.rs"]
+mod diff_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_history_restore_scope_tests.rs"]

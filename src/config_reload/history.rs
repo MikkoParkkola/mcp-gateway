@@ -254,6 +254,24 @@ impl ConfigHistory {
         Ok((resolve(&state, revision), baseline))
     }
 
+    /// For a diff, from one read: what `revision` resolves to, and the
+    /// version kept immediately before its newest copy (by time, then store
+    /// order), so both sides come from one state of the store.
+    #[cfg(feature = "webui")]
+    pub(crate) fn lookup_with_previous(
+        &self,
+        revision: &str,
+    ) -> Result<(Lookup, Option<Snapshot>), String> {
+        let state = self.read_state()?;
+        let previous = state
+            .snapshots
+            .iter()
+            .rposition(|kept| kept.revision == revision)
+            .and_then(|at| kept_before(&state.snapshots, at))
+            .cloned();
+        Ok((resolve(&state, revision), previous))
+    }
+
     /// Every kept version and held event, oldest first, from one read.
     #[cfg(feature = "webui")]
     pub(crate) fn contents(&self) -> Result<(Vec<Snapshot>, Vec<Event>), String> {
@@ -282,6 +300,16 @@ impl ConfigHistory {
             StoreMode::Disk | StoreMode::Unopened { .. } => load_state(&self.file()),
         }
     }
+}
+
+/// The version kept immediately before `snapshots[at]`, ordered by `at`
+/// and, between equal times, by store order.
+#[cfg(feature = "webui")]
+fn kept_before(snapshots: &[Snapshot], at: usize) -> Option<&Snapshot> {
+    let mut order: Vec<usize> = (0..snapshots.len()).collect();
+    order.sort_by_key(|&i| snapshots[i].at);
+    let place = order.iter().position(|&i| i == at)?;
+    order.get(place.checked_sub(1)?).map(|&i| &snapshots[i])
 }
 
 /// The newest kept copy of `revision`: the copy eviction pins.

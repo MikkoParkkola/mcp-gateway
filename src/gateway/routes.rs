@@ -94,6 +94,9 @@ owned_routes! {
     UI_SETTINGS_UNUSED_ENTRY = "/ui/api/settings/secrets/unused/{name}",
     /// The kept config versions and reload events, with no stored byte.
     UI_CONFIG_HISTORY = "/ui/api/config/history",
+    /// What one kept version changed against the version kept before it,
+    /// with every secret slot masked.
+    UI_CONFIG_HISTORY_DIFF = "/ui/api/config/history/{revision}/diff",
     /// Write one kept version's gateway.yaml back, keeping the replaced file.
     UI_CONFIG_RESTORE = "/ui/api/config/restore",
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",

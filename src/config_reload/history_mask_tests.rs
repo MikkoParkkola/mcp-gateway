@@ -23,7 +23,8 @@ fn fill(text: &str) -> String {
 /// A literal written from its second line on: the raw string's first line
 /// break is layout, not content.
 fn literal(text: &str) -> &str {
-    text.strip_prefix('\n').expect("literal starts on its own line")
+    text.strip_prefix('\n')
+        .expect("literal starts on its own line")
 }
 
 /// No 3-byte window of `secret` appears anywhere in `shown`.
@@ -226,11 +227,11 @@ fn m2b_anchors_aliases_tags_merge_keys_and_two_documents_are_withheld() {
 /// The key-side shapes no `decorated` flag marks: each must be refused by
 /// the allow-list pass, never rendered.
 const KEY_SHAPES: [(&str, &str); 7] = [
-    ("a: anchored key reused as an alias key", "&k password: one\n*k : @1\n"),
-    ("b: anchored key alone", "&k password: @1\n"),
-    ("c: tagged key", "!!str password: @1\n"),
-    ("d: sequence as a key", "? [a, b]\n: x\npassword: @1\nmore: y\n"),
-    ("e: mapping as a key", "? {a: b}\n: x\npassword: @1\nmore: y\n"),
+    ("(a) alias key", "&k pw: one\n*k : @1\n"),
+    ("(b) anchor key", "&k password: @1\n"),
+    ("(c) tag key", "!!str password: @1\n"),
+    ("(d) list key", "? [a]\n: x\npassword: @1\nz: y\n"),
+    ("(e) map key", "? {a: b}\n: x\npassword: @1\nz: y\n"),
     ("f: bare tag on a value", "note: ! @1\n"),
     ("f: bare tag on a key", "! note: @1\n"),
 ];
@@ -254,7 +255,10 @@ fn m2c_only_allowed_shapes_are_rendered() {
             "block collections of plain, quoted and block scalars",
             "a:\n  - plain\n  - \"double\"\n  - 'single'\nb:\n  c: |\n    text\n  d: >\n    text\n",
         ),
-        ("flow collections", "a: {b: [1, \"two\", 'three'], c: {}}\nd: []\n"),
+        (
+            "flow collections",
+            "a: {b: [1, \"two\", 'three'], c: {}}\nd: []\n",
+        ),
         ("empty text", ""),
     ] {
         assert!(renderable(text), "{name}");
@@ -389,7 +393,9 @@ fn m5_an_unparseable_text_is_withheld() {
 
 #[test]
 fn m6_env_files_show_names_only() {
-    let text = fill("B_FIRST=@1\nA_SECOND=\"@2\nLEAKED=tail\"\nEMPTY=\nREF=$NOT_SET_ANYWHERE_9617\nHOME_REF=$HOME\n");
+    let text = fill(
+        "B_FIRST=@1\nA_SECOND=\"@2\nLEAKED=tail\"\nEMPTY=\nREF=$NOT_SET_ANYWHERE_9617\nHOME_REF=$HOME\n",
+    );
     let shown = rendered_env(&text).expect("renders").text();
     assert_eq!(
         shown,

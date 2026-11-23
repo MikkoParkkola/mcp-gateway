@@ -378,6 +378,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 409],
     ),
+    // src/gateway/ui/config_history.rs (diff; no config file, so no history
+    // and the admin's answer is no_config_file)
+    row(
+        "/ui/api/config/history/{revision}/diff",
+        Method::GET,
+        "/ui/api/config/history/rv-table-row/diff",
+        Payload::None,
+        [401, 403, 403, 409],
+    ),
     // src/gateway/ui/config_history.rs (restore; no config file, so the
     // admin's answer is no_config_file before any read or write)
     row(

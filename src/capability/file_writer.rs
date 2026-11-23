@@ -301,6 +301,29 @@ fn lcs_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(char, &'a str)> {
 /// A unified diff from `from` to `to`, one hunk over the whole file, line
 /// terminators kept, a missing final newline marked.
 pub(crate) fn unified_diff(from: &str, to: &str) -> String {
+    let lines = tagged_lines(from, to);
+    let old = lines.iter().filter(|(tag, _)| *tag != '+').count();
+    let new = lines.iter().filter(|(tag, _)| *tag != '-').count();
+    // An empty side starts at line 0, as `git apply` requires.
+    let start = |n: usize| usize::from(n > 0);
+    let mut out = format!(
+        "--- current\n+++ sent\n@@ -{},{} +{},{} @@\n",
+        start(old),
+        old,
+        start(new),
+        new
+    );
+    for (tag, line) in lines {
+        patch_line(&mut out, tag, line);
+    }
+    out
+}
+
+/// Every line of `from` and `to`, terminators kept, tagged `' '` (both),
+/// `'-'` (only `from`) or `'+'` (only `to`), in order: the shared head and
+/// tail as they are, the middle by longest common subsequence, or as a full
+/// replace past `DIFF_MAX_CELLS`.
+pub(crate) fn tagged_lines<'a>(from: &'a str, to: &'a str) -> Vec<(char, &'a str)> {
     let a: Vec<&str> = from.split_inclusive('\n').collect();
     let b: Vec<&str> = to.split_inclusive('\n').collect();
     let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
@@ -321,25 +344,9 @@ pub(crate) fn unified_diff(from: &str, to: &str) -> String {
             .chain(mid_b.iter().map(|l| ('+', *l)))
             .collect()
     };
-    // An empty side starts at line 0, as `git apply` requires.
-    let start = |n: usize| usize::from(n > 0);
-    let mut out = format!(
-        "--- current\n+++ sent\n@@ -{},{} +{},{} @@\n",
-        start(a.len()),
-        a.len(),
-        start(b.len()),
-        b.len()
-    );
-    for line in &a[..prefix] {
-        patch_line(&mut out, ' ', line);
-    }
-    for (tag, line) in middle {
-        patch_line(&mut out, tag, line);
-    }
-    for line in &a[a.len() - suffix..] {
-        patch_line(&mut out, ' ', line);
-    }
-    out
+    let head = a[..prefix].iter().map(|line| (' ', *line));
+    let tail = a[a.len() - suffix..].iter().map(|line| (' ', *line));
+    head.chain(middle).chain(tail).collect()
 }
 
 fn message(message: impl std::fmt::Display) -> FieldError {

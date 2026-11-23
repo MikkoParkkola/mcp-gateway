@@ -331,6 +331,26 @@ async fn every_unverifiable_pin_is_a_mismatch() {
     }
 }
 
+/// The whole patch, byte for byte, as the writer has always produced it:
+/// pinned when the tagging moved into `tagged_lines`, so the patch text an
+/// admin reviews did not change with it.
+#[test]
+fn a_patch_is_byte_identical_across_the_tagged_lines_extract() {
+    assert_eq!(
+        super::super::unified_diff("a\nb\nz\n", "a\nc\nz\n"),
+        "--- current\n+++ sent\n@@ -1,3 +1,3 @@\n a\n+c\n-b\n z\n"
+    );
+    assert_eq!(
+        super::super::unified_diff("a\nb\nc\nd\n", "a\nx\nc\nd"),
+        concat!(
+            "--- current\n+++ sent\n@@ -1,4 +1,4 @@\n",
+            " a\n+x\n-b\n c\n",
+            "+d\n\\ No newline at end of file\n",
+            "-d\n",
+        )
+    );
+}
+
 #[test]
 fn an_empty_side_starts_at_line_zero() {
     let created = super::super::unified_diff("", "a\n");

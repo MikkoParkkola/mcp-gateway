@@ -72,7 +72,10 @@ pub(crate) struct Rendered {
 impl Rendered {
     /// Every line, each ended by a line break.
     pub(crate) fn text(&self) -> String {
-        self.lines.iter().map(|line| line.text.clone() + "\n").collect()
+        self.lines
+            .iter()
+            .map(|line| line.text.clone() + "\n")
+            .collect()
     }
 }
 
@@ -193,11 +196,14 @@ pub(crate) fn rendered_env(text: &str) -> Result<Rendered, Withheld> {
 pub(crate) fn slot_path(path: &[Step]) -> bool {
     let fits = |pattern: &[Seg]| {
         pattern.len() == path.len()
-            && pattern.iter().zip(path).all(|(seg, step)| match (seg, step) {
-                (Seg::Key(want), Step::Key(key)) => want == key,
-                (Seg::Backend, Step::Key(_)) | (Seg::Index, Step::Index(_)) => true,
-                _ => false,
-            })
+            && pattern
+                .iter()
+                .zip(path)
+                .all(|(seg, step)| match (seg, step) {
+                    (Seg::Key(want), Step::Key(key)) => want == key,
+                    (Seg::Backend, Step::Key(_)) | (Seg::Index, Step::Index(_)) => true,
+                    _ => false,
+                })
     };
     SLOT_PATHS.iter().any(|pattern| fits(pattern))
         || FIELDS
@@ -277,6 +283,52 @@ fn escaped(text: &str) -> String {
     out
 }
 
+/// Unchanged lines shown around each change.
+const CONTEXT: usize = 3;
+
+/// The unified diff of two rendered texts: hunks with `CONTEXT` lines
+/// around each change, two changes closer than twice that sharing one hunk,
+/// no file headers. Empty when the texts are equal.
+pub(crate) fn unified(older: &str, newer: &str) -> String {
+    let lines = crate::capability::file_writer::tagged_lines(older, newer);
+    let change_from = |from: usize| {
+        lines[from..]
+            .iter()
+            .position(|(tag, _)| *tag != ' ')
+            .map(|i| from + i)
+    };
+    let counted =
+        |part: &[(char, &str)], skip: char| part.iter().filter(|(t, _)| *t != skip).count();
+    // A hunk's first line number; an empty side names the line before it.
+    let first_line = |before: usize, len: usize| if len == 0 { before } else { before + 1 };
+    let mut out = String::new();
+    let mut at = 0;
+    while let Some(first) = change_from(at) {
+        let mut last = first;
+        while let Some(next) = change_from(last + 1).filter(|&n| n - last <= 2 * CONTEXT + 1) {
+            last = next;
+        }
+        let (start, stop) = (
+            first.saturating_sub(CONTEXT),
+            (last + 1 + CONTEXT).min(lines.len()),
+        );
+        let (before, hunk) = (&lines[..start], &lines[start..stop]);
+        let (old_len, new_len) = (counted(hunk, '+'), counted(hunk, '-'));
+        let _ = writeln!(
+            out,
+            "@@ -{},{old_len} +{},{new_len} @@",
+            first_line(counted(before, '+'), old_len),
+            first_line(counted(before, '-'), new_len),
+        );
+        for (tag, line) in hunk {
+            out.push(*tag);
+            out.push_str(line);
+        }
+        at = stop;
+    }
+    out
+}
+
 /// A masked line of `newer` whose stored value differs from the line at the
 /// same path, with the same token, in `older` reads `(changed)`.
 // ponytail: linear scan per line; a path index if renderings reach thousands of lines.
@@ -286,7 +338,9 @@ pub(crate) fn mark_changed(older: &[Line], newer: &mut [Line]) {
             continue;
         };
         let rotated = older.iter().any(|old| {
-            old.path == line.path && old.text == line.text && old.secret.is_some_and(|d| d != digest)
+            old.path == line.path
+                && old.text == line.text
+                && old.secret.is_some_and(|d| d != digest)
         });
         if rotated {
             line.text.push_str(" (changed)");
