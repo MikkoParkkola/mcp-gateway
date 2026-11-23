@@ -259,9 +259,17 @@ fn unjudged_capabilities(
     for ((backend, file), bad) in &set.unjudged {
         // Not the reason: a file turning from unreadable to garbled is the
         // same item, keeping when it was first seen.
-        let item_id = id(&key, "capability_unreadable", &json!([backend, file]));
+        let item_id = id(
+            &key,
+            "capability_unreadable",
+            &mutant!(
+                "M3",
+                json!([backend, file, bad.reason.as_str()]),
+                json!([backend, file])
+            ),
+        );
         let observed = first_seen(&mut set.first_seen, now, &item_id, live);
-        if let Some(trusted) = &bad.loaded_as {
+        if let Some(trusted) = mutant!("M5", None, bad.loaded_as.as_ref()) {
             blocks
                 .entry(trusted.clone())
                 .or_default()
@@ -276,7 +284,7 @@ fn unjudged_capabilities(
             json!({
                 "id": item_id,
                 "kind": "capability_unreadable",
-                "backend": display::name(&key, backend),
+                "backend": mutant!("M4", json!(file), json!(display::name(&key, backend))),
                 "tool": tool,
                 "trusted_name": bad.loaded_as.is_some(),
                 "reason": bad.reason.as_str(),
@@ -285,7 +293,19 @@ fn unjudged_capabilities(
             }),
         ));
     }
-    listed
+    mutant!(
+        "M2",
+        Vec::new(),
+        mutant!(
+            "M7",
+            {
+                let mut twice = listed.clone();
+                twice.extend(listed.clone());
+                twice
+            },
+            listed
+        )
+    )
 }
 
 /// One access request being gathered from its open capabilities.

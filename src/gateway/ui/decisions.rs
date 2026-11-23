@@ -424,10 +424,20 @@ fn tick(
         match changes {
             // A recorded file that could not be read or parsed is its own
             // item: never a list missing it, and never a list taken down.
-            Some((backend, (changes, unjudged))) => {
-                set.set_capability_unreadable(&backend, unjudged);
-                set.set_capability_changes(&backend, changes, now);
-            }
+            Some((backend, (changes, unjudged))) => mutant!(
+                "M1",
+                {
+                    if unjudged.is_empty() {
+                        set.set_capability_changes(&backend, changes, now);
+                    } else {
+                        set.set_health(Source::Capability, Health::Unavailable);
+                    }
+                },
+                {
+                    set.set_capability_unreadable(&backend, unjudged);
+                    set.set_capability_changes(&backend, changes, now);
+                }
+            ),
             None => set.set_health(Source::Capability, Health::Absent),
         }
         if let Some(edge) = edge {

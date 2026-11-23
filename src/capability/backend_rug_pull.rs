@@ -97,11 +97,15 @@ impl CapabilityBackend {
                 // Unreadable is not resolved: the record stays, and the file
                 // is reported as one the pass could not judge.
                 Err(error) => {
-                    let fault = if error.kind() == std::io::ErrorKind::PermissionDenied {
-                        ReadFault::NoPermission
-                    } else {
-                        ReadFault::Unreadable
-                    };
+                    let fault = mutant!(
+                        "M6",
+                        ReadFault::Unreadable,
+                        if error.kind() == std::io::ErrorKind::PermissionDenied {
+                            ReadFault::NoPermission
+                        } else {
+                            ReadFault::Unreadable
+                        }
+                    );
                     mismatches.unreadable.push((record, fault));
                     continue;
                 }
