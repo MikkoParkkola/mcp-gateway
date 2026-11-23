@@ -103,6 +103,9 @@ mod restart_status;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;
+/// The bind-host classifiers `setup export` shares with the router.
+#[cfg(feature = "config-export")]
+pub(crate) use router::{is_wildcard_bind, strip_brackets};
 pub(crate) mod routes;
 #[cfg(tp4)]
 #[cfg(test)]

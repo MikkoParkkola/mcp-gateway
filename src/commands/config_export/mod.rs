@@ -148,7 +148,7 @@ pub(crate) fn build_gateway_entry(
 /// Resolve `Auto` mode to a concrete `Proxy` or `Stdio` decision.
 ///
 /// Auto resolution:
-/// 1. If a gateway daemon is reachable at `host:port/health` → Proxy.
+/// 1. If a TCP connect to `probe_addr` succeeds (a gateway runs here) → Proxy.
 /// 2. If `mcp-gateway` is on `PATH` → Stdio.
 /// 3. Otherwise → Proxy (user must start daemon manually).
 pub fn resolve_mode(mode: ConnectionMode, config: &Config) -> ConnectionMode {

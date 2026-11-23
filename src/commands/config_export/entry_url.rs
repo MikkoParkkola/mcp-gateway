@@ -4,8 +4,11 @@
 //! prints about what that address cannot tell the client.
 
 use std::io::Write;
+use std::net::IpAddr;
 
 use serde_json::Value;
+
+use crate::gateway::{is_wildcard_bind, strip_brackets};
 
 use mcp_gateway::config::Config;
 
@@ -66,36 +69,24 @@ const PUBLIC_URL_REFUSED: &str = "server.public_url is not a URL a client can us
      http or https, name a host a client can reach, and carry no user, password, query or \
      fragment. Fix it or remove it.";
 
-/// `host` without one pair of surrounding brackets.
-fn unbracketed(host: &str) -> &str {
-    host.strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-        .unwrap_or(host)
-}
-
-/// A bind host that serves every interface: empty, or an unspecified IP
-/// (`0.0.0.0`, `::`), brackets allowed. The same rule as the router's own
-/// wildcard test, which is not reachable from here.
+/// A bind host that serves every interface, brackets allowed: the router's
+/// own test, so the two cannot drift apart.
 fn is_wildcard(host: &str) -> bool {
-    let host = unbracketed(host);
-    host.is_empty()
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_unspecified())
+    is_wildcard_bind(strip_brackets(host))
 }
 
 /// The host a client on this machine connects to for a bind host: a wildcard
 /// becomes its family's loopback, an IPv6 address is bracketed once, and
 /// anything else (IPv4, a name) is kept.
 pub(crate) fn connect_host(host: &str) -> String {
-    let bare = unbracketed(host);
+    let bare = strip_brackets(host);
     if is_wildcard(bare) {
-        // An empty host counts as IPv4; a colon means an IPv6 wildcard.
-        let loopback = if bare.contains(':') {
-            "[::1]"
-        } else {
-            "127.0.0.1"
-        };
+        // The family the bind serves: an empty host and an IPv4-mapped
+        // wildcard (`::ffff:0.0.0.0`) serve IPv4.
+        let serves_v6 = bare
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.to_canonical().is_ipv6());
+        let loopback = if serves_v6 { "[::1]" } else { "127.0.0.1" };
         return loopback.to_string();
     }
     if bare.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -110,7 +101,8 @@ fn usable(url: &url::Url) -> bool {
     let reachable = match url.host() {
         Some(url::Host::Domain(_)) => true,
         Some(url::Host::Ipv4(ip)) => !ip.is_unspecified(),
-        Some(url::Host::Ipv6(ip)) => !ip.is_unspecified(),
+        // An IPv4-mapped address is judged as the IPv4 address it carries.
+        Some(url::Host::Ipv6(ip)) => !ip.to_canonical().is_unspecified(),
         None => false,
     };
     matches!(url.scheme(), "http" | "https")
