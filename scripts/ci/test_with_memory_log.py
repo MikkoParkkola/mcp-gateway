@@ -196,8 +196,12 @@ def _pids(path: Path) -> list[int] | None:
 
 def _ps() -> str | None:
     """One ps snapshot for R7: pid, parent, group, state, elapsed time and program name. Never a process's
-    arguments. None when ps failed."""
-    ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,etime=,comm="], capture_output=True, text=True)
+    arguments. None when ps failed or could not be started at all, so either is a missing R7."""
+    try:
+        ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,etime=,comm="],
+                            capture_output=True, text=True)
+    except OSError:
+        return None
     return ps.stdout if ps.returncode == 0 else None
 
 
@@ -291,7 +295,8 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
         record["R6"] = {"wrapper": w, "command": c}
         record["adopter"] = adopter
         if gone:
-            record["gone_before_ps"] = gone
+            # Checked once the snapshot is taken: these exited before, during or just after it.
+            record["gone_at_recheck"] = gone
         # No fact is kept from a pid whose identity is not confirmed, nor from a dead one's number, which the system
         # may already have handed to another process.
         refused = set(gone)
