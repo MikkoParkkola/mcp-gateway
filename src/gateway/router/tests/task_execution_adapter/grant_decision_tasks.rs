@@ -100,8 +100,10 @@ async fn cancelled_worker_keeps_its_pending_record() {
 }
 
 /// T14b. The same cancellation on a stalled log: the dropped slot hands its
-/// note to a bounded write, which the stall refuses at once instead of
-/// pinning a thread.
+/// pending note to a bounded write, which the stall refuses at once instead
+/// of pinning a thread. The refusal is the pending note's own (its error
+/// line), not only some write's: the slot's best-effort note is written
+/// separately and would be refused under the stall too.
 #[cfg(tp5)]
 #[tokio::test]
 async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
@@ -109,6 +111,10 @@ async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
     let created = post(&row.state, "key-a", as_task(personal_invoke(1), "d3a-t14b")).await;
     let id = task_id(&created);
     row.endpoint.wait_for_arrivals(1).await;
+    // Counted on this thread: the runtime is current-thread, so the dropped
+    // slot's write task logs here.
+    let (_counting, pending_refused) =
+        crate::test_log_capture::live_count("grant decision records could not be written");
     let release = stall_log(&row.log).await;
 
     let ack = post(
@@ -119,14 +125,18 @@ async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
     .await;
     assert!(ack.get("error").is_none(), "{ack}");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while row.log.refused_under_stall_for_test() == 0 && tokio::time::Instant::now() < deadline {
+    while *pending_refused.borrow() == 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     row.log.release_and_drain(release).await;
     row.endpoint.release();
     assert!(
         row.log.refused_under_stall_for_test() >= 1,
-        "the cancelled slot's pending note went through the bounded path"
+        "nothing went through the bounded path"
+    );
+    assert!(
+        *pending_refused.borrow() >= 1,
+        "the cancelled slot's pending note never reached the bounded write"
     );
 }
 
