@@ -501,6 +501,14 @@ mod recent_writes_route_more_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_tests;
+/// A withheld direct call and a missing one leave the same firewall state.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_parity_tests;
+/// A withheld surfaced task call and a missing name leave the request firewall uncharged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_task_parity_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
