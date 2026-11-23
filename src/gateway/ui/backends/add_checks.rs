@@ -37,9 +37,10 @@ pub(in crate::gateway::ui) fn request_answer(req: &AddBackendRequest) -> Option<
         // one header once letter case is ignored (the parsed name is lowercase).
         let mut names = HashSet::new();
         for name in req.headers.keys() {
-            match reqwest::header::HeaderName::from_bytes(name.as_bytes()) {
-                Ok(parsed) if names.insert(parsed) => {}
-                _ => return refuse("header_name", "headers"),
+            let fresh = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .is_ok_and(|parsed| names.insert(parsed));
+            if !fresh {
+                return refuse("header_name", "headers");
             }
         }
         if req
