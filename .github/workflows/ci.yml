@@ -47,6 +47,10 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require every job to run on a GitHub-hosted runner
         run: scripts/ci/check-hosted-runners.sh
+      - name: Validate the required-check cancel guard
+        run: scripts/ci/check-required-no-cancel.sh --self-test
+      - name: The required hygiene check never cancels its own runs
+        run: scripts/ci/check-required-no-cancel.sh
       - name: Validate the 800-LOC ratchet
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
