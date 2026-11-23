@@ -331,3 +331,96 @@ async fn n2b_mcp_a_wrong_type_id_is_refused_by_the_envelope_first() {
     );
     assert!(body["id"].is_null(), "no id: {body}");
 }
+
+/// [`signed_on_mcp`] parsed, for a row that changes the request before it
+/// is sent.
+fn signed_on_mcp_value(id: u64, nonce: &Value) -> Value {
+    serde_json::from_str(&signed_on_mcp(id, nonce)).expect("the request parses")
+}
+
+/// E1: N2b's request, an id the signing envelope cannot carry,
+/// is answered exactly as N2b pins, and the refusal now leaves one record:
+/// the request's form (`syntax`), the target as the request names it.
+#[tokio::test]
+async fn e1_mcp_an_unusable_id_is_recorded_as_syntax() {
+    let fx = hardened_signing().await;
+    let mut call = signed_on_mcp_value(1, &json!(5));
+    call["id"] = json!(true);
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32600, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Invalid signing request ID",
+        "{body}"
+    );
+    assert!(body["id"].is_null(), "no id: {body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "denied", -32600, "syntax");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
+}
+
+/// E2: a name that becomes `gateway_invoke` only once the
+/// sanitizer strips a control character (the BEL that
+/// `mik8154_rows_tests::signed_order::s6_a_routing_alias_made_by_sanitization_is_refused`
+/// uses) changes the request's origin. The answer has no id although the
+/// request's id (1) was usable, as before, and the refusal is recorded once.
+#[tokio::test]
+async fn e2_mcp_a_changed_origin_is_recorded_as_syntax() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Signing, Extra::Hardened],
+        sanitize: Sanitize::On,
+        ..Setup::default()
+    })
+    .await;
+    let mut call = signed_on_mcp_value(1, &json!("e2-nonce"));
+    call["params"]["name"] = json!("gateway_\u{7}invoke");
+    let (status, body) = post_to_named(
+        &fx,
+        "/mcp",
+        &call.to_string(),
+        &Caller::ModernOidc,
+        "gateway_invoke",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], -32600, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Invalid signing request origin",
+        "{body}"
+    );
+    assert!(body["id"].is_null(), "no id although 1 was usable: {body}");
+    let all = records_after(&fx, &body);
+    let [record] = all.as_slice() else {
+        panic!("exactly one record: {all:?}");
+    };
+    assert_meta_refusal(record, "denied", -32600, "syntax");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
+}
+
+/// E4: E1's request under a log that fails closed and
+/// cannot be written (as `signing_records_log`'s F1n makes it): the
+/// envelope refusal follows the signing refusal's policy, so the answer is
+/// the log's unavailability, 503, with no id and no record.
+#[tokio::test]
+async fn e4_a_fail_closed_log_that_cannot_write_answers_unavailable() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Signing, Extra::Hardened],
+        log: Log::On,
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log.set_append_failure_for_test(true);
+    let mut call = signed_on_mcp_value(1, &json!(5));
+    call["id"] = json!(true);
+    let (status, body) = post_to(&fx, "/mcp", &call.to_string(), &Caller::ModernOidc).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_i64(), body["id"].is_null()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some(-32005), true),
+        "{body}"
+    );
+    assert!(invocations(&fx).is_empty(), "no record: {body}");
+}
