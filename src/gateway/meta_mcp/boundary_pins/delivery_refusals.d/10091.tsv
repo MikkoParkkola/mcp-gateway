@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_reload/first_key.rs	waiting_first_key	next_start_refusal	1	not-delivered	the first-key question's start check: a candidate a restart would refuse is reported by that check and never held; no call delivery
+src/config_reload/first_key.rs	waiting_first_key	refuse_multi_user_flip	1	no-record	the first-key question asks the status rule once, and its sentence travels with the answer to the reload and the writer; no call delivery
