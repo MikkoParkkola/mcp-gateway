@@ -160,50 +160,111 @@ const TASK_METHODS: &[(&str, Exposes)] = &[
     ("from_snapshot", Exposes::Nothing),
 ];
 
-/// The `pub`, `pub(crate)` and `pub(super)` methods declared in the first
-/// `impl Task { .. }` block of `code`, by name, in order.
-fn public_task_methods(code: &str) -> Vec<String> {
-    let start = code
-        .find("impl Task {")
-        .expect("tasks.rs declares impl Task");
-    let body = &code[start..];
-    let mut depth = 0usize;
-    let mut end = body.len();
-    for (at, byte) in body.bytes().enumerate() {
-        match byte {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = at;
-                    break;
+/// Where the protocol's `Task` is declared.
+const PROTOCOL_TASKS: &str = "src/protocol/tasks.rs";
+
+/// Whether `ty` is the protocol's `Task`: a path ending `protocol::Task` or
+/// `protocol::tasks::Task`, or the bare name where `bare_counts` says the
+/// module in scope sees no other `Task`.
+fn names_protocol_task(ty: &syn::Type, bare_counts: bool) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    if path.qself.is_some() {
+        return false;
+    }
+    let names: Vec<String> = path
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect();
+    match names.as_slice() {
+        [only] => bare_counts && only == "Task",
+        [.., p, t] if p == "protocol" && t == "Task" => true,
+        [.., p, m, t] if p == "protocol" && m == "tasks" && t == "Task" => true,
+        _ => false,
+    }
+}
+
+/// Whether a `use` tree brings a `Task` into scope from somewhere other than
+/// the protocol: its own name or a rename. In `src/protocol/` every import of
+/// `Task` is the protocol's, since the module holds only that one.
+fn imports_other_task(tree: &syn::UseTree, prefix: &mut Vec<String>, in_protocol: bool) -> bool {
+    let protocol_path = |prefix: &[String]| {
+        in_protocol
+            || matches!(prefix, [.., p] if p == "protocol")
+            || matches!(prefix, [.., p, m] if p == "protocol" && m == "tasks")
+    };
+    match tree {
+        syn::UseTree::Path(step) => {
+            prefix.push(step.ident.to_string());
+            let other = imports_other_task(&step.tree, prefix, in_protocol);
+            prefix.pop();
+            other
+        }
+        syn::UseTree::Name(name) => name.ident == "Task" && !protocol_path(prefix),
+        syn::UseTree::Rename(rename) => {
+            rename.rename == "Task" && !(rename.ident == "Task" && protocol_path(prefix))
+        }
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|tree| imports_other_task(tree, prefix, in_protocol)),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
+/// Whether a module's own items declare a `Task` (struct, enum, union, alias or
+/// trait) or import another one: a bare `impl Task` there names that type.
+fn module_has_other_task(items: &[syn::Item], in_protocol: bool) -> bool {
+    items.iter().any(|item| match item {
+        syn::Item::Struct(decl) => decl.ident == "Task",
+        syn::Item::Enum(decl) => decl.ident == "Task",
+        syn::Item::Union(decl) => decl.ident == "Task",
+        syn::Item::Type(decl) => decl.ident == "Task",
+        syn::Item::Trait(decl) => decl.ident == "Task",
+        syn::Item::Use(decl) => imports_other_task(&decl.tree, &mut Vec::new(), in_protocol),
+        _ => false,
+    })
+}
+
+/// The names of the non-private methods (any `pub` form) in the protocol
+/// `Task`'s inherent impls among `items` and the inline modules under them;
+/// test-only items are skipped. `declares_protocol_task`: these are
+/// src/protocol/tasks.rs's own items, whose `Task` is the protocol's.
+fn task_methods_in(
+    items: &[syn::Item],
+    declares_protocol_task: bool,
+    in_protocol: bool,
+    out: &mut Vec<String>,
+) {
+    use crate::test_source_text::test_only;
+    let bare_counts = declares_protocol_task || !module_has_other_task(items, in_protocol);
+    for item in items {
+        match item {
+            syn::Item::Impl(block)
+                if block.trait_.is_none()
+                    && !test_only(&block.attrs)
+                    && names_protocol_task(&block.self_ty, bare_counts) =>
+            {
+                for member in &block.items {
+                    if let syn::ImplItem::Fn(method) = member
+                        && !matches!(method.vis, syn::Visibility::Inherited)
+                        && !test_only(&method.attrs)
+                    {
+                        out.push(method.sig.ident.to_string());
+                    }
+                }
+            }
+            syn::Item::Mod(module) if !test_only(&module.attrs) => {
+                if let Some((_, inner)) = &module.content {
+                    task_methods_in(inner, false, in_protocol, out);
                 }
             }
             _ => {}
         }
     }
-    body[..end]
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let mut rest = ["pub(crate) ", "pub(super) ", "pub "]
-                .iter()
-                .find_map(|vis| line.strip_prefix(vis))?;
-            // Qualifiers between the visibility and `fn`, in any order.
-            while let Some(next) = ["const ", "async ", "unsafe "]
-                .iter()
-                .find_map(|q| rest.strip_prefix(q))
-            {
-                rest = next;
-            }
-            let name = rest.strip_prefix("fn ")?;
-            let name: String = name
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            Some(name)
-        })
-        .collect()
 }
 
 /// Each production source under `src/`: its path from the crate root with '/'
@@ -236,35 +297,36 @@ fn production_sources() -> Vec<(String, String)> {
     sources
 }
 
-/// Where the protocol's `Task` is declared.
-const PROTOCOL_TASKS: &str = "src/protocol/tasks.rs";
-
-/// Whether `code` declares a type, alias or trait of its own named `Task`.
-fn declares_own_task(code: &str) -> bool {
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    ["struct Task", "enum Task", "type Task", "trait Task"]
-        .iter()
-        .any(|decl| {
-            code.match_indices(decl).any(|(at, found)| {
-                !code[..at].ends_with(ident) && !code[at + found.len()..].starts_with(ident)
-            })
-        })
-}
-
+/// Every non-private method of the protocol `Task`, read with syn from every
+/// production file: an inherent impl may sit in any module, under a bare
+/// `Task` or a `protocol::tasks::Task` path. Fails closed: a file syn cannot
+/// parse fails the row by name, since it could hide an impl.
+///
+/// Boundary: an impl a macro expands to is not read, and a module that reaches
+/// the protocol `Task` only through a glob import is read as if it saw no other
+/// `Task`.
 #[test]
 fn task_methods_are_classified() {
-    // An inherent impl may sit in any module of the crate, so every block counts,
-    // except in a module that declares a `Task` of its own: there `impl Task`
-    // names that other type.
-    let found: Vec<String> = production_sources()
-        .iter()
-        .filter(|(file, code)| file == PROTOCOL_TASKS || !declares_own_task(code))
-        .flat_map(|(_, code)| {
-            code.match_indices("impl Task {")
-                .flat_map(|(at, _)| public_task_methods(&code[at..]))
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    let mut unparsed = Vec::new();
+    for (file, _) in production_sources() {
+        let raw = std::fs::read_to_string(root.join(&file)).expect("a listed source is readable");
+        let Ok(parsed) = syn::parse_file(&raw) else {
+            unparsed.push(file);
+            continue;
+        };
+        task_methods_in(
+            &parsed.items,
+            file == PROTOCOL_TASKS,
+            file.starts_with("src/protocol/"),
+            &mut found,
+        );
+    }
+    assert!(
+        unparsed.is_empty(),
+        "syn could not parse {unparsed:?}, so the method scan cannot vouch for them"
+    );
     assert!(
         found.iter().any(|name| name == "wire"),
         "no impl Task block was read"
@@ -387,9 +449,14 @@ fn outcome_exposing_task_methods_are_called_only_where_listed() {
 
 /// Every production use of `snapshot`, through the delivery pin's own
 /// matcher (any receiver, a path, a function reference), in each file that
-/// names the `Task` type, as (file, count). The name is common elsewhere, so a
-/// file that never names `Task` is left out; a new accessor anywhere still
-/// fails `task_methods_are_classified`.
+/// names the `Task` type, as (file, count). The name is common elsewhere, so in
+/// a file that never names `Task` only a call on a receiver whose name holds
+/// `task` counts. A new accessor anywhere still fails
+/// `task_methods_are_classified`.
+///
+/// Boundary: a `Task` held under a binding without `task` in its name, in a
+/// file that never spells `Task`, is not seen. Closing that takes the types
+/// (rust-analyzer), not the text.
 const SNAPSHOT_USES: &[(&str, usize)] = &[
     // The record's model: `set_model`, and the admitted record.
     ("src/gateway/task_service/record.rs", 2),
@@ -410,12 +477,15 @@ fn names_task(code: &str) -> bool {
 fn snapshot_is_used_only_where_listed() {
     let found: Vec<(String, usize)> = production_sources()
         .into_iter()
-        .filter(|(_, code)| names_task(code))
-        .map(|(file, code)| {
-            let uses = path_uses(&code, "snapshot");
-            (file, uses)
+        .filter_map(|(file, code)| {
+            // Exact where the type is spelled; elsewhere a task-named receiver.
+            let uses = if names_task(&code) {
+                path_uses(&code, "snapshot")
+            } else {
+                task_receiver_calls(&code, "snapshot")
+            };
+            (uses > 0).then_some((file, uses))
         })
-        .filter(|(_, uses)| *uses > 0)
         .collect();
     let want: Vec<(String, usize)> = SNAPSHOT_USES
         .iter()
@@ -431,32 +501,53 @@ fn snapshot_is_used_only_where_listed() {
 /// The matchers themselves.
 #[test]
 fn the_task_method_and_receiver_matchers_read_what_they_should() {
+    let methods = |code: &str, declares: bool| {
+        let parsed = syn::parse_file(code).expect("the fixture parses");
+        let mut out = Vec::new();
+        task_methods_in(&parsed.items, declares, false, &mut out);
+        out
+    };
+    // Every pub form, split signatures, qualified and bare impls, private and
+    // test-only methods left out, another type's impl ignored.
     let code = "impl Task {\n    pub fn id(&self) {}\n    pub(crate) const fn ttl_ms(&self) {}\n    \
-                fn private(&self) {}\n    pub const fn result(&self) { if x { } }\n}\nimpl Other {\n    \
-                pub fn outside(&self) {}\n}";
-    assert_eq!(public_task_methods(code), ["id", "ttl_ms", "result"]);
+                fn private(&self) {}\n    pub(in crate::protocol) async unsafe fn\n        split(&self) {}\n    \
+                #[cfg(test)]\n    pub fn probe(&self) {}\n}\nimpl Other {\n    pub fn outside(&self) {}\n}\n\
+                impl crate::protocol::tasks::Task {\n    pub(super) fn qualified(&self) {}\n}\n\
+                mod inner {\n    impl crate::protocol::Task {\n        pub fn nested(&self) {}\n    }\n}";
+    assert_eq!(
+        methods(code, false),
+        ["id", "ttl_ms", "split", "qualified", "nested"]
+    );
+    // A module with a Task of its own: its bare impl names that type, while a
+    // qualified one and a sibling module's bare impl still count.
+    let shadowed = "struct Task;\nimpl Task {\n    pub fn local(&self) {}\n}\n\
+                    impl crate::protocol::tasks::Task {\n    pub fn real(&self) {}\n}\n\
+                    mod clean {\n    impl Task {\n        pub fn sibling(&self) {}\n    }\n}";
+    assert_eq!(methods(shadowed, false), ["real", "sibling"]);
+    // tasks.rs itself declares the protocol Task, so its bare impl counts there.
+    assert_eq!(
+        methods(
+            "pub struct Task;\nimpl Task {\n    pub fn wire(&self) {}\n}",
+            true
+        ),
+        ["wire"]
+    );
+    let imported = "use crate::a2a::types::Task;\nimpl Task {\n    pub fn foreign(&self) {}\n}";
+    assert!(methods(imported, false).is_empty());
+    let protocol_use = "use crate::protocol::tasks::{Task, TaskStatus};\nimpl Task {\n    pub fn mine(&self) {}\n}";
+    assert_eq!(methods(protocol_use, false), ["mine"]);
     let calls = "task.snapshot(); self.task.result(); entry . task . error (); stats.snapshot(); \
                  task.snapshot_of(); fn snapshot(&self) {} task.snapshot";
     assert_eq!(task_receiver_calls(calls, "snapshot"), 1);
     assert_eq!(task_receiver_calls(calls, "result"), 1);
     assert_eq!(task_receiver_calls(calls, "error"), 1);
-    // Qualified methods, a pub(super) one, and a second block read on its own.
-    let more = "impl Task {\n    pub async fn later(&self) {}\n    pub(super) unsafe fn raw(&self) {}\n    \
-                pub const async fn both(&self) {}\n}\nimpl Task {\n    pub fn second(&self) {}\n}";
-    assert_eq!(public_task_methods(more), ["later", "raw", "both"]);
-    let second = more.rfind("impl Task {").expect("a second block");
-    assert_eq!(public_task_methods(&more[second..]), ["second"]);
     assert!(names_task("let t: Task = x;") && names_task("Task::create()"));
     assert!(!names_task("CommittedTask TaskStatus tasks"));
-    assert!(declares_own_task("pub(crate) struct Task {") && declares_own_task("enum Task<T>"));
-    assert!(!declares_own_task(
-        "struct TaskSnapshot; struct MyTask; impl Task {"
-    ));
     assert_eq!(
         path_uses(
-            "answered.snapshot(); Task::snapshot(&t); map(Task::snapshot)",
+            "answered.snapshot(); Task::snapshot(&t); map(Task::snapshot); (answered).snapshot()",
             "snapshot"
         ),
-        3
+        4
     );
 }
