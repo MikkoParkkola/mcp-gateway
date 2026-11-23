@@ -101,6 +101,31 @@ test('E4b an admin whose gateway answers 403 or 404 sees no chip and no error', 
   }
 });
 
+// E4c and E4d hold the check E4 and E4b lean on to the two ways a refusal once slipped past it.
+test('E4c the announcer check reports a refusal that shares an entry with the loading sentence', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const before = await saidBesidesLoading(page);
+  await page.locator('#announcer').evaluate((region, text) => {
+    region.append(Object.assign(document.createElement('p'), { textContent: text }));
+  }, `${LOADING_OVERVIEW} Not available to this key.`);
+  expect(await saidBesidesLoading(page)).toEqual([...before, 'Not available to this key.']);
+});
+
+test('E4d the announcer check waits for a refusal still queued behind the loading sentence', async ({ page }) => {
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const before = await saidBesidesLoading(page);
+  await page.evaluate(async (url) => {
+    const shell = await import(url);
+    shell.announce('Loading Overview', { subject: 'shell' });
+    // Once that is written, a message said inside the dwell is queued rather than joined to it.
+    await shell.announcerIdle();
+    shell.announce('Not available to this key', { subject: 'shell' });
+  }, await shellModuleUrl(page));
+  expect(await saidBesidesLoading(page)).toEqual([...before, 'Not available to this key.']);
+});
+
 test('E5 a name with markup renders as literal text', async ({ page }) => {
   await gateway(page, { name: '<b>x</b>', source: 'config' });
   await page.goto('/ui/overview/status');
