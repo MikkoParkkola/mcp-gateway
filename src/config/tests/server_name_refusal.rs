@@ -103,7 +103,16 @@ fn the_add_check_refuses_dot_names_in_the_load_s_words() {
 #[test]
 fn a_name_with_a_space_or_a_non_ascii_letter_still_loads() {
     for name in ["my server", "päivä"] {
-        let config = with_backend(name);
+        let mut config = with_backend(name);
+        // A complete backend, so only its name is judged: the default one has an empty URL, refused for that alone.
+        let Some(BackendConfig {
+            transport: TransportConfig::Http { http_url, .. },
+            ..
+        }) = config.backends.get_mut(name)
+        else {
+            panic!("the default backend is no longer an HTTP one");
+        };
+        *http_url = "http://127.0.0.1:1/mcp".to_owned();
         assert!(
             config.validate().is_ok(),
             "{name:?} is refused: {:?}",
