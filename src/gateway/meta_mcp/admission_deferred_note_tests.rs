@@ -187,20 +187,19 @@ async fn a_replay_notes_the_pair_of_the_deferred_refusal_it_meets() {
 
 /// d1, third case: an absent step's deferred miss, met by a replay, notes
 /// the pair of that step's own policy check (the backend scope), which the
-/// plan loop kept beside the miss.
+/// plan loop kept beside the miss; never the pair of the hidden step deferred
+/// before it, which the first run was not served.
 #[tokio::test]
 async fn a_replayed_absent_step_notes_its_check_pair() {
-    let keyed = Keyed::new("absent-step", chain(&["alpha:x", "beta:read"]));
+    let keyed = Keyed::new("absent-step", chain(&["beta:other", "alpha:x"]));
     let both = Judge {
         grant: Some(vec!["alpha".into(), "beta".into()]),
         deny: Vec::new(),
     };
-    keyed
-        .completed(&both, &[("alpha", "x"), ("beta", "read")])
-        .await;
+    keyed.completed(&both, &[("alpha", "x")]).await;
     let beta_only = Judge {
         grant: Some(vec!["beta".into()]),
-        deny: Vec::new(),
+        ..Judge::denying(&[("other", DecisionKind::ToolPolicy, 1)])
     };
     let (answer, noted) = keyed.admit(&beta_only, 2).await;
     let refusal = answer.err().expect("premise: the replay is refused");
