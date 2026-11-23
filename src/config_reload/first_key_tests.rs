@@ -211,7 +211,14 @@ fn w8_a_removal_that_changes_status_is_faulty_with_the_rule() {
 #[test]
 fn w8_a_colliding_key_is_faulty_with_the_collision() {
     let gw = Gw::start(&starter(&[]));
-    match ask(&gw, &starter(&[("clash", BEARER)])) {
+    // The file's own bearer differs, so the loader accepts it; only the key
+    // table built on the RUNNING bearer sees the collision.
+    let candidate = starter(&[("clash", BEARER)]).replacen(
+        &format!("bearer_token: \"{BEARER}\""),
+        "bearer_token: \"first-key-tests-another-bearer-0123456789\"",
+        1,
+    );
+    match ask(&gw, &candidate) {
         Waiting::Faulty { reason } => {
             assert!(reason.contains("auth.api_keys"), "{reason}");
             assert!(!says_status_change(&reason), "{reason}");
@@ -288,7 +295,9 @@ async fn w2_the_same_first_key_under_refuse_is_restart_pending() {
 
 /// W3: a first key that also collides with the bearer is refused before any
 /// write with the collision's text, not the restart sentence, even under
-/// `HoldForRestart`. Red today: the status sentence wins.
+/// `HoldForRestart`. A control: the loader refuses a key that collides with
+/// the file's own bearer before this ticket's checks, held or not; the order
+/// inside the question (collision before restart) is W8's to prove.
 #[tokio::test]
 async fn w3_a_colliding_first_key_is_refused_with_the_collision() {
     let gw = Gw::start(&starter(&[]));
