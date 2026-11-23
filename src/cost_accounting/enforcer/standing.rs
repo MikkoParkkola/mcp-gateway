@@ -35,7 +35,7 @@ impl BudgetEnforcer {
     /// and the write are one step on the map's entry: on the same day and
     /// under the same limit the earlier time stays, whichever refusal lands
     /// first; another day or another limit replaces the record.
-    pub(super) fn note_key_refusal(&self, key: &str, today: u64, now: u64, limit: f64) {
+    pub(super) fn note_first_block(&self, key: &str, today: u64, now: u64, limit: f64) {
         let fresh = KeyRefusal {
             day: today,
             at_secs: now,

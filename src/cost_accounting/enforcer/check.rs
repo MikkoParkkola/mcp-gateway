@@ -167,7 +167,7 @@ impl BudgetEnforcer {
         if let (Some(limit), Some(key), Some(today), Some(now)) =
             (key_refusal, api_key_name, today, now)
         {
-            self.note_key_refusal(key, today, now, limit);
+            self.note_first_block(key, today, now, limit);
         }
         for log in logs {
             log.emit();

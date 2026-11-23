@@ -101,7 +101,7 @@ fn s5c_concurrent_refusals_keep_the_smallest_time() {
                     } else {
                         T1 + 1 + offset
                     };
-                    e.note_key_refusal(KEY, today, at, 25.0);
+                    e.note_first_block(KEY, today, at, 25.0);
                 }
             });
         }
@@ -122,13 +122,13 @@ fn s5b_two_refusals_at_once_keep_the_earlier_time() {
     for order in [[T1, T2], [T2, T1]] {
         let e = enforcer(None, 25.0);
         for at in order {
-            e.note_key_refusal(KEY, today, at, 25.0);
+            e.note_first_block(KEY, today, at, 25.0);
         }
         assert_eq!(refusal(&e, T2), Some(earlier), "order {order:?}");
     }
     let e = enforcer(None, 30.0);
-    e.note_key_refusal(KEY, today, T1, 25.0);
-    e.note_key_refusal(KEY, today, T2, 30.0);
+    e.note_first_block(KEY, today, T1, 25.0);
+    e.note_first_block(KEY, today, T2, 30.0);
     assert_eq!(
         refusal(&e, T2),
         Some(KeyRefusal {
