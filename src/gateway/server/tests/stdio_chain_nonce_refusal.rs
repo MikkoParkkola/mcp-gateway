@@ -233,7 +233,8 @@ async fn a_malformed_chain_nonce_on_another_method_is_refused() {
 /// The fixture's invocation records, with the one refusal record every
 /// envelope row expects: denied, -32600, the request's form (`syntax`).
 /// The envelope error is a plain -32600; it reads denied because the intake
-/// site notes the refusal before the writer classes it.
+/// site notes the refusal before the writer classes it. The target is the
+/// one [`external_invoke`] names, on the meta route.
 fn assert_one_envelope_record(dir: &tempfile::TempDir, response: &Value) {
     let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(dir);
     let [record] = records.as_slice() else {
@@ -242,6 +243,9 @@ fn assert_one_envelope_record(dir: &tempfile::TempDir, response: &Value) {
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["error_code"], json!(-32600), "{record}");
     assert_eq!(record["decision"]["kind"], json!("syntax"), "{record}");
+    assert_eq!(record["route"], json!("meta"), "{record}");
+    assert_eq!(record["server"], json!("absent"), "{record}");
+    assert_eq!(record["tool"], json!("t"), "{record}");
 }
 
 /// E3: the unrestorable envelope of the row above, with
