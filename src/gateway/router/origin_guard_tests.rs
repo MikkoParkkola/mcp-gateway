@@ -426,3 +426,52 @@ fn a_numeric_origin_needs_a_parseable_same_scheme_origin_on_a_public_bind() {
         "the numeric rule never admits a name, even the request's own authority"
     );
 }
+
+/// The one wildcard test strips one pair of brackets and nothing else: a
+/// bracketed host classifies as its bare form, a doubly bracketed one is no
+/// address, and names and concrete addresses stay non-wildcards either way.
+#[cfg(any(feature = "webui", feature = "config-export"))]
+#[test]
+fn the_wildcard_test_reads_one_pair_of_brackets() {
+    for (host, wildcard) in [
+        ("", true),
+        ("[]", true),
+        ("0.0.0.0", true),
+        ("[0.0.0.0]", true),
+        ("::", true),
+        ("[::]", true),
+        ("::ffff:0.0.0.0", true),
+        ("[::ffff:0.0.0.0]", true),
+        ("[[::]]", false),
+        ("127.0.0.1", false),
+        ("[127.0.0.1]", false),
+        ("::1", false),
+        ("[::1]", false),
+        ("gw.internal", false),
+        ("[gw.internal]", false),
+    ] {
+        assert_eq!(super::super::is_wildcard_bind(host), wildcard, "{host:?}");
+    }
+}
+
+/// The sign-in form on a mapped IPv4 wildcard bind (`::ffff:0.0.0.0`) and
+/// bracketed ones (`[::]`, `[0.0.0.0]`): each serves loopback as `0.0.0.0` does, so the
+/// loopback page may sign in, and a network address still may not.
+#[cfg(feature = "webui")]
+#[test]
+fn a_mapped_or_bracketed_wildcard_bind_admits_the_loopback_sign_in_page() {
+    for host in ["::ffff:0.0.0.0", "[::]", "[0.0.0.0]"] {
+        let config = crate::config::Config {
+            server: ServerConfig {
+                host: host.to_owned(),
+                port: 39400,
+                ..ServerConfig::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let live = crate::config_reload::LiveConfig::new(config);
+        assert!(admits_signin(&live, "http://127.0.0.1:39400"), "{host}");
+        assert!(admits_signin(&live, "http://[::1]:39400"), "{host}");
+        assert!(!admits_signin(&live, "http://192.0.2.1:39400"), "{host}");
+    }
+}
