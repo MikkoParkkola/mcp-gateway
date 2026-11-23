@@ -14,6 +14,8 @@ mod private_home;
 #[cfg(windows)]
 #[path = "common/required.rs"]
 mod required;
+#[path = "../src/test_source_files.rs"]
+mod test_source_files;
 
 use private_home::{Expect, fresh_private_dir, literal_env_command, run_row_child};
 use std::path::Path;

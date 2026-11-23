@@ -270,7 +270,10 @@ test.describe('round 3 cases', () => {
     const held = new Promise((resolve) => { release = resolve; });
     await page.route(PROBE, async (r) => { await held; return r.fulfill({ status: 500, json: {} }); });
     await withFixturePages(page, { probes: true });
+    const probeSent = page.waitForRequest(PROBE);
     await page.goto('/ui/policies/status');
+    // Leave only once the first render's probe is out and held, so a late answer exists.
+    await probeSent;
     await page.locator('nav.route-nav a[href="/ui/servers"]').click();
     await expect(page.locator('#content')).toContainText('servers - status');
     const answered = page.waitForResponse(PROBE);

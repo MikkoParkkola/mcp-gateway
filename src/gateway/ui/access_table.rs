@@ -436,6 +436,22 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Gateway, Tab::Settings)],
         false,
     ),
+    // Not a load row: a history that cannot be read must not keep the
+    // Settings tab shut.
+    row(
+        routes::UI_CONFIG_HISTORY,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
+    row(
+        routes::UI_CONFIG_RESTORE,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Gateway, Tab::Settings)],
+        false,
+    ),
     row(
         routes::UI_DISCOVERY_ADOPT,
         Post,
