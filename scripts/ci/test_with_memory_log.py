@@ -75,8 +75,6 @@ class W4Files(NamedTuple):
     trap: Path
 
 
-# Every W4 hang's record, printed above the summary by main().
-HANG_RECORDS: list[dict] = []
 LINUX = sys.platform.startswith("linux")
 
 
@@ -94,7 +92,8 @@ def run_w4(cmd: str, env: dict[str, str], sig: str, files: W4Files,
         return p.returncode, so.decode(errors="replace"), se.decode(errors="replace"), time.monotonic() - start, None
     except subprocess.TimeoutExpired as e:
         record = hang_record(sig, files, p, clock, load_start, e.stdout, e.stderr)
-        HANG_RECORDS.append(record)
+        # Printed at once, above the summary, so a later crash or a cancelled run still keeps it.
+        print(f"W4 hang record, class {classify_hang(record)}: {json.dumps(record, sort_keys=True)}", flush=True)
         p.kill()
         p.wait()
         for pipe in (p.stdout, p.stderr):
@@ -135,11 +134,19 @@ def _mask(status: str, key: str) -> int:
     return int(line.split()[1], 16)
 
 
-def bound_read(pid: int, parents: set[int], low: float, high: float) -> dict:
+def _exited(handle: int) -> bool:
+    """A pidfd reads as ready once its process has exited."""
+    poll = select.poll()
+    poll.register(handle, select.POLLIN)
+    return bool(poll.poll(0))
+
+
+def bound_read(pid: int, parents: set[int], low: float, high: float, held: dict[int, int]) -> dict:
     """R6 for one pid, kept only if it names the row's own process (Linux). A handle that names this one process is
     taken first; the facts are read; then the handle says whether that process is still the same live one. Its start
     time must lie between the row's start and the moment its pid was written (one tick either way), and its parent
-    must be one of `parents`. A process gone is "dead", a complete answer; anything else is "not confirmed"."""
+    must be one of `parents`. A process gone is "dead", a complete answer; anything else is "not confirmed". A
+    confirmed pid's handle is left open in `held`, so the caller can ask again after reading R7; the caller closes it."""
     try:
         handle = os.pidfd_open(pid)
     except ProcessLookupError:
@@ -152,22 +159,21 @@ def bound_read(pid: int, parents: set[int], low: float, high: float) -> dict:
             status = Path(f"/proc/{pid}/status").read_text()
         except OSError:
             stat = status = None
-        poll = select.poll()
-        poll.register(handle, select.POLLIN)
-        exited = bool(poll.poll(0))  # a pidfd reads as ready once its process has exited
+        if _exited(handle):
+            return {"identity": "dead"}
+        if stat is None or status is None:  # alive, but its facts could not be read
+            return {"identity": "not confirmed"}
+        fields = stat.rsplit(")", 1)[1].split()  # after the name: state, ppid, pgrp, ...; starttime is field 22
+        state, ppid, started = fields[0], int(fields[1]), int(fields[19])
+        if not (low - 1 <= started <= high + 1) or ppid not in parents:
+            return {"identity": "not confirmed"}
+        held[pid] = handle
+        return {"identity": "confirmed", "state": state,
+                **{k: _mask(status, f) for k, f in (("ign", "SigIgn"), ("cgt", "SigCgt"), ("blk", "SigBlk"),
+                                                     ("pnd", "SigPnd"), ("shd", "ShdPnd"))}}
     finally:
-        os.close(handle)
-    if exited:
-        return {"identity": "dead"}
-    if stat is None or status is None:  # alive, but its facts could not be read
-        return {"identity": "not confirmed"}
-    fields = stat.rsplit(")", 1)[1].split()  # after the name: state, ppid, pgrp, ...; starttime is field 22
-    state, ppid, started = fields[0], int(fields[1]), int(fields[19])
-    if not (low - 1 <= started <= high + 1) or ppid not in parents:
-        return {"identity": "not confirmed"}
-    return {"identity": "confirmed", "state": state,
-            **{k: _mask(status, f) for k, f in (("ign", "SigIgn"), ("cgt", "SigCgt"), ("blk", "SigBlk"),
-                                                 ("pnd", "SigPnd"), ("shd", "ShdPnd"))}}
+        if held.get(pid) != handle:
+            os.close(handle)
 
 
 def orphan_adopter(excluded: set[int | None]) -> int | None:
@@ -188,19 +194,21 @@ def _pids(path: Path) -> list[int] | None:
     return None
 
 
-def processes(roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None,
-              refused: set[int]) -> list[dict] | None:
-    """R7: the named pids, every descendant of the wrapper, and, only when the wrapper's group is the row's own,
-    every other member of that group. A pid in `refused` (one whose identity was not confirmed, or whose process is
-    gone and its number may be reused) is never listed, by any route. Names only: never a process's arguments.
-    None when ps gave no table: a missing R7, not an empty one."""
+def _ps() -> str | None:
+    """One ps snapshot for R7: pid, parent, group, state, elapsed time and program name. Never a process's
+    arguments. None when ps failed."""
     ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,etime=,comm="], capture_output=True, text=True)
-    return None if ps.returncode != 0 else _select(ps.stdout, roles, wrapper, group_private, group, refused)
+    return ps.stdout if ps.returncode == 0 else None
 
 
-def _select(ps: str, roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None,
+def _select(ps: str | None, roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None,
             refused: set[int]) -> list[dict] | None:
-    """processes() on ps's output, apart so W16 can give it a canned table."""
+    """R7 from one ps snapshot: the named pids, every descendant of the wrapper, and, only when the wrapper's group
+    is the row's own, every other member of that group. A pid in `refused` (one whose identity was not confirmed, or
+    whose process is gone and whose number may be reused) is never listed, by any route. None when ps gave no table:
+    a missing R7, not an empty one."""
+    if ps is None:
+        return None
     table = {}
     for line in ps.splitlines():
         f = line.split(None, 5)
@@ -263,27 +271,40 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
         adopter = orphan_adopter({outer.pid, wrapper, command, sleeper})
         adopters = {adopter} if adopter is not None else set()
         low = clock.start_ticks
-        w = bound_read(wrapper, {outer.pid} | (adopters if outer_rc is not None else set()), low,
-                       clock.ticks_at(files.wrapper) or low)
-        c = {"identity": "dead"} if command is None else bound_read(
-            command, {wrapper} | (adopters if w["identity"] == "dead" else set()), low, clock.ticks_at(files.marker) or low)
-        s = {"identity": "dead"} if sleeper is None else bound_read(
-            sleeper, {command} | (adopters if c["identity"] == "dead" else set()), low, clock.ticks_at(files.marker) or low)
+        held: dict[int, int] = {}
+        try:
+            w = bound_read(wrapper, {outer.pid} | (adopters if outer_rc is not None else set()), low,
+                           clock.ticks_at(files.wrapper) or low, held)
+            c = {"identity": "dead"} if command is None else bound_read(
+                command, {wrapper} | (adopters if w["identity"] == "dead" else set()), low,
+                clock.ticks_at(files.marker) or low, held)
+            s = {"identity": "dead"} if sleeper is None else bound_read(
+                sleeper, {command} | (adopters if c["identity"] == "dead" else set()), low,
+                clock.ticks_at(files.marker) or low, held)
+            ps = _ps()
+            # A confirmed process that has exited by now may have lost its number to another process before the
+            # snapshot: its number is dropped from R7. One still alive here was alive throughout the snapshot.
+            gone = sorted(pid for pid, handle in held.items() if _exited(handle))
+        finally:
+            for handle in held.values():
+                os.close(handle)
         record["R6"] = {"wrapper": w, "command": c}
         record["adopter"] = adopter
+        if gone:
+            record["gone_before_ps"] = gone
         # No fact is kept from a pid whose identity is not confirmed, nor from a dead one's number, which the system
         # may already have handed to another process.
-        refused = set()
+        refused = set(gone)
         for pid, seen in ((wrapper, w), (command, c), (sleeper, s)):
             if pid and seen["identity"] != "confirmed":
                 refused.add(pid)
                 if seen["identity"] == "not confirmed":
                     record.setdefault("not_confirmed", []).append(pid)
-        record["R7"] = processes(roles, wrapper if w["identity"] == "confirmed" else None,
-                                 r5["group"] == wrapper, r5["group"], refused)
+        record["R7"] = _select(ps, roles, wrapper if wrapper not in refused else None,
+                               r5["group"] == wrapper, r5["group"], refused)
     else:
-        record["R7"] = processes(roles, wrapper, bool(r5) and r5["group"] == wrapper, r5["group"] if r5 else None,
-                                 set())
+        record["R7"] = _select(_ps(), roles, wrapper, bool(r5) and r5["group"] == wrapper,
+                               r5["group"] if r5 else None, set())
     return record
 
 
@@ -398,9 +419,11 @@ def adopter_rows() -> list[tuple[str, bool, str]]:
     out = [(label, seen is not None and refused is None, f"measured {seen}, with it excluded {refused}")]
     # This Python is never the adopter, unasked: a child Python that makes itself the adopter of its orphans (Linux
     # prctl 36, the child subreaper flag) must still get None. It prints prctl's status, then the measurement.
-    code = ("import ctypes, sys; sys.path.insert(0, sys.argv[1]); import test_with_memory_log as t; "
+    # The child loads this very file by its path, so a changed copy of it is the code the row judges.
+    code = ("import ctypes, importlib.util as u, sys; s = u.spec_from_file_location('rows', sys.argv[1]); "
+            "t = u.module_from_spec(s); s.loader.exec_module(t); "
             "print(ctypes.CDLL(None).prctl(36, 1, 0, 0, 0), t.orphan_adopter(set()))")
-    own = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parent)],
+    own = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve())],
                          capture_output=True, text=True, timeout=30)
     out.append(("W17 this Python, made the adopter of its own orphans, is refused too", own.stdout.split() == ["0", "None"],
                 f"rc {own.returncode}, {own.stdout.strip()!r}, {own.stderr[-200:]}"))
@@ -477,6 +500,7 @@ def classify_hang(record: dict) -> str:
     r6 = record.get("R6")
     if (any(record.get(f) is None for f in ("R1", "R2", "R3", "R4", "R5", "R7", "R8", "R9"))
             or (record["linux"] and r6 is None)
+            or (record["linux"] and record["R5"]["group"] is None)  # D1: only off Linux is the group n/a
             or (r6 is not None and any(r6[w]["identity"] == "not confirmed" for w in ("wrapper", "command")))
             or _r9_incomplete(record)):
         return "K0"
@@ -568,8 +592,9 @@ _MEETS = {
     "K9": lambda r: r["R6"]["wrapper"].update(cgt=_bit(r["signal"])),
 }
 # Pairs no real record can meet together: a kill status needs the kill line (K3, K4); a caught signal is neither
-# ignored (K6) nor, for K9, pending anywhere (K7, K8).
-_EXCLUSIVE = {("K3", "K4"), ("K6", "K9"), ("K7", "K9"), ("K7p", "K9"), ("K8", "K9"), ("K8p", "K9")}
+# ignored (K6) nor, for K9, pending in the wrapper (K7). The command's pending TERM (K8) can sit beside K9's wrapper,
+# so that pair is checked: only the order keeps it K8.
+_EXCLUSIVE = {("K3", "K4"), ("K6", "K9"), ("K7", "K9"), ("K7p", "K9")}
 
 
 def _met(*classes: str) -> dict:
@@ -624,6 +649,9 @@ def classifier_rows() -> list[tuple[str, bool, str]]:
         r = _canned()
         r["R6"][who] = {"identity": "not confirmed"}
         k0.append((who + " identity not confirmed", r))
+    r = _canned()
+    r["R5"]["group"] = None
+    k0.append(("R5 group missing on Linux", r))
     # R9's own facts: a load missing, or a time missing for an event that happened.
     for key in ("load_start", "load_limit", "to_marker", "to_kill"):
         r = _canned()
@@ -661,6 +689,7 @@ def classifier_rows() -> list[tuple[str, bool, str]]:
     for c, want in (("K5", "K5"), (None, "K6 to K9, not separable here")):
         r = _met(c) if c else _canned()
         r.update(linux=False, R6=None)
+        r["R5"]["group"] = None  # n/a off Linux, never K0 there
         if (got := classify_hang(r)) != want:
             off.append(f"{c or 'none'}: {got}, want {want}")
     out.append(("W16 off Linux: R6 n/a is not K0, and K6 to K9 are one answer", not off, "; ".join(off)))
@@ -687,9 +716,6 @@ def main() -> int:
     results = rows()
     for label, ok, detail in results:
         print(f"{'ok   ' if ok else 'WRONG'} {label}" + ("" if ok else f"\n      {detail!r}"))
-    # Each W4 hang's whole record, above the summary, so a run's kept output carries it.
-    for record in HANG_RECORDS:
-        print(f"W4 hang record, class {classify_hang(record)}: {json.dumps(record, sort_keys=True)}")
     print(summary(results))
     return 0 if all(ok for _, ok, _ in results) else 1
 
