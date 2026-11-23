@@ -94,7 +94,8 @@ pub struct BackendUpdate {
     pub env: Option<HashMap<String, String>>,
     /// Enable or disable the backend.
     pub enabled: Option<bool>,
-    /// Replace the transport (overrides existing when `Some`).
+    /// A new command or address: of the stored transport's kind, only that
+    /// value is taken (see `merged_transport`); else it replaces the whole.
     pub transport: Option<TransportConfig>,
     /// Stop this backend when it has been idle this long, or clear the setting.
     ///
@@ -372,7 +373,7 @@ pub fn update_backend(
         backend.enabled = enabled;
     }
     if let Some(transport) = update.transport {
-        backend.transport = transport;
+        backend.transport = merged_transport(backend.transport.clone(), transport);
     }
     if let Some(idle) = update.stop_when_idle_for {
         // Refuse rather than silently drop. The panel is a place operators trust
@@ -404,6 +405,64 @@ pub fn update_backend(
     refuse_unresolved_secrets(&backend, name, &overlay)?;
     *slot = backend;
     Ok(())
+}
+
+/// `new` of `stored`'s kind changes only the command or address; the other
+/// members (folder, protocol version, HTTP mode, card path) stay as written.
+/// An HTTP address on an A2A server is that kind too (a URL never parses as
+/// A2A). Another kind replaces the transport whole.
+fn merged_transport(stored: TransportConfig, new: TransportConfig) -> TransportConfig {
+    use TransportConfig as T;
+    match (stored, new) {
+        (
+            T::Stdio {
+                cwd,
+                protocol_version,
+                ..
+            },
+            T::Stdio { command, .. },
+        ) => T::Stdio {
+            command,
+            cwd,
+            protocol_version,
+        },
+        (
+            T::Http {
+                streamable_http,
+                protocol_version,
+                ..
+            },
+            T::Http { http_url, .. },
+        ) => T::Http {
+            http_url,
+            streamable_http,
+            protocol_version,
+        },
+        (
+            T::WebSocket {
+                protocol_version, ..
+            },
+            T::WebSocket { ws_url, .. },
+        ) => T::WebSocket {
+            ws_url,
+            protocol_version,
+        },
+        #[cfg(feature = "a2a")]
+        (
+            T::A2a {
+                a2a_agent_card_path,
+                ..
+            },
+            T::Http {
+                http_url: a2a_url, ..
+            }
+            | T::A2a { a2a_url, .. },
+        ) => T::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        },
+        (_, new) => new,
+    }
 }
 
 /// Return structured info for all backends in alphabetical order.
