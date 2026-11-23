@@ -160,8 +160,8 @@ const TASK_METHODS: &[(&str, Exposes)] = &[
     ("from_snapshot", Exposes::Nothing),
 ];
 
-/// The `pub` and `pub(crate)` methods declared in `impl Task { .. }` of
-/// `code`, by name, in order.
+/// The `pub`, `pub(crate)` and `pub(super)` methods declared in the first
+/// `impl Task { .. }` block of `code`, by name, in order.
 fn public_task_methods(code: &str) -> Vec<String> {
     let start = code
         .find("impl Task {")
@@ -186,10 +186,16 @@ fn public_task_methods(code: &str) -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let line = line.trim_start();
-            let rest = line
-                .strip_prefix("pub(crate) ")
-                .or_else(|| line.strip_prefix("pub "))?;
-            let rest = rest.strip_prefix("const ").unwrap_or(rest);
+            let mut rest = ["pub(crate) ", "pub(super) ", "pub "]
+                .iter()
+                .find_map(|vis| line.strip_prefix(vis))?;
+            // Qualifiers between the visibility and `fn`, in any order.
+            while let Some(next) = ["const ", "async ", "unsafe "]
+                .iter()
+                .find_map(|q| rest.strip_prefix(q))
+            {
+                rest = next;
+            }
             let name = rest.strip_prefix("fn ")?;
             let name: String = name
                 .chars()
@@ -200,14 +206,51 @@ fn public_task_methods(code: &str) -> Vec<String> {
         .collect()
 }
 
+/// Each production source under `src/`: its path from the crate root with '/'
+/// separators, and its text with test items, comments and strings blanked.
+/// Sorted by path.
+fn production_sources() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut paths = Vec::new();
+    rust_files(&root.join("src"), &mut paths);
+    let is_test = |relative: &Path| {
+        relative.components().any(|part| {
+            let part = part.as_os_str().to_string_lossy();
+            part == "tests" || part.ends_with("_tests") || part.ends_with("_tests.rs")
+        })
+    };
+    let mut sources: Vec<(String, String)> = paths
+        .iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(root).ok()?;
+            if is_test(relative) {
+                return None;
+            }
+            let raw = std::fs::read_to_string(path).ok()?;
+            let blanked =
+                crate::test_source_text::sanitize(&crate::test_source_text::production_text(&raw));
+            Some((relative.to_string_lossy().replace('\\', "/"), blanked))
+        })
+        .collect();
+    sources.sort();
+    sources
+}
+
 #[test]
 fn task_methods_are_classified() {
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/protocol/tasks.rs"),
-    )
-    .expect("tasks.rs is readable");
-    let code = crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
-    let found = public_task_methods(&code);
+    // An inherent impl may sit in any module of the crate, so every block counts.
+    let found: Vec<String> = production_sources()
+        .iter()
+        .flat_map(|(_, code)| {
+            code.match_indices("impl Task {")
+                .flat_map(|(at, _)| public_task_methods(&code[at..]))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        found.iter().any(|name| name == "wire"),
+        "no impl Task block was read"
+    );
     let listed: Vec<&str> = TASK_METHODS.iter().map(|(name, _)| *name).collect();
     let unlisted: Vec<&String> = found
         .iter()
@@ -224,10 +267,11 @@ fn task_methods_are_classified() {
     );
 }
 
-/// The production calls of each outcome-exposing `Task` method other than
-/// `wire` (pinned above), as (file, method, count): the store's own writes
-/// of its row, the delivery projection's helpers, settlement's held
-/// payloads, and the input-round receipt.
+/// The production calls of `result`, `error` and `input_requests` on a task
+/// receiver, as (file, method, count): the delivery projection's receipt
+/// helpers, settlement's held payloads, the store's input-round checks, and
+/// the input-round receipt. `wire` and `snapshot` have exact pins of their
+/// own; these names are too common for one.
 const OUTCOME_CALLS: &[(&str, &str, usize)] = &[
     (
         "src/gateway/meta_mcp/task_replay/receipts.rs",
@@ -236,13 +280,11 @@ const OUTCOME_CALLS: &[(&str, &str, usize)] = &[
     ),
     ("src/gateway/task_service/record.rs", "error", 1),
     ("src/gateway/task_service/record.rs", "result", 1),
-    ("src/gateway/task_service/record.rs", "snapshot", 2),
     (
         "src/gateway/task_service/store_input.rs",
         "input_requests",
         2,
     ),
-    ("src/gateway/task_service/store_input.rs", "snapshot", 2),
     ("src/gateway/task_service/store_targets.rs", "result", 1),
 ];
 
@@ -283,7 +325,9 @@ fn outcome_exposing_task_methods_are_called_only_where_listed() {
     rust_files(&root.join("src"), &mut files);
     let outcome: Vec<&str> = TASK_METHODS
         .iter()
-        .filter(|(name, exposes)| *exposes == Exposes::Outcome && *name != "wire")
+        .filter(|(name, exposes)| {
+            *exposes == Exposes::Outcome && !matches!(*name, "wire" | "snapshot")
+        })
         .map(|(name, _)| *name)
         .collect();
     let mut found = Vec::new();
@@ -323,6 +367,51 @@ fn outcome_exposing_task_methods_are_called_only_where_listed() {
     );
 }
 
+/// Every production use of `snapshot`, through the delivery pin's own
+/// matcher (any receiver, a path, a function reference), in each file that
+/// names the `Task` type, as (file, count). The name is common elsewhere, so a
+/// file that never names `Task` is left out; a new accessor anywhere still
+/// fails `task_methods_are_classified`.
+const SNAPSHOT_USES: &[(&str, usize)] = &[
+    // `delivery_facts::snapshot()`: the dispatch facts, not a task.
+    ("src/gateway/task_service/execution/worker_inspect.rs", 1),
+    // The record's model: `set_model`, and the admitted record.
+    ("src/gateway/task_service/record.rs", 2),
+    // The store's writes of its row, and the cap probe's clone of it.
+    ("src/gateway/task_service/store_input.rs", 3),
+];
+
+/// Whether `code` names the type `Task` as a whole identifier
+/// (`CommittedTask` or `TaskStatus` do not count).
+fn names_task(code: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    code.match_indices("Task").any(|(at, word)| {
+        !code[..at].ends_with(ident) && !code[at + word.len()..].starts_with(ident)
+    })
+}
+
+#[test]
+fn snapshot_is_used_only_where_listed() {
+    let found: Vec<(String, usize)> = production_sources()
+        .into_iter()
+        .filter(|(_, code)| names_task(code))
+        .map(|(file, code)| {
+            let uses = path_uses(&code, "snapshot");
+            (file, uses)
+        })
+        .filter(|(_, uses)| *uses > 0)
+        .collect();
+    let want: Vec<(String, usize)> = SNAPSHOT_USES
+        .iter()
+        .map(|(file, uses)| ((*file).to_owned(), *uses))
+        .collect();
+    assert_eq!(
+        found, want,
+        "a new use of snapshot where a Task is in reach: serve a stored task through \
+         delivered_wire; a store write or a measurement is listed here"
+    );
+}
+
 /// The matchers themselves.
 #[test]
 fn the_task_method_and_receiver_matchers_read_what_they_should() {
@@ -335,4 +424,19 @@ fn the_task_method_and_receiver_matchers_read_what_they_should() {
     assert_eq!(task_receiver_calls(calls, "snapshot"), 1);
     assert_eq!(task_receiver_calls(calls, "result"), 1);
     assert_eq!(task_receiver_calls(calls, "error"), 1);
+    // Qualified methods, a pub(super) one, and a second block read on its own.
+    let more = "impl Task {\n    pub async fn later(&self) {}\n    pub(super) unsafe fn raw(&self) {}\n    \
+                pub const async fn both(&self) {}\n}\nimpl Task {\n    pub fn second(&self) {}\n}";
+    assert_eq!(public_task_methods(more), ["later", "raw", "both"]);
+    let second = more.rfind("impl Task {").expect("a second block");
+    assert_eq!(public_task_methods(&more[second..]), ["second"]);
+    assert!(names_task("let t: Task = x;") && names_task("Task::create()"));
+    assert!(!names_task("CommittedTask TaskStatus tasks"));
+    assert_eq!(
+        path_uses(
+            "answered.snapshot(); Task::snapshot(&t); map(Task::snapshot)",
+            "snapshot"
+        ),
+        3
+    );
 }
