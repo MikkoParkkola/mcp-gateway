@@ -79,6 +79,36 @@ fn s5_the_first_key_refusal_of_the_day_is_recorded_once() {
     assert_eq!(refusal(&global, T1), None, "not the key's own limit");
 }
 
+/// Many refusals at once, from 8 threads: the record ends at the smallest
+/// time. A correct write cannot lose it under any schedule; a read followed
+/// by a separate insert loses an update on practically every run.
+#[test]
+fn s5c_concurrent_refusals_keep_the_smallest_time() {
+    const THREADS: u64 = 8;
+    const EACH: u64 = 10_000;
+    let e = enforcer(None, 25.0);
+    let today = e.day_key(T1);
+    std::thread::scope(|scope| {
+        for thread in 0..THREADS {
+            let e = &e;
+            scope.spawn(move || {
+                for i in 0..EACH {
+                    // A fixed spread of times; the smallest, T1, is written
+                    // once, mid-run, while every other thread still writes.
+                    let offset = (thread * EACH + i).wrapping_mul(7_919) % 80_000;
+                    let at = if thread == 0 && i == EACH / 2 {
+                        T1
+                    } else {
+                        T1 + 1 + offset
+                    };
+                    e.note_key_refusal(KEY, today, at, 25.0);
+                }
+            });
+        }
+    });
+    assert_eq!(refusal(&e, T1).map(|r| r.at_secs), Some(T1));
+}
+
 /// Two refusals at once keep the earlier time in either order of arrival; a
 /// refusal under a changed limit replaces the record.
 #[test]

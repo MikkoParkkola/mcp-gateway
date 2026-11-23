@@ -91,6 +91,21 @@ fn s2b_blocking_uses_the_registry_wide_cheapest_price() {
     assert!(!standing_under(&e, &config, KEY).0.blocking);
     e.record_spend("dear", Some(KEY), 0.39);
     assert!(standing_under(&e, &config, KEY).0.blocking);
+
+    // The same gap when the cheapest call is the default price.
+    let config = CostGovernanceConfig {
+        default_cost: 0.01,
+        ..governance(&[(KEY, 25.0)], &[("dear", 0.50)], block_at_100())
+    };
+    let e = enforcer(config.clone());
+    e.record_spend("dear", Some(KEY), 24.60);
+    assert!(
+        !e.check("dear", Some(KEY)).allowed,
+        "premise: the key's own tool is refused"
+    );
+    assert!(!standing_under(&e, &config, KEY).0.blocking);
+    e.record_spend("dear", Some(KEY), 0.39);
+    assert!(standing_under(&e, &config, KEY).0.blocking);
 }
 
 /// A tool that is not listed costs the default price, so with a default
