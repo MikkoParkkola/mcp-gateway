@@ -11,6 +11,7 @@ use std::path::Path;
 
 use super::super::abandoned::{AbandonedFrame, MAX_ABANDONED_BYTES, Slot, Tail, decode_frames};
 use super::super::{JournalSession, JournalV2, Phase, TokenState};
+#[cfg(test)]
 use super::fault::{self, At};
 use super::handover::{HandoverError, hand_over, open_existing};
 use super::{DrainError, DrainSession, SettleSink, deliver_all};
@@ -121,7 +122,10 @@ pub(crate) fn handover_of(state: &JournalV2) -> Handover {
 /// Remove the drained file whole, then sync its directory.
 fn remove(target: &Path, path: &Path) -> Result<(), DrainError> {
     super::super::super::remove_if_present(path).map_err(|_| DrainError::Journal)?;
+    #[cfg(test)]
     fault::hit(target, At::FileUnlinked).map_err(|_| DrainError::Journal)?;
+    #[cfg(not(test))]
+    let _ = target; // read only by the test-build crash boundary above
     sync_dir_of(path).map_err(|_| DrainError::Journal)
 }
 

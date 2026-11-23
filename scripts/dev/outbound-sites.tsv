@@ -11,6 +11,7 @@ src/commands/stats.rs	Client::builder=1	`stats`: reads the local gateway
 src/events/client.rs	Client::builder=1	event deliveries, when events are on (off by default), to callback URLs authenticated clients registered
 src/gateway/router/accounts/bridge.rs	Client::builder=1	personal-account bridge to the provider the operator configured
 src/gateway/ui/import.rs	Client::builder=1	web UI import: fetches the URL the operator enters
+src/heartbeat.rs	Client::builder=1	the daily heartbeat: a released server, at most one POST a UTC day to telemetry.revaluator.ai; off with DO_NOT_TRACK=1, skipped in dev builds, CI, hardened posture and under a proxy variable
 src/identity_propagation/token_exchange.rs	Client::builder=1	token exchange with the identity provider the operator configured
 src/key_server/oidc_jwks_cache.rs	Client::builder=2	signing keys (JWKS) of the token issuers the operator configured
 src/oauth/client/destination.rs	Client::builder=4	OAuth discovery and token endpoints of the servers the operator configured

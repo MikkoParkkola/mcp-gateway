@@ -89,11 +89,11 @@ deploy_image() {
 }
 
 echo "== install (v1=$V1) =="
-"$HELM" upgrade --install "$RELEASE" "$CHART" "${common_args[@]}" --set image.tag="$V1"
+"$HELM" upgrade --install "$RELEASE" "$CHART" "${common_args[@]}" --set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[0].value=1' --set image.tag="$V1"
 [ "$(deploy_image)" = "$IMG_REG/$IMG_REPO:$V1" ] || { echo "FAIL: install image mismatch" >&2; exit 1; }
 
 echo "== helm upgrade (v2=$V2) =="
-"$HELM" upgrade "$RELEASE" "$CHART" "${common_args[@]}" --set image.tag="$V2"
+"$HELM" upgrade "$RELEASE" "$CHART" "${common_args[@]}" --set 'extraEnv[0].name=DO_NOT_TRACK' --set-string 'extraEnv[0].value=1' --set image.tag="$V2"
 [ "$(deploy_image)" = "$IMG_REG/$IMG_REPO:$V2" ] || { echo "FAIL: upgrade image mismatch" >&2; exit 1; }
 
 echo "== helm rollback -> revision 1 =="

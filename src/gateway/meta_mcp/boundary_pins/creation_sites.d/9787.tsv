@@ -1,0 +1,4 @@
+# file	function	kind	count	class	reason
+src/ranking/ranker.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic: tool usage counts
+src/tool_profiles/persistence.rs	save	helper:write_atomic	1	helper	calls the crate's write_atomic: tool usage profiles
+src/transition.rs	write	helper:write_atomic	1	helper	calls the crate's write_atomic: transition state

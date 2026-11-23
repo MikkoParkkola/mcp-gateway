@@ -418,6 +418,8 @@ def check_job(name: str, job: dict) -> tuple[bool, list[str]]:
 # its own limit keeps none). Limits come from measured healthy durations; a step with no measurement yet logs
 # only, named here per step. Its limit must not be set until it is measured.
 MEMLOG = "scripts/ci/with-memory-log.sh"
+# The same wrapper as the mutants jobs run it: fetched from the release line into $RUNNER_TEMP, never the checkout's.
+MEMLOG_FETCHED = 'bash "$RUNNER_TEMP/with-memory-log.sh"'
 LOG_ONLY = {
     # A healthy lib-b run took 52 min on 2026-11-13: no limit until the shard suite's tail is measured.
     ("ci.yml", "test-shards", "Shard suite"),
@@ -446,7 +448,8 @@ def whole_step_wrapped(run: str) -> bool:
 # optional loop/branch keyword, the wrapper as the command's first word, an optional interpreter, and the start of
 # the build's own word when the match begins inside it (`"$RUNNER_TEMP/run_mutants.py`). No `(` or backtick.
 WRAPPED_PREFIX = re.compile(
-    r"\s*(?:(?:do|then|else)\s+)?(?:\./)?" + re.escape(MEMLOG) + r"\s+(?:(?:python3?|bash|sh)\s+)?[\w$./{}\"'-]*")
+    r"\s*(?:(?:do|then|else)\s+)?(?:(?:\./)?" + re.escape(MEMLOG) + "|" + re.escape(MEMLOG_FETCHED) + ")"
+    r"\s+(?:(?:python3?|bash|sh)\s+)?[\w$./{}\"'-]*")
 # Characters that end one command and start another (or a substitution's): a build's command starts after the
 # last of them.
 COMMAND_BREAKS = "\n;&|(`"
@@ -1051,6 +1054,11 @@ def memlog_cases() -> list[tuple[str, str, str, dict, bool]]:
         ("C15 the wrapper on a continued line", "ci.yml", "j", job(step(w + "\\\n  cargo test --all-features --lib --no-run")), False),
         ("C15 the mutant harness through the wrapper", "m.yml", "j",
          job(step(w + 'python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), False),
+        # The mutants jobs fetch the wrapper from the release line, like the runner, and run that copy.
+        ("C15b the mutant harness through the release line's fetched wrapper", "m.yml", "j",
+         job(step(f'{MEMLOG_FETCHED} python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), False),
+        ("C15c another fetched script is not the wrapper", "m.yml", "j",
+         job(step('bash "$RUNNER_TEMP/other.sh" python3 "$RUNNER_TEMP/run_mutants.py" run --platform linux --out o')), True),
         ("C16 a comment naming cargo test is not a build", "ci.yml", "j",
          job(step(f"# cargo test --all-features --lib runs below\n{w}cargo test --all-features --lib --no-run")), False),
         ("C16 a bare single-target run beside a wrapped library build", "ci.yml", "j",

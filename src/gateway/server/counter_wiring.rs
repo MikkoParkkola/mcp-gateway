@@ -41,6 +41,30 @@ pub(super) fn start(
     meta_mcp: &MetaMcp,
     shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> (Counters, tokio::task::JoinHandle<()>) {
+    let counters = restore(data_dir);
+    meta_mcp.set_counters(Arc::clone(&counters.store));
+    // The saver's root is the file it writes, so a test's kept dir covers it between ticks.
+    let root = Some(data_dir.join("counters.json"));
+    let saver = spawn_periodic_save(
+        "counter save",
+        COUNTER_SAVE_INTERVAL,
+        Some(shutdown),
+        root,
+        {
+            let (store, file) = (Arc::clone(&counters.store), Arc::clone(&counters.file));
+            move || {
+                if let Ok(now) = crate::clock::unix_secs() {
+                    file.save_unless_busy(&store, VERSION, now);
+                }
+            }
+        },
+    );
+    (counters, saver)
+}
+
+/// Restore the counters from `data_dir`: everything `start` does before it
+/// attaches them and starts their periodic save.
+pub(super) fn restore(data_dir: &Path) -> Counters {
     // An unreadable clock starts coverage at the epoch; nothing is counted
     // until the clock reads again (every recorder skips on `Err`).
     let now = crate::clock::unix_secs().unwrap_or_default();
@@ -51,25 +75,12 @@ pub(super) fn start(
         upgrade,
         ..
     } = CounterFile::restore(path.clone(), now, VERSION, &crate::local_day::host_zone());
-    let (store, file) = (Arc::new(store), Arc::new(file));
-    meta_mcp.set_counters(Arc::clone(&store));
-    let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
-        let (store, file) = (Arc::clone(&store), Arc::clone(&file));
-        move || {
-            if let Ok(now) = crate::clock::unix_secs() {
-                file.save_unless_busy(&store, VERSION, now);
-            }
-        }
-    });
-    (
-        Counters {
-            store,
-            file,
-            path,
-            upgrade,
-        },
-        saver,
-    )
+    Counters {
+        store: Arc::new(store),
+        file: Arc::new(file),
+        path,
+        upgrade,
+    }
 }
 
 impl Counters {
@@ -78,6 +89,24 @@ impl Counters {
     /// effort: a failure is logged by the save).
     pub(super) fn save_now(&self, now: u64) {
         self.file.save(&self.store, VERSION, now);
+    }
+
+    /// The stop checkpoints' counters entry: the periodic save, and for the
+    /// last pass the shutdown's waiting save.
+    pub(super) fn checkpoint_class(&self) -> super::stop_checkpoints::Class {
+        let (store, file) = (Arc::clone(&self.store), Arc::clone(&self.file));
+        let (last_store, last_file) = (Arc::clone(&self.store), Arc::clone(&self.file));
+        super::stop_checkpoints::Class {
+            name: "counters",
+            root: Some(self.path.clone()),
+            checkpoint: Arc::new(move || {
+                crate::clock::unix_secs()
+                    .is_ok_and(|now| file.save_unless_busy(&store, VERSION, now))
+            }),
+            last: Arc::new(move || {
+                crate::clock::unix_secs().is_ok_and(|now| last_file.save(&last_store, VERSION, now))
+            }),
+        }
     }
 
     /// The shutdown step that writes `counters.json`.

@@ -358,8 +358,11 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
         calls: Arc::clone(&fx.calls),
         declares_read: true,
         list_gate: Some(Arc::clone(&gate)),
+        list_entered: None,
+        slow_gate: None,
     }));
     assert!(fx.state.backends.register(backend), "registration");
+    // limit-under-test (fires-only): the call waits on the held list, so the deadline alone decides it
     crate::gateway::ui::DEADLINE_FOR_TEST
         .with(|d| d.set(Some(std::time::Duration::from_millis(50))));
     let request = Request::builder()

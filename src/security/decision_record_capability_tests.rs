@@ -20,7 +20,12 @@ fn part() -> CapabilityPart<PartDigest> {
 }
 
 fn record(live: &LiveConfig) -> Decision {
-    Noted::default().decision(Decided::Fresh, Refused::No, Some(live))
+    Noted::default().decision(
+        Decided::Fresh,
+        Refused::No,
+        Some(live),
+        crate::security::audit::CredentialKind::None,
+    )
 }
 
 /// A step that takes the publish locks. A deadlock fails at 30s. The bound

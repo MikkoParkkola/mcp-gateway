@@ -28,13 +28,12 @@ pub(super) fn is_packaged_crate() -> bool {
 
 /// A repository file a pin reads: its text, or `None` when it is not found and
 /// `packaged` says the crate is the unpacked published one. Only "not found"
-/// is a skip; any other error (a directory, a permission) fails in both modes,
-/// and so does a missing file in a checkout.
+/// is a skip, and one the package's `include` makes on purpose, so it passes in
+/// required mode too (`skip_unshipped`); any other error (a directory, a
+/// permission) fails in both modes, and so does a missing file in a checkout.
 pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<String> {
     read_if_present(root, rel, packaged).or_else(|| {
-        crate::test_wait::skip_or_fail(&format!(
-            "{rel} in the crate under test (a checkout has it; the packaged crate does not)"
-        ));
+        crate::test_wait::skip_unshipped(packaged, &format!("{rel} in the crate under test"));
         None
     })
 }
@@ -50,7 +49,8 @@ fn read_if_present(root: &Path, rel: &str, packaged: bool) -> Option<String> {
     }
 }
 
-/// Every repository file a pin reads through [`repo_file`]. A closed enum, so
+/// Every repository file a pin reads through [`repo_file`], or names by path
+/// in a table while a walk reads it (the D12 launch files). A closed enum, so
 /// a new read cannot bypass the list: it must add a variant, and the vacuity
 /// guard's exhaustive `match` (no `_` arm) fails to compile until the new
 /// variant gets a case.
@@ -69,6 +69,20 @@ pub(super) enum PinnedFile {
     /// `scripts/release/check_identity_sources.py`, read by
     /// `the_table_names_every_case_the_scanner_catches`.
     IdentityScanner,
+    /// The root `Makefile`, read by `every_image_launch_sets_dnt` (D12).
+    RootMakefile,
+    /// `scripts/ci/smoke-image.sh`: D12 reads it by walking `scripts/` and
+    /// names it in its tables (its image is its first argument; its launches
+    /// are counted).
+    SmokeImage,
+    /// `scripts/ci/smoke-full-image.sh`, named by D12 like `SmokeImage`.
+    SmokeFullImage,
+    /// `scripts/dev/docker-smoke.sh`, a D12 launch file.
+    DockerSmoke,
+    /// `scripts/dev/helm-kind-lifecycle.sh`, a D12 launch file.
+    HelmKindLifecycle,
+    /// `scripts/dev/helm-kind-real-image.sh`, a D12 launch file.
+    HelmKindRealImage,
 }
 
 impl PinnedFile {
@@ -81,6 +95,12 @@ impl PinnedFile {
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
             PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
+            PinnedFile::RootMakefile => "Makefile",
+            PinnedFile::SmokeImage => "scripts/ci/smoke-image.sh",
+            PinnedFile::SmokeFullImage => "scripts/ci/smoke-full-image.sh",
+            PinnedFile::DockerSmoke => "scripts/dev/docker-smoke.sh",
+            PinnedFile::HelmKindLifecycle => "scripts/dev/helm-kind-lifecycle.sh",
+            PinnedFile::HelmKindRealImage => "scripts/dev/helm-kind-real-image.sh",
         }
     }
 }
@@ -108,6 +128,39 @@ fn a_present_file_is_read_in_both_modes() {
 fn a_missing_file_is_skipped_in_a_packaged_crate() {
     let root = tempfile::tempdir().expect("tempdir");
     assert_eq!(read_if_present(root.path(), "gone.txt", true), None);
+}
+
+/// Run only by `a_missing_packaged_file_passes_in_required_mode`, in a child with its own environment.
+#[test]
+#[ignore = "run by a_missing_packaged_file_passes_in_required_mode, in a child"]
+fn read_or_skip_packaged_child() {
+    let root = tempfile::tempdir().expect("tempdir");
+    assert_eq!(read_or_skip(root.path(), "gone.txt", true), None);
+}
+
+/// `read_or_skip`'s own skip path, the one that failed the packaged suite, passes under
+/// `TESTS_REQUIRE_ALL=1` in a packaged crate and says why. A child process, so the variable is
+/// its own; the checkout side is `a_missing_file_in_a_checkout_panics`.
+#[test]
+fn a_missing_packaged_file_passes_in_required_mode() {
+    let out = crate::test_home::test_binary()
+        .args([
+            "--ignored",
+            "--exact",
+            "gateway::meta_mcp::boundary_pins::packaged::read_or_skip_packaged_child",
+            "--nocapture",
+        ])
+        .env("TESTS_REQUIRE_ALL", "1")
+        .output()
+        .expect("the child runs");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains(
+            "skipped (not shipped in the packaged crate): gone.txt in the crate under test"
+        ),
+        "{err}"
+    );
 }
 
 /// A missing file in a checkout panics: the pin cannot pass vacuously.
@@ -171,6 +224,12 @@ fn pinned_repo_files_are_read_in_a_checkout() {
         PinnedFile::CiWorkflow,
         PinnedFile::UnsafeAdr,
         PinnedFile::IdentityScanner,
+        PinnedFile::RootMakefile,
+        PinnedFile::SmokeImage,
+        PinnedFile::SmokeFullImage,
+        PinnedFile::DockerSmoke,
+        PinnedFile::HelmKindLifecycle,
+        PinnedFile::HelmKindRealImage,
     ] {
         let rel = match file {
             PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
@@ -179,6 +238,12 @@ fn pinned_repo_files_are_read_in_a_checkout() {
             PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
             PinnedFile::UnsafeAdr => "docs/adr/ADR-016-scoped-unsafe-windows-acl.md",
             PinnedFile::IdentityScanner => "scripts/release/check_identity_sources.py",
+            PinnedFile::RootMakefile => "Makefile",
+            PinnedFile::SmokeImage => "scripts/ci/smoke-image.sh",
+            PinnedFile::SmokeFullImage => "scripts/ci/smoke-full-image.sh",
+            PinnedFile::DockerSmoke => "scripts/dev/docker-smoke.sh",
+            PinnedFile::HelmKindLifecycle => "scripts/dev/helm-kind-lifecycle.sh",
+            PinnedFile::HelmKindRealImage => "scripts/dev/helm-kind-real-image.sh",
         };
         assert_eq!(rel, file.path(), "path() names the pinned file");
         assert!(

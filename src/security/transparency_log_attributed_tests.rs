@@ -153,6 +153,8 @@ fn an_invocation_on_an_unreadable_clock_is_recorded_undated() {
 fn decided() -> crate::security::decision_record::Decision {
     use crate::security::decision_record::{Decided, Decision, DecisionKind};
     Decision {
+        token: None,
+        token_unavailable: false,
         v: 1,
         config_revision: Some("hmac-sha256:00".to_owned()),
         config_revision_capabilities: None,

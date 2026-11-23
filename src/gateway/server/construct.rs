@@ -69,8 +69,17 @@ impl Gateway {
     ///
     /// Returns an error if the config is invalid against `env`, or if backend
     /// registration fails.
-    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     pub(super) async fn new_with_env(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        // Boxed: construction holds its config and the startup gate across its awaits, which
+        // would otherwise sit inline in every caller's future.
+        Box::pin(Self::construct(config, env, config_path)).await
+    }
+
+    async fn construct(
         mut config: Config,
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
@@ -78,6 +87,19 @@ impl Gateway {
         // Before any await: in a test, this thread is the test's own.
         #[cfg(test)]
         let test_seams = test_seams::TestSeams::new();
+        // The serve load's startup session, if this is a served start: finished below. Any other
+        // path-backed construction may meet work a dead writer left beside the config, so it
+        // refuses while any is there, writing nothing.
+        let session = env.take_startup_session();
+        if session.is_none()
+            && let Some(path) = &config_path
+        {
+            Box::pin(crate::config_reload::startup_settle::check_sessionless(
+                path,
+            ))
+            .await
+            .map_err(|class| Error::Config(class.to_string()))?;
+        }
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
         posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
@@ -90,6 +112,18 @@ impl Gateway {
             crate::config::SignatureChainConfig::resolve_section(chain, &overlay)?;
         }
         posture::log_startup(&config);
+
+        // The record key and the serving log, opened once for the life of this gateway (WIRE.4).
+        // A served start then settles what a dead writer left with that same log, before any
+        // backend registers or any call can arrive; the config lock is released only then.
+        let data_dir = serving_data_dir(
+            #[cfg(test)]
+            &test_seams,
+        );
+        let serving_audit = Box::pin(super::serving_audit::open_and_settle(
+            &config, &env, &data_dir, session,
+        ))
+        .await?;
 
         // The one resolver every backend's `secrets:` values go through, over
         // the same env this config was validated against; each backend
@@ -183,6 +217,7 @@ impl Gateway {
             // exactly what it was for a caller building a Config in memory.
             custody: None,
             retire: None,
+            serving_audit,
         })
     }
 
@@ -430,5 +465,17 @@ impl Gateway {
         if let Some(custody) = self.account_custody() {
             custody.detach_release();
         }
+    }
+}
+
+/// Where a gateway keeps its record key and its other data: the test's own folder in a test.
+fn serving_data_dir(#[cfg(test)] seams: &test_seams::TestSeams) -> std::path::PathBuf {
+    #[cfg(test)]
+    {
+        seams.data_dir()
+    }
+    #[cfg(not(test))]
+    {
+        super::persistence::standard_data_dir()
     }
 }

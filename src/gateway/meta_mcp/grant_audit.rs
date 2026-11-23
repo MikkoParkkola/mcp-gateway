@@ -39,8 +39,10 @@ use crate::{Error, Result};
 mod marker;
 mod withheld;
 pub(super) use marker::in_delivery_scope;
-pub(crate) use marker::invocation_landing;
+#[cfg(test)]
+pub(super) use marker::stamp_written_untraced;
 pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
+pub(crate) use marker::{invocation_landing, stamp_refused};
 pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
 mod repeat;
 pub(crate) use repeat::DecisionDedupe;
@@ -247,19 +249,9 @@ pub(super) fn note_grant_decision(
 /// Signing prepared this call, so `invoke_tool` skipped its own check: its
 /// trace goes on the prepared (untraced) note for `(server, tool)`.
 pub(super) fn stamp_prepared(server: &str, tool: &str) {
-    let Some(trace) = crate::gateway::trace::current() else {
-        return;
-    };
-    let _ = GRANT_SLOT.try_with(|slot| {
-        let mut notes = slot.notes.lock().expect("grant slot lock");
-        if let Some(note) = notes
-            .iter_mut()
-            .rev()
-            .find(|n| n.trace_id.is_none() && n.server == server && n.tool == tool)
-        {
-            note.trace_id = Some(trace);
-        }
-    });
+    if let Some(trace) = crate::gateway::trace::current() {
+        marker::stamp_untraced(server, tool, trace);
+    }
 }
 
 /// A `Result` answer, refused with -32005 when the slot's write failed.
