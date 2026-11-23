@@ -217,6 +217,8 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
                     },
                 ))
                 .expect("an audit log");
+                // The log's folder lives as long as the log does.
+                logger.keep_test_dir(Arc::clone(&panel.dir));
                 Arc::get_mut(&mut panel.state)
                     .expect("the panel's state is not shared yet")
                     .transparency_log = Some(Arc::new(logger));
