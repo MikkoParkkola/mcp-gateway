@@ -248,7 +248,7 @@ async fn d3_env_file_added_removed_changed() {
 }
 
 #[tokio::test]
-async fn d4_unknown_evicted_and_unreadable_answer_as_the_history_route_does() {
+async fn d4_an_unseen_id_an_evicted_one_and_an_unreadable_store_answer_as_the_history_route_does() {
     let rig = Rig::start(&config_text("environment: \"a\"\n"), Audit::Unlogged).await;
     let (status, body) = diff_of(&rig, "rv-never-seen", Caller::Root).await;
     assert_eq!(
