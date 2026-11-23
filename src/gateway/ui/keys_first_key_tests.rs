@@ -51,7 +51,10 @@ fn start_command(fx: &Fixture) -> Value {
     if cfg!(windows) {
         return Value::Null;
     }
-    let exe = std::env::current_exe().expect("the test binary");
+    // The running test binary's path, named the way the crate's spawn guard
+    // requires (this builds a command and never runs it).
+    let binary = crate::test_home::test_binary();
+    let exe = std::path::Path::new(binary.get_program());
     let config = std::path::absolute(fx.path()).expect("an absolute config path");
     json!(format!(
         "'{}' serve --config '{}'",
