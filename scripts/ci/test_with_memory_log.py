@@ -167,13 +167,15 @@ def bound_read(pid: int, parents: set[int], low: float, high: float) -> dict:
                                                  ("pnd", "SigPnd"), ("shd", "ShdPnd"))}}
 
 
-def orphan_adopter() -> int | None:
+def orphan_adopter(excluded: set[int | None]) -> int | None:
     """The process that adopts this row's orphans, measured (D3): a short sleep whose shell has exited, read for its
-    new parent. It shares the row's ancestry, and no shell between is a subreaper, so the row's orphans go there too."""
+    new parent. It shares the row's ancestry, and no shell between is a subreaper, so the row's orphans go there too.
+    Never one of `excluded` (this Python and the pids the run itself started): those give None."""
     with contextlib.suppress(OSError, ValueError, IndexError):
         sh = subprocess.run(["sh", "-c", "sleep 2 >/dev/null 2>&1 & echo $!"], capture_output=True, text=True)
         orphan = int(sh.stdout.split()[0])
-        return int(Path(f"/proc/{orphan}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        adopter = int(Path(f"/proc/{orphan}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        return None if adopter in excluded | {os.getpid()} else adopter
     return None
 
 
@@ -244,10 +246,7 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
     wrapper = r5["pid"] if r5 else None
     roles = {pid: role for pid, role in ((wrapper, "wrapper"), (command, "command"), (sleeper, "sleeper")) if pid}
     if LINUX and r5:
-        adopter = orphan_adopter()
-        # The adopter is never this Python, the outer shell, or a pid the run itself wrote (D3).
-        if adopter in {os.getpid(), outer.pid, wrapper, command, sleeper}:
-            adopter = None
+        adopter = orphan_adopter({outer.pid, wrapper, command, sleeper})
         adopters = {adopter} if adopter is not None else set()
         low = clock.start_ticks
         w = bound_read(wrapper, {outer.pid} | (adopters if outer_rc is not None else set()), low,
@@ -366,7 +365,19 @@ def rows() -> list[tuple[str, bool, str]]:
                     rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]}"))
     out.extend(gap_rows())
     out.extend(classifier_rows())
+    out.extend(adopter_rows())
     return out
+
+
+def adopter_rows() -> list[tuple[str, bool, str]]:
+    """W17: the measured adopter of orphans is never a pid the run itself started (D3). Linux only: read from /proc.
+    The same measurement is taken twice, the second time with the first answer excluded; it must then give None."""
+    label = "W17 the measured orphan adopter is refused when it is one of the run's own pids"
+    if not LINUX:
+        return [(label, True, "skipped: not Linux")]
+    seen = orphan_adopter(set())
+    refused = orphan_adopter({seen})
+    return [(label, seen is not None and refused is None, f"measured {seen}, with it excluded {refused}")]
 
 
 def gap_rows() -> list[tuple[str, bool, str]]:
