@@ -14,7 +14,7 @@ use super::{Bounds, Fetch, Owned, Shared, lock, within};
 
 /// The only authorities a CONNECT may name, compared after ASCII lowercasing:
 /// no trailing dot, no percent-decoding, port 443 written plainly.
-const ALLOWED: [&str; 3] = [
+pub(super) const ALLOWED: [&str; 3] = [
     "registry.npmjs.org:443",
     "pypi.org:443",
     "files.pythonhosted.org:443",

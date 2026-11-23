@@ -155,6 +155,9 @@ struct Shared {
     resolve: Arc<dyn Resolve>,
     connect: Arc<dyn Connect>,
     interfaces: Arc<dyn Interfaces>,
+    /// The only authorities a CONNECT may name; `bind` sets the registries,
+    /// and a row may swap them.
+    allowed: Mutex<&'static [&'static str]>,
     /// Runs as a revoke's teardown starts, before its sockets shut.
     #[cfg(test)]
     on_end: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -219,6 +222,7 @@ impl AllowlistProxy {
             resolve,
             connect,
             interfaces,
+            allowed: Mutex::new(&admission::ALLOWED),
             #[cfg(test)]
             on_end: Mutex::new(None),
         });
@@ -254,6 +258,19 @@ impl AllowlistProxy {
         self.shared
             .fetches
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The authorities this proxy admits, joined by ", " with their ports:
+    /// what the isolation record shows for a fetch (stub: empty).
+    pub(crate) fn allowlist(&self) -> String {
+        let _ = self;
+        String::new()
+    }
+
+    /// Swap the admitted authorities, for the rows.
+    #[cfg(test)]
+    pub(crate) fn set_allowlist_for_test(&self, allowed: &'static [&'static str]) {
+        *lock(&self.shared.allowed) = allowed;
     }
 
     /// Replace the time bounds, for the rows.
