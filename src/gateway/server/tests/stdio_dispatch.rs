@@ -316,6 +316,16 @@ async fn stdio_call(meta: &Arc<MetaMcp>, params: serde_json::Value) -> serde_jso
     .expect("a tools/call carrying an id must return a response")
 }
 
+/// The answer's text for a missing `key`, rendered by the error type the
+/// refusal is built from, so the row follows its prefix.
+fn missing_answer(key: &str) -> String {
+    crate::Error::json_rpc(
+        crate::error::rpc_codes::INVALID_PARAMS,
+        format!("Missing '{key}' parameter"),
+    )
+    .to_string()
+}
+
 /// A stdio `gateway_invoke` refused for a missing `server` or `tool` is
 /// answered as before and leaves one `invalid` -32602 record whose decision
 /// kind is the request's form (`syntax`).
@@ -343,7 +353,7 @@ async fn missing_server_is_recorded_as_syntax_on_stdio() {
             response
                 .pointer("/error/message")
                 .and_then(serde_json::Value::as_str),
-            Some(format!("JSON-RPC error -32602: Missing '{missing}' parameter").as_str()),
+            Some(missing_answer(missing).as_str()),
             "{missing}: {response}"
         );
         assert_eq!(response["id"], json!(1), "{missing}: {response}");

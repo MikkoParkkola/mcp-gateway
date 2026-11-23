@@ -14,6 +14,16 @@ use crate::backend::BackendRegistry;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::audit::AuditFailurePolicy;
 
+/// The answer's text for a missing `key`, rendered by the error type the
+/// refusal is built from, so the row follows its prefix.
+fn missing_answer(key: &str) -> String {
+    crate::Error::json_rpc(
+        crate::error::rpc_codes::INVALID_PARAMS,
+        format!("Missing '{key}' parameter"),
+    )
+    .to_string()
+}
+
 #[tokio::test]
 async fn missing_server_is_recorded_as_syntax_in_process() {
     for (arguments, missing) in [
@@ -31,7 +41,7 @@ async fn missing_server_is_recorded_as_syntax_in_process() {
         );
         assert_eq!(
             answer.pointer("/error/message").and_then(Value::as_str),
-            Some(format!("JSON-RPC error -32602: Missing '{missing}' parameter").as_str()),
+            Some(missing_answer(missing).as_str()),
             "{missing}: {answer}"
         );
         assert_eq!(answer["id"], json!(1), "{missing}: {answer}");

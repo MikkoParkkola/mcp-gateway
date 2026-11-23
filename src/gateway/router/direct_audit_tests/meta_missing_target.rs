@@ -13,6 +13,16 @@ fn invoke_with(arguments: &Value) -> String {
     .to_string()
 }
 
+/// The answer's text for a missing `key`, rendered by the error type the
+/// refusal is built from, so the row follows its prefix.
+fn missing_answer(key: &str) -> String {
+    crate::Error::json_rpc(
+        crate::error::rpc_codes::INVALID_PARAMS,
+        format!("Missing '{key}' parameter"),
+    )
+    .to_string()
+}
+
 #[tokio::test]
 async fn missing_server_is_recorded_as_syntax_on_mcp() {
     for (arguments, missing) in [
@@ -25,7 +35,7 @@ async fn missing_server_is_recorded_as_syntax_on_mcp() {
         assert_eq!(answer["error"]["code"], -32602, "{missing}: {answer}");
         assert_eq!(
             answer["error"]["message"],
-            format!("JSON-RPC error -32602: Missing '{missing}' parameter"),
+            missing_answer(missing),
             "{missing}: {answer}"
         );
         assert_eq!(answer["id"], 5, "{missing}: {answer}");
