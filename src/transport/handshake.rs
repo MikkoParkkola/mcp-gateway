@@ -96,3 +96,24 @@ pub(crate) async fn settle(transport: &dyn Transport) -> Result<()> {
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     Ok(())
 }
+
+/// A command preview's opening exchange over `transport`: proposes
+/// `configured`, else the latest revision this gateway speaks, then settles.
+/// Returns the revision agreed.
+#[cfg_attr(
+    not(all(test, unix)),
+    expect(dead_code, reason = "the preview route calls it")
+)]
+pub(crate) async fn preview_handshake(
+    transport: &dyn Transport,
+    configured: Option<&str>,
+) -> Result<String> {
+    // STUB for the rows commit: always the latest, and no settle.
+    let _ = configured;
+    negotiate(
+        crate::protocol::PROTOCOL_VERSION,
+        "the command preview",
+        |params| transport.request("initialize", Some(params)),
+    )
+    .await
+}

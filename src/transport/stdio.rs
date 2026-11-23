@@ -517,7 +517,9 @@ mod tree;
 #[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
-use tree::{read_frame, spawn_in_own_tree};
+// The preview pipe reads frames the same way.
+pub(in crate::transport) use tree::read_frame;
+use tree::spawn_in_own_tree;
 
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
