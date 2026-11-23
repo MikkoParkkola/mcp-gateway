@@ -216,7 +216,41 @@ def gap_rows() -> list[tuple[str, bool, str]]:
 
 
 def classify_hang(record: dict) -> str:
-    """A W4 hang record's cause class (see hang_record). Stub: the red rows of W16 run against it."""
+    """A W4 hang record's cause class: the first row of this ordered list that matches. The class names where the cause
+    is; it designs no fix. K1 to K6 are named causes; K7 to K10 are not (K7 and K8 are snapshots of one moment, K9 has
+    two stories a snapshot cannot tell apart), and neither is K0, a capture that failed."""
+    r6 = record.get("R6")
+    if (any(record.get(f) is None for f in ("R1", "R2", "R3", "R4", "R5", "R7", "R8", "R9"))
+            or (record["linux"] and r6 is None)
+            or (r6 is not None and any(r6[w]["identity"] == "not confirmed" for w in ("wrapper", "command")))):
+        return "K0"
+    # A stopped process that is only a fellow member of the wrapper's group selects nothing.
+    if any(p["state"].startswith("T") for p in record["R7"] if p["role"] != "group"):
+        return "K1"
+    if not record["R1"]["written"]:
+        return "K2"
+    if not record["R2"]["reached"]:
+        return "K3"
+    if record["R2"]["status"] != 0:
+        return "K4"
+    if record["R3"]["trap_ran"]:
+        return "K5"
+    if r6 is None:
+        return "K6 to K9, not separable here"
+    w, c = r6["wrapper"], r6["command"]
+    w_alive, c_alive = w["identity"] == "confirmed", c["identity"] == "confirmed"
+    sig, term = _bit(record["signal"]), _bit("TERM")
+    # Pending is the union of the thread's set and the process's. A blocked set alone selects nothing: a signal that is
+    # blocked need never have been sent.
+    if w_alive and w["ign"] & sig:
+        return "K6"
+    if w_alive and (w["pnd"] | w["shd"]) & sig:
+        return "K7"
+    if c_alive and (c["pnd"] | c["shd"]) & term:
+        return "K8"
+    # K8 above already took a command holding TERM.
+    if w_alive and w["cgt"] & sig and not (w["pnd"] | w["shd"]):
+        return "K9"
     return "K10"
 
 
@@ -230,7 +264,7 @@ def _canned(sig: str = "INT") -> dict:
     returned 0, the trap did not run, and the wrapper and the command are alive, confirmed, stopped neither, and neither
     ignore, catch nor hold any signal."""
     def proc() -> dict:
-        return {"identity": "confirmed", "alive": True, "state": "S", "ign": 0, "cgt": 0, "blk": 0, "pnd": 0, "shd": 0}
+        return {"identity": "confirmed", "state": "S", "ign": 0, "cgt": 0, "blk": 0, "pnd": 0, "shd": 0}
     return {
         "signal": sig, "linux": True,
         "R1": {"written": True, "child": 1003, "command": 1002},
@@ -302,6 +336,19 @@ def classifier_rows() -> list[tuple[str, bool, str]]:
     quiet["R6"]["command"].update(blk=_bit("TERM"))
     got = classify_hang(quiet)
     out.append(("W16 a stopped group member and a blocked signal select nothing", got == "K10", f"got {got}"))
+    # A process that has exited is a complete R6 answer, not a missing one, and its sets are n/a: a dead wrapper whose
+    # last sets ignored and held the signal, beside a dead command that held TERM, is neither K0 nor K6 to K9.
+    gone = _canned()
+    sig = _bit(gone["signal"])
+    gone["R6"]["wrapper"].update(identity="dead", ign=sig, pnd=sig, cgt=sig)
+    gone["R6"]["command"].update(identity="dead", pnd=_bit("TERM"))
+    got = classify_hang(gone)
+    out.append(("W16 dead processes are an answer: not K0, and their sets select nothing", got == "K10", f"got {got}"))
+    # K9 needs the wrapper to hold nothing pending, not merely not the signal sent.
+    other = _met("K9")
+    other["R6"]["wrapper"].update(shd=_bit("CHLD"))
+    got = classify_hang(other)
+    out.append(("W16 a caught signal beside another pending one is not K9", got == "K10", f"got {got}"))
     # The K0 forms: a fact missing, R6 missing on Linux, the wrapper's or the command's identity not confirmed.
     k0 = []
     for fact in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"):
