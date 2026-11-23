@@ -181,7 +181,11 @@ async fn f1_an_unreadable_changed_file_leaves_list_count_and_resolve_working() {
     let (status, body) = bench
         .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 1)
         .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (status, of_kind(&body, UNREADABLE).len()),
+        (StatusCode::OK, 1),
+        "the bad file is not listed: {body}"
+    );
     let (count_status, count_body) = count(&bench.state, true).await;
     assert_eq!(count_status, StatusCode::OK, "{count_body}");
     let (denied, reply) = bench.deny(&bench.request, &bench.digest).await;
@@ -197,7 +201,11 @@ async fn f2_a_garbled_changed_file_leaves_list_count_and_resolve_working() {
     let (status, body) = bench
         .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 1)
         .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (status, of_kind(&body, UNREADABLE).len()),
+        (StatusCode::OK, 1),
+        "the bad file is not listed: {body}"
+    );
     let (count_status, count_body) = count(&bench.state, true).await;
     assert_eq!(count_status, StatusCode::OK, "{count_body}");
     let (denied, reply) = bench.deny(&bench.request, &bench.digest).await;
@@ -238,11 +246,15 @@ async fn f2b_an_unreadable_and_a_garbled_file_together_leave_everything_working(
 #[cfg(unix)]
 #[tokio::test]
 async fn f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes() {
-    let bench = Bench::start(&["foxtrot", "golf"], "stripe.charges").await;
+    let bench = Bench::start(&["foxtrot", "golf", "hotel"], "stripe.charges").await;
     lock(&bench.file("foxtrot"));
     garble(&bench.file("golf"));
+    // A directory where the file was: unreadable, for neither permission
+    // nor absence.
+    std::fs::remove_file(bench.file("hotel")).expect("removed");
+    std::fs::create_dir(bench.file("hotel")).expect("a directory in its place");
     let (_, body) = bench
-        .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 2)
+        .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 3)
         .await;
     unlock(&bench.file("foxtrot"));
     let reasons: BTreeSet<(String, String)> = of_kind(&body, UNREADABLE)
@@ -259,6 +271,7 @@ async fn f3_the_item_names_the_tool_and_a_reason_never_the_path_or_bytes() {
         BTreeSet::from([
             ("foxtrot".to_owned(), "no_permission".to_owned()),
             ("golf".to_owned(), "did_not_parse".to_owned()),
+            ("hotel".to_owned(), "not_a_readable_file".to_owned()),
         ])
     );
     let keys: BTreeSet<&str> = of_kind(&body, UNREADABLE)[0]
