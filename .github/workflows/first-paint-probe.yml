@@ -1,9 +1,9 @@
 name: First-paint host probe
 
 # Throwaway evidence for moving the first-paint gate onto hosted runners, never
-# merged. Five hosted copies each report whether the gate's busy check can read
-# its files, the CPU model, and how far apart the benchmark indices of 20
-# unthrottled runs of the real page are. Only a push to a
+# merged. Five hosted copies, each on its own VM, each report the CPU model and
+# the real page's first paint at the gate's mobile settings (4x CPU): 20 plain
+# and 20 planted samples, taken one and one. Only a push to a
 # throwaway/first-paint-probe-* branch starts it; no other workflow listens to
 # that name. No third-party actions: plain git fetches the pushed commit and the
 # runner's own Node runs the probe, its version printed with the result.
@@ -18,7 +18,7 @@ jobs:
   probe:
     name: Host probe ${{ matrix.copy }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -42,4 +42,4 @@ jobs:
           timeout 300 npx playwright install-deps chromium || echo "::warning::system libraries not installed; relying on the image"
       - name: Probe this host
         working-directory: probe/ui-tests
-        run: node perf/probe-host.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+        run: node perf/probe-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
