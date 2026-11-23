@@ -50,7 +50,8 @@ impl SetupFailure {
     fn from_io(step: SetupStep, what: &str, error: &io::Error) -> Self {
         Self {
             step,
-            denied: error.kind() == io::ErrorKind::PermissionDenied,
+            // Mutant m-denied-always-false (probe only).
+            denied: error.kind() == io::ErrorKind::PermissionDenied && false,
             detail: format!("{what} ({error})"),
         }
     }
@@ -114,24 +115,28 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
             return ExitCode::from(super::REFUSED);
         }
     };
-    let done = Some(SetupStatus::Done);
-    let sent = || fault::trace("sent");
-    if control_client::report_and_leave(&mut control, done, HELPER_BOUNDS.write, sent).is_err() {
-        return ExitCode::from(super::REFUSED);
-    }
-    // The gateway has taken the status; the target must not inherit this.
-    drop(control);
-    fault::trace("closed");
-    let _late = fault::plant(Point::AfterClose);
-    // Strict now: the control descriptor is gone, so nothing is exempt.
-    if let Err(why) = check_descriptors(None) {
-        return refused(&why);
-    }
-    fault::trace("strict-check");
-    if let Err(why) = fault::hold() {
-        return refused(&why);
-    }
-    supervise(plan, &ready)
+    // Mutant m-spawn-before-send (probe only): the target starts before the
+    // status is sent, and the rest still runs.
+    std::thread::scope(|s| {
+        let target = s.spawn(|| supervise(plan, &ready));
+        let done = Some(SetupStatus::Done);
+        let sent = || fault::trace("sent");
+        if control_client::report_and_leave(&mut control, done, HELPER_BOUNDS.write, sent).is_err()
+        {
+            return ExitCode::from(super::REFUSED);
+        }
+        drop(control);
+        fault::trace("closed");
+        let _late = fault::plant(Point::AfterClose);
+        if let Err(why) = check_descriptors(None) {
+            return refused(&why);
+        }
+        fault::trace("strict-check");
+        if let Err(why) = fault::hold() {
+            return refused(&why);
+        }
+        target.join().unwrap_or(ExitCode::FAILURE)
+    })
 }
 
 /// The helper's own refusal before or after the report: on stderr only.

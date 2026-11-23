@@ -200,8 +200,9 @@ pub(crate) async fn accept_helper(
     // took the pid after the accept refuses on its start time, and one that
     // exits after the open fails the reads. A pid taken before the accept
     // names no child of the spawned unshare, whose only child is the helper.
+    // Mutant m-accept-any-peer (probe only): the judgement is ignored.
     #[cfg(target_os = "linux")]
-    judge_dir(
+    let _ = judge_dir(
         &open_peer(pid).map_err(|e| {
             Refusal::Step(format!(
                 "the sandbox's control peer has no /proc entry ({e})"
@@ -210,7 +211,7 @@ pub(crate) async fn accept_helper(
         accepted_at,
         unshare_pid,
         uid,
-    )?;
+    );
     #[cfg(not(target_os = "linux"))]
     judge_peer(pid, unshare_pid, uid)?;
     Ok(stream)
@@ -534,7 +535,8 @@ struct Revoking<'a> {
 
 impl Drop for Revoking<'_> {
     fn drop(&mut self) {
-        self.proxy.revoke(&self.credential);
+        // Mutant m-no-revoke-on-error (probe only): the fields are read, nothing is revoked.
+        let _ = (&self.proxy, &self.credential);
     }
 }
 

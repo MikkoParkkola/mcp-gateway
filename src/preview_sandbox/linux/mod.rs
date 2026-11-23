@@ -186,7 +186,7 @@ fn launch(unshare: &Path, helper: &Path, plan: &Plan) -> Result<tokio::process::
             "private",
             "--pid",
             "--fork",
-            "--kill-child",
+            // Mutant m-reap-unshare-only (probe only): no --kill-child.
             "--mount-proc",
             "--net",
             "--ipc",

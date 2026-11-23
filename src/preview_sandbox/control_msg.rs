@@ -192,9 +192,10 @@ impl SetupStep {
     /// `AppArmor` blocks unprivileged mounts; any other case names the step.
     #[cfg(target_os = "linux")]
     pub(crate) fn refusal(self, denied: bool, host_restricts: bool) -> super::Refusal {
+        // Mutant m-generic-refusal (probe only): one fixed step for every refusal.
         match (self.mounts() && denied, host_restricts) {
             (true, true) => super::Refusal::AppArmorRestricted,
-            _ => super::Refusal::Step(self.describe().to_owned()),
+            _ => super::Refusal::Step(SetupStep::Binding.describe().to_owned()),
         }
     }
 }
