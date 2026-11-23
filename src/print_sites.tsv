@@ -1,0 +1,7 @@
+# LOGINJ.7 allowlist (src/print_sites_tests.rs): every production stdout/stderr site, reviewed.
+# Columns, tab-separated: tier, file, owner (modules::Type::fn), site text (P only; "-" for T), reason.
+# T: a CLI subcommand function whose output is the terminal; every print inside it is allowed. Never a function the
+#    serve path runs (cli/entry.rs run_server and run_stdio_server, commands/mod.rs load_for_serve,
+#    commands/upgrade.rs check_upgrade, or anything they call).
+# P: one exact site; a changed site text needs a fresh review.
+P	src/lib.rs	setup_tracing_flush	std::io::stderr()	the log writer's own stream: every line it writes went through the escaping layer
