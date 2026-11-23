@@ -46,7 +46,7 @@ if [ -z "${MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE:-}" ]; then
   fixture_dir="$(mktemp -d)"
   trap 'rm -rf "$fixture_dir"; if [ "$cleanup_restart_image" = true ]; then docker image rm "$MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE" >/dev/null 2>&1 || true; fi' EXIT
   cat >"$fixture_dir/Dockerfile" <<'DOCKERFILE'
-FROM mirror.gcr.io/library/busybox:1.36
+FROM mirror.gcr.io/library/busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
 CMD ["sh", "-c", "echo runtime-provider-restart-fixture-ready; sleep 2; exit 42"]
 DOCKERFILE
   docker build -q -t "$MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE" "$fixture_dir" >/dev/null
@@ -54,22 +54,21 @@ fi
 export MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE
 
 cd "$repo_root"
+# One name prefix for both modes, so every Docker provider row a developer runs also runs in CI.
+rows=runtime::provider::tests::runtime_provider_real_docker
 if [ -z "$prebuilt" ]; then
-  cargo test -q runtime_provider_real_docker --lib -- --ignored --nocapture
+  cargo test -q "$rows" --lib -- --ignored --nocapture
 else
-  for row in \
-    runtime::provider::tests::runtime_provider_real_docker_smoke_exercises_lifecycle \
-    runtime::provider::tests::runtime_provider_real_docker_restart_policy_recovers_after_crash; do
-    # run-one refuses unless exactly one test over the parts matches; the pass line
-    # is required too, since a row run without --ignored reports "0 passed; 1 ignored".
-    rc=0
-    out="$(python3 scripts/ci/shard_tests.py run-one --exact "$row" "$prebuilt" -- --ignored --nocapture 2>&1)" || rc=$?
-    printf '%s\n' "$out"
-    if [ "$rc" != 0 ] || ! grep -Eq '^test result: ok\. 1 passed' <<<"$out"; then
-      echo "runtime provider docker smoke: $row did not pass from the part binaries (exit $rc)" >&2
-      exit 1
-    fi
-  done
+  # run-one refuses unless at least one test sits under the prefix, all on one part.
+  # The pass line is required too: at least one passed and none left ignored, since a
+  # run without --ignored reports "0 passed; N ignored" and still exits 0.
+  rc=0
+  out="$(python3 scripts/ci/shard_tests.py run-one --module "$rows" "$prebuilt" -- --ignored --nocapture 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  if [ "$rc" != 0 ] || ! grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' <<<"$out"; then
+    echo "runtime provider docker smoke: the rows under $rows did not pass from the part binaries (exit $rc)" >&2
+    exit 1
+  fi
 fi
 
 echo "runtime provider docker smoke passed with images $MCP_GATEWAY_RUNTIME_DOCKER_IMAGE and $MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE"
