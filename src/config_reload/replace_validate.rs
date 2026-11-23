@@ -120,13 +120,15 @@ impl ReloadContext {
         ) {
             Waiting::No => false,
             Waiting::Yes { .. } if status_change == StatusChange::HoldForRestart => true,
-            Waiting::Yes { status, .. } => {
+            Waiting::Yes { keys, status } => {
                 return Err(ReplaceError::ReloadRefused {
-                    class: RefusalClass::RestartPending,
+                    class: RefusalClass::RestartPending {
+                        waiting: crate::config_reload::first_key::WaitingKeys::new(keys),
+                    },
                     reason: crate::config_reload::reload_context::nothing_published(&status),
                 });
             }
-            Waiting::Faulty { reason } => return Err(invalid(reason)),
+            Waiting::Faulty { reason, .. } => return Err(invalid(reason)),
         };
         if evaluated.patch.is_empty() {
             return Ok(());

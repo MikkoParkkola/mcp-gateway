@@ -429,7 +429,9 @@ pub(super) const LOADER_REFUSED: &str = "the change would be refused by the conf
 
 pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
     match e {
-        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class: *class },
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused {
+            class: class.clone(),
+        },
         ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         ReplaceError::Unsupported(_) => {
             UiRefused::Unsupported("this change is not supported here".to_owned())

@@ -45,8 +45,32 @@ pub(crate) enum Waiting {
     /// `status` is the status rule's own sentence, so no caller asks it again.
     Yes { keys: Vec<String>, status: String },
     /// The status rule refuses it and some other check fails as well; the text
-    /// is that check's own.
-    Faulty { reason: String },
+    /// is that check's own, and `cause` says which check, so no caller reads
+    /// the text to tell them apart.
+    Faulty { reason: String, cause: FaultCause },
+}
+
+/// Which check a faulty candidate failed, first failure winning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FaultCause {
+    /// Its key table does not build on the running auth settings.
+    KeyTable,
+    /// A start from it would be refused.
+    Start,
+    /// It changes the status without adding a key: a removal only.
+    RemovalOnly,
+}
+
+/// The keys `config` holds that the published key table lacks, in file
+/// order: what a restart from `config` would bring in.
+pub(crate) fn waiting_names(published: &Generation, config: &Config) -> Vec<String> {
+    let held: std::collections::BTreeSet<&str> = (published.config().auth.api_keys.iter())
+        .map(|key| key.name.as_str())
+        .collect();
+    (config.auth.api_keys.iter())
+        .filter(|key| !held.contains(key.name.as_str()))
+        .map(|key| key.name.clone())
+        .collect()
 }
 
 /// The one question every writer, reload and route asks about a candidate.
@@ -69,22 +93,94 @@ pub(crate) fn waiting_first_key(
     if let Err(e) = published.auth().with_keys_of(&candidate.auth, overlay) {
         return Waiting::Faulty {
             reason: format!("auth.api_keys: {e}"),
+            cause: FaultCause::KeyTable,
         };
     }
     if let Some(reason) = crate::gateway::next_start_refusal(candidate) {
-        return Waiting::Faulty { reason };
+        return Waiting::Faulty {
+            reason,
+            cause: FaultCause::Start,
+        };
     }
-    let held: std::collections::BTreeSet<&str> = (published.config().auth.api_keys.iter())
-        .map(|key| key.name.as_str())
-        .collect();
-    let keys: Vec<String> = (candidate.auth.api_keys.iter())
-        .filter(|key| !held.contains(key.name.as_str()))
-        .map(|key| key.name.clone())
-        .collect();
+    let keys = waiting_names(published, candidate);
     if keys.is_empty() {
         // A change that only removes keys: the existing refusal, unchanged.
-        Waiting::Faulty { reason: status }
+        Waiting::Faulty {
+            reason: status,
+            cause: FaultCause::RemovalOnly,
+        }
     } else {
         Waiting::Yes { keys, status }
     }
+}
+
+/// The waiting keys of a restart-pending answer. Built only by [`decide`]
+/// and [`create_guard`], so every such answer names what they found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WaitingKeys(Vec<String>);
+
+impl WaitingKeys {
+    /// Shape only: removed once the decision is the sole producer.
+    pub(crate) fn new(keys: Vec<String>) -> Self {
+        Self(keys)
+    }
+
+    /// The names, in file order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "shape: the routes call it once the decision is built"
+        )
+    )]
+    pub(crate) fn names(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// What the shared decision answers for a write that does not hold.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "shape: the routes call it once the decision is built"
+    )
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Decision {
+    /// Refused as restart pending, naming the file's waiting keys.
+    Pending(WaitingKeys),
+    /// Refused as invalid, with this fixed sentence.
+    Invalid(String),
+    /// Not this decision's case: the caller goes on.
+    Continue,
+}
+
+/// The shared decision on a candidate written without a hold, from the
+/// question's answer on it and the file's waiting keys as read under the
+/// config lock. Shape only: answers `Continue` until it is built.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "shape: the routes call it once the decision is built"
+    )
+)]
+pub(crate) fn decide(candidate: &Waiting, file_waiting: Vec<String>) -> Decision {
+    let _ = (candidate, file_waiting);
+    Decision::Continue
+}
+
+/// The create's guard on the file as read: restart pending when a key
+/// already waits in it. Shape only: answers `None` until it is built.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "shape: the routes call it once the decision is built"
+    )
+)]
+pub(crate) fn create_guard(file: &Waiting, file_waiting: Vec<String>) -> Option<WaitingKeys> {
+    let _ = (file, file_waiting);
+    None
 }

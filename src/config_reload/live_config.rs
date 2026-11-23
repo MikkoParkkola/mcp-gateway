@@ -91,9 +91,9 @@ pub struct LiveConfig {
     published: crate::observer::Observer<Arc<Generation>>,
     /// The configuration history each applied publish is recorded into.
     history: Option<Arc<crate::config_reload::history::HistoryHook>>,
-    /// The keys a first-key file waits on: the most recent file-reading
-    /// reload's verdict, set and cleared by the reload alone.
-    first_key: RwLock<Option<Vec<String>>>,
+    /// A first-key file's wait: the most recent file-reading reload's
+    /// verdict, set and cleared by the reload alone.
+    first_key: RwLock<Option<FirstKeyWait>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -101,6 +101,16 @@ pub struct LiveConfig {
     /// bytes are captured and before they are handed to the history hook.
     #[cfg(test)]
     record_pause: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// A first-key file's wait, as the most recent reload that read the file
+/// judged it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FirstKeyWait {
+    /// The waiting keys, in file order; never empty.
+    pub(crate) keys: Vec<String>,
+    /// Why a start from the file would be refused; `None` when it would start.
+    pub(crate) start_refusal: Option<String>,
 }
 
 impl LiveConfig {
@@ -344,12 +354,23 @@ impl LiveConfig {
     )]
     #[must_use]
     pub(crate) fn waiting_keys(&self) -> Option<Vec<String>> {
+        self.first_key.read().as_ref().map(|wait| wait.keys.clone())
+    }
+
+    /// The whole wait: the keys and whether a start from the file would be
+    /// refused, as the most recent reload that read the file judged them.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the gateway route serves it with the banner")
+    )]
+    #[must_use]
+    pub(crate) fn first_key_wait(&self) -> Option<FirstKeyWait> {
         self.first_key.read().clone()
     }
 
-    /// Record a file-reading reload's verdict on a first key: the waiting
-    /// keys, or `None` for every other outcome of a reload that read the file.
-    pub(crate) fn note_first_key(&self, waiting: Option<Vec<String>>) {
+    /// Record a file-reading reload's verdict on a first key: the wait, or
+    /// `None` for every other outcome of a reload that read the file.
+    pub(crate) fn note_first_key(&self, waiting: Option<FirstKeyWait>) {
         *self.first_key.write() = waiting;
     }
 

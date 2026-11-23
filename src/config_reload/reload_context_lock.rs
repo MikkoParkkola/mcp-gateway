@@ -176,8 +176,12 @@ impl ReloadContext {
             // The file waits only for a restart: the fact names its keys, and
             // the ledger row has its own code.
             Err(refusal) if refusal.kind == ReloadRefusalKind::StatusChange => {
-                self.live_config
-                    .note_first_key(Some(refusal.waiting.clone()));
+                self.live_config.note_first_key(Some(
+                    crate::config_reload::live_config::FirstKeyWait {
+                        keys: refusal.waiting.clone(),
+                        start_refusal: None,
+                    },
+                ));
                 refusals.record_first_key_waiting();
                 self.reporting.tally.refused();
                 let pending = self.live_config.refused_record(source, None);

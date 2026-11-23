@@ -4,14 +4,17 @@
 
 use super::lock_api::{ReloadRefusal, ReloadRefusalKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RefusalClass {
     Posture,
     Invalid,
     ShuttingDown,
     Internal,
-    /// A first key waits for a restart and this candidate still holds it.
-    RestartPending,
+    /// Keys wait in gateway.yaml for a restart and this candidate keeps them;
+    /// `waiting` names them, as the shared decision found them.
+    RestartPending {
+        waiting: crate::config_reload::first_key::WaitingKeys,
+    },
 }
 
 /// Only the typed reload refusal establishes a posture refusal.
@@ -25,6 +28,8 @@ pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
             RefusalClass::ShuttingDown
         }
         ReloadRefusalKind::Other => RefusalClass::Internal,
-        ReloadRefusalKind::StatusChange => RefusalClass::RestartPending,
+        ReloadRefusalKind::StatusChange => RefusalClass::RestartPending {
+            waiting: crate::config_reload::first_key::WaitingKeys::new(refusal.waiting.clone()),
+        },
     }
 }

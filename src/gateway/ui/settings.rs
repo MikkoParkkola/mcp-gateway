@@ -504,7 +504,7 @@ fn answer(refusal: UiRefused) -> Response {
                 "the gateway is shutting down; retry",
             ),
             RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
-            RefusalClass::RestartPending => error(
+            RefusalClass::RestartPending { .. } => error(
                 StatusCode::CONFLICT,
                 "restart_pending",
                 "gateway.yaml waits for a restart; no other change is applied until then",

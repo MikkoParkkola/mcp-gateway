@@ -607,7 +607,7 @@ impl ReloadContext {
                     waiting: keys,
                 });
             }
-            super::first_key::Waiting::Faulty { reason } => {
+            super::first_key::Waiting::Faulty { reason, .. } => {
                 return Err(nothing_published(&reason).into());
             }
         }
