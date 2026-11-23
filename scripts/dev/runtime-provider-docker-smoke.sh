@@ -10,12 +10,33 @@ set -euo pipefail
 # also builds a tiny long-running fixture image and proves Docker on-failure
 # restart policy recovery after an intentional non-zero process exit.
 
+#
+# Usage: runtime-provider-docker-smoke.sh [--prebuilt <dir>]
+# With no argument the rows are compiled and run by cargo (a developer's
+# machine). CI passes --prebuilt with the folder holding the shared lib test
+# part binaries, so nothing compiles there: each row runs from the part binary
+# that holds it and must print its own "1 passed" line. There is no skip path:
+# no daemon, no folder, a row that selects no test, or a row left ignored all
+# end the script non-zero.
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+prebuilt=""
+case "$#:${1:-}" in
+  0:) ;;
+  2:--prebuilt)
+    prebuilt="$2"
+    [ -d "$prebuilt" ] || { echo "runtime provider docker smoke: no part binaries folder at $prebuilt" >&2; exit 2; }
+    ;;
+  *) echo "usage: $0 [--prebuilt <dir>]" >&2; exit 2 ;;
+esac
 
 docker version >/dev/null
 
 export MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1
-: "${MCP_GATEWAY_RUNTIME_DOCKER_IMAGE:=mirror.gcr.io/library/hello-world:latest}"
+# Pinned by digest (the multi-arch index), as the restart fixture pins busybox
+# 1.36, so the lifecycle row's log check does not follow a moving tag.
+: "${MCP_GATEWAY_RUNTIME_DOCKER_IMAGE:=mirror.gcr.io/library/hello-world@sha256:1e4c05b897a751332ce85c7e9449da2d93514ea2dea6dbb0e2753c9e949b2bfa}"
 export MCP_GATEWAY_RUNTIME_DOCKER_IMAGE
 
 cleanup_restart_image=false
@@ -33,6 +54,22 @@ fi
 export MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE
 
 cd "$repo_root"
-cargo test -q runtime_provider_real_docker --lib -- --ignored --nocapture
+if [ -z "$prebuilt" ]; then
+  cargo test -q runtime_provider_real_docker --lib -- --ignored --nocapture
+else
+  for row in \
+    runtime::provider::tests::runtime_provider_real_docker_smoke_exercises_lifecycle \
+    runtime::provider::tests::runtime_provider_real_docker_restart_policy_recovers_after_crash; do
+    # run-one refuses unless exactly one test over the parts matches; the pass line
+    # is required too, since a row run without --ignored reports "0 passed; 1 ignored".
+    rc=0
+    out="$(python3 scripts/ci/shard_tests.py run-one --exact "$row" "$prebuilt" -- --ignored --nocapture 2>&1)" || rc=$?
+    printf '%s\n' "$out"
+    if [ "$rc" != 0 ] || ! grep -Eq '^test result: ok\. 1 passed' <<<"$out"; then
+      echo "runtime provider docker smoke: $row did not pass from the part binaries (exit $rc)" >&2
+      exit 1
+    fi
+  done
+fi
 
 echo "runtime provider docker smoke passed with images $MCP_GATEWAY_RUNTIME_DOCKER_IMAGE and $MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE"
