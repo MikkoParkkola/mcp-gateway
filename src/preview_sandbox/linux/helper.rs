@@ -404,8 +404,9 @@ fn exit_code(status: rustix::process::WaitStatus) -> ExitCode {
     ExitCode::from(u8::try_from(code).unwrap_or(1))
 }
 
-/// The plan's fault, obeyed by a debug build only. A release build has the
-/// same calls, each doing nothing, and no fault field to read.
+/// The plan's fault, obeyed by a debug build only. A release build has no
+/// fault field to read: its `arm`, `injected`, `plant` and `trace` do nothing,
+/// and it has no `hold`, since `run` calls `hold` only in a debug build.
 #[cfg(debug_assertions)]
 mod fault {
     use std::cell::Cell;
