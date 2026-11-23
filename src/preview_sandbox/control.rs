@@ -440,10 +440,11 @@ pub(crate) async fn serve_control(
         None => {}
     }
     serve_fetch(&line, &mut read, &mut write, proxy, deadline, bounds).await?;
-    // After the run line the helper only checks its entry point: the time
-    // left to the deadline, as for the fetch's own reads.
-    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-    read_status(&mut read, left, deadline, bounds).await
+    // After the run line the helper only checks its entry point, so the
+    // deadline alone bounds the status's first byte. A bound of its own equal
+    // to the time left would fire at the same instant and could win, turning
+    // a silent helper's deadline refusal into "no valid status".
+    read_status(&mut read, Duration::MAX, deadline, bounds).await
 }
 
 #[cfg_attr(
