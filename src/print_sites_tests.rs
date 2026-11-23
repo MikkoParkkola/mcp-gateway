@@ -116,7 +116,7 @@ impl<'ast> Visit<'ast> for Finder {
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         self.within(module.ident.to_string(), |me| {
-            syn::visit::visit_item_mod(me, module)
+            syn::visit::visit_item_mod(me, module);
         });
     }
 
@@ -130,21 +130,21 @@ impl<'ast> Visit<'ast> for Finder {
 
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
         self.within(function.sig.ident.to_string(), |me| {
-            syn::visit::visit_item_fn(me, function)
+            syn::visit::visit_item_fn(me, function);
         });
     }
 
     fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
         if !test_only(&method.attrs) {
             self.within(method.sig.ident.to_string(), |me| {
-                syn::visit::visit_impl_item_fn(me, method)
+                syn::visit::visit_impl_item_fn(me, method);
             });
         }
     }
 
     fn visit_trait_item_fn(&mut self, method: &'ast syn::TraitItemFn) {
         self.within(method.sig.ident.to_string(), |me| {
-            syn::visit::visit_trait_item_fn(me, method)
+            syn::visit::visit_trait_item_fn(me, method);
         });
     }
 

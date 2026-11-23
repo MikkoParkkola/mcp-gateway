@@ -22,6 +22,7 @@ const ESCAPED_KEY: &str = "x\\nFORGED y";
 /// The fatal message every row looks for.
 const LOAD_FAILED: &str = "Failed to load configuration";
 
+#[derive(Clone, Copy)]
 enum Mode {
     Stdio,
     Http,
