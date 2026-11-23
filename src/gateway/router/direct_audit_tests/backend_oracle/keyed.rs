@@ -276,14 +276,17 @@ async fn o2m_a_mixed_chain_answers_an_unreachable_step_as_an_absent_one() {
 }
 
 /// d1, first case, on `/mcp`: a keyed chain whose first step is absent for
-/// the key (its scope refusal deferred) and whose second step is malformed.
-/// Admission returns the parse refusal; its one record carries no deferred
-/// pair: kind `unrecorded` (the parse refusal notes none), no rule id. The
-/// answer is the parse refusal's, as before.
+/// the key (its scope refusal deferred), whose second is visible (so the
+/// route's all-invisible gate does not answer the call before admission,
+/// gate.rs:111-129) and whose third is malformed. Admission returns the
+/// parse refusal; its one record carries no deferred pair: kind `unrecorded`
+/// (the parse refusal notes none), no rule id. The answer is the parse
+/// refusal's, as before.
 #[tokio::test]
 async fn d1_a_deferred_step_does_not_label_a_later_refusal_on_mcp() {
     let fx = scoped_fixture(code_mode()).await;
     let chain = json!([{"tool": format!("{WITHHELD}:t"), "arguments": {}},
+                       {"tool": "alpha:t", "arguments": {}},
                        {"tool": "no_prefix", "arguments": {}}]);
     let (status, body) = call(
         &fx,

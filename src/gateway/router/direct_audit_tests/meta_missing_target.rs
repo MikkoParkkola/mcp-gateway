@@ -98,3 +98,107 @@ async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavai
     );
     assert!(invocations(&fx).is_empty(), "no record: {answer}");
 }
+
+/// A keyed `tools/call` of `name` with `arguments`, numbered 5.
+fn keyed(name: &str, arguments: Value, key: &str) -> String {
+    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+           "params": {"name": name, "arguments": arguments,
+                      "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}}})
+    .to_string()
+}
+
+/// The one record whose code is `code`.
+fn the_record(fx: &Fixture, code: i64, answer: &Value) -> Value {
+    let records: Vec<Value> = invocations(fx)
+        .into_iter()
+        .filter(|entry| entry["error_code"] == code)
+        .collect();
+    let [record] = records.as_slice() else {
+        panic!("exactly one {code} record: {records:?}; answer {answer}");
+    };
+    record.clone()
+}
+
+/// Status and data, the cross-era replay: a keyed legacy `gateway_invoke`
+/// runs, the same key from the modern era is refused with HTTP 409 and its
+/// gateway-authored data, as before (the cross-era rows), and now leaves one
+/// record: `denied` (a noted refusal's code is promoted), kind `unrecorded`.
+#[tokio::test]
+async fn an_admission_refusal_keeps_its_status_and_data_on_mcp() {
+    let fx = fixture(Setup::default()).await;
+    let call = keyed(
+        "gateway_invoke",
+        json!({"server": "alpha", "tool": "t", "arguments": {}}),
+        "k-era",
+    );
+    let (_, first) = post_to(&fx, "/mcp", &call, &Caller::Oidc).await;
+    assert!(
+        first.get("result").is_some(),
+        "premise: the first runs: {first}"
+    );
+    let (status, answer) = post_modern_as(&fx, "/mcp", &call, &Caller::ModernOidc).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    let error = &answer["error"];
+    assert_eq!(error["code"], 409, "{answer}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("JSON-RPC error 409:")),
+        "{answer}"
+    );
+    assert_eq!(
+        error["data"],
+        json!({"reason": "idempotency_era_mismatch", "stored_era": "legacy",
+               "request_era": "modern", "already_executed": true}),
+        "{answer}"
+    );
+    assert_eq!(answer["id"], 5, "{answer}");
+    let record = the_record(&fx, 409, &answer);
+    assert_eq!(record["outcome"], "denied", "{record}");
+    assert_eq!(record["decision"]["kind"], "unrecorded", "{record}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "the backend ran once");
+}
+
+/// Status and data, a Forbidden admission refusal: a keyed chain
+/// `[alpha:t, beta:t]` runs both steps; a reload then denies `beta:t`, and
+/// the replay meets its current refusal (SUB.4) with the Forbidden's own
+/// HTTP status and -32003, as before. It now leaves one record: `denied`,
+/// kind `tool_policy` (the refusal it met).
+#[tokio::test]
+async fn a_forbidden_admission_refusal_keeps_its_status_on_mcp() {
+    let fx = fixture(Setup {
+        meta_mode: MetaMode::CodeMode,
+        ..Setup::default()
+    })
+    .await;
+    let chain = json!([{"tool": "alpha:t", "arguments": {}},
+                       {"tool": "beta:t", "arguments": {}}]);
+    let call = keyed("gateway_execute", json!({ "chain": chain }), "k-sub4");
+    let (_, first) = post_modern_as(&fx, "/mcp", &call, &Caller::ModernOidc).await;
+    assert!(
+        first.get("result").is_some(),
+        "premise: the chain runs: {first}"
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        2,
+        "premise: both steps sent"
+    );
+    fx.state.live_config.edit(|c| {
+        c.security.tool_policy.enabled = true;
+        c.security.tool_policy.deny = vec!["beta:t".to_string()];
+    });
+    let (status, answer) = post_modern_as(&fx, "/mcp", &call, &Caller::ModernOidc).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["error"]["code"], -32003, "{answer}");
+    assert_eq!(answer["id"], 5, "{answer}");
+    assert!(answer["error"].get("data").is_none(), "{answer}");
+    let record = the_record(&fx, -32003, &answer);
+    assert_eq!(record["outcome"], "denied", "{record}");
+    assert_eq!(record["decision"]["kind"], "tool_policy", "{record}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        2,
+        "the replay sends nothing"
+    );
+}

@@ -481,7 +481,6 @@ mod tests {
     mod era_parity;
     mod era_split;
     mod startup_strategy;
-    mod stdio_deferred_note;
     mod stdio_dispatch;
 
     // ── MIK-7212 OBS.1: the observation record on the stdio path ───────────
