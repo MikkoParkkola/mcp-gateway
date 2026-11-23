@@ -312,9 +312,6 @@ impl Gateway {
             )
             .map_err(|error| refuse(raw_id.clone(), &error))?;
         }
-        // Both signing refusals of the request's form are recorded before
-        // they are answered. An envelope that cannot be restored is answered
-        // with no id, as before; a malformed nonce with the request's id.
         if let Some(context) = signing_context.as_mut() {
             context
                 .restore(request)
