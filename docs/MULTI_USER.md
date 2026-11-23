@@ -74,9 +74,10 @@ work only after a restart:
 - Until the restart, the new secret is refused and the bearer token stays the
   only credential.
 - `gateway.yaml` takes no other change that keeps the key: the UI routes answer
-  409 `restart_pending` naming the key, and a hand edit is refused at reload.
+  409 `restart_pending` naming the key (a change with a fault of its own is
+  refused for that fault instead), and a hand edit is refused at reload.
   Every admin page shows a banner, with the start command while the file
-  would start.
+  would start and the time it was last checked.
 - To cancel, revoke the key before restarting; the freeze ends at once.
 
 ## 1. Who is calling
