@@ -535,5 +535,9 @@ fn retention_edge(path: &Path) -> Option<u64> {
 
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "decisions_onefile_probe_tests.rs"]
+mod onefile_probe_tests;
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "decisions_tests.rs"]
 mod tests;
