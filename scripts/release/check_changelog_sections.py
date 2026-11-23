@@ -22,7 +22,12 @@ import sys
 import tomllib
 from pathlib import Path
 
-VERSION_HEADING = re.compile(r"## \[(\d[^\]]*)\](?: - (.+))?")
+# Markdown reads up to three leading spaces and any run of spaces or tabs after
+# `##` as the same level-2 heading, so all of them count as one here.
+HEADING = r" {0,3}##[ \t]+"
+VERSION_HEADING = re.compile(HEADING + r"\[(\d[^\]]*)\](?:[ \t]+-[ \t]+(.+))?")
+ANY_BRACKET_HEADING = re.compile(HEADING + r"\[")
+UNRELEASED_HEADING = re.compile(HEADING + r"\[Unreleased\]")
 
 
 def problems(changelog, tags, prepared):
@@ -34,7 +39,7 @@ def problems(changelog, tags, prepared):
         heading = VERSION_HEADING.fullmatch(line)
         if heading is None:
             # Any other `## [` heading would escape both rules unseen.
-            if line.startswith("## [") and line != "## [Unreleased]":
+            if ANY_BRACKET_HEADING.match(line) and not UNRELEASED_HEADING.fullmatch(line):
                 found.append(
                     f"CHANGELOG.md:{number}: heading is neither [Unreleased] nor a version section: {line}"
                 )
