@@ -431,7 +431,7 @@ async fn a_key_holder_subscribes_to_its_own_budget_events_over_mcp() {
 
 /// Over `/mcp`, a gateway-wide admin key and the static bearer are admitted to
 /// the health and kill-switch types; a key without admin standing is refused
-/// them with not_found (-32011): the catalogue does not show it the types.
+/// them with "not found" (-32011): the catalogue does not show it the types.
 #[tokio::test]
 async fn admins_and_the_bearer_subscribe_to_operator_events_over_mcp() {
     let root = tempfile::tempdir().expect("root");
