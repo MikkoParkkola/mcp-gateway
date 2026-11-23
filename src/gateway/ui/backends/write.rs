@@ -17,8 +17,8 @@ use crate::config::Config;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::{
-    BackendOp, ConfigWriteError, Expected, IntentKind, NO_AUDIT_LOG, ReloadOutcome, Replace,
-    ReplaceError, Replaced, StatusChange,
+    BackendOp, ConfigWriteError, Expected, IntentKind, NO_AUDIT_LOG, RefusalClass, ReloadOutcome,
+    Replace, ReplaceError, Replaced, StatusChange,
 };
 use crate::gateway::router::AppState;
 use crate::secret_store::{SaveError, StoreError};
@@ -243,6 +243,11 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         }
         ReplaceError::Refused(_) => unwritten("refused"),
         ReplaceError::AuditRefused(_) => unwritten("audit_refused"),
+        // The edit keeps API keys still waiting in gateway.yaml.
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::RestartPending { waiting },
+            ..
+        } => super::super::errors::restart_pending(waiting.names()),
         ReplaceError::ReloadRefused { .. } => unwritten("reload_refused"),
         ReplaceError::Unsupported(_) => unwritten("unsupported"),
         ReplaceError::Stage(_) => unwritten("stage"),

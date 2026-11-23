@@ -233,8 +233,14 @@ pub(crate) mod ui_fields;
 pub use generation::Generation;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use generation::refuse_hook;
+// The key routes ask the first-key question and the shared decision; the
+// flip check itself is asked only through them (and by `prepare`).
 #[cfg(feature = "webui")]
-pub(crate) use generation::refuse_multi_user_flip;
+pub(crate) use first_key::{
+    Decision, Waiting, restart_pending_decision, restart_pending_guard, waiting_first_key,
+    waiting_names,
+};
+use generation::refuse_multi_user_flip;
 
 /// `config` with both request-path security flags off: what the router test
 /// fixtures set on `AppState` before the flags moved into the published

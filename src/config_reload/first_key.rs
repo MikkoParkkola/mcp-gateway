@@ -18,8 +18,8 @@ pub(crate) enum StatusChange {
     /// Kept on disk for the next start when the candidate only waits for a
     /// restart (see [`waiting_first_key`]); the first-key create alone.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the create route passes it once the hold lands")
+        not(any(test, feature = "webui")),
+        expect(dead_code, reason = "passed by the web UI's key create")
     )]
     HoldForRestart,
 }
@@ -31,7 +31,13 @@ pub(crate) enum ReplaceReload {
     Applied(ReloadOutcome),
     /// The reload refused the bytes only for the status change; they stay on
     /// disk and a restart applies them. `keys` are the waiting keys' names.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the create route reads it"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the routes answer by the variant; its fields are the tests' to read"
+        )
+    )]
     HeldForRestart { refusal: String, keys: Vec<String> },
 }
 
@@ -73,6 +79,10 @@ pub(crate) fn waiting_names(published: &Generation, config: &Config) -> Vec<Stri
         .collect()
 }
 
+/// A key list that only removes keys yet changes the multi-user status.
+const REMOVAL_ONLY: &str = "this change would change whether the gateway is multi-user, \
+     which a running gateway never does";
+
 /// The one question every writer, reload and route asks about a candidate.
 ///
 /// Checked in this order, the first failure winning, so a file with two
@@ -104,9 +114,10 @@ pub(crate) fn waiting_first_key(
     }
     let keys = waiting_names(published, candidate);
     if keys.is_empty() {
-        // A change that only removes keys: the existing refusal, unchanged.
+        // A change that only removes keys: its own sentence, never the
+        // rule's, which would say the change applies at a restart.
         Waiting::Faulty {
-            reason: status,
+            reason: REMOVAL_ONLY.to_owned(),
             cause: FaultCause::RemovalOnly,
         }
     } else {
@@ -114,24 +125,17 @@ pub(crate) fn waiting_first_key(
     }
 }
 
-/// The waiting keys of a restart-pending answer. Built only by [`restart_pending_decision`]
-/// and [`restart_pending_guard`], so every such answer names what they found.
+/// The waiting keys of a restart-pending answer. Built only in this module,
+/// by [`restart_pending_decision`] and [`restart_pending_guard`], so every
+/// such answer names the keys the file holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WaitingKeys(Vec<String>);
 
 impl WaitingKeys {
-    /// Shape only: removed once the decision is the sole producer.
-    pub(crate) fn new(keys: Vec<String>) -> Self {
-        Self(keys)
-    }
-
     /// The names, in file order.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shape: the routes call it once the decision is built"
-        )
+        not(any(test, feature = "webui")),
+        expect(dead_code, reason = "read by the web UI's shared 409")
     )]
     pub(crate) fn names(&self) -> &[String] {
         &self.0
@@ -139,13 +143,6 @@ impl WaitingKeys {
 }
 
 /// What the shared decision answers for a write that does not hold.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "shape: the routes call it once the decision is built"
-    )
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Decision {
     /// Refused as restart pending, naming the file's waiting keys.
@@ -156,34 +153,64 @@ pub(crate) enum Decision {
     Continue,
 }
 
+/// A candidate that would bring in an API key, on a file in which none
+/// waits: only the create may write such a key.
+const ONLY_THE_CREATE_ADDS: &str = "this change would add an API key that makes the gateway \
+     multi-user, which only creating the key can do; nothing was written";
+
 /// The shared decision on a candidate written without a hold, from the
 /// question's answer on it and the file's waiting keys as read under the
-/// config lock. Shape only: answers `Continue` until it is built.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "shape: the routes call it once the decision is built"
-    )
-)]
+/// config lock. A `Yes` on a file whose keys wait is restart pending naming
+/// those keys: nothing was written, so they are what still waits. A `Yes` on
+/// a file with none is no restart-pending answer, since those bytes were
+/// never written. Every other answer is the caller's.
 pub(crate) fn restart_pending_decision(candidate: &Waiting, file_waiting: Vec<String>) -> Decision {
-    let _ = (candidate, file_waiting);
-    Decision::Continue
+    match candidate {
+        Waiting::Yes { .. } if file_waiting.is_empty() => {
+            Decision::Invalid(ONLY_THE_CREATE_ADDS.to_owned())
+        }
+        Waiting::Yes { .. } => Decision::Pending(WaitingKeys(file_waiting)),
+        Waiting::No | Waiting::Faulty { .. } => Decision::Continue,
+    }
 }
 
-/// The create's guard on the file as read: restart pending when a key
-/// already waits in it. Shape only: answers `None` until it is built.
+/// The create's guard, asked of the file as read rather than of the file
+/// with the new key: restart pending when a key already waits in it, even in
+/// a file a later hand edit broke. A file whose answer is `No` is never
+/// pending, whatever names it holds: a key added by hand to a multi-user
+/// gateway is no first key.
 #[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "shape: the routes call it once the decision is built"
-    )
+    not(any(test, feature = "webui")),
+    expect(dead_code, reason = "asked by the web UI's key create")
 )]
 pub(crate) fn restart_pending_guard(
     file: &Waiting,
     file_waiting: Vec<String>,
 ) -> Option<WaitingKeys> {
-    let _ = (file, file_waiting);
-    None
+    match file {
+        Waiting::Yes { .. } => Some(WaitingKeys(file_waiting)),
+        Waiting::Faulty { .. } if !file_waiting.is_empty() => Some(WaitingKeys(file_waiting)),
+        Waiting::No | Waiting::Faulty { .. } => None,
+    }
+}
+
+/// The reload's refusal of a file whose only fault is a first key: the keys
+/// by name, and that a running gateway never changes its multi-user status.
+/// No restart claim: a later edit could stop the file from starting.
+pub(crate) fn held_refusal(keys: &[String]) -> String {
+    format!(
+        "{} gateway.yaml holds API keys ({}) that would change whether the gateway is \
+         multi-user, which a running gateway never does; nothing was published",
+        super::POSTURE_REFUSED_PREFIX,
+        keys.join(", ")
+    )
+}
+
+/// Why a `Refuse` write was stopped by the shared decision: the waiting keys
+/// by name, and that nothing was written.
+pub(crate) fn pending_reason(waiting: &WaitingKeys) -> String {
+    format!(
+        "gateway.yaml holds waiting API keys ({}); nothing was written",
+        waiting.0.join(", ")
+    )
 }

@@ -44,6 +44,36 @@ pub(super) fn gate_refusal(refusal: Refusal) -> Response {
     }
 }
 
+/// A UI write that would keep API keys still waiting in gateway.yaml: 409,
+/// naming them. Says nothing was written and which change does go through;
+/// never speaks of a restart, since only the Gateway page's own start check
+/// can say whether the file would start.
+pub(super) fn restart_pending(waiting: &[String]) -> Response {
+    let quoted = waiting
+        .iter()
+        .map(|key| ["`", key.as_str(), "`"].concat())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = if let [_single] = waiting {
+        format!(
+            "gateway.yaml holds the waiting API key {quoted}; nothing was written. A change \
+             that keeps it is refused. To end the wait, revoke it: that change is applied."
+        )
+    } else {
+        format!(
+            "gateway.yaml holds the waiting API keys {quoted}; nothing was written. A change \
+             that keeps any of them is refused. Only a change that takes out every one is \
+             applied, which here means editing gateway.yaml by hand: they cannot be revoked \
+             one at a time."
+        )
+    };
+    json_body(
+        StatusCode::CONFLICT,
+        json!({"error": "restart_pending", "message": message, "waiting_keys": waiting}),
+    )
+    .into_response()
+}
+
 /// The 409 of a gateway.yaml revision that moved: the one to retry against.
 pub(super) fn stale(current: &FileRevision) -> (StatusCode, Json<Value>) {
     json_body(

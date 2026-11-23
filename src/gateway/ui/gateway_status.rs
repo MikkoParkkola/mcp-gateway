@@ -95,10 +95,24 @@ fn tls_block(state: &AppState) -> Value {
 fn pending_restart_block(state: &AppState) -> Value {
     let fields = state.live_config.pending_restart();
     if fields.is_empty() {
-        Value::Null
-    } else {
-        json!({ "fields": fields })
+        return Value::Null;
     }
+    let mut block = serde_json::Map::new();
+    block.insert("fields".into(), json!(fields));
+    // Keys waiting in gateway.yaml freeze it: name them, and add what the
+    // shared wrapper says for the file's own start verdict (guidance plus
+    // start command if a start would succeed, else only its refusal).
+    if let Some(wait) = state.live_config.first_key_wait() {
+        block.insert("frozen".into(), true.into());
+        block.insert("waiting_keys".into(), json!(wait.keys));
+        let restart = super::restart_confirm::restart_advice(
+            true,
+            wait.start_refusal.as_deref(),
+            state.config_path.as_deref(),
+        );
+        block.extend(restart.unwrap_or_default());
+    }
+    Value::Object(block)
 }
 
 /// The handler.

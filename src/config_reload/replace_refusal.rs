@@ -27,9 +27,11 @@ pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
         {
             RefusalClass::ShuttingDown
         }
-        ReloadRefusalKind::Other => RefusalClass::Internal,
-        ReloadRefusalKind::StatusChange => RefusalClass::RestartPending {
-            waiting: crate::config_reload::first_key::WaitingKeys::new(refusal.waiting.clone()),
-        },
+        // A status change the check before the write did not see: the bytes it
+        // judged were rolled back, so it is no restart-pending answer and its
+        // sentence is not shown. A faulty first key there is the same case.
+        ReloadRefusalKind::Other | ReloadRefusalKind::StatusChange | ReloadRefusalKind::Faulty => {
+            RefusalClass::Internal
+        }
     }
 }

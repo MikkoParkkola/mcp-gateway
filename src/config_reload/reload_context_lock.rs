@@ -16,8 +16,11 @@ use super::{EvaluatedReload, ReloadContext, STOPPED};
 pub(crate) enum ReloadRefusalKind {
     Posture,
     Other,
-    /// The file is a first key that only a restart applies (`waiting` names it).
+    /// The file's only fault is a first key (`waiting` names the keys).
     StatusChange,
+    /// The file changes the multi-user status and fails another check as
+    /// well: recorded as invalid config by this kind, never by its text.
+    Faulty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,8 +164,9 @@ impl ReloadContext {
         // Before anything changes: records stay in the order reloads take
         // this, which is `lock_reload`'s (design D-1).
         let mut slot = crate::config_reload::history::RecordSlot::take(&self.live_config).await;
+        let mut judged = None;
         let outcome = self
-            .reload_transaction(path, source.clone(), &mut slot)
+            .reload_transaction(path, source.clone(), &mut slot, &mut judged)
             .await;
         let refusals = &self.reporting.refusals;
         match &outcome {
@@ -173,8 +177,9 @@ impl ReloadContext {
                 refusals.reload_applied();
                 self.reporting.tally.applied();
             }
-            // The file waits only for a restart: the fact names its keys, and
-            // the ledger row has its own code.
+            // The file's only fault is a first key: the fact names its keys
+            // (the question's check (d) passed, so a start from it is not
+            // refused), and the ledger row has its own code.
             Err(refusal) if refusal.kind == ReloadRefusalKind::StatusChange => {
                 self.live_config.note_first_key(Some(
                     crate::config_reload::live_config::FirstKeyWait {
@@ -187,13 +192,25 @@ impl ReloadContext {
                 let pending = self.live_config.refused_record(source, None);
                 slot.spawn(&self.live_config, pending);
             }
+            // A faulty first key: invalid config by its kind, never by its
+            // text (which carries the shared reload prefix).
+            Err(refusal) if refusal.kind == ReloadRefusalKind::Faulty => {
+                self.live_config.note_first_key(judged.take());
+                refusals.record_invalid_config();
+                self.reporting.tally.refused();
+                let pending = self.live_config.refused_record(source, None);
+                slot.spawn(&self.live_config, pending);
+            }
             Err(refusal) => {
-                // Every other verdict of a reload that read the file clears
-                // the fact; one stopped by shutdown read nothing and leaves it.
+                // Every other verdict of a reload that read the file keeps an
+                // established wait only as judged again on that file (none
+                // when nothing waited, the file did not load, or it holds no
+                // waiting key now); one stopped by shutdown read nothing and
+                // leaves it.
                 if crate::config_reload::reload_failure(&refusal.text)
                     != crate::config_reload::ReloadFailure::ShuttingDown
                 {
-                    self.live_config.note_first_key(None);
+                    self.live_config.note_first_key(judged.take());
                 }
                 // The typed error was flattened to text on the way here.
                 // Parse the file once more and pass that error's location.

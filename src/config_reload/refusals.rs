@@ -242,6 +242,13 @@ impl RefusalLedger {
         );
     }
 
+    /// Record a reload refused because the file's first key fails another
+    /// check: invalid config by type. The refusal's text carries the shared
+    /// reload prefix, which classifying by text would call posture.
+    pub(crate) fn record_invalid_config(&self) {
+        self.record_coded(RefusalKind::Reload, None, RefusalCode::InvalidConfig, None);
+    }
+
     /// Record one refusal whose code is already known.
     fn record_coded(
         &self,
@@ -515,11 +522,14 @@ fn explain(code: RefusalCode, kind: RefusalKind, backend: Option<&str>) -> (Stri
                 _ => "Correct gateway.yaml; the previous configuration is still running.",
             },
         ),
+        // No claim about a restart: a later edit can leave the file unable
+        // to start, and the Gateway page says whether it would.
         RefusalCode::FirstKeyWaiting => (
-            "gateway.yaml holds API keys that change the gateway between single-user and \
-             multi-user, which applies only at a restart."
+            "gateway.yaml holds API keys that would change the gateway between \
+             single-user and multi-user, which a running gateway never does."
                 .to_owned(),
-            "Restart the gateway.",
+            "The Gateway page shows whether a start from this file would succeed; to \
+             cancel, revoke the keys.",
         ),
     }
 }

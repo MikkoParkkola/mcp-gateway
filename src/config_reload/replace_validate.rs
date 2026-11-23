@@ -15,7 +15,9 @@ use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_refer
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
-use crate::config_reload::first_key::{Waiting, waiting_first_key};
+use crate::config_reload::first_key::{
+    Decision, Waiting, pending_reason, restart_pending_decision, waiting_first_key, waiting_names,
+};
 use crate::config_reload::reload_context::EvaluatedReload;
 use crate::config_reload::reload_context::refusals::BeforeApplyKind;
 
@@ -98,6 +100,7 @@ impl ReloadContext {
         &self,
         evaluated: EvaluatedReload,
         status_change: StatusChange,
+        file_waiting: Vec<String>,
     ) -> Result<(), ReplaceError> {
         let invalid = |reason| ReplaceError::ReloadRefused {
             class: RefusalClass::Invalid,
@@ -112,24 +115,29 @@ impl ReloadContext {
         // The status refusal alone is replaced, and asked before the
         // empty-patch return, so the answer never depends on whether a key
         // change shows in the patch. Every other refusal decides as before.
-        let held = match waiting_first_key(
+        let waiting = waiting_first_key(
             self.live_config.running(),
             &self.live_config.generation(),
             &evaluated.config,
             &evaluated.overlay,
-        ) {
-            Waiting::No => false,
-            Waiting::Yes { .. } if status_change == StatusChange::HoldForRestart => true,
-            Waiting::Yes { keys, status } => {
-                return Err(ReplaceError::ReloadRefused {
-                    class: RefusalClass::RestartPending {
-                        waiting: crate::config_reload::first_key::WaitingKeys::new(keys),
-                    },
-                    reason: crate::config_reload::reload_context::nothing_published(&status),
-                });
+        );
+        let held =
+            status_change == StatusChange::HoldForRestart && matches!(waiting, Waiting::Yes { .. });
+        if !held {
+            match restart_pending_decision(&waiting, file_waiting) {
+                Decision::Pending(waiting) => {
+                    return Err(ReplaceError::ReloadRefused {
+                        reason: pending_reason(&waiting),
+                        class: RefusalClass::RestartPending { waiting },
+                    });
+                }
+                Decision::Invalid(sentence) => return Err(invalid(sentence)),
+                Decision::Continue => {}
             }
-            Waiting::Faulty { reason, .. } => return Err(invalid(reason)),
-        };
+        }
+        if let Waiting::Faulty { reason, .. } = waiting {
+            return Err(invalid(reason));
+        }
         if evaluated.patch.is_empty() {
             return Ok(());
         }
@@ -200,6 +208,11 @@ impl ReloadContext {
             class: RefusalClass::Invalid,
             reason: format!("Failed to parse config: {e}"),
         })?;
+        // The file's waiting keys, from the bytes being replaced: what a
+        // restart from them would bring in. None when they do not load.
+        let file_waiting = replaced.as_ref().map_or_else(Vec::new, |file| {
+            waiting_names(&self.live_config.generation(), file)
+        });
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
         }
@@ -232,6 +245,7 @@ impl ReloadContext {
                 configured: evaluated.configured,
             },
             status_change,
+            file_waiting,
         )
     }
 

@@ -348,10 +348,6 @@ impl LiveConfig {
 
     /// The keys a first-key file waits on for a restart: the verdict of the
     /// most recent reload that read the file. `None` when nothing waits.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the gateway route serves it with the banner")
-    )]
     #[must_use]
     pub(crate) fn waiting_keys(&self) -> Option<Vec<String>> {
         self.first_key.read().as_ref().map(|wait| wait.keys.clone())
@@ -360,8 +356,8 @@ impl LiveConfig {
     /// The whole wait: the keys and whether a start from the file would be
     /// refused, as the most recent reload that read the file judged them.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the gateway route serves it with the banner")
+        not(any(test, feature = "webui")),
+        expect(dead_code, reason = "served by the web UI's gateway read")
     )]
     #[must_use]
     pub(crate) fn first_key_wait(&self) -> Option<FirstKeyWait> {

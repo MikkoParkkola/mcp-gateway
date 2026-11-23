@@ -143,6 +143,11 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
         Err(ReplaceError::Secrets(_)) => failed("secrets"),
+        // The adopt keeps API keys still waiting in gateway.yaml.
+        Err(ReplaceError::ReloadRefused {
+            class: crate::config_reload::RefusalClass::RestartPending { waiting },
+            ..
+        }) => super::errors::restart_pending(waiting.names()),
         Err(ReplaceError::ReloadRefused { .. }) => failed("reload_refused"),
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),

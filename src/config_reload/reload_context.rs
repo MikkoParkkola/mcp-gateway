@@ -514,10 +514,21 @@ impl ReloadContext {
         path: &std::path::Path,
         source: Source,
         slot: &mut crate::config_reload::history::RecordSlot,
+        judged: &mut Option<super::live_config::FirstKeyWait>,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker(path.to_path_buf()).await?;
+        // While a first key waits, any refusal below keeps the wait, judged
+        // again on this file: its waiting keys now, and whether it would start.
+        if self.live_config.waiting_keys().is_some() {
+            let keys =
+                super::first_key::waiting_names(&self.live_config.generation(), &evaluated.config);
+            *judged = (!keys.is_empty()).then(|| super::live_config::FirstKeyWait {
+                keys,
+                start_refusal: crate::gateway::next_start_refusal(&evaluated.config),
+            });
+        }
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =
@@ -600,15 +611,19 @@ impl ReloadContext {
         );
         match waiting {
             super::first_key::Waiting::No => {}
-            super::first_key::Waiting::Yes { keys, status } => {
+            super::first_key::Waiting::Yes { keys, .. } => {
                 return Err(ReloadRefusal {
                     kind: ReloadRefusalKind::StatusChange,
-                    text: nothing_published(&status),
+                    text: super::first_key::held_refusal(&keys),
                     waiting: keys,
                 });
             }
             super::first_key::Waiting::Faulty { reason, .. } => {
-                return Err(nothing_published(&reason).into());
+                return Err(ReloadRefusal {
+                    kind: ReloadRefusalKind::Faulty,
+                    text: nothing_published(&reason),
+                    waiting: Vec::new(),
+                });
             }
         }
         let prepared = self.live_config.prepare(new_config, &overlay);
