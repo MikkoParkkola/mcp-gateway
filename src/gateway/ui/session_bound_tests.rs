@@ -159,6 +159,9 @@ fn a_mapped_or_bracketed_wildcard_bind_links_to_its_loopback() {
         ("0.0.0.0", "127.0.0.1:39400"),
         ("::", "[::1]:39400"),
         ("[::]", "[::1]:39400"),
+        // Reaches the wildcard test, not the IPv6 arm: only the strip there
+        // makes it IPv4 loopback.
+        ("[0.0.0.0]", "127.0.0.1:39400"),
     ] {
         assert_eq!(super::loopback_authority(host, 39400), link, "{host}");
     }
