@@ -241,6 +241,28 @@ fn l5_a_settings_save_while_a_key_waits_is_restart_pending() {
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
+/// The window before a reload: a key added to gateway.yaml by hand that no
+/// reload has read yet. A settings save then is refused for that key, and the
+/// answer names it although the gateway's own record of the last reload names
+/// nothing yet: the names come from the file, never from that record.
+#[test]
+fn l5_a_save_before_the_reload_names_the_hand_added_key() {
+    let fx = Fixture::new(starter(""));
+    let edited = format!("{}  api_keys:\n{}", fx.text(), key_item("late", OTHER));
+    crate::gateway::test_helpers::write_owner_only(fx.path(), &edited).expect("hand edit");
+    assert_eq!(
+        fx.live.waiting_keys(),
+        None,
+        "premise: nothing reloaded yet"
+    );
+    let before = fx.bytes();
+    let (status, answer) = save_environment(&fx, "before-reload");
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["error"], "restart_pending", "{answer}");
+    assert_eq!(answer["waiting_keys"], json!(["late"]), "{answer}");
+    assert_eq!(fx.bytes(), before, "the file changed");
+}
+
 /// L5 (the backend half): editing a backend while the key is pending keeps
 /// the key, so it gets the same 409 and the file stays as it is. The
 /// backend is written as a block, which the in-place editor can change.
