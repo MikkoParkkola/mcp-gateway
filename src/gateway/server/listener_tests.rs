@@ -299,13 +299,20 @@ fn one_listener_start_carries_the_budget_grace_to_both_transports() {
         "the listener start does not pass the grace: {}",
         starts[0]
     );
-    let shares = run
+    // Every place run.rs gives `grace` a value, so a later rebinding (say to
+    // the whole total) cannot shadow the budget's share unseen.
+    let bindings: Vec<&&str> = run
         .iter()
-        .filter(|line| line.contains("let grace = StopBudget::listener_grace_for("))
-        .count();
+        .filter(|line| {
+            line.starts_with("let grace")
+                || line.starts_with("let mut grace")
+                || line.starts_with("grace =")
+        })
+        .collect();
     assert_eq!(
-        shares, 1,
-        "the grace is not the stop budget's listener share"
+        bindings,
+        [&"let grace = StopBudget::listener_grace_for(total);"],
+        "the grace is not the stop budget's listener share, bound once"
     );
 
     let serve = code_lines(include_str!("listener.rs"));
