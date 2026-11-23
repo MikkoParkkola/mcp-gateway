@@ -80,10 +80,15 @@ pub(super) fn build_root(
     proxy: Option<&rustix::fd::OwnedFd>,
 ) -> Step {
     let root = Path::new(STAGE);
-    call(SetupStep::Mounting, "mounting the root tmpfs on", root, || {
-        let flags = MountFlags::NOSUID | MountFlags::NODEV;
-        Ok(mount("tmpfs", root, "tmpfs", flags, plan::ROOT_SIZE)?)
-    })?;
+    call(
+        SetupStep::Mounting,
+        "mounting the root tmpfs on",
+        root,
+        || {
+            let flags = MountFlags::NOSUID | MountFlags::NODEV;
+            Ok(mount("tmpfs", root, "tmpfs", flags, plan::ROOT_SIZE)?)
+        },
+    )?;
     let empty = root.join(EMPTY_FILE);
     call(SetupStep::Mounting, "creating", &empty, || {
         fs::write(&empty, b"")
@@ -210,9 +215,12 @@ fn proxy_socket(proxy: &rustix::fd::OwnedFd) -> Step {
         fs::write(&target, b"")
     })?;
     let source = PathBuf::from(format!("/proc/self/fd/{}", proxy.as_raw_fd()));
-    call(SetupStep::Binding, "binding the proxy socket on", &target, || {
-        Ok(mount_bind(&source, &target)?)
-    })?;
+    call(
+        SetupStep::Binding,
+        "binding the proxy socket on",
+        &target,
+        || Ok(mount_bind(&source, &target)?),
+    )?;
     remount(
         &target,
         MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
@@ -279,9 +287,12 @@ fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
         })?;
     }
     let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
-    call(SetupStep::Binding, "binding the CA snapshot on", &ca_pem, || {
-        Ok(mount_bind(&source, &ca_pem)?)
-    })?;
+    call(
+        SetupStep::Binding,
+        "binding the CA snapshot on",
+        &ca_pem,
+        || Ok(mount_bind(&source, &ca_pem)?),
+    )?;
     remount(
         &ca_pem,
         MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
@@ -300,11 +311,13 @@ fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
 fn bind_read_only(path: &Path) -> Step {
     let target = staged(&path.to_string_lossy());
     let meta = match call(SetupStep::Binding, "reading", path, || {
-        fs::symlink_metadata(path).map(Some).or_else(|e| match e.kind() {
-            // A runtime path this host does not have (`/etc/pki/tls` on Debian).
-            io::ErrorKind::NotFound => Ok(None),
-            _ => Err(e),
-        })
+        fs::symlink_metadata(path)
+            .map(Some)
+            .or_else(|e| match e.kind() {
+                // A runtime path this host does not have (`/etc/pki/tls` on Debian).
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(e),
+            })
     })? {
         Some(meta) => meta,
         None => return Ok(()),
@@ -357,11 +370,13 @@ enum BindBacks {
 fn mask(plan: &Plan, path: &Path, bind_backs: BindBacks) -> Step {
     let target = staged(&path.to_string_lossy());
     let meta = call(SetupStep::Masking, "reading", &target, || {
-        fs::symlink_metadata(&target).map(Some).or_else(|e| match e.kind() {
-            // Nothing to hide: the path is not inside any bind.
-            io::ErrorKind::NotFound => Ok(None),
-            _ => Err(e),
-        })
+        fs::symlink_metadata(&target)
+            .map(Some)
+            .or_else(|e| match e.kind() {
+                // Nothing to hide: the path is not inside any bind.
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(e),
+            })
     })?;
     match meta {
         None => return Ok(()),
@@ -389,10 +404,15 @@ fn mask(plan: &Plan, path: &Path, bind_backs: BindBacks) -> Step {
         bind_read_only(back)?;
     }
     // A tmpfs remount (no bind flag) makes the mask's superblock read-only.
-    call(SetupStep::Remounting, "making the mask read-only at", &target, || {
-        let flags = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
-        Ok(mount_remount(&target, flags, plan::MASK_SIZE)?)
-    })
+    call(
+        SetupStep::Remounting,
+        "making the mask read-only at",
+        &target,
+        || {
+            let flags = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
+            Ok(mount_remount(&target, flags, plan::MASK_SIZE)?)
+        },
+    )
 }
 
 fn bind_device(device: &Path, writable: bool) -> Step {
@@ -418,11 +438,16 @@ fn bind_device(device: &Path, writable: bool) -> Step {
 /// Remount one mount as a bind with `wanted`, keeping the flags it has.
 fn remount(target: &Path, wanted: MountFlags) -> Step {
     // The last row at a mount point is the topmost mount there.
-    let current = call(SetupStep::Remounting, "reading", Path::new(MOUNTINFO), mountinfo)?
-        .into_iter()
-        .rev()
-        .find(|m| m.point == target)
-        .map_or(MountFlags::empty(), |m| m.flags);
+    let current = call(
+        SetupStep::Remounting,
+        "reading",
+        Path::new(MOUNTINFO),
+        mountinfo,
+    )?
+    .into_iter()
+    .rev()
+    .find(|m| m.point == target)
+    .map_or(MountFlags::empty(), |m| m.flags);
     let locked = current
         & (MountFlags::NOSUID
             | MountFlags::NODEV
@@ -432,7 +457,11 @@ fn remount(target: &Path, wanted: MountFlags) -> Step {
             | MountFlags::RELATIME
             | MountFlags::STRICTATIME);
     call(SetupStep::Remounting, "remounting", target, || {
-        Ok(mount_remount(target, MountFlags::BIND | wanted | locked, c"")?)
+        Ok(mount_remount(
+            target,
+            MountFlags::BIND | wanted | locked,
+            c"",
+        )?)
     })
 }
 
@@ -552,19 +581,32 @@ fn verify_rows(plan: &Plan, rows: &[Mount]) -> Words {
 /// the new root itself read-only.
 pub(super) fn enter_root() -> Step {
     let old = Path::new(STAGE).join(OLD_ROOT);
-    call(SetupStep::Pivoting, "creating", &old, || fs::create_dir(&old))?;
-    call(SetupStep::Pivoting, "pivoting into", Path::new(STAGE), || {
-        Ok(rustix::process::pivot_root(STAGE, &old)?)
+    call(SetupStep::Pivoting, "creating", &old, || {
+        fs::create_dir(&old)
     })?;
+    call(
+        SetupStep::Pivoting,
+        "pivoting into",
+        Path::new(STAGE),
+        || Ok(rustix::process::pivot_root(STAGE, &old)?),
+    )?;
     // At once: a working directory left in the old root survives a lazy unmount.
-    call(SetupStep::Pivoting, "changing directory to", Path::new("/"), || {
-        Ok(rustix::process::chdir("/")?)
-    })?;
+    call(
+        SetupStep::Pivoting,
+        "changing directory to",
+        Path::new("/"),
+        || Ok(rustix::process::chdir("/")?),
+    )?;
     let old = Path::new("/").join(OLD_ROOT);
-    call(SetupStep::Pivoting, "detaching the old root at", &old, || {
-        Ok(unmount(&old, UnmountFlags::DETACH)?)
+    call(
+        SetupStep::Pivoting,
+        "detaching the old root at",
+        &old,
+        || Ok(unmount(&old, UnmountFlags::DETACH)?),
+    )?;
+    call(SetupStep::Pivoting, "removing", &old, || {
+        fs::remove_dir(&old)
     })?;
-    call(SetupStep::Pivoting, "removing", &old, || fs::remove_dir(&old))?;
     // Through the same helper as every bind, so the root keeps its locked
     // flags rather than failing the remount with an opaque EPERM.
     remount(
@@ -665,7 +707,12 @@ fn unescape(field: &str) -> PathBuf {
 
 /// `target` and every mount below it.
 fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, SetupFailure> {
-    let rows = call(SetupStep::Remounting, "reading", Path::new(MOUNTINFO), mountinfo)?;
+    let rows = call(
+        SetupStep::Remounting,
+        "reading",
+        Path::new(MOUNTINFO),
+        mountinfo,
+    )?;
     Ok(rows
         .into_iter()
         .map(|m| m.point)

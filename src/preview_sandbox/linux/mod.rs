@@ -135,9 +135,13 @@ pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
                 let status = child.wait().await;
                 super::probe_answer(status, stderr).await
             }
-            (Err(_), Some(launcher::Ending { how: launcher::How::EndedSilently, stderr })) => {
-                Err(classify(&super::probe_stderr(stderr).await))
-            }
+            (
+                Err(_),
+                Some(launcher::Ending {
+                    how: launcher::How::EndedSilently,
+                    stderr,
+                }),
+            ) => Err(classify(&super::probe_stderr(stderr).await)),
             (Err(failed), _) => Err(failed.refusal),
         }
     };

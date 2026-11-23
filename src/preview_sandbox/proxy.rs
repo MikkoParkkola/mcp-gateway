@@ -294,7 +294,9 @@ impl AllowlistProxy {
     /// helper died.
     #[cfg(test)]
     pub(crate) fn live_credential(&self) -> Option<Credential> {
-        lock(&self.shared.live).as_ref().map(|l| l.credential.clone())
+        lock(&self.shared.live)
+            .as_ref()
+            .map(|l| l.credential.clone())
     }
 
     /// Install `hook` to run as each revoke's teardown starts, for the rows.

@@ -15,7 +15,9 @@ use std::sync::Arc;
 use tokio::process::{Child, ChildStderr};
 
 use super::plan::{FetchPaths, Plan};
-use super::{Ambient, HostFacts, build_plan, ca_bundle, find_unshare, utf8, uv_probe, with_elapsed};
+use super::{
+    Ambient, HostFacts, build_plan, ca_bundle, find_unshare, utf8, uv_probe, with_elapsed,
+};
 use crate::preview_sandbox::control::{
     CONTROL_BOUNDS, ControlBounds, Ended, accept_helper, serve_control_marked,
 };
@@ -102,8 +104,9 @@ pub(super) fn prepare(
     let mut plan = build_plan(target, protected, path.as_deref())?;
     let (control, proxy, control_dir) = match phase {
         Phase::Run => {
-            let dir = ControlDir::new(runtime_dir)
-                .map_err(|e| Refusal::Step(format!("making the control socket's directory ({e})")))?;
+            let dir = ControlDir::new(runtime_dir).map_err(|e| {
+                Refusal::Step(format!("making the control socket's directory ({e})"))
+            })?;
             (dir.0.join("control.sock"), None, Some(dir))
         }
         Phase::Fetch { resolve, connect } => {
@@ -245,12 +248,18 @@ pub(super) async fn launch_with(
                     let isolation = prepared.isolation();
                     return (Ok(Started { child, isolation }), None);
                 }
-                Some(Ok(SetupStatus::Refused { step, denied })) => {
-                    (step.refusal(denied, HostFacts::read().restricts_userns()), How::Reported)
-                }
+                Some(Ok(SetupStatus::Refused { step, denied })) => (
+                    step.refusal(denied, HostFacts::read().restricts_userns()),
+                    How::Reported,
+                ),
                 Some(Err(Ended::Fetch(refusal))) => (with_elapsed(refusal, begun), How::Reported),
                 Some(Err(Ended::Status(refusal))) => (refusal, How::Reported),
-                None => ended_first(prepared.proxy.as_ref().is_some_and(|p| p.fetches_begun() > 0)),
+                None => ended_first(
+                    prepared
+                        .proxy
+                        .as_ref()
+                        .is_some_and(|p| p.fetches_begun() > 0),
+                ),
             }
         }
     };

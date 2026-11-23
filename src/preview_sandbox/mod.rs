@@ -368,7 +368,8 @@ async fn probe_answer(
 async fn probe_stderr(stderr: Option<tokio::process::ChildStderr>) -> String {
     let mut text = String::new();
     if let Some(stderr) = stderr {
-        let read = stderr.take(64 * 1024).read_to_string(&mut text);
+        let mut capped = stderr.take(64 * 1024);
+        let read = capped.read_to_string(&mut text);
         let _ = tokio::time::timeout(Duration::from_secs(1), read).await;
     }
     text

@@ -80,7 +80,11 @@ pub(super) fn uv_env(credential: &str, port: u16, path: &str) -> Vec<(String, St
 /// The helper's uv fetch step: the wrapper written before the credential,
 /// then inside the shared frame uv's one install and the direct-URL check;
 /// the run follows only when the fetch and all of the teardown succeeded.
-pub(super) fn uv(control: &mut UnixStream, uv: &UvFetch, limits: Limits) -> Result<Run, FetchError> {
+pub(super) fn uv(
+    control: &mut UnixStream,
+    uv: &UvFetch,
+    limits: Limits,
+) -> Result<Run, FetchError> {
     let home = Path::new(plan::HOME);
     write_wrapper(home, &uv.python).map_err(FetchError::Setup)?;
     let uv_dir = Path::new(&uv.uv)

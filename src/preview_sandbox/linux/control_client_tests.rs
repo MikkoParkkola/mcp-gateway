@@ -264,7 +264,12 @@ fn r45_the_helper_reports_then_waits_for_the_gateways_close() {
         denied: false,
     };
     let cases: [(&str, Option<SetupStatus>, bool, &str); 3] = [
-        ("setup_done", Some(SetupStatus::Done), false, "{\"setup_done\":true}\n"),
+        (
+            "setup_done",
+            Some(SetupStatus::Done),
+            false,
+            "{\"setup_done\":true}\n",
+        ),
         (
             "setup_refused",
             Some(refused),
@@ -299,14 +304,20 @@ fn r45_the_helper_reports_then_waits_for_the_gateways_close() {
             let gateway = gateway.try_clone().expect("clone");
             move || std::io::Read::read_to_string(&mut &gateway, &mut rest).map(|n| (n, rest))
         });
-        assert_eq!(read.expect("read to the end").0, 0, "{name}: the write half was shut");
+        assert_eq!(
+            read.expect("read to the end").0,
+            0,
+            "{name}: the write half was shut"
+        );
         assert!(
             rx.recv_timeout(Duration::from_millis(200)).is_err(),
             "{name}: returned while the gateway was still open"
         );
         drop(reader);
         drop(gateway);
-        let returned = rx.recv_timeout(GUARD).expect("returned once the gateway closed");
+        let returned = rx
+            .recv_timeout(GUARD)
+            .expect("returned once the gateway closed");
         assert_eq!(returned, Ok(()), "{name}");
     }
 }

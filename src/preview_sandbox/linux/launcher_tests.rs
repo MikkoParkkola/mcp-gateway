@@ -59,7 +59,10 @@ async fn r34s_the_teardown_returns_at_its_cap_with_the_process_unreaped() {
     let begun = tokio::time::Instant::now();
     let failed = tear_down(sleeper(), refusal, after_4900_ms).await;
     assert_eq!(begun.elapsed(), Duration::from_millis(4900));
-    assert!(failed.unreaped.is_none(), "reaped in time: nothing rides back");
+    assert!(
+        failed.unreaped.is_none(),
+        "reaped in time: nothing rides back"
+    );
 }
 
 /// R21b, kills m-return-before-reap: the teardown returns only once its wait
@@ -68,7 +71,10 @@ async fn r34s_the_teardown_returns_at_its_cap_with_the_process_unreaped() {
 async fn r21b_the_teardown_returns_only_after_the_reap() {
     WAITED.store(false, Ordering::SeqCst);
     let failed = tear_down(sleeper(), Refusal::Step("x".into()), after_1_s).await;
-    assert!(WAITED.load(Ordering::SeqCst), "returned before the wait ended");
+    assert!(
+        WAITED.load(Ordering::SeqCst),
+        "returned before the wait ended"
+    );
     assert!(failed.unreaped.is_none());
 }
 
@@ -101,7 +107,10 @@ async fn r44_a_control_path_too_long_refuses_at_the_bind_and_leaves_nothing() {
         "{refused:?}"
     );
     let left = std::fs::read_dir(&long).expect("long dir").count();
-    assert_eq!(left, 0, "the control socket's directory outlived the refusal");
+    assert_eq!(
+        left, 0,
+        "the control socket's directory outlived the refusal"
+    );
 }
 
 /// A `Prepared` around `proxy` with `fetch` as the plan's fetch.
@@ -233,11 +242,36 @@ async fn r41_each_status_ending_at_the_launch() {
     let done = r#"{"setup_done":true}"#;
     let refused = r#"{"setup_refused":true,"step":"binding","denied":false}"#;
     let cases: [(&str, &[&str], bool, Refusal); 5] = [
-        ("closed with no line", &[], false, Refusal::Step(NO_STATUS.into())),
-        ("a malformed line", &["{\"setup\":1}"], false, Refusal::Step(NO_STATUS.into())),
-        ("a second status", &[done, done], false, Refusal::Step(NO_STATUS.into())),
-        ("held open after the status", &[done], true, Refusal::Step(NO_STATUS.into())),
-        ("binding refused", &[refused], false, Refusal::Step("binding".into())),
+        (
+            "closed with no line",
+            &[],
+            false,
+            Refusal::Step(NO_STATUS.into()),
+        ),
+        (
+            "a malformed line",
+            &["{\"setup\":1}"],
+            false,
+            Refusal::Step(NO_STATUS.into()),
+        ),
+        (
+            "a second status",
+            &[done, done],
+            false,
+            Refusal::Step(NO_STATUS.into()),
+        ),
+        (
+            "held open after the status",
+            &[done],
+            true,
+            Refusal::Step(NO_STATUS.into()),
+        ),
+        (
+            "binding refused",
+            &[refused],
+            false,
+            Refusal::Step("binding".into()),
+        ),
     ];
     let mut wrong = Vec::new();
     for (name, lines, hold, want) in cases {

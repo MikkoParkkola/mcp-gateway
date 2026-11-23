@@ -125,7 +125,8 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
                 step: failure.step,
                 denied: failure.denied,
             };
-            let _ = control_client::report_and_leave(&mut control, Some(status), HELPER_BOUNDS.write);
+            let _ =
+                control_client::report_and_leave(&mut control, Some(status), HELPER_BOUNDS.write);
             return ExitCode::from(super::REFUSED);
         }
         Err(Leave::Reported(detail)) => {
@@ -176,9 +177,11 @@ fn set_up(
 ) -> Result<Ready, Leave> {
     // A capability-less process in the namespace then cannot read this
     // process's environ, fd table or memory through /proc/1.
-    step_call(SetupStep::Limits, || "making the helper non-dumpable".into(), || {
-        Ok(set_dumpable_behavior(DumpableBehavior::NotDumpable)?)
-    })?;
+    step_call(
+        SetupStep::Limits,
+        || "making the helper non-dumpable".into(),
+        || Ok(set_dumpable_behavior(DumpableBehavior::NotDumpable)?),
+    )?;
     // Encoded before the status, so a failure here can still be reported.
     let limits = serde_json::to_string(&plan.limits)
         .map_err(|e| SetupFailure::new(SetupStep::Limits, format!("encoding the limits ({e})")))?;
@@ -217,7 +220,9 @@ fn set_up(
         }
         (false, None) => None,
     };
-    let program = run.as_ref().map_or(plan.program.as_str(), |run| run.program.as_str());
+    let program = run
+        .as_ref()
+        .map_or(plan.program.as_str(), |run| run.program.as_str());
     check_target(program)?;
     let _early = fault::plant(Point::BeforeStatus);
     // The control connection is the one descriptor above 2 allowed here.
@@ -255,12 +260,16 @@ fn open_path(
 ) -> Result<(rustix::fd::OwnedFd, (u64, u64)), SetupFailure> {
     use rustix::fs::{Mode, OFlags};
     let flags = OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW;
-    let fd = step_call(SetupStep::Binding, || format!("opening {what}"), || {
-        Ok(rustix::fs::open(path, flags, Mode::empty())?)
-    })?;
-    let stat = step_call(SetupStep::Binding, || format!("checking {what}"), || {
-        Ok(rustix::fs::fstat(&fd)?)
-    })?;
+    let fd = step_call(
+        SetupStep::Binding,
+        || format!("opening {what}"),
+        || Ok(rustix::fs::open(path, flags, Mode::empty())?),
+    )?;
+    let stat = step_call(
+        SetupStep::Binding,
+        || format!("checking {what}"),
+        || Ok(rustix::fs::fstat(&fd)?),
+    )?;
     if FileType::from_raw_mode(stat.st_mode) != kind {
         return Err(SetupFailure::new(
             SetupStep::Binding,
@@ -420,8 +429,8 @@ mod fault {
     use std::cell::Cell;
     use std::io::{self, Read as _};
 
-    use super::Point;
     use super::super::plan::{Fault, Plan};
+    use super::Point;
     use crate::preview_sandbox::control_msg::SetupStep;
 
     thread_local! {
@@ -476,8 +485,8 @@ mod fault {
 
 #[cfg(not(debug_assertions))]
 mod fault {
-    use super::Point;
     use super::super::plan::Plan;
+    use super::Point;
     use crate::preview_sandbox::control_msg::SetupStep;
 
     pub(super) fn arm(_: &Plan) {}

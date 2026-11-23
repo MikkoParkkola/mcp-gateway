@@ -131,12 +131,20 @@ async fn r25_each_setup_step_is_reported_by_its_name() {
     let (_scratch, file) = outside_tmp_file();
     let sh = target("/bin/sh", &["-c", "true"]);
     let fail_at = |step| {
-        move |plan: &mut Plan| plan.fault = Some(Fault::FailAt { step, denied: false })
+        move |plan: &mut Plan| {
+            plan.fault = Some(Fault::FailAt {
+                step,
+                denied: false,
+            })
+        }
     };
     let binding = file.clone();
     let masking = file.clone();
     let cases: Vec<(&str, Box<dyn FnOnce(&mut Plan)>)> = vec![
-        ("binding", Box::new(move |p: &mut Plan| p.read_only.push(format!("{binding}/x")))),
+        (
+            "binding",
+            Box::new(move |p: &mut Plan| p.read_only.push(format!("{binding}/x"))),
+        ),
         (
             "masking",
             Box::new(move |p: &mut Plan| {
@@ -177,7 +185,15 @@ async fn r25_the_fetchs_own_setup_steps_are_reported_by_their_names() {
     let registry = Registry::start(vec![fake], "r25 CA").await;
     let path = std::env::var_os("PATH");
     let npx = target("npx", &["mcp-nobin"]);
-    let ran = preview(&gateway, &npx, &registry.ca_pem, registry.port, path.clone(), GUARD).await;
+    let ran = preview(
+        &gateway,
+        &npx,
+        &registry.ca_pem,
+        registry.port,
+        path.clone(),
+        GUARD,
+    )
+    .await;
     assert_eq!(ran.err(), Some(Refusal::Step("target_missing".into())));
 
     let runtime = tempfile::tempdir().expect("runtime");
@@ -226,7 +242,9 @@ async fn r25_a_denied_step_reaches_the_gateway_as_denied() {
         let stream = accept_helper(listener, pid, uid, CONTROL_BOUNDS, deadline()).await?;
         serve_control(stream, None, deadline(), CONTROL_BOUNDS).await
     };
-    let status = tokio::time::timeout(GUARD, status).await.expect("within the guard");
+    let status = tokio::time::timeout(GUARD, status)
+        .await
+        .expect("within the guard");
     let _ = child.start_kill();
     let _ = child.wait().await;
     assert_eq!(
@@ -249,10 +267,20 @@ async fn r26e_a_stray_descriptor_before_the_status_is_refused() {
         return;
     };
     let sleeper = target("/bin/sleep", &[MARKER]);
-    let planted = start_edited(&gateway, &sleeper, |p| p.fault = Some(Fault::PlantBeforeStatus));
-    assert_eq!(planted.await.err(), Some(Refusal::Step("descriptors".into())));
-    let started = start_edited(&gateway, &sleeper, |_| {}).await.expect("started");
-    assert!(soon(GUARD, || !marked(MARKER).is_empty()).await, "the target ran");
+    let planted = start_edited(&gateway, &sleeper, |p| {
+        p.fault = Some(Fault::PlantBeforeStatus)
+    });
+    assert_eq!(
+        planted.await.err(),
+        Some(Refusal::Step("descriptors".into()))
+    );
+    let started = start_edited(&gateway, &sleeper, |_| {})
+        .await
+        .expect("started");
+    assert!(
+        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        "the target ran"
+    );
     drop(started);
 }
 
@@ -267,17 +295,24 @@ async fn r35e_a_stray_descriptor_after_the_close_stops_the_target() {
         return;
     };
     let sleeper = target("/bin/sleep", &[MARKER]);
-    let mut started = start_edited(&gateway, &sleeper, |p| p.fault = Some(Fault::PlantAfterClose))
-        .await
-        .expect("started before the strict check");
+    let mut started = start_edited(&gateway, &sleeper, |p| {
+        p.fault = Some(Fault::PlantAfterClose)
+    })
+    .await
+    .expect("started before the strict check");
     let status = tokio::time::timeout(GUARD, started.child.wait())
         .await
         .expect("ended within the guard")
         .expect("status");
     assert_eq!(status.code(), Some(i32::from(super::REFUSED)));
     assert!(marked(MARKER).is_empty(), "the target ran");
-    let started = start_edited(&gateway, &sleeper, |_| {}).await.expect("started");
-    assert!(soon(GUARD, || !marked(MARKER).is_empty()).await, "the target ran");
+    let started = start_edited(&gateway, &sleeper, |_| {})
+        .await
+        .expect("started");
+    assert!(
+        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        "the target ran"
+    );
     drop(started);
 }
 
@@ -320,9 +355,12 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
     let mut stderr = BufReader::new(started.child.stderr.take().expect("stderr"));
     let mut order = Vec::new();
     let read_to = read_trace_to;
-    tokio::time::timeout(Duration::from_secs(10), read_to(&mut stderr, &mut order, "strict-check"))
-        .await
-        .expect("the trace reached the strict check");
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        read_to(&mut stderr, &mut order, "strict-check"),
+    )
+    .await
+    .expect("the trace reached the strict check");
     assert!(marked(MARKER).is_empty(), "the target ran before the hold");
     let want = ["sent", "closed", "strict-check"].map(|at| format!("preview-sandbox: order {at}"));
     assert_eq!(order, want);
@@ -331,11 +369,20 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
     let stdin = started.child.stdin.as_mut().expect("stdin");
     stdin.write_all(b"x").await.expect("release");
     stdin.flush().await.expect("release");
-    tokio::time::timeout(Duration::from_secs(10), read_to(&mut stderr, &mut order, "spawned"))
-        .await
-        .expect("the trace reached the spawn");
-    assert_eq!(order.last().map(String::as_str), Some("preview-sandbox: order spawned"));
-    assert!(soon(GUARD, || marked(MARKER).len() == 1).await, "the target ran once");
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        read_to(&mut stderr, &mut order, "spawned"),
+    )
+    .await
+    .expect("the trace reached the spawn");
+    assert_eq!(
+        order.last().map(String::as_str),
+        Some("preview-sandbox: order spawned")
+    );
+    assert!(
+        soon(GUARD, || marked(MARKER).len() == 1).await,
+        "the target ran once"
+    );
 }
 
 /// R24 and R27, kill m-keep-connection: the target holds no descriptor above
@@ -377,7 +424,10 @@ async fn r29_an_escaped_session_dies_with_the_namespace() {
     let mut started = start_edited(&gateway, &target("/bin/sh", &["-c", &script]), |_| {})
         .await
         .expect("started");
-    assert!(soon(GUARD, || !marked(MARKER).is_empty()).await, "the escapee ran");
+    assert!(
+        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        "the escapee ran"
+    );
     let _ = started.child.start_kill();
     let _ = started.child.wait().await;
     assert!(
@@ -395,10 +445,10 @@ async fn r42_a_stranger_on_the_control_socket_is_refused() {
     let Some(gateway) = helper().await else {
         return;
     };
-    let mut rig = rig(&target("/bin/sh", &["-c", "true"]));
-    let stranger = std::os::unix::net::UnixStream::connect(&rig.prepared.plan.control)
+    let mut early = rig(&target("/bin/sh", &["-c", "true"]));
+    let stranger = std::os::unix::net::UnixStream::connect(&early.prepared.plan.control)
         .expect("the stranger connects first");
-    let refused = launch_prepared(&mut rig.prepared, &gateway, deadline())
+    let refused = launch_prepared(&mut early.prepared, &gateway, deadline())
         .await
         .expect_err("a stranger's connection started a preview");
     assert_eq!(
@@ -408,11 +458,11 @@ async fn r42_a_stranger_on_the_control_socket_is_refused() {
     assert!(refused.unreaped.is_none(), "unshare was reaped");
     drop(stranger);
 
-    let mut rig = rig(&target("/bin/sleep", &["2999.421"]));
-    let mut started = launch_prepared(&mut rig.prepared, &gateway, deadline())
+    let mut later = rig(&target("/bin/sleep", &["2999.421"]));
+    let mut started = launch_prepared(&mut later.prepared, &gateway, deadline())
         .await
         .expect("started");
-    let late = std::os::unix::net::UnixStream::connect(&rig.prepared.plan.control);
+    let late = std::os::unix::net::UnixStream::connect(&later.prepared.plan.control);
     assert!(late.is_err(), "a connection after the start was taken");
     assert!(
         started.child.try_wait().expect("status").is_none(),
@@ -430,7 +480,11 @@ async fn r43_a_helper_killed_mid_fetch_leaves_its_credential_refused() {
     let Some(gateway) = helper().await else {
         return;
     };
-    let fake = package("mcp-r43", &[("mcp-r43", "bin/cli.sh")], serde_json::json!({}));
+    let fake = package(
+        "mcp-r43",
+        &[("mcp-r43", "bin/cli.sh")],
+        serde_json::json!({}),
+    );
     let registry = Registry::start(vec![fake], "r43 CA").await;
     let scratch = tempfile::tempdir().expect("scratch");
     let bundle = scratch.path().join("bundle.pem");
@@ -444,7 +498,8 @@ async fn r43_a_helper_killed_mid_fetch_leaves_its_credential_refused() {
         resolve: Arc::new(TestResolve),
         connect: Arc::new(TestDialer(registry.port)),
     };
-    let mut prepared = prepare(&target("npx", &["mcp-r43"]), &[], ambient, phase).expect("prepared");
+    let mut prepared =
+        prepare(&target("npx", &["mcp-r43"]), &[], ambient, phase).expect("prepared");
     let listener = prepared.listener.take().expect("listener");
     let mut child = launch(prepared.unshare, &gateway, &prepared.plan).expect("launched");
     let unshare = child.id().expect("unshare's pid");
@@ -460,9 +515,15 @@ async fn r43_a_helper_killed_mid_fetch_leaves_its_credential_refused() {
         () = registry.first_request() => {}
         () = tokio::time::sleep(GUARD) => panic!("the registry was not asked within the guard"),
     }
-    let credential = proxy.live_credential().expect("the fetch's credential is live");
+    let credential = proxy
+        .live_credential()
+        .expect("the fetch's credential is live");
     let helpers = children_of(unshare);
-    assert_eq!(helpers.len(), 1, "unshare's one child is the helper: {helpers:?}");
+    assert_eq!(
+        helpers.len(),
+        1,
+        "unshare's one child is the helper: {helpers:?}"
+    );
     let pid = rustix::process::Pid::from_raw(i32::try_from(helpers[0]).expect("pid")).expect("pid");
     rustix::process::kill_process(pid, rustix::process::Signal::KILL).expect("kill the helper");
     let ended = tokio::time::timeout(Duration::from_secs(5), &mut session)
@@ -477,7 +538,10 @@ async fn r43_a_helper_killed_mid_fetch_leaves_its_credential_refused() {
          Proxy-Authorization: {}\r\n\r\n",
         credential.basic()
     );
-    connect.write_all(request.as_bytes()).await.expect("request");
+    connect
+        .write_all(request.as_bytes())
+        .await
+        .expect("request");
     let mut answer = String::new();
     BufReader::new(&mut connect)
         .read_line(&mut answer)
@@ -512,7 +576,10 @@ async fn the_target_gets_only_the_plans_environment() {
         .await
         .expect("ended within the guard")
         .expect("stdout");
-    let mut names: Vec<&str> = out.lines().filter_map(|l| l.split_once('=').map(|(k, _)| k)).collect();
+    let mut names: Vec<&str> = out
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+        .collect();
     names.sort_unstable();
     assert_eq!(names, ["HOME", "PATH", "TMPDIR"], "{out}");
 }

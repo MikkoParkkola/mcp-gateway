@@ -40,8 +40,13 @@ async fn sandboxed_raw(program: &str, args: &[&str], protected: &[PathBuf]) -> O
         program: PathBuf::from(program),
         args: args.iter().map(Into::into).collect(),
     };
-    let started =
-        start_with_helper(Path::new(gateway_bin::path()), &target, protected, deadline()).await;
+    let started = start_with_helper(
+        Path::new(gateway_bin::path()),
+        &target,
+        protected,
+        deadline(),
+    )
+    .await;
     let Started { mut child, .. } = match started {
         Ok(started) => started,
         Err(refusal) => return skip_or_fail(&refusal),
@@ -511,13 +516,14 @@ async fn started_sleeper(marker: &str) -> Option<Started> {
 /// Start `target` and wait until the host runs `sleep <marker>`, or `None`
 /// when the host refuses the sandbox.
 async fn started_until(target: &Target, marker: &str) -> Option<Started> {
-    let started = match start_with_helper(Path::new(gateway_bin::path()), target, &[], deadline()).await {
-        Ok(started) => started,
-        Err(refusal) => {
-            skip_or_fail(&refusal);
-            return None;
-        }
-    };
+    let started =
+        match start_with_helper(Path::new(gateway_bin::path()), target, &[], deadline()).await {
+            Ok(started) => started,
+            Err(refusal) => {
+                skip_or_fail(&refusal);
+                return None;
+            }
+        };
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !host_has(marker) {
         if std::time::Instant::now() > deadline {
