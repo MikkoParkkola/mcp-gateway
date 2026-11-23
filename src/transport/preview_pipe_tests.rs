@@ -189,9 +189,10 @@ async fn r5_frames_that_are_not_json_rpc_end_the_pipe() {
         ),
     ];
     for (case, bytes) in cases {
-        // The server ends after the frame, so a pipe that read past it
-        // would report the end of output instead.
-        let server = serve(&[(1, "cat out.1")], &[("out.1", bytes)]);
+        // The server exits right after the frame (its loop would otherwise
+        // wait for more input), so a pipe that read past the frame reports
+        // the end of output instead of waiting.
+        let server = serve(&[(1, "cat out.1; exit 0")], &[("out.1", bytes)]);
         let outcome = ask(&server, "initialize").await.map(drop);
         assert_eq!(
             server.pipe.failure(),
