@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::test_source_text::{production_text, rust_files, sanitize};
+use crate::test_source_files::rust_files;
+use crate::test_source_text::{production_text, sanitize};
 
 /// `(source, kept, blanked)`: after blanking, every `kept` text remains and
 /// no `blanked` text does.
