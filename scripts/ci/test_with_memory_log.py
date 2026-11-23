@@ -245,6 +245,9 @@ def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock,
     roles = {pid: role for pid, role in ((wrapper, "wrapper"), (command, "command"), (sleeper, "sleeper")) if pid}
     if LINUX and r5:
         adopter = orphan_adopter()
+        # The adopter is never this Python, the outer shell, or a pid the run itself wrote (D3).
+        if adopter in {os.getpid(), outer.pid, wrapper, command, sleeper}:
+            adopter = None
         adopters = {adopter} if adopter is not None else set()
         low = clock.start_ticks
         w = bound_read(wrapper, {outer.pid} | (adopters if outer_rc is not None else set()), low,
