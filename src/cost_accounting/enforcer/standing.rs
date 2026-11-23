@@ -41,6 +41,8 @@ impl BudgetEnforcer {
             at_secs: now,
             limit,
         };
+        // Keep this one entry step: a read and a separate insert would let a
+        // later refusal land between them and overwrite the earlier time.
         self.key_refused
             .entry(key.to_owned())
             .and_modify(|held| {
