@@ -42,6 +42,13 @@ pub(crate) fn local_day<Z: TimeZone>(zone: &Z, unix_secs: u64) -> LocalDay {
     }
 }
 
+/// When daily limits next reset after `now`: the next local midnight in
+/// `zone`, or the next UTC midnight while a legacy UTC day is still open.
+pub(crate) fn next_reset<Z: TimeZone>(zone: &Z, now: u64, legacy_utc: bool) -> u64 {
+    let _ = (zone, now, legacy_utc);
+    0
+}
+
 /// 9999-12-31T23:59:59Z. Every offset keeps a date this late, or a few days
 /// either side of it, inside chrono's range, so no conversion can overflow.
 const MAX_SECS: i64 = 253_402_300_799;

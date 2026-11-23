@@ -242,6 +242,15 @@ impl KeyCost {
             && tally::local_date(last).expired(tally::local_date(now))
     }
 
+    /// The key's spend rate over the last three complete hours before `now`,
+    /// in USD per hour. The hour holding `now` is left out; an hour with no
+    /// spend counts as zero.
+    #[must_use]
+    pub fn rate_3h(&self, now: u64) -> f64 {
+        let _ = now;
+        0.0
+    }
+
     /// Compute cost totals for a given rolling window, `None` when the clock
     /// cannot date the window (MIK-8202 P4b).
     fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
@@ -688,3 +697,8 @@ mod cost_clock_compile_red_tests;
 #[cfg(tp2)]
 #[cfg(test)]
 mod spend_history_tests;
+
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "key_rate_tests.rs"]
+mod key_rate_tests;

@@ -33,6 +33,8 @@ mod config_history;
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;
+#[cfg(feature = "cost-governance")]
+mod costs_standing;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
