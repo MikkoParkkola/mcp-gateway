@@ -1,0 +1,9 @@
+head_sha	22756af1b932ba47fc7b4c64980490c997619001
+#mutant M1
+mcp_gateway	gateway::ui::backends::secret_slot_tests::headers::c1_a_plain_http_add_with_a_header_answers_422_before_any_write	src/gateway/ui/backends_header_tests.rs:300
+#mutant M2
+mcp_gateway	gateway::ui::backends::secret_slot_tests::headers::c2_a_plain_http_url_with_a_plain_query_no_longer_answers_500	src/gateway/ui/backends_header_tests.rs:136
+#mutant M3
+mcp_gateway	gateway::ui::backends::secret_slot_tests::headers::c3_the_override_writes_the_key_and_is_recorded	src/gateway/ui/backends_header_tests.rs:385
+#mutant M4
+mcp_gateway	gateway::ui::backends::secret_slot_tests::headers::c3_the_override_writes_the_key_and_is_recorded	src/gateway/ui/backends_header_tests.rs:376
