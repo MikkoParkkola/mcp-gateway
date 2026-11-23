@@ -86,18 +86,21 @@ pub fn is_loopback_bind(host: &str) -> bool {
 }
 
 /// `true` when `host` is a wildcard bind (empty, `0.0.0.0` or `::`), which
-/// serves every interface, loopback included. An IPv4-mapped IPv6 address is
-/// judged as the IPv4 address it carries, so `::ffff:0.0.0.0` is a wildcard
-/// too. `host` comes without brackets (see `origin_guard::strip_brackets`).
+/// serves every interface, loopback included. One pair of brackets is allowed
+/// (`[::]`), and an IPv4-mapped IPv6 address is judged as the IPv4 address it
+/// carries, so `::ffff:0.0.0.0` is a wildcard too. Every caller (the sign-in
+/// origin, the dashboard link, `setup export`) classifies with this one test.
 #[cfg(any(feature = "webui", feature = "config-export"))]
 pub(crate) fn is_wildcard_bind(host: &str) -> bool {
+    let host = origin_guard::strip_brackets(host);
     host.is_empty()
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.to_canonical().is_unspecified())
 }
-/// Shared with `setup export`, which classifies the same bind host.
-#[cfg(feature = "config-export")]
+/// Shared with the dashboard link and `setup export`, which read the same
+/// bind host.
+#[cfg(any(feature = "webui", feature = "config-export"))]
 pub(crate) use origin_guard::strip_brackets;
 mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).

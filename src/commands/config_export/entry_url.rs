@@ -69,18 +69,13 @@ const PUBLIC_URL_REFUSED: &str = "server.public_url is not a URL a client can us
      http or https, name a host a client can reach, and carry no user, password, query or \
      fragment. Fix it or remove it.";
 
-/// A bind host that serves every interface, brackets allowed: the router's
-/// own test, so the two cannot drift apart.
-fn is_wildcard(host: &str) -> bool {
-    is_wildcard_bind(strip_brackets(host))
-}
-
 /// The host a client on this machine connects to for a bind host: a wildcard
-/// becomes its family's loopback, an IPv6 address is bracketed once, and
-/// anything else (IPv4, a name) is kept.
+/// (the router's own test, so the two cannot drift apart) becomes its family's
+/// loopback, an IPv6 address is bracketed once, and anything else (IPv4, a
+/// name) is kept.
 pub(crate) fn connect_host(host: &str) -> String {
     let bare = strip_brackets(host);
-    if is_wildcard(bare) {
+    if is_wildcard_bind(bare) {
         // The family the bind serves: an empty host and an IPv4-mapped
         // wildcard (`::ffff:0.0.0.0`) serve IPv4.
         let serves_v6 = bare
@@ -152,7 +147,7 @@ pub(crate) fn url_notes(config: &Config) -> Vec<UrlNote> {
         };
     }
     let mut notes = Vec::new();
-    if is_wildcard(&config.server.host) {
+    if is_wildcard_bind(&config.server.host) {
         notes.push(UrlNote::WildcardBind);
     }
     if tls {
