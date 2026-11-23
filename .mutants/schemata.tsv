@@ -1,0 +1,15 @@
+head_sha	a189c43009f8c35836f068455b968118b5652f92
+#mutant m1
+mcp_gateway	gateway::task_service::record::delivery_tests::withhold::an_unvouched_waiting_row_serves_no_stored_input_request	src/gateway/task_service/record_withhold_tests.rs:67
+#mutant m2
+mcp_gateway	gateway::task_service::record::delivery_tests::withhold::the_receipt_helpers_return_nothing_for_a_withheld_row	src/gateway/task_service/record_withhold_tests.rs:110
+#mutant m3
+mcp_gateway	gateway::task_service::record::delivery_tests::withhold::the_receipt_helpers_return_nothing_for_a_withheld_row	src/gateway/task_service/record_withhold_tests.rs:105
+#mutant m4
+mcp_gateway	gateway::task_service::execution::worker::settle::withhold_tests::a_withheld_row_commits_no_settlement_receipt	src/gateway/task_service/execution/worker_settle_withhold_tests.rs:46
+#mutant m5
+mcp_gateway	gateway::meta_mcp::invoke::relay::tests::withhold::reading_an_unvouched_waiting_row_stages_no_receipt	src/gateway/meta_mcp/invoke/relay_withhold_tests.rs:40
+#mutant m6
+mcp_gateway	gateway::task_service::store_tests::withhold::a_handle_is_never_written_onto_a_row_waiting_on_input	src/gateway/task_service/store_tests/withhold.rs:59
+#mutant m8
+mcp_gateway	gateway::task_service::store_tests::withhold::a_row_holding_a_handle_never_parks_a_round	src/gateway/task_service/store_tests/withhold.rs:113
