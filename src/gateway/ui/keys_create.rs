@@ -29,7 +29,8 @@ use crate::config_persistence::keyedit::{
 };
 use crate::config_reload::{
     AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, NO_AUDIT_LOG,
-    RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
+    RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, StatusChange,
+    refuse_multi_user_flip,
     replace_audited,
 };
 use crate::gateway::auth::SessionMintedBy;
@@ -573,6 +574,7 @@ pub(super) async fn create_key(
         compute: Box::new(compute(entry, judge)),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: StatusChange::Refuse,
     };
     #[cfg(test)]
     if let Some(axum::Extension(hook)) = &before_lock {

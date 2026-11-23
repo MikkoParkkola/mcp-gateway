@@ -21,7 +21,8 @@ use crate::config_persistence::keyedit::{
 };
 use crate::config_reload::{
     AuditPosture, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT, Replace,
-    ReplaceError, Replaced, RevokeCheck, refuse_multi_user_flip, replace_audited_revoke,
+    ReplaceError, Replaced, RevokeCheck, StatusChange, refuse_multi_user_flip,
+    replace_audited_revoke,
 };
 use crate::gateway::auth::{digest_tag_of, presented_digest};
 use crate::gateway::router::AppState;
@@ -114,6 +115,7 @@ pub(super) async fn revoke_key(
         expected: Expected::Revision(revision),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: StatusChange::Refuse,
         compute: Box::new(move |bytes| {
             let text = std::str::from_utf8(bytes).map_err(|_| "config_refused".to_owned())?;
             let mut config: crate::config::Config =

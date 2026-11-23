@@ -18,7 +18,7 @@ use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::{
     BackendOp, ConfigWriteError, Expected, IntentKind, NO_AUDIT_LOG, ReloadOutcome, Replace,
-    ReplaceError, Replaced,
+    ReplaceError, Replaced, StatusChange,
 };
 use crate::gateway::router::AppState;
 use crate::secret_store::{SaveError, StoreError};
@@ -145,6 +145,7 @@ where
         compute: Box::new(compute),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let kind = IntentKind::Backend {
         operation,
@@ -163,7 +164,9 @@ where
         }
         (Ok(outcome), Some(Ok(value))) => Ok(Written {
             value,
-            reload: outcome.reload,
+            reload: match outcome.reload {
+                crate::config_reload::ReplaceReload::Applied(reload) => reload,
+            },
             secrets: outcome.secrets,
         }),
         (Ok(_), _) => Err(Box::new(incomplete("no_answer"))),

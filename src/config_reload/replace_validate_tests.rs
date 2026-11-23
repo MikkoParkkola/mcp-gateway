@@ -75,6 +75,7 @@ fn save(dir: &Path, store: Arc<Counting>, keys: &[&str], text: &str, value: &[u8
         expected: Expected::Any,
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(SecretStep {
             vault: Vault::with_lock(dir, dir.join("vault.lock")),
             store,
@@ -544,6 +545,7 @@ async fn distinct_valid_secrets_pass_with_per_slot_sentinels() {
         expected: Expected::Any,
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(SecretStep {
             vault: Vault::with_lock(dir.path(), dir.path().join("vault.lock")),
             store: Arc::clone(&store) as Arc<dyn SecretStore + Send + Sync>,

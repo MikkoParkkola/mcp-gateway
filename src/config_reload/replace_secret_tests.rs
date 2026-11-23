@@ -72,6 +72,7 @@ fn secret_save(
         expected,
         compute: Box::new(compute),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(dir, Arc::new(FilesStore::new(dir)))),
     }
 }
@@ -164,6 +165,7 @@ async fn a_store_refusal_writes_nothing() {
         expected: Expected::Any,
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(dir.path(), Arc::new(Refusing))),
     };
 
@@ -237,6 +239,7 @@ async fn a_refused_compute_creates_no_entry() {
         expected: Expected::Any,
         compute: Box::new(|_| Err("no".to_owned())),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(dir.path(), Arc::new(store))),
     };
 
@@ -460,6 +463,7 @@ async fn a_reference_with_a_backslash_round_trips_through_the_loader() {
         expected: Expected::Any,
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(dir.path(), Arc::new(FilesStore::new(&store_dir)))),
     };
 
@@ -555,6 +559,7 @@ fn two_slot_save(dir: &Path, store: Arc<dyn SecretStore + Send + Sync>) -> Repla
         expected: Expected::Any,
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(SecretStep {
             vault: vault(dir),
             store,
@@ -639,6 +644,7 @@ async fn the_size_bound_counts_escaped_references_before_any_entry() {
         expected: Expected::Any,
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(dir.path(), Arc::new(store))),
     };
 
@@ -691,6 +697,7 @@ async fn a_reference_longer_than_the_bound_is_refused_and_removed() {
         expected: Expected::Any,
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(step(
             dir.path(),
             Arc::new(LongReference(FilesStore::new(dir.path()))),
@@ -726,6 +733,7 @@ async fn two_secrets_for_one_field_are_refused_before_any_entry() {
         expected: Expected::Any,
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
+        status_change: crate::config_reload::StatusChange::Refuse,
         secrets: Some(twice),
     };
 

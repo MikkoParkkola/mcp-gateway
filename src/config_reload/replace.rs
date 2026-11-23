@@ -26,7 +26,8 @@ use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::history::Source;
-use crate::config_reload::{ConfigWriteError, ReloadOutcome};
+use crate::config_reload::ConfigWriteError;
+pub(crate) use crate::config_reload::first_key::{ReplaceReload, StatusChange};
 use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
 };
@@ -118,6 +119,9 @@ pub(crate) struct Replace {
     pub(crate) compute: Compute,
     pub(crate) replaced: Replaced,
     pub(crate) secrets: Option<SecretStep>,
+    /// What a candidate that changes the single-user status gets.
+    #[expect(dead_code, reason = "read by the pre-check once the first-key hold lands")]
+    pub(crate) status_change: StatusChange,
 }
 
 /// A replacement that was written and accepted.
@@ -134,8 +138,8 @@ pub(crate) struct ReplaceOutcome {
     pub(crate) revision: Option<FileRevision>,
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
-    /// The reload that accepted it.
-    pub(crate) reload: ReloadOutcome,
+    /// The reload it ended with.
+    pub(crate) reload: ReplaceReload,
     /// Each stored secret's field and the reference the written file holds for
     /// it, in the secret step's order; empty without one. Read from this write
     /// itself, never from the file afterwards (another writer may follow).
@@ -570,7 +574,7 @@ impl ReloadContext {
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
-                reload,
+                reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
             });
         }
@@ -665,7 +669,7 @@ impl ReloadContext {
                 Ok(ReplaceOutcome {
                     revision: Some(FileRevision::of(new)),
                     kept_beside,
-                    reload,
+                    reload: ReplaceReload::Applied(reload),
                     secrets: Vec::new(),
                 })
             }

@@ -5,7 +5,7 @@
 
 use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
 
-use super::reload_context::replace::{Expected, Replace, Replaced};
+use super::reload_context::replace::{Expected, Replace, Replaced, StatusChange};
 use super::*;
 use crate::config::Config;
 use crate::gateway::test_helpers::write_owner_only;
@@ -77,6 +77,7 @@ pub(super) fn to(expected: Expected, bytes: &'static str, replaced: Replaced) ->
         }),
         replaced,
         secrets: None,
+        status_change: StatusChange::Refuse,
     }
 }
 

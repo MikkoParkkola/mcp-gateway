@@ -45,7 +45,9 @@ fn writer_outcomes() -> Vec<(
             Ok(ReplaceOutcome {
                 revision: Some(FileRevision::of(b"new")),
                 kept_beside: None,
-                reload: crate::config_reload::ReloadOutcome::no_changes(),
+                reload: crate::config_reload::ReplaceReload::Applied(
+                    crate::config_reload::ReloadOutcome::no_changes(),
+                ),
                 secrets: Vec::new(),
             }),
             StatusCode::CREATED,
@@ -55,7 +57,9 @@ fn writer_outcomes() -> Vec<(
             Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
-                reload: crate::config_reload::ReloadOutcome::no_changes(),
+                reload: crate::config_reload::ReplaceReload::Applied(
+                    crate::config_reload::ReloadOutcome::no_changes(),
+                ),
                 secrets: Vec::new(),
             }),
             StatusCode::INTERNAL_SERVER_ERROR,

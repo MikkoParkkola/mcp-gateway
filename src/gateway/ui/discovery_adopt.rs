@@ -32,6 +32,7 @@ use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
     Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
+    StatusChange,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -405,6 +406,7 @@ pub(super) async fn adopt_discovery(
         compute: Box::new(compute(name.clone(), adoption.backend, slots)),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let who = super::super::admin_audit::caller_who(
         &state,

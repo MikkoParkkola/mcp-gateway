@@ -225,6 +225,7 @@ mod apply;
 pub use apply::apply_patch;
 
 mod diff;
+mod first_key;
 mod generation;
 /// The settings the web UI may change (U8).
 #[path = "ui_fields.rs"]
@@ -314,6 +315,10 @@ pub(crate) use reload_context::replace::{
     RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, RevokeCheck, SecretStep,
     replace_audited, replace_audited_revoke,
 };
+#[cfg(feature = "webui")]
+pub(crate) use first_key::ReplaceReload;
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use first_key::StatusChange;
 // The settings routes' reach into the save core: these named items only, each
 // already pub(crate) in its module; the rest of the two modules stays private.
 #[cfg(feature = "webui")]
