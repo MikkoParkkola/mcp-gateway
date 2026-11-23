@@ -92,6 +92,10 @@ owned_routes! {
     UI_SETTINGS_UNUSED = "/ui/api/settings/secrets/unused",
     /// One of those entries, deleted by name.
     UI_SETTINGS_UNUSED_ENTRY = "/ui/api/settings/secrets/unused/{name}",
+    /// The kept config versions and reload events, with no stored byte.
+    UI_CONFIG_HISTORY = "/ui/api/config/history",
+    /// Write one kept version's gateway.yaml back, keeping the replaced file.
+    UI_CONFIG_RESTORE = "/ui/api/config/restore",
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The decisions an admin has open.
     UI_DECISIONS = "/ui/api/decisions",

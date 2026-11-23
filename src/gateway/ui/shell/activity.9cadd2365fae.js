@@ -6,7 +6,7 @@
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
 import { register, segmented } from '/ui/assets/shell.14fa6b528dce.js';
-import * as listCore from '/ui/assets/activity-list.35efad14b558.js';
+import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -121,12 +121,15 @@ async function statusTab(body, ctx) {
   if (filters.key) active.append(h('span', { class: 'activity-label' }, 'Key'), h('span', { class: 'activity-value' }, filters.key));
 
   const empty = h('div', { class: 'activity-empty' });
-  const rowsEl = h('div', { class: 'activity-rows' });
+  // Focusable by script only (outside the Tab order): it holds focus when the end of the
+  // list has nothing left that could, until the next draw offers a real target.
+  const rowsEl = h('div', { class: 'activity-rows', tabindex: '-1' });
   // The observer's target, after the last row. Not focusable: Tab from the
   // search lands on the first row.
   const sentinel = h('div', { class: 'activity-more', 'aria-hidden': 'true' });
-  // Where a next page that could not be read says so, after the rows it would have followed.
-  const moreLine = h('p', { class: 'activity-more-error', hidden: true });
+  // The one line after the rows that says how to get more: Load more, "Reading more…", the
+  // next-page retry, or Keep looking. It can hold focus itself while a press with no rows reads.
+  const moreLine = h('p', { class: 'activity-more-error', hidden: true, tabindex: '-1' });
 
   const root = h('div', { class: 'activity' });
   // The member line says why the rest is hidden. It shows above the list, only when the
@@ -177,7 +180,12 @@ async function statusTab(body, ctx) {
   let left = false;
   let shownRows = [];
   let controlOn = false;
-  let retryOn = false;
+  // The slot's face: null, 'reading', 'retry', 'look' (Keep looking) or 'more' (Load more).
+  let face = null;
+  // A Keep looking press whose request is out: its handle, and where it left focus.
+  let looking = null;
+  // Set while a Keep looking ending settles: that ending places focus, not the face rule.
+  let placing = false;
   let failedShown = false;
   let opened;
   const firstDone = new Promise((done) => { opened = done; });
@@ -217,11 +225,14 @@ async function statusTab(body, ctx) {
       action = h('button', { class: 'btn', type: 'button' }, 'Last 7 days');
       action.addEventListener('click', () => chooseRange('7d'));
     }
-    return ctx.state('empty', {
+    const node = ctx.state('empty', {
       title: `No calls in the last ${RANGE_WORD[filters.range]}`,
       body: EMPTY_LINE,
       action,
     });
+    // A Keep looking press that reaches the end of the log moves focus here.
+    node.querySelector('h2')?.setAttribute('tabindex', '-1');
+    return node;
   }
 
   // Shown while the operator reads older pages and news is waiting; pressing it
@@ -240,6 +251,7 @@ async function statusTab(body, ctx) {
     rows: (Array.isArray(data?.rows) ? data.rows : []).filter((row) => row && typeof row.id === 'string'),
     next_cursor: typeof data?.next_cursor === 'string' ? data.next_cursor : null,
     cursor_reset: data?.cursor_reset === true,
+    scan_exhausted: data?.scan_exhausted === true,
   });
 
   /** Carry out what the core returned: abort, then the new state, then any request, then draw. */
@@ -268,21 +280,98 @@ async function statusTab(body, ctx) {
     if (left) return;
     const mine = list.flight?.handle === ask.handle;
     const before = list.rows.length;
+    // A Keep looking press ends here when its own answer applies; a failure or a reset
+    // falls to the face rule in draw(). Read before the step: a hidden slot drops focus.
+    const ending = mine && answer && !answer.cursor_reset && looking?.handle === ask.handle ? looking : null;
+    const stayed = ending !== null && document.activeElement === ending.from;
+    if (looking?.handle === ask.handle) looking = null;
     // A first page says whose calls the list holds.
     if (mine && answer && ask.kind !== 'append') memberLine.hidden = data?.access !== 'own';
+    placing = ending !== null;
     step('settle', failed ? { handle: ask.handle, failed: true } : { handle: ask.handle, answer });
+    placing = false;
     // Rows added below the reader are said: a screen reader would otherwise find them only by walking the links.
     const added = list.rows.length - before;
     if (mine && answer && ask.kind === 'append' && !answer.cursor_reset && added > 0) {
       ctx.announce(`${added} more call${added === 1 ? '' : 's'}.`);
     }
+    if (ending) endLooking(ending.from, stayed, added);
     opened();
+  }
+
+  /** Where a Keep looking press ends. Focus moves only if it is still where the press left it. */
+  function endLooking(from, stayed, added) {
+    const rows = rowsEl.children;
+    let target = null;
+    let say = null;
+    if (added > 0) {
+      // The new rows were said above; a press with no rows hands focus to the first of them.
+      if (from === moreLine) target = rows[rows.length - added];
+    } else if (list.cursor && list.stalled) {
+      target = keepLooking;
+      say = rows.length ? 'No more matching calls yet. You can keep looking.' : 'Nothing found yet. You can keep looking.';
+    } else if (!list.cursor) {
+      // With rows, focus stays on the last one, where the press put it.
+      if (!rows.length) target = empty.querySelector('h2');
+      say = rows.length ? 'No more matching calls.' : 'No calls found.';
+    } else if (from === moreLine) {
+      // A page that read to its end with a cursor and nothing in it: the face rule's target.
+      target = faceTarget();
+    }
+    if (stayed) target?.focus({ preventScroll: true });
+    if (say) ctx.announce(say);
+  }
+
+  /** Where focus goes when the face it sat in changes: its button, else the last row, else the empty state. */
+  const faceTarget = () => moreLine.querySelector('button') ?? rowsEl.lastElementChild ?? empty.querySelector('h2')
+    // Then the slot itself (a Retry pressed with no rows reads there), else the rows container.
+    ?? (moreLine.hidden ? rowsEl : moreLine);
+
+  /** A paging press: focus waits on the row the next page follows, or on the slot with no rows. */
+  function pressFrom() {
+    const from = rowsEl.lastElementChild ?? moreLine;
+    // No scroll: only the press asks, never the list end coming into view because of it.
+    from.focus({ preventScroll: true });
+    return from;
+  }
+
+  const loadMore = h('button', { class: 'btn', type: 'button' }, 'Load more');
+  loadMore.addEventListener('click', () => {
+    pressFrom();
+    step('next');
+  });
+  const keepLooking = h('button', { class: 'btn', type: 'button' }, 'Keep looking');
+  const lookSays = document.createTextNode('');
+  keepLooking.addEventListener('click', () => {
+    const from = pressFrom();
+    step('next');
+    looking = list.flight?.kind === 'append' ? { handle: list.flight.handle, from } : null;
+  });
+  const retry = h('button', { class: 'btn', type: 'button' }, 'Retry');
+  retry.addEventListener('click', () => {
+    // Focus stays in the list, on the row the next page follows.
+    rowsEl.lastElementChild?.focus();
+    step('next');
+  });
+
+  /** Rebuild the slot for a new face. Keep looking's sentence is kept current by draw(). */
+  function showFace(next) {
+    moreLine.hidden = next === null;
+    if (next === 'reading') moreLine.replaceChildren('Reading more…');
+    else if (next === 'more') moreLine.replaceChildren(loadMore);
+    else if (next === 'look') moreLine.replaceChildren(lookSays, keepLooking);
+    else if (next === 'retry') {
+      moreLine.replaceChildren('More calls could not be read. ', retry);
+      // Said as well as shown: the rows above stay, so nothing else says paging stopped.
+      ctx.announce('More calls could not be read.');
+    } else moreLine.replaceChildren();
   }
 
   function draw() {
     const rows = list.rows;
     if (rows !== shownRows) {
-      const grew = rows.length > shownRows.length && shownRows.every((row, i) => rows[i] === row);
+      // An append of no rows keeps every row element, so a focused row is never rebuilt away.
+      const grew = rows.length >= shownRows.length && shownRows.every((row, i) => rows[i] === row);
       if (grew) rowsEl.append(...rows.slice(shownRows.length).map(rowLink));
       else rowsEl.replaceChildren(...rows.map(rowLink));
       shownRows = rows;
@@ -304,22 +393,22 @@ async function statusTab(body, ctx) {
       }
     }
     staleLine.hidden = !has('stale');
-    if (has('next-retry') !== retryOn) {
-      retryOn = has('next-retry');
-      moreLine.hidden = !retryOn;
-      if (retryOn) {
-        const retry = h('button', { class: 'btn', type: 'button' }, 'Retry');
-        retry.addEventListener('click', () => {
-          // Focus stays in the list, on the row the next page follows.
-          rowsEl.lastElementChild?.focus();
-          step('next');
-        });
-        moreLine.replaceChildren('More calls could not be read. ', retry);
-        // Said as well as shown: the rows above stay, so nothing else says paging stopped.
-        ctx.announce('More calls could not be read.');
-      } else {
-        moreLine.replaceChildren();
-      }
+    const want = list.flight?.kind === 'append' ? 'reading'
+      : has('next-retry') ? 'retry'
+        : !list.cursor ? null
+          : list.stalled ? 'look' : 'more';
+    // Read before the rebuild: a removed button takes focus with it.
+    // The end area: the slot, the empty state, or the rows container holding focus for them.
+    const at = document.activeElement;
+    const inEnd = !placing && (moreLine.contains(at) || empty.contains(at) || at === rowsEl);
+    const faceMoved = want !== face;
+    if (want !== face) {
+      face = want;
+      showFace(want);
+    }
+    // Changed in place, so a focused Keep looking stays the same element.
+    if (face === 'look') {
+      lookSays.data = rows.length ? 'The search stopped before the end of the log. ' : 'No matching call in the part of the log searched so far. ';
     }
     const waiting = list.held && list.newer;
     if (waiting !== controlOn) {
@@ -331,6 +420,11 @@ async function statusTab(body, ctx) {
     // Empty only once nothing is out and the list has run out of pages.
     empty.replaceChildren();
     if (!list.flight && rows.length === 0 && !list.cursor && !failedShown) empty.append(emptyNode());
+    // The face focus sat in changed: focus stays in the list, after the empty state is drawn.
+    // Focus there moves on when the face changed, when its element went or hid, or when the
+    // rows container held it and a real target may exist now.
+    const gone = !at?.isConnected || at.closest('[hidden]') !== null;
+    if (inEnd && (faceMoved || gone || at === rowsEl)) faceTarget()?.focus({ preventScroll: true });
     readOn();
   }
 
@@ -344,7 +438,8 @@ async function statusTab(body, ctx) {
   function readOn(scrolled = false) {
     const prior = waitedOn;
     waitedOn = null;
-    if (left || !list.cursor) return;
+    // A scan that stopped short waits for Keep looking: each read can cost the gateway 8 MB.
+    if (left || !list.cursor || list.stalled) return;
     const out = list.flight;
     if (out?.kind === 'append' || list.notices.includes('next-retry')) return;
     const box = sentinel.getBoundingClientRect();

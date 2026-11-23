@@ -104,6 +104,13 @@ pub(crate) fn configured_key_principal(
 /// task's recorded owner and the key of its MCP child (MIK-7825).
 pub(crate) const CREDENTIAL_OWNER_PREFIX: &str = "credential:";
 
+/// The owner key of a credential principal: [`CREDENTIAL_OWNER_PREFIX`] and its
+/// storage form. The one builder of that string, so the transport's owner and
+/// every check that judges a credential against it cannot spell it two ways.
+pub(crate) fn credential_owner_key(principal: &InternalPrincipal) -> String {
+    format!("{CREDENTIAL_OWNER_PREFIX}{}", principal.storage_form())
+}
+
 /// MIK-7973: refuse a configuration where two credentials resolve to one
 /// principal, since each would then own the other's sessions, grants and tasks.
 ///

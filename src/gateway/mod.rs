@@ -103,6 +103,9 @@ mod restart_status;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;
+/// The bind-host classifiers `setup export` shares with the router.
+#[cfg(feature = "config-export")]
+pub(crate) use router::{is_wildcard_bind, strip_brackets};
 pub(crate) mod routes;
 #[cfg(tp4)]
 #[cfg(test)]
@@ -120,6 +123,8 @@ mod stop_budget;
 /// (the reload loop) is what gives it a production caller.
 #[cfg(test)]
 pub(crate) use router::grant_subject_from_verified_identity;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use stop_budget::BACKEND_RESERVE_FOR_TEST;
 pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside

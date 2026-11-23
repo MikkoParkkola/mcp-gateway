@@ -24,11 +24,12 @@
 //! out, not expanded. An `include_*!` whose path is built that way is not seen
 //! here; the packaged build on every pull request fails on it instead.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::visit::Visit;
 
 use super::packaged::{crate_root, is_packaged_crate};
+use crate::test_source_files::rust_files;
 
 #[path = "shipped_reads_scan.rs"]
 mod scan_impl;
@@ -288,20 +289,6 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     found.sort();
     found.dedup();
     found
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// PACKED.2 on the real tree. Checkout-only: the unpacked crate has the
