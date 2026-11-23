@@ -664,7 +664,11 @@ impl ReloadContext {
     /// The first-key question on the file a reload read: a file whose one
     /// fault is a first key is refused as a status change naming its keys;
     /// one that also fails another check, by that check, as a faulty first key.
-    fn first_key_check(&self, file: &Config, overlay: &EnvOverlay) -> Result<(), ReloadRefusal> {
+    fn first_key_check(
+        &self,
+        file: &Config,
+        overlay: &EnvOverlay,
+    ) -> std::result::Result<(), ReloadRefusal> {
         let live = &self.live_config;
         let answer =
             super::first_key::waiting_first_key(live.running(), &live.generation(), file, overlay);
