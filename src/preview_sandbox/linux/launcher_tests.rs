@@ -340,13 +340,13 @@ async fn the_fetch_steps_clock_starts_at_the_launch() {
     prepared.listener = Some(tokio::net::UnixListener::bind(&control).expect("listener"));
     prepared.plan.control = control.to_str().expect("UTF-8 runtime path").to_owned();
     // The prepare is over; the launch comes 4 s later.
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(Duration::from_secs(4)).await; // timing: precondition
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     // Not fetch_start: the fetch half refuses, so its words carry the time.
     let helper = stand_in(&[r#"{"not":"fetch_start"}"#], false);
     let spawn = move |plan: &Plan| {
         // Inside the launch: the spawn runs after the clock starts.
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs(1)); // timing: lower-bound
         helper(plan)
     };
     let (launched, _) = launch_with(&mut prepared, spawn, deadline, SHORT, reap_exit).await;
