@@ -20,22 +20,48 @@ case $every in '' | *[!0-9]*) every=30 ;; esac # digits only, else the default
 proc=${MEM_LOG_PROC:-/proc}
 cgroup=${MEM_LOG_CGROUP:-/sys/fs/cgroup}
 
-field() { # field FILE LINE-PREFIX KEY: KEY's value on the line starting with LINE-PREFIX, or n/a
-  local v
-  v=$(awk -v p="$2" -v k="$3=" '$1 == p { for (i = 2; i <= NF; i++) if (index($i, k) == 1) print substr($i, length(k) + 1) }' "$1" 2>/dev/null)
-  echo "${v:-n/a}"
+# The sampler holds no command substitution, nor any other form of a nested command (row W19): bash parses a trap's
+# action when the signal arrives, and a substitution open at that moment breaks the parse, so the signal was lost or
+# bash aborted. Values are read with builtins only.
+field() { # field VAR FILE LINE-PREFIX KEY: set VAR to KEY's value on the line starting with LINE-PREFIX, or n/a
+  local words word
+  printf -v "$1" n/a
+  while read -ra words || [ "${#words[@]}" -gt 0 ]; do
+    [ "${words[0]-}" = "$3" ] || continue
+    for word in "${words[@]:1}"; do
+      if [ "${word#"$4="}" != "$word" ] && [ -n "${word#"$4="}" ]; then
+        printf -v "$1" %s "${word#"$4="}"
+        return 0
+      fi
+    done
+  done 2>/dev/null <"$2"
 }
 
 sample() { # sample WHAT: one line of numbers on stderr
-  local mem swap cg oom load
-  mem=$(free -m 2>/dev/null | awk '/^Mem:/ { printf "total %s used %s available %s", $2, $3, $7 }')
-  swap=$(free -m 2>/dev/null | awk '/^Swap:/ { printf "total %s used %s", $2, $3 }')
-  cg=$(awk '{ printf "%d", $1 / 1048576 }' "$cgroup/memory.current" 2>/dev/null)
-  oom=$(awk '$1 == "oom_kill" { print $2 }' "$cgroup/memory.events" 2>/dev/null)
-  load=$(awk '{ print $1 }' "$proc/loadavg" 2>/dev/null)
-  echo "memory $(date -u +%T) $1: Mem ${mem:-n/a}; Swap ${swap:-n/a};" \
-    "pressure mem some $(field "$proc/pressure/memory" some avg10) full $(field "$proc/pressure/memory" full avg10);" \
-    "io some $(field "$proc/pressure/io" some avg10); load ${load:-n/a}; cgroup MB ${cg:-n/a} oom_kill ${oom:-n/a}" >&2
+  # free runs first in a pipeline whose reader is a subshell: never the wrapper's own process, and nothing is
+  # carried back to it, so it needs no substitution and no temporary file.
+  free -m 2>/dev/null | (
+    mem=n/a swap=n/a load=n/a cg=n/a oom=n/a bytes=
+    while read -r name total used free shared cache available rest; do
+      case $name in
+        Mem:) mem="total $total used $used available $available" ;;
+        Swap:) swap="total $total used $used" ;;
+      esac
+    done
+    read -r load rest 2>/dev/null <"$proc/loadavg"
+    [ -n "$load" ] || load=n/a
+    read -r bytes rest 2>/dev/null <"$cgroup/memory.current"
+    case $bytes in '' | *[!0-9]*) ;; *) ((cg = 10#$bytes / 1048576)) ;; esac
+    while read -r name value rest; do
+      [ "$name" != oom_kill ] || oom=${value:-n/a}
+    done 2>/dev/null <"$cgroup/memory.events"
+    field some "$proc/pressure/memory" some avg10
+    field full "$proc/pressure/memory" full avg10
+    field io "$proc/pressure/io" some avg10
+    TZ=UTC printf -v now '%(%T)T' -1
+    printf '%s %s\n' "memory $now $1: Mem $mem; Swap $swap; pressure mem some $some full $full; io some $io;" \
+      "load $load; cgroup MB $cg oom_kill $oom" >&2
+  )
 }
 
 [ $# -gt 0 ] || { echo "usage: with-memory-log.sh CMD [ARG...]" >&2; exit 2; }
@@ -58,7 +84,7 @@ sample start
 nap=
 while :; do
   # bash 5.1 and 5.2 drop a job a signal killed from the job table as soon as they notice the death, so a CMD killed
-  # before the wait below (while a sample runs, say: an out-of-memory kill) is never named by `wait -n`, and the loop
+  # before the wait below (while a sample runs, say: an out-of-memory kill) is never named by "wait -n", and the loop
   # would wake only for naps until the step limit. Its pid is gone then: collect the status bash saved for it.
   if ! kill -0 "$cmd" 2>/dev/null; then
     wait "$cmd" 2>/dev/null
