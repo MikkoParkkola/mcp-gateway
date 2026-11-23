@@ -286,7 +286,9 @@ async fn k5_a_slot_that_became_a_reference_meanwhile_is_not_overwritten() {
 #[tokio::test]
 async fn k6_a_kept_value_over_a_held_reference_is_written_as_given() {
     let other = held_file();
-    for kept in [other.reference.as_str(), "", "${DB_HOST}"] {
+    // The template names a variable every test host sets: the writer
+    // refuses a template it cannot resolve.
+    for kept in [other.reference.as_str(), "", "${PATH}"] {
         let held = held_file();
         let panel = Panel::with(&holding("DATABASE_HOST", &held.reference), Reloads::Accept).await;
         let (status, body) = panel
