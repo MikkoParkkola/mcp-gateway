@@ -336,6 +336,13 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
     let (_, first) = bench
         .settle(|code, body| code == StatusCode::OK && of_kind(body, UNREADABLE).len() == 1)
         .await;
+    // Listed while unreadable: without this the id comparisons below would
+    // hold between two absent items.
+    assert_eq!(
+        of_kind(&first, UNREADABLE).len(),
+        1,
+        "listed while unreadable: {first}"
+    );
     let unreadable = of_kind(&first, UNREADABLE).first().map(|item| (*item).clone());
     unlock(&file);
     garble(&file);
@@ -347,6 +354,11 @@ async fn f5b_one_file_keeps_one_item_through_every_state() {
                     .is_some_and(|item| item["reason"] == "did_not_parse")
         })
         .await;
+    assert_eq!(
+        of_kind(&garbled, UNREADABLE).len(),
+        1,
+        "listed while garbled: {garbled}"
+    );
     let as_garbled = of_kind(&garbled, UNREADABLE).first().map(|item| (*item).clone());
     assert_eq!(
         (
