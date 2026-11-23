@@ -197,8 +197,57 @@ pub(crate) fn anchors_and_aliases(text: &str) -> Option<usize> {
 /// collection and scalar carries no anchor and no tag, no alias appears, and
 /// every mapping key is a scalar. Anything else, or a parse error, is false.
 pub(crate) fn renderable(text: &str) -> bool {
-    let _ = text;
+    if super::guard(text).is_err() {
+        return false;
+    }
+    // Per open collection: whether it is a mapping, and whether a mapping's
+    // next node is a key. Kept here, not taken from `block_nodes`, whose
+    // pairing a collection key shifts.
+    let mut open: Vec<(bool, bool)> = Vec::new();
+    let mut documents = 0;
+    for item in Parser::new_from_str(text) {
+        let Ok((event, span)) = item else {
+            return false;
+        };
+        let tagged = span.tag_start.is_some();
+        let mapping = matches!(event, Event::MappingStart(..));
+        match event {
+            Event::DocumentStart(..) => {
+                documents += 1;
+                if documents > 1 {
+                    return false;
+                }
+            }
+            Event::Scalar(_, _, anchor, tag) => {
+                if anchor != 0 || tag.is_some() || tagged {
+                    return false;
+                }
+                one_node_done(&mut open);
+            }
+            Event::MappingStart(_, anchor, tag) | Event::SequenceStart(_, anchor, tag) => {
+                let at_key = matches!(open.last(), Some((true, true)));
+                if anchor != 0 || tag.is_some() || tagged || at_key {
+                    return false;
+                }
+                open.push((mapping, true));
+            }
+            Event::MappingEnd | Event::SequenceEnd => {
+                open.pop();
+                one_node_done(&mut open);
+            }
+            Event::Alias(_) => return false,
+            _ => {}
+        }
+    }
     true
+}
+
+/// A whole node closed under the innermost open collection: in a mapping,
+/// a key is followed by its value and a value by the next key.
+fn one_node_done(open: &mut [(bool, bool)]) {
+    if let Some((true, at_key)) = open.last_mut() {
+        *at_key = !*at_key;
+    }
 }
 
 /// Add a node under the innermost open collection (or as the root), and
