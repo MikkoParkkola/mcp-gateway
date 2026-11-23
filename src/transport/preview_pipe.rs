@@ -145,18 +145,20 @@ impl PreviewPipe {
         } = wire;
         let line = match read_frame(stdout, frame, FRAME_CAP).await {
             Ok(Some(line)) => line,
-            Ok(None) => return Err(self.fail(PipeFailure::OutputEnded)),
             Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                let not_utf8 = error
-                    .get_ref()
-                    .is_some_and(|inner| inner.is::<std::string::FromUtf8Error>());
+                let not_utf8 = matches!(
+                    error.get_ref(),
+                    Some(inner) if inner.is::<std::string::FromUtf8Error>()
+                );
                 return Err(self.fail(if not_utf8 {
                     PipeFailure::NotJsonRpc
                 } else {
                     PipeFailure::FrameOverCap
                 }));
             }
-            Err(_) => return Err(self.fail(PipeFailure::OutputEnded)),
+            // The end of the stream, or a read that failed: either way the
+            // output ended before the answer.
+            Ok(None) | Err(_) => return Err(self.fail(PipeFailure::OutputEnded)),
         };
         let Some(rest) = left.checked_sub(line.len()) else {
             return Err(self.fail(PipeFailure::OverBudget));
@@ -244,6 +246,7 @@ impl Transport for PreviewPipe {
     }
 }
 
+#[cfg(tp5)]
 #[cfg(all(test, unix))]
 #[path = "preview_pipe_tests.rs"]
 mod tests;

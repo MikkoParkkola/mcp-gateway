@@ -471,5 +471,6 @@ async fn r12s_the_first_call_after_the_exchange_waits_250_ms_after_the_notificat
         .await
         .expect("the listing");
     let waited = server.at("tools/list") - server.at("notifications/initialized");
+    // limit-under-test (paused-clock): the settle wait itself, pinned exactly on tokio's paused clock
     assert_eq!(waited, Duration::from_millis(250));
 }

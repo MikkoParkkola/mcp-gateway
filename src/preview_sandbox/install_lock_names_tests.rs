@@ -7,7 +7,9 @@ use super::*;
 
 /// R20's locks: a root plus one entry, the entry's own fields given.
 fn lock_with(key: &str, entry: Value) -> Value {
-    json!({"lockfileVersion": 3, "packages": {"": {}, key: entry}})
+    let mut lock = json!({"lockfileVersion": 3, "packages": {"": {}}});
+    lock["packages"][key] = entry;
+    lock
 }
 
 const TARBALL: &str = "https://registry.npmjs.org/ok/-/ok-1.0.0.tgz";
