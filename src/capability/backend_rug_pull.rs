@@ -175,6 +175,20 @@ pub(crate) struct Mismatches {
     pub(crate) changes: Vec<(RugPullRecord, String, String)>,
     /// A recorded file could not be read: the list is missing it.
     pub(crate) incomplete: bool,
+    /// Each recorded file this pass could not judge, and why.
+    pub(crate) unreadable: Vec<(RugPullRecord, ReadFault)>,
+}
+
+/// Why a recorded changed file could not be judged on one pass.
+#[cfg(feature = "webui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadFault {
+    /// The gateway may not read it.
+    NoPermission,
+    /// It could not be read for another reason (it is a directory, say).
+    Unreadable,
+    /// It was read, but its pin line does not parse.
+    Garbled,
 }
 
 /// The `sha256:` pin a capability file declares: `Ok(None)` for none,
