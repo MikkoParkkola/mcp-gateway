@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config/backend_add.rs	validate_backend_name	name_refusal	1	no-record	a server name the load would refuse (a control character, or . and ..) is refused by the add check before any write: the admin UI's add and preview routes answer 422 and the CLI prints it; no tool call to record
+src/config/validation.rs	validate_backend_names	name_refusal	2	no-record	the config load refuses a backend name or capabilities.name holding a control character, or named . or ..; answered at start-up or as a refused reload, never as a tool call's answer
