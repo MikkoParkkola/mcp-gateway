@@ -832,3 +832,8 @@ mod account_consumer_config_tests;
 #[cfg(test)]
 #[path = "descriptor_config_tests.rs"]
 mod descriptor_config_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "defaults_tests.rs"]
+mod defaults_tests;
