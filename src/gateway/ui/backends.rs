@@ -448,6 +448,7 @@ async fn update_backend(
     let updated = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
+    let stored = slotting::stored_env_keys(slotted.as_ref());
     let mutation = write_backend(
         &state,
         BackendOp::Update,
@@ -457,6 +458,14 @@ async fn update_backend(
         move |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
+            }
+            // A slot that became a secret reference since the read above
+            // never gets a literal written over it as typed.
+            if let Some(raced) = env
+                .as_ref()
+                .and_then(|env| slotting::now_held(config, &name, env, &stored))
+            {
+                return Err((StatusCode::CONFLICT, raced));
             }
 
             let transport = requested_transport(command, url);
