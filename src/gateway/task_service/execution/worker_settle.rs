@@ -246,3 +246,8 @@ fn is_terminal(status: TaskStatus) -> bool {
         TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
     )
 }
+
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "worker_settle_withhold_tests.rs"]
+mod withhold_tests;
