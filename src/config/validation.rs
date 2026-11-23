@@ -14,10 +14,12 @@ pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext 
      machine. Use TLS, or set allow_cleartext_credentials on this backend to accept that the \
      credentials are readable and replayable in transit.";
 
-/// Why loading refuses a server's name, if it does; `kind` says which setting holds it. A control character could
-/// start a forged line wherever the name is printed, and the message itself names the server escaped. No address can
-/// reach a server called `.` or `..`: clients fold those path segments before the request is sent.
-pub(super) fn name_refusal(kind: &str, name: &str) -> Option<String> {
+/// Why a name that must be printable and addressable is refused, if it is; `kind` says which setting holds it. A
+/// control character could start a forged line wherever the name is printed, and the message itself names it escaped.
+/// No address can reach `.` or `..`: clients fold those path segments before the request is sent. The one copy of
+/// this rule: loading uses it for backend names and `capabilities.name`, and the routes that add a server use it too.
+/// Another name with the same need (an API key's, say) calls it rather than copying it.
+pub(crate) fn name_refusal(kind: &str, name: &str) -> Option<String> {
     if name.chars().any(char::is_control) {
         let shown = crate::log_escape::escaped(name);
         return Some(format!(
@@ -26,7 +28,7 @@ pub(super) fn name_refusal(kind: &str, name: &str) -> Option<String> {
     }
     if name == "." || name == ".." {
         return Some(format!(
-            "{kind} '{name}' cannot be reached: no address can name a server called '.' or '..'; rename it"
+            "{kind} '{name}' cannot be reached: no address can name '.' or '..'; rename it"
         ));
     }
     None
