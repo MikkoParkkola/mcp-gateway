@@ -267,3 +267,66 @@ async fn a_client_disconnect_cancels_the_pending_handler() {
     let _ = stop.send(());
     let _ = timeout(HANG_STOP, server).await;
 }
+
+/// The code lines of a source file, comments left out.
+fn code_lines(source: &str) -> Vec<&str> {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//"))
+        .collect()
+}
+
+/// HTTP and TLS share one budget: the gateway starts its listener from one
+/// place, with the stop budget's listener share as the grace, and `serve`
+/// gives the TLS path the very handle the grace is applied to. The rows above
+/// prove what one listener does with its grace; this one proves there is only
+/// one listener start for that grace to reach.
+#[test]
+fn one_listener_start_carries_the_budget_grace_to_both_transports() {
+    let run = code_lines(include_str!("run.rs"));
+    let starts: Vec<&&str> = run
+        .iter()
+        .filter(|line| line.contains("listener::serve("))
+        .collect();
+    assert_eq!(
+        starts.len(),
+        1,
+        "the gateway starts its listener in more than one place: {starts:?}"
+    );
+    assert!(
+        starts[0].contains(", grace, "),
+        "the listener start does not pass the grace: {}",
+        starts[0]
+    );
+    let shares = run
+        .iter()
+        .filter(|line| line.contains("let grace = StopBudget::listener_grace_for("))
+        .count();
+    assert_eq!(
+        shares, 1,
+        "the grace is not the stop budget's listener share"
+    );
+
+    let serve = code_lines(include_str!("listener.rs"));
+    let tls: Vec<&&str> = serve
+        .iter()
+        .filter(|line| line.contains("serve_tls("))
+        .collect();
+    assert_eq!(tls.len(), 1, "one TLS path expected: {tls:?}");
+    assert!(
+        tls[0].ends_with(", handle).await;"),
+        "the TLS path does not get the handle the grace is applied to: {}",
+        tls[0]
+    );
+    for wanted in [
+        "let bridge = handle.clone();",
+        "bridge.graceful_shutdown(Some(grace));",
+    ] {
+        assert_eq!(
+            serve.iter().filter(|line| **line == wanted).count(),
+            1,
+            "listener.rs must hold exactly one `{wanted}`"
+        );
+    }
+}
