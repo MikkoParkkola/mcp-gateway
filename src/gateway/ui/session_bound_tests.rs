@@ -148,3 +148,19 @@ fn bound_for_binds_the_matched_key_and_refuses_an_unbindable_one() {
         super::bound_for(&auth_config, &bearer, None).expect("the static bearer may mint");
     assert!(unbound.not_after.is_none() && unbound.key.is_none());
 }
+
+/// The dashboard link names the loopback a wildcard bind serves. A mapped
+/// IPv4 wildcard (`::ffff:0.0.0.0`) serves IPv4, so its link is IPv4 loopback,
+/// as `0.0.0.0`'s is; the IPv6 wildcard's is IPv6 loopback.
+#[test]
+fn a_mapped_wildcard_bind_links_to_ipv4_loopback() {
+    assert_eq!(
+        super::loopback_authority("::ffff:0.0.0.0", 39400),
+        "127.0.0.1:39400"
+    );
+    assert_eq!(
+        super::loopback_authority("0.0.0.0", 39400),
+        "127.0.0.1:39400"
+    );
+    assert_eq!(super::loopback_authority("::", 39400), "[::1]:39400");
+}

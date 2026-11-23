@@ -426,3 +426,22 @@ fn a_numeric_origin_needs_a_parseable_same_scheme_origin_on_a_public_bind() {
         "the numeric rule never admits a name, even the request's own authority"
     );
 }
+
+/// The sign-in form on a mapped IPv4 wildcard bind (`::ffff:0.0.0.0`): it
+/// serves loopback as `0.0.0.0` does, so the loopback page may sign in, and a
+/// network address still may not.
+#[cfg(feature = "webui")]
+#[test]
+fn a_mapped_wildcard_bind_admits_the_loopback_sign_in_page() {
+    let config = crate::config::Config {
+        server: ServerConfig {
+            host: "::ffff:0.0.0.0".to_owned(),
+            port: 39400,
+            ..ServerConfig::default()
+        },
+        ..crate::config::Config::default()
+    };
+    let live = crate::config_reload::LiveConfig::new(config);
+    assert!(admits_signin(&live, "http://127.0.0.1:39400"));
+    assert!(!admits_signin(&live, "http://192.0.2.1:39400"));
+}
