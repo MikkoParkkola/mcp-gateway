@@ -28,8 +28,8 @@ fn held_file() -> Held {
 }
 
 /// gateway.yaml with backend `a` whose env `key` holds `reference` (single
-/// quotes: a Windows path's backslashes stay as written) and whose LOG_LEVEL
-/// is plain.
+/// quotes: a Windows path's backslashes stay as written) and whose
+/// `LOG_LEVEL` is plain.
 fn holding(key: &str, reference: &str) -> String {
     format!(
         "secrets:\n  store: files\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      {key}: '{reference}'\n      LOG_LEVEL: info\n"
@@ -54,7 +54,7 @@ fn lands(panel: &Panel, text: &str) -> BackendStoreForTest {
 }
 
 /// K1 (KEEP.1): a long value over a held reference is stored even though
-/// DATABASE_HOST does not name a credential; gateway.yaml holds the store's
+/// `DATABASE_HOST` does not name a credential; gateway.yaml holds the store's
 /// reference.
 #[tokio::test]
 async fn k1_a_long_value_over_a_held_reference_is_stored_whatever_the_name() {
