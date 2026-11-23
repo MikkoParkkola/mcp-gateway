@@ -159,6 +159,22 @@ class Sections(unittest.TestCase):
             ),
         )
 
+    def test_r8_heading_whitespace_markdown_allows_is_still_a_section(self):
+        # Markdown takes up to three leading spaces and any run of spaces or
+        # tabs after `##` as the same heading; none of it may hide a section.
+        with self.subTest("untagged, two spaces after ##"):
+            self.assertEqual(
+                check(["##  [1.1.0] - 2026-01-02"], [], "9.0.0"),
+                (1, "CHANGELOG.md:3: [1.1.0] has no tag v1.1.0\n"),
+            )
+        with self.subTest("a repeat, indented and tab-separated"):
+            self.assertEqual(
+                check(["## [1.0.0] - 2026-01-01", "   ##\t[1.0.0] - 2026-01-01"], ["v1.0.0"], "9.0.0"),
+                (1, "CHANGELOG.md:7: [1.0.0] appears again (first at line 3)\n"),
+            )
+        with self.subTest("[Unreleased] with the same spacing stays exempt"):
+            self.assertEqual(check(["##  [Unreleased]"], [], "9.0.0"), (0, ""))
+
     def test_r6_the_cargo_exemption_covers_only_that_exact_version(self):
         with self.subTest("final version beside a beta manifest"):
             self.assertEqual(
