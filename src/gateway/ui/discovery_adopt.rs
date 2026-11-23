@@ -399,12 +399,10 @@ pub(super) async fn adopt_discovery(
         .iter()
         .map(|literal| (literal.header, literal.key.clone()))
         .collect();
-    let secrets = match opened {
-        None => None,
-        Some((store, vault)) => match secret_step(&name, adoption.literals, store, vault) {
-            Ok(step) => Some(step),
-            Err(refused) => return *refused,
-        },
+    let step = opened.map(|(store, vault)| secret_step(&name, adoption.literals, store, vault));
+    let secrets = match step.transpose() {
+        Ok(secrets) => secrets,
+        Err(refused) => return *refused,
     };
     let replace = Replace {
         expected: Expected::Revision(revision.clone()),

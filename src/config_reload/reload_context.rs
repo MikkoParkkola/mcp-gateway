@@ -519,16 +519,7 @@ impl ReloadContext {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker(path.to_path_buf()).await?;
-        // While a first key waits, any refusal below keeps the wait, judged
-        // again on this file: its waiting keys now, and whether it would start.
-        if self.live_config.waiting_keys().is_some() {
-            let keys =
-                super::first_key::waiting_names(&self.live_config.generation(), &evaluated.config);
-            *judged = (!keys.is_empty()).then(|| super::live_config::FirstKeyWait {
-                keys,
-                start_refusal: crate::gateway::next_start_refusal(&evaluated.config),
-            });
-        }
+        *judged = self.wait_judged_on(&evaluated.config);
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =
@@ -601,31 +592,7 @@ impl ReloadContext {
         }
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        // A first key only a restart applies is refused as a status change
-        // naming its keys; a first key with another fault, by that fault.
-        let waiting = super::first_key::waiting_first_key(
-            self.live_config.running(),
-            &self.live_config.generation(),
-            &new_config,
-            &overlay,
-        );
-        match waiting {
-            super::first_key::Waiting::No => {}
-            super::first_key::Waiting::Yes { keys, .. } => {
-                return Err(ReloadRefusal {
-                    kind: ReloadRefusalKind::StatusChange,
-                    text: super::first_key::held_refusal(&keys),
-                    waiting: keys,
-                });
-            }
-            super::first_key::Waiting::Faulty { reason, .. } => {
-                return Err(ReloadRefusal {
-                    kind: ReloadRefusalKind::Faulty,
-                    text: nothing_published(&reason),
-                    waiting: Vec::new(),
-                });
-            }
-        }
+        self.first_key_check(&new_config, &overlay)?;
         let prepared = self.live_config.prepare(new_config, &overlay);
         let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
@@ -677,6 +644,48 @@ impl ReloadContext {
             &self.live_config,
             env_restart_keys,
         ))
+    }
+}
+
+impl ReloadContext {
+    /// While a first key waits, a refusal of this file keeps the wait as
+    /// judged on the file itself: the keys it holds that the published table
+    /// lacks, and whether a start from it would be refused. `None` when nothing
+    /// waits, or the file holds no such key any more.
+    fn wait_judged_on(&self, file: &Config) -> Option<super::live_config::FirstKeyWait> {
+        self.live_config.waiting_keys()?;
+        let keys = super::first_key::waiting_names(&self.live_config.generation(), file);
+        (!keys.is_empty()).then(|| super::live_config::FirstKeyWait {
+            keys,
+            start_refusal: crate::gateway::next_start_refusal(file),
+        })
+    }
+
+    /// The first-key question on the file a reload read: a file whose one
+    /// fault is a first key is refused as a status change naming its keys;
+    /// one that also fails another check, by that check, as a faulty first key.
+    fn first_key_check(&self, file: &Config, overlay: &EnvOverlay) -> Result<(), ReloadRefusal> {
+        let live = &self.live_config;
+        let answer =
+            super::first_key::waiting_first_key(live.running(), &live.generation(), file, overlay);
+        let (kind, text, waiting) = match answer {
+            super::first_key::Waiting::No => return Ok(()),
+            super::first_key::Waiting::Yes { keys, .. } => (
+                ReloadRefusalKind::StatusChange,
+                super::first_key::held_refusal(&keys),
+                keys,
+            ),
+            super::first_key::Waiting::Faulty { reason, .. } => (
+                ReloadRefusalKind::Faulty,
+                nothing_published(&reason),
+                Vec::new(),
+            ),
+        };
+        Err(ReloadRefusal {
+            kind,
+            text,
+            waiting,
+        })
     }
 }
 

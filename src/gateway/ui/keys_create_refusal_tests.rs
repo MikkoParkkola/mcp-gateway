@@ -3,7 +3,7 @@
 //! `POST /ui/api/keys`, the rows that refuse: the strict body, the
 //! preconditions in their order, the validation that names a field, the
 //! expiry, the audit posture and the keyedit refusals. (Creating the first
-//! key of a single-user gateway is not refused; keys_first_key_tests.rs
+//! key of a single-user gateway is not refused; `keys_first_key_tests.rs`
 //! holds those rows.)
 //! Every refusal leaves the file byte-identical and the answer free of the
 //! secret and its digest.

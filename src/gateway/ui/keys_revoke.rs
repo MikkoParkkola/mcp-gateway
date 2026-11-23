@@ -129,15 +129,7 @@ pub(super) async fn revoke_key(
                 &name,
                 body.expected_key_tag.as_deref(),
             )?;
-            let generation = live.generation();
-            let file_waiting = waiting_names(&generation, &config);
-            let at = config.auth.api_keys.iter().position(|key| key.name == name);
-            config.auth.api_keys.retain(|key| key.name != name);
-            judge_removal(
-                waiting_first_key(live.running(), &generation, &config, &env.get()),
-                file_waiting,
-                &stopped,
-            )?;
+            let at = take_out(&mut config, &name, (&live, &env.get()), &stopped)?;
             let template = remove_key(text, at, &kept)?;
             tags.set(selected)
                 .map_err(|_| "target_changed".to_owned())?;
@@ -154,20 +146,42 @@ pub(super) async fn revoke_key(
     )
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
-    if let Err(ReplaceError::Refused(error)) = &result
-        && error == ANSWERED_HERE
-        && let Some(stopped) = stop.get()
-    {
-        return match stopped {
-            Stopped::Waiting(keys) => super::errors::restart_pending(keys),
-            Stopped::Invalid(message) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({"error": "invalid", "message": message, "revoked": false})),
-            )
-                .into_response(),
-        };
+    revoke_response(&target_name, result, (refusal.get(), stop.get()), &state)
+}
+
+/// Drops the entry called `name` from `config` (the file as read; the
+/// selection already refused a duplicate name) and judges the rest with
+/// [`judge_removal`]. Gives the entry's index for the in-place edit.
+fn take_out(
+    config: &mut crate::config::Config,
+    name: &str,
+    (live, overlay): (
+        &crate::config_reload::LiveConfig,
+        &crate::config::EnvOverlay,
+    ),
+    stop: &OnceLock<Stopped>,
+) -> Result<Option<usize>, String> {
+    let published = live.generation();
+    let waiting_before = waiting_names(&published, config);
+    let index = (config.auth.api_keys.iter()).position(|entry| entry.name == name);
+    if let Some(index) = index {
+        config.auth.api_keys.remove(index);
     }
-    revoke_response(&target_name, result, refusal.get(), &state)
+    let left = waiting_first_key(live.running(), &published, config, overlay);
+    judge_removal(left, &waiting_before, stop)?;
+    Ok(index)
+}
+
+/// The route's own answer for a revoke its compute stopped.
+fn stopped_answer(stopped: &Stopped) -> Response {
+    match stopped {
+        Stopped::Waiting(keys) => super::errors::restart_pending(keys),
+        Stopped::Invalid(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": "invalid", "message": message, "revoked": false})),
+        )
+            .into_response(),
+    }
 }
 
 /// Why the compute stopped a revoke that the route answers itself; the
@@ -189,10 +203,10 @@ const ANSWERED_HERE: &str = "answered_by_the_route";
 /// the status of a gateway on which nothing waits keeps its old refusal.
 fn judge_removal(
     candidate: Waiting,
-    file_waiting: Vec<String>,
+    file_waiting: &[String],
     stop: &OnceLock<Stopped>,
 ) -> Result<(), String> {
-    let stopped = match restart_pending_decision(&candidate, file_waiting.clone()) {
+    let stopped = match restart_pending_decision(&candidate, file_waiting.to_vec()) {
         Decision::Pending(waiting) => Stopped::Waiting(waiting.names().to_vec()),
         Decision::Invalid(sentence) => Stopped::Invalid(sentence),
         Decision::Continue => match candidate {
@@ -270,9 +284,15 @@ mod keys_revoke_instructions_body_tests;
 fn revoke_response(
     name: &str,
     result: Result<serde_json::Value, ReplaceError>,
-    keyedit: Option<&ComputeRefusal>,
+    (keyedit, stopped): (Option<&ComputeRefusal>, Option<&Stopped>),
     state: &AppState,
 ) -> Response {
+    // The compute stopped the revoke and holds the answer itself.
+    if let (Err(ReplaceError::Refused(error)), Some(stopped)) = (&result, stopped)
+        && error == ANSWERED_HERE
+    {
+        return stopped_answer(stopped);
+    }
     if let Err(ReplaceError::Refused(error)) = &result
         && error == "not_written"
         && let Some(ComputeRefusal::Unprovable { code, reason }) = keyedit
