@@ -128,7 +128,9 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
         return refused(&why);
     }
     fault::trace("strict-check");
-    fault::hold();
+    if let Err(why) = fault::hold() {
+        return refused(&why);
+    }
     supervise(plan, &ready)
 }
 
@@ -452,11 +454,18 @@ mod fault {
         }
     }
 
-    /// Wait for one byte on stdin: the row's release.
-    pub(super) fn hold() {
-        if ARMED.get() == Some(Fault::TraceAndHold) {
-            let mut byte = [0_u8; 1];
-            let _ = io::stdin().read(&mut byte);
+    /// Wait for the row's release: exactly one byte on stdin. Any other
+    /// ending, the end of input or an error of any kind, is a refusal, so a
+    /// hold that was not released never goes on to start the target.
+    pub(super) fn hold() -> Result<(), String> {
+        if ARMED.get() != Some(Fault::TraceAndHold) {
+            return Ok(());
+        }
+        let mut byte = [0_u8; 1];
+        match io::stdin().read(&mut byte) {
+            Ok(1) => Ok(()),
+            Ok(_) => Err("hold ended: eof".into()),
+            Err(e) => Err(format!("hold ended: {e}")),
         }
     }
 }
@@ -479,5 +488,7 @@ mod fault {
 
     pub(super) fn trace(_: &str) {}
 
-    pub(super) fn hold() {}
+    pub(super) fn hold() -> Result<(), String> {
+        Ok(())
+    }
 }
