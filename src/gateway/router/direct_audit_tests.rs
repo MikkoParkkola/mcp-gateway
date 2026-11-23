@@ -78,6 +78,12 @@ mod sealed_refusal;
 #[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod session_less;
+// Signing refusals and the chain check, as their records name them.
+#[cfg(tp1)]
+mod signing_records;
+// A refused nonce under each audit configuration: counted, 503 or not.
+#[cfg(tp1)]
+mod signing_records_log;
 #[cfg(feature = "firewall")]
 mod slot_release;
 #[cfg(feature = "firewall")]

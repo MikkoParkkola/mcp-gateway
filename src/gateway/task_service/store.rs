@@ -526,9 +526,15 @@ impl Shared {
             if entry.record.revision != expected_revision {
                 return Err(StoreError::RevisionConflict);
             }
+            // A row waiting on input never takes a handle too: its parked
+            // requests are served only because it has none, so the two never
+            // sit on one row.
             if matches!(
                 entry.task.status(),
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+                TaskStatus::Completed
+                    | TaskStatus::Failed
+                    | TaskStatus::Cancelled
+                    | TaskStatus::InputRequired
             ) {
                 return Err(StoreError::InvalidTransition);
             }

@@ -271,6 +271,75 @@ async fn an_unchanged_secret_settles_delivered_and_redacted() {
     }
 }
 
+/// Settle then restart: the upstream job's result echoes OLD and settles
+/// through the follow in the first process, which still holds OLD. A second,
+/// separate gateway process configured with NEW (its redaction set never held
+/// OLD) then serves the stored task. The bytes on disk and the served task hold
+/// no OLD, and the redaction marker is still there: the result was scrubbed
+/// before it was stored, so losing the old value from the redaction set
+/// un-redacts nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_result_settled_redacted_stays_redacted_after_a_restart_with_a_new_value() {
+    let root = tempfile::Builder::new()
+        .prefix("echo-rotation-settled")
+        .tempdir()
+        .expect("an owned temporary root");
+    let peer = serve_peer(Upstream::Working).await;
+    let client = client();
+    let first = config(root.path(), "first.yaml", &peer, Some(OLD));
+    let mut gateway = Gateway::start(root.path(), &first, "first.log");
+    gateway.wait_until_ready(&client).await;
+    let task_id = task_id_of(
+        &gateway
+            .post(&client, &task_invoke(1, "echo-rotation-4"))
+            .await,
+    );
+    // The handle is durable first, so the answer below comes through the
+    // upstream follow, not as the dispatch's own reply.
+    captured(root.path(), &task_id).await;
+    peer.peer.set_payload(echoing(OLD));
+    peer.peer.set(Upstream::Completed);
+    let before = settled(&gateway, &client, &task_id).await;
+    assert_eq!(
+        status_of(&before),
+        Some("completed"),
+        "premise: the first process delivered it: {before}"
+    );
+    gateway.terminate_confirmed().await;
+
+    let on_disk =
+        std::fs::read_to_string(helper::store_dir(root.path()).join(format!("{task_id}.json")))
+            .expect("the stored record is readable");
+    assert!(
+        !on_disk.contains(OLD),
+        "the stored record holds the old secret: {on_disk}"
+    );
+    assert!(
+        on_disk.contains("[redacted]"),
+        "the stored result was emptied, not redacted: {on_disk}"
+    );
+
+    let second = config(root.path(), "second.yaml", &peer, Some(NEW));
+    let mut restarted = Gateway::start(root.path(), &second, "second.log");
+    restarted.wait_until_ready(&client).await;
+    let after = restarted.post(&client, &tasks_get(900, &task_id)).await;
+    restarted.terminate().await;
+    let served = after.to_string();
+    assert_eq!(
+        status_of(&after),
+        Some("completed"),
+        "the stored task was not served: {after}"
+    );
+    assert!(
+        !served.contains(OLD) && !served.contains(NEW),
+        "the served task holds a secret: {served}"
+    );
+    assert!(
+        served.contains("[redacted]"),
+        "the served result lost its redaction marker: {served}"
+    );
+}
+
 /// The log line a config reload ends with.
 const RELOADED: &str = "Config reload: complete";
 

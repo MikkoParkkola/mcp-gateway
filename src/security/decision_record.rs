@@ -42,6 +42,13 @@ pub(crate) enum DecisionKind {
     DefaultAllow,
     /// A refusal whose check noted no kind: never `default_allow`.
     Unrecorded,
+    /// The upstream signature chain on a backend's reply did not verify, or
+    /// no challenge was on record for it.
+    SignatureChain,
+    /// A single-use token was refused: a signing nonce already seen or a
+    /// nonce store at capacity, or a continuation that is spent, forged or
+    /// expired.
+    ReplayGuard,
     /// The target matches nothing: no backend or tool by that name.
     NotFound,
     /// A stored task result is not served under the bindings that produced

@@ -272,7 +272,7 @@ fn mentions_caller_key(dir: &Path) -> bool {
 
 // G-LOGSITES (lead, 2026-10-23): a logger opened in test code starts keyed,
 // so this proves the production openers by source. Outside test code the
-// logger is opened in two places: build_meta_mcp, which installs the record
+// logger is opened in two places: the serving audit at construction, which installs the record
 // key on the logger it opens, and the governance store, whose records never
 // carry a `caller_key` (the only field the logger keys), so it needs none.
 #[test]
@@ -293,8 +293,8 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
     // gateway-envelope intent, which names no caller, so it never keys.
     const OPENERS: &[&str] = &[
         "src/config_reload/replace_audit.rs",
-        "src/gateway/server/build_meta.rs",
         "src/gateway/server/control_plane_store.rs",
+        "src/gateway/server/serving_audit.rs",
     ];
     fn walk(dir: &Path, root: &Path, hits: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).expect("src readable").flatten() {
@@ -333,11 +333,11 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
     hits.sort();
     hits.dedup();
     assert_eq!(hits, OPENERS, "a new production logger opener");
-    let build_meta =
-        std::fs::read_to_string(root.join("src/gateway/server/build_meta.rs")).expect("build_meta");
+    let serving = std::fs::read_to_string(root.join("src/gateway/server/serving_audit.rs"))
+        .expect("serving_audit");
     assert!(
-        build_meta.contains(".with_record_key(Arc::clone(&record_key))"),
-        "build_meta_mcp keys the logger it opens"
+        serving.contains(".with_record_key(Arc::clone(&record_key))"),
+        "the serving audit keys the logger it opens at construction"
     );
     let replace_audit = std::fs::read_to_string(root.join("src/config_reload/replace_audit.rs"))
         .expect("replace_audit");
@@ -393,8 +393,6 @@ const CENSUS_TEST_ONLY: &[&str] = &[
 const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/rpc/subscribe.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "subscription row field: the store's owner binding"),
     ("src/events/rpc_held.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "held subscription row field: the store's owner binding"),
-    ("src/events/operational_source.rs", "k.principal_for(&digest).storage_form() == principal", 1, Store, "compares a configured key's principal (explicit or digest-derived, ADR-022) to a stored principal"),
-    ("src/events/operational_source.rs", "resolved.principal().storage_form() == principal", 1, Store, "the resolved key of the same generation matched by its stored principal, so a CLI key's approval binding is judged on the key the decision found (ADR-022)"),
     ("src/events/fanout.rs", "row.credential_principal == snapshot.credential_principal", 1, Store, "store row identity comparison"),
     ("src/gateway/router/handlers/session_end.rs", "c.credential_principal().is_none()", 1, Store, "presence test only"),
     ("src/gateway/server/stdio_dispatch.rs", "credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL)", 1, Decl, "context owner key; the record field beside it is keyed"),
@@ -417,14 +415,13 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/router/handlers/tasks.rs", "*opened_as == reader.principal.storage_form()", 1, Store, "held-task reader comparison"),
     ("src/gateway/router/handlers/dispatch_intake_run.rs", ".map(|client| client.principal.storage_form())", 2, Store, "a provenance classification and an admission owner key argument"),
     ("src/gateway/auth.rs", "pub(crate) const CREDENTIAL_OWNER_PREFIX", 1, Decl, "the owner-key prefix"),
+    ("src/gateway/auth.rs", "format!(\"{CREDENTIAL_OWNER_PREFIX}{}\", principal.storage_form())", 1, Store, "the one owner-key builder: the task and events owner (keyed by record_owner where recorded), credential_owner's bare arm, and the operational standing check's credential side"),
     ("src/gateway/auth_caller.rs", "pub(in crate::gateway) fn credential_principal(&self)", 1, Decl, "returns &InternalPrincipal, no bytes"),
     ("src/gateway/router/handlers/events.rs", ".map(|c| c.principal.storage_form().to_owned())", 1, Store, "events Credential.principal: the subscription owner binding"),
     ("src/gateway/router/handlers/events.rs", "principal: c.principal.storage_form().to_owned()", 1, Store, "ApiKeyRef.principal: a key-match store field"),
     ("src/identity_propagation/caller_proof.rs", "pub(crate) fn classify(credential_principal: Option<&str>)", 1, Decl, "presence classification parameter"),
     ("src/identity_propagation/caller_proof.rs", "match credential_principal {", 1, Store, "presence classification only"),
     ("src/gateway/router/handlers/tasks/owner.rs", ".and_then(|c| c.credential_principal())", 1, Decl, "feeds the task owner key below"),
-    ("src/gateway/router/handlers/tasks/owner.rs", "crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,", 1, Store, "task owner key: keyed by record_owner where recorded"),
-    ("src/gateway/router/handlers/tasks/owner.rs", "principal.storage_form()", 1, Store, "task owner key: keyed by record_owner where recorded"),
     ("src/gateway/router/handlers/owner.rs", "match client.and_then(|c| c.credential_principal())", 1, Decl, "feeds the session owner below"),
     ("src/gateway/ui/preview.rs", ".and_then(|c| c.credential_principal())", 1, Decl, "feeds the preview confirmation owner below"),
     ("src/gateway/ui/principal.rs", "let principal = client.credential_principal()?;", 1, Decl, "feeds the page token binding digest below (censused)"),

@@ -50,6 +50,10 @@ mod hardened_identity;
 mod identity;
 pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
+// Stdio records its signing refusals with the same writer as `/mcp`.
+pub(crate) use meta_refusal_audit::{
+    AnswerId, SigningSite, answer_stdio_signing_refusal, call_name_and_arguments,
+};
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
@@ -82,14 +86,22 @@ pub fn is_loopback_bind(host: &str) -> bool {
 }
 
 /// `true` when `host` is a wildcard bind (empty, `0.0.0.0` or `::`), which
-/// serves every interface, loopback included.
-#[cfg(feature = "webui")]
+/// serves every interface, loopback included. One pair of brackets is allowed
+/// (`[::]`), and an IPv4-mapped IPv6 address is judged as the IPv4 address it
+/// carries, so `::ffff:0.0.0.0` is a wildcard too. Every caller (the sign-in
+/// origin, the dashboard link, `setup export`) classifies with this one test.
+#[cfg(any(feature = "webui", feature = "config-export"))]
 pub(crate) fn is_wildcard_bind(host: &str) -> bool {
+    let host = origin_guard::strip_brackets(host);
     host.is_empty()
         || host
             .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_unspecified())
+            .is_ok_and(|ip| ip.to_canonical().is_unspecified())
 }
+/// Shared with the dashboard link and `setup export`, which read the same
+/// bind host.
+#[cfg(any(feature = "webui", feature = "config-export"))]
+pub(crate) use origin_guard::strip_brackets;
 mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
 mod direct_guards;
@@ -367,6 +379,10 @@ mod ui_stream_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod canary_tests;
+/// A CLI user edits a capability by the revision the CLI prints.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod capability_cli_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
@@ -485,6 +501,14 @@ mod recent_writes_route_more_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_tests;
+/// A withheld direct call and a missing one leave the same firewall state.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_parity_tests;
+/// A withheld surfaced task call and a missing name leave the request firewall uncharged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_task_parity_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release

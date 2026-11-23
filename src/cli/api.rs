@@ -47,7 +47,9 @@ pub struct ApiArgs {
     /// URL normalisation would rewrite (`..`, `.`, `\`, encoded dots or
     /// separators) is refused, so the credential never leaves the admin API.
     pub path: String,
-    /// The JSON request body: inline, `@FILE`, or `-` for standard input.
+    /// The request body: inline, `@FILE`, or `-` for standard input. JSON,
+    /// except a capability's save (PUT) and validate routes, which send it
+    /// unchanged as YAML.
     #[arg(long)]
     pub data: Option<String>,
     /// Require the gateway resource to match this `ETag`.

@@ -47,6 +47,8 @@ KEPT = {
     "scope", "public-repo-hygiene", "test", "windows-check",
     # Their shards (MIK-8482): the aggregates above only read these results.
     "test-shards", "windows-shards", "windows-clippy",
+    # Windows' one lib test exe build and the four lib legs that run from it.
+    "windows-lib-build", "windows-lib-shards",
     # The lib test binary in parts, the union check over them, the gateway binary the lib shards' sandbox rows
     # launch, and the lib shards that run them.
     "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
@@ -84,8 +86,8 @@ LANE_LABEL = {"os-int-label", "macos-int-lane"}
 # Each also runs on a lane pull request by its SKIPPED or KEPT rule above, so a
 # Windows, feature or release-tooling break fails the pull request that made it.
 HEAVY_JUDGED = {
-    "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
-    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
+    "windows-shards", "windows-lib-build", "windows-lib-shards", "windows-clippy", "windows-check",
+    "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
     "feature-combos-pr",
 }
 # Kani is not train-only: a lane pull request that is not docs-only runs it too, so code that
@@ -110,8 +112,8 @@ POST_MERGE_SKIPPED = {
     # Platform builds: scarce hosted runners; the tag workflow runs both.
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
-    "test-shards", "windows-shards", "windows-clippy", "macos-shards", "macos-lib-union",
-    "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
+    "test-shards", "windows-shards", "windows-lib-build", "windows-lib-shards", "windows-clippy",
+    "macos-shards", "macos-lib-union", "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",

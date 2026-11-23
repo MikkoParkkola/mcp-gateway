@@ -5,22 +5,12 @@
 //! that route's handler. A hook placed after a read would let a re-read of
 //! the live config before it go unseen by every config-timing row.
 
+use crate::test_source_files::rust_files;
+
 /// The hook call: a site is any code line calling it, however it is written
 /// or commented. Matched in source whose comments and literals are blanked
 /// (`test_source_text::sanitize`), so neither hides code nor fakes a call.
 const HOOK: &str = "relay_witness_hook::run(";
-
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|x| x == "rs") {
-            out.push(path);
-        }
-    }
-}
 
 /// The byte offset of the line opening the function enclosing `line`: the
 /// nearest earlier code line naming `fn ` at a shallower indent.

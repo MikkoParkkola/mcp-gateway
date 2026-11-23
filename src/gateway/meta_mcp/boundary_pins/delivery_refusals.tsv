@@ -258,7 +258,6 @@ src/gateway/router/backend_handlers/key_check.rs	withheld_refusal	key_refusal	1	
 src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	not-delivered	an audit writer; the 403 it accompanies on the direct route is recorded Denied
 src/gateway/router/backend_handlers/relay.rs	catalogue_refusal	relay_refusal	1	feeds	builds the catalogue relay refusal
 src/gateway/router/direct_guards.rs	after_dispatch	refusal	1	recorded	direct outlet: records a sealed refusal; the whole withhold raises in this fn
-src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	Refused::of	1	not-a-decision	client-protocol rejection: a keyed call with no execution principal
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	refuse_malformed_nonce_early	1	not-a-decision	client-protocol rejection: a malformed signing nonce
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	request_check_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	intake_refusal	1	not-a-decision	a keyed call with no execution principal
@@ -307,7 +306,6 @@ src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_body	1	no-record	admin 
 src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
-src/gateway/ui/backends/write.rs	refused_write	config_refusal	1	no-record	admin UI backend routes: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery

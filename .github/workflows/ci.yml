@@ -678,14 +678,16 @@ jobs:
   # runner slots is the exception.
   windows-shards:
     name: Windows shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    # Anchored: windows-lib-build runs under exactly this guard (*windows-pr-guard).
+    if: &windows-pr-guard ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        # Selections and floors: scripts/ci/shard_tests.py.
-        shard: [lib-a, lib-b, lib-c, int-a, int-b]
+        # Selections and floors: scripts/ci/shard_tests.py. The lib legs run from one shared
+        # build in windows-lib-shards; these two compile the integration targets they run.
+        shard: [int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -702,9 +704,9 @@ jobs:
         run: >-
           New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
           -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
-      # Together the shards are every test target: library, binary and the
-      # integration targets under tests/ (`--tests`), and the examples build.
-      # Each shard compiles the targets it runs, so a unix-only API slipping
+      # These two run the binary, the integration targets under tests/
+      # (`--tests`) and the examples build; the library runs in windows-lib-shards.
+      # Each compiles the targets it runs, so a unix-only API slipping
       # into any target still fails here. The store suites are included: both
       # stores run on Windows with owner-only DACLs (ADR-016). Windows-only
       # limits are `cfg(unix)` gates.
@@ -738,50 +740,6 @@ jobs:
           rc=$?
           echo "hash-key on an empty key exited $rc"
           [[ $rc -eq 2 ]]
-      # Owner-only rows that need real Windows state: a second, non-admin
-      # account (the runner is an administrator, whose rights bypass DACLs), a
-      # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
-      # even when it failed, so no evidence hides behind an earlier failure.
-      # lib-a: the rows are library tests, and that shard has the lib built.
-      - name: Privileged owner-only rows
-        id: privileged
-        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
-          $free = 68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") }
-          # Second user: Users only, never Administrators.
-          $pass = 'Mg1!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-          $account = New-LocalUser -Name mgw-probe -Password (ConvertTo-SecureString $pass -AsPlainText -Force) -AccountNeverExpires
-          if ((Get-LocalGroupMember Administrators).Name -match 'mgw-probe') { throw 'mgw-probe is an administrator' }
-          $sid = $account.SID.Value
-          secedit /export /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
-          (Get-Content "$env:RUNNER_TEMP\sec.inf") -replace '^(SeInteractiveLogonRight = .*)$', "`$1,*$sid" | Set-Content "$env:RUNNER_TEMP\sec.inf"
-          secedit /configure /db "$env:RUNNER_TEMP\sec.sdb" /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
-          Set-Service seclogon -StartupType Manual; Start-Service seclogon
-          # Mapped network drive.
-          $net = $free[0]
-          net use "${net}:" \\localhost\C$
-          if ($LASTEXITCODE -ne 0) { throw 'net use failed' }
-          New-Item -ItemType Directory -Force "${net}:\mgw-net-root" | Out-Null
-          # FAT32 and exFAT volumes.
-          $vols = @(@{ fs = 'FAT32'; letter = $free[1] }, @{ fs = 'exFAT'; letter = $free[2] })
-          foreach ($v in $vols) {
-            $vhd = "$env:RUNNER_TEMP\mgw-$($v.fs).vhdx"
-            @("create vdisk file=`"$vhd`" maximum=64 type=expandable", "select vdisk file=`"$vhd`"",
-              'attach vdisk', 'create partition primary', "format fs=$($v.fs) quick",
-              "assign letter=$($v.letter)") | Set-Content "$env:RUNNER_TEMP\dp.txt"
-            diskpart /s "$env:RUNNER_TEMP\dp.txt"
-            if ($LASTEXITCODE -ne 0) { throw "diskpart $($v.fs) failed" }
-          }
-          $env:MGW_PROBE_USER = 'mgw-probe'
-          $env:MGW_PROBE_PASS = $pass
-          $env:MGW_NET_ROOT = "${net}:\mgw-net-root"
-          $env:MGW_FAT32_ROOT = "$($free[1]):\"
-          $env:MGW_EXFAT_ROOT = "$($free[2]):\"
-          cargo test --all-features --lib -- --ignored --show-output win_privileged::
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Moved out of the Windows suite so the lint does not sit on its critical
   # path (MIK-8482). The Windows-only modules (`win_acl`, the one module
@@ -835,7 +793,7 @@ jobs:
   # it on the train.
   windows-check:
     name: Windows check
-    needs: [windows-shards, windows-clippy]
+    needs: [windows-shards, windows-clippy, windows-lib-shards, windows-lib-build]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     steps:
@@ -845,7 +803,7 @@ jobs:
       - name: Every Windows shard and the clippy job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: windows-shards windows-clippy
+          ROLLUP_EXPECTS: windows-shards windows-clippy windows-lib-shards windows-lib-build
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
@@ -865,7 +823,7 @@ jobs:
   # scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
+    needs: [scope, windows-shards, windows-lib-build, windows-lib-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -882,7 +840,7 @@ jobs:
           DOCS_ONLY: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only == 'true' }}
           # Data, not shell text: merge-train reads both from the base copy of this file.
           DOCS_ONLY_SKIPPABLE: task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal,feature-combos-pr
-          ROLLUP_EXPECTS: scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
+          ROLLUP_EXPECTS: scope windows-shards windows-lib-build windows-lib-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
         run: |
           if [ "$TRAIN" != true ]; then
             echo "Heavy checks are judged on the merge train; on this pull request each heavy job's own check decides." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1207,7 +1165,8 @@ jobs:
   linux-lib-union:
     name: Linux lib test binary
     needs: [linux-lib-build]
-    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    # Anchored: windows-lib-shards runs under exactly this guard (*pr-guard-after-build).
+    if: &pr-guard-after-build ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1235,6 +1194,93 @@ jobs:
         run: |
           scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
           python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
+
+  # Windows compiles the library's test exe once, here, and its four lib legs (windows-lib-shards) only run it: each
+  # leg used to compile the same exe for itself. The export writes lib-tests.exe and a .root file naming the checkout
+  # it was built in; the legs refuse an exe from another root. scripts/ci/check_shared_lib.py pins the wiring.
+  windows-lib-build:
+    name: Windows lib test exe
+    if: *windows-pr-guard
+    runs-on: windows-2025
+    # The build step's own 50 min plus the 10 min reserve the step-limit rule keeps.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes or calls the API.
+        with:
+          persist-credentials: false
+      # The compiler rust-toolchain.toml names (check_toolchain_pin.py).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      # Saved on the release line only, restored everywhere.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        # Keyed by job, compiler and lock file (the action's default).
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+      # pwsh, as the legs: the same shell builds and runs the exe.
+      - name: Build the shared lib test exe
+        shell: pwsh
+        timeout-minutes: 50
+        run: python scripts/ci/shard_tests.py export-lib "$env:RUNNER_TEMP\lib-bin"
+      - name: Hand the exe to the lib legs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # One name per run: a rerun of a single leg finds this attempt's exe.
+          name: windows-lib-tests
+          retention-days: 1
+          path: ${{ runner.temp }}/lib-bin
+          if-no-files-found: error
+          overwrite: true
+
+  # The Windows lib legs, from the shared exe: no compile here. `!cancelled()` runs them when the build failed too,
+  # so they end red, never skipped. Same check names as windows-shards.
+  windows-lib-shards:
+    name: Windows shard ${{ matrix.shard }}
+    needs: [windows-lib-build]
+    if: *pr-guard-after-build
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Selections and floors: scripts/ci/shard_tests.py (SHARED_BUILD).
+        shard: [lib-a, lib-b, lib-c, lib-d]
+    steps:
+      - name: The shared lib test exe was built
+        shell: bash
+        run: '[ "$BUILD" = success ] || { echo "::error::windows-lib-build $BUILD"; exit 1; }'
+        env:
+          BUILD: ${{ needs.windows-lib-build.result }}
+      # The checkout is the root the exe was built in (shard_tests.py checks its .root file).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The no-follow rows (W-T6) need symlinks, which Developer Mode lets an unelevated token create; any lib leg
+      # can hold them.
+      - name: Developer Mode, for the symlink rows
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+          -Name AllowDevelopmentWithoutDevLicense -PropertyType DWORD -Value 1 -Force
+      - name: Fetch the shared lib test exe
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      # pwsh for the reason windows-shards gives: Git Bash's MSYS2 writes through a DACL deny.
+      - name: Shard suite from the shared exe
+        shell: pwsh
+        env:
+          LIB_EXE: ${{ runner.temp }}\lib-bin\lib-tests.exe
+        run: python scripts/ci/shard_tests.py run-prebuilt windows ${{ matrix.shard }} "$env:LIB_EXE"
+      # The owner-only rows that need a second account, a mapped drive and FAT32/exFAT volumes, from the same exe.
+      # One leg is enough; it runs when the suite failed too, so these rows still report.
+      - name: Privileged owner-only rows
+        id: privileged
+        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
+        shell: pwsh
+        env:
+          LIB_EXE: ${{ runner.temp }}\lib-bin\lib-tests.exe
+        run: scripts/ci/windows-privileged-rows.ps1 "$env:LIB_EXE"
 
   # The preview sandbox's fetch rows run in the lib's own tests (their fake resolver and dialer are cfg(test), so no
   # shipped build carries a seam) and launch the real gateway binary as the helper. The lib shards run only prebuilt
@@ -1623,6 +1669,8 @@ jobs:
   # reads an entry stored by `secret-tool` byte-exact; the writer creates,
   # reads back, refuses a taken name and deletes; each is refused once the
   # collection is locked. The shards run both against stub programs only.
+  # The job also runs the Docker runtime provider's two #[ignore] rows against the runner's own Docker daemon
+  # (start, inspect, logs, restart, rm, and the restart policy); a missing daemon fails it, never skips.
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: [scope, linux-lib-build]
@@ -1645,6 +1693,7 @@ jobs:
           pattern: linux-lib-tests-p*
           path: ${{ runner.temp }}/lib-bin
           merge-multiple: false
+        id: lib_parts
       - name: Install gnome-keyring, secret-tool and gdbus
         run: |
           sudo apt-get update
@@ -1679,6 +1728,14 @@ jobs:
             "$LIB_TEST_BIN" --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
+      # Runs after a red keychain step too, so one cannot hide the other; skipped only when the part binaries never
+      # arrived, and then the shared-build gate above has already failed the job.
+      - name: "Docker runtime provider: both rows pass against the runner's daemon"
+        if: ${{ !cancelled() && steps.lib_parts.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
+        run: scripts/dev/runtime-provider-docker-smoke.sh --prebuilt "$RUNNER_TEMP/lib-bin"
 
   # Runs one SDK journey test that reads no documentation file, so a docs-only
   # pull request skips it; a failed scope decision runs it (fail-open).

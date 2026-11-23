@@ -9,6 +9,8 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+#[path = "../src/test_source_files.rs"]
+mod test_source_files;
 #[path = "common/windows_paths.rs"]
 mod windows_paths;
 
@@ -16,6 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::transport::{split_command_unix, split_command_windows};
+use test_source_files::rust_files;
 use windows_paths::{hostile_home, sh_path, yaml_single_quoted};
 
 /// Helpers that exist once, in `tests/common/windows_paths.rs`. A `fn` of one
@@ -171,17 +174,6 @@ fn allowed_sites() -> BTreeMap<(String, String), usize> {
         .iter()
         .map(|(file, function, n)| (key(file, function), *n))
         .collect()
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("readable dir") {
-        let path = entry.expect("dir entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 #[test]

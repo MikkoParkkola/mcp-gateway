@@ -21,12 +21,16 @@ const DOCUMENT: &str = include_str!("shell/index.html");
 /// asset gets a new name and a cached copy can never go stale.
 pub(super) const ASSETS: &[(&str, &[u8])] = &[
     (
+        "activity-list.3e4eec96100d.js",
+        include_bytes!("shell/activity-list.3e4eec96100d.js"),
+    ),
+    (
         "activity.237d685089d2.css",
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.6532f4d1169a.js",
-        include_bytes!("shell/activity.6532f4d1169a.js"),
+        "activity.9cadd2365fae.js",
+        include_bytes!("shell/activity.9cadd2365fae.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,48 +53,56 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.31c6a46d61db.js",
-        include_bytes!("shell/gateway.31c6a46d61db.js"),
+        "gateway.cc27e2930123.js",
+        include_bytes!("shell/gateway.cc27e2930123.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.7d6f111a7157.js",
-        include_bytes!("shell/overview.7d6f111a7157.js"),
+        "overview.e509be32d416.js",
+        include_bytes!("shell/overview.e509be32d416.js"),
+    ),
+    (
+        "servers.529ca647e09e.js",
+        include_bytes!("shell/servers.529ca647e09e.js"),
+    ),
+    (
+        "servers.a2711ee29891.css",
+        include_bytes!("shell/servers.a2711ee29891.css"),
+    ),
+    (
+        "shell.14fa6b528dce.js",
+        include_bytes!("shell/shell.14fa6b528dce.js"),
     ),
     (
         "shell.c460caebf770.css",
         include_bytes!("shell/shell.c460caebf770.css"),
     ),
     (
-        "shell.d0963799aba0.js",
-        include_bytes!("shell/shell.d0963799aba0.js"),
-    ),
-    (
         "shell.nojs.4e34f233c1ba.css",
         include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
-        "tips.fed6466b7bdc.json",
-        include_bytes!("shell/tips.fed6466b7bdc.json"),
+        "tips.e494b4eeb750.json",
+        include_bytes!("shell/tips.e494b4eeb750.json"),
     ),
     (
-        "tools.2a290fcdc815.js",
-        include_bytes!("shell/tools.2a290fcdc815.js"),
+        "tools.3cb1b96d5ce1.js",
+        include_bytes!("shell/tools.3cb1b96d5ce1.js"),
     ),
     (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
     ),
     (
-        "tooltip.04e4f1b0ef1f.js",
-        include_bytes!("shell/tooltip.04e4f1b0ef1f.js"),
-    ),
-    (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
+    ),
+    (
+        "tooltip.cd1750e8bd65.js",
+        include_bytes!("shell/tooltip.cd1750e8bd65.js"),
     ),
 ];
 

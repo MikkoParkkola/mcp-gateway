@@ -597,6 +597,29 @@ async fn a_step_with_no_arguments_is_run_with_an_empty_object() {
 #[path = "chain_interim_resume_tests.rs"]
 mod resume;
 
+/// T5: a resume that does not redeem (here, presenting another chain) is a
+/// single-use token the replay guard turned away: it notes `replay_guard`.
+#[tokio::test]
+async fn t5_an_unredeemable_resume_notes_replay_guard() {
+    use crate::gateway::meta_mcp::invoke::audit::{take_refusal_kind, with_route_scope};
+    let state = ContinuationState::new();
+    let chain = three_step_chain();
+    let payload = chain_payload(&state, &chain, Some(1), 1).await;
+    let token = state.keyring().mint(&payload).expect("mint");
+    let mut other = chain.clone();
+    other[0] = json!({"tool": "srv:another_step", "arguments": {}});
+    let (outcome, kind) = with_route_scope(async {
+        let outcome = plan_chain_resume(&state, &token, &other, CALLER, NOW + 1).await;
+        (outcome, take_refusal_kind())
+    })
+    .await;
+    assert!(outcome.is_err(), "premise: the other chain is refused");
+    assert_eq!(
+        serde_json::to_value(kind).expect("a kind serializes"),
+        json!("replay_guard")
+    );
+}
+
 /// MIK-8202: the same routing gate on a clock that reads before 1970.
 #[path = "clock_before_epoch_tests.rs"]
 mod clock_before_epoch;

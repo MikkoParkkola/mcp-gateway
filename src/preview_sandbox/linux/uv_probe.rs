@@ -20,9 +20,9 @@ use crate::preview_sandbox::{Refusal, Target};
 /// the fetch below this entry, through `start_fetching_with`.
 pub(super) fn staged_dark(target: &Target) -> Result<(), Refusal> {
     match crate::preview_sandbox::fetch::plan(target) {
-        Ok(phases) if matches!(phases.fetch, Some(Fetch::Uv(_))) => {
-            Err(Refusal::Step("the uv fetch is not built yet".into()))
-        }
+        Ok(phases) if matches!(phases.fetch, Some(Fetch::Uv(_))) => Err(Refusal::Command(
+            crate::preview_sandbox::UV_NOT_ENABLED.into(),
+        )),
         _ => Ok(()),
     }
 }

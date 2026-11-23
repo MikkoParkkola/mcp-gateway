@@ -248,7 +248,10 @@ async fn l_classes_the_real_pass_set() {
     let all = classes(
         (ranker, data.join("usage.json")),
         (tracker, data.join("transitions.json")),
-        enforcer.map(|enforcer| (enforcer, data.to_path_buf())),
+        enforcer.map(|enforcer| {
+            let costs = Arc::new(crate::cost_accounting::CostTracker::new());
+            (enforcer, costs, data.to_path_buf())
+        }),
         &counters,
         &health,
     );

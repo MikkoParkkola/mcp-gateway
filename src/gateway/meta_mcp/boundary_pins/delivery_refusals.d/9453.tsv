@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/mod.rs	reload	next_start_refusal	1	not-delivered	the start check of the config a restart would boot, shown as start_refusal in the UI reload answer instead of restart advice; no call delivery
+src/gateway/ui/settings.rs	saved_answer	next_start_refusal	1	not-delivered	the same start check, shown as start_refusal in the UI settings-save answer instead of restart advice; no call delivery
