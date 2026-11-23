@@ -251,7 +251,7 @@ fn is_terminal(status: TaskStatus) -> bool {
     )
 }
 
-#[cfg(tp2)]
+#[cfg(tp3)]
 #[cfg(test)]
 #[path = "worker_settle_withhold_tests.rs"]
 mod withhold_tests;

@@ -26,7 +26,7 @@ async fn reading_an_unvouched_waiting_row_stages_no_receipt() {
                     )],
                     request_state: None,
                 }),
-                chrono::Utc::now(),
+                chrono::DateTime::UNIX_EPOCH,
             )
             .expect("a live task parks");
         });

@@ -129,7 +129,7 @@ async fn a_row_holding_a_handle_never_parks_a_round() {
 
 /// A record holding an unvouched handle and parked input requests together
 /// loads after a reopen, and its read serves no stored prompt and no request
-/// key: the state stays input_required, with the fixed withheld sentence as
+/// key: the state stays `input_required`, with the fixed withheld sentence as
 /// its status message.
 #[tokio::test]
 async fn a_stored_unvouched_row_waiting_on_input_is_served_withheld() {
