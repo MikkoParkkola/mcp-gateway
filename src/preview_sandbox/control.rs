@@ -443,7 +443,8 @@ pub(crate) async fn serve_control(
     // After the run line the helper only checks its entry point, so the
     // deadline alone bounds the status's first byte. A bound of its own equal
     // to the time left would fire at the same instant and could win, turning
-    // a silent helper's deadline refusal into "no valid status".
+    // a silent helper's deadline refusal into "no valid status". (tokio's
+    // timeout arms no timer at all when now + the bound overflows.)
     read_status(&mut read, Duration::MAX, deadline, bounds).await
 }
 
