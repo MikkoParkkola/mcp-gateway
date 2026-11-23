@@ -188,13 +188,19 @@ fn names_protocol_task(ty: &syn::Type, bare_counts: bool) -> bool {
 }
 
 /// Whether a `use` tree brings a `Task` into scope from somewhere other than
-/// the protocol: its own name or a rename. In `src/protocol/` every import of
-/// `Task` is the protocol's, since the module holds only that one.
+/// the protocol: its own name or a rename. Only a `crate::` path that does not
+/// end in `protocol` or `protocol::tasks` names another `Task`. A relative or
+/// one-segment path (`super::Task`, `tasks::Task`) is read as the protocol's,
+/// as the text scan before it did: a wrong reading shows up as an unlisted
+/// method, a red row, never a silent skip. An inherent impl on another crate's
+/// type does not compile, so other crates' imports never matter. In the
+/// protocol module every import of `Task` is the protocol's.
 fn imports_other_task(tree: &syn::UseTree, prefix: &mut Vec<String>, in_protocol: bool) -> bool {
-    let protocol_path = |prefix: &[String]| {
-        in_protocol
-            || matches!(prefix, [.., p] if p == "protocol")
-            || matches!(prefix, [.., p, m] if p == "protocol" && m == "tasks")
+    let other_path = |prefix: &[String]| {
+        !in_protocol
+            && prefix.first().is_some_and(|first| first == "crate")
+            && !matches!(prefix, [.., p] if p == "protocol")
+            && !matches!(prefix, [.., p, m] if p == "protocol" && m == "tasks")
     };
     match tree {
         syn::UseTree::Path(step) => {
@@ -203,9 +209,10 @@ fn imports_other_task(tree: &syn::UseTree, prefix: &mut Vec<String>, in_protocol
             prefix.pop();
             other
         }
-        syn::UseTree::Name(name) => name.ident == "Task" && !protocol_path(prefix),
+        syn::UseTree::Name(name) => name.ident == "Task" && other_path(prefix),
+        // `use x::Other as Task` brings in a different type under the name.
         syn::UseTree::Rename(rename) => {
-            rename.rename == "Task" && !(rename.ident == "Task" && protocol_path(prefix))
+            rename.rename == "Task" && (rename.ident != "Task" || other_path(prefix))
         }
         syn::UseTree::Group(group) => group
             .items
@@ -375,7 +382,7 @@ fn task_methods_are_classified() {
         task_methods_in(
             &parsed.items,
             file == PROTOCOL_TASKS,
-            file.starts_with("src/protocol/"),
+            file == "src/protocol.rs" || file.starts_with("src/protocol/"),
             &mut found,
         );
     }
@@ -602,6 +609,19 @@ fn the_task_method_and_receiver_matchers_read_what_they_should() {
     let test_shadow = "#[cfg(test)]\nstruct Task;\n#[cfg(test)]\nuse crate::a2a::types::Task as Task;\n\
                        impl Task {\n    pub fn kept(&self) {}\n}";
     assert_eq!(methods(test_shadow, false), ["kept"]);
+    // Relative and one-segment imports are read as the protocol's, as the text
+    // scan did; only a crate:: path to another module names another Task, and
+    // a different type renamed to Task does too.
+    for relative in [
+        "use super::Task;",
+        "use self::tasks::Task;",
+        "use tasks::Task;",
+    ] {
+        let code = format!("{relative}\nimpl Task {{\n    pub fn relative(&self) {{}}\n}}");
+        assert_eq!(methods(&code, false), ["relative"], "{relative}");
+    }
+    let renamed = "use super::Other as Task;\nimpl Task {\n    pub fn other(&self) {}\n}";
+    assert!(methods(renamed, false).is_empty());
     let calls = "task.snapshot(); self.task.result(); entry . task . error (); stats.snapshot(); \
                  task.snapshot_of(); fn snapshot(&self) {} task.snapshot";
     assert_eq!(task_receiver_calls(calls, "snapshot"), 1);
