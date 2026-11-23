@@ -44,6 +44,8 @@ pub(crate) fn local_day<Z: TimeZone>(zone: &Z, unix_secs: u64) -> LocalDay {
 
 /// When daily limits next reset after `now`: the next local midnight in
 /// `zone`, or the next UTC midnight while a legacy UTC day is still open.
+/// Only daily spend limits reset, so it exists with cost governance alone.
+#[cfg(feature = "cost-governance")]
 pub(crate) fn next_reset<Z: TimeZone>(zone: &Z, now: u64, legacy_utc: bool) -> u64 {
     if legacy_utc {
         (now / 86_400).saturating_add(1).saturating_mul(86_400)
