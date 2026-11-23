@@ -492,10 +492,10 @@ fn every_image_launch_sets_dnt() {
     assert_planted_launch_forms();
     // Checkout-only, as PACKED.2: the unpacked crate ships `tests/` but not
     // `scripts/` or the workflows, so its walk would see a partial tree.
-    if is_packaged_crate() {
-        crate::test_wait::skip_or_fail(
-            "the launch scripts and workflows (the packaged crate does not ship them)",
-        );
+    // The detector's own answer, not a literal: a dropped guard fails in required mode instead of skipping.
+    let packaged = is_packaged_crate();
+    if packaged {
+        crate::test_wait::skip_unshipped(packaged, "the launch scripts and workflows");
         return;
     }
     // The floor (A3/A4): the finder sees each known gateway launch, by file,
@@ -541,8 +541,8 @@ fn every_image_launch_sets_dnt() {
 
 /// DOC1. docs/PRIVACY.md states the facts the code fixes, written out here as
 /// literals: the five field names, the receiver URL, the stored place and
-/// time, the three-month retention, every opt-out and proxy name; and the old
-/// "sends nothing" promise is gone.
+/// time, the three-month retention, the 3.5 line's Windows exception, every
+/// opt-out and proxy name; and the old "sends nothing" promise is gone.
 #[test]
 fn privacy_text_states_the_facts() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -557,6 +557,7 @@ fn privacy_text_states_the_facts() {
         "https://telemetry.revaluator.ai/v1/heartbeat",
         "city name and a country code",
         "three months",
+        "On the 3.5 line, builds for Windows send no daily heartbeat.",
         "DO_NOT_TRACK=1",
         "NO_TELEMETRY=1",
         "HTTPS_PROXY",
@@ -566,6 +567,16 @@ fn privacy_text_states_the_facts() {
     ] {
         assert!(text.contains(fact), "PRIVACY.md does not state {fact:?}");
     }
+    // The Windows exception sits in the paragraph that promises 3.5.3, so
+    // that promise is never read without it.
+    let promise = text
+        .split("\n\n")
+        .find(|p| p.contains("from 3.5.3 on the 3.5 line"))
+        .expect("the paragraph that promises 3.5.3");
+    assert!(
+        promise.contains("On the 3.5 line, builds for Windows send no daily heartbeat."),
+        "the 3.5 Windows exception left the paragraph that promises 3.5.3"
+    );
     assert!(
         !text.contains("sends nothing to its author"),
         "PRIVACY.md still promises that nothing is sent"

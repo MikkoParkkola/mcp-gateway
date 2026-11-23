@@ -4,7 +4,6 @@
 
 use serde_json::Value;
 
-#[cfg(test)]
 use crate::security::transparency_log::settle::role_fields;
 
 use super::{
@@ -12,10 +11,8 @@ use super::{
     Phase, Role, Serialize, TokenState,
 };
 
-#[cfg(test)]
 use super::{FrozenRecord, JournalDecision, MAX_JOURNAL_BYTES, Reason, ResultClass};
 
-#[cfg(test)]
 pub(super) fn terminal_matches(
     record: &FrozenRecord,
     decision: &JournalDecision,
@@ -148,7 +145,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<JournalV2, JournalError> {
     Ok(state)
 }
 
-#[cfg(test)]
 pub(super) fn encode(state: &JournalV2) -> Result<Vec<u8>, JournalError> {
     let wire = JournalWire {
         version: state.version,

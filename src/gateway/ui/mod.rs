@@ -672,16 +672,28 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         })
         .await
     {
-        Ok(outcome) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(outcome) => {
+            let pending = outcome.restart_required;
+            let mut body = json!({
                 "status": "ok",
                 "changes": outcome.changes,
-                "restart_required": outcome.restart_required,
+                "restart_required": pending,
                 "restart_reason": outcome.restart_reason,
-            })),
-        )
-            .into_response(),
+            });
+            // What a restart would boot is the published config.
+            let refusal = pending
+                .then(|| crate::gateway::next_start_refusal(&reload_context.live_config.get()))
+                .flatten();
+            if let Some(keys) = restart_confirm::restart_advice(
+                pending,
+                refusal.as_deref(),
+                Some(&reload_context.config_path),
+            ) && let Some(answer) = body.as_object_mut()
+            {
+                answer.extend(keys);
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(error) => {
             // Whose fault, not just that it failed (MIK-8058): a file the
             // network posture refuses is the operator's config, a shutdown is

@@ -116,7 +116,8 @@ pub enum ContextIntegrityPolicyPreset {
 pub enum ContextIntegrityDecisionKind {
     /// Deliver content unchanged.
     Allow,
-    /// Remove instruction-like lines and deliver the remaining text.
+    /// Remove the lines the detectors flag and deliver the rest, only when the answer as sent
+    /// can be proven clean; otherwise withhold, as Deny does.
     Strip,
     /// Replace content with a short non-instructional summary.
     Summarize,
@@ -468,8 +469,14 @@ impl ContextIntegrityEvaluation {
                     "Delivered content unchanged.".to_string()
                 }
             }
+            ContextIntegrityDecisionKind::Strip if self.transformed.withheld => {
+                "Withheld content: a stripped answer could not be proven clean.".to_string()
+            }
             ContextIntegrityDecisionKind::Strip => {
                 "Removed instruction-like lines before delivery.".to_string()
+            }
+            ContextIntegrityDecisionKind::Summarize if self.transformed.withheld => {
+                "Withheld content: the summarized answer could not be sent clean.".to_string()
             }
             ContextIntegrityDecisionKind::Summarize => {
                 "Withheld raw content and delivered a short summary.".to_string()

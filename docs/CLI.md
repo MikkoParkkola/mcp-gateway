@@ -46,6 +46,35 @@ What each code tells a script:
   sending it again.
 - **7** and **130** are reserved and not used yet.
 
+## Where remote commands send their request
+
+`api`, `audit lookup-email`, `dashboard-link`, `events dead-letters` and `stats` talk to a running gateway. Each
+takes the gateway's base URL from the first of these that is set:
+
+1. `--gateway URL`.
+2. The `MCP_GATEWAY_URL` environment variable.
+3. A saved login (not yet: until the CLI can sign in, this step is empty).
+4. The address in `--config` (`server.host` and `server.port`), else `http://127.0.0.1:39400` for `stats`.
+
+The old spellings `--url` and `-u` still work on these five commands. The credential is never a flag: it is the
+`MCP_GATEWAY_TOKEN` environment variable.
+
+## Request bodies
+
+`api --data` takes a body inline, from `@FILE`, or from standard input (`-`), up to 16 MiB. It must be JSON, with
+two exceptions chosen by the route, never by a flag: a PUT to one capability (`/ui/api/capabilities/NAME`, with or
+without `?validate=1`) and a POST to its `validate` route send the body as `application/x-yaml`, byte for byte.
+
+Saving or deleting a capability needs the revision of the copy you loaded, so a change someone else made in the
+meantime is never overwritten. `api GET /ui/api/capabilities/NAME > NAME.yaml` prints the file and, on stderr, a
+line `api: revision "<sha256>"; ...`. Edit the file, then
+`api PUT /ui/api/capabilities/NAME --data @NAME.yaml --if-match '"<sha256>"'`, quoting the value exactly as
+printed. Take the revision from the same load as the text you edited, never from the capability list. If the save
+is refused because the file changed, load it again, make your change on the new text, and save with the new
+revision. A delete takes `--if-match` the same way: load the file, check it is the version you mean to remove, then
+`api DELETE /ui/api/capabilities/NAME --if-match '"<sha256>"'`. If the delete is refused because the file changed,
+load it again and check the new version before deleting with the new revision.
+
 ## Command classes
 
 Every command is in one class:

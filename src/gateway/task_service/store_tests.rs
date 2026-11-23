@@ -45,6 +45,8 @@ mod stop_serving;
 mod support;
 mod targets;
 mod test_dir;
+// No row holds both a handle and parked input requests; one that does is withheld.
+mod withhold;
 // MIK-8407: recorded bindings, across a reopen, and legacy rows.
 mod bindings;
 #[cfg(windows)]

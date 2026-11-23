@@ -24,7 +24,8 @@
 use std::path::Path;
 
 use super::fragments::{
-    Table, live_base, multiset_delta, pin_table, scratch_table, without_first_row,
+    Bless, Table, bless_ticket, delta_or_bless, live_base, pin_table, pin_table_at, scratch_table,
+    without_first_row,
 };
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
@@ -230,7 +231,8 @@ fn table_of(rows: &std::collections::BTreeMap<String, usize>) -> Vec<String> {
 }
 
 const REGENERATE: &str = "add the listed rows in a fragment of your own (<name>.d/<n>.tsv), \
-                          remove the listed ones, and have the diff reviewed";
+                          remove the listed ones, and have the diff reviewed (or run with BOUNDARY_PINS_BLESS=<ticket> to have \
+                          the rows to add written into <name>.d/<ticket>.tsv)";
 
 /// The rows of `table` cut to their first `columns` columns (the key and its
 /// count), each with the file holding it.
@@ -252,25 +254,36 @@ fn keyed_rows(table: &Table, columns: usize) -> Vec<(&Path, String)> {
 /// `computed` against the pinned rows of `table` (`name`), as multisets of
 /// their first four columns: a site that appears, vanishes or changes count,
 /// and a key listed twice in any files, fail, naming the files.
-fn compare(name: &str, computed: &[String], table: &Table) -> Result<(), String> {
+fn compare(
+    name: &str,
+    computed: &[String],
+    table: &Table,
+    bless: Option<Bless<'_>>,
+) -> Result<(), String> {
     let rows = keyed_rows(table, 4);
     let pinned: Vec<(&Path, &str)> = rows.iter().map(|(f, r)| (*f, r.as_str())).collect();
-    multiset_delta(name, computed, &pinned).map_or(Ok(()), Err)
+    delta_or_bless(name, computed, &pinned, bless).map_or(Ok(()), Err)
 }
 
 /// The framing inventory against `table`.
-fn framing_check(table: &Table) -> Result<(), String> {
+fn framing_check(table: &Table, bless: Option<Bless<'_>>) -> Result<(), String> {
     compare(
         "delivery_framing_inventory",
         &table_of(&found().builders),
         table,
+        bless,
     )
 }
 
 /// The refusal sites against `table`, then every row's class: one of
 /// [`CLASSES`], or a `pending:` slug still in [`PENDING`].
-fn refusals_check(table: &Table) -> Result<(), String> {
-    compare("delivery_refusals", &table_of(&found().refusals), table)?;
+fn refusals_check(table: &Table, bless: Option<Bless<'_>>) -> Result<(), String> {
+    compare(
+        "delivery_refusals",
+        &table_of(&found().refusals),
+        table,
+        bless,
+    )?;
     for (_, row) in table.rows() {
         let class = row.split('\t').nth(4).unwrap_or("");
         let pending = class
@@ -294,32 +307,35 @@ fn refusals_check(table: &Table) -> Result<(), String> {
 
 #[test]
 fn every_generic_framing_site_is_inventoried() {
-    framing_check(&pin_table("delivery_framing_inventory"))
+    framing_check(&pin_table("delivery_framing_inventory"), bless_ticket())
         .unwrap_or_else(|m| panic!("framing sites changed; {REGENERATE}\n{m}"));
 }
 
 #[test]
 fn every_refusal_site_is_classified() {
-    refusals_check(&pin_table("delivery_refusals")).unwrap_or_else(|m| {
+    refusals_check(&pin_table("delivery_refusals"), bless_ticket()).unwrap_or_else(|m| {
         panic!("refusal sites changed; classify each new one; {REGENERATE}\n{m}")
     });
 }
 
+/// A table check as the negative rows call it; they always pass no bless.
+type Check = fn(&Table, Option<Bless<'_>>) -> Result<(), String>;
+
 /// A real row held only by a fragment (`<name>.d/<n>.tsv`) still counts, so
 /// a change adds its rows in a file of its own and two changes never edit
 /// one file.
-fn fragment_only_row_counts(name: &str, check: fn(&Table) -> Result<(), String>) {
+fn fragment_only_row_counts(name: &str, check: Check) {
     let (base, moved) = without_first_row(&live_base(name));
     let (_root, table) = scratch_table(name, &base, &[("0.tsv", &moved)]);
-    check(&table).unwrap_or_else(|m| panic!("{name}: {m}"));
+    check(&table, None).unwrap_or_else(|m| panic!("{name}: {m}"));
 }
 
 /// A key listed in the base and again in a fragment fails, naming the
 /// fragment: two copies of one site are never merged into one.
-fn key_in_base_and_fragment_fails(name: &str, check: fn(&Table) -> Result<(), String>) {
+fn key_in_base_and_fragment_fails(name: &str, check: Check) {
     let (_, first) = without_first_row(&live_base(name));
     let (_root, table) = scratch_table(name, &live_base(name), &[("0.tsv", &first)]);
-    let err = check(&table).expect_err("a key listed twice fails");
+    let err = check(&table, None).expect_err("a key listed twice fails");
     assert!(err.contains("0.tsv"), "{name}: {err}");
 }
 
@@ -352,6 +368,27 @@ fn a_fragment_row_with_no_class_fails() {
     cols[4] = "unclassified";
     let row = format!("{}\n", cols.join("\t"));
     let (_root, table) = scratch_table("delivery_refusals", &base, &[("0.tsv", &row)]);
-    let err = refusals_check(&table).expect_err("a fragment row with no class fails");
+    let err = refusals_check(&table, None).expect_err("a fragment row with no class fails");
     assert!(err.contains("unclassified refusal site"), "{err}");
+}
+
+/// R2c: a blessed refusal row is written as its four key columns only, so
+/// the reloaded table fails the class check on that row until its author
+/// fills in a class.
+#[test]
+fn r2c_a_blessed_refusal_row_waits_for_its_class() {
+    let (shortened, moved) = without_first_row(&live_base("delivery_refusals"));
+    let (scratch, table) = scratch_table("delivery_refusals", &shortened, &[]);
+    let target = Bless {
+        root: scratch.path(),
+        ticket: "9977",
+    };
+    refusals_check(&table, Some(target)).expect_err("a blessed run that wrote fails");
+    let reloaded = pin_table_at(scratch.path(), "delivery_refusals");
+    let err = refusals_check(&reloaded, None).expect_err("the written row has no class");
+    let key = moved.split('\t').take(4).collect::<Vec<_>>().join("\t");
+    assert!(
+        err.contains("unclassified refusal site") && err.contains(&key),
+        "{err}"
+    );
 }

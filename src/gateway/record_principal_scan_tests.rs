@@ -272,7 +272,7 @@ fn mentions_caller_key(dir: &Path) -> bool {
 
 // G-LOGSITES (lead, 2026-10-23): a logger opened in test code starts keyed,
 // so this proves the production openers by source. Outside test code the
-// logger is opened in two places: build_meta_mcp, which installs the record
+// logger is opened in two places: the serving audit at construction, which installs the record
 // key on the logger it opens, and the governance store, whose records never
 // carry a `caller_key` (the only field the logger keys), so it needs none.
 #[test]
@@ -293,8 +293,8 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
     // gateway-envelope intent, which names no caller, so it never keys.
     const OPENERS: &[&str] = &[
         "src/config_reload/replace_audit.rs",
-        "src/gateway/server/build_meta.rs",
         "src/gateway/server/control_plane_store.rs",
+        "src/gateway/server/serving_audit.rs",
     ];
     fn walk(dir: &Path, root: &Path, hits: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).expect("src readable").flatten() {
@@ -333,11 +333,11 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
     hits.sort();
     hits.dedup();
     assert_eq!(hits, OPENERS, "a new production logger opener");
-    let build_meta =
-        std::fs::read_to_string(root.join("src/gateway/server/build_meta.rs")).expect("build_meta");
+    let serving = std::fs::read_to_string(root.join("src/gateway/server/serving_audit.rs"))
+        .expect("serving_audit");
     assert!(
-        build_meta.contains(".with_record_key(Arc::clone(&record_key))"),
-        "build_meta_mcp keys the logger it opens"
+        serving.contains(".with_record_key(Arc::clone(&record_key))"),
+        "the serving audit keys the logger it opens at construction"
     );
     let replace_audit = std::fs::read_to_string(root.join("src/config_reload/replace_audit.rs"))
         .expect("replace_audit");

@@ -385,3 +385,22 @@ async fn a_timed_out_scan_keeps_the_cached_decisions() {
     })
     .await;
 }
+
+/// The Servers screen's refresh pattern costs one client-file scan: a status
+/// read followed by a discovery read, repeated twenty times while the cache's
+/// clock stands still, goes through the production router and scans once.
+#[tokio::test]
+async fn twenty_status_then_discovery_rounds_scan_once() {
+    let (state, _dir) = state().await;
+    let files = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(files.path(), &["round-find"]);
+    let cache = DiscoveryCache::new(Arc::clone(&source) as Arc<dyn ScanSource>);
+    state.meta_mcp.set_discovery_cache(Arc::new(cache));
+    for round in 1..=20 {
+        let (code, body) = admin_get(&state, "/ui/api/status").await;
+        assert_eq!(code, StatusCode::OK, "status, round {round}: {body}");
+        let (code, body) = admin_get(&state, "/ui/api/discovery").await;
+        assert_eq!(code, StatusCode::OK, "discovery, round {round}: {body}");
+    }
+    assert_eq!(source.scans(), 1, "twenty rounds, one window, one scan");
+}

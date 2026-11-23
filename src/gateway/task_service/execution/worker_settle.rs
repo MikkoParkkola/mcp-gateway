@@ -234,10 +234,14 @@ impl TaskExecutor {
 /// gateway established as the peer's. A bounded settlement stores neither,
 /// nor does a round refused before its backend (its answer is the gateway's).
 fn stored_backend_output(stored: &CommittedTask) -> bool {
-    (stored.task.status() == TaskStatus::Completed
-        && !stored.output_free
-        && stored.error_author != Some(ErrorAuthor::Gateway))
-        || stored.backend_error().is_some()
+    // A withheld row serves no reader its output, so nothing of it is relayed.
+    // The completed arm is not `backend_result()`: that would also drop a
+    // result carrying the gateway's execution-outcome marker.
+    !stored.withholds_outcome()
+        && ((stored.task.status() == TaskStatus::Completed
+            && !stored.output_free
+            && stored.error_author != Some(ErrorAuthor::Gateway))
+            || stored.backend_error().is_some())
 }
 
 fn is_terminal(status: TaskStatus) -> bool {
@@ -246,3 +250,8 @@ fn is_terminal(status: TaskStatus) -> bool {
         TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
     )
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "worker_settle_withhold_tests.rs"]
+mod withhold_tests;

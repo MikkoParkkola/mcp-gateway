@@ -251,11 +251,15 @@ pub(super) async fn key_server_credential(
     let Some(ks) = state.key_server.as_ref() else {
         return KsCredential::NotOurs;
     };
-    let (mut client, identity, exp, jti, issued_at, via) = match ks.lookup(token).await {
+    let (mut client, identity, exp, jti, issued_at, via, issuance_row) = match ks
+        .lookup(token)
+        .await
+    {
         KeyServerLookup::Valid((client, temporary)) => {
             let (exp, jti) = (Some(temporary.exp), Some(temporary.jti.clone()));
             let identity = temporary.identity.clone();
-            (client, identity, exp, jti, None, "temporary token")
+            let row = temporary.issuance_row.clone();
+            (client, identity, exp, jti, None, "temporary token", row)
         }
         KeyServerLookup::Nameless => return KsCredential::Refused,
         // Gated on config and a cheap JWT-shape check so JWKS verification
@@ -265,7 +269,15 @@ pub(super) async fn key_server_credential(
                 KeyServerLookup::Valid((client, identity)) => {
                     let exp = bearer_deadline(token, ks.config.max_oidc_token_age_secs);
                     let iat = jwt_claim(token, "iat");
-                    (client, identity, exp, None, iat, "delegated OIDC bearer")
+                    (
+                        client,
+                        identity,
+                        exp,
+                        None,
+                        iat,
+                        "delegated OIDC bearer",
+                        None,
+                    )
                 }
                 KeyServerLookup::Nameless => return KsCredential::Refused,
                 KeyServerLookup::Absent => return KsCredential::NotOurs,
@@ -289,6 +301,7 @@ pub(super) async fn key_server_credential(
         client,
         KeyServerSubject {
             facts: CredentialFacts {
+                issuance_row,
                 expires_at,
                 jti,
                 issued_at,
@@ -317,6 +330,8 @@ pub(super) enum KsCredential {
 /// token itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CredentialFacts {
+    /// The temporary token's issuance row, when recorded.
+    pub issuance_row: Option<crate::security::transparency_log::issuance::IssuanceRow>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub jti: Option<String>,
     /// A delegated bearer's `iat`, re-checked against the running max age.
@@ -324,6 +339,21 @@ pub(crate) struct CredentialFacts {
     /// The verifying provider's configuration digest: a delivery re-check
     /// refuses the binding once a restart changes what that provider accepts.
     pub provider_sha256: Option<String>,
+}
+
+impl CredentialFacts {
+    /// The exchanged token these facts stand for, as a call's decision names
+    /// it: its id and, when one was confirmed, its issuance row. A delegated
+    /// bearer has no id of ours, so it names none.
+    pub(crate) fn token_on_call(
+        &self,
+    ) -> Option<crate::security::transparency_log::issuance::TokenOnCall> {
+        let jti = self.jti.clone()?;
+        Some(crate::security::transparency_log::issuance::TokenOnCall {
+            jti,
+            issuance_row: self.issuance_row.clone(),
+        })
+    }
 }
 
 /// SHA-256 of the configuration of the provider that verifies `issuer`.
@@ -467,6 +497,7 @@ mod tests {
             .unwrap()
             .as_secs();
         crate::key_server::TemporaryToken {
+            issuance_row: None,
             jti: InMemoryTokenStore::generate_jti(),
             token: InMemoryTokenStore::generate_bearer(),
             identity: VerifiedIdentity::for_test(

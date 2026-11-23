@@ -715,12 +715,16 @@ LINUX_LIB_BINARY = ("1", "a consumer rerun after a day fails red until the build
 # rerun within the day reuses it; after that the shard fails red at the download until linux-gateway-bin reruns.
 # Nothing published depends on it.
 LINUX_GATEWAY_BINARY = ("1", "a shard rerun after a day fails red until the build reruns; a large debug binary per run")
+# ci.yml's Windows lib test exe (windows-lib-build): only the four lib legs of the same run download it. A leg rerun
+# later than that is red at the download, never green, until windows-lib-build runs again. Nothing published reads it.
+WINDOWS_LIB_EXE = ("1", "a Windows leg rerun after a day is red until windows-lib-build reruns; one large test exe per run")
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
     ("ci.yml", "macos-lib-lists-${{ matrix.shard }}"): MACOS_LIB_LISTS,
     ("ci.yml", "linux-lib-tests-p${{ matrix.part }}"): LINUX_LIB_BINARY,
     ("ci.yml", "linux-gateway-bin"): LINUX_GATEWAY_BINARY,
+    ("ci.yml", "windows-lib-tests"): WINDOWS_LIB_EXE,
 }
 
 

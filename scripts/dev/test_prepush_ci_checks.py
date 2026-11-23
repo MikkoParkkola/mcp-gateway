@@ -43,6 +43,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
+    ("scripts/ci/ignored-integration-rows.sh", ()):
+        "cargo: runs the ignored integration rows against the gateway the int-a shard built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-b", "--build", "<TMP>/parts")):
         "cargo: builds and runs macOS lib test parts 1-4, one at a time",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "int-lib", "--build", "<TMP>/parts")):

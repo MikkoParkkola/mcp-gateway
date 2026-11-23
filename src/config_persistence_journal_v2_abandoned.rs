@@ -82,18 +82,29 @@ pub(crate) struct FrameRead {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cause {
+    // The variants only the test-only `inspect` produces.
+    #[cfg(test)]
     Wire(FrameFault),
     DonorMismatch,
     NotAPrefix,
+    #[cfg(test)]
     TailWithoutDonor,
+    #[cfg(test)]
     TailBeyondDonor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inspection {
+    #[cfg(test)]
     Structural,
-    RepairableTail { start: usize },
-    Corrupt { at: usize, cause: Cause },
+    #[cfg(test)]
+    RepairableTail {
+        start: usize,
+    },
+    Corrupt {
+        at: usize,
+        cause: Cause,
+    },
 }
 
 /// One frame as the file stores it: declared length, tab, checksum, tab, JSON, newline.
@@ -306,6 +317,7 @@ fn proves(donor: &JournalV2, frame: &AbandonedFrame) -> bool {
 
 /// What a torn tail is, given the donor: repairable only when the complete frames are exactly
 /// the donor's leading frames and each is proven. Nothing here reads or writes a file.
+#[cfg(test)]
 fn tail_verdict(read: &FrameRead, start: usize, donor: Option<&JournalV2>) -> Inspection {
     let complete = read.frames.len();
     let Some(donor) = donor else {
@@ -353,6 +365,7 @@ fn walk_prefix(
 
 /// Classify the bytes of an abandoned file without touching it. `Structural` is not donor
 /// evidence: it says only that the frames parse and check out.
+#[cfg(test)]
 pub(crate) fn inspect(bytes: &[u8], donor: Option<&JournalV2>) -> Inspection {
     match read(bytes) {
         Err((at, fault)) => Inspection::Corrupt {
@@ -425,11 +438,9 @@ pub(crate) fn against_donor(existing: &[u8], donor: &JournalV2) -> Placement {
     }
 }
 
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_fixtures_tests.rs"]
 mod fixtures;
-#[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned_placement_tests.rs"]
 mod placement;

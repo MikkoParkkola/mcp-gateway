@@ -86,6 +86,7 @@ fn temporary_token(backends: &[&str]) -> TemporaryToken {
         .unwrap()
         .as_secs();
     TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: VerifiedIdentity::for_test(

@@ -21,7 +21,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Destructive-call confirmation | A destructive meta-tool running without the user agreeing to it |
 | Capability pin check | Tampering with a pinned capability file. A file whose `sha256:` pin no longer matches is refused |
 | Process limits for CLI capabilities | A CLI capability starting arbitrary programs. It runs only if it is pinned and its command is on `capabilities.process_commands`, with no shell, in a private directory, with a cleared environment, an output cap and a timeout. Unset, the list admits the commands the shipped catalogue runs: `gws`, `openpencil-mcp`, `pact-mcp`, `pyghidra-mcp` and `skill-scanner scan`. Setting the key replaces that list, so keep the entries you still need |
-| Response inspection and context integrity | Nothing is blocked by default. Both observe tool output and record what they find |
+| Response inspection and context integrity | Nothing is blocked by default. Both observe tool output and record what they find. Above a 64 KiB threshold, context integrity classifies only the start and end of a tool answer |
 
 ## Opt-in
 
@@ -30,7 +30,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Authentication | `auth.enabled: true` with API keys or a bearer token ([Multi-User Setup](MULTI_USER.md)) | Callers on paths outside `auth.public_paths` must identify themselves, and each key reaches only its listed backends. The config `mcp-gateway init` writes has auth on but lists `/mcp` in `auth.public_paths`, so tool calls stay anonymous; remove `/mcp` from that list to require credentials for tools. With auth on, the gateway also requires the audit log below and refuses plain HTTP on a network address unless `server.cleartext_http` says how traffic is protected |
 | Audit log | `security.transparency_log.enabled: true` | A hash-chained record of every call. A failed write withholds the result |
 | Hardened posture | `security.posture: hardened` | Several controls raised together: context integrity at `team_shared` or stricter and not bypassable, the firewall and anomaly blocking on, backends confined by the SSRF guard (list exceptions in `security.hardened.private_backends`), and message signing required. Needs a restart |
-| Context integrity | `security.context_integrity.preset: team_shared` | Tool output that fails the baseline is withheld instead of delivered |
+| Context integrity | `security.context_integrity.preset: team_shared` | Tool output that fails the baseline is withheld instead of delivered. Above a 64 KiB threshold only the start and end of an answer are classified, so content in the middle cannot by itself get it withheld |
 | Response inspection blocking | `security.response_inspection.action_mode: true` | Anomalous responses are blocked instead of logged |
 | Anomaly detection | `security.firewall.anomaly_detection: true`, plus `anomaly_block_threshold` to block | Unusual tool-call sequences. Calls with no caller identity are refused |
 | Relay detection | `security.firewall.collusion` with `action: observe` or `block` | Content delivered to one caller that another caller then sends out |
@@ -50,7 +50,8 @@ To turn CLI capabilities off entirely, set `capabilities.process_execution: disa
   port can call tools until you remove it.
 - **Prompt injection is flagged, not removed.** The response firewall warns about injection text
   but delivers it. Withholding it needs context integrity at `team_shared` or the hardened
-  posture.
+  posture, and even then only the start and end of an answer over the 64 KiB threshold are
+  checked: injection text in its middle cannot by itself get the answer withheld.
 - **Configured backend URLs are trusted.** The SSRF guard does not re-check URLs you put in
   `backends:` unless you set `security.trust_configured_backends: false` or use the hardened
   posture.

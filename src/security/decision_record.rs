@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::security::transparency_log::issuance::TokenOnCall;
+
 /// The record field the decision object lives under.
 pub(crate) const FIELD: &str = "decision";
 
@@ -40,6 +42,13 @@ pub(crate) enum DecisionKind {
     DefaultAllow,
     /// A refusal whose check noted no kind: never `default_allow`.
     Unrecorded,
+    /// The upstream signature chain on a backend's reply did not verify, or
+    /// no challenge was on record for it.
+    SignatureChain,
+    /// A single-use token was refused: a signing nonce already seen or a
+    /// nonce store at capacity, or a continuation that is spent, forged or
+    /// expired.
+    ReplayGuard,
     /// The target matches nothing: no backend or tool by that name.
     NotFound,
     /// A stored task result is not served under the bindings that produced
@@ -104,6 +113,11 @@ pub(crate) enum Coverage {
 /// The decision object as written and as read back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Decision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // ci-allow-secret-debug: the token's id and its issuance-row reference, never the bearer; TokenOnCall's field guard keeps this true.
+    pub token: Option<crate::security::transparency_log::issuance::TokenOnCall>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub token_unavailable: bool,
     pub v: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_revision: Option<String>,
@@ -275,6 +289,56 @@ struct NotedChecks {
     effect: Option<(Effect, EffectSource)>,
 }
 
+tokio::task_local! {
+    /// The exchanged token the current call was made with, opened where the
+    /// request's credential facts are still in hand and carried by every
+    /// future that goes on to build the call's decision.
+    static TOKEN_ON_CALL: Option<TokenOnCall>;
+}
+
+/// Run `work` with `token` as the call's token. A task-local does not cross
+/// `tokio::spawn`, so a spawned worker opens its own scope inside the spawn.
+pub(crate) fn with_token<F: std::future::Future>(
+    token: Option<TokenOnCall>,
+    work: F,
+) -> impl std::future::Future<Output = F::Output> {
+    TOKEN_ON_CALL.scope(token, work)
+}
+
+/// The current call's token, if a scope holds one.
+pub(crate) fn scoped_token() -> Option<TokenOnCall> {
+    TOKEN_ON_CALL.try_with(Clone::clone).ok().flatten()
+}
+
+/// Which token a call's decision names, and whether a missing one is flagged.
+/// Only a `KeyServerToken` caller ever names one; such a caller with no token
+/// in scope is flagged rather than written as if it had none.
+pub(crate) fn token_on_decision(
+    kind: crate::security::audit::CredentialKind,
+    scope: Option<TokenOnCall>,
+) -> (Option<TokenOnCall>, bool) {
+    match (kind, scope) {
+        (crate::security::audit::CredentialKind::KeyServerToken, Some(token)) => {
+            (Some(token), false)
+        }
+        (crate::security::audit::CredentialKind::KeyServerToken, None) => (None, true),
+        _ => (None, false),
+    }
+}
+
+/// Count and warn about a key-server call whose token never reached its
+/// decision: a route that lost the scope. The record is kept and marked.
+fn note_token_unavailable() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    telemetry_metrics::counter!("mcp_decision_token_unavailable_total").increment(1);
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "a key-server token call's decision was built with no token in scope; \
+             recorded as unavailable (further cases are counted, not logged)"
+        );
+    });
+}
+
 impl Noted {
     /// A call answered without deciding it again (a replay, a cache hit).
     pub(crate) fn not_redecided() -> Self {
@@ -294,6 +358,28 @@ impl Noted {
     /// Whether a gate refused.
     pub(crate) fn has_refusal(&self) -> bool {
         self.refusal().is_some()
+    }
+
+    /// The record's outcome class for a call whose result reads `outcome`:
+    /// a refusal a gate noted is `denied`, whatever form it was answered in.
+    /// The one rule every writer applies; a converted backend failure is the
+    /// caller's to class first (`DispatchNotes::outcome`).
+    pub(crate) fn refused_outcome(
+        &self,
+        outcome: crate::security::audit::AuditOutcome,
+    ) -> crate::security::audit::AuditOutcome {
+        use crate::security::audit::AuditOutcome;
+        match outcome {
+            // R1: a refusal some gate noted, answered with an error code.
+            AuditOutcome::Error(code) if self.has_refusal() => AuditOutcome::Denied(code),
+            // R6: such a refusal answered as an error-flagged tool result
+            // instead; it carries the code an outright response-gate refusal
+            // answers, since the wire answer has none.
+            AuditOutcome::ToolError if self.has_refusal() => {
+                AuditOutcome::Denied(crate::Error::ResponseFirewallRefused.to_rpc_code())
+            }
+            outcome => outcome,
+        }
     }
 
     /// The check that refused and its rule, if one did.
@@ -351,7 +437,18 @@ impl Noted {
         decided: Decided,
         refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
+        credential_kind: crate::security::audit::CredentialKind,
     ) -> Decision {
+        let (token, token_unavailable) = token_on_decision(credential_kind, scoped_token());
+        // A route that loses the scope fails every debug build; a release
+        // build keeps the record and marks the token unavailable instead.
+        debug_assert!(
+            !token_unavailable,
+            "no token on this call: a key-server token decision was built outside its token scope"
+        );
+        if token_unavailable {
+            note_token_unavailable();
+        }
         let ((kind, rule_id), grant_id) = match (self.refusal(), refused) {
             (Some(refusal), _) => (refusal.clone(), None),
             (None, Refused::No) => self
@@ -400,6 +497,8 @@ impl Noted {
                 .map(|applied| coverage_of(applied.capability_part()))
         });
         Decision {
+            token,
+            token_unavailable,
             v: DECISION_VERSION,
             config_revision,
             config_revision_capabilities,
@@ -453,6 +552,11 @@ mod read_tests;
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
 mod writer_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "decision_token_tests.rs"]
+mod token_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]

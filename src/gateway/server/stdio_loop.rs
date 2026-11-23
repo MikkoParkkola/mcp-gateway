@@ -110,6 +110,7 @@ impl Gateway {
                 "protocol telemetry save",
                 telemetry_save_every,
                 None,
+                Some(data_dir.clone()),
                 move || Self::save_stdio_protocol_telemetry_unless_busy(&sink),
             ))
         };
@@ -219,6 +220,7 @@ impl Gateway {
         let cost_saver = meta_mcp.budget_enforcer.as_ref().map(|enforcer| {
             AbortOnDrop::new(persistence::spawn_cost_saver(
                 Arc::clone(enforcer),
+                meta_mcp.cost_tracker(),
                 data_dir.clone(),
                 persistence::COST_SAVE_INTERVAL,
                 None,
@@ -756,9 +758,12 @@ impl Gateway {
                     .await;
                 #[cfg(feature = "cost-governance")]
                 if let Some(enforcer) = &meta_mcp.budget_enforcer {
-                    let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir)
-                        .await;
+                    let cost = (
+                        Arc::clone(enforcer),
+                        meta_mcp.cost_tracker(),
+                        data_dir.clone(),
+                    );
+                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, cost).await;
                 }
             }
             // Every sender gone, then the writer joined: the task drains its queue

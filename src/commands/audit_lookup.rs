@@ -238,7 +238,7 @@ pub(crate) async fn lookup(
             "Use RFC 3339 times with --from not after --to.",
         )
     })?;
-    let body = request_body(input, args);
+    let body = super::dashboard_link::AdminBody::Json(request_body(input, args));
     let remedies = Remedies::read(base);
     let response = super::dashboard_link::admin_call_url(
         reqwest::Method::POST,
@@ -332,7 +332,7 @@ pub(crate) async fn lookup_run(
     let token = super::dashboard_link::read_token(token);
     let mut secrets: Vec<String> = token.iter().cloned().collect();
     let (base, tls, token) = match super::dashboard_link::resolved(
-        args.url.clone(),
+        args.gateway.url.clone(),
         args.tls.clone(),
         load,
         port_override,
