@@ -120,15 +120,10 @@ impl ReloadContext {
         ) {
             Waiting::No => false,
             Waiting::Yes { .. } if status_change == StatusChange::HoldForRestart => true,
-            Waiting::Yes { .. } => {
-                // The status rule's own sentence, as the build states it.
-                let reason = (self.live_config)
-                    .prepare(evaluated.config, &evaluated.overlay)
-                    .err()
-                    .unwrap_or_default();
+            Waiting::Yes { status, .. } => {
                 return Err(ReplaceError::ReloadRefused {
                     class: RefusalClass::RestartPending,
-                    reason: crate::config_reload::reload_context::nothing_published(&reason),
+                    reason: crate::config_reload::reload_context::nothing_published(&status),
                 });
             }
             Waiting::Faulty { reason } => return Err(invalid(reason)),

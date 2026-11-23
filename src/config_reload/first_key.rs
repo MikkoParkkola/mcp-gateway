@@ -41,8 +41,9 @@ pub(crate) enum Waiting {
     /// The status rule accepts the candidate.
     No,
     /// The status rule refuses it, it adds keys the running table lacks, those
-    /// keys build, and a start from it is not refused. Never empty.
-    Yes { keys: Vec<String> },
+    /// keys build, and a start from it is not refused. `keys` is never empty;
+    /// `status` is the status rule's own sentence, so no caller asks it again.
+    Yes { keys: Vec<String>, status: String },
     /// The status rule refuses it and some other check fails as well; the text
     /// is that check's own.
     Faulty { reason: String },
@@ -84,6 +85,6 @@ pub(crate) fn waiting_first_key(
         // A change that only removes keys: the existing refusal, unchanged.
         Waiting::Faulty { reason: status }
     } else {
-        Waiting::Yes { keys }
+        Waiting::Yes { keys, status }
     }
 }

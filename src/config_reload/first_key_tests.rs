@@ -56,6 +56,24 @@ struct Gw {
 
 impl Gw {
     fn start(text: &str) -> Self {
+        Self::start_with(text, None)
+    }
+
+    /// [`Self::start`] whose reloads after a write refuse with a text that is
+    /// no status change (kind `Other`); the writer's own checks before the
+    /// write still run on the real loader.
+    fn start_refusing_reloads(text: &str) -> Self {
+        fn refused(
+            _: &std::path::Path,
+            _: &Arc<LiveConfig>,
+            _: &crate::config::LiveEnv,
+        ) -> Result<super::reload_context::EvaluatedReload, String> {
+            Err("the reload refused the new bytes (test)".to_owned())
+        }
+        Self::start_with(text, Some(refused))
+    }
+
+    fn start_with(text: &str, load: Option<super::reload_context::LoadPatch>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("write");
@@ -65,16 +83,18 @@ impl Gw {
             crate::gateway::record_principal::TEST_RECORD_KEY,
         );
         let live = Arc::new(LiveConfig::with_auth(config, Arc::new(auth)));
-        let ctx = Arc::new(
-            ReloadContext::new(
-                path.clone(),
-                Arc::clone(&live),
-                Arc::new(crate::backend::BackendRegistry::new()),
-                crate::config::FailsafeConfig::default(),
-                std::time::Duration::from_secs(60),
-            )
-            .expect("the registry pairs with the config"),
-        );
+        let ctx = ReloadContext::new(
+            path.clone(),
+            Arc::clone(&live),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config");
+        let ctx = Arc::new(match load {
+            Some(load) => ctx.with_load(load),
+            None => ctx,
+        });
         Self {
             _dir: dir,
             path,
@@ -156,12 +176,11 @@ fn ask(gw: &Gw, candidate: &str) -> Waiting {
 #[test]
 fn w8_a_clean_first_key_waits_and_names_its_key() {
     let gw = Gw::start(&starter(&[]));
-    assert_eq!(
-        ask(&gw, &starter(&[("first", FIRST)])),
-        Waiting::Yes {
-            keys: vec!["first".to_owned()]
-        }
-    );
+    match ask(&gw, &starter(&[("first", FIRST)])) {
+        // The status sentence it carries is W1's to check, on the held refusal.
+        Waiting::Yes { keys, .. } => assert_eq!(keys, ["first"]),
+        other => panic!("expected Yes, got {other:?}"),
+    }
 }
 
 /// The status unchanged: `No` (control).
@@ -286,6 +305,29 @@ async fn w3_a_colliding_first_key_is_refused_with_the_collision() {
         other => panic!("expected ReloadRefused, got {other:?}"),
     }
     assert_eq!(gw.file(), before);
+    assert_eq!(gw.live.waiting_keys(), None);
+}
+
+/// W5: a held write whose reload refuses for any reason but the status
+/// change is rolled back as any write is: the old bytes, no journal, today's
+/// class, no fact. Red today: the pre-check refuses before the write.
+#[tokio::test]
+async fn w5_a_held_write_refused_for_another_reason_rolls_back() {
+    let gw = Gw::start_refusing_reloads(&starter(&[]));
+    let before = gw.file();
+    let error = gw
+        .write(&starter(&[("first", FIRST)]), StatusChange::HoldForRestart)
+        .await
+        .expect_err("rolled back");
+    match error {
+        ReplaceError::ReloadRefused { class, reason } => {
+            assert_eq!(class, RefusalClass::Internal);
+            assert!(reason.contains("(test)"), "{reason}");
+        }
+        other => panic!("expected ReloadRefused, got {other:?}"),
+    }
+    assert_eq!(gw.file(), before);
+    assert!(!gw.journal_left());
     assert_eq!(gw.live.waiting_keys(), None);
 }
 

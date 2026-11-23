@@ -598,21 +598,21 @@ impl ReloadContext {
             &new_config,
             &overlay,
         );
-        if let super::first_key::Waiting::Faulty { reason } = &waiting {
-            return Err(nothing_published(reason).into());
+        match waiting {
+            super::first_key::Waiting::No => {}
+            super::first_key::Waiting::Yes { keys, status } => {
+                return Err(ReloadRefusal {
+                    kind: ReloadRefusalKind::StatusChange,
+                    text: nothing_published(&status),
+                    waiting: keys,
+                });
+            }
+            super::first_key::Waiting::Faulty { reason } => {
+                return Err(nothing_published(&reason).into());
+            }
         }
         let prepared = self.live_config.prepare(new_config, &overlay);
-        let generation = Arc::new(prepared.map_err(|reason| {
-            let text = nothing_published(&reason);
-            match waiting {
-                super::first_key::Waiting::Yes { keys } => ReloadRefusal {
-                    kind: ReloadRefusalKind::StatusChange,
-                    text,
-                    waiting: keys,
-                },
-                _ => text.into(),
-            }
-        })?);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         // After every refusal: a backend `apply_patch` registers is seeded
