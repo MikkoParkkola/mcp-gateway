@@ -564,6 +564,9 @@ mod list;
 #[path = "config_persistence_keyedit_frame_tests.rs"]
 mod frame;
 
+#[path = "config_persistence_keyedit_element_tests.rs"]
+mod element;
+
 /// H1: an edit's hunks follow its line origins: kept lines never
 /// appear, a replaced line is one old and one new line, adjacent changed
 /// lines are one hunk, an inserted run is one hunk; a CRLF copy gives the
