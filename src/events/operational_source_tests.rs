@@ -360,10 +360,34 @@ fn admit(hub: &EventsHub, key: &str, secret: &str, name: &str) {
         .expect("admitted");
 }
 
+/// The caller `/mcp` makes of the API key `key`/`secret`: its owner key as the
+/// principal, the key's bare principal in its credential.
+fn key_caller(key: &str, secret: &str, admin: bool) -> super::super::rpc::Caller {
+    super::super::rpc::Caller {
+        principal: Some(principal(secret)),
+        credential: super::super::records::Credential {
+            kind: crate::security::audit::CredentialKind::ApiKey,
+            principal: bare(secret),
+            api_key: Some(crate::events::ApiKeyRef {
+                name: key.to_owned(),
+                principal: bare(secret),
+                digest_tag: Some(crate::gateway::auth::secret_tag(secret)),
+            }),
+            expires_at: None,
+            binding: None,
+        },
+        visible_backends: std::collections::HashSet::new(),
+        admin,
+        identity: None,
+        read_key: None,
+    }
+}
+
 /// Lead condition (2): at fan-out a non-admin's subscription to an operator
 /// event ends unoffered, and an admin demoted after subscribing loses it too.
 #[tokio::test]
 async fn a_non_admin_never_receives_an_operator_event() {
+    use base64::Engine as _;
     let dir = tempfile::tempdir().expect("dir");
     let (hub, live) = hub(dir.path(), keys(true));
     hub.install_operational_source(
@@ -371,9 +395,31 @@ async fn a_non_admin_never_receives_an_operator_event() {
         &crate::backend::BackendRegistry::new(),
         None,
     );
-    admit(&hub, "ops", "s-ops", KILL_SWITCH_CHANGED);
+    // The admin subscribes through the hub, so the row under test is the one
+    // the hub stores; a row of another type first verifies its callback, so
+    // the subscribe sends no challenge.
+    admit(&hub, "ops", "s-ops", "seed");
+    let secret = format!(
+        "whsec_{}",
+        base64::engine::general_purpose::STANDARD.encode([7_u8; 32])
+    );
+    let params = json!({"name": KILL_SWITCH_CHANGED, "arguments": {},
+        "delivery": {"mode": "webhook", "url": "https://h/ops", "secret": secret}});
+    hub.subscribe(&key_caller("ops", "s-ops", true), Some(&params))
+        .await
+        .expect("the admin subscribes");
+    // Seeded: the hub refuses a non-admin this subscription, which is the
+    // state the fan-out check exists for.
     admit(&hub, "dev", "s-dev", KILL_SWITCH_CHANGED);
     let services = hub.runtime.services.get().cloned().expect("services");
+    let holders = || -> Vec<String> {
+        hub.store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.name == KILL_SWITCH_CHANGED)
+            .map(|s| s.principal)
+            .collect()
+    };
     let killed = || {
         let mut e = event(
             KILL_SWITCH_CHANGED,
@@ -383,23 +429,14 @@ async fn a_non_admin_never_receives_an_operator_event() {
         e
     };
     hub.fan_out(&services, &killed()).await;
-    let holders: Vec<String> = hub
-        .store
-        .subscriptions()
-        .into_iter()
-        .map(|s| s.principal)
-        .collect();
     assert_eq!(
-        holders,
+        holders(),
         [principal("s-ops")],
         "the non-admin's subscription ended"
     );
     live.set(config(keys(false)));
     hub.fan_out(&services, &killed()).await;
-    assert!(
-        hub.store.subscriptions().is_empty(),
-        "the demoted admin's ended too"
-    );
+    assert!(holders().is_empty(), "the demoted admin's ended too");
 }
 
 /// A key whose digest shares `secret`'s first 48 bits (its principal) and

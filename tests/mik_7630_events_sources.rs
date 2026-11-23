@@ -272,9 +272,10 @@ async fn start_task(gw: &Gateway, key: &str, idem: &str) -> String {
 
 /// A gateway whose two task owners are delegated OIDC bearers, so each owner
 /// is a verified identity. Returns the gateway, receiver, mock backend and the
-/// two tokens.
+/// two tokens. `sources` is laid over the events sources (`{}`: the defaults).
 async fn two_owner_gateway(
     root: &std::path::Path,
+    sources: &Value,
 ) -> (Gateway, Receiver, Mock, String, String, issuer::Issuer) {
     let issuer = issuer::Issuer::start(root).await;
     let rx = Receiver::start(root).await;
@@ -284,6 +285,9 @@ async fn two_owner_gateway(
         issuer.mint("events-subject-b", EMAIL_B),
     );
     let mut cfg = config_with_mock(root, &mock);
+    for (source, on) in sources.as_object().into_iter().flatten() {
+        cfg["events"]["sources"][source] = on.clone();
+    }
     let policies: Vec<Value> = [EMAIL_A, EMAIL_B]
         .iter()
         .map(|email| {
@@ -320,7 +324,7 @@ async fn two_owner_gateway(
 #[tokio::test]
 async fn settled_tasks_become_events_for_their_owner_only() {
     let root = tempfile::tempdir().expect("root");
-    let (gw, rx, mock, alice, bob, _issuer) = two_owner_gateway(root.path()).await;
+    let (gw, rx, mock, alice, bob, _issuer) = two_owner_gateway(root.path(), &json!({})).await;
     let (a_tok, b_tok) = (alice.as_str(), bob.as_str());
     let task_a = start_task(&gw, a_tok, "i4-a").await;
     let alice_all = sub_id(&subscribe(&gw, a_tok, "task.settled", &rx.url, json!({})).await);
@@ -450,6 +454,36 @@ async fn admins_and_the_bearer_subscribe_to_operator_events_over_mcp() {
             sub_id(&admitted);
         }
         let refused = subscribe(&gw, ALICE, name, &rx.url, json!({})).await;
+        assert_eq!(error(&refused)["code"], -32011, "{name}: {refused}");
+    }
+}
+
+/// A key-server caller (a delegated OIDC bearer) is neither the static bearer
+/// nor a configured key, so over `/mcp` it holds no operational type: a budget
+/// event is refused (-32012), even one naming a key's scope, and the operator
+/// types are not shown to it (-32011).
+#[tokio::test]
+async fn a_key_server_caller_holds_no_operational_type_over_mcp() {
+    let root = tempfile::tempdir().expect("root");
+    let (gw, rx, _mock, caller, _other, _issuer) =
+        two_owner_gateway(root.path(), &json!({"operational": true})).await;
+    gw.event_names(Some(ALICE), Some("gateway.budget.threshold"))
+        .await;
+    for name in ["gateway.budget.threshold", "gateway.budget.exhausted"] {
+        for arguments in [json!({"scope": "key:alice"}), json!({})] {
+            let refused = subscribe(&gw, &caller, name, &rx.url, arguments.clone()).await;
+            assert_eq!(
+                error(&refused)["code"],
+                -32012,
+                "{name} {arguments}: {refused}"
+            );
+        }
+    }
+    for name in [
+        "gateway.backend.health_changed",
+        "gateway.kill_switch.changed",
+    ] {
+        let refused = subscribe(&gw, &caller, name, &rx.url, json!({})).await;
         assert_eq!(error(&refused)["code"], -32011, "{name}: {refused}");
     }
 }
