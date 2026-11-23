@@ -128,6 +128,8 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
         return refused(&why);
     }
     fault::trace("strict-check");
+    // Only a debug build has a hold: a release build has no fault to obey.
+    #[cfg(debug_assertions)]
     if let Err(why) = fault::hold() {
         return refused(&why);
     }
@@ -487,8 +489,4 @@ mod fault {
     }
 
     pub(super) fn trace(_: &str) {}
-
-    pub(super) fn hold() -> Result<(), String> {
-        Ok(())
-    }
 }
