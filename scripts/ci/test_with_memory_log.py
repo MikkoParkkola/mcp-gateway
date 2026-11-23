@@ -10,13 +10,16 @@ status. It never limits time (the step's timeout-minutes does) and never prints 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts" / "ci" / "with-memory-log.sh"
@@ -63,6 +66,207 @@ def run(cmd: str, env: dict[str, str], timeout: float = 60) -> tuple[int, str, s
     return p.returncode, p.stdout, p.stderr, time.monotonic() - start
 
 
+class W4Files(NamedTuple):
+    """The files a W4 run's shells write: the marker (sleeper's pid, command's pid), R5, R2 before and after, R3."""
+    marker: Path
+    wrapper: Path
+    pre: Path
+    post: Path
+    trap: Path
+
+
+# Every W4 hang's record, printed above the summary by main().
+HANG_RECORDS: list[dict] = []
+LINUX = sys.platform.startswith("linux")
+
+
+def run_w4(cmd: str, env: dict[str, str], sig: str, files: W4Files,
+           timeout: float = 60) -> tuple[int, str, str, float, dict | None]:
+    """run() for W4, holding the outer shell itself: on a hang the record is taken before anything is killed (the
+    outer shell's state at the limit needs the process; run() cannot give it). Then, as run() does, only the outer
+    shell is killed: nothing the row did not start is signalled, and the leftovers end with the command's sleep."""
+    clock = Clock()
+    load_start = real_load()
+    start = time.monotonic()
+    p = subprocess.Popen(["bash", "-c", cmd], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT)
+    try:
+        so, se = p.communicate(timeout=timeout)
+        return p.returncode, so.decode(errors="replace"), se.decode(errors="replace"), time.monotonic() - start, None
+    except subprocess.TimeoutExpired as e:
+        record = hang_record(sig, files, p, clock, load_start, e.stdout, e.stderr)
+        HANG_RECORDS.append(record)
+        p.kill()
+        p.wait()
+        for pipe in (p.stdout, p.stderr):
+            pipe.close()
+        return -1, "", f"HUNG past {timeout} s", time.monotonic() - start, record
+
+
+def real_load() -> float | None:
+    """The host's 1-minute load: the real /proc/loadavg (never the rows' stub), or the OS's figure off Linux."""
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        return float(Path("/proc/loadavg").read_text().split()[0]) if LINUX else os.getloadavg()[0]
+    return None
+
+
+class Clock:
+    """The row's start on the system's time since boot, in clock ticks (the unit /proc gives a start time in), and
+    the one offset that puts a file's wall-clock time on that same clock (D2)."""
+    def __init__(self) -> None:
+        self.tick = os.sysconf("SC_CLK_TCK")
+        self.wall = time.time()
+        boot = time.clock_gettime(time.CLOCK_BOOTTIME) if LINUX else 0.0
+        self.offset = self.wall - boot
+        self.start_ticks = boot * self.tick
+
+    def ticks_at(self, path: Path) -> float | None:
+        with contextlib.suppress(OSError):
+            return (path.stat().st_mtime - self.offset) * self.tick
+        return None
+
+    def since_start(self, path: Path) -> float | None:
+        with contextlib.suppress(OSError):
+            return round(path.stat().st_mtime - self.wall, 3)
+        return None
+
+
+def _mask(status: str, key: str) -> int:
+    line = next(l for l in status.splitlines() if l.startswith(key + ":"))
+    return int(line.split()[1], 16)
+
+
+def bound_read(pid: int, parents: set[int], low: float, high: float) -> dict:
+    """R6 for one pid, kept only if it names the row's own process (Linux). A handle that names this one process is
+    taken first; the facts are read; then the handle says whether that process is still the same live one. Its start
+    time must lie between the row's start and the moment its pid was written (one tick either way), and its parent
+    must be one of `parents`. A process gone is "dead", a complete answer; anything else is "not confirmed"."""
+    try:
+        handle = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return {"identity": "dead"}
+    except OSError:
+        return {"identity": "not confirmed"}
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        status = Path(f"/proc/{pid}/status").read_text()
+        poll = select.poll()
+        poll.register(handle, select.POLLIN)
+        exited = bool(poll.poll(0))  # a pidfd reads as ready once its process has exited
+    except OSError:
+        exited = True
+    finally:
+        os.close(handle)
+    if exited:
+        return {"identity": "dead"}
+    fields = stat.rsplit(")", 1)[1].split()  # after the name: state, ppid, pgrp, ...; starttime is field 22
+    state, ppid, started = fields[0], int(fields[1]), int(fields[19])
+    if not (low - 1 <= started <= high + 1) or ppid not in parents:
+        return {"identity": "not confirmed"}
+    return {"identity": "confirmed", "state": state,
+            **{k: _mask(status, f) for k, f in (("ign", "SigIgn"), ("cgt", "SigCgt"), ("blk", "SigBlk"),
+                                                 ("pnd", "SigPnd"), ("shd", "ShdPnd"))}}
+
+
+def orphan_adopter() -> int | None:
+    """The process that adopts this row's orphans, measured (D3): a short sleep whose shell has exited, read for its
+    new parent. It shares the row's ancestry, and no shell between is a subreaper, so the row's orphans go there too."""
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        sh = subprocess.run(["sh", "-c", "sleep 2 >/dev/null 2>&1 & echo $!"], capture_output=True, text=True)
+        orphan = int(sh.stdout.split()[0])
+        return int(Path(f"/proc/{orphan}/stat").read_text().rsplit(")", 1)[1].split()[1])
+    return None
+
+
+def _pids(path: Path) -> list[int] | None:
+    with contextlib.suppress(OSError, ValueError):
+        return [int(x) for x in path.read_text().split()]
+    return None
+
+
+def processes(roles: dict[int, str], wrapper: int | None, group_private: bool, group: int | None) -> list[dict]:
+    """R7: the named pids, every descendant of the wrapper, and, only when the wrapper's group is the row's own,
+    every other member of that group. Names only: never a process's arguments."""
+    ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,etime=,comm="], capture_output=True, text=True)
+    table = {}
+    for line in ps.stdout.splitlines():
+        f = line.split(None, 5)
+        if len(f) == 6:
+            table[int(f[0])] = {"pid": int(f[0]), "ppid": int(f[1]), "pgid": int(f[2]), "state": f[3],
+                                "etime": f[4], "comm": f[5]}
+    found = dict(roles)
+    if wrapper is not None:
+        frontier = [wrapper]
+        while frontier:
+            parent = frontier.pop()
+            for pid, row in table.items():
+                if row["ppid"] == parent and pid not in found:
+                    found[pid] = "descendant"
+                    frontier.append(pid)
+    if group_private and group is not None:
+        for pid, row in table.items():
+            if row["pgid"] == group:
+                found.setdefault(pid, "group")
+    return [dict(table[pid], role=role) for pid, role in sorted(found.items()) if pid in table]
+
+
+def hang_record(sig: str, files: W4Files, outer: subprocess.Popen, clock: Clock, load_start: float | None,
+                stdout: bytes | None, stderr: bytes | None) -> dict:
+    """The facts R1 to R9 of a W4 hang, read before anything is killed and only read: nothing is signalled."""
+    outer_rc = outer.poll()
+    marker = _pids(files.marker)
+    written = bool(marker)
+    sleeper, command = (marker + [None, None])[:2] if written else (None, None)
+    r5 = None
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        parts = files.wrapper.read_text().split()
+        wrapper_pid = int(parts[0])
+        # The stat line read by the outer shell: after "(name)", state then ppid then pgrp.
+        tail = files.wrapper.read_text().rsplit(")", 1)
+        group = int(tail[1].split()[2]) if len(tail) == 2 else None
+        r5 = {"pid": wrapper_pid, "group": group}
+    post = None
+    with contextlib.suppress(OSError, ValueError):
+        post = int(files.post.read_text().split()[0])
+    reached = files.pre.exists()
+    r2 = {"reached": reached, "status": post} if (not reached or post is not None) else None
+    record = {
+        "signal": sig, "linux": LINUX,
+        "R1": {"written": written, "child": sleeper, "command": command},
+        "R2": r2,
+        "R3": {"trap_ran": files.trap.exists()},
+        "R4": {"running": outer_rc is None, "status": outer_rc},
+        "R5": r5,
+        "R6": None,
+        "R8": {"stdout": (stdout or b"").decode(errors="replace"), "stderr": (stderr or b"").decode(errors="replace")},
+        "R9": {"load_start": load_start, "load_limit": real_load(), "to_marker": clock.since_start(files.marker),
+               "to_kill": clock.since_start(files.pre)},
+    }
+    wrapper = r5["pid"] if r5 else None
+    roles = {pid: role for pid, role in ((wrapper, "wrapper"), (command, "command"), (sleeper, "sleeper")) if pid}
+    if LINUX and r5:
+        adopter = orphan_adopter()
+        adopters = {adopter} if adopter is not None else set()
+        low = clock.start_ticks
+        w = bound_read(wrapper, {outer.pid} | (adopters if outer_rc is not None else set()), low,
+                       clock.ticks_at(files.wrapper) or low)
+        c = {"identity": "dead"} if command is None else bound_read(
+            command, {wrapper} | (adopters if w["identity"] == "dead" else set()), low, clock.ticks_at(files.marker) or low)
+        s = {"identity": "dead"} if sleeper is None else bound_read(
+            sleeper, {command} | (adopters if c["identity"] == "dead" else set()), low, clock.ticks_at(files.marker) or low)
+        record["R6"] = {"wrapper": w, "command": c}
+        record["adopter"] = adopter
+        # No fact is kept from a pid whose identity is not confirmed.
+        for pid, seen in ((wrapper, w), (command, c), (sleeper, s)):
+            if pid and seen["identity"] == "not confirmed":
+                roles.pop(pid, None)
+                record.setdefault("not_confirmed", []).append(pid)
+        record["R7"] = processes(roles, wrapper if w["identity"] == "confirmed" else None,
+                                 r5["group"] == wrapper, r5["group"])
+    else:
+        record["R7"] = processes(roles, wrapper, bool(r5) and r5["group"] == wrapper, r5["group"] if r5 else None)
+    return record
+
+
 def rows() -> list[tuple[str, bool, str]]:
     out = []
     w = str(WRAPPER)
@@ -91,15 +295,25 @@ def rows() -> list[tuple[str, bool, str]]:
         # trap, then writes its marker; the signal is sent when the marker exists (the command's own "ready" event, not a
         # sleep that load can overtake). A signal that is not forwarded leaves the command in its 120 s wait: a hang at the
         # 60 s timeout, far from a correct run's seconds. The trap waits for the child, so "child gone" holds at exit.
+        # The marker holds the sleeper's pid and the command's own. For a hang's record (hang_record) the shells also
+        # write four small files, by redirection only (no process): the wrapper's pid and /proc stat line just after
+        # the launch (R5), one file just before the kill and one after it holding kill's status (R2), and one as the
+        # command's trap starts (R3).
         for sig in ("TERM", "INT", "HUP"):
             marker = tmp / f"child-{sig}"
-            cmd = (f"set -m; {w} bash -c 'sleep 120 & c=$!; trap \"kill $c; wait $c; exit 42\" TERM; echo $c > {marker}; wait $c' "
-                   f"& wp=$!; while [ ! -s {marker} ]; do kill -0 $wp 2>/dev/null || break; sleep 0.1; done; kill -{sig} $wp; wait $wp")
-            rc, so, se, t = run(cmd, env)
-            child = marker.read_text().strip() if marker.exists() else ""
+            files = W4Files(marker, *(tmp / f"w4-{sig}-{n}" for n in ("wrapper", "pre", "post", "trap")))
+            cmd = (f"set -m; {w} bash -c 'sleep 120 & c=$!; trap \": > {files.trap}; kill $c; wait $c; exit 42\" TERM; "
+                   f"echo $c $$ > {marker}; wait $c' "
+                   f"& wp=$!; st=; read -r st 2>/dev/null < /proc/$wp/stat; echo \"$wp $st\" > {files.wrapper}; "
+                   f"while [ ! -s {marker} ]; do kill -0 $wp 2>/dev/null || break; sleep 0.1; done; "
+                   f": > {files.pre}; kill -{sig} $wp; echo $? > {files.post}; wait $wp")
+            rc, so, se, t, record = run_w4(cmd, env, sig, files)
+            child = marker.read_text().split()[0] if marker.exists() and marker.read_text().split() else ""
             gone = bool(child) and subprocess.run(["kill", "-0", child], capture_output=True).returncode != 0
+            hung = f", class {classify_hang(record)}" if record else ""
             out.append((f"W4 {sig} reaches the command as TERM: exit 42, child gone", rc == 42 and gone,
-                        f"rc {rc}, {t:.1f}s, child {'gone' if gone else 'still there or never written'}, {se[-200:]}"))
+                        f"rc {rc}, {t:.1f}s, child {'gone' if gone else 'still there or never written'}{hung}, "
+                        f"{se[-200:]}"))
         # W11: a command that ignores the forwarded TERM keeps running and its own later status is the result.
         cmd = (f"set -m; {w} bash -c 'trap \"\" TERM; sleep 2; exit 7' & wp=$!; sleep 0.5; kill -TERM $wp; wait $wp")
         rc, so, se, t = run(cmd, env)
@@ -392,6 +606,9 @@ def main() -> int:
     results = rows()
     for label, ok, detail in results:
         print(f"{'ok   ' if ok else 'WRONG'} {label}" + ("" if ok else f"\n      {detail!r}"))
+    # Each W4 hang's whole record, above the summary, so a run's kept output carries it.
+    for record in HANG_RECORDS:
+        print(f"W4 hang record, class {classify_hang(record)}: {json.dumps(record, sort_keys=True)}")
     print(summary(results))
     return 0 if all(ok for _, ok, _ in results) else 1
 
