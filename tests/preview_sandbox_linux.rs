@@ -524,9 +524,27 @@ async fn started_until(target: &Target, marker: &str) -> Option<Started> {
                 return None;
             }
         };
+    let mut started = started;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !host_has(marker) {
         if std::time::Instant::now() > deadline {
+            // Diagnostic only: how the start ended, and what it printed, when
+            // the sleeper never showed.
+            let status = started.child.try_wait();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            if let Some(mut pipe) = started.child.stdout.take() {
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(2), pipe.read_to_end(&mut out)).await;
+            }
+            if let Some(mut pipe) = started.child.stderr.take() {
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(2), pipe.read_to_end(&mut err)).await;
+            }
+            eprintln!(
+                "diagnostic: child status {status:?}; stdout {:?}; stderr {:?}",
+                String::from_utf8_lossy(&out),
+                String::from_utf8_lossy(&err)
+            );
             // `unshare` refused the namespaces: the sleeper never started.
             skip_or_fail(&Refusal::Step("the sleeper did not start".into()));
             return None;
