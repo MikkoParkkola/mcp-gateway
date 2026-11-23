@@ -245,6 +245,8 @@ pub(crate) fn flags_off(mut config: Config) -> Config {
     config
 }
 pub(crate) mod history;
+#[cfg(feature = "webui")]
+pub(crate) mod history_mask;
 pub(crate) mod override_audit;
 #[cfg_attr(
     not(feature = "webui"),

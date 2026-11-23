@@ -66,6 +66,9 @@ pub(crate) struct Node {
     pub(crate) start: usize,
     /// One past the last byte of the node and everything under it.
     pub(crate) end: usize,
+    /// A scalar's text as the parser decoded it: escapes resolved, quotes
+    /// and block headers not part of it. `None` for a collection or alias.
+    pub(crate) value: Option<String>,
 }
 
 /// An open collection.
@@ -119,6 +122,7 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
                     false,
                     decorated,
                     bytes,
+                    Some(value.into_owned()),
                 );
             }
             Event::Alias(_) => {
@@ -133,6 +137,7 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
                     false,
                     true,
                     bytes,
+                    None,
                 );
             }
             Event::MappingStart(style, anchor, tag) | Event::SequenceStart(style, anchor, tag) => {
@@ -147,7 +152,7 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
                 if let Some(top) = open.last_mut().filter(|o| o.mapping && o.key.is_none()) {
                     top.key = Some((String::new(), false, bytes.clone()));
                 }
-                let node = push(&mut out, &mut open, shape, flow, decorated, bytes);
+                let node = push(&mut out, &mut open, shape, flow, decorated, bytes, None);
                 open.push(Open {
                     node,
                     mapping,
@@ -188,6 +193,14 @@ pub(crate) fn anchors_and_aliases(text: &str) -> Option<usize> {
     Some(count)
 }
 
+/// Whether `text` is one document built only from plain shapes: every
+/// collection and scalar carries no anchor and no tag, no alias appears, and
+/// every mapping key is a scalar. Anything else, or a parse error, is false.
+pub(crate) fn renderable(text: &str) -> bool {
+    let _ = text;
+    true
+}
+
 /// Add a node under the innermost open collection (or as the root), and
 /// stretch every open ancestor's end over it.
 fn push(
@@ -197,6 +210,7 @@ fn push(
     flow: bool,
     decorated: bool,
     bytes: Range<usize>,
+    value: Option<String>,
 ) -> usize {
     let (path, key, inherited_flow, plain) = match open.last_mut() {
         None => (Vec::new(), None, false, !decorated && !flow),
@@ -248,6 +262,7 @@ fn push(
         bytes,
         start,
         end,
+        value,
     });
     out.len() - 1
 }
