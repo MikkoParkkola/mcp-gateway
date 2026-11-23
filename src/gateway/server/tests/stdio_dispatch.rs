@@ -291,6 +291,107 @@ async fn malformed_retry_fields_are_recorded_on_stdio() {
     assert!(record.get("tool").is_none(), "{record}");
 }
 
+/// A `MetaMcp` whose transparency log, in `dir`, follows `policy`.
+fn logged_meta(
+    dir: &Arc<tempfile::TempDir>,
+    policy: crate::security::audit::AuditFailurePolicy,
+) -> Arc<MetaMcp> {
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.enable_transparency_log(crate::gateway::meta_mcp::grant_audit_fixture::logger(
+        dir, policy,
+    ));
+    Arc::new(meta)
+}
+
+/// One stdio `tools/call` of `name` with `params`, numbered 1.
+async fn stdio_call(meta: &Arc<MetaMcp>, params: serde_json::Value) -> serde_json::Value {
+    Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &test_mtls_policy(),
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}),
+        "stdio-session",
+    )
+    .await
+    .expect("a tools/call carrying an id must return a response")
+}
+
+/// A stdio `gateway_invoke` refused for a missing `server` or `tool` is
+/// answered as before and leaves one `invalid` -32602 record whose decision
+/// kind is the request's form (`syntax`).
+#[tokio::test]
+async fn missing_server_is_recorded_as_syntax_on_stdio() {
+    for (arguments, missing) in [
+        (json!({"tool": "t"}), "server"),
+        (json!({"server": "alpha"}), "tool"),
+    ] {
+        let dir = crate::test_dir_keep::kept_tempdir();
+        let meta = logged_meta(&dir, crate::security::audit::AuditFailurePolicy::BestEffort);
+        let response = stdio_call(
+            &meta,
+            json!({"name": "gateway_invoke", "arguments": arguments}),
+        )
+        .await;
+        assert_eq!(
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(-32602),
+            "{missing}: {response}"
+        );
+        assert_eq!(
+            response
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str),
+            Some(format!("Missing '{missing}' parameter").as_str()),
+            "{missing}: {response}"
+        );
+        assert_eq!(response["id"], json!(1), "{missing}: {response}");
+        let records = crate::gateway::meta_mcp::grant_audit_fixture::invocations(&dir);
+        let [record] = records.as_slice() else {
+            panic!("{missing}: exactly one record: {records:#?}; answer {response}");
+        };
+        assert_eq!(record["outcome"], json!("invalid"), "{missing}: {record}");
+        assert_eq!(record["error_code"], json!(-32602), "{missing}: {record}");
+        assert_eq!(
+            record["decision"]["kind"],
+            json!("syntax"),
+            "{missing}: {record}"
+        );
+    }
+}
+
+/// The malformed-retry row under a log that fails closed and cannot be
+/// written: like `/mcp` (`meta_malformed_retry`), the answer is the log's
+/// unavailability with the request's id, and nothing is recorded.
+#[tokio::test]
+async fn malformed_retry_fields_under_an_unwritable_fail_closed_log_answer_unavailable_on_stdio() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let meta = logged_meta(&dir, crate::security::audit::AuditFailurePolicy::FailClosed);
+    meta.transparency_log()
+        .expect("the fixture logs")
+        .set_append_failure_for_test(true);
+    let response = stdio_call(
+        &meta,
+        json!({"name": "gateway_list_servers", "arguments": {}, "inputResponses": "not an object"}),
+    )
+    .await;
+    assert_eq!(
+        (
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            response["id"].clone()
+        ),
+        (Some(-32005), json!(1)),
+        "{response}"
+    );
+    assert!(
+        crate::gateway::meta_mcp::grant_audit_fixture::invocations(&dir).is_empty(),
+        "no record: {response}"
+    );
+}
+
 #[tokio::test]
 async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
     // Bound rather than inlined: the kill switch is the execution sentinel,

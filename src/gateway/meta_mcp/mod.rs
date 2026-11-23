@@ -807,6 +807,9 @@ mod legacy_row_planted_tests;
 mod maps_invoke_tests;
 #[cfg(tp2)]
 #[cfg(test)]
+mod missing_target_tests;
+#[cfg(tp2)]
+#[cfg(test)]
 mod oracle_audit_tests;
 #[cfg(tp2)]
 #[cfg(test)]
