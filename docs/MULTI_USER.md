@@ -75,7 +75,8 @@ work only after a restart:
   only credential.
 - `gateway.yaml` takes no other change that keeps the key: the UI routes answer
   409 `restart_pending` naming the key, and a hand edit is refused at reload.
-  Every admin page shows a banner with the start command.
+  Every admin page shows a banner, with the start command while the file
+  would start.
 - To cancel, revoke the key before restarting; the freeze ends at once.
 
 ## 1. Who is calling
