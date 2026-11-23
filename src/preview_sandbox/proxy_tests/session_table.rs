@@ -214,6 +214,49 @@ async fn r41_only_one_well_formed_status_then_the_end_is_accepted() {
     }
 }
 
+/// R41, kills "a fetching session's first-line refusal is taken without the
+/// end of the connection": that refusal goes straight to the end check, and
+/// stands only as every status does: the connection ends right after it. A
+/// byte after it, or the connection held open past the frame bound, is no
+/// status.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn r41_a_fetching_first_line_refusal_stands_only_at_the_end() {
+    let refused = lines(&[Line::SetupRefused]);
+    let plain = session(true, &refused, CONTROL_BOUNDS, far()).await;
+    assert_eq!(plain, Ok(REFUSED), "the refusal, then the end");
+
+    let mut trailing = refused.clone();
+    trailing.push(b'x');
+    let got = session(true, &trailing, CONTROL_BOUNDS, far()).await;
+    assert_eq!(got, step(NO_STATUS), "a byte after the refusal");
+
+    let rig = rig().await;
+    let (helper, gateway) = UnixStream::pair().expect("pair");
+    let began = tokio::time::Instant::now();
+    let served = serve_control(gateway, Some(&rig.proxy), far(), CONTROL_BOUNDS);
+    let script = async {
+        let (mut read, mut write) = helper.into_split();
+        let _ = write.write_all(&refused).await;
+        // The write side stays open until the gateway has closed its end.
+        let mut rest = Vec::new();
+        let _ = read.read_to_end(&mut rest).await;
+        drop(write);
+    };
+    let (got, ()) = tokio::time::timeout(GUARD, async { tokio::join!(served, script) })
+        .await
+        .expect("the session did not end within the guard");
+    assert_eq!(
+        got,
+        step(NO_STATUS),
+        "the refusal with the connection held open"
+    );
+    assert_eq!(
+        began.elapsed(),
+        CONTROL_BOUNDS.frame,
+        "refused at the frame bound"
+    );
+}
+
 /// R41, kills "the end of the connection is waited for without a bound": a
 /// helper that sends its status and then holds the connection open is refused
 /// once the frame bound has passed, not taken as started.
@@ -286,16 +329,21 @@ impl Scripted {
     }
 }
 
-/// R41 after a fetch: the status read after the run line waits for the time
-/// left to the deadline, so a helper silent there ends at exactly the
-/// deadline (the setup bound, 30 s, is past it here).
+/// R41 after a fetch: the status read after the run line is bounded by the
+/// deadline alone, so a helper silent there ends at exactly the deadline.
+/// The setup bound here (5 s) is well inside the 20 s deadline, so a read
+/// that fell back to it would refuse early and fail this row.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn r41_a_helper_silent_after_its_run_line_is_refused_at_the_deadline() {
     let rig = rig().await;
     let (helper, gateway) = UnixStream::pair().expect("pair");
     let began = tokio::time::Instant::now();
     let deadline = began + Duration::from_secs(20);
-    let served = serve_control(gateway, Some(&rig.proxy), deadline, CONTROL_BOUNDS);
+    let short_setup = ControlBounds {
+        setup: Duration::from_secs(5),
+        ..CONTROL_BOUNDS
+    };
+    let served = serve_control(gateway, Some(&rig.proxy), deadline, short_setup);
     let script = async {
         let mut scripted = Scripted::new(helper);
         for said in [Line::FetchStart, Line::FetchDone, Line::Run] {
