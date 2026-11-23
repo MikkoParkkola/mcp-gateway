@@ -175,8 +175,9 @@ async fn audit_pair(route: Route) {
     let (status, body) = send(route, &missing, OPEN_KEY, VISIBLE, json!({})).await;
     assert_visible_allowed(route, status, &body);
 
-    // One scan, one row: the probe is charged as exactly one request.
-    assert_eq!(withheld_events, ["request"]);
+    // One scan each way: the probe is charged as one request, and its absent
+    // answer passes the response scan once.
+    assert_eq!(withheld_events, ["request", "response"]);
     assert_eq!(missing_events, withheld_events);
     // Only each arm's visible call was sent on.
     assert_eq!(withheld.calls.load(Ordering::SeqCst), 1);

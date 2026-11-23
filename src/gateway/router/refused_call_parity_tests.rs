@@ -246,8 +246,9 @@ async fn direct_withheld_and_missing_write_the_same_probe_audit() {
     assert_eq!(missing_probe, withheld_probe);
     let missing_events = audit_events(&missing_dir.path().join("audit.jsonl"));
     assert_eq!(missing_events, withheld_events);
-    // One scan, one row: the probe is charged as exactly one request.
-    assert_eq!(withheld_events, ["request"]);
+    // One scan each way: the probe is charged as one request, and its absent
+    // answer passes the response scan once.
+    assert_eq!(withheld_events, ["request", "response"]);
 
     let (control, control_dir) = fresh_audited().await;
     let (status, body) = call(&control, OPEN_KEY, VISIBLE).await;
@@ -550,8 +551,9 @@ async fn meta_withheld_and_missing_write_the_same_probe_audit() {
     assert_eq!(missing_probe, withheld_probe);
     let missing_events = audit_events(&missing_dir.path().join("audit.jsonl"));
     assert_eq!(missing_events, withheld_events);
-    // One scan, one row: the probe is charged as exactly one request.
-    assert_eq!(withheld_events, ["request"]);
+    // One scan each way: the probe is charged as one request, and its absent
+    // answer passes the response scan once.
+    assert_eq!(withheld_events, ["request", "response"]);
 
     let (control, control_dir) = fresh_audited().await;
     let (status, body) = meta_call(&control, OPEN_KEY, VISIBLE).await;
