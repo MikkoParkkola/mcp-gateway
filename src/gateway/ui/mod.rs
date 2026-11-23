@@ -22,6 +22,7 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod cli_login;
 /// Every web UI change has a CLI form; CLI commands and config writes are
 /// classified for remote use.
 #[cfg(test)]

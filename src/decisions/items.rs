@@ -85,18 +85,26 @@ type Blocks = BTreeMap<String, Vec<String>>;
 
 pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
     let mut live = Vec::new();
-    let (mut changed, blocks) = changed_capabilities(set, &mut live);
+    let (mut changed, mut blocks) = changed_capabilities(set, &mut live);
+    let mut unjudged = unjudged_capabilities(set, &mut live, &mut blocks);
     let mut requests = access_requests(set, &blocks);
     let mut adopt = adopt_items(set, &mut live);
     let mut unreadable = unreadable_files(set, &mut live);
     // Pruned once, over every kind's ids: a kind pruning alone would drop the
     // first-seen time of every other kind (R11).
     set.first_seen.retain(|seen, _| live.contains(seen));
-    for kind in [&mut changed, &mut requests, &mut adopt, &mut unreadable] {
+    for kind in [
+        &mut changed,
+        &mut unjudged,
+        &mut requests,
+        &mut adopt,
+        &mut unreadable,
+    ] {
         sort(kind);
     }
     changed
         .into_iter()
+        .chain(unjudged)
         .chain(requests)
         .chain(adopt)
         .chain(unreadable)
@@ -235,6 +243,49 @@ fn changed_capabilities(set: &mut DecisionSet, live: &mut Vec<String>) -> (Vec<D
         ));
     }
     (changed, blocks)
+}
+
+/// One item per changed capability file its pass could not read or parse:
+/// its tool named as the change's item names it, a reason class, never the
+/// path, bytes or error. The capability stays off while it is listed, so it
+/// blocks the trusted name as the change does.
+fn unjudged_capabilities(
+    set: &mut DecisionSet,
+    live: &mut Vec<String>,
+    blocks: &mut Blocks,
+) -> Vec<Dated> {
+    let (key, now) = (set.key, now(set));
+    let mut listed = Vec::new();
+    for ((backend, file), bad) in &set.unjudged {
+        // Not the reason: a file turning from unreadable to garbled is the
+        // same item, keeping when it was first seen.
+        let item_id = id(&key, "capability_unreadable", &json!([backend, file]));
+        let observed = first_seen(&mut set.first_seen, now, &item_id, live);
+        if let Some(trusted) = &bad.loaded_as {
+            blocks
+                .entry(trusted.clone())
+                .or_default()
+                .push(item_id.clone());
+        }
+        let tool = bad.loaded_as.as_deref().map_or_else(
+            || display::label(&key, file),
+            |trusted| display::name(&key, trusted),
+        );
+        listed.push((
+            observed,
+            json!({
+                "id": item_id,
+                "kind": "capability_unreadable",
+                "backend": display::name(&key, backend),
+                "tool": tool,
+                "trusted_name": bad.loaded_as.is_some(),
+                "reason": bad.reason.as_str(),
+                "observed_at": time(observed),
+                "waits_on": [],
+            }),
+        ));
+    }
+    listed
 }
 
 /// One access request being gathered from its open capabilities.
