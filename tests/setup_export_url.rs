@@ -358,15 +358,30 @@ fn u7_the_watch_loop_keeps_the_url_right_across_edits() {
     watched.wait_for(false, CLIENT_CERT);
     assert!(home.zed_url().starts_with("https://"), "{}", home.zed_url());
     let after_tls = std::fs::read(home.zed_settings()).expect("zed settings");
+    let zed_dir = home.zed_settings().parent().unwrap().to_path_buf();
+    let names_after_tls = listing(&zed_dir);
+    let modified = || {
+        std::fs::metadata(home.zed_settings())
+            .and_then(|meta| meta.modified())
+            .expect("zed settings mtime")
+    };
+    let modified_after_tls = modified();
 
     rewrite(format!(
         "server:\n  host: 127.0.0.1\n  port: {PORT}\n  public_url: not a url\n"
     ));
     watched.wait_for(false, "Cannot regenerate");
+    // Nothing is touched: same bytes, no rewrite of them, no backup beside them.
     assert_eq!(
         std::fs::read(home.zed_settings()).expect("zed settings"),
         after_tls
     );
+    assert_eq!(
+        modified(),
+        modified_after_tls,
+        "the settings were rewritten"
+    );
+    assert_eq!(listing(&zed_dir), names_after_tls, "a file appeared");
 
     rewrite(format!("server:\n  host: 0.0.0.0\n  port: {PORT}\n"));
     watched.wait_for(false, WILDCARD);

@@ -47,6 +47,11 @@ fn u1_ipv6_binds_are_bracketed_and_wildcards_become_loopback() {
     );
     assert_eq!(url(&on("[::1]", 39400, false)), "http://[::1]:39400/mcp");
     assert_eq!(url(&on("::1", 39400, false)), "http://[::1]:39400/mcp");
+    // A mapped address that is no wildcard is an IPv6 host like any other.
+    assert_eq!(
+        url(&on("::ffff:127.0.0.1", 39400, false)),
+        "http://[::ffff:127.0.0.1]:39400/mcp"
+    );
     for wildcard in ["::0", "[::]", "::"] {
         assert_eq!(
             url(&on(wildcard, 39400, false)),
@@ -58,7 +63,8 @@ fn u1_ipv6_binds_are_bracketed_and_wildcards_become_loopback() {
 
 #[test]
 fn u1_ipv4_and_names_keep_their_host_and_take_the_served_scheme() {
-    for wildcard in ["", "0.0.0.0"] {
+    // A mapped IPv4 wildcard serves IPv4, so its loopback is IPv4's.
+    for wildcard in ["", "0.0.0.0", "[0.0.0.0]", "::ffff:0.0.0.0"] {
         assert_eq!(
             url(&on(wildcard, 39400, false)),
             "http://127.0.0.1:39400/mcp",
@@ -114,7 +120,10 @@ fn u1_a_declared_public_url_decides_scheme_host_and_port() {
 fn u1_a_public_url_no_client_can_use_is_refused() {
     for bad in [
         "http://[::]:39400",
+        "http://[::ffff:0.0.0.0]:39400",
         "https://u:p@mcp.example.com",
+        "https://u@mcp.example.com",
+        "https://:p@mcp.example.com",
         "https://mcp.example.com/#x",
         "http://0.0.0.0:39400",
         "https://mcp.example.com/?a=1",
@@ -168,10 +177,13 @@ fn u2_each_note_appears_exactly_when_it_is_true() {
         notes(&on("127.0.0.1", 39400, true), proxy),
         [tls_on("127.0.0.1")]
     );
-    assert_eq!(
-        notes(&on("0.0.0.0", 39400, false), proxy),
-        [UrlNote::WildcardBind]
-    );
+    for wildcard in ["0.0.0.0", "::ffff:0.0.0.0"] {
+        assert_eq!(
+            notes(&on(wildcard, 39400, false), proxy),
+            [UrlNote::WildcardBind],
+            "{wildcard:?}"
+        );
+    }
     assert_eq!(notes(&Config::default(), proxy), []);
 
     let mtls_behind =
@@ -251,6 +263,10 @@ fn u6a_the_probe_asks_this_machine_in_a_form_that_parses() {
         "gw.internal:8080"
     );
     assert_eq!(probe_addr(&on("0.0.0.0", 39400, false)), "127.0.0.1:39400");
+    assert_eq!(
+        probe_addr(&on("::ffff:0.0.0.0", 39400, false)),
+        "127.0.0.1:39400"
+    );
     assert_eq!(probe_addr(&on("::", 39400, false)), "[::1]:39400");
     assert_eq!(probe_addr(&on("::1", 39400, false)), "[::1]:39400");
     // The probe asks whether a gateway runs here, so a public_url is not read.
