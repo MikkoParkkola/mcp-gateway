@@ -54,7 +54,8 @@ async fn read_config(yaml: Option<&str>) -> Value {
     let dir = TempDir::new().expect("tempdir");
     let path = yaml.map(|text| {
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(&path, text).expect("write the config");
+        // Owner-only, as the gateway requires of a config that may hold secrets.
+        write_owner_only(&path, text).expect("write the config");
         path
     });
     let (state, _store) = make_app_state(None, path).await;
