@@ -207,6 +207,16 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
     )
 )]
 pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if fault::fires(&resolved(target), |f| {
+        matches!(f, fault::Fault::FailJournalMark)
+    })
+    .is_some()
+    {
+        return Err(std::io::Error::other(
+            "injected: the journal cannot be marked",
+        ));
+    }
     let path = journal_path(target);
     let mut journal = match read(&path) {
         Ok(Some(journal)) => journal,
@@ -533,6 +543,9 @@ pub(crate) mod fault {
     pub(crate) enum Fault {
         /// `finish` fails before removing the journal.
         FailJournalRemove,
+        /// `mark_all_renamed` fails before touching the journal, which stays
+        /// `staged`.
+        FailJournalMark,
         /// Recovery of a `staged` journal stops until released.
         Pause(Arc<Pause>),
         /// A commit fails before its rename.

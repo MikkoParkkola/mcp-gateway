@@ -42,7 +42,6 @@ pub(crate) fn on(target: &Path, event: &'static str, hook: Hook) {
 }
 
 /// The events recorded for `target`, in order, cleared with its hooks.
-#[cfg(feature = "webui")]
 pub(crate) fn take(target: &Path) -> Vec<&'static str> {
     HOOKS.lock().expect("hooks").retain(|(p, _, _)| p != target);
     let mut all = EVENTS.lock().expect("order");

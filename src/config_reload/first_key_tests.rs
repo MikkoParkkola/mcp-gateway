@@ -48,15 +48,47 @@ fn starter(keys: &[(&str, &str)]) -> String {
 
 /// A gateway running a file, with a reload context over it.
 struct Gw {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     path: std::path::PathBuf,
     live: Arc<LiveConfig>,
     ctx: Arc<ReloadContext>,
 }
 
+/// A replacement whose new bytes are `text`, whatever the file holds.
+fn replace(text: &str, status_change: StatusChange) -> Replace {
+    let bytes = text.as_bytes().to_vec();
+    Replace {
+        expected: Expected::Any,
+        compute: Box::new(move |_| Ok(Template::plain(bytes))),
+        replaced: Replaced::Discard,
+        secrets: None,
+        status_change,
+    }
+}
+
 impl Gw {
     fn start(text: &str) -> Self {
         Self::start_with(text, None)
+    }
+
+    /// [`Self::start`] on `gateway.yaml`, a link to `real.yaml`, with
+    /// `other.yaml` beside it holding the same text to re-point the link at.
+    #[cfg(unix)]
+    fn start_linked(text: &str) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_owner_only(dir.path().join("real.yaml"), text).expect("write");
+        write_owner_only(dir.path().join("other.yaml"), text).expect("write");
+        let path = dir.path().join("gateway.yaml");
+        std::os::unix::fs::symlink(dir.path().join("real.yaml"), &path).expect("symlink");
+        Self::on(dir, path, None)
+    }
+
+    /// The same file under a new process: the journal recovery the first
+    /// holder of the config lock runs, then a start from what it left.
+    fn restart(self) -> (Self, crate::config_persistence::journal::Recovered) {
+        let Self { dir, path, .. } = self;
+        let recovered = crate::config_persistence::journal::recover(&path).expect("recovery runs");
+        (Self::on(dir, path, None), recovered)
     }
 
     /// [`Self::start`] whose reloads after a write refuse with a text that is
@@ -77,6 +109,14 @@ impl Gw {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("write");
+        Self::on(dir, path, load)
+    }
+
+    fn on(
+        dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+        load: Option<super::reload_context::LoadPatch>,
+    ) -> Self {
         let config = Config::load(Some(&path)).expect("the running config loads");
         let auth = ResolvedAuthConfig::from_config(
             &config.auth,
@@ -96,7 +136,7 @@ impl Gw {
             None => ctx,
         });
         Self {
-            _dir: dir,
+            dir,
             path,
             live,
             ctx,
@@ -120,17 +160,38 @@ impl Gw {
         text: &str,
         status_change: StatusChange,
     ) -> Result<ReplaceReload, ReplaceError> {
-        let bytes = text.as_bytes().to_vec();
-        let replace = Replace {
-            expected: Expected::Any,
-            compute: Box::new(move |_| Ok(Template::plain(bytes))),
-            replaced: Replaced::Discard,
-            secrets: None,
-            status_change,
-        };
+        self.run(replace(text, status_change)).await
+    }
+
+    async fn run(&self, replace: Replace) -> Result<ReplaceReload, ReplaceError> {
         replace_detached(Arc::clone(&self.ctx), replace, WAIT)
             .await
             .map(|outcome| outcome.reload)
+    }
+
+    /// Whether the writer replaced the file since the last look, from its
+    /// own trace: a reload that refuses and rolls back leaves the same bytes
+    /// and no fact, so only this tells "refused before any write" apart.
+    fn wrote(&self) -> bool {
+        let target = crate::identity_grants::journal::resolved(&self.path);
+        super::reload_context::replace::order::take(&target).contains(&"commit")
+    }
+
+    /// The journal's recorded state, `None` when there is no journal.
+    fn journal_state(&self) -> Option<String> {
+        let path = crate::config_persistence::journal::journal_path(&self.path);
+        let text = std::fs::read_to_string(path).ok()?;
+        let journal: serde_json::Value = serde_json::from_str(&text).expect("a JSON journal");
+        journal["state"].as_str().map(str::to_owned)
+    }
+
+    /// Whether the staged original is still beside the file.
+    fn original_left(&self) -> bool {
+        crate::config_persistence::journal::original_path(&self.path).exists()
+    }
+
+    fn multi_user(&self) -> bool {
+        self.live.running().auth.implies_multi_user(false)
     }
 
     async fn hand_edit(&self, text: &str) -> Result<(), String> {
@@ -317,6 +378,111 @@ async fn w3_a_colliding_first_key_is_refused_with_the_collision() {
     assert_eq!(gw.live.waiting_keys(), None);
 }
 
+/// A record key reference of the shape the loader takes.
+const RECORD_KEY: &str = "first-key-tests-record-key-5a5a5a5a5a5a5a5a";
+
+/// `extra` lines in front of the starter with a first key.
+fn first_key_with(extra: &str) -> String {
+    format!("{extra}{}", starter(&[("first", FIRST)]))
+}
+
+/// A held candidate that the question calls a clean first key, written by
+/// the writer: it must be refused before anything is written, kept or
+/// waiting, with a text that is no restart sentence. Returns the refusal.
+async fn held_but_refused_first(candidate: &str) -> (RefusalClass, String) {
+    let gw = Gw::start(&starter(&[]));
+    assert!(
+        matches!(ask(&gw, candidate), Waiting::Yes { .. }),
+        "premise: the question calls it a clean first key: {:?}",
+        ask(&gw, candidate)
+    );
+    let before = gw.file();
+    let error = gw
+        .write(candidate, StatusChange::HoldForRestart)
+        .await
+        .expect_err("refused");
+    assert!(!gw.wrote(), "the file was written before the refusal");
+    assert_eq!(gw.file(), before);
+    assert!(!gw.journal_left());
+    assert_eq!(gw.live.waiting_keys(), None);
+    match error {
+        ReplaceError::ReloadRefused { class, reason } => {
+            assert!(!says_status_change(&reason), "{reason}");
+            (class, reason)
+        }
+        other => panic!("expected ReloadRefused, got {other:?}"),
+    }
+}
+
+/// W3, the posture class: a held first key that also changes a posture
+/// setting is refused by the posture check, as any candidate is.
+#[tokio::test]
+async fn w3_a_held_first_key_changing_the_posture_is_refused_by_it() {
+    let candidate =
+        first_key_with("security:\n  hardened:\n    private_backends: [\"elsewhere\"]\n");
+    let (class, reason) = held_but_refused_first(&candidate).await;
+    assert_eq!(class, RefusalClass::Invalid);
+    assert!(
+        reason.contains("security.hardened requires restart"),
+        "{reason}"
+    );
+}
+
+/// W3, the restart-only class: a held first key that also changes the
+/// record key is refused for that field.
+#[tokio::test]
+async fn w3_a_held_first_key_changing_a_restart_only_field_is_refused_by_it() {
+    let candidate = first_key_with(&format!(
+        "security:\n  record_principal_key: \"{RECORD_KEY}\"\n"
+    ));
+    let (class, reason) = held_but_refused_first(&candidate).await;
+    assert_eq!(class, RefusalClass::Invalid);
+    assert!(
+        reason.contains("security.record_principal_key requires restart"),
+        "{reason}"
+    );
+}
+
+/// W3, the before-apply class: a held first key that also declares a public
+/// URL the running listener would serve in cleartext is refused by the
+/// network check. The file names who terminates TLS, so its own start is not
+/// refused and the question still calls it a clean first key.
+#[tokio::test]
+async fn w3_a_held_first_key_opening_the_listener_is_refused_before_apply() {
+    let candidate = first_key_with(
+        "server:\n  public_url: \"https://first-key.example.test\"\n  cleartext_http: tls_terminated_upstream\n",
+    );
+    let (class, reason) = held_but_refused_first(&candidate).await;
+    assert_eq!(class, RefusalClass::Posture);
+    assert!(reason.contains("refusing to serve HTTP"), "{reason}");
+}
+
+/// W4: a held first key whose only other fault is that its own start is
+/// refused (the running config's start is not) is refused before any write
+/// with the start check's sentence. Kills the start check dropped, and the
+/// start check asked about the running config instead of the candidate.
+#[tokio::test]
+async fn w4_a_held_first_key_whose_start_is_refused_is_refused_with_it() {
+    let gw = Gw::start(&starter(&[]));
+    let before = gw.file();
+    let candidate = first_key_with("server:\n  replicas: 2\n  modern_protocol: true\n");
+    let error = gw
+        .write(&candidate, StatusChange::HoldForRestart)
+        .await
+        .expect_err("refused");
+    match error {
+        ReplaceError::ReloadRefused { class, reason } => {
+            assert_eq!(class, RefusalClass::Invalid);
+            assert!(reason.contains("replicas"), "{reason}");
+            assert!(!says_status_change(&reason), "{reason}");
+        }
+        other => panic!("expected ReloadRefused, got {other:?}"),
+    }
+    assert!(!gw.wrote(), "the file was written before the refusal");
+    assert_eq!(gw.file(), before);
+    assert_eq!(gw.live.waiting_keys(), None);
+}
+
 /// W5: a held write whose reload refuses for any reason but the status
 /// change is rolled back as any write is: the old bytes, no journal, today's
 /// class, no fact. Red today: the pre-check refuses before the write.
@@ -407,3 +573,8 @@ async fn l4_a_refused_status_change_records_no_fact() {
         .expect_err("refused");
     assert_eq!(gw.live.waiting_keys(), None);
 }
+
+#[path = "first_key_fact_tests.rs"]
+mod fact;
+#[path = "first_key_hold_tests.rs"]
+mod hold;
