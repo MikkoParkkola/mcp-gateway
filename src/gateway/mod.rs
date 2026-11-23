@@ -247,6 +247,14 @@ pub mod test_helpers {
         config
     }
 
+    /// What an import says for `name` when its capability file is already
+    /// there, so rows in `tests/` assert the sentence itself. For `tests/`
+    /// only, not a stable API.
+    #[must_use]
+    pub fn name_taken(name: &str) -> String {
+        crate::capability::name_taken(name)
+    }
+
     /// The OS config directory the gateway resolves, exactly what the crate's
     /// own lookup returns, so an integration test can prove it routes to a
     /// private home before scanning anything under it. For `tests/` only, with

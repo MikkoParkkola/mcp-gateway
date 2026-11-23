@@ -29,6 +29,7 @@ mod sanitize;
 
 pub use convert::OpenApiConverter;
 
+pub(crate) use generated::name_taken;
 pub use generated::{AuthTemplate, CacheTemplate, GeneratedCapability};
 
 #[cfg(test)]

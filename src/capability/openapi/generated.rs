@@ -42,6 +42,15 @@ pub struct GeneratedCapability {
     pub yaml: String,
 }
 
+/// What an import says for a tool whose capability file is already there:
+/// the file is kept as it was, and the sentence names the way forward.
+pub(crate) fn name_taken(name: &str) -> String {
+    format!(
+        "a capability named {name} already exists and was left unchanged; \
+         remove that capability or rename the operation, then import again"
+    )
+}
+
 impl GeneratedCapability {
     /// Write capability to a file in the specified directory
     ///
