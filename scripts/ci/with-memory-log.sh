@@ -51,6 +51,7 @@ cmd=
 pending=
 trap 'if [ -z "$cmd" ]; then pending=1; else kill -TERM "$cmd" 2>/dev/null; fi' TERM INT HUP
 "$@" &
+# Keep the next line a single simple command: row W14's hook matches its exact text.
 cmd=$!
 [ -z "$pending" ] || kill -TERM "$cmd" 2>/dev/null
 sample start

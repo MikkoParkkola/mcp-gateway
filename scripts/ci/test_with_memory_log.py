@@ -196,10 +196,14 @@ def gap_rows() -> list[tuple[str, bool, str]]:
             # Matched by process group, never by name alone: other runs on the host own sleeps too. Names only, as W7:
             # never a process's arguments. A wrapper that ended has already stopped its own nap, so any sleep still
             # in the group is the command's.
-            ps = subprocess.run(["ps", "-A", "-o", "pgid=,comm="], capture_output=True, text=True).stdout
-            left = any(f[0] == str(p.pid) and f[-1].endswith("sleep") for f in map(str.split, ps.splitlines()) if f)
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(p.pid, signal.SIGKILL)
+            # The group is killed even if the scan itself fails, so nothing is left holding the pipes.
+            try:
+                ps = subprocess.run(["ps", "-A", "-o", "pgid=,comm="], capture_output=True, text=True).stdout
+                left = any(f[0] == str(p.pid) and f[-1].endswith("sleep")
+                           for f in map(str.split, ps.splitlines()) if f)
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(p.pid, signal.SIGKILL)
             if rc == -1:
                 so, se = p.communicate()
                 se += "\nHUNG past 30 s"
