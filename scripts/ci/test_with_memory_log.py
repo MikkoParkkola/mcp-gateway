@@ -148,6 +148,7 @@ def rows() -> list[tuple[str, bool, str]]:
         out.append(("W13 a command killed before the first wait: exit 137, no hang",
                     rc == 137 and "end, exit 137" in se, f"rc {rc}, {t:.1f}s, {se[-200:]}"))
     out.extend(gap_rows())
+    out.extend(classifier_rows())
     return out
 
 
@@ -211,6 +212,116 @@ def gap_rows() -> list[tuple[str, bool, str]]:
             ok = (rc == 143 and se.count(said) == 1 and bool(lines) and "end, exit 143" in lines[-1] and not left)
             out.append((label, ok, f"rc {rc}, hook line {se.count(said)}x, "
                                    f"{'a sleep was left' if left else 'no sleep left'}, {se[-200:]}"))
+    return out
+
+
+def classify_hang(record: dict) -> str:
+    """A W4 hang record's cause class (see hang_record). Stub: the red rows of W16 run against it."""
+    return "K10"
+
+
+def _bit(sig: str) -> int:
+    """The mask bit /proc/PID/status uses for a signal: bit n-1 for signal n."""
+    return 1 << (signal.Signals["SIG" + sig].value - 1)
+
+
+def _canned(sig: str = "INT") -> dict:
+    """A complete Linux record that meets none of the classes K0 to K9, so it is K10: the marker was written, the kill
+    returned 0, the trap did not run, and the wrapper and the command are alive, confirmed, stopped neither, and neither
+    ignore, catch nor hold any signal."""
+    def proc() -> dict:
+        return {"identity": "confirmed", "alive": True, "state": "S", "ign": 0, "cgt": 0, "blk": 0, "pnd": 0, "shd": 0}
+    return {
+        "signal": sig, "linux": True,
+        "R1": {"written": True, "child": 1003, "command": 1002},
+        "R2": {"reached": True, "status": 0},
+        "R3": {"trap_ran": False},
+        "R4": {"running": True, "status": None},
+        "R5": {"pid": 1001, "group": 1001},
+        "R6": {"wrapper": proc(), "command": proc()},
+        "R7": [{"pid": p, "ppid": pp, "pgid": 1001, "state": "S", "etime": "00:10", "comm": c, "role": r}
+               for p, pp, c, r in ((1001, 1000, "bash", "wrapper"), (1002, 1001, "bash", "command"),
+                                   (1003, 1002, "sleep", "sleeper"), (1004, 1001, "sleep", "descendant"))]
+               + [{"pid": 1005, "ppid": 1, "pgid": 1001, "state": "S", "etime": "00:10", "comm": "sh", "role": "group"}],
+        "R8": {"stdout": "", "stderr": "memory 00:00:00 start: ..."},
+        "R9": {"load_start": 21.0, "load_limit": 22.0, "to_marker": 0.5, "to_kill": 0.6},
+    }
+
+
+def _role(record: dict, role: str) -> dict:
+    return next(p for p in record["R7"] if p["role"] == role)
+
+
+# One setter per class row of the ordered list: each makes the canned record meet that row's condition. "K7p" and "K8p"
+# put the signal in the process-wide pending set instead of the thread's.
+_MEETS = {
+    "K0": lambda r: r.update(R9=None),
+    "K1": lambda r: _role(r, "wrapper").update(state="T"),
+    "K2": lambda r: r["R1"].update(written=False, child=None, command=None),
+    "K3": lambda r: r["R2"].update(reached=False, status=None),
+    "K4": lambda r: r["R2"].update(status=1),
+    "K5": lambda r: r["R3"].update(trap_ran=True),
+    "K6": lambda r: r["R6"]["wrapper"].update(ign=_bit(r["signal"])),
+    "K7": lambda r: r["R6"]["wrapper"].update(pnd=_bit(r["signal"])),
+    "K7p": lambda r: r["R6"]["wrapper"].update(shd=_bit(r["signal"])),
+    "K8": lambda r: r["R6"]["command"].update(pnd=_bit("TERM")),
+    "K8p": lambda r: r["R6"]["command"].update(shd=_bit("TERM")),
+    "K9": lambda r: r["R6"]["wrapper"].update(cgt=_bit(r["signal"])),
+}
+# Pairs no real record can meet together: a kill status needs the kill line (K3, K4); a caught signal is neither
+# ignored (K6) nor, for K9, pending anywhere (K7, K8).
+_EXCLUSIVE = {("K3", "K4"), ("K6", "K9"), ("K7", "K9"), ("K7p", "K9"), ("K8", "K9"), ("K8p", "K9")}
+
+
+def _met(*classes: str) -> dict:
+    record = _canned()
+    for c in reversed(classes):  # the upper class last, so it is the one surely met
+        _MEETS[c](record)
+    return record
+
+
+def classifier_rows() -> list[tuple[str, bool, str]]:
+    """W16: the ordered list of classes, on canned records only (no timing)."""
+    order = list(_MEETS)
+    checks = [(c, (c,), c[:2]) for c in order] + [("K10", (), "K10")]
+    # Every pair of rows a record can meet together, neighbours or not, must print the upper row.
+    checks += [(f"{a}+{b}", (a, b), a[:2]) for i, a in enumerate(order) for b in order[i + 1:]
+               if a[:2] != b[:2] and (a, b) not in _EXCLUSIVE]
+    wrong = []
+    for name, classes, want in checks:
+        got = classify_hang(_met(*classes))
+        if got != want:
+            wrong.append(f"{name}: {got}, want {want}")
+    out = [("W16 each class row, and each pair of rows met together, prints the upper class",
+            not wrong, f"{len(wrong)} of {len(checks)} wrong: " + "; ".join(wrong))]
+    # Facts that must select nothing: a stopped process that is only a member of the wrapper's group, and a signal
+    # that is only blocked.
+    quiet = _canned()
+    _role(quiet, "group").update(state="T")
+    quiet["R6"]["wrapper"].update(blk=_bit("INT"))
+    quiet["R6"]["command"].update(blk=_bit("TERM"))
+    got = classify_hang(quiet)
+    out.append(("W16 a stopped group member and a blocked signal select nothing", got == "K10", f"got {got}"))
+    # The K0 forms: a fact missing, R6 missing on Linux, the wrapper's or the command's identity not confirmed.
+    k0 = []
+    for fact in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"):
+        r = _canned()
+        r[fact] = None
+        k0.append((fact + " missing", r))
+    for who in ("wrapper", "command"):
+        r = _canned()
+        r["R6"][who] = {"identity": "not confirmed"}
+        k0.append((who + " identity not confirmed", r))
+    bad = [f"{n}: {got}" for n, r in k0 if (got := classify_hang(r)) != "K0"]
+    out.append(("W16 every K0 form prints K0", not bad, "; ".join(bad)))
+    # Off Linux R6 is n/a: K0 to K5 are still told apart, rows 7 to 10 are one answer.
+    off = []
+    for c, want in (("K5", "K5"), (None, "K6 to K9, not separable here")):
+        r = _met(c) if c else _canned()
+        r.update(linux=False, R6=None)
+        if (got := classify_hang(r)) != want:
+            off.append(f"{c or 'none'}: {got}, want {want}")
+    out.append(("W16 off Linux: R6 n/a is not K0, and K6 to K9 are one answer", not off, "; ".join(off)))
     return out
 
 
