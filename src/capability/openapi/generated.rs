@@ -6,6 +6,7 @@
 //! templates emitted by the converter.
 
 use std::fs;
+use std::io::{self, Write as _};
 use std::path::Path;
 
 use serde::Serialize;
@@ -51,12 +52,24 @@ pub(crate) fn name_taken(name: &str) -> String {
     )
 }
 
+/// Whether `error` is [`GeneratedCapability::write_to_file`]'s refusal of a
+/// name whose capability file is already there. Callers that answer that
+/// case on its own ask this, never the message text.
+#[cfg(feature = "webui")]
+pub(crate) fn is_name_taken(error: &Error) -> bool {
+    matches!(error, Error::Io(e) if e.kind() == io::ErrorKind::AlreadyExists)
+}
+
 impl GeneratedCapability {
-    /// Write capability to a file in the specified directory
+    /// Write capability to a file in the specified directory, never over a
+    /// file already there.
     ///
     /// # Errors
     ///
-    /// Returns an error if the directory cannot be created or the file cannot be written.
+    /// Returns an error if the directory cannot be created or the file cannot
+    /// be written; a file of this name already in `directory` is refused with
+    /// an [`Error::Io`] of kind `AlreadyExists` (`is_name_taken` tells it
+    /// apart) and is left byte-identical.
     pub fn write_to_file(&self, directory: &str) -> Result<()> {
         let dir = Path::new(directory);
         if !dir.exists() {
@@ -66,9 +79,29 @@ impl GeneratedCapability {
 
         let filename = format!("{}.yaml", self.name);
         let path = dir.join(filename);
+        let failed = |e: io::Error| Error::Config(format!("Failed to write capability file: {e}"));
 
-        fs::write(&path, &self.yaml)
-            .map_err(|e| Error::Config(format!("Failed to write capability file: {e}")))?;
+        // Created only if absent, in one step: no check made before the write
+        // can be passed by two writers at once.
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                let taken = io::Error::new(io::ErrorKind::AlreadyExists, name_taken(&self.name));
+                return Err(Error::Io(taken));
+            }
+            Err(e) => return Err(failed(e)),
+        };
+        if let Err(e) = file.write_all(self.yaml.as_bytes()) {
+            // The file is the one just created here: a partial one would
+            // refuse the next import of this name.
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(failed(e));
+        }
 
         info!(capability = %self.name, path = %path.display(), "Wrote capability file");
         Ok(())

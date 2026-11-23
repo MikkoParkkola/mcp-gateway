@@ -29,6 +29,8 @@ mod sanitize;
 
 pub use convert::OpenApiConverter;
 
+#[cfg(feature = "webui")]
+pub(crate) use generated::is_name_taken;
 pub(crate) use generated::name_taken;
 pub use generated::{AuthTemplate, CacheTemplate, GeneratedCapability};
 

@@ -119,6 +119,8 @@ pub use loader::CapabilityLoader;
 #[cfg(feature = "webui")]
 pub(crate) use loader::unloadable_issues;
 pub(crate) use loader::{IssueLog, refuse_unloadable};
+#[cfg(feature = "webui")]
+pub(crate) use openapi::is_name_taken;
 pub(crate) use openapi::name_taken;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub(crate) use parser::validate_cli_templates;

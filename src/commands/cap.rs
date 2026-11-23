@@ -297,18 +297,26 @@ async fn cap_import(
     match result {
         Ok(caps) => {
             let out_path = output.to_string_lossy();
-            let count = caps.len();
-            println!(
-                "Imported {count} tools from {spec_ref}. Review {out_path}/ before loading.\n"
-            );
-            for cap in caps {
+            let mut failed = 0_usize;
+            for cap in &caps {
                 if let Err(e) = cap.write_to_file(&out_path) {
+                    failed += 1;
                     eprintln!("❌ Failed to write {}: {e}", cap.name);
                 } else {
                     println!("  ✅ {}.yaml", cap.name);
                 }
             }
-            println!("\nCapabilities written to {out_path}/");
+            // Counted after the writes, so the summary says what happened.
+            let written = caps.len() - failed;
+            println!(
+                "\nImported {written} tools from {spec_ref} into {out_path}/. Review them before loading."
+            );
+            if failed > 0 {
+                // A tool not written, an existing name included, is a failed
+                // import: a script must not read it as done.
+                eprintln!("{failed} tools could not be written.");
+                return ExitCode::FAILURE;
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
