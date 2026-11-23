@@ -110,6 +110,11 @@ async fn budget_pair(route: Route, limit: usize) {
         (Route::Meta, 1) => assert_meta_budget_refused(w_status, &w_visible),
         _ => assert_visible_allowed(route, w_status, &w_visible),
     }
+    // Nothing reaches the backend but an allowed visible call.
+    assert_eq!(
+        withheld.calls.load(Ordering::SeqCst),
+        usize::from(limit > 1)
+    );
     assert_eq!(
         missing.calls.load(Ordering::SeqCst),
         withheld.calls.load(Ordering::SeqCst)
@@ -134,6 +139,10 @@ async fn tenant_pair(route: Route, limit: usize) {
         (Route::Meta, 1) => assert_meta_tenant_refused(w_status, &w_visible),
         _ => assert_visible_allowed(route, w_status, &w_visible),
     }
+    assert_eq!(
+        withheld.calls.load(Ordering::SeqCst),
+        usize::from(limit > 1)
+    );
     assert_eq!(
         missing.calls.load(Ordering::SeqCst),
         withheld.calls.load(Ordering::SeqCst)
@@ -169,6 +178,9 @@ async fn audit_pair(route: Route) {
     // One scan, one row: the probe is charged as exactly one request.
     assert_eq!(withheld_events, ["request"]);
     assert_eq!(missing_events, withheld_events);
+    // Only each arm's visible call was sent on.
+    assert_eq!(withheld.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(missing.calls.load(Ordering::SeqCst), 1);
 }
 
 /// The fixture has seeded `read` as a well-known name, so the step from
