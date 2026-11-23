@@ -195,10 +195,14 @@ pub(super) enum StoredChain {
 /// never names a step that never ran (#3872 review B). A record with no step
 /// list (written before the list) counts every step as served, so it keeps
 /// the first refusal (#3872 FIX 1, fail closed). `None`: the stored answer.
+/// The refusal comes with its check's pair, still unnoted.
 pub(super) fn refusal_to_meet(
     served: Option<&[(String, String)]>,
     withheld: super::plan::Withheld,
-) -> Option<crate::Error> {
+) -> Option<(
+    crate::Error,
+    Option<crate::security::decision_record::Refusal>,
+)> {
     withheld
         .into_iter()
         .find(|(step, _)| served.is_none_or(|ran| ran.contains(step)))

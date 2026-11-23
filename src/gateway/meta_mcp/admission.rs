@@ -646,8 +646,12 @@ impl MetaMcp {
             _ => None,
         };
         if let Some(dispatched) = ran
-            && let Some(refusal) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
+            && let Some((refusal, pair)) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
         {
+            // Only the refusal met is noted (the plan loop noted none).
+            if let Some((kind, rule_id)) = pair {
+                super::invoke::audit::note_refused_by(kind, rule_id);
+            }
             return Err(crate::gateway::delivery_facts::refused(refusal));
         }
         let mut admission = admission?;

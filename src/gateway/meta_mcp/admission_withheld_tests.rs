@@ -263,8 +263,11 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
     let step = |tool: &str| ("beta".to_string(), tool.to_string());
     let withheld = || {
         vec![
-            (step("other"), crate::Error::json_rpc(-32003, "other")),
-            (step("read"), crate::Error::json_rpc(-32003, "read")),
+            (
+                step("other"),
+                (crate::Error::json_rpc(-32003, "other"), None),
+            ),
+            (step("read"), (crate::Error::json_rpc(-32003, "read"), None)),
         ]
     };
     let older = serde_json::to_vec(&json!({
@@ -278,7 +281,7 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
     );
     assert_eq!(stored_steps(&older).0, None, "an older record has no list");
     let refused = |served: Option<&[(String, String)]>| {
-        refusal_to_meet(served, withheld()).map(|error| error.to_string())
+        refusal_to_meet(served, withheld()).map(|(error, _)| error.to_string())
     };
     assert_eq!(
         refused(stored_steps(&older).0.as_deref()),
