@@ -99,7 +99,7 @@ pub struct Isolation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Network {
     /// Where the fetch phase may connect; `None` when there is no fetch phase.
-    pub fetch: Option<&'static str>,
+    pub fetch: Option<String>,
     pub run: &'static str,
 }
 

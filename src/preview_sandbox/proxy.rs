@@ -261,10 +261,9 @@ impl AllowlistProxy {
     }
 
     /// The authorities this proxy admits, joined by ", " with their ports:
-    /// what the isolation record shows for a fetch (stub: empty).
+    /// what the isolation record shows for a fetch.
     pub(crate) fn allowlist(&self) -> String {
-        let _ = self;
-        String::new()
+        lock(&self.shared.allowed).join(", ")
     }
 
     /// Swap the admitted authorities, for the rows.

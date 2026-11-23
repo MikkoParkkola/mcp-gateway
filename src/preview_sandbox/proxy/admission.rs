@@ -83,7 +83,7 @@ where
         }
     }
     let fetch = authorized(&auth, shared).ok_or(Status::AuthRequired)?;
-    if !ALLOWED.contains(&authority.as_str()) {
+    if !lock(&shared.allowed).contains(&authority.as_str()) {
         return Err(Status::Forbidden);
     }
     // A Host header, when sent, names the same place (with or without port).
