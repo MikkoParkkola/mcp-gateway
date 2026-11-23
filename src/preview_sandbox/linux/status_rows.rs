@@ -433,6 +433,44 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
     );
 }
 
+/// R23b, kills m-hold-ignores-eof: a hold whose stdin closes instead of
+/// bringing the release byte refuses, naming the end of input, and the
+/// target never starts.
+#[cfg(tp4)]
+#[tokio::test]
+async fn r23b_a_hold_that_ends_without_its_release_refuses() {
+    const MARKER: &str = "2999.232";
+    let Some(gateway) = helper().await else {
+        return;
+    };
+    let sleeper = target("/bin/sleep", &[MARKER]);
+    let mut started = start_edited(&gateway, &sleeper, |p| p.fault = Some(Fault::TraceAndHold))
+        .await
+        .expect("started");
+    let mut stderr = BufReader::new(started.child.stderr.take().expect("stderr"));
+    let mut order = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        read_trace_to(&mut stderr, &mut order, "strict-check"),
+    )
+    .await
+    .expect("the trace reached the strict check");
+    // The end of input instead of the release byte.
+    drop(started.child.stdin.take());
+    let status = tokio::time::timeout(GUARD, started.child.wait())
+        .await
+        .expect("ended within the guard")
+        .expect("status");
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).await.expect("stderr");
+    assert_eq!(status.code(), Some(i32::from(super::REFUSED)), "{rest}");
+    assert!(
+        rest.contains("preview-sandbox: refused at hold ended: eof"),
+        "{rest}"
+    );
+    assert!(sleeping(MARKER).is_empty(), "the target ran");
+}
+
 /// What a target's shell prints about itself: its descriptors, one per line,
 /// listed by a separate `ls` writing straight to stdout (a glob would open
 /// the directory, and `$(...)` a pipe, in the shell itself, and list that
