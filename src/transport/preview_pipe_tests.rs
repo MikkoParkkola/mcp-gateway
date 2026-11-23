@@ -162,16 +162,26 @@ async fn r5_a_notification_to_a_server_that_closed_its_input_fails() {
 
 #[tokio::test]
 async fn r5_frames_that_are_not_json_rpc_end_the_pipe() {
-    let cases: [(&str, Vec<u8>); 3] = [
+    let cases: [(&str, Vec<u8>); 5] = [
         ("not JSON", line("this is not json")),
         ("not UTF-8", vec![0xff, 0xfe, b'\n']),
         (
             "an error that is a string",
             line(r#"{"jsonrpc":"2.0","id":1,"error":"boom"}"#),
         ),
+        (
+            "a request whose method is null",
+            line(r#"{"jsonrpc":"2.0","id":"r1","method":null}"#),
+        ),
+        (
+            "a notification whose method is a number",
+            line(r#"{"jsonrpc":"2.0","method":7}"#),
+        ),
     ];
     for (case, bytes) in cases {
-        let server = serve(&[(1, "cat out.1; exec sleep 30")], &[("out.1", bytes)]);
+        // The server ends after the frame, so a pipe that read past it
+        // would report the end of output instead.
+        let server = serve(&[(1, "cat out.1")], &[("out.1", bytes)]);
         let outcome = ask(&server, "initialize").await.map(drop);
         assert_eq!(
             server.pipe.failure(),

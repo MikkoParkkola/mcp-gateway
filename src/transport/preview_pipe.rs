@@ -187,7 +187,12 @@ impl PreviewPipe {
         self.write_line(&mut wire, call.to_string()).await?;
         loop {
             let value = self.read_value(&mut wire).await?;
-            if value.get("method").is_some() {
+            if let Some(named) = value.get("method") {
+                // Only a string names a method: anything else in that member
+                // is neither a request nor a notification.
+                if !named.is_string() {
+                    return Err(self.fail(PipeFailure::NotJsonRpc));
+                }
                 // A request gets the refusal; a notification is dropped.
                 if let Some(their_id) = value.get("id") {
                     let line = refusal_line(their_id);
