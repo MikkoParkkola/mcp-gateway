@@ -363,8 +363,9 @@ impl Drop for AllowlistProxy {
     }
 }
 
-/// The lock holds no invariant a panic could break, so a poisoned one is used.
-fn lock(m: &Mutex<Option<Live>>) -> std::sync::MutexGuard<'_, Option<Live>> {
+/// The proxy's locks hold no invariant a panic could break, so a poisoned
+/// one is used.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
