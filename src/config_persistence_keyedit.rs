@@ -115,6 +115,21 @@ pub(crate) enum Scalar {
     Num(FiniteF64),
 }
 
+/// One list element an edit writes: a string, or a flat mapping in member
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Element {
+    Str(String),
+    Map(Vec<(String, Member)>),
+}
+
+/// One member of a mapping element: a string, or a list of strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Member {
+    Str(String),
+    Strings(Vec<String>),
+}
+
 /// One change to one field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Change {
@@ -125,6 +140,12 @@ pub(crate) enum Change {
     Remove,
     /// The field becomes exactly these strings, written as one inline list.
     List(Vec<String>),
+    /// A new element at the path's last position, an index into the list as
+    /// the file holds it; the element there and every later one move down.
+    Insert(Element),
+    /// The element at the path's last position goes; the list stays, empty
+    /// or not.
+    Drop,
 }
 
 /// Why an edit was refused. Nothing is written for any of them.
@@ -256,6 +277,12 @@ fn edit_unmarked(
 ) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
+    if changes
+        .iter()
+        .any(|(_, c)| matches!(c, Change::Insert(_) | Change::Drop))
+    {
+        return Err(unprovable("an element insert or drop is not written yet"));
+    }
     for (path, change) in changes {
         // A slot is named by its own field's path, never another's.
         if let Change::Secret(id) = change
@@ -468,7 +495,7 @@ fn rendered(change: &Change) -> Option<String> {
         Change::Set(Scalar::Num(n)) => float_text(n.0),
         Change::Secret(id) => quoted_placeholder(id),
         Change::List(items) => inline_list(items),
-        Change::Remove => return None,
+        Change::Remove | Change::Insert(_) | Change::Drop => return None,
     })
 }
 
@@ -669,7 +696,7 @@ fn expected_value(change: &Change) -> Option<Value> {
                 .map(|item| Value::from(item.as_str()))
                 .collect(),
         ),
-        Change::Remove => return None,
+        Change::Remove | Change::Insert(_) | Change::Drop => return None,
     })
 }
 
