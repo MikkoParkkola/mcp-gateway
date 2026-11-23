@@ -25,6 +25,27 @@ pub(super) fn expected(original: &Value, changes: &[(FieldPath, Change)]) -> Opt
         other => other.clone(),
     };
     for (path, change) in changes.iter().filter(|(_, c)| *c != Change::Remove) {
+        // An element change: the list (created with its parents, a null read
+        // as empty) gains or loses one position; the list itself stays.
+        if let (Change::Insert(_) | Change::Drop, Some((list, i))) =
+            (change, super::element::split(&path.0))
+        {
+            let seq = slot_mut(&mut want, list)?;
+            if seq.is_null() {
+                *seq = Value::Sequence(Vec::new());
+            }
+            let seq = seq.as_sequence_mut()?;
+            match change {
+                Change::Insert(new) if i <= seq.len() => {
+                    seq.insert(i, super::element::value(new));
+                }
+                Change::Drop if i < seq.len() => {
+                    seq.remove(i);
+                }
+                _ => return None,
+            }
+            continue;
+        }
         let value = super::expected_value(change)?;
         *slot_mut(&mut want, &path.0)? = value;
     }
