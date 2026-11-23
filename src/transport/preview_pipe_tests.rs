@@ -28,11 +28,20 @@ while IFS= read -r line; do
 done
 "#;
 
-/// A running fake server and the pipe over its standard streams.
+/// A running fake server and the pipe over its standard streams. The child
+/// is declared first and its drop waits (below), so the server has exited
+/// before its folder is removed.
 struct Server {
-    folder: tempfile::TempDir,
-    _child: tokio::process::Child,
+    child: std::process::Child,
     pipe: PreviewPipe,
+    folder: tempfile::TempDir,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl Server {
@@ -61,23 +70,24 @@ fn serve(steps: &[(usize, &str)], files: &[(&str, Vec<u8>)]) -> Server {
     for (name, bytes) in files {
         std::fs::write(folder.path().join(name), bytes).expect("write a file");
     }
-    let mut child = tokio::process::Command::new("sh")
+    let mut child = std::process::Command::new("sh")
         .arg("server.sh")
         .current_dir(folder.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
         .spawn()
         .expect("start sh");
+    let stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
     let pipe = PreviewPipe::new(
-        child.stdin.take().expect("stdin"),
-        child.stdout.take().expect("stdout"),
+        tokio::process::ChildStdin::from_std(stdin).expect("async stdin"),
+        tokio::process::ChildStdout::from_std(stdout).expect("async stdout"),
     );
     Server {
-        folder,
-        _child: child,
+        child,
         pipe,
+        folder,
     }
 }
 
