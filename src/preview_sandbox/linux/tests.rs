@@ -668,3 +668,69 @@ fn r26l_r35l_only_the_one_control_descriptor_is_exempt() {
     assert_eq!(extra_descriptors(&[0, 1, 2, 9], None), vec![9]);
     assert_eq!(extra_descriptors(&[0, 1, 2], None), Vec::<u32>::new());
 }
+
+/// A fake launcher standing in for `unshare`: `sh -c script`, connecting to
+/// nothing.
+fn fake_launcher(
+    script: &'static str,
+) -> impl FnOnce(&Path, &plan::Plan) -> Result<tokio::process::Child, Refusal> {
+    move |_: &Path, _: &plan::Plan| {
+        tokio::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| Refusal::Step(format!("the fake launcher ({e})")))
+    }
+}
+
+/// R48, kills m-probe-drops-stderr and m-run-reads-stderr: the probe names
+/// the host's refusal from what the sandbox printed, judged by the host's
+/// facts; a run on a launcher that also prints a helper line never reads it.
+#[tokio::test]
+async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
+    const DENIED: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; exit 1";
+    const CANARY: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; \
+                          echo 'preview-sandbox: refused at CANARY' >&2; exit 1";
+    let apparmor = HostFacts {
+        apparmor_restricts_userns: Some("1".into()),
+        ..HostFacts::default()
+    };
+    assert_eq!(
+        probe_with(fake_launcher(DENIED), &apparmor).await,
+        Err(Refusal::AppArmorRestricted)
+    );
+    let container = HostFacts {
+        in_container: true,
+        ..HostFacts::default()
+    };
+    assert_eq!(
+        probe_with(fake_launcher(DENIED), &container).await,
+        Err(Refusal::Container)
+    );
+    let runtime = tempfile::tempdir().expect("runtime");
+    let ambient = Ambient {
+        ca_bundle: None,
+        runtime_dir: Some(runtime.path().as_os_str().to_owned()),
+        path: system_path(),
+    };
+    let mut prepared = launcher::prepare(&target("/bin/true"), &[], ambient, launcher::Phase::Run)
+        .expect("prepared");
+    let spawn = |plan: &plan::Plan| fake_launcher(CANARY)(Path::new("/unused"), plan);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let bounds = super::super::control::CONTROL_BOUNDS;
+    let (launched, _) =
+        launcher::launch_with(&mut prepared, spawn, deadline, bounds, launcher::reap_exit).await;
+    let refusal = launched
+        .err()
+        .expect("a fake launcher never starts")
+        .refusal;
+    assert_eq!(
+        refusal,
+        Refusal::Step("the sandbox helper sent no valid status".into())
+    );
+    assert!(!format!("{refusal:?} {refusal}").contains("CANARY"));
+}

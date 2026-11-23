@@ -79,28 +79,6 @@ enum Point {
     AfterClose,
 }
 
-/// Why the helper stops before the target: a setup step to report, or an
-/// ending already told to the gateway (a refused fetch) or that cannot be.
-enum Leave {
-    Setup(SetupFailure),
-    Reported(String),
-}
-
-impl From<FetchError> for Leave {
-    fn from(error: FetchError) -> Self {
-        match error {
-            FetchError::Setup(failure) => Self::Setup(failure),
-            FetchError::Reported(detail) => Self::Reported(detail),
-        }
-    }
-}
-
-impl From<SetupFailure> for Leave {
-    fn from(failure: SetupFailure) -> Self {
-        Self::Setup(failure)
-    }
-}
-
 pub(super) fn run(plan: &Plan) -> ExitCode {
     fault::arm(plan);
     // Before the connection, and host-level: stderr and exit 97.
@@ -119,7 +97,7 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
     };
     let ready = match set_up(plan, fetcher, &mut control) {
         Ok(ready) => ready,
-        Err(Leave::Setup(failure)) => {
+        Err(FetchError::Setup(failure)) => {
             eprintln!("preview-sandbox: refused at {}", failure.detail);
             let status = SetupStatus::Refused {
                 step: failure.step,
@@ -129,7 +107,7 @@ pub(super) fn run(plan: &Plan) -> ExitCode {
                 control_client::report_and_leave(&mut control, Some(status), HELPER_BOUNDS.write);
             return ExitCode::from(super::REFUSED);
         }
-        Err(Leave::Reported(detail)) => {
+        Err(FetchError::Reported(detail)) => {
             eprintln!("preview-sandbox: refused at {detail}");
             let _ = control_client::report_and_leave(&mut control, None, HELPER_BOUNDS.write);
             return ExitCode::from(super::REFUSED);
@@ -174,7 +152,7 @@ fn set_up(
     plan: &Plan,
     fetcher: Option<Fetcher<'_>>,
     control: &mut UnixStream,
-) -> Result<Ready, Leave> {
+) -> Result<Ready, FetchError> {
     // A capability-less process in the namespace then cannot read this
     // process's environ, fd table or memory through /proc/1.
     step_call(
@@ -215,7 +193,7 @@ fn set_up(
         (_, Some(Fetcher::Uv(uv))) => Some(super::fetch_uv::uv(control, uv, plan.limits)?),
         // The bare handshake, which only rows plan.
         (true, None) => {
-            fetch(control).map_err(Leave::Reported)?;
+            fetch(control).map_err(FetchError::Reported)?;
             None
         }
         (false, None) => None,

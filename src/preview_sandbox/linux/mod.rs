@@ -110,6 +110,16 @@ pub(super) async fn start(
 /// one: `/bin/true` runs no package, so the text is `unshare`'s and the
 /// helper's.
 pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
+    let spawn = |unshare: &Path, plan: &plan::Plan| launch(unshare, helper, plan);
+    probe_with(spawn, &HostFacts::read()).await
+}
+
+/// [`probe`] with the spawn and the host's facts given, so a row can stand a
+/// fake launcher in for `unshare` and name the host.
+async fn probe_with(
+    spawn: impl FnOnce(&'static Path, &plan::Plan) -> Result<tokio::process::Child, Refusal>,
+    host: &HostFacts,
+) -> Result<(), Refusal> {
     let target = Target {
         program: PathBuf::from("/bin/true"),
         args: Vec::new(),
@@ -123,7 +133,7 @@ pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
     let answer = async {
         let mut prepared = launcher::prepare(&target, &[], ambient, launcher::Phase::Run)?;
         let unshare = prepared.unshare;
-        let spawn = |plan: &plan::Plan| launch(unshare, helper, plan);
+        let spawn = |plan: &plan::Plan| spawn(unshare, plan);
         let bounds = super::control::CONTROL_BOUNDS;
         let (launched, ending) =
             launcher::launch_with(&mut prepared, spawn, deadline, bounds, launcher::reap_exit)
@@ -132,8 +142,11 @@ pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
             (Ok(Started { mut child, .. }), _) => {
                 drop(child.stdin.take());
                 let stderr = child.stderr.take();
-                let status = child.wait().await;
-                super::probe_answer(status, stderr).await
+                match child.wait().await {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(_) => Err(classify_with(&super::probe_stderr(stderr).await, host)),
+                    Err(e) => Err(Refusal::Step(format!("waiting for the probe ({e})"))),
+                }
             }
             (
                 Err(_),
@@ -141,7 +154,7 @@ pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
                     how: launcher::How::EndedSilently,
                     stderr,
                 }),
-            ) => Err(classify(&super::probe_stderr(stderr).await)),
+            ) => Err(classify_with(&super::probe_stderr(stderr).await, host)),
             (Err(failed), _) => Err(failed.refusal),
         }
     };
@@ -742,6 +755,9 @@ impl HostFacts {
 
 /// Name why `unshare` or the helper failed, from what it printed and the
 /// host's own settings, so the refusal can say which one-time step fixes it.
+/// Production reads this through the probe, which passes its facts; the
+/// fetch rows name a helper's refusal with it.
+#[cfg(test)]
 pub(super) fn classify(stderr: &str) -> Refusal {
     classify_with(stderr, &HostFacts::read())
 }

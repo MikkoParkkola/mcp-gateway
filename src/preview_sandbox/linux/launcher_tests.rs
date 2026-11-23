@@ -181,17 +181,20 @@ const SHORT: ControlBounds = ControlBounds {
 };
 
 /// A stand-in helper: Python connects to the control socket, writes `lines`
-/// (each ended by a newline) and either closes or holds the connection 30 s.
+/// (each ended by a newline) and either closes or holds the connection
+/// until the gateway closes it.
 /// Its parent is the spawned process, which then becomes `sleep 300`, so
 /// the launch's peer check passes as for the real helper.
 fn stand_in(lines: &[&str], hold: bool) -> impl FnOnce(&Plan) -> Result<Child, Refusal> {
+    // Holding means waiting for the gateway's close, so a refusal (which
+    // closes the connection) also ends the stand-in.
     let script = format!(
-        "import socket,sys,time\n\
+        "import socket,sys\n\
          s=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\n\
          s.sendall({:?}.encode())\n\
-         time.sleep({})\n",
+         {}\n",
         lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
-        if hold { 30 } else { 0 }
+        if hold { "s.recv(1)" } else { "s.close()" }
     );
     move |plan: &Plan| {
         let python = ["/usr/bin/python3", "/bin/python3"]
@@ -214,7 +217,11 @@ fn stand_in(lines: &[&str], hold: bool) -> impl FnOnce(&Plan) -> Result<Child, R
 
 /// One launch against `lines`: its answer, and whether the spawned process
 /// was still in `/proc` when the launch returned.
-async fn launch_against(lines: &[&str], hold: bool) -> (Result<Started, StartFailed>, bool) {
+async fn launch_against(
+    lines: &[&str],
+    hold: bool,
+    within: Duration,
+) -> (Result<Started, StartFailed>, bool) {
     let runtime = tempfile::tempdir().expect("runtime");
     let mut prepared = prepare(&sh(), &[], ambient(runtime.path()), Phase::Run).expect("prepared");
     let pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -225,7 +232,7 @@ async fn launch_against(lines: &[&str], hold: bool) -> (Result<Started, StartFai
         seen.store(child.id().unwrap_or(0), Ordering::SeqCst);
         Ok(child)
     };
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let deadline = tokio::time::Instant::now() + within;
     let (launched, _) = launch_with(&mut prepared, spawn, deadline, SHORT, reap_exit).await;
     let alive = Path::new(&format!("/proc/{}", pid.load(Ordering::SeqCst))).exists();
     (launched, alive)
@@ -233,9 +240,10 @@ async fn launch_against(lines: &[&str], hold: bool) -> (Result<Started, StartFai
 
 /// R41 (launch half), kills m-default-done, m-accept-second, m-unbounded-wait
 /// and m-no-eof-check at the launch: each ending that is not one status then
-/// the close is "no valid status", a reported refusal is its step, and on
-/// every refusal the spawned process is killed and reaped before the launch
-/// returns. Positive control: one `setup_done` then the close starts.
+/// the close is "no valid status", a reported refusal is its step, a silent
+/// open connection is the deadline's refusal, and on every refusal the
+/// spawned process is killed and reaped before the launch returns. Positive
+/// control: one `setup_done` then the close starts.
 #[tokio::test]
 async fn r41_each_status_ending_at_the_launch() {
     const NO_STATUS: &str = "the sandbox helper sent no valid status";
@@ -274,8 +282,17 @@ async fn r41_each_status_ending_at_the_launch() {
         ),
     ];
     let mut wrong = Vec::new();
-    for (name, lines, hold, want) in cases {
-        let (launched, alive) = launch_against(lines, hold).await;
+    let roomy = Duration::from_secs(20);
+    // Connected and silent, with a deadline before the setup bound (5 s):
+    // the deadline's own refusal.
+    let late = Refusal::Step("the preview's deadline passed before the sandbox's status".into());
+    let silent: [(&str, &[&str], bool, Refusal); 1] = [("silent and open", &[], true, late)];
+    let runs = cases
+        .into_iter()
+        .map(|case| (case, roomy))
+        .chain(silent.map(|case| (case, Duration::from_secs(2))));
+    for ((name, lines, hold, want), within) in runs {
+        let (launched, alive) = launch_against(lines, hold, within).await;
         match launched {
             Err(failed) if failed.refusal == want && failed.unreaped.is_none() && !alive => {}
             Err(failed) => wrong.push(format!(
@@ -287,6 +304,6 @@ async fn r41_each_status_ending_at_the_launch() {
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
-    let (started, _) = launch_against(&[done], false).await;
+    let (started, _) = launch_against(&[done], false, roomy).await;
     assert!(started.is_ok(), "one setup_done then the close starts");
 }

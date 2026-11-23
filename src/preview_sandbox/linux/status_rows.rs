@@ -107,6 +107,37 @@ fn children_of(parent: u32) -> Vec<u32> {
     found
 }
 
+/// The live processes that are exactly `sleep <marker>`: the target itself,
+/// never `unshare` or the helper, whose own command lines carry the plan and
+/// so the marker too (`marked` counts those, for the whole-namespace checks).
+fn sleeping(marker: &str) -> Vec<u32> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc").expect("/proc").flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let state = stat
+            .rsplit_once(") ")
+            .and_then(|(_, rest)| rest.split_whitespace().next());
+        if !matches!(state, Some(s) if !matches!(s, "Z" | "X" | "x")) {
+            continue;
+        }
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let argv: Vec<&[u8]> = cmdline
+            .split(|b| *b == 0)
+            .filter(|a| !a.is_empty())
+            .collect();
+        let is_sleep = argv
+            .first()
+            .is_some_and(|a| a.rsplit(|b| *b == b'/').next() == Some(b"sleep".as_slice()));
+        if is_sleep && argv.len() == 2 && argv[1] == marker.as_bytes() {
+            found.push(pid);
+        }
+    }
+    found
+}
+
 /// A regular file outside `/tmp` (which the helper's staging covers), in a
 /// scratch directory the caller keeps.
 fn outside_tmp_file() -> (tempfile::TempDir, String) {
@@ -278,7 +309,7 @@ async fn r26e_a_stray_descriptor_before_the_status_is_refused() {
         .await
         .expect("started");
     assert!(
-        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        soon(GUARD, || !sleeping(MARKER).is_empty()).await,
         "the target ran"
     );
     drop(started);
@@ -305,12 +336,12 @@ async fn r35e_a_stray_descriptor_after_the_close_stops_the_target() {
         .expect("ended within the guard")
         .expect("status");
     assert_eq!(status.code(), Some(i32::from(super::REFUSED)));
-    assert!(marked(MARKER).is_empty(), "the target ran");
+    assert!(sleeping(MARKER).is_empty(), "the target ran");
     let started = start_edited(&gateway, &sleeper, |_| {})
         .await
         .expect("started");
     assert!(
-        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        soon(GUARD, || !sleeping(MARKER).is_empty()).await,
         "the target ran"
     );
     drop(started);
@@ -361,11 +392,28 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
     )
     .await
     .expect("the trace reached the strict check");
-    assert!(marked(MARKER).is_empty(), "the target ran before the hold");
+    assert!(
+        sleeping(MARKER).is_empty(),
+        "the target ran before the hold"
+    );
     let want = ["sent", "closed", "strict-check"].map(|at| format!("preview-sandbox: order {at}"));
     assert_eq!(order, want);
     tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(marked(MARKER).is_empty(), "the target ran during the hold");
+    assert!(
+        sleeping(MARKER).is_empty(),
+        "the target ran during the hold"
+    );
+    let helpers = children_of(started.child.id().expect("unshare's pid"));
+    assert_eq!(
+        helpers.len(),
+        1,
+        "unshare's one child is the helper: {helpers:?}"
+    );
+    assert_eq!(
+        children_of(helpers[0]),
+        Vec::<u32>::new(),
+        "the helper has a child before the release"
+    );
     let stdin = started.child.stdin.as_mut().expect("stdin");
     stdin.write_all(b"x").await.expect("release");
     stdin.flush().await.expect("release");
@@ -380,7 +428,7 @@ async fn r23_the_status_and_the_close_come_before_the_target() {
         Some("preview-sandbox: order spawned")
     );
     assert!(
-        soon(GUARD, || marked(MARKER).len() == 1).await,
+        soon(GUARD, || sleeping(MARKER).len() == 1).await,
         "the target ran once"
     );
 }
@@ -410,6 +458,58 @@ async fn r24_r27_the_target_holds_nothing_of_the_control_connection() {
     assert_eq!(out, "0 1 2\nend\n");
 }
 
+/// R24 and R27, the fetching half: the run after an npm fetch holds no
+/// descriptor above 2 either, and cannot see the control socket's path.
+#[cfg(tp4)]
+#[tokio::test]
+async fn r24_r27_a_fetched_run_holds_nothing_of_the_control_connection() {
+    const FDS: &[u8] =
+        b"#!/bin/sh\ncd /proc/$$/fd && echo *\ntest -e \"$1\" && echo control-visible\necho end\n";
+    let Some(gateway) = helper().await else {
+        return;
+    };
+    let fake = super::fetch_registry::Package {
+        name: "mcp-fds",
+        version: "1.0.0",
+        manifest: serde_json::json!({"bin": {"mcp-fds": "bin/fds.sh"}}),
+        files: vec![("bin/fds.sh", FDS.to_vec(), 0o755)],
+    };
+    let registry = Registry::start(vec![fake], "r24 CA").await;
+    let scratch = tempfile::tempdir().expect("scratch");
+    let bundle = scratch.path().join("bundle.pem");
+    std::fs::write(&bundle, &registry.ca_pem).expect("bundle");
+    let ambient = Ambient {
+        ca_bundle: Some(bundle.into_os_string()),
+        runtime_dir: Some(OsString::from(scratch.path())),
+        path: std::env::var_os("PATH"),
+    };
+    let phase = Phase::Fetch {
+        resolve: Arc::new(TestResolve),
+        connect: Arc::new(TestDialer(registry.port)),
+    };
+    let mut prepared =
+        prepare(&target("npx", &["mcp-fds"]), &[], ambient, phase).expect("prepared");
+    let control = prepared.plan.control.clone();
+    let npm = prepared
+        .plan
+        .fetch
+        .as_mut()
+        .and_then(|f| f.npm.as_mut())
+        .expect("an npm fetch was planned");
+    npm.run_args = vec![control];
+    let mut started = launch_prepared(&mut prepared, &gateway, deadline())
+        .await
+        .expect("started");
+    drop(started.child.stdin.take());
+    let mut out = String::new();
+    let mut stdout = started.child.stdout.take().expect("stdout");
+    tokio::time::timeout(GUARD, stdout.read_to_string(&mut out))
+        .await
+        .expect("ended within the guard")
+        .expect("stdout");
+    assert_eq!(out, "0 1 2\nend\n");
+}
+
 /// R29, kills m-reap-unshare-only: a process the target leaves in a session
 /// of its own dies with the namespace once the row kills and reaps
 /// `Started.child`.
@@ -425,7 +525,7 @@ async fn r29_an_escaped_session_dies_with_the_namespace() {
         .await
         .expect("started");
     assert!(
-        soon(GUARD, || !marked(MARKER).is_empty()).await,
+        soon(GUARD, || !sleeping(MARKER).is_empty()).await,
         "the escapee ran"
     );
     let _ = started.child.start_kill();

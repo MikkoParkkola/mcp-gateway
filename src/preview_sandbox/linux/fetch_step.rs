@@ -166,10 +166,17 @@ pub(super) fn npm(
 /// line is out, the fetch's own `fetch_done` refusal went out (or the channel
 /// is dead), so no status may follow; after the run line it is the run's
 /// entry point, a setup step again.
+/// The helper's whole setup ends the same two ways, so it shares this type.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum FetchError {
     Setup(SetupFailure),
     Reported(String),
+}
+
+impl From<SetupFailure> for FetchError {
+    fn from(failure: SetupFailure) -> Self {
+        Self::Setup(failure)
+    }
 }
 
 /// The fetch frame every fetcher's steps run inside. Setup that can fail

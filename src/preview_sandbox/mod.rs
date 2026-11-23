@@ -355,22 +355,8 @@ pub async fn probe_with_helper(gateway: &Path) -> Result<(), Refusal> {
     os::probe(gateway).await
 }
 
-/// The probe's answer once its `/bin/true` ended: the host's refusal from
-/// what the sandbox printed (at most 64 KiB, read within 1 s of the end),
-/// unless it exited 0.
-#[cfg(target_os = "linux")]
-async fn probe_answer(
-    status: std::io::Result<std::process::ExitStatus>,
-    stderr: Option<tokio::process::ChildStderr>,
-) -> Result<(), Refusal> {
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(_) => Err(os::classify(&probe_stderr(stderr).await)),
-        Err(e) => Err(Refusal::Step(format!("waiting for the probe ({e})"))),
-    }
-}
-
-/// What the probe's sandbox printed, from its untouched stderr.
+/// What the probe's sandbox printed, from its untouched stderr: at most
+/// 64 KiB, read within 1 s.
 #[cfg(target_os = "linux")]
 async fn probe_stderr(stderr: Option<tokio::process::ChildStderr>) -> String {
     let mut text = String::new();
