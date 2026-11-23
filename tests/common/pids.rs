@@ -6,15 +6,25 @@
 
 use std::process::Stdio;
 
-/// Whether `pid` is a live process (not gone, not a zombie).
-pub fn alive(pid: u32) -> bool {
+/// `pid`'s state as `ps` prints it, its letter first and then any flags
+/// (`S`, `Tl`, `Z+`); empty once the pid is gone.
+fn stat(pid: u32) -> String {
     let out = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
         .expect("ps");
-    let stat = String::from_utf8_lossy(&out.stdout);
-    let stat = stat.trim();
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// Whether `pid` is a live process (not gone, not a zombie).
+pub fn alive(pid: u32) -> bool {
+    let stat = stat(pid);
     !stat.is_empty() && !stat.starts_with('Z')
+}
+
+/// Whether `pid` is stopped (SIGSTOP): its state letter is `T`, whatever flags follow it.
+pub fn stopped(pid: u32) -> bool {
+    stat(pid).starts_with('T')
 }
 
 /// SIGKILLs a pid when the row ends, so a red run leaks no process.
