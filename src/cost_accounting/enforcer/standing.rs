@@ -31,35 +31,72 @@ pub(crate) struct KeyStandingInputs {
 }
 
 impl BudgetEnforcer {
-    /// Record that `key` was refused under its own `limit` at `now`.
+    /// Record that `key` was refused under its own `limit` at `now`. The test
+    /// and the write are one step on the map's entry: on the same day and
+    /// under the same limit the earlier time stays, whichever refusal lands
+    /// first; another day or another limit replaces the record.
     pub(super) fn note_key_refusal(&self, key: &str, today: u64, now: u64, limit: f64) {
-        let _ = (key, today, now, limit, &self.key_refused);
+        let fresh = KeyRefusal {
+            day: today,
+            at_secs: now,
+            limit,
+        };
+        self.key_refused
+            .entry(key.to_owned())
+            .and_modify(|held| {
+                if held.day == today && held.limit == limit {
+                    held.at_secs = held.at_secs.min(now);
+                } else {
+                    *held = fresh;
+                }
+            })
+            .or_insert(fresh);
     }
 
-    /// `key`'s standing figures at `now` under `governance`.
+    /// `key`'s standing figures at `now` under `governance`: the same row,
+    /// reload charge and in-flight holds the check judges a call by.
     pub(crate) fn key_standing_inputs(
         &self,
         governance: &CostGovernanceConfig,
         key: &str,
         now: u64,
     ) -> KeyStandingInputs {
-        let _ = (governance, key, now);
+        let today = self.day_key(now);
+        // The check's order: the ledger, then the map shard, then the row.
+        let pending = super::locked(&self.ledger);
+        let held = pending.key(key);
+        let row = self
+            .key_daily
+            .get(key)
+            .map_or(0, |acc| acc.current_on(Some(today)));
+        let judged = super::usd(self.key_attribution.judged(key, row, held, Some(today)));
+        drop(pending);
         KeyStandingInputs {
-            limit: None,
-            judged: 0.0,
-            refusal: None,
-            today: 0,
+            limit: governance.budgets.per_key.get(key).copied(),
+            judged,
+            refusal: self
+                .key_refused
+                .get(key)
+                .map(|held| *held)
+                .filter(|held| held.day == today),
+            today,
         }
     }
 
-    /// The price of the cheapest priced tool, as a check converts it.
+    /// The price of the cheapest priced call, as a check converts it.
     pub(crate) fn cheapest_price(&self) -> Option<f64> {
-        None
+        self.registry
+            .cheapest_price()
+            .map(|price| super::usd(super::super::tally::micro(price)))
     }
 
-    /// When daily limits next reset after `now`.
+    /// When daily limits next reset after `now`: the next local midnight, or
+    /// the next UTC midnight while a legacy UTC day is still open.
     pub(crate) fn resets_at(&self, now: u64) -> u64 {
-        let _ = now;
-        0
+        crate::local_day::next_reset(
+            &crate::local_day::host_zone(),
+            now,
+            self.on_legacy_utc_day(now),
+        )
     }
 }

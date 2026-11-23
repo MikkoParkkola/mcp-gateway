@@ -614,6 +614,8 @@ impl BudgetEnforcer {
             }
             self.tool_attribution.sweep(today);
             self.key_attribution.sweep(today);
+            // A refusal of an earlier day is never read again.
+            self.key_refused.retain(|_, held| Some(held.day) == today);
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }

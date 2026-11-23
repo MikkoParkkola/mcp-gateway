@@ -554,6 +554,14 @@ impl CostTracker {
         self.per_key.get(key_name).map(|kc| kc.snapshot())
     }
 
+    /// `key_name`'s spend rate over the last three complete hours before
+    /// `now`, USD per hour; `None` for a key with no entry.
+    #[cfg(feature = "cost-governance")]
+    #[must_use]
+    pub(crate) fn key_rate_3h(&self, key_name: &str, now: u64) -> Option<f64> {
+        self.per_key.get(key_name).map(|key| key.rate_3h(now))
+    }
+
     /// Snapshot all API key accumulators.
     #[must_use]
     pub fn all_keys(&self) -> Vec<KeyCostSnapshot> {

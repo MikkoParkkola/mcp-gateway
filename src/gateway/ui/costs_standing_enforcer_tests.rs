@@ -93,6 +93,24 @@ fn s2b_blocking_uses_the_registry_wide_cheapest_price() {
     assert!(standing_under(&e, &config, KEY).0.blocking);
 }
 
+/// A tool that is not listed costs the default price, so with a default
+/// above zero that is the cheapest call a key can make: `blocking` reads it.
+#[test]
+fn s4b_the_default_price_is_a_priced_call() {
+    let _clock = test_clock::at_secs(NOW);
+    let config = CostGovernanceConfig {
+        default_cost: 0.005,
+        ..governance(&[(KEY, 25.0)], &[("dear", 3.0)], block_at_100())
+    };
+    let e = enforcer(config.clone());
+    e.record_spend("dear", Some(KEY), 24.995);
+    assert!(
+        !e.check("unlisted", Some(KEY)).allowed,
+        "premise: an unlisted tool is refused"
+    );
+    assert!(standing_under(&e, &config, KEY).0.blocking);
+}
+
 /// Around the limit, `blocking` is exactly a real check of the cheapest tool
 /// refused.
 #[test]

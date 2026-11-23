@@ -94,6 +94,77 @@ pub(crate) fn ordered(rules: &[AlertRule]) -> bool {
         .all(|pair| severity(pair[0]) <= severity(pair[1]))
 }
 
+/// The members a `GET /ui/api/costs` answer gains: on every key row its
+/// standing, its rate, today's judged spend and its own limit; on the body
+/// the next reset and, only when it applies, that the rules are unordered.
+/// With no enforcer every one is null; on a clock before 1970 the figures
+/// that need a time are null and nothing reads as blocking.
+pub(crate) fn add_members(
+    body: &mut serde_json::Value,
+    tracker: &crate::cost_accounting::CostTracker,
+    read: Option<(
+        &crate::cost_accounting::enforcer::BudgetEnforcer,
+        &crate::cost_accounting::config::CostGovernanceConfig,
+    )>,
+    now: Option<u64>,
+) {
+    use serde_json::{Value, json};
+    let cheapest = read.and_then(|(enforcer, _)| enforcer.cheapest_price());
+    if let Some(rows) = body.get_mut("by_key").and_then(Value::as_array_mut) {
+        for row in rows {
+            let Some(fields) = row.as_object_mut() else {
+                continue;
+            };
+            let key = fields
+                .get("api_key_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let rate = now.and_then(|now| tracker.key_rate_3h(&key, now));
+            let members = match read {
+                None => json!({
+                    "at_limit": null, "blocking": null, "blocked_since": null,
+                    "rate_3h_usd_per_hour": null, "today_usd": null, "daily_limit_usd": null,
+                }),
+                Some((enforcer, governance)) => {
+                    let figures =
+                        now.map(|now| enforcer.key_standing_inputs(governance, &key, now));
+                    let got = standing(&Inputs {
+                        rules: &governance.alerts,
+                        limit: governance.budgets.per_key.get(&key).copied(),
+                        judged: figures.map_or(0.0, |read| read.judged),
+                        // No time, no day to judge in: nothing reads as blocking.
+                        cheapest: cheapest.filter(|_| figures.is_some()),
+                        refusal: figures.and_then(|read| read.refusal),
+                        today: figures.map_or(0, |read| read.today),
+                    });
+                    json!({
+                        "at_limit": got.at_limit,
+                        "blocking": got.blocking,
+                        "blocked_since": got.blocked_since,
+                        "rate_3h_usd_per_hour": rate,
+                        "today_usd": figures.map(|read| read.judged),
+                        "daily_limit_usd": governance.budgets.per_key.get(&key),
+                    })
+                }
+            };
+            if let Value::Object(members) = members {
+                fields.extend(members);
+            }
+        }
+    }
+    let Some(fields) = body.as_object_mut() else {
+        return;
+    };
+    let resets_at = read
+        .zip(now)
+        .map(|((enforcer, _), now)| enforcer.resets_at(now));
+    fields.insert("resets_at".to_owned(), json!(resets_at));
+    if read.is_some_and(|(_, governance)| !ordered(&governance.alerts)) {
+        fields.insert("alert_rules".to_owned(), json!("unordered"));
+    }
+}
+
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "costs_standing_tests.rs"]
