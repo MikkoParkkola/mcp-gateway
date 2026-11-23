@@ -7,7 +7,10 @@
 
 use std::sync::Arc;
 
-use super::first_key::{Waiting, waiting_first_key};
+use super::first_key::{
+    Decision, FaultCause, Waiting, restart_pending_decision, restart_pending_guard,
+    waiting_first_key,
+};
 use super::refusals::RefusalCode;
 use super::reload_context::replace::{
     Expected, RefusalClass, Replace, ReplaceError, ReplaceReload, Replaced, StatusChange,
@@ -213,6 +216,21 @@ fn says_status_change(text: &str) -> bool {
     text.contains("would make the gateway multi-user") && text.contains("restart")
 }
 
+/// No admin-visible text of this ticket claims anything about a restart,
+/// except the held create's own answer (FIRSTKEY.1).
+fn no_restart_claim(text: &str) {
+    assert!(!text.to_lowercase().contains("restart"), "{text}");
+}
+
+/// The reload's refusal of a clean first key: the keys by name, that the
+/// gateway's multi-user status would change, and that nothing was published.
+fn says_held_status_change(text: &str, key: &str) {
+    assert!(text.contains(key), "{text}");
+    assert!(text.contains("multi-user"), "{text}");
+    assert!(text.contains("nothing was published"), "{text}");
+    no_restart_claim(text);
+}
+
 fn parsed(text: &str) -> Config {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
@@ -252,16 +270,17 @@ fn w8_an_unchanged_status_is_no() {
 }
 
 /// (b) fails: removing the key of a two-credential gateway changes its
-/// status but adds nothing, so it is faulty with the rule's own sentence.
+/// status but adds nothing, so it is faulty as a removal only, with the
+/// question's own sentence: the multi-user status would change, and no
+/// restart claim (the rule's sentence would say it applies at a restart).
 #[test]
-fn w8_a_removal_that_changes_status_is_faulty_with_the_rule() {
+fn w8_a_removal_that_changes_status_is_faulty_as_removal_only() {
     let gw = Gw::start(&starter(&[("first", FIRST)]));
     match ask(&gw, &starter(&[])) {
-        Waiting::Faulty { reason } => {
-            assert!(
-                reason.contains("single-user") && reason.contains("restart"),
-                "{reason}"
-            );
+        Waiting::Faulty { reason, cause } => {
+            assert_eq!(cause, FaultCause::RemovalOnly);
+            assert!(reason.contains("multi-user"), "{reason}");
+            no_restart_claim(&reason);
         }
         other => panic!("expected Faulty, got {other:?}"),
     }
@@ -280,7 +299,8 @@ fn w8_a_colliding_key_is_faulty_with_the_collision() {
         1,
     );
     match ask(&gw, &candidate) {
-        Waiting::Faulty { reason } => {
+        Waiting::Faulty { reason, cause } => {
+            assert_eq!(cause, FaultCause::KeyTable);
             assert!(reason.contains("auth.api_keys"), "{reason}");
             assert!(!says_status_change(&reason), "{reason}");
         }
@@ -298,7 +318,8 @@ fn w8_a_first_key_that_would_not_start_is_faulty_with_the_start_check() {
         starter(&[("first", FIRST)])
     );
     match ask(&gw, &candidate) {
-        Waiting::Faulty { reason } => {
+        Waiting::Faulty { reason, cause } => {
+            assert_eq!(cause, FaultCause::Start);
             assert!(reason.contains("replicas"), "{reason}");
             assert!(!says_status_change(&reason), "{reason}");
         }
@@ -323,7 +344,7 @@ async fn w1_a_held_first_key_keeps_its_bytes_until_a_restart() {
     match reload {
         ReplaceReload::HeldForRestart { refusal, keys } => {
             assert_eq!(keys, ["first"]);
-            assert!(says_status_change(&refusal), "{refusal}");
+            says_held_status_change(&refusal, "first");
         }
         ReplaceReload::Applied(_) => panic!("the status changed while running"),
     }
@@ -334,10 +355,21 @@ async fn w1_a_held_first_key_keeps_its_bytes_until_a_restart() {
     assert!(gw.accepts(BEARER), "the bearer stopped working");
 }
 
-/// W2 (and W9): the same candidate under `Refuse` is refused before any
-/// write as `RestartPending`. Red today: it is refused as `Invalid`.
+/// The shared decision's sentence for a key list that only creating the key
+/// may bring in: an API key, the multi-user status, nothing written, and no
+/// restart claim (the bytes were never written, so no restart applies them).
+fn says_only_create_adds(text: &str) {
+    assert!(text.contains("API key"), "{text}");
+    assert!(text.contains("multi-user"), "{text}");
+    assert!(text.contains("nothing was written"), "{text}");
+    no_restart_claim(text);
+}
+
+/// W2 (and W9): the same candidate under `Refuse`, on the starter, whose
+/// file holds no waiting key: refused before any write as invalid, with the
+/// decision's own sentence; no restart-pending answer.
 #[tokio::test]
-async fn w2_the_same_first_key_under_refuse_is_restart_pending() {
+async fn w2_the_same_first_key_under_refuse_is_invalid_with_its_own_sentence() {
     let gw = Gw::start(&starter(&[]));
     let before = gw.file();
     let error = gw
@@ -345,13 +377,168 @@ async fn w2_the_same_first_key_under_refuse_is_restart_pending() {
         .await
         .expect_err("refused");
     match error {
-        ReplaceError::ReloadRefused { class, .. } => {
-            assert_eq!(class, RefusalClass::RestartPending)
+        ReplaceError::ReloadRefused { class, reason } => {
+            assert_eq!(class, RefusalClass::Invalid);
+            says_only_create_adds(&reason);
         }
         other => panic!("expected ReloadRefused, got {other:?}"),
     }
+    assert!(!gw.wrote(), "the file was written before the refusal");
     assert_eq!(gw.file(), before);
     assert_eq!(gw.live.waiting_keys(), None);
+}
+
+/// W2b: a `Refuse` write on a file that already holds a waiting key, and
+/// keeps it: restart pending naming the file's waiting key, no restart
+/// claim, nothing written.
+#[tokio::test]
+async fn w2b_a_refuse_write_keeping_a_waiting_key_is_restart_pending() {
+    let gw = Gw::start(&starter(&[]));
+    let held = starter(&[("first", FIRST)]);
+    gw.write(&held, StatusChange::HoldForRestart)
+        .await
+        .expect("held");
+    // The held write's own trace, so the check below sees only what follows.
+    assert!(gw.wrote(), "premise: the held write wrote");
+    let error = gw
+        .write(
+            &format!("environment: \"edited\"\n{held}"),
+            StatusChange::Refuse,
+        )
+        .await
+        .expect_err("refused");
+    match error {
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::RestartPending { waiting },
+            reason,
+        } => {
+            assert_eq!(waiting.names(), ["first"]);
+            no_restart_claim(&reason);
+        }
+        other => panic!("expected RestartPending, got {other:?}"),
+    }
+    assert!(!gw.wrote(), "the file was written before the refusal");
+    assert_eq!(gw.file(), held);
+}
+
+/// R10: a `Refuse` write that only removes keys and so changes the status
+/// (the multi-user gateway's one key taken out) is refused before any write
+/// as invalid, with the question's removal sentence: no restart claim.
+#[tokio::test]
+async fn r10_a_removal_only_write_is_refused_without_a_restart_claim() {
+    let gw = Gw::start(&starter(&[("first", FIRST)]));
+    let before = gw.file();
+    let error = gw
+        .write(&starter(&[]), StatusChange::Refuse)
+        .await
+        .expect_err("refused");
+    match error {
+        ReplaceError::ReloadRefused { class, reason } => {
+            assert_eq!(class, RefusalClass::Invalid);
+            assert!(reason.contains("multi-user"), "{reason}");
+            no_restart_claim(&reason);
+        }
+        other => panic!("expected ReloadRefused, got {other:?}"),
+    }
+    assert!(!gw.wrote(), "the file was written before the refusal");
+    assert_eq!(gw.file(), before);
+}
+
+/// R3: a `Refuse` write that would repair a start fault in a file whose key
+/// waits still keeps that key: restart pending naming it, nothing written.
+#[tokio::test]
+async fn r3_a_write_repairing_a_start_fault_beside_a_waiting_key_is_restart_pending() {
+    let gw = Gw::start(&starter(&[]));
+    let held = starter(&[("first", FIRST)]);
+    gw.write(&held, StatusChange::HoldForRestart)
+        .await
+        .expect("held");
+    // The held write's own trace, so the check below sees only what follows.
+    assert!(gw.wrote(), "premise: the held write wrote");
+    let broken = first_key_with("server:\n  replicas: 2\n  modern_protocol: true\n");
+    gw.hand_edit(&broken)
+        .await
+        .expect_err("a start fault is refused");
+    let error = gw
+        .write(&held, StatusChange::Refuse)
+        .await
+        .expect_err("refused");
+    match error {
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::RestartPending { waiting },
+            ..
+        } => assert_eq!(waiting.names(), ["first"]),
+        other => panic!("expected RestartPending, got {other:?}"),
+    }
+    assert!(!gw.wrote(), "the file was written before the refusal");
+    assert_eq!(gw.file(), broken);
+}
+
+// ---- R6: the shared decision, one row per cell ----
+
+fn yes(keys: &[&str]) -> Waiting {
+    Waiting::Yes {
+        keys: keys.iter().map(|k| (*k).to_owned()).collect(),
+        status: String::new(),
+    }
+}
+
+fn faulty() -> Waiting {
+    Waiting::Faulty {
+        reason: "a start from it would be refused".to_owned(),
+        cause: FaultCause::Start,
+    }
+}
+
+fn names(keys: &[&str]) -> Vec<String> {
+    keys.iter().map(|k| (*k).to_owned()).collect()
+}
+
+/// A candidate `Yes` on a file whose keys wait: pending, naming the FILE's
+/// keys, not the candidate's.
+#[test]
+fn r6_yes_with_waiting_file_keys_is_pending_naming_the_file_keys() {
+    match restart_pending_decision(&yes(&["first", "second"]), names(&["first"])) {
+        Decision::Pending(waiting) => assert_eq!(waiting.names(), ["first"]),
+        other => panic!("expected Pending, got {other:?}"),
+    }
+}
+
+/// A candidate `Yes` on a file with no waiting key: invalid, with the
+/// decision's own sentence.
+#[test]
+fn r6_yes_with_no_waiting_file_keys_is_invalid() {
+    match restart_pending_decision(&yes(&["first"]), Vec::new()) {
+        Decision::Invalid(sentence) => says_only_create_adds(&sentence),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+/// `No` and `Faulty` candidates are not the decision's: the caller goes on.
+#[test]
+fn r6_no_and_faulty_candidates_continue() {
+    assert_eq!(
+        restart_pending_decision(&Waiting::No, names(&["late"])),
+        Decision::Continue
+    );
+    assert_eq!(
+        restart_pending_decision(&faulty(), names(&["first"])),
+        Decision::Continue
+    );
+}
+
+/// The create's guard: a file that is `Yes`, or `Faulty` while keys wait in
+/// it, is pending naming them; `Faulty` with none, or `No` even with names
+/// (a key added by hand to a multi-user gateway), is no answer.
+#[test]
+fn r6_the_create_guard_answers_by_the_file() {
+    let named = |file: &Waiting, keys: &[&str]| {
+        restart_pending_guard(file, names(keys)).map(|w| w.names().to_vec())
+    };
+    assert_eq!(named(&yes(&["first"]), &["first"]), Some(names(&["first"])));
+    assert_eq!(named(&faulty(), &["first"]), Some(names(&["first"])));
+    assert_eq!(named(&faulty(), &[]), None);
+    assert_eq!(named(&Waiting::No, &["late"]), None);
 }
 
 /// W3: a first key that also collides with the bearer is refused before any
@@ -520,12 +707,16 @@ async fn l1_the_waiting_fact_follows_each_reload() {
         .await
         .expect("held");
     assert_eq!(gw.newest_code(), Some(RefusalCode::FirstKeyWaiting));
+    let row = gw.ctx.refusals().list().first().cloned().expect("a row");
+    no_restart_claim(&row.cause);
+    no_restart_claim(row.fix);
     assert!(
         gw.live.pending_restart().contains(&"auth.api_keys"),
         "{:?}",
         gw.live.pending_restart()
     );
-    gw.hand_edit(&candidate).await.expect_err("still refused");
+    let refusal = gw.hand_edit(&candidate).await.expect_err("still refused");
+    says_held_status_change(&refusal, "first");
     assert_eq!(gw.live.waiting_keys(), Some(vec!["first".to_owned()]));
     gw.hand_edit(&starter(&[]))
         .await

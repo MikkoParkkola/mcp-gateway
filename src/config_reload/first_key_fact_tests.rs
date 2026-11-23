@@ -7,7 +7,9 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use super::{BEARER, FIRST, Gw, RefusalCode, Waiting, ask, first_key_with, replace, starter};
+use super::{
+    BEARER, FIRST, FaultCause, Gw, RefusalCode, Waiting, ask, first_key_with, replace, starter,
+};
 use crate::config_reload::reload_context::replace::{
     Audit, Intent, IntentId, IntentKind, IntentSink, RefusalClass, ReplaceError, ReplaceReload,
     StatusChange, replace_audited,
@@ -42,7 +44,8 @@ fn w8_a_collision_and_a_start_fault_report_the_collision() {
         "the question built a generation"
     );
     match answer {
-        Waiting::Faulty { reason } => {
+        Waiting::Faulty { reason, cause } => {
+            assert_eq!(cause, FaultCause::KeyTable);
             assert!(reason.contains("auth.api_keys"), "{reason}");
             assert!(!reason.contains("replicas"), "{reason}");
             assert!(!super::says_status_change(&reason), "{reason}");
@@ -171,19 +174,43 @@ fn nothing_waits(gw: &Gw) {
     );
 }
 
+/// The fact names `keys` and a start from the file would be refused for
+/// `fault` (a word of the start check's sentence).
+fn waits_unstartable(gw: &Gw, keys: &[&str], fault: &str) {
+    let wait = gw.live.first_key_wait().expect("the fact is kept");
+    assert_eq!(wait.keys, keys);
+    let refusal = wait.start_refusal.expect("a start would be refused");
+    assert!(refusal.contains(fault), "{refusal}");
+}
+
 /// L2, the start-refusal class: after a clean hold, a hand edit that keeps
-/// the key and adds a start fault is faulty, so the fact is cleared and the
-/// ledger shows the invalid-config code.
+/// the key and adds a start fault keeps the fact's names, now with the start
+/// check's refusal; the ledger shows the invalid-config code.
 #[tokio::test]
-async fn l2_a_start_fault_by_hand_after_a_hold_clears_the_fact() {
+async fn l2_a_start_fault_by_hand_after_a_hold_keeps_the_names() {
     let gw = held().await;
     let error = gw
         .hand_edit(&first_key_with(START_FAULT))
         .await
         .expect_err("refused");
     assert!(error.contains("replicas"), "{error}");
-    nothing_waits(&gw);
+    waits_unstartable(&gw, &["first"], "replicas");
+    assert!(gw.live.pending_restart().contains(&"auth.api_keys"));
     assert_eq!(gw.newest_code(), Some(RefusalCode::InvalidConfig));
+}
+
+/// L2, the swap class: after a hold, a hand edit that replaces the waiting
+/// key by another and adds a start fault: the fact names the file's waiting
+/// key now, not the one it named before, and a start would be refused.
+#[tokio::test]
+async fn l2_a_swapped_key_with_a_start_fault_names_the_new_key() {
+    let gw = held().await;
+    let swapped = format!(
+        "{START_FAULT}{}",
+        starter(&[("second", "first-key-tests-secret-second")])
+    );
+    gw.hand_edit(&swapped).await.expect_err("refused");
+    waits_unstartable(&gw, &["second"], "replicas");
 }
 
 /// L2, the unparseable class: a file that does not parse clears the fact.
@@ -199,9 +226,10 @@ async fn l2_an_unparseable_file_after_a_hold_clears_the_fact() {
 
 /// L2, an earlier reload check: the file is still a clean first key, but it
 /// also changes a posture setting, which the reload refuses before it asks
-/// the question. That verdict wins, so the fact is cleared.
+/// the question. The fact keeps the names, still startable; the ledger
+/// keeps the posture code.
 #[tokio::test]
-async fn l2_a_posture_change_beside_a_clean_first_key_clears_the_fact() {
+async fn l2_a_posture_change_beside_a_clean_first_key_keeps_the_names() {
     let gw = held().await;
     let candidate = first_key_with(POSTURE_CHANGE);
     assert!(
@@ -210,7 +238,9 @@ async fn l2_a_posture_change_beside_a_clean_first_key_clears_the_fact() {
     );
     let error = gw.hand_edit(&candidate).await.expect_err("refused");
     assert!(error.contains("security.hardened"), "{error}");
-    nothing_waits(&gw);
+    let wait = gw.live.first_key_wait().expect("the fact is kept");
+    assert_eq!(wait.keys, ["first"]);
+    assert_eq!(wait.start_refusal, None);
     assert_eq!(gw.newest_code(), Some(RefusalCode::Posture));
 }
 
@@ -242,16 +272,14 @@ async fn l3_a_first_key_with_a_start_fault_by_hand_is_not_told_to_restart() {
 }
 
 /// L3, a removal that changes the status of a multi-user gateway, by hand:
-/// refused with the status rule's sentence for that direction and the
-/// invalid-config code, as before; no fact.
+/// refused with the question's removal sentence (no restart claim) and the
+/// invalid-config code, recorded by type; no fact.
 #[tokio::test]
-async fn l3_a_status_changing_removal_by_hand_keeps_its_refusal() {
+async fn l3_a_status_changing_removal_by_hand_is_invalid_without_a_restart_claim() {
     let gw = Gw::start(&starter(&[("first", FIRST)]));
     let error = gw.hand_edit(&starter(&[])).await.expect_err("refused");
-    assert!(
-        error.contains("single-user") && error.contains("restart"),
-        "{error}"
-    );
+    assert!(error.contains("multi-user"), "{error}");
+    assert!(!error.to_lowercase().contains("restart"), "{error}");
     assert_eq!(gw.newest_code(), Some(RefusalCode::InvalidConfig));
     assert_eq!(gw.live.waiting_keys(), None);
 }

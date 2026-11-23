@@ -76,6 +76,20 @@ fn members(value: &Value, names: &[&str]) {
     }
 }
 
+/// The shared 409: exactly its three members, the code, the waiting keys
+/// by name, and a message that names each of them and claims nothing about a
+/// restart.
+fn restart_pending(answer: &Value, waiting: &[&str]) {
+    members(answer, &["waiting_keys", "message", "error"]);
+    assert_eq!(answer["error"], "restart_pending", "{answer}");
+    assert_eq!(answer["waiting_keys"], json!(waiting), "{answer}");
+    let message = answer["message"].as_str().unwrap_or_default();
+    for name in waiting {
+        assert!(message.contains(name), "{message}");
+    }
+    assert!(!message.to_lowercase().contains("restart"), "{message}");
+}
+
 fn create_first(fx: &Fixture) -> Sent {
     let sent = fx.post(Call::new(&fx.body("first")));
     assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
@@ -171,9 +185,10 @@ fn f9_revoking_the_waiting_key_ends_the_wait() {
     assert_eq!(status, StatusCode::OK, "{answer}");
 }
 
-/// L7 (two keys pending after a hand edit, unsupported to revoke one):
-/// revoking one answers the shared 409 naming the key that would still be
-/// pending, and the file stays as it is.
+/// L7 and R7 (two keys pending after a hand edit, unsupported to revoke
+/// one): revoking one answers the shared 409 naming both, since nothing was
+/// written; with several waiting the message points at a change that takes
+/// out all of them (a hand edit), and the file stays as it is.
 #[test]
 fn l7_revoking_one_of_two_waiting_keys_is_restart_pending() {
     let fx = Fixture::new(starter(""));
@@ -192,8 +207,9 @@ fn l7_revoking_one_of_two_waiting_keys_is_restart_pending() {
     let before = fx.bytes();
     let (status, answer) = revoke(&fx, "first");
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
-    assert_eq!(answer["error"], "restart_pending", "{answer}");
-    assert_eq!(answer["waiting_keys"], json!(["second"]), "{answer}");
+    restart_pending(&answer, &["first", "second"]);
+    let message = answer["message"].as_str().unwrap_or_default();
+    assert!(message.contains("hand"), "{message}");
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
@@ -229,18 +245,7 @@ fn l5_a_settings_save_while_a_key_waits_is_restart_pending() {
     let before = fx.bytes();
     let (status, answer) = save_environment(&fx, "while-pending");
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
-    members(
-        &answer,
-        &[
-            "waiting_keys",
-            "start_command",
-            "restart_advice",
-            "message",
-            "error",
-        ],
-    );
-    assert_eq!(answer["error"], "restart_pending");
-    assert_eq!(answer["waiting_keys"], json!(["first"]));
+    restart_pending(&answer, &["first"]);
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
@@ -261,8 +266,7 @@ fn l5_a_save_before_the_reload_names_the_hand_added_key() {
     let before = fx.bytes();
     let (status, answer) = save_environment(&fx, "before-reload");
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
-    assert_eq!(answer["error"], "restart_pending", "{answer}");
-    assert_eq!(answer["waiting_keys"], json!(["late"]), "{answer}");
+    restart_pending(&answer, &["late"]);
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
@@ -282,24 +286,14 @@ fn l5_a_backend_edit_while_a_key_waits_is_restart_pending() {
     let body = json!({"description": "edited while pending"});
     let (status, answer) = call(&fx, "PATCH", "/ui/api/backends/a", &body);
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
-    members(
-        &answer,
-        &[
-            "waiting_keys",
-            "start_command",
-            "restart_advice",
-            "message",
-            "error",
-        ],
-    );
-    assert_eq!(answer["error"], "restart_pending");
-    assert_eq!(answer["waiting_keys"], json!(["first"]));
+    restart_pending(&answer, &["first"]);
     assert_eq!(fx.bytes(), before, "the file changed");
 }
 
-/// F1: a 201 that is never cached, with the members a kept key answers; the
-/// entry on disk carries the digest of the secret handed out; the admin
-/// record says which key, what was done, and that it is pending.
+/// F1: a 201 that is never cached, with exactly the members a kept key
+/// answers (no restart advice, no start command); the entry on disk carries
+/// the digest of the secret handed out; the admin record says which key,
+/// what was done, and that it is pending.
 #[test]
 fn f1_the_first_key_is_created_and_held_for_a_restart() {
     let fx = Fixture::new(starter(""));
@@ -308,22 +302,15 @@ fn f1_the_first_key_is_created_and_held_for_a_restart() {
     let answer = sent.json();
     members(
         &answer,
-        &[
-            "start_command",
-            "secret",
-            "revision",
-            "restart_advice",
-            "pending_restart",
-            "name",
-        ],
+        &["message", "secret", "revision", "pending_restart", "name"],
     );
     assert_eq!(answer["name"], "first");
     assert_eq!(answer["secret"], KNOWN);
     assert_eq!(answer["revision"], fx.revision());
     assert_eq!(answer["pending_restart"], true);
-    let line = answer["restart_advice"].as_str().unwrap_or_default();
-    assert!(!line.is_empty(), "{answer}");
-    assert_eq!(answer["start_command"], start_command(&fx));
+    // The one route answer that may speak of a restart (FIRSTKEY.1).
+    let message = answer["message"].as_str().unwrap_or_default();
+    assert!(message.contains("restart"), "{answer}");
     let keys = fx.file_keys();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].name, "first");
@@ -400,9 +387,9 @@ fn f3_a_start_from_the_written_file_accepts_the_same_secret() {
     assert_eq!(auth.validate_token(BEARER).map(|c| c.admin), Some(true));
 }
 
-/// F4: creating another key before the restart is a 409 whose members are
-/// the shared ones and whose list names the pending key; nothing on disk or
-/// in the audit log moves.
+/// F4 and R7: creating another key before the restart is the shared 409
+/// naming the pending key, whose message offers its revoke; nothing on disk
+/// or in the audit log moves.
 #[test]
 fn f4_a_second_create_while_a_key_waits_is_restart_pending() {
     let fx = Fixture::new(starter(""));
@@ -413,22 +400,10 @@ fn f4_a_second_create_while_a_key_waits_is_restart_pending() {
     let sent = fx.post(call);
     assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     let answer = sent.json();
-    members(
-        &answer,
-        &[
-            "waiting_keys",
-            "start_command",
-            "restart_advice",
-            "message",
-            "error",
-        ],
-    );
-    assert_eq!(answer["error"], "restart_pending");
-    assert_eq!(answer["waiting_keys"], json!(["first"]));
+    restart_pending(&answer, &["first"]);
+    // One waiting key: the message names its revoke as the way back.
     let message = answer["message"].as_str().unwrap_or_default();
-    assert!(message.contains("first"), "{message}");
-    assert!(message.contains("restart"), "{message}");
-    assert_eq!(answer["start_command"], start_command(&fx));
+    assert!(message.to_lowercase().contains("revoke"), "{message}");
     assert_eq!(fx.bytes(), before, "the file changed");
     assert_eq!(fx.records("config_key_create_intent").len(), 1);
     assert_eq!(fx.file_keys().len(), 1);
@@ -537,4 +512,99 @@ fn l1_the_gateway_read_serves_the_wait() {
     let fields = block["fields"].as_array().cloned().unwrap_or_default();
     assert!(fields.contains(&json!("auth.api_keys")), "{block}");
     assert_eq!(block["start_command"], start_command(&fx));
+}
+
+/// Two replicas with the task store on: a start the starter never refuses.
+const START_FAULT: &str = "server:\n  replicas: 2\n  modern_protocol: true\n";
+
+/// F4b: the waiting file was since broken by hand (a start fault beside the
+/// key). A second create still gets the shared 409 for "first"; no bytes
+/// move and no second intent is logged.
+#[test]
+fn f4b_a_second_create_on_a_broken_waiting_file_is_restart_pending() {
+    let fx = Fixture::new(starter(""));
+    create_first(&fx);
+    by_hand(&fx, &format!("{START_FAULT}{}", fx.text()));
+    let before = fx.bytes();
+    let mut call = Call::new(&fx.body("second"));
+    call.known = Some(OTHER.to_owned());
+    let sent = fx.post(call);
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+    restart_pending(&sent.json(), &["first"]);
+    assert_eq!(fx.bytes(), before, "the file changed");
+    assert_eq!(fx.records("config_key_create_intent").len(), 1);
+}
+
+/// F11: several credentials already, and an unreloaded extra key ("late")
+/// sits in the file. Names the running table lacks are not enough to call
+/// it a pending first key: the next create is an ordinary 201.
+#[test]
+fn f11_a_hand_added_key_on_a_multi_user_gateway_is_no_pending_first_key() {
+    let fx = Fixture::new(Setup::default());
+    let edited = format!("{}{}", fx.text(), key_item("late", OTHER));
+    crate::gateway::test_helpers::write_owner_only(fx.path(), &edited).expect("hand edit");
+    let sent = fx.post(Call::new(&fx.body("plain")));
+    assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
+    members(&sent.json(), &["revision", "secret", "name"]);
+}
+
+/// F-U: the held create's journal mark fails. 500 `state_uncertain`, no
+/// secret anywhere in the body, and a recovery text that does not say which
+/// file survives but tells the admin what to do (including the hand-edit
+/// way out). Once the next save puts the old file back, revoking "first"
+/// answers exactly as revoking a name that never existed.
+#[test]
+fn fu_a_held_create_whose_journal_mark_fails_is_uncertain_without_a_secret() {
+    use crate::config_persistence::journal::fault::{self, Fault};
+    let fx = Fixture::new(starter(""));
+    let armed = fault::set(&fx.path(), Fault::FailJournalMark);
+    let sent = fx.post(Call::new(&fx.body("first")));
+    assert_eq!(
+        fault::fired(&fx.path()),
+        1,
+        "premise: the fault was reached"
+    );
+    drop(armed);
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
+    let answer = sent.json();
+    members(&answer, &["error", "recovery"]);
+    assert_eq!(answer["error"], "state_uncertain");
+    assert!(!sent.body.contains(KNOWN), "{}", sent.body);
+    let recovery = answer["recovery"].as_str().unwrap_or_default();
+    assert!(recovery.contains("revoke"), "{recovery}");
+    assert!(recovery.contains("by hand"), "{recovery}");
+    assert!(recovery.contains("gateway.yaml"), "{recovery}");
+    let (status, answer) = save_environment(&fx, "settles-it");
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(fx.file_keys().is_empty(), "{}", fx.text());
+    assert_eq!(revoke(&fx, "first"), revoke(&fx, "never-there"));
+}
+
+/// R8: "first" and "second" both wait, and the file without "first" would
+/// not start. The revoke answers 422 `invalid` carrying the start check's
+/// reason: not `restart_required`, no restart wording, file untouched.
+#[test]
+fn r8_revoking_into_a_faulty_file_with_waiting_keys_is_invalid() {
+    let fx = Fixture::new(starter(""));
+    let both = format!(
+        "{START_FAULT}{}  api_keys:\n{}{}",
+        fx.text(),
+        key_item("first", KNOWN),
+        key_item("second", OTHER)
+    );
+    by_hand(&fx, &both);
+    let before = fx.bytes();
+    let (status, answer) = revoke(&fx, "first");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    assert_eq!(answer["error"], "invalid", "{answer}");
+    assert_eq!(answer["revoked"], false, "{answer}");
+    let message = answer["message"].as_str().unwrap_or_default();
+    assert!(message.contains("replicas"), "{message}");
+    assert!(!message.to_lowercase().contains("restart"), "{message}");
+    assert_eq!(fx.bytes(), before, "the file changed");
 }

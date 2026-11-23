@@ -325,6 +325,19 @@ mod tests {
         assert_eq!(post_write_class(&refusal), RefusalClass::Internal);
     }
 
+    /// R5: a status change that surfaces only at the reload after a `Refuse`
+    /// write was rolled back, so it is not kept and is no restart-pending
+    /// answer: the internal class, as kind `Other` is.
+    #[test]
+    fn r5_a_post_write_status_change_is_internal() {
+        let refusal = ReloadRefusal {
+            kind: ReloadRefusalKind::StatusChange,
+            text: "neutral".into(),
+            waiting: vec!["first".into()],
+        };
+        assert_eq!(post_write_class(&refusal), RefusalClass::Internal);
+    }
+
     /// K5: red oracle is `ShuttingDown` for the shared shutdown literal.
     #[test]
     fn k5_other_kind_with_shutdown_text() {
