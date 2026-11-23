@@ -18,10 +18,6 @@ pub(crate) struct FirstKeyWait {
     /// The waiting keys, in file order; never empty.
     pub(crate) keys: Vec<String>,
     /// Why a start from the file would be refused; `None` when it would start.
-    #[cfg_attr(
-        not(any(test, feature = "webui")),
-        expect(dead_code, reason = "served by the web UI's gateway read")
-    )]
     pub(crate) start_refusal: Option<String>,
 }
 

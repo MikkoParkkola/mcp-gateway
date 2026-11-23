@@ -28,7 +28,16 @@ pub(crate) enum StatusChange {
 #[derive(Debug)]
 pub(crate) enum ReplaceReload {
     /// The reload accepted the new bytes.
-    Applied(ReloadOutcome),
+    Applied(
+        #[cfg_attr(
+            not(any(test, feature = "webui")),
+            expect(
+                dead_code,
+                reason = "read by the web UI routes that write gateway.yaml"
+            )
+        )]
+        ReloadOutcome,
+    ),
     /// The reload refused the bytes only for the status change; they stay on
     /// disk and a restart applies them. `keys` are the waiting keys' names.
     #[cfg_attr(
