@@ -21,6 +21,8 @@ export function initial(query) {
     newer: false,
     notices: [],
     flight: null,
+    // The last applied answer's scan stopped before the end of the log; its cursor goes on.
+    stalled: false,
   };
 }
 
@@ -76,6 +78,8 @@ export function settle(state, { handle, answer, failed, fresh, now }) {
   } else {
     s = { ...s, rows: answer.rows, cursor: cursorOf(answer), window: req.window, notices: minus(s.notices, 'page1-retry', 'stale') };
   }
+  // Every applied answer decides it afresh; a failure leaves it as it was.
+  if (!failed) s.stalled = answer.scan_exhausted === true;
   if (!s.dirty) return { state: s, abort: null, issue: null };
   const ask = liveAsk(s, fresh, now);
   return { state: { ...s, dirty: false, flight: ask }, abort: null, issue: ask };
