@@ -222,3 +222,27 @@ export function serverStates() {
   }
   return variants.map((v) => v.replace(/[A-Z]/g, (c, i) => (i ? '_' : '') + c.toLowerCase()));
 }
+
+/**
+ * A held stream for this test. The fixture-stream cookie only names the
+ * channel on the fixture server; it is test plumbing, not a session.
+ */
+export async function heldStream(page, request, testInfo, setup = {}) {
+  const name = testInfo.testId.replace(/[^\w-]/g, '-');
+  await request.post(`/__stream/${name}/setup`, { data: setup });
+  const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
+  await page.context().addCookies([{ name: 'fixture-stream', value: name, url }]);
+  const log = async () => (await request.get(`/__stream/${name}/log`)).json();
+  return {
+    log,
+    connects: async () => (await log()).length,
+    send: (text) => request.post(`/__stream/${name}/send`, { data: text, headers: { 'content-type': 'text/plain' } }),
+    end: () => request.post(`/__stream/${name}/end`),
+  };
+}
+
+/** One SSE frame as the gateway writes it (conn.rs); hello carries a retry hint and no id. */
+export function frame(event, data, id = null) {
+  const head = event === 'hello' ? 'retry: 3000\n' : '';
+  return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
+}

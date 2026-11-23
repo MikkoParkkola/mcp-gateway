@@ -65,6 +65,16 @@ The old spellings `--url` and `-u` still work on these five commands. The creden
 two exceptions chosen by the route, never by a flag: a PUT to one capability (`/ui/api/capabilities/NAME`, with or
 without `?validate=1`) and a POST to its `validate` route send the body as `application/x-yaml`, byte for byte.
 
+Saving or deleting a capability needs the revision of the copy you loaded, so a change someone else made in the
+meantime is never overwritten. `api GET /ui/api/capabilities/NAME > NAME.yaml` prints the file and, on stderr, a
+line `api: revision "<sha256>"; ...`. Edit the file, then
+`api PUT /ui/api/capabilities/NAME --data @NAME.yaml --if-match '"<sha256>"'`, quoting the value exactly as
+printed. Take the revision from the same load as the text you edited, never from the capability list. If the save
+is refused because the file changed, load it again, make your change on the new text, and save with the new
+revision. A delete takes `--if-match` the same way: load the file, check it is the version you mean to remove, then
+`api DELETE /ui/api/capabilities/NAME --if-match '"<sha256>"'`. If the delete is refused because the file changed,
+load it again and check the new version before deleting with the new revision.
+
 ## Command classes
 
 Every command is in one class:
