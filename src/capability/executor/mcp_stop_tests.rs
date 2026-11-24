@@ -296,6 +296,42 @@ async fn r4_a_busy_child_is_ended_and_its_call_fails() {
     assert!(answer.is_err(), "the cut-off call answered {answer:?}");
 }
 
+/// R4b. The same busy call fails at once: a stopped child refuses every new
+/// poll, and the wait takes that refusal as final instead of polling on for
+/// the rest of its 25 s.
+#[tokio::test]
+async fn r4b_a_busy_call_fails_at_once_after_the_stop() {
+    let rig = rig();
+    child_pid(&rig, "say").await;
+    let same_caller = caller("a");
+    let busy = async {
+        let answer = call(
+            &rig.executor,
+            &rig.cap,
+            json!({ "operation": "slow" }),
+            &same_caller,
+        )
+        .await;
+        (answer, tokio::time::Instant::now())
+    };
+    let stopping = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        stop(&rig, Handover::AtEntry).await;
+        tokio::time::Instant::now()
+    };
+    let ((answer, answered), stopped) = tokio::time::timeout(Duration::from_secs(40), async {
+        tokio::join!(busy, stopping)
+    })
+    .await
+    .expect("the call and the stop both end");
+    assert!(answer.is_err(), "the cut-off call answered {answer:?}");
+    let lingered = answered.saturating_duration_since(stopped);
+    assert!(
+        lingered < Duration::from_secs(3),
+        "the busy call went on polling a stopped child for {lingered:?}"
+    );
+}
+
 /// R5. Latched: any call after the stop is turned away, with no child
 /// started for it.
 #[tokio::test]
