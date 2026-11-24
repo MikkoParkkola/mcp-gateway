@@ -663,6 +663,17 @@ mod tests {
         );
     }
 
+    /// XPORT.2: the refusal of an A2A address on another origin is a 422.
+    #[test]
+    fn xport2_an_own_card_path_on_another_origin_is_422() {
+        let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
+        let message = format!("Backend 'x' {marker}; edit gateway.yaml.");
+        assert_eq!(
+            update_refusal_status(&message),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
     // ── validate_backend_name ──────────────────────────────────────────────────
 
     #[test]

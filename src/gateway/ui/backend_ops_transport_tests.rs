@@ -24,6 +24,8 @@ fn updated(stored: TransportConfig, new: TransportConfig) -> TransportConfig {
 #[test]
 fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
     let version = || Some("2025-06-18".to_owned());
+    // What the update sends beside the primary value is never taken.
+    let stray = || Some("2024-11-05".to_owned());
 
     let TransportConfig::Stdio {
         command,
@@ -35,7 +37,11 @@ fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
             cwd: Some("/srv/tools".into()),
             protocol_version: version(),
         },
-        stdio_transport("new-server"),
+        TransportConfig::Stdio {
+            command: "new-server".into(),
+            cwd: Some("/elsewhere".into()),
+            protocol_version: stray(),
+        },
     )
     else {
         panic!("leg 1: no longer a command");
@@ -56,7 +62,11 @@ fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
             streamable_http: Some(true),
             protocol_version: version(),
         },
-        TransportConfig::for_url("https://two.example/mcp"),
+        TransportConfig::Http {
+            http_url: "https://two.example/mcp".into(),
+            streamable_http: Some(false),
+            protocol_version: stray(),
+        },
     )
     else {
         panic!("leg 2: no longer HTTP");
@@ -92,7 +102,13 @@ fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
     let TransportConfig::WebSocket {
         ws_url,
         protocol_version,
-    } = updated(socket, TransportConfig::for_url("wss://five.example/ws"))
+    } = updated(
+        socket,
+        TransportConfig::WebSocket {
+            ws_url: "wss://five.example/ws".into(),
+            protocol_version: stray(),
+        },
+    )
     else {
         panic!("leg 5: no longer a websocket");
     };
@@ -107,8 +123,8 @@ fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
 }
 
 /// Legs 4 and 6 of XPORT.1: an address or an agent transport on an A2A
-/// server keeps the agent kind and its card path; a websocket address is a
-/// change of kind and starts fresh.
+/// server (same origin: XPORT.2 covers another) keeps the agent kind and its
+/// card path; a websocket address is a change of kind and starts fresh.
 #[cfg(feature = "a2a")]
 fn agent_legs() {
     let card = || Some("/.well-known/agent.json".to_owned());
@@ -118,16 +134,16 @@ fn agent_legs() {
     };
     for (new, want, leg) in [
         (
-            TransportConfig::for_url("https://other.example"),
-            "https://other.example",
+            TransportConfig::for_url("https://agent.example/v2"),
+            "https://agent.example/v2",
             "leg 4: an address",
         ),
         (
             TransportConfig::A2a {
-                a2a_url: "https://third.example".into(),
-                a2a_agent_card_path: None,
+                a2a_url: "https://agent.example/v3".into(),
+                a2a_agent_card_path: Some("/elsewhere.json".into()),
             },
-            "https://third.example",
+            "https://agent.example/v3",
             "leg 4: an agent transport",
         ),
     ] {
@@ -156,5 +172,76 @@ fn agent_legs() {
         (ws_url.as_str(), protocol_version),
         ("wss://six.example/ws", None),
         "leg 6: a change of kind starts fresh"
+    );
+}
+
+/// XPORT.2: while an A2A server has its own card path, an address on another
+/// scheme, host or port (or one that does not parse) is refused with the gateway.yaml sentence and the
+/// server stays as stored; the default card path may move anywhere, and its
+/// own path may move within the same origin.
+#[cfg(feature = "a2a")]
+#[test]
+fn xport2_an_own_card_path_never_follows_the_address_to_another_origin() {
+    let agent = |card: Option<&str>| TransportConfig::A2a {
+        a2a_url: "https://agent.example".into(),
+        a2a_agent_card_path: card.map(str::to_owned),
+    };
+    let own = Some("/cards/agent.json");
+    let moves = [
+        "https://other.example",
+        "http://agent.example",
+        "https://agent.example:8443",
+        "agent.example",
+    ];
+    for address in moves {
+        let mut cfg = empty_config();
+        add_backend(&mut cfg, "svc", agent(own), String::new(), HashMap::new()).unwrap();
+        let before = serde_json::to_value(&cfg.backends["svc"]).unwrap();
+        let change = BackendUpdate {
+            transport: Some(TransportConfig::for_url(address)),
+            ..Default::default()
+        };
+        let refused = update_backend(&mut cfg, "svc", change).unwrap_err();
+        assert_eq!(
+            refused,
+            format!(
+                "Backend 'svc' {CARD_TO_OTHER_ORIGIN}; change the address and the card \
+                 path together in gateway.yaml."
+            ),
+            "(i) {address}"
+        );
+        let after = serde_json::to_value(&cfg.backends["svc"]).unwrap();
+        assert_eq!(after, before, "(i) {address}: the stored server changed");
+    }
+
+    for card in [None, Some(crate::a2a::types::DEFAULT_CARD_PATH)] {
+        let TransportConfig::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        } = updated(agent(card), TransportConfig::for_url(moves[0]))
+        else {
+            panic!("(ii) {card:?}: no longer an agent");
+        };
+        assert_eq!(
+            (a2a_url.as_str(), a2a_agent_card_path.as_deref()),
+            (moves[0], card),
+            "(ii) {card:?}"
+        );
+    }
+
+    let TransportConfig::A2a {
+        a2a_url,
+        a2a_agent_card_path,
+    } = updated(
+        agent(own),
+        TransportConfig::for_url("https://agent.example/v2"),
+    )
+    else {
+        panic!("(iii): no longer an agent");
+    };
+    assert_eq!(
+        (a2a_url.as_str(), a2a_agent_card_path.as_deref()),
+        ("https://agent.example/v2", own),
+        "(iii)"
     );
 }

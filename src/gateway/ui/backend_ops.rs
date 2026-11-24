@@ -203,6 +203,10 @@ pub(crate) const LITERAL_IN_VALUE: &str = "holds literal text a template would w
 /// CLI can answer it as a usage error (exit 2).
 pub(crate) const CREDENTIAL_IN_ARGV: &str = "would write a credential into gateway.yaml as text";
 
+/// The phrase the refusal of an A2A address on another origin carries (a 422).
+pub(crate) const CARD_TO_OTHER_ORIGIN: &str =
+    "has its own agent card path, which this address would send to another origin";
+
 /// Each credential the saved field would carry as text, as `(code, field)`,
 /// never a value: `command` when given (it takes precedence), else `url`.
 pub(crate) fn credential_refusals(
