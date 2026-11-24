@@ -7,22 +7,10 @@
 
 use std::sync::Arc;
 
+use super::reload_test_support::reload_after;
 use super::{LiveConfig, load_config_patch};
 use crate::config::{Config, LiveEnv};
 use crate::gateway::test_helpers::write_owner_only;
-
-/// A started gateway from `startup`, and a reload of `reload` against it.
-fn reload_after(startup: &str, reload: &str) -> (Result<(), String>, Arc<LiveConfig>) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, startup).expect("write config");
-    let started = Config::load_evaluated(Some(&path)).expect("startup loads");
-    let live = Arc::new(LiveConfig::new(started.config.clone()));
-    let env = LiveEnv::new(started.overlay, started.env_paths);
-    write_owner_only(&path, reload).expect("rewrite config");
-    let outcome = load_config_patch(&path, &live, &env).map(|_| ());
-    (outcome, live)
-}
 
 fn firewall(enabled: bool, rule: &str) -> String {
     format!("security:\n  firewall:\n    enabled: {enabled}\n    rules:\n      - {rule}\n")
