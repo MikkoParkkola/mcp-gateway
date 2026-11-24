@@ -8,7 +8,7 @@ use std::time::Duration;
 use super::{Bounds, ConfigHistory, Event, HistoryHook, Outcome, Snapshot, Source, StoredFile};
 use crate::backend::BackendRegistry;
 use crate::config::{Config, FailsafeConfig};
-use crate::config_reload::reload_context::replace::{Expected, Replace, Replaced};
+use crate::config_reload::reload_context::replace::{Expected, Replace, Replaced, StatusChange};
 use crate::config_reload::revision::{ConsumedInput, ConsumedSource, RawInputs};
 use crate::config_reload::{LiveConfig, ReloadContext};
 use crate::gateway::record_principal::test_record_key;
@@ -100,6 +100,7 @@ pub(super) fn replace_with(bytes: &'static str) -> Replace {
         }),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: StatusChange::Refuse,
     }
 }
 

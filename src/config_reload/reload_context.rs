@@ -514,10 +514,12 @@ impl ReloadContext {
         path: &std::path::Path,
         source: Source,
         slot: &mut crate::config_reload::history::RecordSlot,
+        judged: &mut Option<super::live_config::FirstKeyWait>,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker(path.to_path_buf()).await?;
+        *judged = self.wait_judged_on(&evaluated.config);
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =
@@ -585,10 +587,12 @@ impl ReloadContext {
                     }
                 },
                 text: refusal.text,
+                waiting: Vec::new(),
             });
         }
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
+        self.first_key_check(&new_config, &overlay)?;
         let prepared = self.live_config.prepare(new_config, &overlay);
         let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
@@ -640,6 +644,52 @@ impl ReloadContext {
             &self.live_config,
             env_restart_keys,
         ))
+    }
+}
+
+impl ReloadContext {
+    /// While a first key waits, a refusal of this file keeps the wait as
+    /// judged on the file itself: the keys it holds that the published table
+    /// lacks, and whether a start from it would be refused. `None` when nothing
+    /// waits, or the file holds no such key any more.
+    fn wait_judged_on(&self, file: &Config) -> Option<super::live_config::FirstKeyWait> {
+        self.live_config.waiting_keys()?;
+        let keys = super::first_key::waiting_names(&self.live_config.generation(), file);
+        (!keys.is_empty()).then(|| super::live_config::FirstKeyWait {
+            keys,
+            start_refusal: crate::gateway::next_start_refusal(file),
+        })
+    }
+
+    /// The first-key question on the file a reload read: a file whose one
+    /// fault is a first key is refused as a status change naming its keys;
+    /// one that also fails another check, by that check, as a faulty first key.
+    fn first_key_check(
+        &self,
+        file: &Config,
+        overlay: &EnvOverlay,
+    ) -> std::result::Result<(), ReloadRefusal> {
+        let live = &self.live_config;
+        let answer =
+            super::first_key::waiting_first_key(live.running(), &live.generation(), file, overlay);
+        let (kind, text, waiting) = match answer {
+            super::first_key::Waiting::No => return Ok(()),
+            super::first_key::Waiting::Yes { keys, .. } => (
+                ReloadRefusalKind::StatusChange,
+                super::first_key::held_refusal(&keys),
+                keys,
+            ),
+            super::first_key::Waiting::Faulty { reason, .. } => (
+                ReloadRefusalKind::Faulty,
+                nothing_published(&reason),
+                Vec::new(),
+            ),
+        };
+        Err(ReloadRefusal {
+            kind,
+            text,
+            waiting,
+        })
     }
 }
 

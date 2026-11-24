@@ -498,12 +498,21 @@ fn answer(refusal: UiRefused) -> Response {
             RefusalClass::Invalid => {
                 error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
             }
+            // The first-key question's own sentence names no value: shown.
+            RefusalClass::KeyList(refusal) => error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid",
+                refusal.sentence(),
+            ),
             RefusalClass::ShuttingDown => error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "shutting_down",
                 "the gateway is shutting down; retry",
             ),
             RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
+            RefusalClass::RestartPending { waiting } => {
+                super::errors::restart_pending(waiting.names())
+            }
         },
         UiRefused::Unsupported(_) => error(
             StatusCode::CONFLICT,
