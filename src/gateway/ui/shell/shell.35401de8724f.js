@@ -1840,7 +1840,7 @@ function showWho(auth) {
   document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
   for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
   showEnvironment(auth);
-  const admin = signedIn && auth.admin === true;
+  const admin = signedIn; // MUTANT drawn-for-a-non-admin: probe branch only
   if (!admin) endRestart();
   else if (!restartAdmin) {
     restartAdmin = true;
