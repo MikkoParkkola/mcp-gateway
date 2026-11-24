@@ -20,8 +20,12 @@ use crate::capability::executor::CapabilityExecutor;
 use crate::capability::executor::cli_run::Workdir;
 use crate::capability::{CapabilityDefinition, parse_capability};
 
-/// The stage each stop row grants: room for a graceful end.
-const STAGE: Duration = Duration::from_secs(5);
+/// The stage each stop row grants: the reaper keeps `KILL_RESERVE` back for
+/// the kill and the reap, so the stage must exceed it for the graceful phase
+/// to have room; a child slow to read its end of input under load still gets
+/// its turn. A child that exits at once ends the stop at once.
+const STAGE: Duration =
+    crate::transport::KILL_RESERVE_FOR_TEST.saturating_add(Duration::from_secs(4));
 
 fn stop_capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
