@@ -723,3 +723,6 @@ mod names;
 
 #[path = "backends_credential_tests.rs"]
 mod credentials;
+
+#[path = "backends_header_tests.rs"]
+mod headers;

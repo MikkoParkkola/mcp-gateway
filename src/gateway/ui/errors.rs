@@ -6,7 +6,8 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::config_reload::{
-    ConfigWriteError, FileRevision, NO_AUDIT_LOG, RELOAD_RESTARTING, RELOAD_STOPPING, ReplaceError,
+    ConfigWriteError, FileRevision, NO_AUDIT_LOG, RELOAD_RESTARTING, RELOAD_STOPPING, RefusalClass,
+    ReplaceError,
 };
 use crate::gateway::http_error::{flat_error_body, json_body, structured_error_body};
 use crate::gateway::restart_config_floor::Refusal;
@@ -45,6 +46,37 @@ pub(super) fn gate_refusal(refusal: Refusal) -> Response {
         Refusal::Restarting => ending("restarting", RELOAD_RESTARTING).into_response(),
         Refusal::Stopping => ending("stopping", RELOAD_STOPPING).into_response(),
     }
+}
+
+/// A UI write that would keep API keys still waiting in gateway.yaml: 409,
+/// naming them. Says nothing was written and which change does go through;
+/// never speaks of a restart, since only the Gateway page's own start check
+/// can say whether the file would start.
+pub(super) fn restart_pending(waiting: &[String]) -> Response {
+    let quoted = waiting
+        .iter()
+        .map(|key| ["`", key.as_str(), "`"].concat())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = if let [_single] = waiting {
+        format!(
+            "gateway.yaml holds the waiting API key {quoted}; nothing was written. A change \
+             that keeps it is refused. To end the wait, revoke it, or restore a version \
+             without it: that change is applied."
+        )
+    } else {
+        format!(
+            "gateway.yaml holds the waiting API keys {quoted}; nothing was written. A change \
+             that keeps any of them is refused. Only a change that takes out every one is \
+             applied: restore a version without them, or edit gateway.yaml by hand. They \
+             cannot be revoked one at a time."
+        )
+    };
+    json_body(
+        StatusCode::CONFLICT,
+        json!({"error": "restart_pending", "message": message, "waiting_keys": waiting}),
+    )
+    .into_response()
 }
 
 /// The 409 of a gateway.yaml revision that moved: the one to retry against.
@@ -173,6 +205,22 @@ pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::respon
         }
         ReplaceError::Refused(_) => unwritten(route, "refused"),
         ReplaceError::AuditRefused(_) => unwritten(route, "audit_refused"),
+        // The write keeps API keys still waiting in gateway.yaml.
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::RestartPending { waiting },
+            ..
+        } => restart_pending(waiting.names()),
+        // A key list refused with the first-key question's own sentence,
+        // which names no value: a 422 that shows it.
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::KeyList(refusal),
+            ..
+        } => structured_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            refusal.sentence(),
+        )
+        .into_response(),
         ReplaceError::ReloadRefused { .. } => unwritten(route, "reload_refused"),
         ReplaceError::Unsupported(_) => unwritten(route, "unsupported"),
         ReplaceError::Stage(_) => unwritten(route, "stage"),

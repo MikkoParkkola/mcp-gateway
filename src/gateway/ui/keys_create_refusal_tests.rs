@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `POST /ui/api/keys`, the rows that refuse: the strict body, the
 //! preconditions in their order, the validation that names a field, the
-//! expiry, the audit posture, the multi-user flip and the keyedit refusals.
+//! expiry, the audit posture and the keyedit refusals. (Creating the first
+//! key of a single-user gateway is not refused; `keys_first_key_tests.rs`
+//! holds those rows.)
 //! Every refusal leaves the file byte-identical and the answer free of the
 //! secret and its digest.
 
@@ -221,30 +223,6 @@ fn a3_no_audit_log_refuses_the_write() {
         &off.body("a"),
         StatusCode::SERVICE_UNAVAILABLE,
         &code("audit_unavailable"),
-    );
-}
-
-/// F2: the first key beside a lone bearer flips the gateway to multi-user:
-/// 409 `restart_required`, nothing written, no intent.
-#[test]
-fn f2_a_key_that_flips_the_mode_is_refused_before_the_write() {
-    let mut running = Setup::default().running;
-    running.api_keys.clear();
-    running.single_user = true;
-    running.bearer_token = Some("a-bearer".into());
-    let text =
-        "secrets:\n  store: files\nbackends: {}\nauth:\n  enabled: true\n  single_user: true\n"
-            .to_owned();
-    let fx = Fixture::new(Setup {
-        text,
-        running,
-        ..Setup::default()
-    });
-    refused(
-        &fx,
-        &fx.body("first"),
-        StatusCode::CONFLICT,
-        &code("restart_required"),
     );
 }
 

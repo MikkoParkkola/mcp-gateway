@@ -111,8 +111,10 @@ async fn k8_adding_a_key_that_makes_the_gateway_multi_user_is_refused() {
         ))
         .await
         .expect_err("a flip to multi-user is refused");
+    // The refusal names the change and claims nothing about a restart: the
+    // file could stop starting before the next one (the first-key rule).
     assert!(
-        err.contains("multi-user") && err.contains("restart"),
+        err.contains("multi-user") && !err.to_lowercase().contains("restart"),
         "{err}"
     );
     assert_refused(&err, &before, &gw);
@@ -136,7 +138,7 @@ async fn k8_removing_a_key_that_makes_the_gateway_single_user_is_refused() {
         .await
         .expect_err("a flip to single-user is refused");
     assert!(
-        err.contains("single-user") && err.contains("restart"),
+        err.contains("multi-user") && !err.to_lowercase().contains("restart"),
         "{err}"
     );
     assert_refused(&err, &before, &gw);
