@@ -118,7 +118,8 @@ fn strings(parts: &[&str]) -> Vec<String> {
 fn tls_taken(p: &Path, name: &str) -> (String, Pin, Pin) {
     let out = p.join("out");
     write(&out.join(name), "taken\n");
-    let first = Pin::Exact(format!("error: {}/{name} already exists.", text(&out)));
+    // Joined, not formatted with `/`: Windows writes the path with backslashes.
+    let first = Pin::Exact(format!("error: {} already exists.", text(&out.join(name))));
     let second = Pin::Exact("Remove it first or choose a different --out.".to_owned());
     (text(&out), first, second)
 }
@@ -145,7 +146,11 @@ fn config_case(p: &Path, leaf: &[&str], flag: &str) -> Case {
     fail_case(
         args,
         Pin::Starts("error: "),
-        Pin::Has(format!("mcp-gateway doctor --config {}", text(&file))),
+        // Quoted as the command line names it: a Windows path with backslashes comes out in quotes.
+        Pin::Has(format!(
+            "mcp-gateway doctor --config {}",
+            shlex::try_quote(&text(&file)).expect("a path without NUL")
+        )),
     )
 }
 
