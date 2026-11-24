@@ -28,9 +28,9 @@ use super::guard::Guard;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
-        BackendUpdate, LITERAL_IN_VALUE, UNRESOLVED_SECRETS, add_backend as add_backend_config,
-        remove_backend as remove_backend_config, resolve_backend,
-        update_backend as update_backend_config,
+        BackendUpdate, CARD_TO_OTHER_ORIGIN, LITERAL_IN_VALUE, UNRESOLVED_SECRETS,
+        add_backend as add_backend_config, remove_backend as remove_backend_config,
+        resolve_backend, update_backend as update_backend_config,
     },
     errors::{config_path_unavailable, flat_error},
 };
@@ -551,11 +551,12 @@ fn add_refusal(name: &str, message: String) -> (StatusCode, String) {
 }
 
 /// An update that `update_backend` refused: 404 for a missing backend, 422
-/// for a secret reference that does not resolve (ADR-028), else 400.
+/// for a secret reference that does not resolve (ADR-028) or an A2A card path
+/// the new address would send to another origin, else 400.
 fn update_refusal_status(message: &str) -> StatusCode {
     // The marker first: an unresolved `env:` names a missing env file in its
     // hint, which says "not found".
-    if message.contains(UNRESOLVED_SECRETS) {
+    if message.contains(UNRESOLVED_SECRETS) || message.contains(CARD_TO_OTHER_ORIGIN) {
         StatusCode::UNPROCESSABLE_ENTITY
     } else if message.contains("not found") {
         StatusCode::NOT_FOUND
@@ -655,6 +656,17 @@ mod tests {
         assert_eq!(
             update_refusal_status("stop when idle refused"),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    /// XPORT.2: the refusal of an A2A address on another origin is a 422.
+    #[test]
+    fn xport2_an_own_card_path_on_another_origin_is_422() {
+        let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
+        let message = format!("Backend 'x' {marker}; edit gateway.yaml.");
+        assert_eq!(
+            update_refusal_status(&message),
+            StatusCode::UNPROCESSABLE_ENTITY
         );
     }
 
