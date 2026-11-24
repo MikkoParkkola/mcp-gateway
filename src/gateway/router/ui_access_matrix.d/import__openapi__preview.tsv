@@ -149,10 +149,10 @@
 /ui/api/import/openapi/preview	POST	bad-type	OidcUnmapped	415
 /ui/api/import/openapi/preview	POST	bad-type	Session	415
 /ui/api/import/openapi/preview	POST	bad-type	StandardKey	415
-/ui/api/import/openapi/preview	POST	json	AdminKey	422
-/ui/api/import/openapi/preview	POST	json	AdminKeyUnmapped	422
+/ui/api/import/openapi/preview	POST	json	AdminKey	409
+/ui/api/import/openapi/preview	POST	json	AdminKeyUnmapped	409
 /ui/api/import/openapi/preview	POST	json	AuthOff	403:error="Admin authentication required"
-/ui/api/import/openapi/preview	POST	json	Bearer	422
+/ui/api/import/openapi/preview	POST	json	Bearer	409
 /ui/api/import/openapi/preview	POST	json	NoKey	401:error.code=-32000
 /ui/api/import/openapi/preview	POST	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/import/openapi/preview	POST	json	OidcAdmin	403:error="Admin authentication required"
@@ -162,7 +162,7 @@
 /ui/api/import/openapi/preview	POST	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	POST	json	OidcReviewer	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	POST	json	OidcUnmapped	403:error="Admin authentication required"
-/ui/api/import/openapi/preview	POST	json	Session	422
+/ui/api/import/openapi/preview	POST	json	Session	409
 /ui/api/import/openapi/preview	POST	json	StandardKey	403:error="Admin authentication required"
 /ui/api/import/openapi/preview	PUT	bad-json	AdminKey	405
 /ui/api/import/openapi/preview	PUT	bad-json	AdminKeyUnmapped	405
