@@ -162,6 +162,11 @@ pub(crate) struct WriteTrace {
 }
 
 impl WriteTrace {
+    /// The intent this write appended; a write appends one at most.
+    fn keep_intent(&self, id: IntentId) {
+        let _ = self.intent_id.set(id);
+    }
+
     fn snapshot(&self) -> Trace {
         Trace {
             intent_id: self.intent_id.get().cloned(),
@@ -271,12 +276,13 @@ async fn spawn_locked(
             "the config write task failed: {e}"
         )))
     });
+    let trace = trace.snapshot();
     match result {
         Ok((mut outcome, receipt)) => {
-            outcome.intent_id = None;
+            outcome.intent_id = trace.intent_id;
             Ok((outcome, receipt))
         }
-        Err(error) => Err((error, Trace::default())),
+        Err(error) => Err((error, trace)),
     }
 }
 
@@ -690,6 +696,8 @@ impl ReloadContext {
         // rather than deleting what the new file may already name. A write
         // error comes back after a proven rollback and discards.
         entries.renamed = true;
+        // From here the new bytes may be on disk.
+        entries.trace.written.store(true, Ordering::SeqCst);
         // Test seam: a hook here can make the write below fail.
         #[cfg(test)]
         order::record(target, "write");
@@ -820,7 +828,10 @@ impl ReloadContext {
         order::record(target, "rollback");
         match journal::recover(target) {
             Ok(_) => {
-                let _ = trace;
+                // A staging cleanup before the write puts nothing back.
+                if trace.written.load(Ordering::SeqCst) {
+                    trace.restored.store(true, Ordering::SeqCst);
+                }
                 error
             }
             Err(rollback) => ReplaceError::RollbackFailed {

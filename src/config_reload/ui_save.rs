@@ -96,8 +96,42 @@ pub(crate) fn save_outcome(
     result: Result<(bool, bool), &ReplaceError>,
     trace: &super::Trace,
 ) -> SaveOutcome {
-    let _ = (result, trace);
-    SaveOutcome::Refused
+    let error = match result {
+        Ok((changed, applied)) if changed || applied => return SaveOutcome::Applied,
+        Ok(_) => return SaveOutcome::Unchanged,
+        Err(error) => error,
+    };
+    match error {
+        ReplaceError::Stale { .. } => SaveOutcome::Stale,
+        ReplaceError::RollbackFailed { .. } | ReplaceError::Unconfirmed { .. } => {
+            SaveOutcome::Indeterminate
+        }
+        // After the append the writer cannot say what happened: a panicked
+        // task is one of these.
+        ReplaceError::Failed(_) if trace.intent_id.is_some() => SaveOutcome::Indeterminate,
+        ReplaceError::Busy
+        | ReplaceError::Gated(_)
+        | ReplaceError::Refused(_)
+        | ReplaceError::NoAuditLog
+        | ReplaceError::AuditRefused(_)
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::ReloadRefused { .. }
+        | ReplaceError::Failed(_)
+        | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_) => {
+            if trace.restored {
+                SaveOutcome::RolledBack
+            } else if trace.written {
+                // The new bytes may be on disk and nothing says they went.
+                SaveOutcome::Indeterminate
+            } else {
+                SaveOutcome::Refused
+            }
+        }
+    }
 }
 
 /// Save `edit` over the file at revision `base`.

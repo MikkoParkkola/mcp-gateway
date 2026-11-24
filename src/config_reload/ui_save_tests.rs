@@ -563,7 +563,7 @@ async fn the_intent_id_leaves_the_writer() {
     );
 
     // (b) No log: no intent, so no id.
-    let gw = gw(BASE);
+    let gw = gw_with(BASE, false, false);
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(kind())
         .expect("an audit");
@@ -602,7 +602,7 @@ async fn the_intent_id_leaves_the_writer() {
     // (d) Test profile only (release aborts on panic): a task that dies
     // right after its append still yields the id.
     let (logger, log) = audit_log();
-    let gw = gw(BASE);
+    let gw = gw_with(BASE, false, false);
     order::on(
         &gw.path,
         "intent",
