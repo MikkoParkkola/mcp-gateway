@@ -259,3 +259,8 @@ export function frame(event, data, id = null) {
   const head = event === 'hello' ? 'retry: 3000\n' : '';
   return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
 }
+
+/** A signed-in admin: the status read the shell makes first. */
+export async function signedInAdmin(page) {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+}
