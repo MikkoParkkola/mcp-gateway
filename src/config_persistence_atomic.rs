@@ -102,7 +102,7 @@ fn write_at(
     // failure under `Inherit` is returned before any scratch is created, so a
     // target we could not stat is never replaced by a wider default-mode file,
     // while a `Private` write never needed the stat.
-    let stat = std::fs::symlink_metadata(&target);
+    let stat = std::fs::symlink_metadata(target);
     let target_meta = match stat {
         Ok(meta) if !meta.file_type().is_symlink() => Some(meta),
         Ok(_) => None,
@@ -115,7 +115,7 @@ fn write_at(
         }
     };
     let (mut file, scratch) = create_scratch(
-        &target,
+        target,
         super::next_scratch_seed(),
         scratch_create_for(mode, target_meta.as_ref()),
     )?;
@@ -136,7 +136,7 @@ fn write_at(
         return Err(e);
     }
     #[cfg(test)]
-    let staged = super::crash_fs::stage(&target, &scratch, bytes);
+    let staged = super::crash_fs::stage(target, &scratch, bytes);
     observe(&file);
     // Closed before the rename: Windows renames only a closed file.
     drop(file);
@@ -144,13 +144,13 @@ fn write_at(
         cleanup(&scratch);
         return Err(e);
     }
-    if let Err(e) = super::rename_with_retry(&scratch, &target) {
+    if let Err(e) = super::rename_with_retry(&scratch, target) {
         cleanup(&scratch);
         return Err(e);
     }
     #[cfg(test)]
     if let Some(staged) = staged {
-        super::crash_fs::bind(&target, staged);
+        super::crash_fs::bind(target, staged);
     }
     Ok(())
 }
