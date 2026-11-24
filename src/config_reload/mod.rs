@@ -333,7 +333,7 @@ pub(crate) use reload_context::replace::ui_diff::{
 };
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::ui_save::{
-    SaveEdit, SaveValue, SecretTarget, UiSaved, ui_save,
+    SaveEdit, SaveOutcome, SaveValue, SecretTarget, UiSaved, ui_save,
 };
 #[cfg(test)]
 use reload_context::{

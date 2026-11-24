@@ -75,8 +75,8 @@ use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
 use crate::config_reload::{
     AuditPosture, BusyReason, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep,
-    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue,
-    SecretTarget, Shown, UiPreview, UiRefused, UiSaved, path_text, ui_diff, ui_save,
+    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveOutcome,
+    SaveValue, SecretTarget, Shown, UiPreview, UiRefused, UiSaved, path_text, ui_diff, ui_save,
 };
 use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
@@ -217,100 +217,123 @@ pub(super) async fn settings_save(
     session: Option<Extension<SessionMintedBy>>,
     body: Result<Json<SaveBody>, JsonRejection>,
 ) -> Response {
-    if let Err(refused) = guard.admit() {
-        return refused.into_response();
-    }
-    let Ok(Json(body)) = body else {
-        return invalid_body();
-    };
-    // Refuse the whole edit before opening the store: even a secret stored
-    // ahead of the config write must not outlive a CLI key's approver.
-    if body
-        .fields
-        .iter()
-        .any(|field| field.field.starts_with("auth."))
-        && caller_is_cli_key(
-            generation.auth(),
-            guard
-                .client
-                .as_ref()
-                .and_then(|client| client.quota_principal.as_ref()),
-            session.as_ref().map(|Extension(SessionMintedBy(key))| key),
-        )
-    {
-        return super::guard::Refused::Forbidden.into_response();
-    }
-    let Some(base) = FileRevision::from_text(&body.base_revision) else {
-        return invalid_body();
-    };
-    if body
-        .fields
-        .iter()
-        .any(|f| matches!(f.value, SaveValueBody::Remove(false)))
-    {
-        return invalid_body();
-    }
-    let Some(ctx) = state.meta_mcp.reload_context() else {
-        return no_reload_write().into_response();
-    };
-    let mut edit = SaveEdit::default();
-    for (entry, body) in body.fields.into_iter().enumerate() {
-        let (id, param, value) = match identify(body, entry) {
-            Ok(field) => field,
-            Err(response) => return *response,
-        };
-        let value = match value {
-            SaveValueBody::Set(value) => match scalar(id, &value) {
-                Ok(value) => SaveValue::Set(value),
-                Err(response) => return *response,
-            },
-            SaveValueBody::Remove(_) => SaveValue::Remove,
-            SaveValueBody::Secret(value) => SaveValue::Secret(value),
-        };
-        edit.fields.push((id, param, value));
-    }
-    let fields: Vec<_> = edit.fields.iter().map(|(id, ..)| id.spec().id).collect();
-    let secrets = if edit
-        .fields
-        .iter()
-        .any(|(_, _, value)| matches!(value, SaveValue::Secret(_)))
-    {
-        let dir = ctx
-            .config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
-        let config = ctx.live_config.get();
-        #[cfg(test)]
-        let opened = match store_for_test {
-            Some(Extension(SettingsStoreForTest::OpenRefused(why))) => Err(why),
-            Some(Extension(SettingsStoreForTest::Store(store))) => {
-                secret_slots::open_store(config.secrets.store, dir)
-                    .await
-                    .map(|(_, vault)| (store, vault))
-            }
-            None => secret_slots::open_store(config.secrets.store, dir).await,
-        };
-        #[cfg(not(test))]
-        let opened = secret_slots::open_store(config.secrets.store, dir).await;
-        match secret_target(opened) {
-            Ok(target) => Some(target),
-            Err(response) => return *response,
+    // The writer's word and intent id; any refusal before it reads refused.
+    let mut answered: (SaveOutcome, Option<String>) = (SaveOutcome::Refused, None);
+    let mut response = async {
+        if let Err(refused) = guard.admit() {
+            return refused.into_response();
         }
-    } else {
-        None
-    };
-    let posture = AuditPosture::of(
-        state.transparency_log.clone(),
-        GatewayAuth::of(state.live_config.running().auth.enabled),
-    );
-    let who =
-        super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
-    let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
-    match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
-        Ok(saved) => saved_answer(&saved, &fields, &live, &config_path),
-        Err(refusal) => answer_for(refusal, &fields),
+        let Ok(Json(body)) = body else {
+            return invalid_body();
+        };
+        // Refuse the whole edit before opening the store: even a secret stored
+        // ahead of the config write must not outlive a CLI key's approver.
+        if body
+            .fields
+            .iter()
+            .any(|field| field.field.starts_with("auth."))
+            && caller_is_cli_key(
+                generation.auth(),
+                guard
+                    .client
+                    .as_ref()
+                    .and_then(|client| client.quota_principal.as_ref()),
+                session.as_ref().map(|Extension(SessionMintedBy(key))| key),
+            )
+        {
+            return super::guard::Refused::Forbidden.into_response();
+        }
+        let Some(base) = FileRevision::from_text(&body.base_revision) else {
+            return invalid_body();
+        };
+        if body
+            .fields
+            .iter()
+            .any(|f| matches!(f.value, SaveValueBody::Remove(false)))
+        {
+            return invalid_body();
+        }
+        let Some(ctx) = state.meta_mcp.reload_context() else {
+            return no_reload_write().into_response();
+        };
+        let mut edit = SaveEdit::default();
+        for (entry, body) in body.fields.into_iter().enumerate() {
+            let (id, param, value) = match identify(body, entry) {
+                Ok(field) => field,
+                Err(response) => return *response,
+            };
+            let value = match value {
+                SaveValueBody::Set(value) => match scalar(id, &value) {
+                    Ok(value) => SaveValue::Set(value),
+                    Err(response) => return *response,
+                },
+                SaveValueBody::Remove(_) => SaveValue::Remove,
+                SaveValueBody::Secret(value) => SaveValue::Secret(value),
+            };
+            edit.fields.push((id, param, value));
+        }
+        let fields: Vec<_> = edit.fields.iter().map(|(id, ..)| id.spec().id).collect();
+        let secrets = if edit
+            .fields
+            .iter()
+            .any(|(_, _, value)| matches!(value, SaveValue::Secret(_)))
+        {
+            let dir = ctx
+                .config_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            let config = ctx.live_config.get();
+            #[cfg(test)]
+            let opened = match store_for_test {
+                Some(Extension(SettingsStoreForTest::OpenRefused(why))) => Err(why),
+                Some(Extension(SettingsStoreForTest::Store(store))) => {
+                    secret_slots::open_store(config.secrets.store, dir)
+                        .await
+                        .map(|(_, vault)| (store, vault))
+                }
+                None => secret_slots::open_store(config.secrets.store, dir).await,
+            };
+            #[cfg(not(test))]
+            let opened = secret_slots::open_store(config.secrets.store, dir).await;
+            match secret_target(opened) {
+                Ok(target) => Some(target),
+                Err(response) => return *response,
+            }
+        } else {
+            None
+        };
+        let posture = AuditPosture::of(
+            state.transparency_log.clone(),
+            GatewayAuth::of(state.live_config.running().auth.enabled),
+        );
+        let who =
+            super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+        let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
+        let answer = ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await;
+        answered = (answer.outcome, answer.intent_id.map(|id| id.0));
+        match answer.result {
+            Ok(saved) => saved_answer(&saved, &fields, &live, &config_path),
+            Err(refusal) => answer_for(refusal, &fields),
+        }
     }
+    .await;
+    attach_outcome(&mut response, answered.0, answered.1);
+    response
+}
+
+/// The save's outcome word, and its intent's id when it appended one, on
+/// the request's own `admin_action` (WRITE.2): no `intent_id` key at all
+/// when there is no intent.
+fn attach_outcome(response: &mut Response, outcome: SaveOutcome, intent_id: Option<String>) {
+    let mut detail = serde_json::Map::new();
+    detail.insert("save_outcome".into(), outcome.as_str().into());
+    if let Some(id) = intent_id {
+        detail.insert("intent_id".into(), id.into());
+    }
+    response
+        .extensions_mut()
+        .insert(super::admin_audit::AuditDetail(detail));
 }
 
 /// The answer to a completed save, with the restart keys while one is pending.

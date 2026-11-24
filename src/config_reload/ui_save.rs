@@ -31,7 +31,7 @@ use super::ui_diff::{
 };
 use super::{
     AuditPosture, Expected, FileRevision, IntentKind, Replace, ReplaceError, Replaced, SecretStep,
-    StatusChange, replace_audited,
+    StatusChange, replace_traced,
 };
 
 /// What a save asks for one field. A secret carries its value here only.
@@ -134,7 +134,16 @@ pub(crate) fn save_outcome(
     }
 }
 
-/// Save `edit` over the file at revision `base`.
+/// What one save came to: the answer, the outcome word its admin action
+/// carries, and the id of the intent it appended, when it appended one.
+pub(crate) struct SaveAnswer {
+    pub(crate) result: Result<UiSaved, UiRefused>,
+    pub(crate) outcome: SaveOutcome,
+    pub(crate) intent_id: Option<super::IntentId>,
+}
+
+/// Save `edit` over the file at revision `base`. A refusal before the
+/// writer answered reads `refused`, with no intent id.
 pub(crate) async fn ui_save(
     ctx: Arc<ReloadContext>,
     posture: AuditPosture,
@@ -143,102 +152,121 @@ pub(crate) async fn ui_save(
     secrets: Option<SecretTarget>,
     who: &crate::security::audit::AuditWho,
     wait: Duration,
-) -> Result<UiSaved, UiRefused> {
-    // The preview's shape, the secret bytes held aside.
-    let mut values = Vec::new();
-    let fields = edit.fields.into_iter().map(|(id, param, value)| {
-        let value = match value {
-            SaveValue::Set(scalar) => PreviewValue::Set(scalar),
-            SaveValue::Remove => PreviewValue::Remove,
-            SaveValue::Secret(bytes) => {
-                values.push(NewSecretOwned {
-                    field: slot(id, &param).display(),
-                    value: bytes,
-                });
-                PreviewValue::Secret
+) -> SaveAnswer {
+    let mut traced: Option<(SaveOutcome, Option<super::IntentId>)> = None;
+    let result: Result<UiSaved, UiRefused> = async {
+        // The preview's shape, the secret bytes held aside.
+        let mut values = Vec::new();
+        let fields = edit.fields.into_iter().map(|(id, param, value)| {
+            let value = match value {
+                SaveValue::Set(scalar) => PreviewValue::Set(scalar),
+                SaveValue::Remove => PreviewValue::Remove,
+                SaveValue::Secret(bytes) => {
+                    values.push(NewSecretOwned {
+                        field: slot(id, &param).display(),
+                        value: bytes,
+                    });
+                    PreviewValue::Secret
+                }
+            };
+            (id, param, value)
+        });
+        let preview = PreviewEdit {
+            fields: fields.collect(),
+        };
+        let checked = ui_fields::checked(&preview)?;
+        let names = checked
+            .fields
+            .iter()
+            .map(|(id, param, _)| slot(*id, param).display());
+        let kind = IntentKind::Save {
+            fields: names.collect(),
+        };
+        let audit = posture
+            .save_write(kind, who.clone())
+            .map_err(|_| UiRefused::NoAuditLog)?;
+        let secrets = match (secrets, values.is_empty()) {
+            (_, true) => None,
+            (Some(target), false) => Some(SecretStep {
+                vault: target.vault,
+                store: target.store,
+                values,
+            }),
+            (None, false) => {
+                return Err(UiRefused::Unsupported(
+                    "no secret store to save to".to_owned(),
+                ));
             }
         };
-        (id, param, value)
-    });
-    let preview = PreviewEdit {
-        fields: fields.collect(),
-    };
-    let checked = ui_fields::checked(&preview)?;
-    let names = checked
-        .fields
-        .iter()
-        .map(|(id, param, _)| slot(*id, param).display());
-    let kind = IntentKind::Save {
-        fields: names.collect(),
-    };
-    let audit = posture.audit(kind).map_err(|_| UiRefused::NoAuditLog)?;
-    let secrets = match (secrets, values.is_empty()) {
-        (_, true) => None,
-        (Some(target), false) => Some(SecretStep {
-            vault: target.vault,
-            store: target.store,
-            values,
-        }),
-        (None, false) => {
-            return Err(UiRefused::Unsupported(
-                "no secret store to save to".to_owned(),
-            ));
-        }
-    };
-    let stop = Arc::new(Mutex::new(None));
-    let replace = Replace {
-        expected: Expected::Revision(base.clone()),
-        compute: compute(checked, Arc::clone(&stop)),
-        replaced: Replaced::Discard,
-        secrets,
-        status_change: StatusChange::Refuse,
-    };
-    let error = match replace_audited(
-        Arc::clone(&ctx),
-        replace,
-        audit,
-        crate::config_reload::history::Source::Ui {
-            who: who.account.clone(),
-        },
-        wait,
-    )
-    .await
-    {
-        Ok(outcome) => {
-            return Ok(UiSaved {
-                changed: outcome.revision.is_some(),
-                revision: outcome.revision.unwrap_or(base),
-                reload: match outcome.reload {
-                    super::ReplaceReload::Applied(reload) => reload,
-                    // A settings save passes `Refuse`; the writer never holds it.
-                    super::ReplaceReload::HeldForRestart { .. } => {
-                        tracing::error!("a settings save came back held for a restart");
-                        return Err(UiRefused::ReloadRefused {
-                            class: super::RefusalClass::Internal,
-                        });
-                    }
-                },
-            });
-        }
-        Err(error) => error,
-    };
-    let halt = match stop.lock().take() {
-        Some(Stop::Refused(refusal)) => return Err(refusal),
-        Some(Stop::Halt(halt)) => Some(halt),
-        None => None,
-    };
-    match map_error(error, halt) {
-        Mapped::Refusal(refusal) => Err(refusal),
-        Mapped::Repreview { stale } => match (ui_diff(&ctx, &preview).await, stale) {
-            (Ok(fresh), true) => Err(UiRefused::Stale(Box::new(fresh))),
-            (Ok(fresh), false) => match fresh.shown {
-                Shown::Patch(patch) => Err(UiRefused::Unprovable(patch)),
-                // Provable now: the file changed since the compute read it.
-                Shown::Diff(_) => Err(UiRefused::Stale(Box::new(fresh))),
+        let stop = Arc::new(Mutex::new(None));
+        let replace = Replace {
+            expected: Expected::Revision(base.clone()),
+            compute: compute(checked, Arc::clone(&stop)),
+            replaced: Replaced::Discard,
+            secrets,
+            status_change: StatusChange::Refuse,
+        };
+        let error = match replace_traced(
+            Arc::clone(&ctx),
+            replace,
+            audit,
+            crate::config_reload::history::Source::Ui {
+                who: who.account.clone(),
             },
-            (Err(refusal), true) => Err(UiRefused::StaleUnpreviewable(format!("{refusal:?}"))),
-            (Err(refusal), false) => Err(refusal),
-        },
+            wait,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                // Applied from the reload's own signal arrives with WRITE.3.
+                let answer = Ok((outcome.revision.is_some(), false));
+                let word = save_outcome(answer, &super::Trace::default());
+                traced = Some((word, outcome.intent_id.clone()));
+                return Ok(UiSaved {
+                    changed: outcome.revision.is_some(),
+                    revision: outcome.revision.unwrap_or(base),
+                    reload: match outcome.reload {
+                        super::ReplaceReload::Applied(reload) => reload,
+                        // A settings save passes `Refuse`; the writer never holds it.
+                        super::ReplaceReload::HeldForRestart { .. } => {
+                            tracing::error!("a settings save came back held for a restart");
+                            return Err(UiRefused::ReloadRefused {
+                                class: super::RefusalClass::Internal,
+                            });
+                        }
+                    },
+                });
+            }
+            Err((error, trace)) => {
+                traced = Some((save_outcome(Err(&error), &trace), trace.intent_id));
+                error
+            }
+        };
+        let halt = match stop.lock().take() {
+            Some(Stop::Refused(refusal)) => return Err(refusal),
+            Some(Stop::Halt(halt)) => Some(halt),
+            None => None,
+        };
+        match map_error(error, halt) {
+            Mapped::Refusal(refusal) => Err(refusal),
+            Mapped::Repreview { stale } => match (ui_diff(&ctx, &preview).await, stale) {
+                (Ok(fresh), true) => Err(UiRefused::Stale(Box::new(fresh))),
+                (Ok(fresh), false) => match fresh.shown {
+                    Shown::Patch(patch) => Err(UiRefused::Unprovable(patch)),
+                    // Provable now: the file changed since the compute read it.
+                    Shown::Diff(_) => Err(UiRefused::Stale(Box::new(fresh))),
+                },
+                (Err(refusal), true) => Err(UiRefused::StaleUnpreviewable(format!("{refusal:?}"))),
+                (Err(refusal), false) => Err(refusal),
+            },
+        }
+    }
+    .await;
+    let (outcome, intent_id) = traced.unwrap_or((SaveOutcome::Refused, None));
+    SaveAnswer {
+        result,
+        outcome,
+        intent_id,
     }
 }
 

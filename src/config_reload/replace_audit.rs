@@ -42,14 +42,14 @@ pub(crate) enum IntentKind {
     },
 }
 
-/// Who asked for a key write and which key: what a key write's intent names
-/// beside its kind, since `Replaced::Discard` keeps no original to diff.
+/// Who asked for a write, and for a key write which key: named on the
+/// intent of a key write or a settings save.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KeyWriter {
     /// The authenticated request's identity.
     pub(crate) actor: crate::security::audit::AuditWho,
-    /// The key's name, never a value.
-    pub(crate) subject: String,
+    /// A key write's key name, never a value; `None` for a settings save.
+    pub(crate) subject: Option<String>,
 }
 
 /// Which backend route an intent is for.
@@ -176,10 +176,30 @@ impl AuditPosture {
         if let Audit::Required { writer, .. } = &mut audit {
             *writer = Some(KeyWriter {
                 actor,
-                subject: subject.to_owned(),
+                subject: Some(subject.to_owned()),
             });
         }
         Ok(audit)
+    }
+
+    /// A settings save's audit: its intent names the caller `actor` and no
+    /// key (WRITE.2); refused or off exactly as [`Self::audit`] is.
+    pub(crate) fn save_write(
+        self,
+        kind: IntentKind,
+        actor: crate::security::audit::AuditWho,
+    ) -> Result<Audit, ReplaceError> {
+        Ok(match self.audit(kind)? {
+            Audit::Required { sink, kind, .. } => Audit::Required {
+                sink,
+                kind,
+                writer: Some(KeyWriter {
+                    actor,
+                    subject: None,
+                }),
+            },
+            Audit::Off => Audit::Off,
+        })
     }
 }
 
@@ -216,7 +236,9 @@ impl IntentSink for LogSink {
         // gateway, as it always has.
         let envelope = match &intent.writer {
             Some(writer) => {
-                fields.insert("subject".into(), writer.subject.as_str().into());
+                if let Some(subject) = &writer.subject {
+                    fields.insert("subject".into(), subject.as_str().into());
+                }
                 crate::security::audit::AuditEnvelope::ok(writer.actor.clone())
             }
             None => crate::security::audit::AuditEnvelope::gateway(),

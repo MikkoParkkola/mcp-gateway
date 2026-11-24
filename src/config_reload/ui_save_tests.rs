@@ -140,6 +140,7 @@ impl Gw {
             WAIT,
         )
         .await
+        .result
     }
 }
 
