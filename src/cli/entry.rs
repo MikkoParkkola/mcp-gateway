@@ -542,8 +542,27 @@ fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
 /// field-keyed directive answers it exactly as it answers the event.
 fn fatal(message: &str) {
     error!(target: "mcp_gateway", "{message}");
-    if !tracing::event_enabled!(target: "mcp_gateway", tracing::Level::ERROR, message) {
-        eprintln!("{}", crate::log_escape::escaped(message));
+    if mutant!(
+        "m5",
+        false,
+        mutant!(
+            "m6",
+            true,
+            mutant!(
+                "m9",
+                !tracing::enabled!(target: "mcp_gateway", tracing::Level::ERROR),
+                !tracing::event_enabled!(target: "mcp_gateway", tracing::Level::ERROR, message)
+            )
+        )
+    ) {
+        eprintln!(
+            "{}",
+            mutant!(
+                "m8",
+                std::borrow::Cow::Borrowed(message),
+                crate::log_escape::escaped(message)
+            )
+        );
     }
 }
 

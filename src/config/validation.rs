@@ -20,13 +20,17 @@ pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext 
 /// this rule: loading uses it for backend names and `capabilities.name`, and the routes that add a server use it too.
 /// Another name with the same need (an API key's, say) calls it rather than copying it.
 pub(crate) fn name_refusal(kind: &str, name: &str) -> Option<String> {
-    if name.chars().any(char::is_control) {
-        let shown = crate::log_escape::escaped(name);
+    if mutant!("m1", false, name.chars().any(char::is_control)) {
+        let shown = mutant!(
+            "m2",
+            std::borrow::Cow::Borrowed(name),
+            crate::log_escape::escaped(name)
+        );
         return Some(format!(
             "{kind} '{shown}' contains a control character; rename it"
         ));
     }
-    if name == "." || name == ".." {
+    if mutant!("m3", name == ".", name == "." || name == "..") {
         return Some(format!(
             "{kind} '{name}' cannot be reached: no address can name '.' or '..'; rename it"
         ));
@@ -437,7 +441,7 @@ impl Config {
         // registry membership, so one name may not mean both
         // (MIK-8358.CAPCFG.1). Checked whatever `enabled` says (MIK-8298).
         let capabilities = &self.capabilities.name;
-        if let Some(why) = name_refusal("capabilities.name", capabilities) {
+        if let Some(why) = mutant!("m7", None, name_refusal("capabilities.name", capabilities)) {
             return Err(Error::ConfigValidation(why));
         }
         if self.backends.contains_key(capabilities) {
