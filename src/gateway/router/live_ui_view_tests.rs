@@ -31,8 +31,13 @@ async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir)
 /// `GET /ui/api/config` as the admin bearer, on `router`: one router per
 /// test, kept across reloads as the long-lived server keeps it.
 async fn view(router: &axum::Router) -> Value {
+    admin_get(router, "/ui/api/config").await
+}
+
+/// GET `uri` as the admin bearer on `router`; anything but success fails.
+async fn admin_get(router: &axum::Router, uri: &str) -> Value {
     let request = Request::builder()
-        .uri("/ui/api/config")
+        .uri(uri)
         .header(header::AUTHORIZATION, format!("Bearer {BEARER}"))
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
         .body(Body::empty())
@@ -96,6 +101,57 @@ async fn f8_the_view_reports_the_flags_after_a_reload() {
     let after = view(&router).await;
     assert_eq!(after["sanitize_input"], !sanitize, "{after}");
     assert_eq!(after["ssrf_protection"], !ssrf, "{after}");
+}
+
+/// A request check as the policies read must serve it: a switch the save
+/// table lists, applied live, so its file and enforced values are one.
+fn request_check(name: &str, on: bool) -> Value {
+    serde_json::json!({
+        "path": format!("security.{name}"),
+        "file": on,
+        "enforced": on,
+        "pending_restart": false,
+        "on": on,
+        "read_only": false,
+    })
+}
+
+// rc1: the policies read serves both request checks as published, at both
+// values of each, and the config view agrees. Each switch is published once
+// as true and once as false, so one case always differs from the running
+// config: a read of the running config fails one of them.
+#[tokio::test]
+async fn rc1_the_request_checks_as_in_force() {
+    let (state, _dir) = Box::pin(fixture()).await;
+    let router = create_router(Arc::clone(&state));
+    for (sanitize, ssrf) in [(true, false), (false, true)] {
+        let mut config = (*state.live_config.get()).clone();
+        config.security.sanitize_input = sanitize;
+        config.security.ssrf_protection = ssrf;
+        state.live_config.set(config);
+
+        let policies = admin_get(&router, "/ui/api/policies").await;
+        let checks = &policies["request_checks"];
+        assert_eq!(
+            checks["sanitize_input"],
+            request_check("sanitize_input", sanitize),
+            "{policies}"
+        );
+        assert_eq!(
+            checks["ssrf_protection"],
+            request_check("ssrf_protection", ssrf),
+            "{policies}"
+        );
+        let keys: Vec<&str> = checks
+            .as_object()
+            .map(|o| o.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        assert_eq!(keys, ["sanitize_input", "ssrf_protection"], "{policies}");
+
+        let view = view(&router).await;
+        assert_eq!(view["sanitize_input"], sanitize, "{view}");
+        assert_eq!(view["ssrf_protection"], ssrf, "{view}");
+    }
 }
 
 const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: T\n  version: '1'\npaths:\n  /items:\n    get:\n      operationId: listItems\n      responses:\n        '200':\n          description: ok\n";
