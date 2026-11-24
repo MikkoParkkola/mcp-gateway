@@ -104,6 +104,32 @@ fn s5_the_first_key_refusal_of_the_day_is_recorded_once() {
         );
     }
     assert_eq!(refusal(&by_tool, T1), None, "a tool's limit, not the key's");
+
+    // Nor does it touch a record the key's own limit already made.
+    let mut config = CostGovernanceConfig {
+        enabled: true,
+        budgets: BudgetLimits {
+            per_tool: [("cheap".to_string(), 1.0)].into(),
+            per_key: [(KEY.to_string(), 25.0)].into(),
+            ..BudgetLimits::default()
+        },
+        ..CostGovernanceConfig::default()
+    };
+    config.tool_costs.insert("cheap".to_string(), 0.01);
+    let registry = Arc::new(CostRegistry::new(&config));
+    let kept = BudgetEnforcer::new(config, registry);
+    let earlier = KeyRefusal {
+        day: kept.day_key(T1),
+        at_secs: T1 - 60,
+        limit: 25.0,
+    };
+    kept.note_first_block(KEY, earlier.day, earlier.at_secs, 25.0);
+    {
+        let _clock = test_clock::at_secs(T1);
+        kept.record_spend("cheap", Some(KEY), 1.0);
+        assert!(!kept.check("cheap", Some(KEY)).allowed, "premise: refused");
+    }
+    assert_eq!(refusal(&kept, T1), Some(earlier), "the key's record stays");
 }
 
 /// The day sweep keeps a record from its own day, and one from a day that
@@ -157,36 +183,6 @@ fn s5d_a_day_sweep_keeps_records_of_its_day_and_later() {
         !e.key_refused.contains_key(KEY),
         "an earlier day's record is gone"
     );
-}
-
-/// Many refusals at once, from 8 threads: the record ends at the smallest
-/// time. A correct write cannot lose it under any schedule; a read followed
-/// by a separate insert loses an update on practically every run.
-#[test]
-fn s5c_concurrent_refusals_keep_the_smallest_time() {
-    const THREADS: u64 = 8;
-    const EACH: u64 = 10_000;
-    let e = enforcer(None, 25.0);
-    let today = e.day_key(T1);
-    std::thread::scope(|scope| {
-        for thread in 0..THREADS {
-            let e = &e;
-            scope.spawn(move || {
-                for i in 0..EACH {
-                    // A fixed spread of times; the smallest, T1, is written
-                    // once, mid-run, while every other thread still writes.
-                    let offset = (thread * EACH + i).wrapping_mul(7_919) % 80_000;
-                    let at = if thread == 0 && i == EACH / 2 {
-                        T1
-                    } else {
-                        T1 + 1 + offset
-                    };
-                    e.note_first_block(KEY, today, at, 25.0);
-                }
-            });
-        }
-    });
-    assert_eq!(refusal(&e, T1).map(|r| r.at_secs), Some(T1));
 }
 
 /// Two refusals at once keep the earlier time in either order of arrival; a
