@@ -75,7 +75,7 @@ pub(super) fn policy_id(g: &Generation, server: &str, tool: &str) -> String {
     let named = g
         .tool_policy()
         .check_explained(server, tool)
-        .map_or_else(|(_, refusing)| refusing, |allowing| allowing);
+        .unwrap_or_else(|(_, refusing)| refusing);
     named
         .unwrap_or_else(|| panic!("no entry decided {server}/{tool}"))
         .as_str()
