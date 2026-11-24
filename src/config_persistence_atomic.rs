@@ -159,9 +159,24 @@ fn write_at(
 /// `target-changed`, ...), or `None` when `e` is not one.
 #[cfg(all(test, unix))]
 pub(crate) fn refusal_code(e: &std::io::Error) -> Option<&'static str> {
-    e.get_ref()
-        .and_then(|inner| inner.downcast_ref::<unix::WriterRefusal>())
-        .map(|refusal| refusal.code)
+    writer_refusal(e).map(|(code, _)| code)
+}
+
+/// A save the writer turned down: its code and the sentence the user reads,
+/// which names the file and user ids only, so a caller may show it as is.
+/// `None` for any other error, and off unix, where refusals carry no type.
+pub(crate) fn writer_refusal(e: &std::io::Error) -> Option<(&'static str, String)> {
+    #[cfg(unix)]
+    {
+        e.get_ref()
+            .and_then(|inner| inner.downcast_ref::<unix::WriterRefusal>())
+            .map(|refusal| (refusal.code, refusal.to_string()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        None
+    }
 }
 
 // Windows `Inherit` keeps the target's access list.

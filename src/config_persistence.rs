@@ -96,6 +96,7 @@ mod atomic;
 pub(crate) use atomic::write_atomic_checked;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use atomic::write_atomic_observed_for_test;
+pub(crate) use atomic::writer_refusal;
 pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 // The writer's seams, for the refusal-surface rows.
 #[cfg(all(test, unix))]

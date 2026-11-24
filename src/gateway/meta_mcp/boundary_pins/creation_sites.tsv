@@ -17,7 +17,7 @@ src/config/record_key.rs	publish_new_file	helper:create_new_private	1	helper	cal
 src/config_persistence_atomic.rs	finish_kept	open-create	1	helper	the atomic writer's create on a volume without access lists, where there is no list to keep
 src/config_persistence_atomic.rs	finish_kept	helper:create_like	1	helper	calls the writer's create_like (the target's owner, the folder's inherited list)
 src/config_persistence_atomic.rs	create_scratch	helper:create_new_private	1	helper	calls the crate's create_new_private
-src/config_persistence_atomic.rs	create_scratch	open-create	1	helper	the atomic writer's scratch create
+src/config_persistence_atomic.rs	create_scratch	open-create	2	helper	the atomic writer's scratch create (mode 0000 on unix, the default create elsewhere)
 src/config_persistence_atomic_windows.rs	create_like	helper:create_file_like	1	helper	calls the crate's create_file_like
 src/config_persistence_atomic_windows.rs	prepare_from	helper:create_like	1	helper	calls the writer's create_like
 src/control_plane/export.rs	deliver	open-create	1	no-secret	SIEM export file sink; audit records, append-only
@@ -65,7 +65,6 @@ src/trust/claim_capture.rs	open	open-create	1	no-secret	append-only claim log
 src/validator/cli_handler.rs	run_validate_command	fs-write	1	no-secret	validation report output
 src/commands/upgrade.rs	backup_config	helper:copy_keeping_access	1	helper	config backup keeps the config's access
 src/commands/config_export/mod.rs	create_backup	helper:copy_keeping_access	1	helper	config backup keeps the config's access
-src/config_persistence_atomic.rs	copy_keeping_access	fs-copy	1	helper	unix branch of the backup helper; fs::copy keeps the mode
 src/config_persistence_journal.rs	begin	helper:create_new_private	1	helper	calls the crate's create_new_private
 src/config_persistence_journal.rs	mark_all_renamed	helper:write_atomic	1	helper	calls the crate's write_atomic
 src/config_persistence_journal.rs	recover	helper:write_atomic	1	helper	calls the crate's write_atomic

@@ -397,9 +397,15 @@ fn the_writer_seams_are_compiled_out_of_production() {
         "config_persistence_atomic_unix.rs",
     ] {
         let raw = std::fs::read_to_string(root.join(file)).expect("read the writer");
+        // The calls live in the unix half; the parent only re-exports them.
+        let used_here = if file.ends_with("_unix.rs") {
+            "seams::"
+        } else {
+            "unix::seams"
+        };
         assert!(
-            raw.contains("seams::"),
-            "{file}: premise: the seams are used here"
+            raw.contains(used_here),
+            "{file}: premise: the seams are named here"
         );
         let production = production_text(&raw);
         for seam in [
