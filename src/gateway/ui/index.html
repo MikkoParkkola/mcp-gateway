@@ -832,7 +832,6 @@ function keyLookupShow(body) {
     const line = document.createElement('div');
     line.append(keyLookupCell('span', r.timestamp + '  '), keyLookupCell('strong', r.subject),
       keyLookupCell('span', '  ' + r.issuer + '  [' + r.backends.join(', ') + ']'));
-    rows.append(line);
   }
   keyLookupSay(body.rows.length === 0 ? 'No retained issuance matches.' : body.rows.length + ' retained issuance(s) on this page.');
   document.getElementById('kl-scope').textContent = 'Covers retained audit rows only: older rows that were rotated away are not searched.';
