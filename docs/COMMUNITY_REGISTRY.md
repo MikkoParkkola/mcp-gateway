@@ -58,6 +58,7 @@ Use `--write-config` only after reviewing adoptable local findings.
 Every capability is a single YAML file following the Fulcrum 1.0 schema:
 
 ```yaml
+# example: not gateway.yaml
 fulcrum: "1.0"
 name: your_capability_name
 description: Short, clear description of what this capability does

@@ -38,6 +38,7 @@ webhooks:
 Webhooks are defined in capability YAML files alongside regular REST API providers:
 
 ```yaml
+# example: not gateway.yaml
 fulcrum: "1.0"
 name: linear_integration
 description: Linear webhook integration
@@ -159,6 +160,7 @@ mcp-gateway
 **Capability**: `capabilities/examples/linear_webhook.yaml`
 
 ```yaml
+# example: not gateway.yaml
 # capabilities/examples/linear_webhook.yaml
 webhooks:
   issue_updated:
@@ -183,6 +185,7 @@ webhooks:
 **Capability**: `capabilities/examples/github_webhook.yaml`
 
 ```yaml
+# example: not gateway.yaml
 # capabilities/examples/github_webhook.yaml
 webhooks:
   repository_events:
@@ -331,6 +334,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 ### Multiple Webhooks in One Capability
 
 ```yaml
+# example: not gateway.yaml
 # capability file (capabilities/<name>.yaml)
 webhooks:
   issue_events:
@@ -349,6 +353,7 @@ webhooks:
 Capabilities can define only webhooks without any REST providers:
 
 ```yaml
+# example: not gateway.yaml
 fulcrum: "1.0"
 name: webhook_receiver
 description: Pure webhook receiver
