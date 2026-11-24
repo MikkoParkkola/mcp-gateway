@@ -44,14 +44,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use tokio::time::Instant;
-
 use crate::gateway::task_service::{
     CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
 /// R2h (MIK-8202 P4a): a read queued behind a worker's dark-clock settle.
 mod dark_clock_settle;
+
+/// The join and arrival bounds under a host stall (flaky-under-load rows).
+mod drain_bound;
 
 /// The opaque handle the peer answers the task-augmented call with.
 const UPSTREAM_HANDLE: &str = "upstream-job-serialization";
@@ -64,10 +65,12 @@ const CONTENTION_TURNS: usize = 2_000;
 /// The bound on a wait for an event a row expects to arrive.
 ///
 /// Arrival is a handoff, not a local step: the worker is woken by a task-store
-/// write that can cross a thread boundary. A fixed count of `yield_now` turns
+/// write that runs on the blocking pool. A fixed count of `yield_now` turns
 /// never parks the runtime, so it elapses in about a millisecond of CPU time
 /// and starves on a contended CI runner while passing on an idle developer
-/// machine. A deadline bounds the same wait by the thing that actually varies.
+/// machine. So the waits measure this bound in tokio time on a paused clock:
+/// it moves only while no task can run and no blocking work is in flight, so
+/// a host stall does not spend it and a missing event still fails at it.
 const ARRIVAL_BOUND: Duration = Duration::from_secs(10);
 
 /// The bound on a read that must not be stranded by a cancelled predecessor.
@@ -192,6 +195,12 @@ enum Script {
     /// sends it to wait out its poll gap — then hold and answer `Completed`.
     /// The shape a row needs when the worker must queue behind a reader.
     LiveThenHold,
+    /// Count the FIRST query only once the row opens the gate, then hold as
+    /// `Hold` does. A row opens it from the blocking pool after a host stall.
+    GateFirstQuery,
+    /// Count the reader's claim (any claim after the worker's first) only once
+    /// the row opens the gate; queries hold as `Hold` does.
+    GateReaderClaim,
 }
 
 /// Counts queries, holds them, and reports the most that were ever in flight
@@ -208,6 +217,8 @@ struct BarrierRecovery {
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
     release: Arc<tokio::sync::Semaphore>,
+    /// What a `Gate…` script waits on before it counts.
+    gate: tokio::sync::Semaphore,
 }
 
 /// Decrements the in-flight count on every exit from a query, cancelled or not.
@@ -232,7 +243,21 @@ impl BarrierRecovery {
             in_flight: AtomicUsize::new(0),
             max_in_flight: AtomicUsize::new(0),
             release: Arc::new(tokio::sync::Semaphore::new(0)),
+            gate: tokio::sync::Semaphore::new(0),
         })
+    }
+
+    /// Let the gated count through, once.
+    fn open_gate(&self) {
+        self.gate.add_permits(1);
+    }
+
+    async fn through_gate(&self) {
+        self.gate
+            .acquire()
+            .await
+            .expect("the gate outlives every wait on it")
+            .forget();
     }
 
     fn claims_seen(&self) -> usize {
@@ -258,19 +283,24 @@ impl BarrierRecovery {
 
     /// Wait until at least `count` queries have entered the adapter.
     async fn wait_for_queries(&self, count: usize) {
-        let deadline = Instant::now() + ARRIVAL_BOUND;
-        loop {
-            if self.queries() >= count {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "only {} upstream queries entered the adapter in {ARRIVAL_BOUND:?}; \
-                 {count} were expected",
-                self.queries()
-            );
-            tokio::task::yield_now().await;
-        }
+        let adapter = self;
+        let arrived = on_paused_clock(crate::test_wait::wait_until(
+            ARRIVAL_BOUND,
+            move || async move {
+                if adapter.queries() >= count {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(String::new())
+                }
+            },
+        ))
+        .await;
+        assert!(
+            arrived.is_ok(),
+            "only {} upstream queries entered the adapter in {ARRIVAL_BOUND:?}; \
+             {count} were expected",
+            self.queries()
+        );
     }
 
     /// Wait until a caller has passed the trust check that `recover_upstream_read`
@@ -280,18 +310,23 @@ impl BarrierRecovery {
     /// guess: past this point the reader is either querying or queued, and the
     /// row can tell those two apart.
     async fn wait_for_claims_after(&self, seen: usize) {
-        let deadline = Instant::now() + ARRIVAL_BOUND;
-        loop {
-            if self.claims_seen() > seen {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "no recovery read reached the adapter's trust check in {ARRIVAL_BOUND:?}; \
-                 the read never entered the recovery path and this row would observe nothing"
-            );
-            tokio::task::yield_now().await;
-        }
+        let adapter = self;
+        let reached = on_paused_clock(crate::test_wait::wait_until(
+            ARRIVAL_BOUND,
+            move || async move {
+                if adapter.claims_seen() > seen {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(String::new())
+                }
+            },
+        ))
+        .await;
+        assert!(
+            reached.is_ok(),
+            "no recovery read reached the adapter's trust check in {ARRIVAL_BOUND:?}; \
+             the read never entered the recovery path and this row would observe nothing"
+        );
     }
 
     /// Spend a bounded number of scheduler turns looking for a second query in
@@ -314,11 +349,17 @@ impl UpstreamRecovery for BarrierRecovery {
     }
 
     async fn claims(&self, backend: &str) -> bool {
+        if self.script == Script::GateReaderClaim && self.claims_seen() >= 1 {
+            self.through_gate().await;
+        }
         self.claims.fetch_add(1, Ordering::SeqCst);
         backend == BACKEND
     }
 
     async fn query(&self, handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
+        if self.script == Script::GateFirstQuery && self.queries() == 0 {
+            self.through_gate().await;
+        }
         let seen = self.queries.fetch_add(1, Ordering::SeqCst);
         self.handles.lock().push(handle.handle.clone());
         let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
@@ -391,15 +432,6 @@ async fn armed_fixture(
 async fn submit(state: &Arc<AppState>, key: &str) -> String {
     let created = post(state, "key-a", task_invoke(1, key, json!({ "n": 1 }))).await;
     task_id(&created)
-}
-
-/// Join the executor's workers within the row's bound.
-async fn join_workers(state: &Arc<AppState>) {
-    let bound = Duration::from_secs(5);
-    let joined = tokio::time::timeout(bound, state.task_executor.drain(bound))
-        .await
-        .expect("the worker settles within the fixture bound");
-    std::assert!(joined.is_clean(), "the worker must finish: {joined:?}");
 }
 
 // =====================================================================
@@ -594,7 +626,8 @@ async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
 
     adapter.release_all();
     let fetched = reader.await.expect("the owner's read must answer");
-    join_workers(&state).await;
+    // This row's clock is already paused, so it drains directly.
+    drain_clean(&state).await;
 
     std::assert_eq!(
         status_of(&fetched),
