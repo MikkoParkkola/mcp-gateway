@@ -140,9 +140,10 @@ const LOOK: i32 =
 
 /// What the writer knows of the file a save replaces (or a backup copies):
 /// owner, group, mode and identity, all from one look. The identity pins the
-/// file, and its size and modification time catch a rewrite in place: all
-/// are compared again just before the rename. A filesystem with coarse times
-/// can miss a same-size rewrite within one tick.
+/// file, and its size and times catch a rewrite in place: all
+/// are compared again just before the rename (a backup's source without its change time, which
+/// a rename moves). A filesystem with coarse times
+/// can miss a rewrite within one tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Model {
     uid: u32,
@@ -152,6 +153,8 @@ struct Model {
     ino: u64,
     size: u64,
     mtime: (i64, i64),
+    /// Moves on any write or rename and cannot be set back by a writer.
+    ctime: (i64, i64),
 }
 
 impl Model {
@@ -164,6 +167,7 @@ impl Model {
             ino: meta.ino(),
             size: meta.size(),
             mtime: (meta.mtime(), meta.mtime_nsec()),
+            ctime: (meta.ctime(), meta.ctime_nsec()),
         }
     }
 }
@@ -175,12 +179,13 @@ impl Model {
 enum Seen {
     File(Model),
     Absent,
-    /// Identity and file type: a freed inode number can come back at once as
-    /// a different kind of file (a link removed, a file created).
+    /// Identity, file type and change time: a freed inode number can come back at once as
+    /// a different kind of file, or as another link.
     Entry {
         dev: u64,
         ino: u64,
         kind: u32,
+        ctime: (i64, i64),
     },
 }
 
@@ -190,6 +195,7 @@ impl Seen {
             dev: meta.dev(),
             ino: meta.ino(),
             kind: meta.mode() & 0o170_000,
+            ctime: (meta.ctime(), meta.ctime_nsec()),
         }
     }
 }
@@ -463,8 +469,14 @@ fn verify(save: &Save<'_>, file: &File, settled: &Settled) -> io::Result<()> {
         && settled.gid.is_none_or(|gid| now.gid() == gid)
         && settled.mode.is_none_or(|mode| now.mode() & 0o7777 == mode);
     let model_unchanged = save.model.is_none_or(|model| {
-        std::fs::symlink_metadata(save.model_path)
-            .is_ok_and(|meta| meta.is_file() && Model::of(&meta) == *model)
+        std::fs::symlink_metadata(save.model_path).is_ok_and(|meta| {
+            let mut now = Model::of(&meta);
+            if save.seen.is_none() {
+                // A backup's source: renamed away and back is the same file.
+                now.ctime = model.ctime;
+            }
+            meta.is_file() && now == *model
+        })
     });
     // A target that was nothing, or a link, must still be that: a file
     // created or swapped in meanwhile is another writer's, never replaced.

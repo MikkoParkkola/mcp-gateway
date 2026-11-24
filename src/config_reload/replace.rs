@@ -9,7 +9,7 @@
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
 //! accepted the new bytes, and puts the original back on a refused reload; a
-//! failed write never replaced the file, so it only drops the journal. A crash
+//! failed write never replaced the file, so it drops the journal and staged copy. A crash
 //! anywhere is recovered by the next holder of the config lock.
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
