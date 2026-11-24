@@ -109,8 +109,20 @@ fn p8_every_existing_member_is_unchanged() {
         model["tool_policy"]["deny"][0],
         json!({
             "entry": "srv:delete_*", "path": "security.tool_policy.deny[0]",
-            "overridden_by": [], "partly_overridden_by": ["security.tool_policy.allow[1]"],
+            "overridden_by": [],
+            "partly_overridden_by": [
+                "security.tool_policy.allow[0]",
+                "security.tool_policy.allow[1]",
+                "security.tool_policy.allow[2]",
+            ],
         })
+    );
+    assert_eq!(
+        model["tool_policy"]["default_denies"][0]["partly_overridden_by"],
+        json!([
+            "security.tool_policy.allow[0]",
+            "security.tool_policy.allow[2]"
+        ])
     );
     assert_eq!(
         model["tool_policy"]["allow"][2],

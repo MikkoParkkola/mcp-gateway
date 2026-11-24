@@ -275,7 +275,10 @@ fn p1_each_rule_carries_its_id_hits_and_exception_count() {
     assert_eq!(cells(&model["finding_rules"][0]), json!([ids.a, 3, 2, 2]));
     // A's record 49 hours ago is outside; B's 0 sits beside its 1.
     assert_eq!(cells(&model["finding_rules"][1]), json!([ids.b, 0, 1, 0]));
-    assert_eq!(cells(&policy["deny"][0]), json!([ids.deny, 1, 0, 1]));
+    // The coverage judge counts a prefix on `server:tool` too, so every allow
+    // here partly overrides the deny (all three), and the two that can meet
+    // a call of `write_file` partly override the built-in.
+    assert_eq!(cells(&policy["deny"][0]), json!([ids.deny, 1, 0, 3]));
     assert_eq!(cells(&policy["allow"][0]), json!([ids.read, 1, 0, 0]));
     assert_eq!(cells(&policy["allow"][1]), json!([ids.tmp, 0, 0, 0]));
     assert_eq!(
@@ -285,7 +288,7 @@ fn p1_each_rule_carries_its_id_hits_and_exception_count() {
     assert_eq!(policy["default_denies"][0]["name"], "write_file");
     assert_eq!(
         cells(&policy["default_denies"][0]),
-        json!([ids.write_builtin, 0, 1, 1])
+        json!([ids.write_builtin, 0, 1, 2])
     );
     assert_eq!(model["hits"], whole_read_hits());
     let all = [
