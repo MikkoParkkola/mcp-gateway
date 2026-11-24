@@ -279,29 +279,13 @@ pub(super) struct Staged {
 
 /// The synced scratch's identity, taken by path (nothing else touches the
 /// scratch), and the exact bytes `write_atomic` wrote and synced into it.
-#[cfg(not(unix))]
 pub(super) fn stage(target: &Path, scratch: &Path, bytes: &[u8]) -> Option<Staged> {
-    stage_from(target, bytes, || open_shared(scratch))
-}
-
-/// As `stage`, but holding a clone of the writer's own descriptor: on unix
-/// the scratch is mode 0000 until it settles, so no reopen by name works.
-#[cfg(unix)]
-pub(super) fn stage_held(target: &Path, scratch: &File, bytes: &[u8]) -> Option<Staged> {
-    stage_from(target, bytes, || scratch.try_clone())
-}
-
-fn stage_from(
-    target: &Path,
-    bytes: &[u8],
-    hold: impl FnOnce() -> io::Result<File>,
-) -> Option<Staged> {
     let dir = key(target.parent()?);
     let mut armed = ARMED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let overlay = armed.as_mut()?.get_mut(&dir)?;
-    let held = hold().expect("crash_fs: hold scratch");
+    let held = open_shared(scratch).expect("crash_fs: hold scratch");
     let generation = file_id(&held).expect("crash_fs: scratch identity");
     // The scratch's bytes were synced before this call: durable now, under
     // its own generation, and held so the identity cannot be reused, even if

@@ -3,6 +3,7 @@
 //! The scratch-and-rename writer: claim an owner-only scratch name next to
 //! the target, write and sync it, then rename it over the target.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -61,15 +62,27 @@ pub(super) fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
 /// rename replaces whatever entry is there, so a symlink planted at the
 /// target since is replaced, never followed to another file.
 pub(super) fn write_yaml_at(path: &Path, yaml: &str) -> Result<(), String> {
-    // The shared writer, so a config save keeps its owner or refuses as every
-    // other save does; owner-only, and a link at `path` is replaced.
-    super::write_atomic(
-        path,
-        yaml.as_bytes(),
-        super::FileMode::Private,
-        super::Symlink::Replace,
-    )
-    .map_err(|e| format!("Failed to save config {}: {e}", path.display()))
+    let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
+
+    // Leave no debris behind on any failure. The scratch name is unique per
+    // call, so without cleanup each failure would strand one more file next to
+    // the config instead of reusing a single stale one.
+    let cleanup = |e: &std::io::Error, what: &str| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to {what} config: {e}")
+    };
+
+    // Write through the handle the exclusive create returned. Reopening by
+    // path would reopen the gap the exclusive create just closed.
+    let written = file
+        .write_all(yaml.as_bytes())
+        .and_then(|()| file.sync_all());
+    // Close before cleanup: Windows cannot delete a file held open without
+    // delete sharing.
+    drop(file);
+    written.map_err(|e| cleanup(&e, "write temp"))?;
+
+    rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
 
 /// Create `path`, refusing a name already in use, with access limited to this
@@ -148,7 +161,6 @@ pub(crate) fn create_private_replacing(path: &Path) -> std::io::Result<std::fs::
 ///
 /// Returns an error when every candidate name is taken, or on any I/O failure
 /// other than a collision.
-#[cfg(test)]
 pub(super) fn create_scratch_exclusive(
     path: &Path,
     first: u64,

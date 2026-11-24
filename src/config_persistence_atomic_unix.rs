@@ -1,16 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The shared atomic writer on unix. A save keeps the replaced file's owner
-//! (or refuses `foreign-owner`), never widens its group or mode, writes into
-//! a scratch nobody else can open, and refuses `target-changed` when another
-//! process swaps or alters the file, or the scratch, before the rename.
+//! The shared atomic writer on unix: how a replacement takes the target's
+//! group and mode.
 
-use std::fs::File;
-use std::io::{self, Write as _};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
-
-use super::FileMode;
 
 /// Whether the scratch ended up in the target's group.
 #[cfg(unix)]
@@ -57,366 +50,46 @@ pub(super) fn inherit_mode(target_mode: u32, gid: GidMatch, acl: AclPresence) ->
     }
 }
 
-/// A save the writer turned down before anything was replaced: the code a
-/// caller matches on, and the sentence the user reads.
-#[derive(Debug)]
-pub(crate) struct WriterRefusal {
-    pub(crate) code: &'static str,
-    text: String,
-}
-
-impl std::fmt::Display for WriterRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.text)
-    }
-}
-
-impl std::error::Error for WriterRefusal {}
-
-fn refusal(code: &'static str, text: String) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        WriterRefusal { code, text },
-    )
-}
-
-/// Another process swapped or altered the file being replaced, or the new
-/// copy, while the save was in progress.
-fn changed(target: &Path) -> io::Error {
-    let shown = target.display();
-    refusal(
-        "target-changed",
-        format!(
-            "target-changed: refused to replace {shown}: another process replaced or changed \
-             the file during the save. Nothing was written. Save again to write the new \
-             contents."
-        ),
-    )
-}
-
-/// The file belongs to someone else and this process may not hand a new
-/// file to them.
-fn foreign_owner(target: &Path, owner: u32) -> io::Error {
-    let shown = target.display();
-    let me = rustix::process::geteuid().as_raw();
-    refusal(
-        "foreign-owner",
-        format!(
-            "foreign-owner: refused to replace {shown}: the file belongs to uid {owner}, but \
-             this gateway runs as uid {me}. Nothing was written. To save it, run the gateway \
-             as uid {owner}, or hand the file to uid {me} (chown {me} {shown})."
-        ),
-    )
-}
-
-/// macOS: the writer cannot open the file for reading, so it cannot check
-/// what access the file grants (its access control list) and will not guess.
-#[cfg(target_os = "macos")]
-fn unreadable(target: &Path) -> io::Error {
-    let shown = target.display();
-    let me = rustix::process::geteuid().as_raw();
-    refusal(
-        "acl-not-kept",
-        format!(
-            "acl-not-kept: refused to replace {shown}: this gateway cannot read the file to \
-             check its access control list. Nothing was written. To save it, give uid {me} \
-             read access to the file."
-        ),
-    )
-}
-
-/// The flags of the one look at the target: never through a link, and never
-/// waiting on a FIFO. Linux needs no read access for it (`O_PATH`); macOS
-/// opens for events only, which does need read access.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const LOOK: i32 =
-    (rustix::fs::OFlags::PATH.bits() | rustix::fs::OFlags::NOFOLLOW.bits()).cast_signed();
-#[cfg(target_os = "macos")]
-const LOOK: i32 = libc::O_EVTONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK;
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-const LOOK: i32 =
-    (rustix::fs::OFlags::NOFOLLOW.bits() | rustix::fs::OFlags::NONBLOCK.bits()).cast_signed();
-
-/// What the writer knows of the file a save replaces (or a backup copies):
-/// owner, group, mode and identity, all from one look. The identity pins the
-/// file: it is compared again just before the rename.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Model {
-    uid: u32,
-    gid: u32,
-    mode: u32,
-    dev: u64,
-    ino: u64,
-}
-
-impl Model {
-    fn of(meta: &std::fs::Metadata) -> Self {
-        Self {
-            uid: meta.uid(),
-            gid: meta.gid(),
-            mode: meta.mode() & 0o7777,
-            dev: meta.dev(),
-            ino: meta.ino(),
-        }
-    }
-}
-
-/// Step 1: the regular file at `target`, or `None` when nothing is there or
-/// a link is (a link is replaced, never modelled). Any other failure to look
-/// is returned: a file the writer cannot inspect is not an absent one.
-fn model_at(target: &Path) -> io::Result<Option<Model>> {
-    #[cfg(test)]
-    if let Some(forced) = seams::open_error(target) {
-        return Err(forced);
-    }
-    let looked = File::options().read(true).custom_flags(LOOK).open(target);
-    let file = match looked {
-        Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        // A no-follow open of a link fails with ELOOP off Linux; only a path
-        // confirmed to be a link takes the no-model path.
-        Err(e) if e.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
-            return match std::fs::symlink_metadata(target) {
-                Ok(meta) if meta.file_type().is_symlink() => Ok(None),
-                _ => Err(e),
-            };
-        }
-        #[cfg(target_os = "macos")]
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Err(unreadable(target)),
-        Err(e) => return Err(e),
-    };
-    let meta = file.metadata()?;
-    Ok(meta.is_file().then(|| Model::of(&meta)))
-}
-
-/// Step 2: a file another user owns is saved only by a process that may give
-/// the new file to that user (root); anyone else is turned away here, before
-/// a scratch exists.
-fn owner_allows(target: &Path, model: &Model) -> io::Result<()> {
-    let euid = rustix::process::geteuid();
-    if model.uid == euid.as_raw() || euid.is_root() {
-        Ok(())
-    } else {
-        Err(foreign_owner(target, model.uid))
-    }
-}
-
-/// One save in progress: where it goes, its scratch, and the model it keeps
-/// (taken from `model_path`: the target for a save, the source for a backup).
-struct Save<'a> {
-    target: &'a Path,
-    scratch: &'a Path,
-    model_path: &'a Path,
-    mode: FileMode,
-    model: Option<&'a Model>,
-}
-
-/// What the new copy was settled to; step 9 checks it is still that.
-struct Settled {
-    uid: u32,
-    gid: Option<u32>,
-    mode: Option<u32>,
-}
-
-/// Replace `target` with `bytes`: look once and pin, check the owner, write
-/// into a mode-0000 scratch, run `check`, settle the scratch's owner, group
-/// and mode, verify the scratch and the target, then rename. A refusal leaves
-/// the target as it was and no scratch behind.
-pub(super) fn write(
+/// Narrow the open scratch to the target's mode, never wider (unix,
+/// `Inherit` over an existing target only). Runs after the bytes are written
+/// and synced: the scratch was created private, so the bytes are never in a
+/// wider file. Order is fixed: `fchown` first, then `chmod`, never the other
+/// way round — the mode is only meaningful once the group is settled.
+#[cfg(unix)]
+pub(super) fn apply_inherited_mode(
+    scratch: &std::fs::File,
     target: &Path,
-    bytes: &[u8],
-    mode: FileMode,
-    observe: impl FnOnce(&File),
-    check: impl FnOnce() -> io::Result<()>,
-) -> io::Result<()> {
-    let model = model_at(target)?;
-    if let Some(model) = &model {
-        owner_allows(target, model)?;
-    }
-    // Closed from creation whenever the bytes must not sit in a wider file;
-    // an `Inherit` file with nothing to inherit from keeps the default create.
-    let create = if model.is_some() || mode == FileMode::Private {
-        super::ScratchCreate::Closed
-    } else {
-        super::ScratchCreate::Default
+    target_meta: &std::fs::Metadata,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    // Take the target's group when the process may; a refusal only narrows
+    // what the chmod below keeps, and is never an error of the write.
+    #[cfg(test)]
+    seams::event(target, "chown");
+    let gid = match std::os::unix::fs::fchown(scratch, None, Some(target_meta.gid())) {
+        Ok(()) => GidMatch::Matched,
+        Err(_) => GidMatch::Unmatched,
     };
-    let (mut file, scratch) =
-        super::create_scratch(target, super::super::next_scratch_seed(), create)?;
-    let save = Save {
-        target,
-        scratch: &scratch,
-        model_path: target,
-        mode,
-        model: model.as_ref(),
-    };
-    let filled = fill(&save, &mut file, bytes, observe, check);
-    finish(&save, file, filled, bytes)
-}
-
-/// A backup of `src` at `dst`, made like a save with the source as the model:
-/// its bytes and its model come from one descriptor, and a link at `dst` is
-/// replaced, not followed.
-pub(super) fn copy(src: &Path, dst: &Path) -> io::Result<()> {
-    use std::io::Read as _;
-    let src = std::fs::canonicalize(src)?;
-    let source = File::open(&src)?;
-    let model = Model::of(&source.metadata()?);
-    owner_allows(dst, &model)?;
-    #[cfg(test)]
-    seams::after_model(&src, dst);
-    let mut bytes = Vec::new();
-    (&source).read_to_end(&mut bytes)?;
-    let (mut file, scratch) = super::create_scratch(
-        dst,
-        super::super::next_scratch_seed(),
-        super::ScratchCreate::Closed,
-    )?;
-    let save = Save {
-        target: dst,
-        scratch: &scratch,
-        model_path: &src,
-        mode: FileMode::Inherit,
-        model: Some(&model),
-    };
-    let filled = fill(&save, &mut file, &bytes, |_| {}, || Ok(()));
-    finish(&save, file, filled, &bytes)
-}
-
-/// Steps 4 to 9 on the open scratch.
-fn fill(
-    save: &Save<'_>,
-    file: &mut File,
-    bytes: &[u8],
-    observe: impl FnOnce(&File),
-    check: impl FnOnce() -> io::Result<()>,
-) -> io::Result<()> {
-    #[cfg(test)]
-    seams::first_write(save.target, file);
-    #[cfg(test)]
-    seams::event(save.target, "write");
-    file.write_all(bytes)?;
-    #[cfg(test)]
-    seams::event(save.target, "sync");
-    file.sync_all()?;
-    observe(file);
-    #[cfg(test)]
-    seams::event(save.target, "check");
-    check()?;
-    let settled = settle(save, file)?;
-    #[cfg(test)]
-    seams::before_verify(save.target, save.scratch);
-    verify(save, file, &settled)
-}
-
-/// Rename a filled scratch into place, then close it; on any failure remove
-/// whatever stands at the scratch's name and return the error.
-fn finish(save: &Save<'_>, file: File, filled: io::Result<()>, bytes: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    let staged = filled
-        .is_ok()
-        .then(|| super::super::crash_fs::stage_held(save.target, &file, bytes))
-        .flatten();
-    #[cfg(not(test))]
-    let _ = bytes;
-    let renamed = filled.and_then(|()| super::super::rename_with_retry(save.scratch, save.target));
-    drop(file);
-    if let Err(e) = renamed {
-        let _ = std::fs::remove_file(save.scratch);
-        return Err(e);
-    }
-    #[cfg(test)]
-    if let Some(staged) = staged {
-        super::super::crash_fs::bind(save.target, staged);
-    }
-    Ok(())
-}
-
-/// Steps 7 and 8: owner, then group, then mode, so no later ownership change
-/// can clear a bit the mode step set. A private file is owner-only; an
-/// inherited one is never wider than the model (`inherit_mode`).
-fn settle(save: &Save<'_>, file: &File) -> io::Result<Settled> {
-    let euid = rustix::process::geteuid().as_raw();
-    let Some(model) = save.model else {
-        return Ok(match save.mode {
-            FileMode::Private => {
-                set_mode(save, file, 0o600)?;
-                Settled {
-                    uid: euid,
-                    gid: None,
-                    mode: Some(0o600),
-                }
-            }
-            // Nothing to inherit from: the default create's own access.
-            FileMode::Inherit => Settled {
-                uid: euid,
-                gid: None,
-                mode: None,
-            },
-        });
-    };
-    if model.uid != euid {
-        #[cfg(test)]
-        seams::event(save.target, "chown");
-        std::os::unix::fs::fchown(file, Some(model.uid), None)
-            .map_err(|_| foreign_owner(save.target, model.uid))?;
-    }
-    let (mode, gid) = match save.mode {
-        FileMode::Private => (0o600, None),
-        FileMode::Inherit => {
-            #[cfg(test)]
-            seams::event(save.target, "chown");
-            // The group when the process may take it; without it the mode
-            // keeps the owner bits only.
-            let gid = match std::os::unix::fs::fchown(file, None, Some(model.gid)) {
-                Ok(()) => GidMatch::Matched,
-                Err(_) => GidMatch::Unmatched,
-            };
-            // A model file that cannot be opened for the probe counts as
-            // carrying an ACL; the probe never waits on a FIFO.
-            let acl = match crate::open_nonblocking::open_nonblocking(save.model_path) {
-                Ok(model_file) => acl_presence(&model_file, file),
-                Err(_) => AclPresence::PresentOrUnknown,
-            };
-            let matched = (gid == GidMatch::Matched).then_some(model.gid);
-            (inherit_mode(model.mode, gid, acl), matched)
+    // An ACL on either file can widen the group bits past the mode; a target
+    // that cannot be opened for the probe counts as widened.
+    // Only a regular file is opened for the probe, and without waiting: a path
+    // swapped for a FIFO after the stat must not block the save.
+    let acl = if target_meta.is_file() {
+        match crate::open_nonblocking::open_nonblocking(target) {
+            Ok(target) => acl_presence(&target, scratch),
+            Err(_) => AclPresence::PresentOrUnknown,
         }
-    };
-    set_mode(save, file, mode)?;
-    Ok(Settled {
-        uid: model.uid,
-        gid,
-        mode: Some(mode),
-    })
-}
-
-fn set_mode(save: &Save<'_>, file: &File, mode: u32) -> io::Result<()> {
-    #[cfg(test)]
-    seams::event(save.target, "chmod");
-    #[cfg(not(test))]
-    let _ = save;
-    file.set_permissions(std::fs::Permissions::from_mode(mode))
-}
-
-/// Step 9: the scratch, read through its own descriptor, is still what the
-/// save settled; the model file, read again by name, is still the file that
-/// was modelled, unchanged; and the scratch's name still names this scratch.
-/// Anything else is another writer's work, and the save refuses.
-fn verify(save: &Save<'_>, file: &File, settled: &Settled) -> io::Result<()> {
-    let now = file.metadata()?;
-    let scratch_as_settled = now.uid() == settled.uid
-        && settled.gid.is_none_or(|gid| now.gid() == gid)
-        && settled.mode.is_none_or(|mode| now.mode() & 0o7777 == mode);
-    let model_unchanged = save.model.is_none_or(|model| {
-        std::fs::symlink_metadata(save.model_path)
-            .is_ok_and(|meta| meta.is_file() && Model::of(&meta) == *model)
-    });
-    let name_unchanged = std::fs::symlink_metadata(save.scratch)
-        .is_ok_and(|at| (at.dev(), at.ino()) == (now.dev(), now.ino()));
-    if scratch_as_settled && model_unchanged && name_unchanged {
-        Ok(())
     } else {
-        Err(changed(save.target))
-    }
+        AclPresence::PresentOrUnknown
+    };
+    #[cfg(test)]
+    seams::event(target, "chmod");
+    scratch.set_permissions(std::fs::Permissions::from_mode(inherit_mode(
+        target_meta.mode() & 0o7777,
+        gid,
+        acl,
+    )))
 }
 
 /// Whether either file carries an access ACL that can widen the group bits

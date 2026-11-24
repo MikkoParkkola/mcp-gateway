@@ -176,11 +176,6 @@ pub(crate) enum ReplaceError {
     Stage(String),
     /// Writing the new bytes failed; the original is back.
     Write(String),
-    /// The shared writer turned the save down before replacing anything:
-    /// another user owns gateway.yaml, or another process changed it during
-    /// the save. Its code and sentence name only the file and user ids, so a
-    /// route may show them as they are.
-    WriterRefused { code: &'static str, text: String },
     /// The reload refused the new bytes, or the check of them before any
     /// entry or write did; the original stands.
     ReloadRefused { class: RefusalClass, reason: String },
@@ -332,7 +327,6 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
-        | ReplaceError::WriterRefused { .. }
         | ReplaceError::ReloadRefused { .. } => Settle::Discard,
         // The file on disk may name them; `Failed` proves nothing either way.
         ReplaceError::RollbackFailed { .. }
@@ -639,11 +633,10 @@ impl ReloadContext {
         // gateway.yaml is owner-only, as every config write leaves it.
         if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
             unkeep();
-            let error = match crate::config_persistence::writer_refusal(&e) {
-                Some((code, text)) => ReplaceError::WriterRefused { code, text },
-                None => ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
-            };
-            return Err(Self::roll_back(target, error));
+            return Err(Self::roll_back(
+                target,
+                ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+            ));
         }
         #[cfg(test)]
         order::record(target, "commit");

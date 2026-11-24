@@ -444,7 +444,6 @@ pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
         | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
-        | ReplaceError::WriterRefused { .. }
         | ReplaceError::RollbackFailed { .. }
         | ReplaceError::Unconfirmed { .. }
         | ReplaceError::Secrets(_)
