@@ -176,7 +176,8 @@ fn agent_legs() {
 }
 
 /// XPORT.2: while an A2A server has its own card path, an address on another
-/// scheme, host or port (or one that does not parse) is refused with the gateway.yaml sentence and the
+/// scheme, host or port (or one that does not parse), sent as an address or
+/// as an agent transport, is refused with the gateway.yaml sentence and the
 /// server stays as stored; the default card path may move anywhere, and its
 /// own path may move within the same origin.
 #[cfg(feature = "a2a")]
@@ -193,12 +194,17 @@ fn xport2_an_own_card_path_never_follows_the_address_to_another_origin() {
         "https://agent.example:8443",
         "agent.example",
     ];
-    for address in moves {
+    let agent_move = TransportConfig::A2a {
+        a2a_url: "https://other.example/a2a".into(),
+        a2a_agent_card_path: None,
+    };
+    let sent = moves.map(|address| (address, TransportConfig::for_url(address)));
+    for (address, new) in sent.into_iter().chain([("an agent transport", agent_move)]) {
         let mut cfg = empty_config();
         add_backend(&mut cfg, "svc", agent(own), String::new(), HashMap::new()).unwrap();
         let before = serde_json::to_value(&cfg.backends["svc"]).unwrap();
         let change = BackendUpdate {
-            transport: Some(TransportConfig::for_url(address)),
+            transport: Some(new),
             ..Default::default()
         };
         let refused = update_backend(&mut cfg, "svc", change).unwrap_err();
