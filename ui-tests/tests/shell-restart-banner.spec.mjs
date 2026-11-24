@@ -61,7 +61,16 @@ async function go(page, path) {
 /** Resolves when the next gateway read has its answer. */
 const gatewayAnswer = (page) => page.waitForResponse((r) => new URL(r.url()).pathname === '/ui/api/gateway');
 
-/** Two frames: time for an answer that has arrived to be drawn, or dropped. */
+/** The banner's check time, to the millisecond: every drawn read changes it. */
+const checkedAt = (page) => banner(page).locator('time').getAttribute('datetime');
+
+/** Resolves once a read newer than `before` has been drawn into the banner. */
+const drawnAfter = (page, before) => expect.poll(() => checkedAt(page)).not.toBe(before);
+
+/**
+ * Two frames: time for an answer that has arrived to be dropped. Only where
+ * nothing is drawn (an absent banner, a dropped answer), so no signal exists.
+ */
 const settle = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
 async function open(page, path = '/ui/overview/status') {
@@ -146,13 +155,14 @@ test('B4 a page error and the restart banner are both shown, each once', async (
   await expect(page.locator('#content [data-state="error"]')).toHaveCount(1);
   await expect(banner(page)).toHaveCount(1);
   // Away and back: each route change reads the banner again and redraws the page.
+  // Counted only once the read on the way back is drawn, so a second copy
+  // drawn by that read is seen.
+  const start = await checkedAt(page);
   await go(page, '/ui/tools/status');
-  // Counted only once the read on the way back is answered and drawn, so a
-  // second copy drawn by that read is seen.
-  const read = gatewayAnswer(page);
+  await drawnAfter(page, start);
+  const away = await checkedAt(page);
   await go(page, '/ui/overview/status');
-  await read;
-  await settle(page);
+  await drawnAfter(page, away);
   await expect(page.locator('#content [data-state="error"]')).toHaveCount(1);
   await expect(banner(page)).toHaveCount(1);
 });
@@ -171,10 +181,9 @@ test('B5 the banner is announced once across three reads', async ({ page }) => {
   await expect(banner(page)).toHaveCount(1);
   // Two more reads, each answered and drawn before the count.
   for (const path of ['/ui/tools/status', '/ui/servers/status']) {
-    const read = gatewayAnswer(page);
+    const before = await checkedAt(page);
     await go(page, path);
-    await read;
-    await settle(page);
+    await drawnAfter(page, before);
   }
   await page.evaluate(async (url) => (await import(url)).announcerIdle(), await shellModuleUrl(page));
   const said = await page.evaluate(() => window.__said.join(' '));
@@ -217,10 +226,9 @@ test('B7 the copy button comes after the top bar in the tab order and confirms i
   expect(await page.evaluate(() => window.__copied)).toEqual([COMMAND]);
   // A read with the same content keeps the button, and the focus on it.
   await keyRoutes(page);
-  const read = gatewayAnswer(page);
+  const before = await checkedAt(page);
   await write(page, 'POST', '/ui/api/keys');
-  await read;
-  await settle(page);
+  await drawnAfter(page, before);
   await expect(button).toBeFocused();
 });
 
@@ -253,6 +261,19 @@ test('B8 a member and an auditor see no banner and no error, and never ask for t
     await expect(page.locator('#content [data-state="error"], [role="alert"]')).toHaveCount(0);
     expect(state.asked, 'the admin-only read is never asked for by another key').toBe(0);
   }
+});
+
+test('B10 an admin whose session ends on a write (401) loses the banner and sends no further read', async ({ page }) => {
+  const state = await gatewayRoute(page, ONE);
+  await page.route('**/ui/api/keys', (r) => r.fulfill({ status: 401, json: { error: 'unauthorized' } }));
+  await open(page);
+  await expect(banner(page)).toHaveCount(1);
+  const asked = state.asked;
+  await write(page, 'POST', '/ui/api/keys').catch(() => {}); // api() throws on the 401
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(banner(page)).toHaveCount(0);
+  await settle(page);
+  expect(state.asked, 'a read was sent after the session ended').toBe(asked);
 });
 
 test('B9 reads answered out of order: the newer answer wins, across a create and a revoke', async ({ page }) => {
