@@ -270,7 +270,22 @@ fn h4_header_values_duplicate_names_a_bad_url_and_a_stray_override_are_refused_b
         }
     });
     assert_eq!(checked, 8, "the cases did not all run");
+    // A log record escapes control characters, so each bad value is looked
+    // for raw and in the escaped spellings a record can carry.
+    // Each value as written, as a record may escape it (JSON), as a field may
+    // format it (Debug), and that Debug text escaped again.
+    let json = |s: &str| {
+        serde_json::to_string(s)
+            .expect("a string")
+            .trim_matches('"')
+            .to_owned()
+    };
+    let mut forms = Vec::new();
     for value in [TOKEN, "a\nb", "a\u{0}b"] {
+        let debug = format!("{value:?}").trim_matches('"').to_owned();
+        forms.extend([value.to_owned(), json(value), json(&debug), debug]);
+    }
+    for value in &forms {
         assert!(
             !logs.iter().any(|r| r.to_string().contains(value)),
             "{value:?} reached the log"
