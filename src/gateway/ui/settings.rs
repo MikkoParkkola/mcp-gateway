@@ -307,13 +307,14 @@ pub(super) async fn settings_save(
             state.transparency_log.clone(),
             GatewayAuth::of(state.live_config.running().auth.enabled),
         );
+        let audited = posture.requires_audit();
         let who =
             super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
         let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
         let answer = ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await;
         answered = (answer.outcome, answer.intent_id.map(|id| id.0));
         match answer.result {
-            Ok(saved) => saved_answer(&saved, &fields, &live, &config_path),
+            Ok(saved) => saved_answer(&saved, &fields, &live, &config_path, audited),
             Err(refusal) => answer_for(refusal, &fields),
         }
     }
@@ -336,18 +337,40 @@ fn attach_outcome(response: &mut Response, outcome: SaveOutcome, intent_id: Opti
         .insert(super::admin_audit::AuditDetail(detail));
 }
 
+/// A saved answer's notice: its code and sentence. Both can stand on one
+/// save, so they share one `notices` array.
+pub(super) const OUTSIDE_CHANGE_APPLIED: (&str, &str) = (
+    "OUTSIDE_CHANGE_APPLIED",
+    "this save's reload also loaded edits someone made to gateway.yaml outside the UI; see the reload for any that wait for a restart",
+);
+/// The save of a gateway with auth off and no audit log: it goes ahead with
+/// no record, and says so.
+pub(super) const NOT_AUDITED: (&str, &str) = (
+    "NOT_AUDITED",
+    "no audit record was written: this gateway has auth off and no audit log",
+);
+
 /// The answer to a completed save, with the restart keys while one is pending.
 fn saved_answer(
     saved: &UiSaved,
     fields: &[&str],
     live: &crate::config_reload::LiveConfig,
     config_path: &std::path::Path,
+    audited: bool,
 ) -> Response {
     let pending = saved.reload.restart_required;
+    let notices: Vec<serde_json::Value> = [
+        (saved.outside_change, OUTSIDE_CHANGE_APPLIED),
+        (!audited, NOT_AUDITED),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, (code, message))| json!({"code": code, "message": message}))
+    .collect();
     let mut body = json!({
         "revision": saved.revision.as_str(), "changed": saved.changed,
         "restart_required": restart_fields(fields, &saved.reload),
-        "reload": saved.reload, "comments": "kept",
+        "reload": saved.reload, "comments": "kept", "notices": notices,
     });
     // A restart would boot the published config.
     let refusal = pending

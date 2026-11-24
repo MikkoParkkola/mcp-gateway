@@ -158,6 +158,18 @@ impl ReloadContext {
         path: &std::path::Path,
         source: Source,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
+        let applied = self.reload_applied_at(path, source).await;
+        applied.map(|(outcome, _)| outcome)
+    }
+
+    /// [`Self::reload_outcome_locked_at`], and whether the reload published an
+    /// effective change: the patch's own predicate, never its summary text.
+    /// Crate-private, so the public `ReloadOutcome` keeps its shape.
+    pub(super) async fn reload_applied_at(
+        &self,
+        path: &std::path::Path,
+        source: Source,
+    ) -> std::result::Result<(ReloadOutcome, bool), ReloadRefusal> {
         // Audits the overrides the registry holds however this ends: applied,
         // refused, or dropped at an await after registering backends.
         let _audit = (self.reporting.override_audit.as_deref()).map(|a| a.guard(&self.registry));
@@ -165,8 +177,9 @@ impl ReloadContext {
         // this, which is `lock_reload`'s (design D-1).
         let mut slot = crate::config_reload::history::RecordSlot::take(&self.live_config).await;
         let mut judged = None;
+        let mut applied = false;
         let outcome = self
-            .reload_transaction(path, source.clone(), &mut slot, &mut judged)
+            .reload_transaction(path, source.clone(), &mut slot, &mut judged, &mut applied)
             .await;
         let refusals = &self.reporting.refusals;
         match &outcome {
@@ -232,7 +245,7 @@ impl ReloadContext {
             }
         }
         slot.finish().await;
-        outcome
+        outcome.map(|outcome| (outcome, applied))
     }
 
     /// Note what a lock recovery did, then pay an owed reload of `target`,

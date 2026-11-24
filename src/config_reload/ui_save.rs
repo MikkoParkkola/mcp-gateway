@@ -61,6 +61,9 @@ pub(crate) struct UiSaved {
     pub(crate) revision: FileRevision,
     /// Whether the bytes changed.
     pub(crate) changed: bool,
+    /// No byte of this save changed, yet its reload applied a change: an edit
+    /// made outside the UI that the save's reload took up (WRITE.3).
+    pub(crate) outside_change: bool,
     pub(crate) reload: ReloadOutcome,
 }
 
@@ -218,12 +221,12 @@ pub(crate) async fn ui_save(
         .await
         {
             Ok(outcome) => {
-                // Applied from the reload's own signal arrives with WRITE.3.
-                let answer = Ok((outcome.revision.is_some(), false));
+                let answer = Ok((outcome.revision.is_some(), outcome.reload_applied));
                 let word = save_outcome(answer, &super::Trace::default());
                 traced = Some((word, outcome.intent_id.clone()));
                 return Ok(UiSaved {
                     changed: outcome.revision.is_some(),
+                    outside_change: outcome.revision.is_none() && outcome.reload_applied,
                     revision: outcome.revision.unwrap_or(base),
                     reload: match outcome.reload {
                         super::ReplaceReload::Applied(reload) => reload,

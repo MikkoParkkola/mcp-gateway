@@ -515,6 +515,7 @@ impl ReloadContext {
         source: Source,
         slot: &mut crate::config_reload::history::RecordSlot,
         judged: &mut Option<super::live_config::FirstKeyWait>,
+        applied: &mut bool,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;

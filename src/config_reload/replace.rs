@@ -147,6 +147,9 @@ pub(crate) struct ReplaceOutcome {
     /// The entry hash of the intent this write appended; `None` without an
     /// audit log. The id a request's admin action carries.
     pub(crate) intent_id: Option<IntentId>,
+    /// Whether the write's reload published an effective change. The bytes
+    /// alone cannot say: an unchanged save's reload can take up an outside edit.
+    pub(crate) reload_applied: bool,
 }
 
 /// Why nothing was applied. Every kind but `RollbackFailed` and
@@ -589,13 +592,13 @@ impl ReloadContext {
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
             // The principal arrives with its own row (H8).
-            let reload = self
-                .reload_outcome_locked_at(target, source)
-                .await
-                .map_err(|refusal| ReplaceError::ReloadRefused {
-                    class: post_write_class(&refusal),
-                    reason: refusal.text,
-                })?;
+            let (reload, reload_applied) =
+                self.reload_applied_at(target, source)
+                    .await
+                    .map_err(|refusal| ReplaceError::ReloadRefused {
+                        class: post_write_class(&refusal),
+                        reason: refusal.text,
+                    })?;
             #[cfg(test)]
             self.record_write_reload();
             return Ok(ReplaceOutcome {
@@ -604,6 +607,7 @@ impl ReloadContext {
                 reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
                 intent_id: None,
+                reload_applied,
             });
         }
         self.commit(
@@ -691,7 +695,7 @@ impl ReloadContext {
         #[cfg(test)]
         order::record(target, "commit");
         // The principal arrives with its own row (H8).
-        let reloaded = self.reload_outcome_locked_at(target, source).await;
+        let reloaded = self.reload_applied_at(target, source).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.
@@ -708,11 +712,11 @@ impl ReloadContext {
                 &entries.trace,
             ));
         }
-        let reload = match reloaded {
-            Ok(reload) => {
+        let (reload, reload_applied) = match reloaded {
+            Ok((reload, applied)) => {
                 #[cfg(test)]
                 self.record_write_reload();
-                ReplaceReload::Applied(reload)
+                (ReplaceReload::Applied(reload), applied)
             }
             // The operator's option B1 (ADR-024, amended): a first key the
             // question held is refused by the reload for its status change
@@ -723,10 +727,12 @@ impl ReloadContext {
                 if status_change == StatusChange::HoldForRestart
                     && refusal.kind == super::lock_api::ReloadRefusalKind::StatusChange =>
             {
-                ReplaceReload::HeldForRestart {
+                let held = ReplaceReload::HeldForRestart {
                     refusal: refusal.text,
                     keys: refusal.waiting,
-                }
+                };
+                // Held for the next start: nothing published now.
+                (held, false)
             }
             Err(refusal) => {
                 unkeep();
@@ -757,6 +763,7 @@ impl ReloadContext {
             reload,
             secrets: Vec::new(),
             intent_id: None,
+            reload_applied,
         })
     }
 

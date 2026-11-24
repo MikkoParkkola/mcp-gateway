@@ -399,3 +399,28 @@ fn every_writer_answer_has_one_save_outcome() {
         assert_eq!(outcome.as_str(), word);
     }
 }
+
+/// W3 (e): the writer's applied flag comes from the reload's own patch. A
+/// no-op write whose reload took up an outside edit sets it; the same no-op
+/// write over an unedited file leaves it unset.
+#[tokio::test]
+async fn the_reload_says_whether_it_applied_a_change() {
+    use crate::config_reload::history::Source;
+    use crate::config_reload::reload_context::replace::{
+        Audit, Expected, Replaced, replace_traced,
+    };
+    use crate::config_reload::replace_test_support::to;
+    let staging: &'static str = Box::leak(BASE.replace("\"dev\"", "\"staging\"").into_boxed_str());
+    for (edited, bytes) in [(true, staging), (false, BASE)] {
+        let gw = gw_with(BASE, false, false);
+        if edited {
+            write_owner_only(&gw.path, staging).expect("hand edit");
+        }
+        let replace = to(Expected::Revision(gw.base()), bytes, Replaced::Discard);
+        let ui = Source::Ui { who: String::new() };
+        let written = replace_traced(Arc::clone(&gw.ctx), replace, Audit::Off, ui, WAIT).await;
+        let outcome = written.expect("the no-op write stands");
+        assert!(outcome.revision.is_none(), "edited {edited}: a no-op write");
+        assert_eq!(outcome.reload_applied, edited, "edited {edited}");
+    }
+}
