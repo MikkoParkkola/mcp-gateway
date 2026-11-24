@@ -1,0 +1,25 @@
+head_sha	5947233db63bf96767445d9072e98a0bf1d8cf7e
+#mutant s2f-none
+mcp_gateway	gateway::router::backend_handlers::costs::standing_route_tests::s2f_unordered_rules_are_said_in_the_route_answer	src/gateway/router/backend_handlers/costs_standing_route_tests.rs:246
+#mutant s5b-fww
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5b_two_refusals_at_once_keep_the_earlier_time	src/cost_accounting/enforcer_standing_tests.rs:207
+#mutant blk-rec
+mcp_gateway	gateway::ui::costs_standing::tests::s2_blocking_is_the_cheapest_call_refused	src/gateway/ui/costs_standing_tests.rs:57
+#mutant s5-ovr
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5_the_first_key_refusal_of_the_day_is_recorded_once	src/cost_accounting/enforcer_standing_tests.rs:59
+#mutant s7-cur
+mcp_gateway	cost_accounting::key_rate_tests::s7_rate_is_three_complete_hours_over_three	src/cost_accounting/key_rate_tests.rs:26
+#mutant s6-day
+mcp_gateway	gateway::ui::costs_standing::tests::s6_next_reset_is_the_next_local_midnight	src/gateway/ui/costs_standing_tests.rs:143
+#mutant s5d-gt
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5d_a_day_sweep_keeps_records_of_its_day_and_later	src/cost_accounting/enforcer_standing_tests.rs:127
+#mutant s5d-eq
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5d_a_day_sweep_keeps_records_of_its_day_and_later	src/cost_accounting/enforcer_standing_tests.rs:142
+#mutant s5d-all
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5d_a_day_sweep_keeps_records_of_its_day_and_later	src/cost_accounting/enforcer_standing_tests.rs:156
+#mutant s10b-zero
+mcp_gateway	gateway::router::backend_handlers::costs::standing_route_tests::s10b_each_row_carries_its_own_keys_three_hour_rate	src/gateway/router/backend_handlers/costs_standing_route_tests.rs:172
+#mutant s10b-key
+mcp_gateway	gateway::router::backend_handlers::costs::standing_route_tests::s10b_each_row_carries_its_own_keys_three_hour_rate	src/gateway/router/backend_handlers/costs_standing_route_tests.rs:177
+#mutant s5-tool
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5_the_first_key_refusal_of_the_day_is_recorded_once	src/cost_accounting/enforcer_standing_tests.rs:106
