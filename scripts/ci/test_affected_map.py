@@ -134,6 +134,7 @@ class Trace(unittest.TestCase):
 
     def test_the_trace_keeps_whole_paths(self) -> None:
         cmd = am.strace_command("/tmp/t")
+        self.assertIn("-s", cmd, "strace cuts every string at 32 bytes without -s")
         self.assertEqual(cmd[cmd.index("-s") + 1], "4096")
         self.assertIn("-f", cmd)
         self.assertIn("-y", cmd)
@@ -170,6 +171,10 @@ class Trace(unittest.TestCase):
     def test_a_file_opened_through_a_link_also_credits_its_real_name(self) -> None:
         text = '2 openat(AT_FDCWD</w/repo>, "linked/a.txt", O_RDONLY) = 3</w/repo/real/a.txt>\n'
         self.assertEqual(self.parse(text).files, {"linked/a.txt", "real/a.txt"})
+
+    def test_escaped_bytes_in_a_path_are_read_back_as_its_name(self) -> None:
+        text = '5 openat(AT_FDCWD</w/repo>, "docs/p\\303\\244iv\\303\\244 \\"q\\".md", O_RDONLY) = 3\n'
+        self.assertEqual(self.parse(text).files, {'docs/päivä "q".md'})
 
     def test_paths_outside_the_repository_are_dropped(self) -> None:
         text = '1 openat(AT_FDCWD</tmp>, "/usr/lib/libc.so", O_RDONLY) = 3</usr/lib/libc.so>\n'
@@ -255,6 +260,89 @@ class Workflow(unittest.TestCase):
         restore = next(s for s in self.steps("guard") if str(s.get("uses", "")).startswith("actions/cache/restore@"))
         self.assertEqual(restore["with"]["restore-keys"], "affected-map-")
         self.assertEqual(restore["with"]["path"], saves[0]["with"]["path"])
+
+
+def _mutants() -> list[tuple[str, str, dict]]:
+    """(name, the row class that must fail, the module attributes the mutant replaces). Each patch keeps the
+    original's signature, so only the behaviour the row guards changes."""
+    real = {name: getattr(am, name) for name in (
+        "split_heavy", "unit_record", "parse_trace", "depinfo_inputs", "group", "repo_key", "_completed_calls",
+        "should_build", "lcov_files", "results", "map_document", "unit_env")}
+
+    def one_level(prefix, members, depth, total, measure, share=None):
+        share = am.SPLIT_SHARE if share is None else share
+        if measure(prefix, members) > share * total and not (len(members) == 1 and members[0] == prefix):
+            return {k: sorted(v) for k, v in am.group(members, depth + 1).items()}
+        return {prefix: sorted(members)}
+
+    def no_pass_count(r, *a):
+        return {**real["unit_record"](r, *a), "unmapped": r.trace_rc != 0 or r.trace_text is None}
+
+    def trace_ignored(r, *a):
+        return {**real["unit_record"](r, *a), "unmapped": r.passed + r.ignored != r.listed}
+
+    def ok_calls_only(text, repo, cwd):
+        return real["parse_trace"]("\n".join(x for x in text.splitlines() if "= -1 " not in x) + "\n", repo, cwd)
+
+    def files_only(text, repo, cwd):
+        got = real["parse_trace"](text, repo, cwd)
+        return am.Access(files=got.files)
+
+    def every_input(text, repo):
+        return {k for line in text.splitlines() if ":" in line
+                for k in (am.repo_key(d, repo) for d in line.split(":", 1)[1].split()) if k}
+
+    def no_split_halves(lines):
+        return [(m.group(1), m.group(2)) for m in (am._LINE.match(x) for x in lines) if m]
+
+    return [
+        ("M1 no counter relocation", "Coverage", {"COVERAGE_RUSTFLAGS": "-C instrument-coverage"}),
+        ("M1 no continuous mode (%c)", "Coverage", {"PROFILE_NAME": "%m-%p.profraw"}),
+        ("M1 the profile outside the unit folder", "Coverage", {"unit_env": lambda d: {"LLVM_PROFILE_FILE": "x"}}),
+        ("M2 the share constant at 13%", "Weight", {"SPLIT_SHARE": 0.13}),
+        ("M2 a split that stops after one level", "Weight", {"split_heavy": one_level}),
+        ("M2 groups by the whole name", "Weight", {"group": lambda names, depth: {n: [n] for n in names}}),
+        ("M3 the pass count ignored", "Units", {"unit_record": no_pass_count}),
+        ("M4 an eighth unit key", "Units", {"unit_record": lambda *a: {**real["unit_record"](*a), "x": 1}}),
+        ("M4 a fourth map key", "Units", {"map_document": lambda *a: {**real["map_document"](*a), "x": 1}}),
+        ("M4 only the first libtest line counted", "Units",
+         {"results": lambda out: real["results"](out.split("\n")[0])}),
+        ("M5/M8 a failed or missing trace kept mapped", "Units", {"unit_record": trace_ignored}),
+        ("M5 the trace without -s 4096", "Trace", {"strace_command": lambda p: ["strace", "-f", "-y", "-o", p, "--"]}),
+        ("M5 split strace halves not joined", "Trace", {"_completed_calls": no_split_halves}),
+        ("M5 escaped path bytes kept escaped", "Trace", {"_unescape": lambda s: s}),
+        ("M5 absolute paths, no repository key", "Trace",
+         {"repo_key": lambda p, r: os.path.normpath(p) if os.path.normpath(p).startswith(r) else None}),
+        ("M6 every compile input credited", "Inputs", {"depinfo_inputs": every_input}),
+        ("M6 a function that never ran counts", "Inputs",
+         {"lcov_files": lambda t, r: real["lcov_files"](t.replace("FNDA:0,", "FNDA:1,"), r)}),
+        ("M9 failed probes dropped", "Trace", {"parse_trace": ok_calls_only}),
+        ("M9 folders and probes dropped", "Trace", {"parse_trace": files_only}),
+        ("M10 the age compared the wrong way", "Age",
+         {"should_build": lambda b, now: not real["should_build"](b, now) if b else True}),
+        ("M10 a 24-hour age", "Age", {"MAP_AGE": timedelta(hours=24)}),
+    ]
+
+
+class Mutants(unittest.TestCase):
+    """Each named mutant, applied in this process, turns its row red: the proof that the rows above can fail."""
+
+    def test_each_mutant_turns_its_row_red(self) -> None:
+        import io
+        for name, target, patch in _mutants():
+            with self.subTest(mutant=name):
+                saved = {k: getattr(am, k) for k in patch}
+                for k, v in patch.items():
+                    setattr(am, k, v)
+                try:
+                    suite = unittest.defaultTestLoader.loadTestsFromTestCase(globals()[target])
+                    outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+                finally:
+                    for k, v in saved.items():
+                        setattr(am, k, v)
+                # An assertion must fail: a mutant that only crashes the row proves nothing about what it checks.
+                self.assertTrue(outcome.failures, f"{name}: {target} had no failing assertion "
+                                f"({len(outcome.errors)} errors)")
 
 
 @unittest.skipUnless(shutil.which("strace") and sys.platform.startswith("linux"), "needs strace (Linux; Spark)")
