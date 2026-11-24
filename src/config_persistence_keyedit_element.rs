@@ -206,8 +206,8 @@ fn column(text: &str, at: usize) -> usize {
 
 /// The byte of the `]` closing a one-line inline list: after the last item
 /// (or the `[`), past spaces and commas, on the `[`'s line.
-fn closing(text: &str, list: &Node, last: Option<&Node>) -> Result<usize, ComputeRefusal> {
-    let from = last.map_or(list.bytes.end, |item| item.bytes.end);
+fn closing(text: &str, list: &Node, end_item: Option<&Node>) -> Result<usize, ComputeRefusal> {
+    let from = end_item.map_or(list.bytes.end, |item| item.bytes.end);
     let rest = &text[from..];
     let at = from + rest.len() - rest.trim_start_matches([' ', ',']).len();
     if !text[list.bytes.start..at].contains('\n') && text[at..].starts_with(']') {
@@ -269,10 +269,10 @@ pub(super) fn insert(
             // or between the brackets of an empty list.
             let spliced = match kids.last() {
                 None => format!("{}{quoted}]", &text[after_colon..close]),
-                Some(last) if i == kids.len() => format!(
+                Some(tail) if i == kids.len() => format!(
                     "{}, {quoted}{}",
-                    &text[after_colon..last.bytes.end],
-                    &text[last.bytes.end..=close]
+                    &text[after_colon..tail.bytes.end],
+                    &text[tail.bytes.end..=close]
                 ),
                 Some(_) => {
                     return Err(give_up(GiveUp::Flow, "a new item inside an inline list"));
