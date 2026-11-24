@@ -216,6 +216,33 @@ fn test_format_name() {
     assert_eq!(converter.format_name("GET /users/{id}"), "get_users_id");
 }
 
+/// The shared writer itself refuses a taken name: an `AlreadyExists` I/O
+/// error carrying the sentence, the file left byte-identical; a free name is
+/// written. The web UI checks names first, so only this row and the CLI's
+/// reach the writer's own refusal.
+#[test]
+fn the_writer_refuses_a_taken_name_and_keeps_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = |yaml: &str| GeneratedCapability {
+        name: "listusers".into(),
+        yaml: yaml.into(),
+    };
+    let at = dir.path().to_str().unwrap();
+    cap("first")
+        .write_to_file(at)
+        .expect("a free name is written");
+
+    let refused = cap("second").write_to_file(at).expect_err("a taken name");
+
+    let crate::Error::Io(e) = &refused else {
+        panic!("not an I/O refusal: {refused}");
+    };
+    assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists, "{refused}");
+    assert_eq!(e.to_string(), name_taken("listusers"));
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yaml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
 // ── petstore fixture ─────────────────────────────────────────────────────
 
 fn petstore_caps() -> Vec<GeneratedCapability> {

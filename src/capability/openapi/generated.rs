@@ -95,13 +95,14 @@ impl GeneratedCapability {
             }
             Err(e) => return Err(failed(e)),
         };
-        if let Err(e) = file.write_all(self.yaml.as_bytes()) {
-            // The file is the one just created here: a partial one would
-            // refuse the next import of this name.
-            drop(file);
-            let _ = fs::remove_file(&path);
-            return Err(failed(e));
-        }
+        // Never removed on failure: by then the path may name another
+        // writer's file. The message says a partial file may be left.
+        file.write_all(self.yaml.as_bytes()).map_err(|e| {
+            Error::Config(format!(
+                "Failed to write capability file: {e}; a partial {} may be left, remove it before importing again",
+                path.display()
+            ))
+        })?;
 
         info!(capability = %self.name, path = %path.display(), "Wrote capability file");
         Ok(())
