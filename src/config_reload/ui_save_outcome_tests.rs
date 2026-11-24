@@ -63,7 +63,7 @@ async fn the_intent_id_leaves_the_writer() {
     // before the commit, over the revision the file had.
     let (logger, log) = audit_log();
     let gw = gw(BASE);
-    let audit = AuditPosture::of(Some(logger), GatewayAuth::Off)
+    let audit = AuditPosture::of(Some(Arc::clone(&logger)), GatewayAuth::Off)
         .audit(kind())
         .expect("an audit");
     let replace = to(
@@ -104,7 +104,7 @@ async fn the_intent_id_leaves_the_writer() {
     // (c) A write the reload refuses: put back, and the trace says so.
     let (logger, log) = audit_log();
     let gw = gw_with(BASE, true, false);
-    let audit = AuditPosture::of(Some(logger), GatewayAuth::Off)
+    let audit = AuditPosture::of(Some(Arc::clone(&logger)), GatewayAuth::Off)
         .audit(kind())
         .expect("an audit");
     let replace = to(
@@ -132,7 +132,7 @@ async fn the_intent_id_leaves_the_writer() {
         "intent",
         Arc::new(|| panic!("W0 stops the write after its intent")),
     );
-    let audit = AuditPosture::of(Some(logger), GatewayAuth::Off)
+    let audit = AuditPosture::of(Some(Arc::clone(&logger)), GatewayAuth::Off)
         .audit(kind())
         .expect("an audit");
     let replace = to(
@@ -198,7 +198,7 @@ fn a_key_write_keeps_its_subject_and_a_recovery_names_the_gateway() {
     use crate::config_reload::reload_context::replace::{Audit, Intent, IntentKind, IntentSink};
     use crate::security::audit::AuditWho;
     let (logger, log) = audit_log();
-    let posture = AuditPosture::of(Some(logger), GatewayAuth::Off);
+    let posture = AuditPosture::of(Some(Arc::clone(&logger)), GatewayAuth::Off);
     let caller = AuditWho::from_actor_id("w2b-caller");
     let Ok(Audit::Required {
         mut sink,

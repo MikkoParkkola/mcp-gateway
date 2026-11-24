@@ -223,7 +223,7 @@ async fn w1_a_gated_save_is_refused() {
 
 /// W1 leg 5: a field the handler refuses before the writer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn w1_an_unknown_field_is_refused() {
+async fn w1_a_field_the_handler_refuses_is_refused() {
     let fx = gateway(START, Reloads::Accept).await;
     let before = kept(&fx);
     let unknown = json!({
