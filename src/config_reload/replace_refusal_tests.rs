@@ -17,14 +17,17 @@ async fn a_writer_refusal_keeps_the_other_writers_bytes_and_no_journal() {
     for code in ["foreign-owner", "target-changed", "acl-not-kept"] {
         let (dir, path, ctx) = setup();
         let other = format!("{START}# another writer\n");
-        let put = other.clone();
+        let mut put = Some(other.clone());
         let _armed = seams::arm(
             dir.path(),
             Seams {
                 refuse: Some(code),
-                // In place, so only the injected refusal turns the save down.
+                // Once and in place, so only the injected refusal turns the
+                // save down.
                 before_verify: Some(Box::new(move |target, _scratch| {
-                    std::fs::write(target, &put).expect("the other writer");
+                    if let Some(text) = put.take() {
+                        std::fs::write(target, text).expect("the other writer");
+                    }
                 })),
                 ..Seams::default()
             },

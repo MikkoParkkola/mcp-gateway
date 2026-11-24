@@ -301,13 +301,13 @@ fn stage_from(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let overlay = armed.as_mut()?.get_mut(&dir)?;
-    let held = hold().expect("crash_fs: hold scratch");
-    let generation = file_id(&held).expect("crash_fs: scratch identity");
+    let handle = hold().expect("crash_fs: hold scratch");
+    let generation = file_id(&handle).expect("crash_fs: scratch identity");
     // The scratch's bytes were synced before this call: durable now, under
     // its own generation, and held so the identity cannot be reused, even if
     // the rename never happens.
     overlay.data.insert(generation, bytes.to_vec());
-    overlay.held.insert(generation, held);
+    overlay.held.insert(generation, handle);
     Some(Staged { generation })
 }
 

@@ -243,6 +243,8 @@ pub(super) fn write(
     };
     let (mut file, scratch) =
         super::create_scratch(target, super::super::next_scratch_seed(), create)?;
+    #[cfg(test)]
+    seams::created(target);
     let save = Save {
         target,
         scratch: &scratch,
@@ -272,6 +274,8 @@ pub(super) fn copy(src: &Path, dst: &Path) -> io::Result<()> {
         super::super::next_scratch_seed(),
         super::ScratchCreate::Closed,
     )?;
+    #[cfg(test)]
+    seams::created(dst);
     let save = Save {
         target: dst,
         scratch: &scratch,
@@ -471,8 +475,9 @@ pub(crate) mod seams {
     pub(crate) struct Seams {
         /// The target's open (or stat) fails with this errno.
         pub(crate) open_error: Option<i32>,
-        /// The final check before the rename turns the save down with the
-        /// writer's own refusal of this code (`foreign-owner` names uid 4101).
+        /// The next save's final check before the rename turns it down with
+        /// the writer's own refusal of this code (`foreign-owner` names uid
+        /// 4101); later saves, such as a restore, go through.
         pub(crate) refuse: Option<&'static str>,
         /// Just before the first byte is written.
         pub(crate) first_write: Option<FileHook>,
@@ -562,7 +567,7 @@ pub(crate) mod seams {
     }
 
     pub(crate) fn refused(target: &Path) -> Option<std::io::Error> {
-        Some(match with(target, |s| s.seams.refuse).flatten()? {
+        Some(match with(target, |s| s.seams.refuse.take()).flatten()? {
             "foreign-owner" => super::foreign_owner(target, 4101),
             "target-changed" => super::changed(target),
             "acl-not-kept" => super::unreadable(target),

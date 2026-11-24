@@ -252,7 +252,7 @@ fn create_scratch(
             std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .mode(0)
+                .mode(0o000)
                 .open(candidate)
         }
         ScratchCreate::Default => std::fs::OpenOptions::new()
