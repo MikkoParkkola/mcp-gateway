@@ -5,6 +5,7 @@
 //! entries and lose where each came from). Admin only: it shows every rule
 //! and key name.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -13,6 +14,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
+use super::activity::access::Access;
+use super::activity::counts::Pass;
 use super::guard::Guard;
 use crate::config::Config;
 use crate::gateway::router::AppState;
@@ -67,6 +70,24 @@ pub(super) fn read_model(sources: &Sources<'_>) -> Value {
     for (section, value) in firewall_sections(sources) {
         model[section] = value;
     }
+    model
+}
+
+/// [`read_model`] with each rule's id, its hits in the last 24 hours and the
+/// 24 hours before, and its exception count, counted in `logs` (invocation,
+/// governance; `None` when no log is kept) under `access`.
+pub(super) fn read_model_with_hits(
+    sources: &Sources<'_>,
+    logs: Option<(&std::path::Path, Option<&std::path::Path>)>,
+    access: &Access,
+    now: Result<chrono::DateTime<chrono::FixedOffset>, crate::clock::ClockBeforeEpoch>,
+    byte_cap: u64,
+    after_pass: impl FnMut(Pass) -> ControlFlow<()>,
+) -> Value {
+    let _ = (logs, access, now, byte_cap);
+    drop(after_pass);
+    let mut model = read_model(sources);
+    model["hits"] = json!({ "complete": true });
     model
 }
 

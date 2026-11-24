@@ -8,6 +8,8 @@
 // the resolver the routes use, not a copy of its role rules.
 pub(in crate::gateway::ui) mod access;
 mod answer;
+/// The bounded counting scan, and the Policies screen's hits per rule.
+pub(in crate::gateway::ui) mod counts;
 mod csv;
 mod cursor;
 mod export;
@@ -691,8 +693,22 @@ mod decision_receipt_tests;
 mod list_tests;
 #[cfg(tp5)]
 #[cfg(test)]
+#[cfg(feature = "firewall")]
+#[path = "policy_hits2_tests.rs"]
+mod policy_hits2_tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[cfg(feature = "firewall")]
+#[path = "policy_hits_tests.rs"]
+mod policy_hits_tests;
+#[cfg(tp5)]
+#[cfg(test)]
 #[path = "refusal_tests.rs"]
 mod refusal_tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "scan_window_tests.rs"]
+mod scan_window_tests;
 #[cfg(tp5)]
 #[cfg(test)]
 #[path = "scope_tests.rs"]

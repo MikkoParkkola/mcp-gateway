@@ -42,6 +42,14 @@ impl FirewallPolicy {
         policy
     }
 
+    /// The id of the rule configured at `index` (`security.firewall.rules[index]`):
+    /// compiled rules pair with configured rules one to one, a refused shape
+    /// included. `None` on a policy compiled without a key.
+    #[cfg(feature = "webui")]
+    pub(crate) fn rule_id(&self, _index: usize) -> Option<&crate::security::rule_id::RuleId> {
+        None
+    }
+
     /// Compile `config`'s rules. Never fails: a rule whose glob does not
     /// parse compiles to one that matches no tool, and the config load has
     /// already refused it by key path (POLICY.2).

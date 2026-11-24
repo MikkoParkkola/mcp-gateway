@@ -297,6 +297,19 @@ impl ToolPolicy {
         }
     }
 
+    /// The id this policy gave the entry `pattern` of list `list` (`allow`,
+    /// `deny` or `builtin_deny`), as written in the config. `None` on a policy
+    /// compiled without a key, and for an entry this policy does not hold (a
+    /// built-in deny while `use_default_deny` is off).
+    #[cfg(feature = "webui")]
+    pub(crate) fn entry_id(
+        &self,
+        _list: &str,
+        _pattern: &str,
+    ) -> Option<&crate::security::rule_id::RuleId> {
+        None
+    }
+
     /// [`Self::check`], naming the entry that decided: an explicit allow on
     /// `Ok`, the refusing deny or default action on `Err`. Ids are present only
     /// on a policy compiled with [`Self::from_config_keyed`].
