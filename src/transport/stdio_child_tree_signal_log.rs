@@ -385,7 +385,7 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
             "SIGTERM not sent, the group's ownership was not shown: {sent:?}"
         ));
     }
-    if !has_skip(sent) {
+    if mutant!("J2", false, !has_skip(sent)) {
         return Err(format!(
             "killed with no SIGTERM and no recorded reason: {sent:?}"
         ));
@@ -393,7 +393,7 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
     let threshold = skip_threshold();
     for s in sent {
         if let Sent::SkipLate { late } = s
-            && *late <= threshold
+            && mutant!("J1", *late < threshold, *late <= threshold)
         {
             return Err(format!(
                 "SIGTERM skipped {late:?} late, under the {threshold:?} the slack allows: {sent:?}"
