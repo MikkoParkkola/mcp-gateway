@@ -64,16 +64,12 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
     signal_log::arm(pid);
-    let started_at = std::time::Instant::now();
+    // The timeout is the bound's whole check: a stall after close returns is
+    // not the close's time.
     tokio::time::timeout(BOUND, t.close())
         .await
         .expect("close returns within the bound")
         .expect("close");
-    assert!(
-        started_at.elapsed() < BOUND,
-        "close took {:?}",
-        started_at.elapsed()
-    );
     assert_killed(pid).await;
     signal_log::assert_term_then_kill(pid, "the uncut plan").await;
     gone(child).await;
@@ -99,9 +95,10 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     let started_at = std::time::Instant::now();
     let cut = super::super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
     deadline.move_earlier(started_at + cut);
-    // A hang guard, not a timing claim: half the tree's own 120 s plan. A stop
-    // that ignored the cut would wait the whole plan; the wait itself is bounded.
-    tokio::time::timeout(Duration::from_secs(60), assert_killed(pid))
+    // A hang guard, not a timing claim: the kill comes about 7 s after the cut.
+    // It sits under the reap deadline the row lifts to HANG_BOUND, so a stop
+    // that ignored the cut fails here, never at the reaper's give-up instead.
+    tokio::time::timeout(HANG_BOUND / 2, assert_killed(pid))
         .await
         .expect("the kill waited for the tree's own plan");
     close.await.expect("close task").expect("close");
@@ -680,7 +677,10 @@ fn cut_after_a_starved_plan(
     step_at: Duration,
     owed: bool,
 ) -> (std::time::Instant, usize, usize) {
-    use super::super::super::reaper::KILL_RESERVE;
+    use super::super::super::reaper::{KILL_RESERVE, StopDeadline};
+    // Set-times are stored against a clock that starts on first use; started
+    // here, `s` is never before it, so the given set-time cannot saturate.
+    StopDeadline::start_epoch();
     let s = std::time::Instant::now();
     tree.set_ending(
         Ending::Graceful {
@@ -701,6 +701,7 @@ fn cut_after_a_starved_plan(
         s + cut_in + KILL_RESERVE,
         "the cut lowered the deadline"
     );
+    assert_eq!(set_at, s, "the cut's set-time is the one given");
     assert_eq!(
         term_at <= set_at,
         owed,

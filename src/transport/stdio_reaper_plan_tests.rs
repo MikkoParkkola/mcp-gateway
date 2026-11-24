@@ -299,6 +299,12 @@ fn the_allocator_plan_across_its_edges() {
 /// chosen side of a planned SIGTERM whatever the host's scheduling. The body is
 /// `move_earlier`'s, with `set_at` in place of `Instant::now()`.
 impl super::StopDeadline {
+    /// Test-only: start the clock set-times are stored against, so an instant
+    /// read after this call encodes exactly (an earlier one saturates).
+    pub(crate) fn start_epoch() {
+        std::sync::LazyLock::force(&super::STOP_EPOCH);
+    }
+
     pub(crate) fn move_earlier_at(&self, deadline: std::time::Instant, set_at: std::time::Instant) {
         let nanos = deadline
             .saturating_duration_since(*super::STOP_EPOCH)

@@ -59,6 +59,8 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
             (&[LATE, KillGone], None),
             (&[JUST_OVER, Kill], None),
             (&[AT_THRESHOLD, Kill], Some("under the")),
+            (&[JUST_OVER, KillGone], None),
+            (&[AT_THRESHOLD, KillGone], Some("under the")),
             (&[Term, FAILED], Some("a kill failed")),
             (&[Term, FAILED, KillGone], Some("a kill failed")),
             (&[KillGone, Term, KillGone], Some("not one SIGTERM")),
