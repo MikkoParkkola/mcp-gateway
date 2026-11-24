@@ -1,0 +1,24 @@
+head_sha	5775b5d7117b8182b91fd41a7a0d2cc586323e4f
+#mutant EM1
+mcp_gateway	config_persistence::keyedit::tests::element::e4_mapping_lands_below_the_previous_rule	src/config_persistence_keyedit_tests.rs:57
+mcp_gateway	config_persistence::keyedit::tests::element::e5_mapping_at_position_zero_sits_right_under_the_key	src/config_persistence_keyedit_tests.rs:57
+mcp_gateway	config_persistence::keyedit::tests::element::e16_insert_shifts_rather_than_replaces	src/config_persistence_keyedit_tests.rs:57
+#mutant EM2
+mcp_gateway	config_persistence::keyedit::tests::element::e4_mapping_lands_below_the_previous_rule	src/config_persistence_keyedit_element_tests.rs:117
+mcp_gateway	config_persistence::keyedit::tests::element::e5_mapping_at_position_zero_sits_right_under_the_key	src/config_persistence_keyedit_element_tests.rs:123
+#mutant EM3
+mcp_gateway	config_persistence::keyedit::tests::element::e10_dropping_the_sole_entry_writes_brackets	src/config_persistence_keyedit_tests.rs:57
+mcp_gateway	config_persistence::keyedit::tests::element::e12_written_then_rewritten_list_is_accepted	src/config_persistence_keyedit_tests.rs:57
+#mutant EM4
+mcp_gateway	config_persistence::keyedit::tests::element::e13_drop_refuses_a_commented_line	src/config_persistence_keyedit_element_tests.rs:264
+#mutant EM5
+mcp_gateway	config_persistence::keyedit::tests::element::e9_inline_string_drop_at_each_position	src/config_persistence_keyedit_element_tests.rs:168
+#mutant EM6
+mcp_gateway	config_persistence::keyedit::tests::element::e15_element_edit_shares_no_list_with_another_change	src/config_persistence_keyedit_element_tests.rs:326
+#mutant EM7
+mcp_gateway	config_persistence::keyedit::tests::element::e4_mapping_lands_below_the_previous_rule	src/config_persistence_keyedit_tests.rs:57
+mcp_gateway	config_persistence::keyedit::tests::element::e5_mapping_at_position_zero_sits_right_under_the_key	src/config_persistence_keyedit_tests.rs:57
+mcp_gateway	config_persistence::keyedit::tests::element::e16_insert_shifts_rather_than_replaces	src/config_persistence_keyedit_tests.rs:57
+#mutant CM10 multi=2
+mcp_gateway	config_persistence::keyedit::tests::element::e2_inline_list_gains_a_string_before_its_bracket	src/config_persistence_keyedit_element_tests.rs:84
+mcp_gateway	config_persistence::keyedit::tests::element::e9_inline_string_drop_at_each_position	src/config_persistence_keyedit_element_tests.rs:168
