@@ -218,11 +218,6 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-/** The words for a server whose config entry turns it off. */
-export const OFF_WORD = 'Off';
-export const OFF_BANNER = (name) => `${name} is turned off in its gateway.yaml entry. The gateway leaves it stopped, and its tools are out of reach for every key.`;
-export const OFF_NEXT = 'Turn it back on from its Settings tab.';
-
 /**
  * The one word for each state, used across every screen (UI1.24). Server
  * states are keyed by the gateway's ServerState wire values. A dropped live
@@ -238,7 +233,6 @@ export const GLOSSARY = {
     refused: 'Refused',
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
-    off: OFF_WORD,
   },
   stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
@@ -308,8 +302,6 @@ export const SERVER_STATES = {
     banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
     next: () => 'Add it from the Servers Actions tab.',
   },
-  // Switched off by its owner: nothing is wrong, so the quiet glyph and tone.
-  off: { glyph: 'ⓘ', tone: 'neutral', banner: (s) => OFF_BANNER(s.name), next: () => OFF_NEXT },
 };
 
 /** A state the table lacks is not shown as harmless. */
