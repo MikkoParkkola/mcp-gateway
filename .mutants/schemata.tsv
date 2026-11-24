@@ -1,0 +1,29 @@
+head_sha	fcb2f3dfb7ee836377015fc4b46ccd54562b5473
+#mutant m1
+mcp_gateway	gateway::ui::gateway_health::tests::g1b_what_was_not_observed_is_null_and_a_slow_p95_keeps_its_form	src/gateway/ui/gateway_health_tests.rs:132
+#mutant m2
+mcp_gateway	gateway::ui::gateway_health::tests::g2_halves_are_sixteen_oldest_first_and_an_unobserved_slot_is_null	src/gateway/ui/gateway_health_tests.rs:174
+#mutant m3 multi=2
+mcp_gateway	gateway::ui::gateway_health::tests::g1_tiles_serve_each_series_for_the_last_hour_and_the_hour_before	src/gateway/ui/gateway_health_tests.rs:89
+#mutant m4
+mcp_gateway	gateway::ui::gateway_health::tests::g1_tiles_serve_each_series_for_the_last_hour_and_the_hour_before	src/gateway/ui/gateway_health_tests.rs:89
+#mutant m5
+mcp_gateway	gateway::ui::gateway_health::tests::g1b_what_was_not_observed_is_null_and_a_slow_p95_keeps_its_form	src/gateway/ui/gateway_health_tests.rs:124
+#mutant m6
+mcp_gateway	gateway::ui::gateway_health::tests::g2_halves_are_sixteen_oldest_first_and_an_unobserved_slot_is_null	src/gateway/ui/gateway_health_tests.rs:158
+#mutant m7
+mcp_gateway	gateway::ui::gateway_health::tests::g8_seven_days_only	src/gateway/ui/gateway_health_tests.rs:428
+#mutant m8
+mcp_gateway	gateway::ui::gateway_health::tests::g8_seven_days_only	src/gateway/ui/gateway_health_tests.rs:413
+#mutant m9
+mcp_gateway	gateway::ui::gateway_health::tests::g8_seven_days_only	src/gateway/ui/gateway_health_tests.rs:419
+#mutant m10
+mcp_gateway	gateway::ui::gateway_health::tests::g3_the_strip_serves_blocks_and_both_downtime_kinds	src/gateway/ui/gateway_health_tests.rs:203
+#mutant m11
+mcp_gateway	gateway::ui::gateway_health::tests::g3_the_strip_serves_blocks_and_both_downtime_kinds	src/gateway/ui/gateway_health_tests.rs:219
+#mutant m12
+mcp_gateway	gateway::ui::gateway_health::tests::g5_the_answer_holds_only_numbers_and_fixed_words	src/gateway/ui/gateway_health_tests.rs:283
+#mutant m14
+mcp_gateway	gateway::router::gateway_health_tests::g6_a_non_admin_key_is_refused_and_no_credential_is_401	src/gateway/ui/guard.rs:248
+#mutant m15
+mcp_gateway	gateway::ui::gateway_health::tests::g7_no_history_or_a_clock_before_1970_is_503	src/gateway/ui/gateway_health_tests.rs:380
