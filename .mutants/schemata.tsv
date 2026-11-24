@@ -1,0 +1,13 @@
+head_sha	fa141a2abe30513f1c0ca6dee9e3d5c9a8fac313
+#mutant K1
+mcp_gateway	gateway::ui::access_table::tests::the_three_new_pages_are_backed_by_the_routes_they_call	src/gateway/ui/access_table_tests.rs:96
+#mutant K2
+mcp_gateway	gateway::ui::access_table::tests::the_three_new_pages_are_backed_by_the_routes_they_call	src/gateway/ui/access_table_tests.rs:96
+#mutant K3
+mcp_gateway	gateway::ui::access_table::tests::the_three_new_pages_are_backed_by_the_routes_they_call	src/gateway/ui/access_table_tests.rs:96
+#mutant K4
+mcp_gateway	gateway::ui::access_table::tests::the_three_new_pages_are_backed_by_the_routes_they_call	src/gateway/ui/access_table_tests.rs:113
+#mutant K5
+mcp_gateway	gateway::ui::access_table::tests::the_three_new_pages_are_backed_by_the_routes_they_call	src/gateway/ui/access_table_tests.rs:96
+#mutant K6
+mcp_gateway	gateway::ui::access_table::tests::rows_left_without_a_tab_keep_their_need	src/gateway/ui/access_table_tests.rs:158
