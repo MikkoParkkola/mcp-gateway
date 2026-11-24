@@ -17,7 +17,7 @@ use super::{
     counts::{COUNT_SCAN_BYTES, count_rule_hits},
     decision_fixtures::decision,
     reader::{Limits, read_page},
-    rows::{Filter, NOT_A_CALL, kind_of, row_id},
+    rows::{Check, Filter, NOT_A_CALL, kind_of, row},
 };
 use crate::config_reload::LiveConfig;
 use crate::gateway::ui::policies::{Sources, read_model, read_model_with_hits};
@@ -182,8 +182,8 @@ fn p10_the_window_edges() {
 }
 
 /// The stamps of the rows the Activity list gives for rule `id` over
-/// `[from, to]`: its own filter, then only lines it can show as a row (the
-/// list drops a line `row()` cannot project, and `row()` needs `row_id`).
+/// `[from, to]`: its own filter, then its own `row()`, which drops a line it
+/// cannot project.
 fn listed(
     path: &std::path::Path,
     id: &str,
@@ -204,10 +204,11 @@ fn listed(
         kind_of(line).is_some_and(|kind| filter.matches(line, kind, &NOT_A_CALL))
     })
     .expect("read");
+    let check = Check::new(None, path, None);
     page.lines
         .iter()
-        .filter(|l| row_id(l).is_some())
-        .map(|l| l.entry["timestamp"].as_str().unwrap_or_default().to_owned())
+        .filter_map(|l| row(l, &check, &NOT_A_CALL))
+        .map(|r| r["timestamp"].as_str().unwrap_or_default().to_owned())
         .collect()
 }
 
