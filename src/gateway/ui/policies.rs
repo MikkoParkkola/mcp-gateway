@@ -56,6 +56,34 @@ impl<'a> Sources<'a> {
     }
 }
 
+/// One setting: its path, the file's value, the enforced value and whether
+/// they differ (the screen says "takes effect after restart").
+pub(super) fn setting(path: &str, file: Value, enforced: Value) -> Value {
+    let pending = file != enforced;
+    setting_pending(path, file, enforced, pending)
+}
+
+/// A setting with its pending state given. `read_only` is true unless the
+/// save table lists `path`: the table is the one answer to what a save can
+/// change, so the read and the save cannot disagree.
+pub(super) fn setting_pending(path: &str, file: Value, enforced: Value, pending: bool) -> Value {
+    let mut s = serde_json::Map::new();
+    s.insert("path".to_owned(), Value::from(path));
+    s.insert("file".to_owned(), file);
+    s.insert("enforced".to_owned(), enforced);
+    s.insert("pending_restart".to_owned(), Value::Bool(pending));
+    let read_only = crate::config_reload::ui_fields::FieldId::of(path).is_none();
+    s.insert("read_only".to_owned(), Value::Bool(read_only));
+    Value::Object(s)
+}
+
+/// A switch, `on` when its enforced value is.
+pub(super) fn switch(path: &str, file: bool, enforced: bool) -> Value {
+    let mut s = setting(path, json!(file), json!(enforced));
+    s["on"] = json!(enforced);
+    s
+}
+
 /// The read model for `sources`.
 pub(super) fn read_model(sources: &Sources<'_>) -> Value {
     let config = sources.generation.config();
@@ -63,6 +91,7 @@ pub(super) fn read_model(sources: &Sources<'_>) -> Value {
         "tool_policy": tool_policy(&config.security.tool_policy),
         "finding_rules": finding_rules(config),
         "tool_limits": tool_limits(),
+        "request_checks": request_checks(config),
     });
     for (section, value) in firewall_sections(sources) {
         model[section] = value;
@@ -85,6 +114,32 @@ fn firewall_sections(_sources: &Sources<'_>) -> [(&'static str, Value); 4] {
         ("credentials", Value::Null),
         ("relay", Value::Null),
     ]
+}
+
+/// The two request checks, as the published generation holds them: the value
+/// the config view serves and the request paths read. Both apply live, so the
+/// file and the enforced value are one. Under the hardened posture SSRF
+/// protection is held on at load whatever the file says; the read says so and
+/// marks it read-only, since a save of it would not take effect.
+fn request_checks(config: &Config) -> Value {
+    let security = &config.security;
+    let mut ssrf = switch(
+        "security.ssrf_protection",
+        security.ssrf_protection,
+        security.ssrf_protection,
+    );
+    if security.posture == crate::security::posture::SecurityPosture::Hardened {
+        ssrf["forced_by"] = json!("security.posture");
+        ssrf["read_only"] = json!(true);
+    }
+    json!({
+        "sanitize_input": switch(
+            "security.sanitize_input",
+            security.sanitize_input,
+            security.sanitize_input,
+        ),
+        "ssrf_protection": ssrf,
+    })
 }
 
 /// The four configured tool limits, in ADR-029's display order ("Tool
@@ -175,10 +230,20 @@ fn tool_policy(policy: &ToolPolicyConfig) -> Value {
         .iter()
         .map(|(path, entry)| json!({ "entry": entry, "path": path }))
         .collect();
+    // The three values the save can change, as setting objects with their
+    // save paths; all apply live, so file and enforced come from one config.
     json!({
-        "enabled": policy.enabled,
-        "default_action": policy.default_action,
-        "use_default_deny": policy.use_default_deny,
+        "enabled": switch("security.tool_policy.enabled", policy.enabled, policy.enabled),
+        "default_action": setting(
+            "security.tool_policy.default_action",
+            json!(policy.default_action),
+            json!(policy.default_action),
+        ),
+        "use_default_deny": switch(
+            "security.tool_policy.use_default_deny",
+            policy.use_default_deny,
+            policy.use_default_deny,
+        ),
         "default_denies": default_denies,
         "allow": allow,
         "deny": deny,
