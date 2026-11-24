@@ -36,6 +36,7 @@ const REMOVED: &[(&[&str], OnLoad)] = &[
     (&["meta_mcp", "cache_tools"], OnLoad::Warns),
     (&["backends", "*", "idle_timeout"], OnLoad::Refuses),
     (&["backends", "*", "circuit_breaker"], OnLoad::Refuses),
+    (&["backends", "*", "transport"], OnLoad::Refuses),
     (&["marketplace"], OnLoad::Refuses),
     (&["server", "request_timeout"], OnLoad::Refuses),
     (&["server", "ws_port"], OnLoad::Refuses),

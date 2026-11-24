@@ -208,6 +208,7 @@ In every mode but `mesh`, `server.cleartextHttp` becomes `server.cleartext_http`
 
 ```yaml
 # Helm values: an ingress in front, audit log on a volume claim
+# example: not gateway.yaml
 auth:
   mode: credential
   existingSecret: mcp-gateway-auth
@@ -229,6 +230,7 @@ while per-process state is on
 
 ```yaml
 # Helm values: two people with their own keys, state kept on a claim
+# example: not gateway.yaml
 auth:
   mode: api_keys
   existingSecret: mcp-gateway-keys   # keys alice, bob: `printf %s "$KEY" | mcp-gateway hash-key`

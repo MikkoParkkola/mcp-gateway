@@ -166,6 +166,7 @@ env_files:
 
 backends:
   slack:
+    url: "https://mcp.slack.example/mcp"
     oauth:
       client_secret: "${SLACK_CLIENT_SECRET}"
 ```

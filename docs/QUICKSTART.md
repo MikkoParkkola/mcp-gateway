@@ -198,6 +198,7 @@ The `init --profile local` command creates these automatically. If you're writin
 
 **capabilities/weather.yaml**
 ```yaml
+# example: not gateway.yaml
 fulcrum: "1.0"
 name: weather
 description: Get current weather for a location (free, no API key)
@@ -243,6 +244,7 @@ metadata:
 
 **capabilities/wikipedia.yaml**
 ```yaml
+# example: not gateway.yaml
 fulcrum: "1.0"
 name: wikipedia_summary
 description: Get a Wikipedia article summary (free, no API key)
