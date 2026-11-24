@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use super::first_key::{
-    Decision, FaultCause, Waiting, restart_pending_decision, restart_pending_guard,
+    Decision, FaultCause, KeyListRefusal, Waiting, restart_pending_decision, restart_pending_guard,
     waiting_first_key,
 };
 use super::refusals::RefusalCode;
@@ -509,7 +509,10 @@ fn r6_yes_with_waiting_file_keys_is_pending_naming_the_file_keys() {
 #[test]
 fn r6_yes_with_no_waiting_file_keys_is_invalid() {
     match restart_pending_decision(&yes(&["first"]), Vec::new()) {
-        Decision::Invalid(sentence) => says_only_create_adds(&sentence),
+        Decision::Invalid(refusal) => {
+            assert_eq!(refusal, KeyListRefusal::OnlyCreateAdds);
+            says_only_create_adds(refusal.sentence());
+        }
         other => panic!("expected Invalid, got {other:?}"),
     }
 }

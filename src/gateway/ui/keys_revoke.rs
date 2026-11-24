@@ -208,7 +208,7 @@ fn judge_removal(
 ) -> Result<(), String> {
     let stopped = match restart_pending_decision(&candidate, file_waiting.to_vec()) {
         Decision::Pending(waiting) => Stopped::Waiting(waiting.names().to_vec()),
-        Decision::Invalid(sentence) => Stopped::Invalid(sentence),
+        Decision::Invalid(refusal) => Stopped::Invalid(refusal.sentence().to_owned()),
         Decision::Continue => match candidate {
             Waiting::No | Waiting::Yes { .. } => return Ok(()),
             Waiting::Faulty { .. } if file_waiting.is_empty() => {

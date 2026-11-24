@@ -158,10 +158,30 @@ impl WaitingKeys {
 pub(crate) enum Decision {
     /// Refused as restart pending, naming the file's waiting keys.
     Pending(WaitingKeys),
-    /// Refused as invalid, with this fixed sentence.
-    Invalid(String),
+    /// Refused as invalid, for this reason.
+    Invalid(KeyListRefusal),
     /// Not this decision's case: the caller goes on.
     Continue,
+}
+
+/// A key list refused for a reason this module states in its own fixed
+/// sentence, which a route may show as it is: it names no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyListRefusal {
+    /// It only removes keys, yet changes whether the gateway is multi-user.
+    RemovalOnly,
+    /// It brings in an API key on a file in which none waits.
+    OnlyCreateAdds,
+}
+
+impl KeyListRefusal {
+    /// The fixed sentence for this reason.
+    pub(crate) fn sentence(self) -> &'static str {
+        match self {
+            Self::RemovalOnly => REMOVAL_ONLY,
+            Self::OnlyCreateAdds => ONLY_THE_CREATE_ADDS,
+        }
+    }
 }
 
 /// A candidate that would bring in an API key, on a file in which none
@@ -178,7 +198,7 @@ const ONLY_THE_CREATE_ADDS: &str = "this change would add an API key that makes 
 pub(crate) fn restart_pending_decision(candidate: &Waiting, file_waiting: Vec<String>) -> Decision {
     match candidate {
         Waiting::Yes { .. } if file_waiting.is_empty() => {
-            Decision::Invalid(ONLY_THE_CREATE_ADDS.to_owned())
+            Decision::Invalid(KeyListRefusal::OnlyCreateAdds)
         }
         Waiting::Yes { .. } => Decision::Pending(WaitingKeys(file_waiting)),
         Waiting::No | Waiting::Faulty { .. } => Decision::Continue,

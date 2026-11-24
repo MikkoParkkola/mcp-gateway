@@ -131,7 +131,7 @@ impl ReloadContext {
                         class: RefusalClass::RestartPending { waiting },
                     });
                 }
-                Decision::Invalid(sentence) => return Err(invalid(sentence)),
+                Decision::Invalid(refusal) => return Err(invalid(refusal.sentence().to_owned())),
                 Decision::Continue => {}
             }
         }
