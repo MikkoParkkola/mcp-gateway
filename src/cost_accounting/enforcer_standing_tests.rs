@@ -77,6 +77,33 @@ fn s5_the_first_key_refusal_of_the_day_is_recorded_once() {
         );
     }
     assert_eq!(refusal(&global, T1), None, "not the key's own limit");
+
+    // A tool's own limit refusing the key's call records nothing either.
+    let mut config = CostGovernanceConfig {
+        enabled: true,
+        budgets: BudgetLimits {
+            per_tool: [("cheap".to_string(), 1.0)].into(),
+            per_key: [(KEY.to_string(), 25.0)].into(),
+            ..BudgetLimits::default()
+        },
+        ..CostGovernanceConfig::default()
+    };
+    config.tool_costs.insert("cheap".to_string(), 0.01);
+    let registry = Arc::new(CostRegistry::new(&config));
+    let by_tool = BudgetEnforcer::new(config, registry);
+    {
+        let _clock = test_clock::at_secs(T1);
+        by_tool.record_spend("cheap", Some(KEY), 1.0);
+        let refused = by_tool.check("cheap", Some(KEY));
+        assert!(!refused.allowed, "premise: the tool's limit refuses");
+        assert!(
+            refused
+                .block_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Tool"))
+        );
+    }
+    assert_eq!(refusal(&by_tool, T1), None, "a tool's limit, not the key's");
 }
 
 /// The day sweep keeps a record from its own day, and one from a day that
