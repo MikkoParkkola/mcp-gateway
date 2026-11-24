@@ -23,6 +23,7 @@
 mod yaml;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::config::{Config, api_key_digest_spec};
@@ -217,7 +218,7 @@ fn env_values(text: &str) -> BTreeMap<String, String> {
 }
 
 /// `yaml` without its own top-level `env_files` key. One example sets one
-/// (docs/OAUTH_CONFIG.md), naming a path under the reader's home; the guard's
+/// (`docs/OAUTH_CONFIG.md`), naming a path under the reader's home; the guard's
 /// own file takes that path's place.
 fn without_env_files(yaml: &str) -> String {
     let mut kept = String::new();
@@ -252,10 +253,10 @@ fn load_example(at: &str, yaml: &str) -> Result<(), String> {
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let env = dir.path().join("example.env");
-    let lines: String = values
-        .iter()
-        .map(|(var, value)| format!("{var}={value}\n"))
-        .collect();
+    let mut lines = String::new();
+    for (var, value) in &values {
+        writeln!(lines, "{var}={value}").expect("writing to a String cannot fail");
+    }
     mcp_gateway::gateway::test_helpers::write_owner_only(&env, &lines).expect("write env file");
     let body = if swap {
         without_env_files(yaml)
@@ -508,7 +509,7 @@ fn any_other_reference_gets_its_own_placeholder() {
     }
 }
 
-/// The OAUTH_CONFIG example's own `env_files` gives way to the guard's file;
+/// The `OAUTH_CONFIG` example's own `env_files` gives way to the guard's file;
 /// any other file's example keeps its own, which then decides the load.
 #[test]
 fn only_the_named_examples_env_files_gives_way_to_the_guards() {

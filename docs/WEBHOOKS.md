@@ -160,8 +160,8 @@ mcp-gateway
 **Capability**: `capabilities/examples/linear_webhook.yaml`
 
 ```yaml
-# example: not gateway.yaml
 # capabilities/examples/linear_webhook.yaml
+# example: not gateway.yaml
 webhooks:
   issue_updated:
     path: /linear/issues
@@ -185,8 +185,8 @@ webhooks:
 **Capability**: `capabilities/examples/github_webhook.yaml`
 
 ```yaml
-# example: not gateway.yaml
 # capabilities/examples/github_webhook.yaml
+# example: not gateway.yaml
 webhooks:
   repository_events:
     path: /github/events
@@ -334,8 +334,8 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 ### Multiple Webhooks in One Capability
 
 ```yaml
-# example: not gateway.yaml
 # capability file (capabilities/<name>.yaml)
+# example: not gateway.yaml
 webhooks:
   issue_events:
     path: /linear/issues
