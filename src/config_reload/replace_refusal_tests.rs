@@ -75,7 +75,7 @@ async fn a_refusal_after_a_re_point_drops_only_its_own_journal() {
     let _armed = seams::arm(
         dir.path(),
         Seams {
-            refuse: Some("target-changed"),
+            // No injected refusal: the writer's own check sees the re-point.
             before_verify: Some(Box::new(move |target, _scratch| {
                 std::fs::rename(target, target.with_extension("moved")).expect("move away");
                 std::os::unix::fs::symlink(&other, target).expect("re-point");
