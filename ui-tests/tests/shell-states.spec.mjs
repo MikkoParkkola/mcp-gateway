@@ -241,17 +241,18 @@ for (const width of WIDTHS) {
   });
 }
 
-test('T10 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
+test('T11 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
   await open(page);
+  // A missing export reads as null, so a shell without them fails at the expects below, not in the page.
   const got = await inShell(page, (m) => {
     const banner = m.serverBanner({ name: 'github', state: 'off', reason: '', next_retry_at: null });
     return {
       word: m.stateWord('off'),
-      offWord: m.OFF_WORD,
+      offWord: m.OFF_WORD ?? null,
       banner: banner?.querySelector('h2')?.textContent ?? null,
-      offBanner: m.OFF_BANNER('github'),
+      offBanner: typeof m.OFF_BANNER === 'function' ? m.OFF_BANNER('github') : null,
       next: banner?.querySelector('p')?.textContent ?? null,
-      offNext: m.OFF_NEXT,
+      offNext: m.OFF_NEXT ?? null,
       glyph: m.SERVER_STATES.off?.glyph ?? null,
       tone: m.SERVER_STATES.off?.tone ?? null,
     };
