@@ -58,6 +58,9 @@ mod policies_part2;
 mod policies_part2_tests;
 #[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
+mod policies_read_only_tests;
+#[cfg(tp3)]
+#[cfg(all(test, feature = "firewall"))]
 mod policies_relay_tests;
 #[cfg(feature = "firewall")]
 mod policies_rules;
