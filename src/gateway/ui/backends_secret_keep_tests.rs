@@ -315,7 +315,13 @@ fn k5b_the_race_refusal_leaves_no_value_in_the_audit_log_or_logs() {
                 let (status, body) = panel
                     .update_seamed("a", sent, Some(lands(&panel, &raced)))
                     .await;
-                let audit = std::fs::read_to_string(&journal).unwrap_or_default();
+                // No file means the refusal wrote no record; any other read
+                // error fails the row rather than passing it unread.
+                let audit = match std::fs::read_to_string(&journal) {
+                    Ok(text) => text,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(e) => panic!("the audit log does not read: {e}"),
+                };
                 (status, body, audit)
             })
         });
