@@ -755,3 +755,26 @@ async fn impbind2_an_inline_document_is_checked_when_a_digest_is_sent() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
 }
+
+/// IMPOW.1, the writer's own refusal through the UI: a dangling link at the
+/// name passes the directory check (it follows links) but the exclusive
+/// create refuses it, and that refusal is a taken name (409), not a failure.
+#[cfg(unix)]
+#[tokio::test]
+async fn impow1_a_name_held_by_a_dangling_link_is_taken_not_a_failure() {
+    let dir = TempDir::new().unwrap();
+    let link = dir.path().join("listusers.yaml");
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let body = json!({ "spec": USERS_SPEC, "selected_tools": ["listusers"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        dir.path().join("nowhere")
+    );
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
+}

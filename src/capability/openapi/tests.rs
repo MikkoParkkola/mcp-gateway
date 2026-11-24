@@ -243,6 +243,33 @@ fn the_writer_refuses_a_taken_name_and_keeps_the_file() {
     assert_eq!(kept, "first");
 }
 
+/// The loader reads `<name>.yml` as well, so the writer refuses the name when
+/// only that file exists and adds no `.yaml` beside it.
+#[test]
+fn the_writer_refuses_a_name_held_by_a_yml_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("listusers.yml"), "first").unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let refused = cap
+        .write_to_file(dir.path().to_str().unwrap())
+        .expect_err("a name held by a .yml file");
+
+    assert_eq!(
+        refused.to_string(),
+        format!("IO error: {}", name_taken("listusers"))
+    );
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
 // ── petstore fixture ─────────────────────────────────────────────────────
 
 fn petstore_caps() -> Vec<GeneratedCapability> {
