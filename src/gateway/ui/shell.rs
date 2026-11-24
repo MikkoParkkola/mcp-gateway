@@ -25,12 +25,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity-list.3e4eec96100d.js"),
     ),
     (
-        "activity.237d685089d2.css",
-        include_bytes!("shell/activity.237d685089d2.css"),
+        "activity.020dbd377b27.js",
+        include_bytes!("shell/activity.020dbd377b27.js"),
     ),
     (
-        "activity.ac4b75fc250e.js",
-        include_bytes!("shell/activity.ac4b75fc250e.js"),
+        "activity.237d685089d2.css",
+        include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -89,12 +89,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.e494b4eeb750.json"),
     ),
     (
-        "tools.48917711373b.js",
-        include_bytes!("shell/tools.48917711373b.js"),
-    ),
-    (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
+    ),
+    (
+        "tools.54cf081792f3.js",
+        include_bytes!("shell/tools.54cf081792f3.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
