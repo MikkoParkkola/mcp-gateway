@@ -214,6 +214,8 @@ impl RuleHits {
     pub(in crate::gateway::ui) fn counts(&self, id: Option<&str>) -> Option<(u64, u64)> {
         match self.stop {
             None | Some(Stopped::Rotated) => None,
+            Some(Stopped::Cap) if mutant!("M3", true, false) => None,
+            Some(Stopped::WindowPassed) if mutant!("M14", true, false) => None,
             Some(_) => Some(
                 id.and_then(|id| self.per_rule.get(id))
                     .copied()
@@ -263,7 +265,14 @@ pub(in crate::gateway::ui) fn count_rule_hits(
     after_pass: impl FnMut(Pass) -> ControlFlow<()>,
 ) -> io::Result<RuleHits> {
     let Ok(to) = now else {
-        return Ok(RuleHits::unread(access));
+        return Ok(mutant!(
+            "M10",
+            RuleHits {
+                stop: Some(Stopped::End),
+                ..RuleHits::unread(access)
+            },
+            RuleHits::unread(access)
+        ));
     };
     let days = Days::ending(to);
     // No secret: a count reads no signature, and the join only decides what
@@ -271,7 +280,11 @@ pub(in crate::gateway::ui) fn count_rule_hits(
     let check = Check::new(None, invocation, governance);
     let mut per_rule: HashMap<String, (u64, u64)> = HashMap::new();
     let end = scan_window(
-        days.from..=days.to,
+        mutant!(
+            "M6",
+            days.from - crate::duration_bound::delta!(hours, 2),
+            days.from
+        )..=days.to,
         invocation,
         governance,
         &check,
@@ -282,10 +295,18 @@ pub(in crate::gateway::ui) fn count_rule_hits(
             let Some(rule) = decision_evidence(&line.entry).and_then(|d| d.rule_id) else {
                 return;
             };
-            let slot = per_rule.entry(rule).or_default();
+            let key = mutant!(
+                "M1",
+                rule.split(':').next().unwrap_or_default().to_owned(),
+                rule
+            );
+            let slot = per_rule.entry(key).or_default();
             if at >= days.split {
                 slot.0 += 1;
             } else {
+                slot.1 += 1;
+            }
+            if mutant!("M7", at == days.split, false) {
                 slot.1 += 1;
             }
         },

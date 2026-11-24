@@ -152,7 +152,7 @@ fn with_hits(mut model: Value, sources: &Sources<'_>, hits: &RuleHits) -> Value 
     let generation = &sources.generation;
     let policy = generation.tool_policy();
     let add = |entry: &mut Value, id: Option<&RuleId>, exceptions: usize| {
-        let id = id.map(RuleId::as_str);
+        let id = mutant!("M4", id.map(|_| "tool_policy:0"), id.map(RuleId::as_str));
         let counts = hits.counts(id);
         entry["rule_id"] = id.into();
         entry["hits_24h"] = counts.map(|(newer, _)| newer).into();
@@ -161,18 +161,27 @@ fn with_hits(mut model: Value, sources: &Sources<'_>, hits: &RuleHits) -> Value 
     };
     // A deny's exceptions are the allows that override it, wholly or partly.
     let overriding = |entry: &Value| {
-        ["overridden_by", "partly_overridden_by"]
-            .iter()
-            .map(|list| entry[list].as_array().map_or(0, Vec::len))
-            .sum::<usize>()
+        mutant!(
+            "M9",
+            &["overridden_by"][..],
+            &["overridden_by", "partly_overridden_by"][..]
+        )
+        .iter()
+        .map(|list| entry[list].as_array().map_or(0, Vec::len))
+        .sum::<usize>()
     };
     let lists = &mut model["tool_policy"];
+    let mut seen = std::collections::HashSet::new();
     for entry in each(&mut lists["deny"]) {
         let id = entry["entry"]
             .as_str()
             .and_then(|p| policy.entry_id("deny", p));
         let exceptions = overriding(entry);
         add(entry, id, exceptions);
+        let again = !seen.insert(entry["entry"].to_string());
+        if mutant!("M8", again, false) {
+            entry["hits_24h"] = (entry["hits_24h"].as_u64().unwrap_or(0) + 1).into();
+        }
     }
     for entry in each(&mut lists["allow"]) {
         let id = entry["entry"]
@@ -204,7 +213,11 @@ fn with_hits(mut model: Value, sources: &Sources<'_>, hits: &RuleHits) -> Value 
         "older_to": bound(|d| d.older_to),
         "split": bound(|d| d.split),
         "to": bound(|d| d.to),
-        "scope": hits.scope,
+        "scope": mutant!(
+            "M11",
+            super::activity::access::AccessScope::All,
+            hits.scope
+        ),
     });
     model
 }

@@ -267,7 +267,7 @@ impl ToolPolicy {
             .chain(config.deny.iter().cloned().map(|p| (List::Deny, p)))
             .chain(
                 builtin
-                    .filter(|_| config.use_default_deny)
+                    .filter(|_| mutant!("M16", true, config.use_default_deny))
                     .map(|p| (List::BuiltinDeny, p)),
             );
         for (at, (list, pattern)) in lists.enumerate() {
@@ -308,6 +308,9 @@ impl ToolPolicy {
         pattern: &str,
     ) -> Option<&crate::security::rule_id::RuleId> {
         let ids = self.ids.as_deref()?;
+        if mutant!("M12", list == "builtin_deny", false) {
+            return None;
+        }
         // Looked up where `from_config_keyed` filed it: prefixes by their
         // stripped prefix, exact patterns by name.
         match pattern.strip_suffix('*') {

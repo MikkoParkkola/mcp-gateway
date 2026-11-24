@@ -438,7 +438,7 @@ impl Joiner<'_, '_> {
         } else {
             NOT_A_CALL
         };
-        if !access.admits(line, kind) {
+        if !mutant!("M2", true, access.admits(line, kind)) {
             return None;
         }
         if kind == Kind::Call {
