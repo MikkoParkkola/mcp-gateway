@@ -1,0 +1,7 @@
+head_sha	731c69f69db81b74878f1e82e6d1039e55c37c0e
+#mutant XM1
+mcp_gateway	gateway::ui::backend_ops::tests::transport::xport1_a_same_kind_update_keeps_the_members_it_did_not_send	src/gateway/ui/backend_ops_transport_tests.rs:49
+#mutant XM2
+mcp_gateway	gateway::ui::backend_ops::tests::transport::xport2_an_own_card_path_never_follows_the_address_to_another_origin	src/gateway/ui/backend_ops_transport_tests.rs:204
+#mutant XM3
+mcp_gateway	gateway::ui::backend_ops::tests::transport::xport2_an_own_card_path_never_follows_the_address_to_another_origin	src/gateway/ui/backend_ops_transport_tests.rs:204
