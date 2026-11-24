@@ -1,0 +1,29 @@
+head_sha	a3716771599bda726ea87a523a805eb3fe19acf8
+#mutant M1
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p1_each_rule_carries_its_id_hits_and_exception_count	src/gateway/ui/activity/policy_hits_tests.rs:285
+#mutant M2
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p6_a_scoped_caller_counts_only_its_backends_calls	src/gateway/ui/activity/policy_hits2_tests.rs:73
+#mutant M3
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p4_complete_only_at_end_and_every_other_stop_says_why	src/gateway/ui/activity/policy_hits_tests.rs:528
+#mutant M4
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p1_each_rule_carries_its_id_hits_and_exception_count	src/gateway/ui/activity/policy_hits_tests.rs:285
+#mutant M5
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p3_a_refused_rule_keeps_its_place	src/gateway/ui/activity/policy_hits_tests.rs:453
+#mutant M6
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p1_each_rule_carries_its_id_hits_and_exception_count	src/gateway/ui/activity/policy_hits_tests.rs:285
+#mutant M7
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p10_the_window_edges	src/gateway/ui/activity/policy_hits2_tests.rs:171
+#mutant M8
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p9_two_entries_with_one_pattern_share_an_id_and_show_the_same_counts	src/gateway/ui/activity/policy_hits2_tests.rs:144
+#mutant M9
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p1_each_rule_carries_its_id_hits_and_exception_count	src/gateway/ui/activity/policy_hits_tests.rs:291
+#mutant M10
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p7_a_dark_clock_reads_null	src/gateway/ui/activity/policy_hits2_tests.rs:90
+#mutant M11
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p6_a_scoped_caller_counts_only_its_backends_calls	src/gateway/ui/activity/policy_hits2_tests.rs:74
+#mutant M12
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p1_each_rule_carries_its_id_hits_and_exception_count	src/gateway/ui/activity/policy_hits_tests.rs:299
+#mutant M14
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p4_complete_only_at_end_and_every_other_stop_says_why	src/gateway/ui/activity/policy_hits_tests.rs:554
+#mutant M16
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p11_an_inactive_built_in_deny	src/gateway/ui/activity/policy_hits2_tests.rs:259
