@@ -1380,7 +1380,10 @@ jobs:
         id: select
         continue-on-error: true
         timeout-minutes: 3
-        run: python3 scripts/ci/affected_select.py ${{ matrix.shard }} "$RUNNER_TEMP/affected-select/${{ matrix.shard }}.json"
+        env:
+          LEG: ${{ matrix.shard }}
+          RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+        run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD"
       - name: Affected tests record
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -1510,7 +1513,10 @@ jobs:
         id: select
         continue-on-error: true
         timeout-minutes: 3
-        run: python3 scripts/ci/affected_select.py ${{ matrix.shard }} "$RUNNER_TEMP/affected-select/${{ matrix.shard }}.json" --lib-bin "$RUNNER_TEMP/lib-bin"
+        env:
+          LEG: ${{ matrix.shard }}
+          RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+        run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD" --lib-bin "$RUNNER_TEMP/lib-bin"
       - name: Affected tests record
         if: ${{ !cancelled() }}
         continue-on-error: true
