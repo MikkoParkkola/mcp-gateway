@@ -1784,7 +1784,7 @@ function streamFrame(frame) {
   if (!['hello', 'status', 'reload', 'activity', 'reset'].includes(frame.event)) return;
   let detail;
   try {
-    detail = JSON.parse(frame.data);
+    detail = frame.event === 'reset' ? frame.data : JSON.parse(frame.data);
   } catch {
     return;
   }

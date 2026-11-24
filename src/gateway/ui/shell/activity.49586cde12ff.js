@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.e97c8490b811.js';
+import { register, segmented } from '/ui/assets/shell.6df4910525e6.js';
 import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
@@ -486,7 +486,7 @@ async function statusTab(body, ctx) {
   addEventListener('gateway-activity', onFrame);
   // A reset of the activity log means the same: what the list showed may be gone.
   // A reset of another log (config) leaves this list as it is.
-  const onReset = (e) => { if (e.detail?.kind === 'activity') { step('frame'); step('frame'); } };
+  const onReset = (e) => { if (e.detail?.kind === 'activity') step('frame'); };
   addEventListener('gateway-reset', onReset);
   // Leaving: the shell swaps the content out, so this list's root leaves the document.
   // The request in flight is aborted and nothing more is asked or drawn.
