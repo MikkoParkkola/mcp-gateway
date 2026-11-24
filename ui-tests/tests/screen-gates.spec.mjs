@@ -40,14 +40,9 @@ function rowTitles(screens) {
 function tableProblems(screens) {
   const out = [];
   for (const s of screens) {
-    for (const part of ['states', 'journeys']) {
+    for (const part of ['states', 'journeys', 'frames']) {
       if (!s[part]?.length) out.push(`${s.id}: no ${part}`);
     }
-    // Frames, or an empty frames array with a written reason for it; never both.
-    const listed = Array.isArray(s.frames) ? s.frames.length : 0;
-    const why = typeof s.frames_deferred === 'string' ? s.frames_deferred.trim() : '';
-    if (listed === 0 && !(Array.isArray(s.frames) && why)) out.push(`${s.id}: no frames`);
-    if (listed > 0 && s.frames_deferred !== undefined) out.push(`${s.id}: frames and frames_deferred both given`);
     const names = new Set((s.states ?? []).map((st) => st.name));
     for (const st of s.states ?? []) {
       if (typeof st.action !== 'string' || !st.action) out.push(`${s.id} ${st.name}: no main action`);

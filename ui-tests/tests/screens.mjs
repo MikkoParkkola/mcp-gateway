@@ -20,7 +20,6 @@
 //   frames    [{ file, width, height, scheme, state, data?, regions, masks }]:
 //             regions as [name, x, y, w, h, ceiling?, cause?]; masks as
 //             [x, y, w, h], painted one colour on both images and left out of the ratio
-//   frames_deferred  a non-blank string saying why `frames` is still [], given only then
 import { expect } from './base.mjs';
 
 const ADMIN = { auth: { signed_in: true, admin: true, enabled: true } };
