@@ -92,7 +92,7 @@ function schemaBlock(t, { compact = false } = {}) {
 function matching(list, query, server) {
   const q = query.trim().toLowerCase();
   return list.filter((t) => (!server || t.server === server)
-    && (!q || t.name.toLowerCase().includes(q) || t.server.toLowerCase() === q
+    && (!q || t.name.toLowerCase().includes(q) || t.server.includes(q)
       || (t.description ?? '').toLowerCase().includes(q)));
 }
 

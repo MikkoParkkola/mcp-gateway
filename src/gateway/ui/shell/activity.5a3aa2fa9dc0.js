@@ -486,7 +486,7 @@ async function statusTab(body, ctx) {
   addEventListener('gateway-activity', onFrame);
   // A reset of the activity log means the same: what the list showed may be gone.
   // A reset of another log (config) leaves this list as it is.
-  const onReset = (e) => { if (e.detail?.kind !== 'config') step('frame'); };
+  const onReset = (e) => { if (e.detail?.kind === 'activity') step('frame'); };
   addEventListener('gateway-reset', onReset);
   // Leaving: the shell swaps the content out, so this list's root leaves the document.
   // The request in flight is aborted and nothing more is asked or drawn.
@@ -495,7 +495,6 @@ async function statusTab(body, ctx) {
     left = true;
     listCore.leave(list).abort?.abort.abort();
     removeEventListener('gateway-activity', onFrame);
-    removeEventListener('gateway-reset', onReset);
     endSeen.disconnect();
     gone.disconnect();
     opened();
