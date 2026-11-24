@@ -3,7 +3,7 @@
 //! The outbound A2A bridge: an MCP client delegates to an A2A agent through
 //! the gateway (MIK-8063).
 //!
-//! A backend configured with `transport: a2a` and an `a2a_url` starts as an
+//! A backend configured with an `a2a_url` starts as an
 //! [`transport::A2aTransport`] in `Backend::start`, so a delegation runs
 //! through the same invoke funnel, pool, budgets, audit and firewall as any
 //! tool call. The agent is exposed as one tool, `send_message`.

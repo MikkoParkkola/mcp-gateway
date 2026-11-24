@@ -3,7 +3,7 @@
 //! MIK-8139 FW.3: an A2A backend beside the fixture's MCP pair, so an egress
 //! row can drive the same leak through the A2A transport. `alpha-a2a` is a
 //! real `A2aTransport` against the shared stub agent (`a2a::test_agent`); its
-//! config is `transport: a2a`, so `Backend::is_a2a` holds.
+//! config is an `a2a_url` one, so `Backend::is_a2a` holds.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -200,6 +200,23 @@ fn removed_idle_timeout_refused() {
     );
 }
 
+/// A backend's `transport` key was never read: the transport follows from the
+/// key that selects it. Our own 3.x docs showed the line, so the refusal says
+/// that, and what to do.
+#[cfg(feature = "a2a")]
+#[test]
+fn removed_backend_transport_refused() {
+    let yaml = "backends:\n  agent:\n    transport: a2a\n    a2a_url: \"https://agent.invalid\"\n";
+    removed_key_refused(yaml, "backends.agent.transport");
+    let message = refusal(yaml, &["backends.agent.transport"]);
+    for words in ["never read", "3.x docs", "follows from `a2a_url`"] {
+        assert!(
+            message.contains(words),
+            "refusal must say {words:?}; got: {message}"
+        );
+    }
+}
+
 /// F15: the WebSocket listener stays removed; a config still naming its port,
 /// even as `null` (the old default), is refused naming the key.
 #[test]
