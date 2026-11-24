@@ -280,7 +280,7 @@ impl OpenApiConverter {
         if schemes.is_empty() {
             return None;
         }
-        schemes.sort_by(|(a, _), (b, _)| a.cmp(b));
+        schemes.sort_by_key(|(name, _)| *name);
 
         // Prefer bearer HTTP auth.
         for &(name, scheme) in &schemes {

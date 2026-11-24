@@ -27,7 +27,7 @@ pub(super) fn structured_error(
     json_body(status, structured_error_body(code, message))
 }
 
-/// The OpenAPI import found other text at the address than its preview saw.
+/// The `OpenAPI` import found other text at the address than its preview saw.
 pub(crate) const DOCUMENT_CHANGED: &str = "The address now serves a different document from the one \
 you previewed, so no tools were imported. Run the preview again and import from that.";
 
@@ -38,7 +38,7 @@ from (capabilities are disabled, or no directory is configured), so the request 
 file was made. Enable capabilities with at least one directory in gateway.yaml and restart the \
 gateway.";
 
-/// An OpenAPI import from an address arrived with no digest from its preview.
+/// An `OpenAPI` import from an address arrived with no digest from its preview.
 pub(crate) const DIGEST_REQUIRED: &str = "Importing from an address needs the digest returned by its \
 preview. Preview the address, then send that digest with the import.";
 

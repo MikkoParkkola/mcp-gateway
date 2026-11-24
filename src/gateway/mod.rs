@@ -255,7 +255,7 @@ pub mod test_helpers {
         crate::capability::name_taken(name)
     }
 
-    /// The OpenAPI import's three refusal sentences, so rows in `tests/`
+    /// The `OpenAPI` import's three refusal sentences, so rows in `tests/`
     /// assert the sentences themselves. For `tests/` only, not a stable API.
     #[cfg(feature = "webui")]
     pub const DOCUMENT_CHANGED: &str = super::ui::DOCUMENT_CHANGED;
