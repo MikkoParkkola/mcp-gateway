@@ -1,0 +1,3 @@
+head_sha	9dab04d9a2a89d15da4f5a7d87f4fe033a8e8aa3
+#mutant w-drop
+mcp_gateway	config_reload::grant_reload_trigger_tests::w_a_watcher_driven_config_reload_applies_a_revocation	src/config_reload/grant_reload_trigger_tests.rs:272
