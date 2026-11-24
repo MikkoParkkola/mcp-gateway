@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A gateway with no capability directory (capabilities off, or on with an
-//! empty list) refuses the OpenAPI import and the capability create route
+//! empty list) refuses the `OpenAPI` import and the capability create route
 //! before it fetches or writes anything. The gateway runs as a child (the
 //! shared HTTP fixture) whose working directory is a fresh folder, never the
 //! repository; a sentinel `capabilities/` folder there makes a write into the
