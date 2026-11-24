@@ -547,6 +547,7 @@ DOC_MENTIONS_ALLOWED: dict[tuple[str, str], str] = {
     ("docs/control_plane.md", "schema_version"): "a field of the control-plane API response, not a gateway config key",
     ("docs/CLI.md", "schema_version"): "a field of the JSON error document the CLI prints (src/commands/cli_exit.rs, CliError::outcome), not a gateway config key",
     ("docs/runtime/descriptor_spec.md", "max_entries"): "a field of the Hebb sandbox descriptor schema, not gateway config",
+    ("docs/SHADOW_SCAN.md", "transport"): "a field of a shadow-scan finding (its transport kind), not a gateway config key",
 }
 
 

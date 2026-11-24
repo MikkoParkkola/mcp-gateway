@@ -428,13 +428,27 @@ callers.
 
 ```yaml
 accounts:
-  # ...existing schema_version, enabled, deployment, instance_id, store_dir,
-  # authority_dir, current_key_id, keys unchanged...
+  # Unchanged from your existing accounts block:
+  enabled: true
+  deployment: single_process
+  instance_id: gateway-a
+  store_dir: /var/lib/mcp-gateway/accounts/store
+  authority_dir: /var/lib/mcp-gateway/accounts/authority
+  current_key_id: current
+  keys:
+    current: env:ACCOUNTS_KEY   # base64 of a 32-byte key
+  # New:
   hosted:
     public_origin: "https://chat.example.com"   # https origin only: no path, query, userinfo or default port
     return_paths: ["/"]                          # absolute paths the outcome page may land on; compared byte-exact
   adapters:
-    - kind: openwebui_signed_header               # existing fields (installation_id, header, issuer, hmac_secret_ref, ...) unchanged
+    - kind: openwebui_signed_header
+      # Unchanged adapter fields:
+      installation_id: owui-prod-1
+      header: X-OpenWebUI-Assertion
+      issuer: open-webui
+      hmac_secret_ref: env:OPENWEBUI_ADAPTER_HMAC
+      allowed_api_key_names: [owui-gateway-key]
       session:                                     # new, required: enables the connect-link bridge; exactly one adapter may carry it
         user_endpoint: "http://127.0.0.1:8090/api/v1/auths/"   # Open WebUI's session-user endpoint; https, or http on a loopback literal
         cookie_name: token                          # Open WebUI's session cookie name (default "token")

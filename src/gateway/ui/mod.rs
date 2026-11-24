@@ -58,6 +58,9 @@ mod policies_part2;
 mod policies_part2_tests;
 #[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
+mod policies_read_only_tests;
+#[cfg(tp3)]
+#[cfg(all(test, feature = "firewall"))]
 mod policies_relay_tests;
 #[cfg(feature = "firewall")]
 mod policies_rules;
@@ -870,6 +873,11 @@ mod keys_create_tests;
 #[cfg(test)]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "key_name_tests.rs"]
+mod key_name_tests;
 
 #[cfg(tp3)]
 #[cfg(test)]

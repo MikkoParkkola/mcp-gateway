@@ -77,7 +77,6 @@ fn r7b_the_relay_lists_classes_and_precondition() {
         relay["inferred_classes"],
         json!(crate::security::firewall::SENSITIVE_CLASSES)
     );
-    assert_eq!(relay["read_only"], json!(true));
     assert_eq!(
         relay["firewall"],
         switch(&format!("{FW}.enabled"), true, true)
@@ -276,4 +275,41 @@ fn r7h_each_detector_setting_waits_for_a_restart() {
             "{field}"
         );
     }
+}
+
+// rc4: the relay carries its read-only flag per setting, never for the whole
+// section: only its action is one the save can change.
+#[test]
+fn rc4_the_relay_flags() {
+    let model = read_model(&Config::default());
+    let relay = &model["relay"];
+    assert_eq!(relay["action"]["read_only"], false, "{relay}");
+    for name in ["sources", "non_egress", "allowed_flows", "firewall"] {
+        assert_eq!(relay[name]["read_only"], true, "{name}: {relay}");
+    }
+    for i in 0..3 {
+        assert_eq!(
+            relay["detector"][i]["read_only"], true,
+            "detector {i}: {relay}"
+        );
+    }
+    let mut keys: Vec<&str> = relay
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "action",
+            "allowed_flows",
+            "detector",
+            "effect",
+            "firewall",
+            "inferred_classes",
+            "non_egress",
+            "sources",
+        ],
+        "no section-wide read_only: {relay}"
+    );
 }

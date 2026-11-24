@@ -339,7 +339,8 @@ class Run:
     trace_rc: int
     trace_text: str | None
     covered: set[str]
-    coverage_ok: bool = True
+    # No default: a caller that forgot it would mark a unit covered, and selection would skip its tests.
+    coverage_ok: bool
 
 
 _RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
