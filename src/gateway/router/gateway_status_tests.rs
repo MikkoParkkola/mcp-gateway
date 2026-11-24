@@ -24,12 +24,18 @@ const ROUTE: &str = "/ui/api/gateway";
 const ADMIN: &str = "gateway-status-admin-key";
 const STANDARD: &str = "gateway-status-standard-key";
 
+/// A key's name, never its secret, so a read that showed a secret cannot
+/// pass for one that named the key.
+fn name_of(secret: &str) -> &'static str {
+    if secret == ADMIN { "admin" } else { "standard" }
+}
+
 fn key(secret: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
         key: None,
         key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
         expires_at: None,
-        name: secret.to_string(),
+        name: name_of(secret).to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -90,6 +96,14 @@ async fn get_at(state: &Arc<AppState>, uri: &str, bearer: Option<&str>) -> (Stat
 async fn read(state: &Arc<AppState>) -> Value {
     let (status, body) = get_at(state, ROUTE, Some(ADMIN)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    for secret in [ADMIN, STANDARD] {
+        let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+        let hex = digest.trim_start_matches("sha256:");
+        assert!(
+            !body.contains(secret) && !body.contains(hex),
+            "a secret in the status read: {body}"
+        );
+    }
     serde_json::from_str(&body).expect("a JSON body")
 }
 
@@ -400,7 +414,7 @@ async fn a_reported_name_does_not_change_what_a_session_may_do() {
     };
     let (status, plain, _) = mcp(&state, STANDARD, None, &init("honest-client")).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, spoof, _) = mcp(&state, STANDARD, None, &init(ADMIN)).await;
+    let (status, spoof, _) = mcp(&state, STANDARD, None, &init(name_of(ADMIN))).await;
     assert_eq!(status, StatusCode::OK);
     let list = serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
     let (status, _, plain_tools) = mcp(&state, STANDARD, plain.as_deref(), &list).await;
