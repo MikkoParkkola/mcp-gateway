@@ -153,19 +153,17 @@ pub(super) fn cells(entry: &Value) -> Value {
 
 /// Every rule entry of a model.
 pub(super) fn entries(model: &Value) -> Vec<&Value> {
-    let list = |v: &Value| {
-        v.as_array()
-            .map(|a| a.iter().collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
     let policy = &model["tool_policy"];
     [
-        list(&model["finding_rules"]),
-        list(&policy["deny"]),
-        list(&policy["allow"]),
-        list(&policy["default_denies"]),
+        &model["finding_rules"],
+        &policy["deny"],
+        &policy["allow"],
+        &policy["default_denies"],
     ]
-    .concat()
+    .into_iter()
+    .filter_map(Value::as_array)
+    .flatten()
+    .collect()
 }
 
 /// The model without the members this ticket adds.
