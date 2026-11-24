@@ -391,6 +391,7 @@ fn p2_counts_only() {
         "tool_limits",
         "finding_rules",
         "tool_policy",
+        "request_checks",
     ];
     assert_eq!(keys(&model), sorted(&top));
     let hits = [
