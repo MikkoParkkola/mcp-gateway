@@ -61,7 +61,11 @@ pub(crate) fn standing(inputs: &Inputs<'_>) -> Standing {
     // The check's own sum: judged spend plus the call's price, against the
     // limit, under the same rules.
     let blocking = inputs.cheapest.is_some_and(|cheapest| {
-        evaluate_alerts(inputs.rules, inputs.judged + cheapest, limit) == Some(AlertAction::Block)
+        evaluate_alerts(
+            inputs.rules,
+            mutant!("blk-rec", inputs.judged, inputs.judged + cheapest),
+            limit,
+        ) == Some(AlertAction::Block)
     });
     // The record's limit is the config value it was refused under, compared
     // bit for bit: a reload to any other limit drops it.
@@ -124,7 +128,15 @@ pub(crate) fn add_members(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            let rate = now.and_then(|now| tracker.key_rate_3h(&key, now));
+            let rate = mutant!(
+                "s10b-zero",
+                Some(0.0),
+                mutant!(
+                    "s10b-key",
+                    now.and_then(|now| tracker.key_rate_3h("ci", now)),
+                    now.and_then(|now| tracker.key_rate_3h(&key, now))
+                )
+            );
             let members = match read {
                 None => json!({
                     "at_limit": null, "blocking": null, "blocked_since": null,
@@ -164,7 +176,11 @@ pub(crate) fn add_members(
         .zip(now)
         .map(|((enforcer, _), now)| enforcer.resets_at(now));
     fields.insert("resets_at".to_owned(), json!(resets_at));
-    if read.is_some_and(|(_, governance)| !ordered(&governance.alerts)) {
+    if mutant!(
+        "s2f-none",
+        false,
+        read.is_some_and(|(_, governance)| !ordered(&governance.alerts))
+    ) {
         fields.insert("alert_rules".to_owned(), json!("unordered"));
     }
 }

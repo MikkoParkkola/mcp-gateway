@@ -258,7 +258,7 @@ impl KeyCost {
             .hours
             .rows()
             .into_iter()
-            .filter(|(h, ..)| (first..hour).contains(h))
+            .filter(|(h, ..)| mutant!("s7-cur", (first..=hour).contains(h), (first..hour).contains(h)))
             .fold(0u64, |sum, (.., micro)| sum.saturating_add(micro));
         #[allow(clippy::cast_precision_loss)]
         let usd = micro as f64 / 1_000_000.0;

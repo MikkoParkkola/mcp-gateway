@@ -50,7 +50,11 @@ impl BudgetEnforcer {
             .and_modify(|held| {
                 // The same config value, bit for bit: no margin is wanted.
                 if held.day == today && held.limit.to_bits() == limit.to_bits() {
-                    held.at_secs = held.at_secs.min(now);
+                    held.at_secs = mutant!(
+                        "s5-ovr",
+                        now,
+                        mutant!("s5b-fww", held.at_secs, held.at_secs.min(now))
+                    );
                 } else {
                     *held = fresh;
                 }

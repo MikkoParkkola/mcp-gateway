@@ -619,7 +619,21 @@ impl BudgetEnforcer {
             // has begun meanwhile, is newer and stays, and an unknown day
             // removes nothing.
             self.key_refused
-                .retain(|_, held| today.is_none_or(|today| held.day >= today));
+                .retain(|_, held| {
+                    mutant!(
+                        "s5d-all",
+                        true,
+                        mutant!(
+                            "s5d-eq",
+                            Some(held.day) == today,
+                            mutant!(
+                                "s5d-gt",
+                                today.is_none_or(|today| held.day > today),
+                                today.is_none_or(|today| held.day >= today)
+                            )
+                        )
+                    )
+                });
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }

@@ -53,7 +53,11 @@ pub(crate) fn next_reset<Z: TimeZone>(zone: &Z, now: u64, legacy_utc: bool) -> u
     } else {
         // The day's own end: a day is 23 or 25 hours across a DST change, so
         // its start plus 86 400 would miss the midnight by an hour.
-        local_day(zone, now).end
+        mutant!(
+            "s6-day",
+            local_day(zone, now).start + 86_400,
+            local_day(zone, now).end
+        )
     }
 }
 

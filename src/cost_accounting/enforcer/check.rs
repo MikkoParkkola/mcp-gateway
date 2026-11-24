@@ -82,7 +82,14 @@ impl BudgetEnforcer {
                         ));
                     }
                     AlertAction::Block => {
-                        blocked = true;
+                        blocked = mutant!(
+                            "s5-tool",
+                            {
+                                key_refusal = Some(limit);
+                                true
+                            },
+                            true
+                        );
                         block_reason = Some(format!(
                             "Tool '{tool_name}' daily budget exceeded: ${projected:.4} >= ${limit:.2}"
                         ));
