@@ -1,0 +1,3 @@
+head_sha	ffaf1d308d50770f7f9939d880eae658fdabc7ec
+#mutant m16
+mcp_gateway	gateway::ui::gateway_health::tests::g4_the_served_history_survives_restart	src/gateway/ui/gateway_health_tests.rs:261
