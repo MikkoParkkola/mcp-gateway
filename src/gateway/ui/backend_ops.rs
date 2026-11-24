@@ -373,7 +373,11 @@ pub fn update_backend(
         backend.enabled = enabled;
     }
     if let Some(transport) = update.transport {
-        backend.transport = merged_transport(backend.transport.clone(), transport);
+        backend.transport = mutant!(
+            "XM1",
+            transport,
+            merged_transport(backend.transport.clone(), transport)
+        );
     }
     if let Some(idle) = update.stop_when_idle_for {
         // Refuse rather than silently drop. The panel is a place operators trust
