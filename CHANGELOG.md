@@ -6669,6 +6669,56 @@ Router guards: the direct-route response firewall reads the tool name from the v
   point at `3.3.2` (were stale at `2.19.0`); both chart `version`s bumped to
   `0.1.1`.
 
+## [3.3.1] - 2026-07-13
+
+### Security
+
+- **SSE transport: endpoints and redirects are checked after the URL is
+  resolved (#356).** The same-origin guard for the SSE `endpoint` event checked
+  only endpoints that began with a scheme, so a network-path or backslash form
+  (`//169.254.169.254/...`, `\\host/x`, `/\host/x`) replaced the authority and
+  went unchecked. Every endpoint is now resolved against the base URL and the
+  resolved origin is checked. The SSE redirect policy enforces the same origin,
+  and the SSE handshake buffer is capped at 64 KiB. An unused Tailscale
+  identity-header parser, which trusted inbound headers and had no callers, is
+  removed.
+- **Identity propagation fails closed when its audit record cannot be written
+  (#355).** A per-user credential minted for a caller is no longer returned
+  when the transparency-log write fails; the call fails instead. A refusal whose
+  audit write fails still refuses, and logs the failure.
+
+### Changed
+
+- **A lint for secrets in Debug output and logs (#354).**
+  `scripts/dev/cwe532-leak-lint.py` fails a pull request that derives `Debug`
+  over a secret-shaped field or logs a secret-shaped variable, and the release
+  workflow runs it before publishing. Findings that predate it are listed in
+  `scripts/dev/cwe532-baseline.txt`.
+- **The README is restructured for first-time readers and explains the
+  licensing model (#357).**
+- **npm publishing runs on Node 22 (#352).** npm 12 needs Node 22 or later, so
+  the 3.3.0 npm publish failed on Node 20 while the other channels published.
+
+## [3.3.0] - 2026-07-12
+
+### Changed
+
+- **BREAKING: per-file licensing (#349, #350).** The repository default is now
+  PolyForm Noncommercial 1.0.0; files marked `SPDX-License-Identifier: MIT` stay
+  MIT. Commercial use of the noncommercial-licensed code needs a commercial
+  license (`COMMERCIAL.md`). Versions 3.0.0 to 3.2.1 were published under MIT,
+  and that grant stays for those exact artifacts; they are now deprecated on npm
+  and yanked on crates.io, so new installs resolve to 3.3.0. `LICENSES.md` and
+  `NOTICE.md` describe the model.
+
+### Fixed
+
+- **OAuth discovery for an authorization server whose issuer has a path (#346,
+  #347).** The `.well-known` metadata URL is now built as RFC 8414 §3.1 and
+  RFC 9728 §3 require, with `.well-known/<suffix>` between the host and the
+  path, instead of after the path, which returned 404. Reported by @crepererum.
+- **Cargo.lock carries the 3.3.0 version bump (#351).**
+
 ## [3.2.1] - 2026-07-07
 
 ### Changed
@@ -7333,7 +7383,7 @@ credential path.
 
 - Resolved all 243 clippy pedantic warnings; `#![warn(missing_docs)]` enabled.
 
-## [2.0.0] - 2025-01-25
+## [2.0.0] - 2026-01-25
 
 ### Changed
 
@@ -7376,7 +7426,7 @@ credential path.
 - Python implementation (see v1.0.0 for Python version)
 - Pydantic configuration (replaced with figment + serde)
 
-## [1.0.0] - 2025-01-24
+## [1.0.0] - 2026-01-25
 
 ### Added
 

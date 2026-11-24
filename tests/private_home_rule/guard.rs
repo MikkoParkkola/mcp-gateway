@@ -221,7 +221,9 @@ fn g1_every_listed_test_starts_with_the_rule() {
     let tests_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let mut found = std::collections::BTreeSet::new();
     let mut late = Vec::new();
-    for path in rust_files(&tests_dir) {
+    let mut sources = Vec::new();
+    crate::test_source_files::rust_files(&tests_dir, &mut sources);
+    for path in sources {
         if path.ends_with("common/private_home.rs") {
             continue;
         }
@@ -315,17 +317,4 @@ fn g1_matches_only_the_whole_rule_statement() {
     ] {
         assert!(!is_rule_statement(refused), "should refuse {refused:?}");
     }
-}
-
-fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).expect("readable dir").flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    out
 }

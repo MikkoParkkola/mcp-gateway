@@ -5,7 +5,9 @@
 //! the file it opens holds a secret or decides whom the gateway trusts.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::test_source_files::rust_files;
 
 /// (path, why its raw file I/O needs no mode check, or where the check is).
 const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
@@ -515,17 +517,6 @@ fn is_test_path(path: &Path) -> bool {
             let name = name.to_string_lossy();
             name.contains("e2e") || name.contains("fixture")
         })
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read src") {
-        let path = entry.expect("dir entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Whether a source file's non-test code has a raw read or write. Each

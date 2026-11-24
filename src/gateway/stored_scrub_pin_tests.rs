@@ -133,7 +133,9 @@ fn every_stored_read_is_a_scrubbed_exit_or_named() {
 fn the_stored_task_wire_has_only_listed_callers() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
-    for entry in walk(&root.join("src")) {
+    let mut sources = Vec::new();
+    crate::test_source_files::rust_files(&root.join("src"), &mut sources);
+    for entry in sources {
         let rel = entry.strip_prefix(root).expect("under the crate");
         let rel = rel.to_string_lossy().replace('\\', "/");
         if rel.ends_with("_tests.rs")
@@ -157,17 +159,4 @@ fn the_stored_task_wire_has_only_listed_callers() {
         found, listed,
         "a new caller of delivered_wire serves stored task output"
     );
-}
-
-fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).expect("src reads") {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            out.extend(walk(&path));
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-    out
 }

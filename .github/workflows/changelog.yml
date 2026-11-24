@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 scripts/release/test_changelog_fragments.py
           python3 scripts/release/test_check_security_fragments.py
+          python3 scripts/release/test_check_changelog_sections.py
       - name: Require a fragment for a src/ change
         env:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
@@ -40,6 +41,10 @@ jobs:
         run: python3 scripts/release/check_security_fragments.py changelog.d
       - name: Fragments assemble cleanly
         run: python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null
+      # Every version section in CHANGELOG.md has its v<version> tag and none
+      # appears twice; the checkout above uses fetch-depth 0, which brings tags.
+      - name: CHANGELOG version sections match release tags
+        run: python3 scripts/release/check_changelog_sections.py
       # MIK-8185: an UPGRADING fragment leaves only by being folded into the
       # guide (its numbered section, row and notice phrase), never by deletion.
       - name: UPGRADING fragments leave only by being folded in

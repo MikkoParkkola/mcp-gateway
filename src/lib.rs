@@ -137,6 +137,9 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+#[cfg(tp3)]
+#[cfg(test)]
+mod print_sites_tests;
 
 // The preview sandbox's test seams must never ship: a release build with them
 // fails here, and CI proves it with a build that must fail.
@@ -214,6 +217,12 @@ pub(crate) mod test_late_write;
 mod test_pause;
 #[cfg(test)]
 mod test_ports;
+#[cfg(test)]
+#[allow(dead_code, reason = "parts without a scan never call it")]
+pub(crate) mod test_source_files;
+#[cfg(tp3)]
+#[cfg(test)]
+mod test_source_files_tests;
 #[cfg(test)]
 pub(crate) mod test_source_text;
 #[cfg(tp3)]

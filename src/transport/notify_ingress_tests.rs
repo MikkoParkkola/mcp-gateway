@@ -212,19 +212,9 @@ const NEEDLES: &[&str] = &[
 
 #[test]
 fn every_way_into_the_sink_is_classified() {
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("a source dir") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push(path);
-            }
-        }
-    }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(&root.join("src"), &mut files);
+    crate::test_source_files::rust_files(&root.join("src"), &mut files);
     let mut found = std::collections::BTreeMap::new();
     for path in files {
         // Joined with `/` on every OS, so the keys and the exclusions below
