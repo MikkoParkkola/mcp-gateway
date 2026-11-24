@@ -319,45 +319,26 @@ pub(super) fn row(line: &Line, check: &Check<'_>, joined: &Joined) -> Option<Val
                 &["reason", "scope", "capability", "grant_id"],
             );
             row.insert("decision".into(), decision.into());
-            row.insert("who".into(), named_who(e));
+            let mut who = Map::new();
+            if let Some(w) = e.get("who") {
+                copy(&mut who, w, &["account", "authority", "subject"]);
+            }
+            row.insert("who".into(), who.into());
         }
         Kind::Config => {
             copy(&mut row, e, &["action", "actor_id", "target_id"]);
             row.insert("outcome".into(), "change".into());
         }
         Kind::AdminAction => {
-            // A capability editor's record also says what changed; the file
-            // hashes stay in the log.
             copy(
                 &mut row,
                 e,
-                &[
-                    "surface",
-                    "route",
-                    "method",
-                    "http_status",
-                    "tool",
-                    "action",
-                    "capability",
-                    "pin",
-                ],
+                &["surface", "route", "method", "http_status", "tool"],
             );
             row.insert("outcome".into(), "change".into());
-            row.insert("who".into(), named_who(e));
         }
     }
     Some(row.into())
-}
-
-/// Who acted, by name only: the account and the identity it signed in with,
-/// never the key's principal or kind. Present, maybe empty, on every row
-/// that has it, so the screen never has to ask whether the key exists.
-fn named_who(e: &Value) -> Value {
-    let mut who = Map::new();
-    if let Some(w) = e.get("who") {
-        copy(&mut who, w, &["account", "authority", "subject"]);
-    }
-    who.into()
 }
 
 /// A call's request-side findings, from its decision record alone: the
@@ -429,13 +410,7 @@ impl Filter {
         }
         if let Some(q) = &self.q {
             let tool = str_field(e, "tool");
-            // A capability save has no tool; its capability is what it names.
-            let capability = || {
-                kind == Kind::AdminAction
-                    && str_field(e, "capability").is_some_and(|c| c.contains(q.as_str()))
-            };
             let hit = tool.is_some_and(|t| t.contains(q.as_str()))
-                || capability()
                 || (kind.is_call() && str_field(e, "trace_id") == Some(q.as_str()));
             if !hit {
                 return false;
