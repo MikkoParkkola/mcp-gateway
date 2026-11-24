@@ -47,8 +47,12 @@ impl BudgetEnforcer {
 
         // One step from here to the reservation below. Nothing in it waits or
         // writes a log: alerts are recorded and emitted after the lock is gone.
-        let today = self.today().ok();
+        // One clock read for the day and for a key refusal's record.
+        let now = crate::clock::unix_secs().ok();
+        let today = now.map(|secs| self.day_key(secs));
         let mut pending = locked(&self.ledger);
+        // A refusal under the key's own limit, recorded once the lock is gone.
+        let mut key_refusal: Option<f64> = None;
         let mut logs: Vec<DeferredLog> = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         let mut blocked = false;
@@ -141,6 +145,7 @@ impl BudgetEnforcer {
                     }
                     AlertAction::Block => {
                         blocked = true;
+                        key_refusal = Some(limit);
                         block_reason = Some(format!(
                             "API key '{key_name}' daily budget exceeded: ${projected:.4} >= ${limit:.2}"
                         ));
@@ -159,6 +164,11 @@ impl BudgetEnforcer {
             })
         });
         drop(pending);
+        if let (Some(limit), Some(key), Some(today), Some(now)) =
+            (key_refusal, api_key_name, today, now)
+        {
+            self.note_first_block(key, today, now, limit);
+        }
         for log in logs {
             log.emit();
         }
