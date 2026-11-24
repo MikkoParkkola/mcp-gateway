@@ -61,3 +61,29 @@ pub(super) fn merged_transport(stored: TransportConfig, new: TransportConfig) ->
         (_, new) => new,
     }
 }
+
+/// Whether `merged` takes an A2A server whose card path is not the default
+/// one to another origin (scheme, host or port). The update cannot set the
+/// card path, and a path may carry a token, so the gateway would fetch it,
+/// token and all, from a host nobody chose for it. A URL that does not parse
+/// counts as another origin.
+#[cfg(feature = "a2a")]
+pub(super) fn card_leaves_origin(stored: &TransportConfig, merged: &TransportConfig) -> bool {
+    let (
+        TransportConfig::A2a {
+            a2a_url: old,
+            a2a_agent_card_path: Some(path),
+        },
+        TransportConfig::A2a { a2a_url: new, .. },
+    ) = (stored, merged)
+    else {
+        return false;
+    };
+    if path == crate::a2a::types::DEFAULT_CARD_PATH {
+        return false;
+    }
+    match (url::Url::parse(old), url::Url::parse(new)) {
+        (Ok(old), Ok(new)) => old.origin() != new.origin(),
+        _ => true,
+    }
+}

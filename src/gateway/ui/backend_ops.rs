@@ -99,7 +99,10 @@ pub struct BackendUpdate {
     /// Enable or disable the backend.
     pub enabled: Option<bool>,
     /// A new command or address: of the stored transport's kind, only that
-    /// value is taken (see `merged_transport`); else it replaces the whole.
+    /// value is taken and any folder, protocol version, HTTP mode or card path
+    /// it carries is ignored; an HTTP address on an A2A server keeps it A2A.
+    /// Another kind replaces the transport whole. An A2A address on another
+    /// origin is refused while the stored card path is not the default one.
     pub transport: Option<TransportConfig>,
     /// Stop this backend when it has been idle this long, or clear the setting.
     ///
@@ -357,7 +360,8 @@ pub fn remove_backend(config: &mut Config, name: &str) -> Result<(), String> {
 ///
 /// `Err(String)` when no backend with `name` exists, or when a secret
 /// reference in the updated backend does not resolve (the message then
-/// carries [`UNRESOLVED_SECRETS`]).
+/// carries [`UNRESOLVED_SECRETS`]), or when it would move an A2A server with
+/// its own card path to another origin ([`CARD_TO_OTHER_ORIGIN`]).
 pub fn update_backend(
     config: &mut Config,
     name: &str,
@@ -381,7 +385,15 @@ pub fn update_backend(
         backend.enabled = enabled;
     }
     if let Some(transport) = update.transport {
-        backend.transport = merged_transport(backend.transport.clone(), transport);
+        let merged = merged_transport(backend.transport.clone(), transport);
+        #[cfg(feature = "a2a")]
+        if transport_merge::card_leaves_origin(&backend.transport, &merged) {
+            return Err(format!(
+                "Backend '{name}' {CARD_TO_OTHER_ORIGIN}; change the address and the card \
+                 path together in gateway.yaml."
+            ));
+        }
+        backend.transport = merged;
     }
     if let Some(idle) = update.stop_when_idle_for {
         // Refuse rather than silently drop. The panel is a place operators trust
