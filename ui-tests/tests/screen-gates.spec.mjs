@@ -45,8 +45,17 @@ function tableProblems(screens) {
     }
     // Frames, or an empty frames array with a written reason for it; never both.
     const listed = Array.isArray(s.frames) ? s.frames.length : 0;
-    const why = typeof s.frames_deferred === 'string' ? s.frames_deferred.trim() : '';
-    if (listed === 0 && !(Array.isArray(s.frames) && why)) out.push(`${s.id}: no frames`);
+    // Throwaway probe: each repeat of a row runs against one mutant of the rule.
+    const mutant = ['K1', 'K2', 'K3', 'K8', 'K0'][test.info().repeatEachIndex];
+    console.log(`probe ${mutant} in "${test.info().title}"`);
+    const whyOf = {
+      K1: () => typeof s.frames_deferred === 'string',
+      K2: () => s.frames_deferred !== undefined,
+      K3: () => s.frames_deferred,
+    }[mutant] ?? (() => (typeof s.frames_deferred === 'string' ? s.frames_deferred.trim() : ''));
+    const why = whyOf();
+    const said = mutant === 'K8' ? `${s.id}: frames missing` : `${s.id}: no frames`;
+    if (mutant !== 'K0' && listed === 0 && !(Array.isArray(s.frames) && why)) out.push(said);
     if (listed > 0 && s.frames_deferred !== undefined) out.push(`${s.id}: frames and frames_deferred both given`);
     const names = new Set((s.states ?? []).map((st) => st.name));
     for (const st of s.states ?? []) {
