@@ -111,9 +111,29 @@ async function unreachedControls(page, state, { width, plant }) {
     if (!inside) return [`press ${i + 1} (${key}) moved focus out of the trap`];
   }
   if (trap) await expect(trap, 'the trap is still open after the walk').toBeVisible();
-  return page.evaluate(([sel, scope]) => [...(scope ?? document).querySelectorAll(sel)]
+  // Read while the trap is still open: once it closes, its controls no longer show.
+  const missed = await page.evaluate(([sel, scope]) => [...(scope ?? document).querySelectorAll(sel)]
     .filter((el) => el.checkVisibility() && !el.disabled && !el.hasAttribute('data-g2b-reached'))
     .map((el) => el.outerHTML.slice(0, 80)), [FOCUSABLE, root]);
+  if (!trap) return missed;
+  // One Escape shuts the trap, and focus comes back to the control that opened it. Both
+  // waits end as a fault in the list, never as a throw, so a plant row reads the fault.
+  await page.keyboard.press('Escape');
+  try {
+    await expect(trap).toBeHidden();
+  } catch {
+    return [...missed, 'trap still visible after Escape'];
+  }
+  try {
+    await expect(state.opener(page)).toBeFocused();
+  } catch {
+    const holder = await page.evaluate(() => {
+      const el = document.activeElement;
+      return !el || el === document.body ? 'body' : el.outerHTML.slice(0, 80);
+    });
+    return [...missed, `focus on ${holder} after Escape, expected the opener`];
+  }
+  return missed;
 }
 
 // ---- G4: record every animation as it starts, then judge them all. ----
