@@ -284,9 +284,10 @@ async fn r2b_the_stdio_hurry_hands_the_child_over_and_the_stop_waits_for_it() {
         .await
         .expect("the hurried stop came back");
     assert!(
-        gone_within(&pid, Duration::from_millis(300)).await,
-        "child {pid} was still running when the hurried stop came back"
+        rig.registry.stop_deadline().handed_all_reaped(),
+        "the hurried stop came back before child {pid} was reaped"
     );
+    assert!(!alive(&pid), "child {pid} still running at the return");
 }
 
 /// R3. Graceful: the child reads up to the end of its input and leaves its
@@ -426,6 +427,7 @@ async fn r8_a_stop_racing_an_eviction_still_ends_the_evicted_child() {
     crate::test_pause::within("the eviction's pause", reached.notified()).await;
 
     let (returned, stopping) = stop_on_thread(Arc::clone(&rig.registry));
+    // limit-under-test (fires-only): the fixed stop waits on the held lock, so this window always runs out
     let returned_early = returned.recv_timeout(Duration::from_millis(300)).is_ok();
     let running_after_early_return = returned_early && alive(&pid);
     release.now();
@@ -441,9 +443,10 @@ async fn r8_a_stop_racing_an_eviction_still_ends_the_evicted_child() {
         "the stop came back while evicted child {pid}, out of the map, still ran"
     );
     assert!(
-        gone_within(&pid, Duration::from_millis(300)).await,
-        "evicted child {pid} was still running when the stop came back"
+        rig.registry.stop_deadline().handed_all_reaped(),
+        "the stop came back before evicted child {pid} was reaped"
     );
+    assert!(!alive(&pid), "evicted child {pid} still running");
 }
 
 /// R9. The running child of a key goes stale for a call whose start then
