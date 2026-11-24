@@ -1,0 +1,18 @@
+head_sha	119159efbca254daa0b67905ef8950bc73e3920d
+#mutant J1
+mcp_gateway	transport::stdio::child_tree::signal_log::tests::the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only	src/transport/stdio_child_tree_signal_log_tests.rs:38
+#mutant J2
+mcp_gateway	transport::stdio::child_tree::signal_log::tests::the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only	src/transport/stdio_child_tree_signal_log_tests.rs:38
+#mutant M1
+mcp_gateway	transport::stdio::child_tree::tests::stop::the_last_late_step_with_room_for_the_minimum_phase_still_sends_sigterm	src/transport/stdio_child_tree_stop_tests.rs:604
+#mutant M2
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound	src/transport/stdio_child_tree_signal_log.rs:430
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_cut_stop_still_sends_sigterm_before_the_kill	src/transport/stdio_child_tree_signal_log.rs:430
+#mutant M3
+mcp_gateway	transport::stdio::child_tree::tests::stop::the_last_late_step_with_room_for_the_minimum_phase_still_sends_sigterm	src/transport/stdio_child_tree_stop_tests.rs:605
+#mutant M4
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline	src/transport/stdio_child_tree_stop_tests.rs:103
+#mutant M5
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_sigterm_due_before_a_short_cut_was_made_is_still_sent	src/transport/stdio_child_tree_stop_tests.rs:738
+#mutant M6
+mcp_gateway	transport::stdio::child_tree::tests::stop::a_short_cut_made_before_the_sigterm_was_due_still_skips_it	src/transport/stdio_child_tree_stop_tests.rs:775
