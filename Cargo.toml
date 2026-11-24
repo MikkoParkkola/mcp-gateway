@@ -150,7 +150,7 @@ rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 time = { version = "0.3.47", default-features = false }
 x509-parser = "0.18"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum-server = { version = "0.9", features = ["tls-rustls"] }
 tokio-rustls = "0.26"
 
 # XML parsing (for APIs that return XML, e.g. ECB exchange rates)
