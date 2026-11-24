@@ -52,6 +52,9 @@ function tableProblems(screens) {
     for (const st of s.states ?? []) {
       if (typeof st.action !== 'string' || !st.action) out.push(`${s.id} ${st.name}: no main action`);
       if (typeof st.step !== 'function') out.push(`${s.id} ${st.name}: no step`);
+      // A modal state names the control that focus returns to after Escape.
+      const opens = st.opener instanceof Function;
+      if (st.trap !== undefined && !opens) out.push(`${s.id} ${st.name}: trap without opener`);
     }
     for (const f of s.frames ?? []) {
       if (!f.regions?.length) out.push(`${s.id} ${f.file}: compares no region`);
