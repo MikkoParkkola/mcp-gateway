@@ -201,60 +201,74 @@ fn h3_a_bad_header_name_is_refused_and_never_echoed() {
 /// H4: a bad header value, two names that are one header, a URL that does
 /// not parse, and the override without a URL are each refused by field
 /// before the store; each case also carries a value the store would take.
-#[tokio::test]
-async fn h4_header_values_duplicate_names_a_bad_url_and_a_stray_override_are_refused_before_the_store()
- {
-    let panel = Panel::new().await;
-    let before = panel.text();
+/// Neither that value nor a bad header value reaches the answer or the log.
+#[test]
+fn h4_header_values_duplicate_names_a_bad_url_and_a_stray_override_are_refused_before_the_store() {
     let bearer = format!("Bearer {TOKEN}");
     let url = "https://host.example/mcp";
-    for (body, reason, field) in [
-        (
-            json!({"name": "h", "url": url, "headers": {"X-A": "a\nb", "Authorization": bearer}}),
-            "header_value",
-            "headers",
-        ),
-        (
-            json!({"name": "h", "url": url, "headers": {"X-A": "a\u{0}b", "Authorization": bearer}}),
-            "header_value",
-            "headers",
-        ),
-        (
-            json!({"name": "h", "url": url, "headers": {"Authorization": bearer, "authorization": "x"}}),
-            "header_name",
-            "headers",
-        ),
-        (
-            json!({"name": "h", "url": "http://", "headers": {"Authorization": bearer}}),
-            "url_invalid",
-            "url",
-        ),
-        (
-            json!({"name": "c", "command": "npx tool", "env": {"API_KEY": TOKEN},
-                "allow_cleartext_credentials": true}),
-            "override_needs_url",
-            "allow_cleartext_credentials",
-        ),
-        (
-            json!({"name": "github", "env": {"GITHUB_TOKEN": TOKEN},
-                "allow_cleartext_credentials": true}),
-            "override_needs_url",
-            "allow_cleartext_credentials",
-        ),
-        (
-            json!({"name": "h", "url": userinfo_url(),
-                "headers": {"bad name": "v", "Authorization": bearer}}),
-            "header_name",
-            "headers",
-        ),
-    ] {
-        let store = Arc::new(Limited::new(panel.dir.path()));
-        let (status, answer, _) = add_through(&panel, body.clone(), Some(&store)).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}: {answer}");
-        assert_eq!(answer, refused(reason, field), "{body}");
-        no_value(&answer, TOKEN);
-        assert_eq!(store.calls(), 0, "{body}: the store was opened");
-        assert_eq!(panel.text(), before, "{body}: a refused add wrote");
+    let mut checked = 0;
+    let logs = logged(async {
+        let panel = Panel::new().await;
+        let before = panel.text();
+        let bad_line = json!({"X-A": "a\nb", "Authorization": bearer});
+        let bad_nul = json!({"X-A": "a\u{0}b", "Authorization": bearer});
+        let twice = json!({"Authorization": bearer, "authorization": "x"});
+        for (body, reason, field) in [
+            (
+                json!({"name": "h", "url": url, "headers": bad_line}),
+                "header_value",
+                "headers",
+            ),
+            (
+                json!({"name": "h", "url": url, "headers": bad_nul}),
+                "header_value",
+                "headers",
+            ),
+            (
+                json!({"name": "h", "url": url, "headers": twice}),
+                "header_name",
+                "headers",
+            ),
+            (
+                json!({"name": "h", "url": "http://", "headers": {"Authorization": bearer}}),
+                "url_invalid",
+                "url",
+            ),
+            (
+                json!({"name": "c", "command": "npx tool", "env": {"API_KEY": TOKEN},
+                    "allow_cleartext_credentials": true}),
+                "override_needs_url",
+                "allow_cleartext_credentials",
+            ),
+            (
+                json!({"name": "github", "env": {"GITHUB_TOKEN": TOKEN},
+                    "allow_cleartext_credentials": true}),
+                "override_needs_url",
+                "allow_cleartext_credentials",
+            ),
+            (
+                json!({"name": "h", "url": userinfo_url(),
+                    "headers": {"bad name": "v", "Authorization": bearer}}),
+                "header_name",
+                "headers",
+            ),
+        ] {
+            let store = Arc::new(Limited::new(panel.dir.path()));
+            let (status, answer, _) = add_through(&panel, body.clone(), Some(&store)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}: {answer}");
+            assert_eq!(answer, refused(reason, field), "{body}");
+            no_value(&answer, TOKEN);
+            assert_eq!(store.calls(), 0, "{body}: the store was opened");
+            assert_eq!(panel.text(), before, "{body}: a refused add wrote");
+            checked += 1;
+        }
+    });
+    assert_eq!(checked, 7, "the cases did not all run");
+    for value in [TOKEN, "a\nb", "a\u{0}b"] {
+        assert!(
+            !logs.iter().any(|r| r.to_string().contains(value)),
+            "{value:?} reached the log"
+        );
     }
 }
 
