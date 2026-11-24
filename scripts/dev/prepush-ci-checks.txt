@@ -36,6 +36,7 @@ python3 scripts/ci/check_toolchain_pin.py --self-test	0	closed
 python3 scripts/ci/compare_coverage.py --self-test	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py --self-test	0	closed
+python3 scripts/ci/test_affected_map.py	0	closed
 python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
@@ -99,6 +100,7 @@ python3 -I scripts/dev/test_rehash_ui_assets.py	0	closed
 python3 scripts/perf/test_per_call_gate.py	1	closed
 python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
 python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
+python3 scripts/release/check_changelog_sections.py	0	closed
 python3 scripts/release/check_identity_sources.py	47	closed
 "$GATE_PY" scripts/release/check_inventory_rows.py --all	35	closed
 "$GATE_PY" scripts/release/check_inventory_rows.py <BASE_TIP>	1	closed
@@ -113,6 +115,7 @@ python3 scripts/release/test_c6_killer_drift.py	2	closed
 python3 scripts/release/test_c6_mutation_sample.py	1	closed
 python3 scripts/release/test_c6_resolve.py	26	closed
 python3 scripts/release/test_changelog_fragments.py	2	closed
+python3 scripts/release/test_check_changelog_sections.py	1	closed
 python3 scripts/release/test_check_identity_sources.py	73	closed
 "$GATE_PY" scripts/release/test_check_inventory_rows.py	21	closed
 python3 scripts/release/test_check_keyless_read_only.py	1	closed

@@ -46,10 +46,18 @@ async fn run(state: Arc<AppState>) {
         tick.tick().await;
         #[cfg(test)]
         hub.probe().park_point().await;
-        let reloaded = hub.reloaded(&state.live_config.generation());
+        // One read a tick: the reload check and the full body's switched-off
+        // servers see the same config.
+        let generation = state.live_config.generation();
+        let reloaded = hub.reloaded(&generation);
         hub.observe(
-            status_body(&state, StatusView::Full, BackendGrant::Unscoped),
-            status_body(&state, StatusView::CountsOnly, BackendGrant::Unscoped),
+            status_body(
+                &state,
+                StatusView::Full,
+                BackendGrant::Unscoped,
+                Some(generation.config().as_ref()),
+            ),
+            status_body(&state, StatusView::CountsOnly, BackendGrant::Unscoped, None),
             reloaded,
         );
     }

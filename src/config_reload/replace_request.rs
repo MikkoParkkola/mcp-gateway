@@ -8,11 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config_persistence::keyedit::Template;
-use crate::config_reload::ReloadOutcome;
 use crate::gateway::restart_config_floor::Refusal;
 use crate::secret_store::{NewSecretOwned, SaveError, SecretStore, Vault};
 
-use super::{FileRevision, RefusalClass};
+use super::{FileRevision, RefusalClass, ReplaceReload, StatusChange};
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(
@@ -88,6 +87,8 @@ pub(crate) struct Replace {
     pub(crate) compute: Compute,
     pub(crate) replaced: Replaced,
     pub(crate) secrets: Option<SecretStep>,
+    /// What a candidate that changes the single-user status gets.
+    pub(crate) status_change: StatusChange,
 }
 
 /// A replacement that was written and accepted.
@@ -104,8 +105,8 @@ pub(crate) struct ReplaceOutcome {
     pub(crate) revision: Option<FileRevision>,
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
-    /// The reload that accepted it.
-    pub(crate) reload: ReloadOutcome,
+    /// The reload it ended with.
+    pub(crate) reload: ReplaceReload,
     /// Each stored secret's field and the reference the written file holds for
     /// it, in the secret step's order; empty without one. Read from this write
     /// itself, never from the file afterwards (another writer may follow).

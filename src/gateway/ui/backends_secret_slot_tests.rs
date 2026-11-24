@@ -697,8 +697,32 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }
 
+/// XPORT.2 at the route: a PATCH moving an A2A server with its own card path
+/// to another host answers 422 with the gateway.yaml sentence, and the file
+/// stays as it was.
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn xport2_the_patch_route_refuses_an_own_card_path_on_another_origin() {
+    let text = "backends:\n  agent:\n    a2a_url: \"https://agent.example\"\n    a2a_agent_card_path: /cards/agent.json\n";
+    let panel = Panel::with(text, Reloads::Accept).await;
+    let (status, body) = panel
+        .update("agent", json!({"url": "https://other.example"}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
+    let sentence = format!(
+        "Backend 'agent' {marker}; change the address and the card path together in \
+         gateway.yaml."
+    );
+    assert_eq!(body["error"], sentence, "{body}");
+    assert_eq!(panel.text(), text);
+}
+
 #[path = "backends_secret_name_tests.rs"]
 mod names;
 
 #[path = "backends_credential_tests.rs"]
 mod credentials;
+
+#[path = "backends_header_tests.rs"]
+mod headers;

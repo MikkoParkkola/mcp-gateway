@@ -11,14 +11,17 @@ Tools:
   grandchild    starts a sleeping grandchild and returns its pid
   open_file     opens `path` only inside OPENPENCIL_MCP_ROOT, else the cwd, as
                 @open-pencil/mcp does; structuredContent {opened, pid}
+  deaf          answers {pid}, then ignores SIGTERM and never reads stdin again
 """
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 
 TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_binaries",
-         "open_file"]
+         "open_file", "deaf"]
 POLLS = {"n": 0}
 
 
@@ -61,6 +64,11 @@ for line in sys.stdin:
             base = os.path.basename(args.get("binary_path", ""))
             result(req_id, {"content": [], "structuredContent": {"program_name": "prog-" + base}})
         elif name == "list_project_binaries":
+            # A row that names a poll mark learns a wait is really polling.
+            poll_mark = os.environ.get("CAP_EXEC_TEST_POLL_MARK")
+            if poll_mark:
+                with open(poll_mark, "w") as out:
+                    out.write("polled\n")
             # Analysis "finishes" on the third poll; the first two answer an error
             # for an absent program, as the real server does.
             if args.get("expect") == "die":
@@ -94,7 +102,21 @@ for line in sys.stdin:
         elif name == "grandchild":
             child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
             result(req_id, {"content": [], "structuredContent": {"pid": child.pid}})
+        elif name == "deaf":
+            # From here on SIGTERM does nothing and stdin is never read again:
+            # only the kill at the stop's deadline ends this server.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            result(req_id, {"content": [], "structuredContent": {"pid": os.getpid()}})
+            while True:
+                time.sleep(3600)
         else:
             send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "unknown tool"}})
     else:
         send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "no such method"}})
+
+# stdin ended: the graceful MCP stop closed it. A row that names a mark file
+# learns the child was stopped this way, not killed outright.
+mark = os.environ.get("CAP_EXEC_TEST_EOF_MARK")
+if mark:
+    with open(mark, "w") as out:
+        out.write("eof\n")

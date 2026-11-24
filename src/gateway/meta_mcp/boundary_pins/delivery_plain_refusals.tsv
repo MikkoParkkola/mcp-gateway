@@ -108,7 +108,6 @@ src/gateway/server/start_checks.rs	http	Error::Config (as value)	1	no-record	sta
 src/gateway/server/start_checks.rs	http	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	1	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
 src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	2	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
-src/gateway/server/stdio_dispatch.rs	prepare_signing	via refuse (closure)	3	not-a-decision	client-protocol rejection: a bad chain nonce or a refused request sanitize
 src/gateway/server/stdio_route_stage.rs	authorize_targets	Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	via key_error	1	no-record	start-up: the gateway refuses to start, no call exists
@@ -125,3 +124,8 @@ src/gateway/ui/activity/key_lookup.rs	scan	via refuse (closure)	1	no-record	the 
 src/gateway/ui/activity/key_lookup.rs	scan	via refuse (closure)	2	no-record	the admin email lookup: a refusal answered to its admin caller, with its outcome noted on the request's own admin_action record (finish); no call delivery exists
 src/gateway/ui/activity/key_lookup.rs	throttled	via refuse (closure)	1	no-record	the admin email lookup: a refusal answered to its admin caller, with its outcome noted on the request's own admin_action record (finish); no call delivery exists
 src/gateway/ui/activity/key_lookup.rs	what_it_needs	via refuse (closure)	1	no-record	the admin email lookup: a refusal answered to its admin caller, with its outcome noted on the request's own admin_action record (finish); no call delivery exists
+src/gateway/ui/backends/add_checks.rs	request_answer	via refuse (closure)	1	no-record	the panel's backend add and preview: a field refusal (422) answered to its admin caller before anything is resolved or stored; no call delivery exists
+src/gateway/ui/backends/add_checks.rs	request_answer	via refuse (closure)	2	no-record	the panel's backend add and preview: a field refusal (422) answered to its admin caller before anything is resolved or stored; no call delivery exists
+src/gateway/ui/backends/add_checks.rs	request_answer	via refuse (closure)	3	no-record	the panel's backend add and preview: a field refusal (422) answered to its admin caller before anything is resolved or stored; no call delivery exists
+src/gateway/ui/backends/add_checks.rs	request_answer	via refuse (closure)	4	no-record	the panel's backend add and preview: a field refusal (422) answered to its admin caller before anything is resolved or stored; no call delivery exists
+src/gateway/ui/backends/add_checks.rs	request_answer	via refuse (closure)	5	no-record	the panel's backend add and preview: a field refusal (422) answered to its admin caller before anything is resolved or stored; no call delivery exists

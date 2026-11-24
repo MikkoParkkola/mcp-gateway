@@ -68,19 +68,9 @@ async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
 /// The source files, outside test code, whose text contains `needle`, as
 /// `src/...` paths. A path naming `test` anywhere is test code.
 fn files_containing(needle: &str) -> Vec<String> {
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("src reads").flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(&root.join("src"), &mut files);
+    crate::test_source_files::rust_files(&root.join("src"), &mut files);
     let mut hits: Vec<String> = files
         .iter()
         .filter_map(|path| {

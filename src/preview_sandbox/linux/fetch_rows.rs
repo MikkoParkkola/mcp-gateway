@@ -26,7 +26,7 @@ const SYNTHETIC: IpAddr = IpAddr::V4(Ipv4Addr::new(104, 16, 0, 10));
 pub(super) const GUARD: Duration = Duration::from_secs(120);
 
 /// Answers the three registry names with [`SYNTHETIC`], anything else fails.
-struct TestResolve;
+pub(super) struct TestResolve;
 
 #[async_trait]
 impl Resolve for TestResolve {
@@ -39,7 +39,7 @@ impl Resolve for TestResolve {
 }
 
 /// After every check passed, sends [`SYNTHETIC`]:443 to the fake registry.
-struct TestDialer(u16);
+pub(super) struct TestDialer(pub(super) u16);
 
 #[async_trait]
 impl Connect for TestDialer {
@@ -81,18 +81,11 @@ fn host_npx() -> Option<PathBuf> {
     found.or_else(|| skip("npx is not installed").map(|n| match n {}))
 }
 
-/// Whether this host runs the sandbox at all (a plain `/bin/true` preview);
+/// Whether this host runs the sandbox at all (the probe's `/bin/true`);
 /// `false` (skip) where it refuses and the rows are not required.
 pub(super) async fn sandbox_runs(gateway: &std::path::Path) -> bool {
-    let target = Target {
-        program: PathBuf::from("/bin/true"),
-        args: Vec::new(),
-    };
-    match super::start(gateway, &target, &[]) {
-        Ok(mut started) => {
-            let _ = started.child.wait().await;
-            true
-        }
+    match super::probe(gateway).await {
+        Ok(()) => true,
         Err(refusal) => skip(&format!("this host refuses the sandbox: {refusal}")).is_some(),
     }
 }
@@ -102,7 +95,11 @@ pub(super) async fn sandbox_runs(gateway: &std::path::Path) -> bool {
 pub(super) const REPORT: &[u8] = b"#!/bin/sh\ntest -e /tmp/proxy.sock && echo sock-present\ntest -e /preview-home/script-marker && echo script-ran\necho bin-ran \"$@\"\n";
 
 /// A package whose `bin` is `bins` (name to file), each file [`REPORT`].
-fn package(name: &'static str, bins: &[(&str, &'static str)], extra: serde_json::Value) -> Package {
+pub(super) fn package(
+    name: &'static str,
+    bins: &[(&str, &'static str)],
+    extra: serde_json::Value,
+) -> Package {
     let mut manifest = extra;
     manifest["bin"] = bins
         .iter()
@@ -631,7 +628,7 @@ fn a_failed_stat_read_keeps_a_process_live_unless_it_is_missing_or_exiting() {
 
 /// Every live process whose command line carries `marker` (the `unshare`, the
 /// helper and a target all carry the target's arguments).
-fn marked(marker: &str) -> Vec<u32> {
+pub(super) fn marked(marker: &str) -> Vec<u32> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir("/proc").expect("/proc").flatten() {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {

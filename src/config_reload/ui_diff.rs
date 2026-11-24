@@ -417,7 +417,8 @@ async fn validate(
     target: &std::path::Path,
     template: &keyedit::Template,
 ) -> Result<(), UiRefused> {
-    ctx.validate_template(target, template, None)
+    // A preview judges as the save does: settings never hold for a restart.
+    ctx.validate_template(target, template, None, super::StatusChange::Refuse)
         .await
         .map_err(|error| validate_refusal(&error))
 }
@@ -428,7 +429,9 @@ pub(super) const LOADER_REFUSED: &str = "the change would be refused by the conf
 
 pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
     match e {
-        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class: *class },
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused {
+            class: class.clone(),
+        },
         ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         ReplaceError::Unsupported(_) => {
             UiRefused::Unsupported("this change is not supported here".to_owned())

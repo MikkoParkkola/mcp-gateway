@@ -135,17 +135,6 @@ fn cleared_without_home(rel: &str, text: &str) -> Vec<(String, String)> {
     found
 }
 
-fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read src") {
-        let path = entry.expect("entry").path();
-        if path.is_dir() {
-            rust_files(&path, found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push(path);
-        }
-    }
-}
-
 /// R2.3: the running test binary is started only through
 /// [`test_binary`], except at the listed sites that wrap it in a shell and
 /// apply [`child_env`] themselves, and at the production uses (the gateway starting itself).
@@ -174,16 +163,16 @@ fn every_test_binary_spawn_goes_through_test_binary() {
             "under_umask_022",
         ),
     ];
-    const PRODUCTION: [(&str, &str); 4] = [
-        ("src/preview_sandbox/mod.rs", "start"),
-        ("src/preview_sandbox/mod.rs", "start_fetching"),
+    const PRODUCTION: [(&str, &str); 3] = [
+        // The sandbox's helper is the gateway's own binary, found in one place.
+        ("src/preview_sandbox/mod.rs", "gateway"),
         ("src/gateway/server/window_saver.rs", "start_window_saver"),
         // Reads the running file for the restart notice's start command; spawns nothing.
         ("src/gateway/ui/restart_confirm.rs", "restart_advice"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&root.join("src"), &mut files);
+    crate::test_source_files::rust_files(&root.join("src"), &mut files);
     let mut texts = std::collections::BTreeMap::new();
     for path in files {
         let rel = path

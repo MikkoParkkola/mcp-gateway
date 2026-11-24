@@ -9,7 +9,7 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES } from '/ui/assets/shell.14fa6b528dce.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.2885a89b422b.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -41,6 +41,9 @@ const answers = (s) => Object.hasOwn(MEMBER_WORD, s.state);
 const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
 
 const QUIET_LINE = 'Could not check this machine for servers outside the gateway.';
+
+/** The heading over the servers whose config entry turns them off: the state's one word, from the glossary (UI1.24). */
+export const OFF_BLOCK_TITLE = GLOSSARY.server.off;
 
 /**
  * How long the registry and discovery reads may take before the page draws without
@@ -189,6 +192,14 @@ function showOpen(tbody, key) {
   for (const r of tbody.querySelectorAll('tr[data-member-of]')) r.hidden = r.dataset.memberOf !== key;
 }
 
+/** Servers turned off in the config: the same five columns, by name; none of them answers or needs a look. */
+function offBlock(list) {
+  const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name));
+  return block(OFF_BLOCK_TITLE, sorted.length, el('tbody', {}, ...sorted.map((s) => el('tr', {},
+    el('th', { scope: 'row' }, s.name), el('td', {}, serverBadge('off', { plain: true })),
+    numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)))));
+}
+
 /** Rule D: unmanaged finds no status row names, or the quiet line when discovery failed. */
 function outsideBlock(discovery, statusNames) {
   if (!discovery.ok) return el('p', { class: 't3 sv-quiet' }, QUIET_LINE);
@@ -268,10 +279,14 @@ function statusTab(body, ctx) {
       const add = el('a', { class: 'btn', href: '/ui/classic' }, 'Add a server');
       parts.push(ctx.state('empty', { title: 'No servers behind the gateway yet', body: 'Add one and it shows here with its state.', action: add }));
     }
-    const needs = servers.filter((s) => !answers(s));
+    // Turned-off servers sit apart: never counted as answering, never a thing to look at.
+    const off = servers.filter((s) => s.state === 'off');
+    const live = servers.filter((s) => s.state !== 'off');
+    const needs = live.filter((s) => !answers(s));
     if (needs.length) parts.push(needsBlock(needs));
-    const fine = servers.filter(answers);
+    const fine = live.filter(answers);
     if (fine.length) parts.push(answeringBlock(fine, categories, view));
+    if (off.length) parts.push(offBlock(off));
     const outside = outsideBlock(discovery, new Set(servers.map((s) => s.name)));
     if (outside) parts.push(outside);
     if (root.parentNode !== body) body.append(root);

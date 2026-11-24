@@ -242,6 +242,29 @@ impl KeyCost {
             && tally::local_date(last).expired(tally::local_date(now))
     }
 
+    /// The key's spend rate over the last three complete hours before `now`,
+    /// in USD per hour. The hour holding `now` is left out; an hour with no
+    /// spend counts as zero.
+    #[cfg(any(test, feature = "cost-governance"))]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn rate_3h(&self, now: u64) -> f64 {
+        let hour = now / 3600;
+        let first = hour.saturating_sub(3);
+        let micro = self
+            .spend
+            .lock()
+            .0
+            .hours
+            .rows()
+            .into_iter()
+            .filter(|(h, ..)| (first..hour).contains(h))
+            .fold(0u64, |sum, (.., micro)| sum.saturating_add(micro));
+        #[allow(clippy::cast_precision_loss)]
+        let usd = micro as f64 / 1_000_000.0;
+        usd / 3.0
+    }
+
     /// Compute cost totals for a given rolling window, `None` when the clock
     /// cannot date the window (MIK-8202 P4b).
     fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
@@ -532,6 +555,15 @@ impl CostTracker {
         self.per_key.get(key_name).map(|kc| kc.snapshot())
     }
 
+    /// `key_name`'s spend rate over the last three complete hours before
+    /// `now`, USD per hour; `None` for a key with no entry.
+    #[cfg(feature = "cost-governance")]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn key_rate_3h(&self, key_name: &str, now: u64) -> Option<f64> {
+        self.per_key.get(key_name).map(|key| key.rate_3h(now))
+    }
+
     /// Snapshot all API key accumulators.
     #[must_use]
     pub fn all_keys(&self) -> Vec<KeyCostSnapshot> {
@@ -688,3 +720,8 @@ mod cost_clock_compile_red_tests;
 #[cfg(tp2)]
 #[cfg(test)]
 mod spend_history_tests;
+
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "key_rate_tests.rs"]
+mod key_rate_tests;

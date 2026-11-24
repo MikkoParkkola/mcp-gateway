@@ -501,6 +501,14 @@ mod recent_writes_route_more_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_tests;
+/// A withheld direct call and a missing one leave the same firewall state.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_parity_tests;
+/// A withheld surfaced task call and a missing name leave the request firewall uncharged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_task_parity_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
@@ -512,6 +520,9 @@ mod reload_status_tests;
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
+#[cfg(tp1)]
+#[cfg(test)]
+mod server_name_route_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
 /// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
 #[cfg(tp1)]

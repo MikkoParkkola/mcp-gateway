@@ -1,0 +1,157 @@
+# LOGINJ.7 allowlist (src/print_sites_tests.rs): every production stdout/stderr site, reviewed.
+# Columns, tab-separated: tier, file, owner (modules::Type::fn), site text (P only; "-" for T), reason.
+# T: a CLI subcommand function whose output is the terminal; every print inside it is allowed. Never a function the
+#    serve path runs (cli/entry.rs run_server and run_stdio_server, commands/mod.rs load_for_serve,
+#    commands/upgrade.rs check_upgrade, or anything they call).
+# P: one exact site; a changed site text needs a fresh review.
+P	src/lib.rs	setup_tracing_flush	std::io::stderr()	the log writer's own stream: every line it writes went through the escaping layer
+P	src/cli/entry.rs	fatal	eprintln!("{}" , crate :: log_escape :: escaped (message))	escaped by log_escape::escaped, printed only when the log drops the fatal event
+P	src/cli/entry.rs	run	eprintln!("Failed to setup tracing: {e}")	before logging exists: the log writer spawn error, no config text
+P	src/cli/stdout.rs		macro_rules!(() => { { use :: std :: io :: Write as _ ; let written = :: std :: writeln ! (:: std :: io :: stdout () . lock ()) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ; ($ ($ arg : tt) *) => { { use :: std :: io :: Write as _ ; let written = :: std :: writeln ! (:: std :: io :: stdout () . lock () , $ ($ arg) *) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ;)	the CLI own println/print macros: CLI output only
+P	src/cli/stdout.rs		macro_rules!(($ ($ arg : tt) *) => { { use :: std :: io :: Write as _ ; let written = :: std :: write ! (:: std :: io :: stdout () . lock () , $ ($ arg) *) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ;)	the CLI own println/print macros: CLI output only
+P	src/commands/upgrade.rs	check_upgrade	std::io::stderr()	serve path: the stream for the once-only webhook notice, fixed text
+P	src/commands/upgrade.rs	migrate_3_0_0_multi_user_notice	eprintln!("{NOTICE_AUTH_DISABLED}")	serve path: a migration notice of fixed text
+P	src/commands/upgrade.rs	migrate_3_0_0_multi_user_notice	eprintln!("{NOTICE_MULTI_USER_DEFAULT}")	serve path: a migration notice of fixed text
+P	src/commands/upgrade.rs	migrate_4_0_0_release_notice	eprintln!("v4.0.0: {} changes need your attention. No config was changed automatically.\n{body}" , NOTICE_4_0_0_ITEMS . len ())	serve path: a migration notice of fixed text
+P	src/commands/upgrade.rs	print_whats_new	println!("  - {item}")	serve path, but printed only when not quiet (serve passes quiet: true): version strings and fixed items
+P	src/commands/upgrade.rs	print_whats_new	println!("What's new in v{current}:")	serve path, but printed only when not quiet (serve passes quiet: true): version strings and fixed items
+P	src/commands/upgrade.rs	UpgradeContext::run	println!("  {prefix}Applying: {}" , m . description)	serve path, but printed only when not quiet (serve passes quiet: true): version strings and fixed items
+P	src/gateway/server/stdio_single.rs	Gateway::run_stdio	tokio::io::stdout()	the stdio transport JSON-RPC stream: serde_json frames escape control characters
+P	src/oauth/client/browser.rs	announce_on_stderr	std::io::stderr()	the OAuth link: a serialized url::Url carries no control characters
+P	src/preview_sandbox/linux/drop.rs	run	eprintln!("preview-sandbox: refused at {step}")	the sandbox child refusal line: a fixed step name or an OS error
+P	src/preview_sandbox/linux/helper.rs	fault::trace	eprintln!("preview-sandbox: order {at}")	debug builds only (this fault module is cfg(debug_assertions)), printed only when a test armed the trace fault; at is a literal step name
+P	src/preview_sandbox/linux/helper.rs	refused	eprintln!("preview-sandbox: refused at {why}")	carries helper error text, which can include process-specific detail; safe because a normal run never reads the helper's stderr (launcher.rs:183)
+P	src/preview_sandbox/linux/helper.rs	run	eprintln!("preview-sandbox: refused at {detail}")	fetch refusal text, may carry the package fetcher's output tail; safe only because a normal run never reads the helper's stderr (launcher.rs:183)
+P	src/preview_sandbox/linux/helper.rs	run	eprintln!("preview-sandbox: refused at {}" , failure . detail)	carries helper error text, which can include process-specific detail, never sent over the control socket; safe because a normal run never reads the helper's stderr (launcher.rs:183)
+P	src/preview_sandbox/linux/helper.rs	supervise	eprintln!("preview-sandbox: waiting for the target ({e})")	the sandbox child refusal line: a fixed step name or an OS error
+P	src/preview_sandbox/linux/mod.rs	refuse	eprintln!("preview-sandbox: refused at {step}")	the sandbox child refusal line: a fixed step name or an OS error
+P	src/retire.rs	tail	writeln!(std :: io :: stderr () , "mcp-gateway: the log writer: {note}")	the log writer own fixed notice
+P	src/security/firewall/audit.rs	AuditLogger::stderr	io::stderr()	the firewall audit stderr fallback: serde_json lines
+P	src/security/firewall/construct.rs	Firewall::from_config	audit::AuditLogger::stderr()	the firewall audit stderr fallback: serde_json lines
+T	src/bin/provenance-eval.rs	main	-	the provenance-eval tool (its own binary)
+T	src/bin/provenance-eval.rs	print_report	-	the provenance-eval tool (its own binary)
+T	src/capability/pin_file.rs	pin_file_until	-	only production caller is commands/cap.rs:171 (the cap subcommand)
+T	src/cli/entry.rs	dispatch	-	CLI dispatch: a subcommand this build lacks
+T	src/cli/entry.rs	resolve_stats_url	-	the stats subcommand
+T	src/cli/entry.rs	run_runtime_command	-	the runtime subcommand
+T	src/cli/entry.rs	write_discovered_to_config	-	the discover subcommand write report
+T	src/cli/output.rs	print_document	-	CLI output helpers
+T	src/cli/output.rs	print_header	-	CLI output helpers
+T	src/cli/output.rs	print_json	-	CLI output helpers
+T	src/cli/output.rs	print_plain	-	CLI output helpers
+T	src/cli/output.rs	print_row	-	CLI output helpers
+T	src/cli/output.rs	print_table	-	CLI output helpers
+T	src/cli/output.rs	print_tool_inspect	-	CLI output helpers
+T	src/cli/output.rs	print_tool_list	-	CLI output helpers
+T	src/cli/output.rs	Printed::emit	-	CLI output helpers
+T	src/commands/accounts.rs	print_migrated	-	CLI subcommand output (accounts.rs)
+T	src/commands/accounts.rs	print_report	-	CLI subcommand output (accounts.rs)
+T	src/commands/accounts.rs	run_init_store	-	CLI subcommand output (accounts.rs)
+T	src/commands/accounts.rs	run_migrate_credentials	-	CLI subcommand output (accounts.rs)
+T	src/commands/add_remove.rs	run_add_command	-	CLI subcommand output (add_remove.rs)
+T	src/commands/add_remove.rs	run_get_command	-	CLI subcommand output (add_remove.rs)
+T	src/commands/add_remove.rs	run_list_available_command	-	CLI subcommand output (add_remove.rs)
+T	src/commands/add_remove.rs	run_list_command	-	CLI subcommand output (add_remove.rs)
+T	src/commands/add_remove.rs	run_remove_command	-	CLI subcommand output (add_remove.rs)
+T	src/commands/api_stream.rs	run_production	-	CLI subcommand output (api_stream.rs)
+T	src/commands/audit.rs	print_findings	-	CLI subcommand output (audit.rs)
+T	src/commands/audit.rs	print_pass	-	CLI subcommand output (audit.rs)
+T	src/commands/audit.rs	print_verdict	-	CLI subcommand output (audit.rs)
+T	src/commands/audit.rs	run_audit_command	-	CLI subcommand output (audit.rs)
+T	src/commands/audit.rs	run_audit_verify	-	CLI subcommand output (audit.rs)
+T	src/commands/cap.rs	cap_import	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_install	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_list	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_pin	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_registry_list	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_search	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_test	-	CLI subcommand output (cap.rs)
+T	src/commands/cap.rs	cap_validate	-	CLI subcommand output (cap.rs)
+T	src/commands/cap/server_scan.rs	cap_discover	-	CLI subcommand output (cap/server_scan.rs)
+T	src/commands/cap/server_scan.rs	cap_discover_shadow	-	CLI subcommand output (cap/server_scan.rs)
+T	src/commands/cap/server_scan.rs	print_discovered_servers	-	CLI subcommand output (cap/server_scan.rs)
+T	src/commands/cap/server_scan.rs	print_server_entry	-	CLI subcommand output (cap/server_scan.rs)
+T	src/commands/cap/server_scan.rs	print_shadow_report	-	CLI subcommand output (cap/server_scan.rs)
+T	src/commands/cli_exit.rs	emit	-	CLI subcommand output (cli_exit.rs)
+T	src/commands/color.rs	for_stdout	-	CLI subcommand output (color.rs)
+T	src/commands/config_export/mod.rs	merge_into_config	-	CLI subcommand output (config_export/mod.rs)
+T	src/commands/config_export/mod.rs	run_config_export	-	CLI subcommand output (config_export/mod.rs)
+T	src/commands/config_export/watch.rs	run_watch_loop	-	CLI subcommand output (config_export/watch.rs)
+T	src/commands/config_write.rs	write	-	CLI subcommand output (config_write.rs)
+T	src/commands/dashboard_link.rs	run_dashboard_link_args	-	CLI subcommand output (dashboard_link.rs)
+T	src/commands/discover.rs	cap_import_url	-	CLI subcommand output (discover.rs)
+T	src/commands/doctor.rs	run_doctor_command	-	CLI subcommand output (doctor.rs)
+T	src/commands/doctor/report.rs	print_results_human	-	CLI subcommand output (doctor/report.rs)
+T	src/commands/doctor/report.rs	print_results_json	-	CLI subcommand output (doctor/report.rs)
+T	src/commands/doctor/shadow.rs	run_doctor_shadow_command	-	CLI subcommand output (doctor/shadow.rs)
+T	src/commands/hash_key.rs	run_hash_key_command	-	CLI subcommand output (hash_key.rs)
+T	src/commands/identity.rs	print_grant_result	-	CLI subcommand output (identity.rs)
+T	src/commands/identity.rs	print_grants	-	CLI subcommand output (identity.rs)
+T	src/commands/identity.rs	run_identity_command	-	CLI subcommand output (identity.rs)
+T	src/commands/kubernetes.rs	print_cluster_apply_plan	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/kubernetes.rs	print_cluster_execution_report	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/kubernetes.rs	print_controller_report	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/kubernetes.rs	print_plan	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/kubernetes.rs	run_controller_command	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/kubernetes.rs	run_kubernetes_command	-	CLI subcommand output (kubernetes.rs)
+T	src/commands/mod.rs	print_init_success	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	read_ca_files	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	refuse_existing_tls_output	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	run_init_command	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	tls_init_ca	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	tls_issue_client	-	CLI subcommand output (mod.rs)
+T	src/commands/mod.rs	tls_issue_server	-	CLI subcommand output (mod.rs)
+T	src/commands/protocol_import.rs	print_apply_plain	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/protocol_import.rs	print_apply_table	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/protocol_import.rs	print_json	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/protocol_import.rs	print_plain	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/protocol_import.rs	print_table	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/protocol_import.rs	run_protocol_import_command	-	CLI subcommand output (protocol_import.rs)
+T	src/commands/ranking.rs	print_ranking_eval_report	-	CLI subcommand output (ranking.rs)
+T	src/commands/ranking.rs	run_ranking_command	-	CLI subcommand output (ranking.rs)
+T	src/commands/setup.rs	bootstrap_local_profile	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	configure_ai_clients	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	discover_all_servers	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	handle_empty_discovery	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	import_servers	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	interactive_select	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	merge_servers_into_config	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	print_discovery_summary	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	print_next_steps	-	CLI subcommand output (setup.rs)
+T	src/commands/setup.rs	run_setup_command	-	CLI subcommand output (setup.rs)
+T	src/commands/skills.rs	print_dry_run_summary	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	print_skill_summary	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_generate	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_import	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_list	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_remove	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_search	-	CLI subcommand output (skills.rs)
+T	src/commands/skills.rs	run_skills_show	-	CLI subcommand output (skills.rs)
+T	src/commands/stats.rs	run_stats_command	-	CLI subcommand output (stats.rs)
+T	src/commands/tool.rs	catalogue	-	CLI subcommand output (tool.rs)
+T	src/commands/tool.rs	none_found	-	CLI subcommand output (tool.rs)
+T	src/commands/tool.rs	tool_completions	-	CLI subcommand output (tool.rs)
+T	src/commands/tool.rs	tool_inspect	-	CLI subcommand output (tool.rs)
+T	src/commands/tool.rs	tool_invoke	-	CLI subcommand output (tool.rs)
+T	src/commands/tool.rs	tool_list	-	CLI subcommand output (tool.rs)
+T	src/commands/trust.rs	run_trust_command	-	CLI subcommand output (trust.rs)
+T	src/commands/trust.rs	run_trust_lab_command	-	CLI subcommand output (trust.rs)
+T	src/commands/trust/output.rs	print_card	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_card_table	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_cards	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_decision_prompts	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_findings	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_json	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_lab_evaluations	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_lab_table	-	CLI subcommand output (trust/output.rs)
+T	src/commands/trust/output.rs	print_validation_report	-	CLI subcommand output (trust/output.rs)
+T	src/commands/upgrade_grant_rows.rs	check_grant_rows	-	CLI subcommand output (upgrade_grant_rows.rs)
+T	src/commands/upgrade_url_keys.rs	run_upgrade_with_config	-	CLI subcommand output (upgrade_url_keys.rs)
+T	src/commands/upgrade.rs	print_upgrade_summary	-	CLI subcommand output (upgrade.rs)
+T	src/commands/upgrade.rs	run_upgrade_command	-	CLI subcommand output (upgrade.rs)
+T	src/config_persistence.rs	say_waiting	-	reached only through cli_lock, a CLI config write
+T	src/registry/mod.rs	Registry::build_index	-	only production callers are commands/cap.rs:431 and :465 (the cap subcommand)
+T	src/trust/provenance_public_cli.rs	emit_line	-	the provenance public-key subcommand
+T	src/trust/provenance_public_cli.rs	run_public_key	-	the provenance public-key subcommand
+T	src/validator/cli_handler.rs	collect_capability_files	-	the validate subcommand
+T	src/validator/cli_handler.rs	run_validate_command	-	the validate subcommand

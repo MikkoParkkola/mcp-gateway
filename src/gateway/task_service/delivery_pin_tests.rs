@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use crate::test_source_files::rust_files;
+
 /// The files allowed to call `delivered_wire`, each once: the owner's
 /// `tasks/get`, the keyed task repeat, and the task notification.
 const SERVE_SITES: [&str; 3] = [
@@ -15,17 +17,6 @@ const SERVE_SITES: [&str; 3] = [
     "src/gateway/task_service/execution.rs",
     "src/gateway/meta_mcp/task_notify.rs",
 ];
-
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("the source tree is readable") {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
 
 /// How often `code` calls or names the function `name`: the whole
 /// identifier after a `::` (a path call or a function reference), or after

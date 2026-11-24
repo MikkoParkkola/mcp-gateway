@@ -26,6 +26,7 @@ use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::ConfigWriteError;
+pub(crate) use crate::config_reload::first_key::{ReplaceReload, StatusChange};
 use crate::config_reload::history::Source;
 use crate::secret_store::{PendingSecrets, create_secrets};
 
@@ -316,7 +317,7 @@ impl ReloadContext {
         let fields = step_fields(step.as_ref());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
-        self.validate_template(&target, &template, step.as_ref())
+        self.validate_template(&target, &template, step.as_ref(), replace.status_change)
             .await?;
         // gateway.yaml deleted while the bytes were computed or checked: the
         // missing file, before any intent or entry exists.
@@ -342,7 +343,7 @@ impl ReloadContext {
                     &locked,
                     &target,
                     &current,
-                    (new, replace.replaced),
+                    (new, replace.replaced, replace.status_change),
                     &mut entries,
                     source,
                 )
@@ -381,7 +382,7 @@ impl ReloadContext {
         locked: &Locked,
         target: &std::path::Path,
         current: &[u8],
-        (new, replaced): (Vec<u8>, Replaced),
+        (new, replaced, status_change): (Vec<u8>, Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -423,12 +424,19 @@ impl ReloadContext {
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
-                reload,
+                reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
             });
         }
-        self.commit(target, current, &new, replaced, entries, source)
-            .await
+        self.commit(
+            target,
+            current,
+            &new,
+            (replaced, status_change),
+            entries,
+            source,
+        )
+        .await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
@@ -437,7 +445,7 @@ impl ReloadContext {
         target: &std::path::Path,
         current: &[u8],
         new: &[u8],
-        replaced: Replaced,
+        (replaced, status_change): (Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -500,39 +508,54 @@ impl ReloadContext {
                 )),
             ));
         }
-        match reloaded {
+        let reload = match reloaded {
             Ok(reload) => {
                 #[cfg(test)]
                 self.record_write_reload();
-                if let Err(e) = journal::mark_all_renamed(target) {
-                    return Err(ReplaceError::Unconfirmed {
-                        journal: journal::journal_path(target),
-                        error: e.to_string(),
-                    });
+                ReplaceReload::Applied(reload)
+            }
+            // The operator's option B1 (ADR-024, amended): a first key the
+            // question held is refused by the reload for its status change
+            // alone, and its bytes stay for the next start, which accepts
+            // them. No other caller passes `HoldForRestart`, and no other
+            // refusal reaches this arm.
+            Err(refusal)
+                if status_change == StatusChange::HoldForRestart
+                    && refusal.kind == super::lock_api::ReloadRefusalKind::StatusChange =>
+            {
+                ReplaceReload::HeldForRestart {
+                    refusal: refusal.text,
+                    keys: refusal.waiting,
                 }
-                if let Err(e) = journal::finish(target) {
-                    // The new bytes stand and were accepted; the journal says
-                    // `all_renamed`, so the next lock holder only cleans up.
-                    tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
-                }
-                Ok(ReplaceOutcome {
-                    revision: Some(FileRevision::of(new)),
-                    kept_beside,
-                    reload,
-                    secrets: Vec::new(),
-                })
             }
             Err(refusal) => {
                 unkeep();
-                Err(Self::roll_back(
+                return Err(Self::roll_back(
                     target,
                     ReplaceError::ReloadRefused {
                         class: post_write_class(&refusal),
                         reason: refusal.text,
                     },
-                ))
+                ));
             }
+        };
+        if let Err(e) = journal::mark_all_renamed(target) {
+            return Err(ReplaceError::Unconfirmed {
+                journal: journal::journal_path(target),
+                error: e.to_string(),
+            });
         }
+        if let Err(e) = journal::finish(target) {
+            // The new bytes stand; the journal says `all_renamed`, so the
+            // next lock holder only cleans up.
+            tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
+        }
+        Ok(ReplaceOutcome {
+            revision: Some(FileRevision::of(new)),
+            kept_beside,
+            reload,
+            secrets: Vec::new(),
+        })
     }
 
     /// The locked target's bytes, once it is still the file this gateway

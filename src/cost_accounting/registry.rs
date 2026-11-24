@@ -67,6 +67,20 @@ impl CostRegistry {
         self.cost_for(tool_name) == 0.0
     }
 
+    /// The lowest price a priced call can cost: the cheapest registered price
+    /// above zero, and the default price when it is above zero, since any
+    /// tool not registered costs that. `None` when no call is priced.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn cheapest_price(&self) -> Option<f64> {
+        self.costs
+            .iter()
+            .map(|e| *e.value())
+            .chain(std::iter::once(self.default_cost))
+            .filter(|price| *price > 0.0)
+            .min_by(f64::total_cmp)
+    }
+
     /// Snapshot all explicitly registered costs (for API / UI display).
     #[must_use]
     pub fn snapshot(&self) -> HashMap<String, f64> {

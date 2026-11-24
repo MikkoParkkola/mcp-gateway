@@ -200,6 +200,7 @@ async fn failing_secret_save(
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
         secrets: Some(step),
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(IntentKind::Adopt)

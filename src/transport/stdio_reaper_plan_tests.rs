@@ -293,3 +293,31 @@ fn the_allocator_plan_across_its_edges() {
         }
     }
 }
+
+/// Test-only: [`super::StopDeadline::move_earlier`] with the set-time given
+/// instead of read from the clock, so a row can place the cut's set-time on a
+/// chosen side of a planned SIGTERM whatever the host's scheduling. The body is
+/// `move_earlier`'s, with `set_at` in place of `Instant::now()`. Unix only, as
+/// its callers are (the child-tree rows).
+#[cfg(unix)]
+impl super::StopDeadline {
+    /// Test-only: start the clock set-times are stored against, so an instant
+    /// read after this call encodes exactly (an earlier one saturates).
+    pub(crate) fn start_epoch() {
+        std::sync::LazyLock::force(&super::STOP_EPOCH);
+    }
+
+    pub(crate) fn move_earlier_at(&self, deadline: std::time::Instant, set_at: std::time::Instant) {
+        let nanos = deadline
+            .saturating_duration_since(*super::STOP_EPOCH)
+            .as_nanos();
+        let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
+        let mut cut = self.cut.lock();
+        if nanos < cut.0 {
+            let set = set_at
+                .saturating_duration_since(*super::STOP_EPOCH)
+                .as_nanos();
+            *cut = (nanos, u64::try_from(set).unwrap_or(u64::MAX - 1));
+        }
+    }
+}

@@ -225,6 +225,7 @@ mod apply;
 pub use apply::apply_patch;
 
 mod diff;
+mod first_key;
 mod generation;
 /// The settings the web UI may change (U8).
 #[path = "ui_fields.rs"]
@@ -232,8 +233,14 @@ pub(crate) mod ui_fields;
 pub use generation::Generation;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use generation::refuse_hook;
+// The key routes ask the first-key question and the shared decision; the
+// flip check itself is asked only through them (and by `prepare`).
 #[cfg(feature = "webui")]
-pub(crate) use generation::refuse_multi_user_flip;
+pub(crate) use first_key::{
+    Decision, Waiting, restart_pending_decision, restart_pending_guard, waiting_first_key,
+    waiting_names,
+};
+use generation::refuse_multi_user_flip;
 
 /// `config` with both request-path security flags off: what the router test
 /// fixtures set on `AppState` before the flags moved into the published
@@ -306,6 +313,10 @@ pub(crate) use reload_context::{RELOAD_RESTARTING, RELOAD_STOPPING, is_gate_refu
 pub fn recover_before_start(config: &std::path::Path) -> Result<(), String> {
     crate::config_persistence::recover_before_start(config, &startup_recovery_intent)
 }
+#[cfg(feature = "webui")]
+pub(crate) use first_key::ReplaceReload;
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use first_key::StatusChange;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
@@ -370,6 +381,11 @@ mod config_error_leak_tests;
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
+#[cfg(test)]
+mod reload_test_support;
+#[cfg(tp3)]
+#[cfg(test)]
+mod server_name_reload_tests;
 /// For the admin audit layer's cancel rows, which pause a UI write between
 /// writing the file and publishing its reload.
 #[cfg(all(test, feature = "webui"))]
@@ -384,6 +400,9 @@ mod writer_lock_tests;
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
 
+#[cfg(tp3)]
+#[cfg(test)]
+mod first_key_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 mod flip_pin_tests;
