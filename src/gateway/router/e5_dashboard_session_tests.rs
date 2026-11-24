@@ -8,6 +8,7 @@
 //! `DashboardBootstrap::backdate`, which moves both clocks of one session back,
 //! so no test sleeps.
 
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -171,10 +172,11 @@ pub(super) async fn send_to(router: axum::Router, request: Request<Body>) -> Rep
 fn shows_no_credential(headers: &HeaderMap, body: &[u8]) {
     let mut text = String::from_utf8_lossy(body).into_owned();
     for (name, value) in headers {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n{name}: {}",
             String::from_utf8_lossy(value.as_bytes())
-        ));
+        );
     }
     for secret in [BEARER, ADMIN_KEY, STANDARD_KEY] {
         let digest = crate::config::api_key_digest_spec(secret.as_bytes());
