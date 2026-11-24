@@ -78,37 +78,41 @@ struct Block {
 }
 
 /// A fence: its character (`` ` `` or `~`), its length (three or more) and its
-/// info string's first word.
+/// whole info string.
 fn fence(trimmed: &str) -> Option<(char, usize, &str)> {
     let ch = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
     let len = trimmed.chars().take_while(|c| *c == ch).count();
     let info = trimmed[len..].trim();
-    (len >= 3 && !(ch == '`' && info.contains('`'))).then(|| {
-        (
-            ch,
-            len,
-            info.split([' ', '{', ',']).next().unwrap_or_default(),
-        )
-    })
+    (len >= 3 && !(ch == '`' && info.contains('`'))).then_some((ch, len, info))
 }
 
-/// One open block: its fence's line, indentation, character and length, and
-/// whether it is yaml (other fences are followed only so a yaml fence inside
-/// one is not taken for a block).
+/// Whether an info string names yaml: its first word, cut at whitespace (tabs
+/// included), `{` or `,`.
+fn names_yaml(info: &str) -> bool {
+    let word = info
+        .split(|c: char| c.is_whitespace() || c == '{' || c == ',')
+        .next()
+        .unwrap_or_default();
+    word.eq_ignore_ascii_case("yaml") || word.eq_ignore_ascii_case("yml")
+}
+
+/// One open yaml block: its fence's line, indentation, character and length.
 struct Open<'a> {
     start: usize,
     indent: usize,
     ch: char,
     len: usize,
-    yaml: bool,
     body: Vec<&'a str>,
 }
 
-/// The fenced `yaml` blocks in `lines`, by CommonMark's fence rules: a run of
-/// three or more `` ` `` or `~` opens one, the same character at least as long
-/// closes it. Each entry is a line's content, or `None` for a line no block can
-/// span (code between rustdoc lines), which drops a block left open. Up to the
-/// fence's indentation in leading spaces is cut from each body line.
+/// The fenced `yaml` blocks in `lines`. A run of three or more `` ` `` or `~`
+/// whose info string names yaml opens one. The same character, at least as
+/// long and with nothing after it, closes it. Other fences are not followed: a
+/// fence this reader misjudges then shows as a yaml block that fails loudly,
+/// never as one silently skipped. Each entry is a line's content, or `None` for
+/// a line no block can span (code between rustdoc lines), which drops a block
+/// left open. Up to the fence's indentation in leading spaces is cut from each
+/// body line.
 fn fenced(file: &str, lines: &[Option<&str>]) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut open: Option<Open<'_>> = None;
@@ -123,25 +127,26 @@ fn fenced(file: &str, lines: &[Option<&str>]) -> Vec<Block> {
             let closes = found.is_some_and(|(ch, len, info)| {
                 ch == block.ch && len >= block.len && info.is_empty()
             });
-            if !closes {
-                let cut = line.len() - line.trim_start_matches(' ').len();
-                block.body.push(&line[cut.min(block.indent)..]);
-                open = Some(block);
-            } else if block.yaml {
+            if closes {
                 let mut text = block.body.join("\n");
                 text.push('\n');
                 blocks.push(Block {
                     at: format!("{file}:{}", block.start),
                     text,
                 });
+            } else {
+                let cut = line.len() - line.trim_start_matches(' ').len();
+                block.body.push(&line[cut.min(block.indent)..]);
+                open = Some(block);
             }
-        } else if let Some((ch, len, info)) = found {
+        } else if let Some((ch, len, info)) = found
+            && names_yaml(info)
+        {
             open = Some(Open {
                 start: i + 1,
                 indent: line.len() - trimmed.len(),
                 ch,
                 len,
-                yaml: matches!(info.to_ascii_lowercase().as_str(), "yaml" | "yml"),
                 body: Vec::new(),
             });
         }
@@ -257,8 +262,33 @@ fn load_example(at: &str, yaml: &str) -> Result<(), String> {
     } else {
         yaml.to_owned()
     };
-    let yaml = format!("env_files: ['{}']\n{body}", env.display());
-    load(&yaml).map(drop).map_err(|e| e.to_string())
+    let entry = format!("env_files: ['{}']", env.display());
+    load(&with_entry(&body, &entry))
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+/// `yaml` with `entry` (one `key: value`) added at its top level: inside the
+/// braces when the document is one flow mapping, above it otherwise.
+fn with_entry(yaml: &str, entry: &str) -> String {
+    let first = yaml
+        .lines()
+        .map(str::trim_start)
+        .find(|line| !line.is_empty() && !line.starts_with('#'));
+    match first {
+        Some(line) if line.starts_with('{') => {
+            // `line` is a slice of `yaml`, so its offset is the brace's.
+            let brace = line.as_ptr() as usize - yaml.as_ptr() as usize;
+            let rest = &yaml[brace + 1..];
+            let joint = if rest.trim_start().starts_with('}') {
+                ""
+            } else {
+                ", "
+            };
+            format!("{}{{{entry}{joint}{rest}", &yaml[..brace])
+        }
+        _ => format!("{entry}\n{yaml}"),
+    }
 }
 
 /// Whether the loader reads a top-level key named `key`, asked of the loader
@@ -389,11 +419,12 @@ fn fences_are_found_in_markdown_and_rustdoc() {
             text: "server:\n  port: 1\n".into()
         }]
     );
-    // Tilde and longer fences, an info string after the language, a body line
-    // indented less than its fence (only spaces are cut), and a yaml fence
-    // inside another block, which is that block's text.
+    // Tilde and longer fences, an info string after the language (after a
+    // space or a tab), a body line indented less than its fence (only spaces
+    // are cut), a bare indented fence that opens nothing, and a body line
+    // `{note}` after the fence, which does not close the block.
     let md = "~~~yaml title=gateway.yaml\nserver: {}\n~~~\n  ````yml\n  a: 1\nb: 2\n  ```\n  ````\n\
-              ```markdown\n```yaml\nnot: me\n```\n";
+              \x20   ```\n```yaml\ttitle=t\nc: 3\n```{note}\n```\n";
     let lines: Vec<Option<&str>> = md.lines().map(Some).collect();
     assert_eq!(
         fenced("c.md", &lines),
@@ -405,6 +436,10 @@ fn fences_are_found_in_markdown_and_rustdoc() {
             Block {
                 at: "c.md:4".into(),
                 text: "a: 1\nb: 2\n```\n".into()
+            },
+            Block {
+                at: "c.md:10".into(),
+                text: "c: 3\n```{note}\n".into()
             },
         ]
     );
@@ -485,6 +520,19 @@ fn only_the_named_examples_env_files_gives_way_to_the_guards() {
     load_example("docs/OTHER.md:1", &own).expect_err("keeps its own env_files and is refused");
 }
 
+/// The guard's `env_files` entry goes inside a document that is one flow
+/// mapping, where a line above it would not be valid YAML.
+#[test]
+fn an_entry_goes_inside_a_flow_mapping() {
+    assert_eq!(with_entry("{a: 1}\n", "e: 2"), "{e: 2, a: 1}\n");
+    assert_eq!(with_entry("# {c}\n{}\n", "e: 2"), "# {c}\n{e: 2}\n");
+    assert_eq!(with_entry("a: 1\n", "e: 2"), "e: 2\na: 1\n");
+    let flow = "{backends: {x: {http_url: \"https://mcp.example.com/mcp\", headers: \
+                {Authorization: \"Bearer ${DOCS_YAML_GUARD_FIXTURE_TOKEN}\"}}}}\n";
+    load(flow).expect_err("refused while the variable is unset");
+    load_example("docs/x.md:1", flow).expect("a flow-mapping example with a variable loads");
+}
+
 /// Placeholder words a documented digest must not be the SHA-256 of: an
 /// example carrying one would accept that word as a key wherever it is copied.
 const COMMON_WORDS: &[&str] = &[
@@ -517,14 +565,22 @@ fn common_preimages(text: &str) -> Vec<(String, &'static str)> {
 /// "foo" once sat in three of them as an API key's `key_sha256`.
 #[test]
 fn no_documented_digest_is_the_hash_of_a_common_word() {
-    let planted = format!("key_sha256: \"{}\"\n", api_key_digest_spec(b"foo"));
+    // The red: the digest of "foo" with its prefix, uppercased with none, and
+    // the empty string's in a later position of the same block.
+    let foo = api_key_digest_spec(b"foo");
+    let bare = foo.strip_prefix("sha256:").expect("sha256: form");
+    let empty = api_key_digest_spec(b"");
+    let planted = format!(
+        "key_sha256: \"{foo}\"\nprevious_key_sha256: {}\nnote: x {empty} y\n",
+        bare.to_ascii_uppercase()
+    );
     assert_eq!(
         common_preimages(&planted)
             .iter()
             .map(|(_, word)| *word)
             .collect::<Vec<_>>(),
-        ["foo"],
-        "the planted digest must be caught"
+        ["foo", "foo", ""],
+        "every planted digest must be caught"
     );
     let found: Vec<String> = shipped_blocks(Path::new(env!("CARGO_MANIFEST_DIR")))
         .iter()
