@@ -83,7 +83,11 @@ pub(super) fn card_leaves_origin(stored: &TransportConfig, merged: &TransportCon
         return false;
     }
     match (url::Url::parse(old), url::Url::parse(new)) {
-        (Ok(old), Ok(new)) => old.origin() != new.origin(),
-        _ => true,
+        (Ok(old), Ok(new)) => mutant!(
+            "XM2",
+            old.host_str() != new.host_str(),
+            old.origin() != new.origin()
+        ),
+        _ => mutant!("XM3", false, true),
     }
 }

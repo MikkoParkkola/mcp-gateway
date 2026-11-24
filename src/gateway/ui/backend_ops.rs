@@ -385,7 +385,11 @@ pub fn update_backend(
         backend.enabled = enabled;
     }
     if let Some(transport) = update.transport {
-        let merged = merged_transport(backend.transport.clone(), transport);
+        let merged = mutant!(
+            "XM1",
+            transport,
+            merged_transport(backend.transport.clone(), transport)
+        );
         #[cfg(feature = "a2a")]
         if transport_merge::card_leaves_origin(&backend.transport, &merged) {
             return Err(format!(
