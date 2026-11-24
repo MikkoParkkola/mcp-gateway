@@ -1999,7 +1999,7 @@ function restartBanner(block, keys, at) {
     if (advice) node.append(el('p', {}, advice));
     if (command) node.append(copyRow(command));
   }
-  node.append(el('p', { class: 'muted' }, `Checked at ${stamp(at)}`));
+  node.append(el('p', { class: 'muted' }, 'Checked at ', el('time', { datetime: at.toISOString() }, stamp(at))));
   node.dataset.shows = JSON.stringify([keys, refusal, advice, command]);
   return node;
 }
