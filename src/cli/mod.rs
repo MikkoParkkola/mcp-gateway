@@ -396,7 +396,7 @@ pub(crate) enum Command {
         #[arg(long)]
         fix: bool,
 
-        /// Disable colored output. Hidden (MIK-8044 P2c3a): colour already
+        /// Disable colored output. Hidden: colour already
         /// follows the terminal and `NO_COLOR`.
         #[arg(long, hide = true)]
         no_color: bool,
@@ -653,7 +653,7 @@ pub(crate) enum Command {
     #[command(subcommand, about = "Transparency log audit commands")]
     Audit(AuditCommand),
 
-    /// Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
+    /// Dual-substrate OCI runtime abstraction (B4-PLATFORM).
     #[cfg(feature = "runtime-substrate")]
     #[command(
         subcommand,
