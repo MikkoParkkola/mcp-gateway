@@ -223,7 +223,13 @@ pub(super) static ROWS: &[Row] = &[
         &[],
         false,
     ),
-    row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
+    row(
+        routes::UI_DECISIONS,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::ToDo, Tab::Status)],
+        true,
+    ),
     // Resolving an access request writes a grant (accept) or a decision
     // (deny): the grant routes' own permission.
     row(
@@ -233,7 +239,16 @@ pub(super) static ROWS: &[Row] = &[
         &[],
         false,
     ),
-    row(routes::UI_POLICIES, Get, Admin(AdminRequired), &[], false),
+    row(
+        routes::UI_POLICIES,
+        Get,
+        Admin(AdminRequired),
+        &[
+            (Page::Policies, Tab::Status),
+            (Page::Policies, Tab::Settings),
+        ],
+        true,
+    ),
     row(
         routes::UI_DECISIONS_COUNT,
         Get,
@@ -241,13 +256,8 @@ pub(super) static ROWS: &[Row] = &[
         &[],
         false,
     ),
-    row(
-        routes::UI_REFUSALS,
-        Get,
-        Admin(Forbidden),
-        &[(Page::ToDo, Tab::Status)],
-        true,
-    ),
+    // No page shows refusals, so no tab; the need still gates the route.
+    row(routes::UI_REFUSALS, Get, Admin(Forbidden), &[], false),
     row(
         routes::UI_GATEWAY,
         Get,
@@ -263,7 +273,13 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Access, Tab::Status)],
         true,
     ),
-    row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
+    row(
+        routes::UI_KEYS,
+        Post,
+        Admin(Forbidden),
+        &[(Page::Access, Tab::Settings)],
+        false,
+    ),
     // Reads retained audit rows by a keyed email hash: gateway-wide admin
     // only. A scoped admin, an auditor, a user and an anonymous caller are
     // refused before the email is hashed or anything is read.
@@ -274,26 +290,33 @@ pub(super) static ROWS: &[Row] = &[
         &[],
         false,
     ),
-    row(routes::UI_KEYS_NAME, Delete, Admin(Forbidden), &[], false),
+    row(
+        routes::UI_KEYS_NAME,
+        Delete,
+        Admin(Forbidden),
+        &[(Page::Access, Tab::Actions)],
+        false,
+    ),
+    // No page shows dead letters, so no tab; the needs still gate the routes.
     row(
         routes::UI_DEAD_LETTERS,
         Get,
         Admin(AdminRequired),
-        &[(Page::ToDo, Tab::Status)],
-        true,
+        &[],
+        false,
     ),
     row(
         routes::UI_DEAD_LETTERS_REPLAY,
         Post,
         Admin(AdminRequired),
-        &[(Page::ToDo, Tab::Actions)],
+        &[],
         false,
     ),
     row(
         routes::UI_DEAD_LETTER_REPLAY,
         Post,
         Admin(AdminRequired),
-        &[(Page::ToDo, Tab::Actions)],
+        &[],
         false,
     ),
     row(
@@ -412,14 +435,21 @@ pub(super) static ROWS: &[Row] = &[
         routes::UI_SETTINGS_DIFF,
         Post,
         Admin(AdminRequired),
-        &[(Page::Gateway, Tab::Settings)],
+        &[
+            (Page::Gateway, Tab::Settings),
+            (Page::Policies, Tab::Settings),
+        ],
         false,
     ),
+    // Policies saves its switches through the shared settings flow.
     row(
         routes::UI_SETTINGS,
         Post,
         Admin(AdminRequired),
-        &[(Page::Gateway, Tab::Settings)],
+        &[
+            (Page::Gateway, Tab::Settings),
+            (Page::Policies, Tab::Settings),
+        ],
         false,
     ),
     row(
@@ -527,21 +557,23 @@ pub(super) static ROWS: &[Row] = &[
         routes::UI_CONTROL_PLANE,
         Get,
         ControlPlane(CpCheck::Read),
-        &[(Page::Policies, Tab::Status), (Page::Access, Tab::Status)],
-        true,
+        // The Access and Policies pages call the gateway's own routes, so the
+        // control-plane rows back no tab; their needs still gate them.
+        &[],
+        false,
     ),
     row(
         routes::UI_CONTROL_PLANE_GRANTS,
         Post,
         ControlPlane(CpCheck::Action(ControlPlaneAction::MutateGrant)),
-        &[(Page::Access, Tab::Actions)],
+        &[],
         false,
     ),
     row(
         routes::UI_CONTROL_PLANE_POLICIES,
         Post,
         ControlPlane(CpCheck::Action(ControlPlaneAction::MutatePolicy)),
-        &[(Page::Policies, Tab::Actions)],
+        &[],
         false,
     ),
     row(
@@ -551,7 +583,7 @@ pub(super) static ROWS: &[Row] = &[
             ControlPlaneAction::MutateGrant,
             ControlPlaneAction::MutatePolicy,
         ])),
-        &[(Page::Policies, Tab::Actions)],
+        &[],
         false,
     ),
     row(
