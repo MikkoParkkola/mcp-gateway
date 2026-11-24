@@ -3,6 +3,12 @@
 `security.firewall.rules` overrides what the firewall does with a finding, per tool, backend and key. Without a rule, every finding gets its severity's default: Critical and High block, Medium warns, Low is allowed.
 
 ```yaml
+auth:
+  enabled: true
+  api_keys:
+    - name: support-bot   # `keys` names API keys, so the rule needs one
+      key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"   # from hash-key
+      backends: ["*"]
 security:
   firewall:
     rules:

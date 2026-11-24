@@ -244,7 +244,7 @@ def test_backend_keys_match_strict_keys_oracle() -> None:
     for const in ("KNOWN_BACKEND_KEYS", "A2A_BACKEND_KEYS"):
         body = re.search(rf"const {const}: &\[&str\] = &\[(.*?)\];", code, re.S).group(1)
         want |= set(re.findall(r'"([^"]+)"', re.sub(r"//[^\n]*", "", body)))
-    retired = {"idle_timeout", "circuit_breaker"}
+    retired = {"idle_timeout", "circuit_breaker", "transport"}
     got = {
         e.id.split(".")[2]
         for e in inv.extract_config()
