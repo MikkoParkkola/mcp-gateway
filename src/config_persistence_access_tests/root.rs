@@ -172,7 +172,7 @@ fn parse_outcome(stdout: &str) -> Outcome {
     }
 }
 
-/// The save refused with PermissionDenied and a message led by `code`.
+/// The save refused with `PermissionDenied` and a message led by `code`.
 fn assert_refused(got: &Outcome, code: &str, row: &str) {
     let led_by_code = matches!(got, Outcome::Refused { kind, text }
         if kind == "PermissionDenied" && text.starts_with(&format!("{code}: ")));

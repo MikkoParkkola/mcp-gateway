@@ -7,10 +7,13 @@
 //! that setup fails instead of passing.
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::ffi::OsString;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 /// One backend, so `remove` has something to take out.
 const CONFIG: &str = "backends:\n  srv:\n    command: echo\n";
@@ -30,27 +33,30 @@ fn set_mode(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
 }
 
-/// The gateway binary run as user C (group G) with only `HOME` set, so no
-/// variable from the job (a config path among them) reaches it.
+/// The gateway binary run as user C (group G) through the shared spawn
+/// helper: an isolated home and nothing inherited, so no variable from the
+/// job (a config path among them) reaches it. The wrapper keeps the
+/// environment it is given (setpriv always; sudo with -E, which root may use).
 fn gateway_as_c(home: &Path, args: &[&std::ffi::OsStr]) -> Output {
-    let mut command = if cfg!(target_os = "linux") {
-        let mut setpriv = Command::new("setpriv");
-        setpriv
-            .args(["--reuid", &job_id("ACCESS_ROWS_UID_C").to_string()])
-            .args(["--regid", &job_id("ACCESS_ROWS_GID_G").to_string()])
-            .arg("--init-groups");
-        setpriv
+    let (uid, gid) = (
+        job_id("ACCESS_ROWS_UID_C").to_string(),
+        job_id("ACCESS_ROWS_GID_G").to_string(),
+    );
+    let user = job_env("ACCESS_ROWS_USER_C");
+    // Absolute paths: the child's environment is empty, PATH included.
+    let wrapper: Vec<&str> = if cfg!(target_os = "linux") {
+        vec![
+            "/usr/bin/setpriv",
+            "--reuid",
+            &uid,
+            "--regid",
+            &gid,
+            "--init-groups",
+        ]
     } else {
-        let mut sudo = Command::new("sudo");
-        sudo.args(["-u", &job_env("ACCESS_ROWS_USER_C")]);
-        sudo
+        vec!["/usr/bin/sudo", "-E", "-u", &user]
     };
-    let mut home_var = OsString::from("HOME=");
-    home_var.push(home);
-    command
-        .args(["env", "-i"])
-        .arg(home_var)
-        .arg(env!("CARGO_BIN_EXE_mcp-gateway"))
+    gateway_bin::wrapped(&wrapper, home, gateway_bin::Inherit::Nothing)
         .args(args)
         .output()
         .expect("start the gateway binary as user C")
