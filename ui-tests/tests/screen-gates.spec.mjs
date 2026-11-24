@@ -245,6 +245,39 @@ test('G0 plant: an entry with no frames is reported', () => {
   expect(tableProblems([{ ...tools, frames: [] }])).toEqual(['tools: no frames']);
 });
 
+// Why an entry has no frames yet: they arrive with a later screen cut.
+const LATER = 'frames come with a later screen cut';
+
+test('G0 plant: frames: [] passes only when a deferral reason comes with it', () => {
+  expect(tableProblems([{ ...tools, frames: [], frames_deferred: LATER }])).toEqual([]);
+  expect(tableProblems([{ ...tools, frames: [] }])).toEqual(['tools: no frames']);
+});
+
+test('G0 plant: a blank deferral reason does not count', () => {
+  expect(tableProblems([{ ...tools, frames: [], frames_deferred: '' }])).toEqual(['tools: no frames']);
+  expect(tableProblems([{ ...tools, frames: [], frames_deferred: ' \t ' }])).toEqual(['tools: no frames']);
+});
+
+test('G0 plant: real frames beside any deferral reason are refused', () => {
+  for (const frames_deferred of [LATER, '', ' \t ']) {
+    expect(tableProblems([{ ...tools, frames_deferred }]), JSON.stringify(frames_deferred))
+      .toEqual(['tools: frames and frames_deferred both given']);
+  }
+});
+
+test('G0 plant: a deferral reason without a frames array is refused', () => {
+  expect(tableProblems([{ ...tools, frames: undefined, frames_deferred: LATER }])).toEqual(['tools: no frames']);
+});
+
+test('G0 plant: a non-string deferral reason does not count', () => {
+  expect(tableProblems([{ ...tools, frames: [], frames_deferred: 42 }])).toEqual(['tools: no frames']);
+});
+
+test('G0 plant: a frame with an empty region list is refused', () => {
+  const frames = [{ ...tools.frames[0], regions: [] }];
+  expect(tableProblems([{ ...tools, frames }])).toEqual([`tools ${frames[0].file}: compares no region`]);
+});
+
 test('G0 plant: a frame drawn in a state the entry lacks is reported', () => {
   const frames = [{ ...tools.frames[0], state: 'nowhere' }];
   expect(tableProblems([{ ...tools, frames }])).toEqual([`tools ${frames[0].file}: drawn in state "nowhere", which the entry lacks`]);
