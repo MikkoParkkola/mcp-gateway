@@ -310,7 +310,9 @@ async fn by_deadline<T>(
 /// Run one helper's session on `stream`: `fetch_start`, then the fetch's
 /// credential, then `fetch_done`, then `expired` once the credential's
 /// tunnels are shut. Any other line, a closed socket or a missed bound ends
-/// the session with the credential revoked.
+/// the session with the credential revoked. The rows' way into
+/// [`serve_fetch`] with a whole stream; production serves [`serve_control`].
+#[cfg(test)]
 pub(crate) async fn serve_session(
     stream: UnixStream,
     proxy: &AllowlistProxy,
@@ -403,28 +405,56 @@ where
     Ok(())
 }
 
+/// Which half of a control session refused: the fetch's, whose words the
+/// launch follows with how long into the fetch step they came, or the
+/// status's, which it returns bare.
+#[derive(Debug)]
+pub(crate) enum Ended {
+    Fetch(Refusal),
+    Status(Refusal),
+}
+
+impl Ended {
+    #[cfg(test)]
+    pub(crate) fn into_refusal(self) -> Refusal {
+        match self {
+            Self::Fetch(refusal) | Self::Status(refusal) => refusal,
+        }
+    }
+}
+
 /// One helper's whole control session: the fetch when `fetch` names its
 /// proxy, then the helper's setup status, which is the session's answer.
-#[cfg_attr(
-    all(not(test), target_os = "linux"),
-    expect(
-        dead_code,
-        reason = "the launch starts calling it with the helper's status"
-    )
-)]
+/// The rows' form of [`serve_control_marked`], with the refusal unmarked.
+#[cfg(test)]
 pub(crate) async fn serve_control(
     stream: UnixStream,
     fetch: Option<&AllowlistProxy>,
     deadline: tokio::time::Instant,
     bounds: ControlBounds,
 ) -> Result<SetupStatus, Refusal> {
+    serve_control_marked(stream, fetch, deadline, bounds)
+        .await
+        .map_err(Ended::into_refusal)
+}
+
+/// The session the launch serves, its refusal marked by the half it came
+/// from (the rows read it unmarked through `serve_control`).
+pub(crate) async fn serve_control_marked(
+    stream: UnixStream,
+    fetch: Option<&AllowlistProxy>,
+    deadline: tokio::time::Instant,
+    bounds: ControlBounds,
+) -> Result<SetupStatus, Ended> {
     // The write half stays open until the status is read: the helper takes
     // the gateway's close as its cue to go on.
     let (read, mut write) = stream.into_split();
     let mut read = tokio::io::BufReader::new(read);
     let Some(proxy) = fetch else {
         // The helper builds its root before it reports: the setup bound.
-        return read_status(&mut read, bounds.setup, deadline, bounds).await;
+        return read_status(&mut read, bounds.setup, deadline, bounds)
+            .await
+            .map_err(Ended::Status);
     };
     // A fetching helper's first line is `fetch_start`, or a refusal of a
     // step it failed before asking; it is read as the fetch always was.
@@ -433,35 +463,36 @@ pub(crate) async fn serve_control(
         "fetch_start",
         read_line(&mut read, bounds.setup, bounds),
     )
-    .await?;
+    .await
+    .map_err(Ended::Fetch)?;
     match SetupStatus::parse(&line) {
-        Some(SetupStatus::Done) => return Err(no_status()),
-        Some(refused) => return status_at_end(&mut read, refused, deadline, bounds).await,
+        Some(SetupStatus::Done) => return Err(Ended::Status(no_status())),
+        Some(refused) => {
+            return status_at_end(&mut read, refused, deadline, bounds)
+                .await
+                .map_err(Ended::Status);
+        }
         None => {}
     }
-    serve_fetch(&line, &mut read, &mut write, proxy, deadline, bounds).await?;
+    serve_fetch(&line, &mut read, &mut write, proxy, deadline, bounds)
+        .await
+        .map_err(Ended::Fetch)?;
     // After the run line the helper only checks its entry point, so the
     // deadline alone bounds the status's first byte. A bound of its own equal
     // to the time left would fire at the same instant and could win, turning
     // a silent helper's deadline refusal into "no valid status". (tokio's
     // timeout arms no timer at all when now + the bound overflows.)
-    read_status(&mut read, Duration::MAX, deadline, bounds).await
+    read_status(&mut read, Duration::MAX, deadline, bounds)
+        .await
+        .map_err(Ended::Status)
 }
 
-#[cfg_attr(
-    all(not(test), target_os = "linux"),
-    expect(dead_code, reason = "only serve_control reads a status so far")
-)]
 fn no_status() -> Refusal {
     Refusal::Step("the sandbox helper sent no valid status".into())
 }
 
 /// The helper's one status line. Anything that is not exactly one well-formed
 /// status followed by the end of the connection is no status at all.
-#[cfg_attr(
-    all(not(test), target_os = "linux"),
-    expect(dead_code, reason = "only serve_control reads a status so far")
-)]
 async fn read_status<R: AsyncBufRead + Unpin>(
     read: &mut R,
     first: Duration,
@@ -480,10 +511,6 @@ async fn read_status<R: AsyncBufRead + Unpin>(
 
 /// `status` stands only when the connection ends right after it, within the
 /// frame bound: the helper shuts its side once it has reported.
-#[cfg_attr(
-    all(not(test), target_os = "linux"),
-    expect(dead_code, reason = "only serve_control reads a status so far")
-)]
 async fn status_at_end<R: AsyncBufRead + Unpin>(
     read: &mut R,
     status: SetupStatus,
