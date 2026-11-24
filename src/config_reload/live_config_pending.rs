@@ -24,8 +24,9 @@ pub(crate) struct FirstKeyWait {
 impl LiveConfig {
     /// Everything only a restart would apply, as the Gateway page shows it:
     /// the published config's fields plus the startup-environment marker,
-    /// read from one snapshot.
-    #[cfg(any(test, feature = "webui"))]
+    /// read from one snapshot. The page itself reads it with the wait,
+    /// through [`Self::restart_view`].
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
         self.restart_view().0
