@@ -407,16 +407,6 @@ fn judge_term_then_kill(sent: &[Sent]) -> Result<(), String> {
     }
 }
 
-/// The normal path only: one SIGTERM, then the kill, with nothing skipped.
-fn judge_strict(sent: &[Sent]) -> Result<(), String> {
-    no_failed_kill(sent)?;
-    if term_then_kill(sent) && !has_skip(sent) && !sent.contains(&Sent::LeaderGone) {
-        Ok(())
-    } else {
-        Err(format!("not one SIGTERM followed by the kill: {sent:?}"))
-    }
-}
-
 /// The kill with no SIGTERM; a late skip is allowed (these plans leave no
 /// room for one), any other unsent reason is refused.
 fn judge_kill_without_term(sent: &[Sent]) -> Result<(), String> {
@@ -441,14 +431,6 @@ pub(crate) async fn assert_term_then_kill(pid: Pid, what: &str) {
     }
 }
 
-/// See [`judge_strict`]: for a row on the full, uncut plan, which leaves the
-/// reaper seconds of room.
-pub(crate) async fn assert_term_then_kill_strict(pid: Pid, what: &str) {
-    if let Err(why) = judge_strict(&after_the_kill(pid).await) {
-        panic!("{what}: {why}");
-    }
-}
-
 /// See [`judge_kill_without_term`].
 pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
     if let Err(why) = judge_kill_without_term(&after_the_kill(pid).await) {
@@ -456,28 +438,15 @@ pub(crate) async fn assert_kill_without_term(pid: Pid, what: &str) {
     }
 }
 
-/// The rule a gone-kill row's record must also pass.
-#[derive(Clone, Copy)]
-pub(crate) enum Rule {
-    /// [`judge_term_then_kill`].
-    Live,
-    /// [`judge_strict`].
-    Strict,
-}
-
-/// A kill that found the group gone is recorded as such, and `rule` takes it
-/// as the kill.
-pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str, rule: Rule) {
+/// A kill that found the group gone is recorded as such, and
+/// [`judge_term_then_kill`] takes it as the kill.
+pub(crate) async fn assert_gone_kill_counts(pid: Pid, what: &str) {
     let sent = after_the_kill(pid).await;
     assert!(
         sent.contains(&Sent::KillGone),
         "{what}: no kill of a group already gone recorded: {sent:?}"
     );
-    let judged = match rule {
-        Rule::Live => judge_term_then_kill(&sent),
-        Rule::Strict => judge_strict(&sent),
-    };
-    if let Err(why) = judged {
+    if let Err(why) = judge_term_then_kill(&sent) {
         panic!("{what}: {why}");
     }
 }
