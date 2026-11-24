@@ -91,8 +91,8 @@ pub(crate) fn waiting_names(published: &Generation, config: &Config) -> Vec<Stri
 }
 
 /// A key list that only removes keys yet changes the multi-user status.
-const REMOVAL_ONLY: &str = "this change would change whether the gateway is multi-user, \
-     which a running gateway never does";
+const REMOVAL_ONLY: &str = "this change to auth.api_keys would change whether the gateway is \
+     multi-user, which a running gateway never does.";
 
 /// The one question every writer, reload and route asks about a candidate.
 ///
@@ -230,8 +230,9 @@ pub(crate) fn restart_pending_guard(
 /// No restart claim: a later edit could stop the file from starting.
 pub(crate) fn held_refusal(keys: &[String]) -> String {
     format!(
-        "{} gateway.yaml holds API keys ({}) that would change whether the gateway is \
-         multi-user, which a running gateway never does; nothing was published",
+        "{} the API keys listed in auth.api_keys ({}) would switch this gateway between \
+         single-user and multi-user, and a gateway never switches while it runs; nothing \
+         was published",
         super::POSTURE_REFUSED_PREFIX,
         keys.join(", ")
     )
