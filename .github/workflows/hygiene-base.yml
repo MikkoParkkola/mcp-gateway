@@ -14,9 +14,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: hygiene-base-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No concurrency group: the ruleset requires this check, and it reads a cancelled run under the
+# required name as a failure. Every run completes; two runs at one head judge the same tree.
+# Pinned by scripts/ci/check-required-no-cancel.sh.
 
 jobs:
   hygiene-base:
