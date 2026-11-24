@@ -158,7 +158,11 @@ pub(super) fn status_body(
             latency_p99_ms: hm.latency_p99_ms,
         });
     }
-    servers.extend(switched_off(config, &backends));
+    servers.extend(mutant!(
+        "of-reg",
+        Vec::new(),
+        switched_off(config, &backends)
+    ));
 
     let labels: Vec<crate::counters::Filter<'_>> = servers
         .iter()
@@ -176,7 +180,7 @@ pub(super) fn status_body(
         "uptime_secs": state.process.uptime_secs(),
         "version": env!("CARGO_PKG_VERSION"),
         "circuit_breakers": {
-            "closed": cb_closed,
+            "closed": mutant!("of-cb", cb_closed + (servers.len() - total), cb_closed),
             "open": cb_open,
             "half_open": cb_half_open,
         },
@@ -203,7 +207,12 @@ fn switched_off(
         .backends
         .iter()
         .filter(|(name, server)| {
-            !server.enabled && !registered.iter().any(|b| b.name == name.as_str())
+            !server.enabled
+                && mutant!(
+                    "of-dup",
+                    true,
+                    !registered.iter().any(|b| b.name == name.as_str())
+                )
         })
         .map(|(name, server)| ServerStatus {
             name: name.clone(),
@@ -213,7 +222,7 @@ fn switched_off(
             request_count: None,
             calls_24h: None,
             calls_prev_24h: None,
-            circuit_state: None,
+            circuit_state: mutant!("of-def", Some("closed".to_owned()), None),
             circuit_trips: None,
             current_failures: None,
             healthy: None,
@@ -231,7 +240,7 @@ fn switched_off(
             sign_in_flow: None,
         })
         .collect();
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.sort_by(|a, b| mutant!("of-sort", b.name.cmp(&a.name), a.name.cmp(&b.name)));
     rows
 }
 
