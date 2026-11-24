@@ -1,0 +1,22 @@
+head_sha	3f57e10172a36b17d9eae16a6e6c9547a8d89fb7
+#mutant m1
+mcp_gateway	gateway::router::tests::task_execution_adapter::settlement_record::r1_a_recovered_result_writes_one_settlement_record	src/gateway/router/tests/task_execution_adapter/support.rs:496
+#mutant m2
+mcp_gateway	gateway::router::tests::task_execution_adapter::settlement_record::drain_bound::flake2_a_worker_never_released_fails_the_join	src/gateway/router/tests/task_execution_adapter/support.rs:650
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_flake2_a_worker_never_released_fails_the_join	src/gateway/router/tests/task_execution_adapter/support.rs:650
+#mutant m3 multi=2
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_flake3_the_join_waits_on_a_paused_clock	src/gateway/router/tests/task_execution_adapter/query_serialization/drain_bound.rs:106
+#mutant m3b multi=2
+mcp_gateway	gateway::router::tests::task_execution_adapter::settlement_record::drain_bound::flake1_a_stall_past_the_join_bound_still_joins_clean	src/gateway/router/tests/task_execution_adapter/support.rs:496
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_flake1_a_stall_past_the_join_bound_still_joins_clean	src/gateway/router/tests/task_execution_adapter/support.rs:496
+#mutant m5
+mcp_gateway	gateway::router::tests::task_execution_adapter::settlement_record::drain_bound::flake2_a_worker_never_released_fails_the_join	src/gateway/router/tests/task_execution_adapter/support.rs:650
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_flake2_a_worker_never_released_fails_the_join	src/gateway/router/tests/task_execution_adapter/support.rs:650
+#mutant m6
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::a_worker_queued_behind_a_settling_read_asks_nothing_further	src/gateway/router/tests/task_execution_adapter/support.rs:479
+#mutant m7
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_flake1_a_stall_past_the_join_bound_still_joins_clean	src/gateway/router/tests/task_execution_adapter/support.rs:496
+#mutant m8
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_arrival_a_first_query_late_by_a_stall_still_arrives	src/gateway/router/tests/task_execution_adapter/query_serialization.rs:304
+#mutant m11
+mcp_gateway	gateway::router::tests::task_execution_adapter::query_serialization::drain_bound::q_arrival_a_reader_claim_late_by_a_stall_still_arrives	src/gateway/router/tests/task_execution_adapter/query_serialization.rs:328
