@@ -113,14 +113,28 @@ impl McpChildren {
         // PATH lookup are file-system calls a stalled mount can hold, and a
         // gateway stop must never wait on them. A start that fails returns
         // here, before any child has left the map.
-        let candidate = start()?;
+        let held: Option<parking_lot::MutexGuard<'_, Children>> =
+            mutant!("M7", Some(self.map.lock()), None);
+        let mut start = Some(start);
+        let candidate = mutant!(
+            "M6",
+            None,
+            Some((start.take().expect("not yet started"))()?)
+        );
+        drop(held);
         // Declared after the candidate, so dropped before it: an unused
         // candidate's directory is removed only once the lock is released.
         let mut map = self.map.lock();
         // Read again right before the insert: an unload (epoch) or a stop
         // (latch) while the candidate was built refuses it here.
-        self.admit(&map, &capability.name, &epoch_current)?;
-        if let Some(child) = map.by_key.get_mut(&key).filter(|child| current(child)) {
+        if mutant!("M4a", false, true) {
+            self.admit(&map, &capability.name, &epoch_current)?;
+        }
+        if let Some(child) = map
+            .by_key
+            .get_mut(&key)
+            .filter(|child| mutant!("M9", false, current(child)))
+        {
             // Another call put one in meanwhile; the candidate goes unused.
             return Ok(lease(child));
         }
@@ -161,7 +175,12 @@ impl McpChildren {
             .filter_map(|k| map.by_key.remove(k))
             .collect();
         hand_over(&removed, ChildEnd::Graceful);
-        let (backend, workdir) = candidate;
+        let (backend, workdir) = match candidate {
+            Some(built) => built,
+            // M6 on: the start runs after the removals, and its failure
+            // returns with them out of the map.
+            None => (start.take().expect("not yet started"))()?,
+        };
         if let Some(deadline) = self.stop_deadline.get() {
             let _ = backend.stop_deadline.set(Arc::clone(deadline));
         }
@@ -193,7 +212,7 @@ impl McpChildren {
         capability: &str,
         epoch_current: &impl Fn(u64) -> bool,
     ) -> Result<()> {
-        if children.stopped {
+        if mutant!("M4b", false, children.stopped) {
             return Err(Error::Config(format!(
                 "capability '{capability}': the gateway is stopping"
             )));
@@ -213,7 +232,7 @@ impl McpChildren {
         let mut map = self.map.lock();
         map.stopped = true;
         let all: Vec<Child> = map.by_key.drain().map(|(_, child)| child).collect();
-        hand_over(&all, ChildEnd::By(deadline));
+        hand_over(&all, mutant!("M3", ChildEnd::Now, ChildEnd::By(deadline)));
         drop(map);
         finish(all);
     }
@@ -250,13 +269,21 @@ impl McpChildren {
             .iter()
             .filter_map(|k| map.by_key.remove(k))
             .collect();
-        #[cfg(test)]
-        self.evict_holds_the_lock.pause_on_thread();
-        // Handed over before the unlock: a gateway stop that takes the lock
-        // after this finds them already in the reaper's hands.
-        hand_over(&revoked, ChildEnd::Now);
-        hand_over(&idled, ChildEnd::Graceful);
-        drop(map);
+        if mutant!("M5", false, true) {
+            #[cfg(test)]
+            self.evict_holds_the_lock.pause_on_thread();
+            // Handed over before the unlock: a gateway stop that takes the lock
+            // after this finds them already in the reaper's hands.
+            hand_over(&revoked, ChildEnd::Now);
+            hand_over(&idled, ChildEnd::Graceful);
+            drop(map);
+        } else {
+            drop(map);
+            #[cfg(test)]
+            self.evict_holds_the_lock.pause_on_thread();
+            hand_over(&revoked, ChildEnd::Now);
+            hand_over(&idled, ChildEnd::Graceful);
+        }
         finish(revoked);
         finish(idled);
     }

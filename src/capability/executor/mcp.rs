@@ -194,9 +194,13 @@ async fn wait_ready(
         // one (every `BackendNotFound` a start returns is a stop or a retire,
         // never a start still on its way); only the server's own "not there
         // yet" answers (tool errors) count as not ready.
-        if let Ok(Err(
-            e @ (Error::Transport(_) | Error::TransportPermanent(_) | Error::BackendNotFound(_)),
-        )) = &poll
+        let stopped =
+            mutant!("M8", false, matches!(&poll, Ok(Err(Error::BackendNotFound(_)))));
+        if let Ok(Err(e @ (Error::Transport(_) | Error::TransportPermanent(_)))) = &poll {
+            return Err(Error::Transport(format!("wait aborted: {e}")));
+        }
+        if let Ok(Err(e)) = &poll
+            && stopped
         {
             return Err(Error::Transport(format!("wait aborted: {e}")));
         }

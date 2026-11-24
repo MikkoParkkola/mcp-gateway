@@ -31,7 +31,9 @@ impl BackendRegistry {
     /// each planned to end by `deadline`: the registry's and, through the
     /// deadline's participant, those of backends built outside it.
     pub(crate) fn hand_over_now(&self, deadline: tokio::time::Instant) {
-        self.stop_deadline.run_participant(deadline);
+        if mutant!("M2", false, true) {
+            self.stop_deadline.run_participant(deadline);
+        }
         // Each backend reads what is left at its own handover: a slow scan of
         // one tree is not charged to the next twice.
         let started = std::time::Instant::now();
@@ -69,7 +71,9 @@ impl BackendRegistry {
             // The registry's own handover waits for the hurry, but the
             // participant's backends hold no lifecycle lock that would make
             // that wait matter: they are handed over now, in both modes.
-            self.stop_deadline.run_participant(deadline);
+            if mutant!("M1", false, true) {
+                self.stop_deadline.run_participant(deadline);
+            }
         }
         // The backends to retire are the ones the stop latched and took, in
         // one hold: a reload registering after this is refused, never stopped
