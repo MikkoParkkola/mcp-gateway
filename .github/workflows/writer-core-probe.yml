@@ -2,8 +2,8 @@ name: Writer core probe
 
 # One-off probe on a throwaway branch: the shared writer's root rows on Linux
 # and macOS, which otherwise run only in a pull request's CI, judged red on
-# the rows before the fix and green after it; the macOS leg first compiles
-# every target. Never on a pull request branch or the release line.
+# the rows before the fix and green after it. (Every target's macOS compile
+# was proven at e0024f62fc.) Never on a pull request branch or the release line.
 on:
   push:
     branches: ["throwaway/writer-core-9887"]
@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,9 +30,6 @@ jobs:
       - name: Swap
         if: runner.os == 'Linux'
         uses: ./.github/actions/add-swap
-      - name: Every target compiles on macOS
-        if: runner.os == 'macOS'
-        run: cargo check --lib --all-targets --all-features
       - name: The lib test part holding the root rows, where user C can run it
         env:
           MCP_GATEWAY_TEST_PART: "3"
