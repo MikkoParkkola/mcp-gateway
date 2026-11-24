@@ -184,7 +184,111 @@ use Need::{ActivityReader, Admin, AdminKeyLink, AdminSplit, ControlPlane, Open};
 use Verb::{Delete, Get, Patch, Post, Put};
 
 /// Every route the UI API router mounts, and the dashboard page.
-pub(super) static ROWS: &[Row] = &[
+#[cfg(not(mutants))]
+pub(super) static ROWS: &[Row] = TABLE;
+/// Mutant builds: the real table with the named mutant's one cell edited.
+#[cfg(mutants)]
+pub(super) static ROWS: mutant_rows::Rows = mutant_rows::Rows;
+
+#[cfg(mutants)]
+mod mutant_rows {
+    use super::Verb::{Get, Post};
+    use super::{Need, Page, Row, TABLE, Tab};
+    use crate::gateway::routes;
+
+    /// Reads as a `&[Row]`: by deref, and by value in a `for` loop.
+    #[derive(Clone, Copy)]
+    pub(in crate::gateway::ui) struct Rows;
+
+    impl std::ops::Deref for Rows {
+        type Target = [Row];
+        fn deref(&self) -> &[Row] {
+            table()
+        }
+    }
+
+    impl IntoIterator for Rows {
+        type Item = &'static Row;
+        type IntoIter = std::slice::Iter<'static, Row>;
+        fn into_iter(self) -> Self::IntoIter {
+            table().iter()
+        }
+    }
+
+    fn copy(r: &Row) -> Row {
+        Row {
+            path: r.path,
+            method: r.method,
+            need: r.need,
+            tabs: r.tabs,
+            load: r.load,
+        }
+    }
+
+    /// The fields of `a` and `b` that differ.
+    fn cells_apart(a: &Row, b: &Row) -> usize {
+        usize::from(a.path != b.path)
+            + usize::from(a.method != b.method)
+            + usize::from(a.need != b.need)
+            + usize::from(a.tabs != b.tabs)
+            + usize::from(a.load != b.load)
+    }
+
+    /// Derived from the real table: copy every row, edit the active mutant's
+    /// one cell, then check exactly one cell differs (none with no mutant).
+    fn table() -> &'static [Row] {
+        static T: std::sync::OnceLock<Vec<Row>> = std::sync::OnceLock::new();
+        T.get_or_init(|| {
+            let mut rows: Vec<Row> = TABLE.iter().map(copy).collect();
+            let mut edit = |path: &str, method: super::Verb, change: &dyn Fn(&mut Row)| {
+                let mut hits = rows
+                    .iter_mut()
+                    .filter(|r| r.path == path && r.method == method);
+                let row = hits.next().expect("the mutant's row exists");
+                assert!(hits.next().is_none(), "the mutant's row is unique");
+                change(row);
+            };
+            let mut on = 0;
+            if mutant!("K1", true, false) {
+                on += 1;
+                edit(routes::UI_CONTROL_PLANE, Get, &|r: &mut Row|{
+                    r.tabs = &[(Page::Access, Tab::Status)];
+                });
+            }
+            if mutant!("K2", true, false) {
+                on += 1;
+                edit(routes::UI_CONTROL_PLANE, Get, &|r: &mut Row|{
+                    r.tabs = &[(Page::Policies, Tab::Status)];
+                });
+            }
+            if mutant!("K3", true, false) {
+                on += 1;
+                edit(routes::UI_REFUSALS, Get, &|r: &mut Row|{
+                    r.tabs = &[(Page::ToDo, Tab::Status)];
+                });
+            }
+            if mutant!("K4", true, false) {
+                on += 1;
+                edit(routes::UI_DECISIONS, Get, &|r: &mut Row|r.load = false);
+            }
+            if mutant!("K5", true, false) {
+                on += 1;
+                edit(routes::UI_SETTINGS, Post, &|r: &mut Row|{
+                    r.tabs = &[(Page::Gateway, Tab::Settings)];
+                });
+            }
+            if mutant!("K6", true, false) {
+                on += 1;
+                edit(routes::UI_REFUSALS, Get, &|r: &mut Row|r.need = Need::Open);
+            }
+            let apart: usize = rows.iter().zip(TABLE).map(|(m, t)| cells_apart(m, t)).sum();
+            assert_eq!(apart, on, "a mutant table differs from the real one in one cell");
+            rows
+        })
+    }
+}
+
+const TABLE: &[Row] = &[
     row(
         routes::UI_STATUS,
         Get,
