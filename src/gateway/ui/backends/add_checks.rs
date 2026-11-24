@@ -51,7 +51,10 @@ pub(in crate::gateway::ui) fn request_answer(req: &AddBackendRequest) -> Option<
             return refuse("header_value", "headers");
         }
     }
-    if req.allow_cleartext_credentials == Some(true) && req.url.is_none() {
+    // A command wins over a URL (resolve_backend), so the override with a
+    // command would land on a stdio server: refused as headers are.
+    if req.allow_cleartext_credentials == Some(true) && (req.command.is_some() || req.url.is_none())
+    {
         return refuse("override_needs_url", "allow_cleartext_credentials");
     }
     if req
@@ -92,8 +95,8 @@ pub(super) fn add_answer(state: &AppState, req: &AddBackendRequest) -> Option<Re
 /// The request's headers onto the backend about to be written, and the
 /// override only when asked as `true`. Both are set only when given: a
 /// registry entry's own headers (a login template) are never replaced by an
-/// absent member. A body that gives either without a URL never gets here:
-/// [`request_answer`] refused it.
+/// absent member. A body that gives either without a URL, or with a command,
+/// never gets here: [`request_answer`] refused it.
 pub(in crate::gateway::ui) fn put_headers(
     backend: &mut BackendConfig,
     headers: HashMap<String, String>,

@@ -247,6 +247,12 @@ fn h4_header_values_duplicate_names_a_bad_url_and_a_stray_override_are_refused_b
                 "allow_cleartext_credentials",
             ),
             (
+                json!({"name": "c", "command": "npx tool", "url": url, "env": {"API_KEY": TOKEN},
+                    "allow_cleartext_credentials": true}),
+                "override_needs_url",
+                "allow_cleartext_credentials",
+            ),
+            (
                 json!({"name": "h", "url": userinfo_url(),
                     "headers": {"bad name": "v", "Authorization": bearer}}),
                 "header_name",
@@ -263,7 +269,7 @@ fn h4_header_values_duplicate_names_a_bad_url_and_a_stray_override_are_refused_b
             checked += 1;
         }
     });
-    assert_eq!(checked, 7, "the cases did not all run");
+    assert_eq!(checked, 8, "the cases did not all run");
     for value in [TOKEN, "a\nb", "a\u{0}b"] {
         assert!(
             !logs.iter().any(|r| r.to_string().contains(value)),
