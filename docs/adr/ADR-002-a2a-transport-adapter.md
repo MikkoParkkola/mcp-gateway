@@ -198,7 +198,7 @@ A2A JSON-RPC endpoints are added to the Axum router:
 | `src/lib.rs` | Add `pub mod a2a;` (behind `a2a` feature flag) |
 | `src/config/mod.rs` | Add `A2a` variant to `TransportConfig` enum |
 | `src/config/mod.rs` | `TransportConfig::transport_type()` returns `"a2a"` for the new variant |
-| `src/main.rs` | Backend startup: detect `transport: a2a` and create `A2aProvider` instead of `McpProvider` |
+| `src/main.rs` | Backend startup: detect `a2a_url` and create `A2aProvider` instead of `McpProvider` |
 | `src/gateway/router/mod.rs` | (Phase 2) Mount `/.well-known/agent.json` and `/a2a` routes |
 | `Cargo.toml` | Add `a2a` feature flag; no new dependencies needed (`reqwest`, `serde`, `serde_json`, `tokio` already present) |
 
@@ -211,7 +211,6 @@ backends:
   travel-agent:
     description: "External travel planning A2A agent"
     enabled: true
-    transport: a2a
     a2a_url: "https://travel.example.com"
     # Agent Card fetched from: https://travel.example.com/.well-known/agent.json
     # Alternative: explicit agent card path

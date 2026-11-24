@@ -186,7 +186,7 @@ backend" and "fails a capability file" first.**
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
-| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 162 | An A2A backend (`a2a_url`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public. A backend's `transport` key, which earlier docs showed, was never read and is now refused | Delete any `transport:` line under a backend (`mcp-gateway upgrade` does it); `a2a_url` alone makes an A2A backend. Library users: configure the agent as an `a2a_url` backend, or use your own A2A client to poll or cancel tasks |
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept and its task reads again at the next expiry sweep, a removed one released); probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
@@ -873,7 +873,8 @@ config and reports the error.
 - **Removed keys are refused at load, and `mcp-gateway upgrade` deletes them (MIK-8044).**
   `backends.<name>.idle_timeout` was retired in 3.x and never had an effect.
   `backends.<name>.circuit_breaker` was never read: every backend's breaker uses
-  `failsafe.circuit_breaker`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
+  `failsafe.circuit_breaker`. `backends.<name>.transport` (item 162) was never read: the
+  transport follows from `a2a_url`, `url`, `http_url`, `ws_url` or `command`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
   `marketplace` (item 145) and `cost_governance.currency` never had an effect either. One refusal
   names every such key and says why, for example `` `backends.x.idle_timeout` was removed in 4.0:
   backend idle hibernation was never implemented, ... ``, and ends with "Run `mcp-gateway upgrade`,
@@ -4353,16 +4354,19 @@ example `mcp-gateway remove old-server --force`.
 
 **Startup:** no notice
 
-A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
+A backend with `a2a_url` failed at its first use in 3.x. It now starts and
 exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
 JSON-RPC binding (the `a2a` Cargo feature, on by default):
 
 ```yaml
 backends:
   travel-agent:
-    transport: a2a
     a2a_url: "https://travel-agent.internal"
 ```
+
+`a2a_url` alone selects the A2A transport. Earlier versions of this guide also showed a
+`transport: a2a` line; the gateway never read that key, and 4.0 refuses it at load. Delete the line,
+or run `mcp-gateway upgrade`, which deletes it.
 
 An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
 offers.
