@@ -267,7 +267,7 @@ test('T12 a server turned off in the config has the glossary word, its banner an
   // The words carry their meaning, not only agree with themselves: where it is
   // turned off, that its tools are out of reach, and where to turn it on.
   expect(got.offBanner).toContain('gateway.yaml');
-  expect(got.offBanner).toContain('tools');
+  expect(got.offBanner).toContain('tools are out of reach');
   expect(got.offNext).toContain('Settings');
 });
 
