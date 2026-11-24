@@ -103,52 +103,58 @@ fn xport1_a_same_kind_update_keeps_the_members_it_did_not_send() {
     );
 
     #[cfg(feature = "a2a")]
-    {
-        let card = || Some("/.well-known/agent.json".to_owned());
-        let agent = || TransportConfig::A2a {
-            a2a_url: "https://agent.example".into(),
-            a2a_agent_card_path: card(),
-        };
-        for (new, want, leg) in [
-            (
-                TransportConfig::for_url("https://other.example"),
-                "https://other.example",
-                "leg 4: an address",
-            ),
-            (
-                TransportConfig::A2a {
-                    a2a_url: "https://third.example".into(),
-                    a2a_agent_card_path: None,
-                },
-                "https://third.example",
-                "leg 4: an agent transport",
-            ),
-        ] {
-            let TransportConfig::A2a {
-                a2a_url,
-                a2a_agent_card_path,
-            } = updated(agent(), new)
-            else {
-                panic!("{leg}: no longer an agent");
-            };
-            assert_eq!(
-                (a2a_url.as_str(), a2a_agent_card_path),
-                (want, card()),
-                "{leg}"
-            );
-        }
+    agent_legs();
+}
 
-        let TransportConfig::WebSocket {
-            ws_url,
-            protocol_version,
-        } = updated(agent(), TransportConfig::for_url("wss://six.example/ws"))
+/// Legs 4 and 6 of XPORT.1: an address or an agent transport on an A2A
+/// server keeps the agent kind and its card path; a websocket address is a
+/// change of kind and starts fresh.
+#[cfg(feature = "a2a")]
+fn agent_legs() {
+    let card = || Some("/.well-known/agent.json".to_owned());
+    let agent = || TransportConfig::A2a {
+        a2a_url: "https://agent.example".into(),
+        a2a_agent_card_path: card(),
+    };
+    for (new, want, leg) in [
+        (
+            TransportConfig::for_url("https://other.example"),
+            "https://other.example",
+            "leg 4: an address",
+        ),
+        (
+            TransportConfig::A2a {
+                a2a_url: "https://third.example".into(),
+                a2a_agent_card_path: None,
+            },
+            "https://third.example",
+            "leg 4: an agent transport",
+        ),
+    ] {
+        let TransportConfig::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        } = updated(agent(), new)
         else {
-            panic!("leg 6: not a websocket");
+            panic!("{leg}: no longer an agent");
         };
         assert_eq!(
-            (ws_url.as_str(), protocol_version),
-            ("wss://six.example/ws", None),
-            "leg 6: a change of kind starts fresh"
+            (a2a_url.as_str(), a2a_agent_card_path),
+            (want, card()),
+            "{leg}"
         );
     }
+
+    let TransportConfig::WebSocket {
+        ws_url,
+        protocol_version,
+    } = updated(agent(), TransportConfig::for_url("wss://six.example/ws"))
+    else {
+        panic!("leg 6: not a websocket");
+    };
+    assert_eq!(
+        (ws_url.as_str(), protocol_version),
+        ("wss://six.example/ws", None),
+        "leg 6: a change of kind starts fresh"
+    );
 }
