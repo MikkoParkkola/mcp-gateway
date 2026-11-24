@@ -203,6 +203,11 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           command -v strace >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends strace; }
           python3 scripts/ci/test_affected_map.py
+      # The shadow selection the four Linux test legs run (scripts/ci/affected_select.py) and their wiring.
+      - name: The affected-tests selection and its leg steps
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_affected_select.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
@@ -1359,6 +1364,51 @@ jobs:
       # refused sandbox into a failure instead of a skip.
       - name: Allow unprivileged user namespaces (preview sandbox tests)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Affected tests, shadow only (scripts/ci/affected_select.py): on a lane PR this leg records which of its
+      # tests the change can reach, then runs all of them anyway. The four steps may fail without failing the
+      # leg, and no other step reads what they produce.
+      - name: Affected tests map
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: map/affected-map.json
+          key: affected-map-none-${{ github.run_id }}
+          restore-keys: affected-map-
+      - name: Affected tests (shadow)
+        id: select
+        continue-on-error: true
+        timeout-minutes: 3
+        run: python3 scripts/ci/affected_select.py ${{ matrix.shard }} "$RUNNER_TEMP/affected-select/${{ matrix.shard }}.json"
+      - name: Affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          LEG: ${{ matrix.shard }}
+          OUTCOME: ${{ steps.select.outcome }}
+          ATTEMPT: ${{ github.run_attempt }}
+        # No repository file is used here: when an earlier step failed, checkout may never have run.
+        run: |
+          f="$RUNNER_TEMP/affected-select/$LEG.json"
+          mkdir -p "$RUNNER_TEMP/affected-select"
+          if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
+            printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
+          fi
+          if [ -f map/affected-map.json ] && ! git ls-files --error-unmatch map/affected-map.json > /dev/null 2>&1; then
+            rm -f map/affected-map.json
+          fi
+      - name: Upload the affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: affected-select-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          retention-days: 30
+          if-no-files-found: warn
       - name: Shard suite
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
@@ -1445,6 +1495,50 @@ jobs:
       # The artifact round trip drops the exec bit.
       - name: The gateway binary is executable
         run: chmod +x "$RUNNER_TEMP/gateway-bin/mcp-gateway"
+      # Affected tests, shadow only, as in test-shards. Here the select step comes after the part binaries are
+      # fetched, because a lib leg must list them to see tests the map has never met.
+      - name: Affected tests map
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: map/affected-map.json
+          key: affected-map-none-${{ github.run_id }}
+          restore-keys: affected-map-
+      - name: Affected tests (shadow)
+        id: select
+        continue-on-error: true
+        timeout-minutes: 3
+        run: python3 scripts/ci/affected_select.py ${{ matrix.shard }} "$RUNNER_TEMP/affected-select/${{ matrix.shard }}.json" --lib-bin "$RUNNER_TEMP/lib-bin"
+      - name: Affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          LEG: ${{ matrix.shard }}
+          OUTCOME: ${{ steps.select.outcome }}
+          ATTEMPT: ${{ github.run_attempt }}
+        # No repository file is used here: when an earlier step failed, checkout may never have run.
+        run: |
+          f="$RUNNER_TEMP/affected-select/$LEG.json"
+          mkdir -p "$RUNNER_TEMP/affected-select"
+          if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
+            printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
+          fi
+          if [ -f map/affected-map.json ] && ! git ls-files --error-unmatch map/affected-map.json > /dev/null 2>&1; then
+            rm -f map/affected-map.json
+          fi
+      - name: Upload the affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: affected-select-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          retention-days: 30
+          if-no-files-found: warn
       # Each part binary runs this half under today's guards; the five are checked first (exactly 1..N, each one
       # listing what its list.txt recorded, no test in two parts) and the floor applies to the sum.
       - name: Shard suite from the part binaries
