@@ -6,7 +6,14 @@
 //! rustdoc under `src/config` is a gateway.yaml example when one of its
 //! top-level keys is one the loader reads. Each goes through `Config::load` on a
 //! real file, the strict-key check included. A block that shows a config the
-//! gateway refuses carries the line `# example: refused` and must be refused.
+//! gateway refuses carries the line `# example: refused` and must be refused; a
+//! block that is another file (a capability, Helm values) carries
+//! `# example: not gateway.yaml` and is not loaded.
+//!
+//! A block that names environment variables (`${NAME}`, `env:NAME`) is right
+//! once they are set, so it loads with an `env_files` entry defining each one,
+//! as `team_deployment_guide_claims.rs` loads its guide's block. A value whose
+//! form the loader checks gets that form (see [`placeholder`]).
 //!
 //! Built only with the features the key check names (`a2a`, `cost-governance`,
 //! `firewall`), which release images carry: the docs describe those builds.
@@ -16,9 +23,24 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::config::Config;
+use regex::Regex;
 
 /// The line that marks a block showing a config the gateway refuses.
 const REFUSED: &str = "# example: refused";
+
+/// The line that marks a block that is some other file, never loaded.
+const NOT_GATEWAY: &str = "# example: not gateway.yaml";
+
+/// An API key digest's form: `sha256:` and 64 lowercase hex characters.
+const DIGEST: &str = "sha256:abababababababababababababababababababababababababababababababab";
+
+/// A chain signing key's form: standard base64 of a 32-byte seed.
+const SEED: &str = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=";
+
+/// Any other variable's value: base64 of 32 bytes, so a key the operator
+/// names (an accounts `keys` entry, read as a 32-byte key) loads too, and still
+/// an opaque string where a token or secret goes.
+const PLACEHOLDER: &str = "ZG9jcy1leGFtcGxlLXBsYWNlaG9sZGVyLTAxMjM0NTY=";
 
 /// One fenced block: the `file:line` of its opening fence, and its text.
 #[derive(Debug, PartialEq)]
@@ -85,6 +107,81 @@ fn load(yaml: &str) -> mcp_gateway::Result<Config> {
     Config::load(Some(&path))
 }
 
+/// The value for a variable referenced under `key`. The loader checks the
+/// form of a digest and of a seed, so those get that form; the docs that use
+/// them are right as written.
+fn placeholder(key: &str) -> &'static str {
+    match key {
+        "key_sha256" | "previous_key_sha256" => DIGEST,
+        "signing_key" => SEED,
+        _ => PLACEHOLDER,
+    }
+}
+
+/// Each variable `text` names (`${NAME}`, with or without a default, and
+/// `env:NAME`) with its value, by the key on the reference's line.
+fn env_values(text: &str) -> BTreeMap<String, &'static str> {
+    let name =
+        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)|env:([A-Za-z_][A-Za-z0-9_]*)").expect("regex");
+    let mut values = BTreeMap::new();
+    for line in text.lines() {
+        let key = line.trim_start().trim_start_matches("- ");
+        let key = key.split(':').next().unwrap_or_default().trim();
+        for found in name.captures_iter(line) {
+            let var = found
+                .get(1)
+                .or_else(|| found.get(2))
+                .expect("one group matched");
+            values.insert(var.as_str().to_owned(), placeholder(key));
+        }
+    }
+    values
+}
+
+/// `yaml` without its own top-level `env_files` key. One example sets one
+/// (docs/OAUTH_CONFIG.md), naming a path under the reader's home; the guard's
+/// own file takes that path's place.
+fn without_env_files(yaml: &str) -> String {
+    let mut kept = String::new();
+    let mut inside = false;
+    for line in yaml.lines() {
+        if line.starts_with("env_files:") {
+            inside = true;
+            continue;
+        }
+        if inside && line.starts_with([' ', '\t', '-']) {
+            continue;
+        }
+        inside = false;
+        kept.push_str(line);
+        kept.push('\n');
+    }
+    kept
+}
+
+/// Load `yaml` as the gateway would, `Err` holding the refusal. A block that
+/// names variables or sets `env_files` loads with an `env_files` entry
+/// defining each variable it names.
+fn load_example(yaml: &str) -> Result<(), String> {
+    let values = env_values(yaml);
+    if values.is_empty() && !yaml.lines().any(|line| line.starts_with("env_files:")) {
+        return load(yaml).map(drop).map_err(|e| e.to_string());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = dir.path().join("example.env");
+    let lines: String = values
+        .iter()
+        .map(|(var, value)| format!("{var}={value}\n"))
+        .collect();
+    mcp_gateway::gateway::test_helpers::write_owner_only(&env, &lines).expect("write env file");
+    let yaml = format!(
+        "env_files: ['{}']\n{}",
+        env.display(),
+        without_env_files(yaml)
+    );
+    load(&yaml).map(drop).map_err(|e| e.to_string())
+}
+
 /// Whether the loader reads a top-level key named `key`, asked of the loader
 /// itself: only a key it reads nowhere is refused as unrecognised.
 fn gateway_key(key: &str, known: &mut BTreeMap<String, bool>) -> bool {
@@ -102,6 +199,9 @@ fn gateway_key(key: &str, known: &mut BTreeMap<String, bool>) -> bool {
 fn misbehaving(blocks: &[Block], known: &mut BTreeMap<String, bool>) -> (Vec<String>, Vec<String>) {
     let (mut checked, mut wrong) = (Vec::new(), Vec::new());
     for block in blocks {
+        if block.text.lines().any(|line| line.trim() == NOT_GATEWAY) {
+            continue;
+        }
         if !top_keys(&block.text)
             .into_iter()
             .any(|key| gateway_key(key, known))
@@ -110,10 +210,10 @@ fn misbehaving(blocks: &[Block], known: &mut BTreeMap<String, bool>) -> (Vec<Str
         }
         checked.push(block.at.clone());
         let marked = block.text.lines().any(|line| line.trim() == REFUSED);
-        match (load(&block.text), marked) {
-            (Ok(_), true) => wrong.push(format!("{}: marked refused, but loads", block.at)),
+        match (load_example(&block.text), marked) {
+            (Ok(()), true) => wrong.push(format!("{}: marked refused, but loads", block.at)),
             (Err(error), false) => {
-                let error: String = error.to_string().chars().take(240).collect();
+                let error: String = error.chars().take(240).collect();
                 wrong.push(format!("{}: {error}", block.at));
             }
             _ => {}
@@ -211,6 +311,61 @@ fn fences_are_found_in_markdown_and_rustdoc() {
     );
 }
 
+/// A digest reference gets a value the key check accepts.
+#[test]
+fn a_digest_reference_gets_a_digest() {
+    let text = "auth:\n  api_keys:\n    - name: a\n      key_sha256: env:DOCS_GUARD_A\n      \
+                previous_key_sha256: \"env:DOCS_GUARD_B\"\n";
+    let values = env_values(text);
+    assert_eq!(values["DOCS_GUARD_A"], DIGEST);
+    assert_eq!(values["DOCS_GUARD_B"], DIGEST);
+    let hex = DIGEST.strip_prefix("sha256:").expect("prefix");
+    assert!(
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
+    let key = "auth:\n  enabled: true\n  api_keys:\n    - name: a\n      key_sha256: env:DOCS_GUARD_A\n      \
+               backends: [\"*\"]\n";
+    load(key).expect_err("refused while the variable is unset");
+    load_example(key).expect("loads with the digest placeholder");
+}
+
+/// A signing key reference gets a base64 32-byte seed.
+#[test]
+fn a_signing_key_reference_gets_a_seed() {
+    use base64::Engine as _;
+    let values =
+        env_values("security:\n  signature_chain:\n    signing_key: \"${DOCS_GUARD_SEED}\"\n");
+    assert_eq!(values["DOCS_GUARD_SEED"], SEED);
+    let seed = base64::engine::general_purpose::STANDARD
+        .decode(SEED)
+        .expect("base64");
+    assert_eq!(seed.len(), 32);
+}
+
+/// Any other reference gets the plain placeholder.
+#[test]
+fn any_other_reference_gets_the_placeholder() {
+    let values = env_values(ENV_EXAMPLE);
+    assert_eq!(values["DOCS_YAML_GUARD_FIXTURE_TOKEN"], PLACEHOLDER);
+}
+
+/// A block's own `env_files` gives way to the guard's file.
+#[test]
+fn an_examples_own_env_files_gives_way_to_the_guards() {
+    let own =
+        format!("env_files:\n  - ~/.config/nowhere/.env   # holds the token\n\n{ENV_EXAMPLE}");
+    assert_eq!(without_env_files(&own), format!("\n{ENV_EXAMPLE}"));
+    load(&own).expect_err("refused with the illustrative path");
+    load_example(&own).expect("loads with the guard's env file");
+}
+
+/// A backend whose header names a variable no run sets.
+const ENV_EXAMPLE: &str = "backends:\n  x:\n    http_url: \"https://mcp.example.com/mcp\"\n    \
+     headers:\n      Authorization: \"Bearer ${DOCS_YAML_GUARD_FIXTURE_TOKEN}\"\n";
+
 #[test]
 fn a_block_that_does_not_do_what_it_shows_is_named() {
     let block = |at: &str, text: String| Block {
@@ -226,9 +381,23 @@ fn a_block_that_does_not_do_what_it_shows_is_named() {
             format!("{REFUSED}\nbackends:\n  x:\n    command: y\n    idle_timeout: 1m\n"),
         ),
         block("not-gateway", "apiVersion: v1\nkind: Pod\n".into()),
+        block(
+            "other-file",
+            format!("{NOT_GATEWAY}\nserverr: {{}}\nbackends: {{}}\n"),
+        ),
+        block("env", ENV_EXAMPLE.into()),
     ];
+    // The env example is refused as written, so only the guard's env file
+    // can load it.
+    assert!(
+        load(ENV_EXAMPLE).is_err(),
+        "the fixture variable must be unset"
+    );
     let (checked, wrong) = misbehaving(&blocks, &mut BTreeMap::new());
-    assert_eq!(checked, ["loads", "typo", "marked-loads", "marked-refused"]);
+    assert_eq!(
+        checked,
+        ["loads", "typo", "marked-loads", "marked-refused", "env"]
+    );
     assert_eq!(wrong.len(), 2, "{wrong:?}");
     assert!(
         wrong[0].starts_with("typo: ") && wrong[0].contains("serverr"),
