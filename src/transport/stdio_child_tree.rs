@@ -454,13 +454,14 @@ impl ChildTree {
             && let Some((cut, set_at)) = deadline.get_with_set_at()
         {
             let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
-            if cut < grace.kill_at {
+            if mutant!("M4", false, cut < grace.kill_at) {
                 // A SIGTERM the plan had due before this cut was made is owed,
                 // however little the cut leaves: the reaper missed it, not the stop.
                 #[cfg(unix)]
-                if grace.term_sent_at.is_none()
+                if mutant!("M5", false, true)
+                    && grace.term_sent_at.is_none()
                     && grace.term_at < grace.kill_at
-                    && grace.term_at <= set_at
+                    && mutant!("M6", true, grace.term_at <= set_at)
                 {
                     grace.term_owed = true;
                 }
@@ -517,7 +518,11 @@ impl ChildTree {
         let slack_end = grace.kill_at + SLACK;
         let planned = grace.term_at < grace.kill_at || grace.term_owed;
         let due = grace.term_owed || now >= grace.term_at;
-        let fits = now < grace.kill_at || now + MIN_PHASE <= slack_end;
+        let fits = mutant!(
+            "M2",
+            false,
+            now < grace.kill_at || mutant!("M1", false, now + MIN_PHASE <= slack_end)
+        );
         #[cfg(test)]
         if planned
             && due
@@ -544,7 +549,11 @@ impl ChildTree {
             }
         }
         grace.term_sent_at.map_or(grace.kill_at, |sent| {
-            (sent + MIN_PHASE).max(grace.kill_at).min(slack_end)
+            mutant!(
+                "M3",
+                grace.kill_at,
+                (sent + MIN_PHASE).max(grace.kill_at).min(slack_end)
+            )
         })
     }
 
