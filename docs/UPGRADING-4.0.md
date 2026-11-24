@@ -1274,7 +1274,8 @@ ever needs the key's hash, so 4.0 stores the digest instead.
   auth:
     api_keys:
       - name: laptop
-        key_sha256: "sha256:<64 lowercase hex>"
+        # What hash-key printed: sha256: and 64 lowercase hex characters.
+        key_sha256: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
   ```
 
   The key is read from stdin, never an argument, so it stays out of shell history. One trailing
@@ -2437,8 +2438,10 @@ To serve a withheld tool you trust, pin its current description:
 ```yaml
 backends:
   my-backend:
+    http_url: "https://mcp.example.com/mcp"
     allow_flagged_tools:
-      tool_name: "<64-hex digest from the warning>"
+      # The digest the warning names.
+      tool_name: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
 ```
 
 A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
@@ -3226,7 +3229,7 @@ dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio i
 auth:
   api_keys:
     - name: alice
-      key_sha256: "sha256:..."
+      key_sha256: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"  # from hash-key
       kind: personal
 ```
 
