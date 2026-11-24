@@ -634,7 +634,7 @@ impl ReloadContext {
         // From here the file on disk may name this save's entries: set before
         // the write, so a death inside it keeps them (listed as unused)
         // rather than deleting what the new file may already name. A write
-        // error comes back after a proven rollback and discards.
+        // error leaves the file alone, drops the journal, and discards.
         entries.renamed = true;
         // gateway.yaml is owner-only, as every config write leaves it.
         if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
@@ -643,7 +643,7 @@ impl ReloadContext {
                 Some((code, text)) => ReplaceError::WriterRefused { code, text },
                 None => ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             };
-            return Err(Self::roll_back(target, error));
+            return Err(Self::abandon(target, error));
         }
         #[cfg(test)]
         order::record(target, "commit");
@@ -759,6 +759,17 @@ impl ReloadContext {
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
                 error: rollback.into_message(),
+            },
+        }
+    }
+
+    /// Our rename never ran: drop the journal, never the file (maybe another's).
+    fn abandon(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+        match journal::finish(target) {
+            Ok(()) => error,
+            Err(e) => ReplaceError::RollbackFailed {
+                journal: journal::journal_path(target),
+                error: e.to_string(),
             },
         }
     }
