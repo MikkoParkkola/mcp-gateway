@@ -1,0 +1,23 @@
+head_sha	9cfddcc99253de2f12c5869a6d4c4129704ad3c2
+#mutant M1
+mcp_gateway	gateway::ui::policies_read_only_tests::rc3_read_only_follows_the_save_table	src/gateway/ui/policies_read_only_tests.rs:162
+#mutant M2
+mcp_gateway	gateway::ui::policies_relay_tests::rc4_the_relay_flags	src/gateway/ui/policies_relay_tests.rs:301
+#mutant M3
+mcp_gateway	gateway::router::live_ui_view_tests::rc1_the_request_checks_as_in_force	src/gateway/router/live_ui_view_tests.rs:135
+#mutant M4
+mcp_gateway	gateway::ui::policies_read_only_tests::rc2_the_hardened_posture_forces_ssrf	src/gateway/ui/policies_read_only_tests.rs:102
+#mutant M5 multi=3
+mcp_gateway	gateway::ui::policies_tests::rc5_the_tool_policy_as_settings	src/gateway/ui/policies_tests.rs:529
+#mutant M6
+mcp_gateway	gateway::ui::policies_read_only_tests::rc2_the_hardened_posture_forces_ssrf	src/gateway/ui/policies_read_only_tests.rs:103
+#mutant M7
+mcp_gateway	gateway::ui::policies_read_only_tests::rc2_the_hardened_posture_forces_ssrf	src/gateway/ui/policies_read_only_tests.rs:127
+#mutant M8
+mcp_gateway	gateway::ui::policies_read_only_tests::rc2_the_hardened_posture_forces_ssrf	src/gateway/ui/policies_read_only_tests.rs:102
+#mutant M12 multi=2
+mcp_gateway	gateway::ui::policies_relay_tests::rc4_the_relay_flags	src/gateway/ui/policies_relay_tests.rs:286
+#mutant M13 multi=2
+mcp_gateway	gateway::router::live_ui_view_tests::rc1_the_request_checks_as_in_force	src/gateway/router/live_ui_view_tests.rs:135
+#mutant M14
+mcp_gateway	gateway::ui::policies_read_only_tests::rc3_read_only_follows_the_save_table	src/gateway/ui/policies_read_only_tests.rs:146
