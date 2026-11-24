@@ -487,7 +487,7 @@ fn a_stale_allow_entry_fails() {
 
 /// F6: on a fixture tree, exactly the command files are scanned.
 #[test]
-fn the_file_selection_is_exact() {
+fn the_scanned_set_is_exact() {
     let root = tempfile::tempdir().expect("tempdir");
     let dropped = [
         "src/other/z.rs",

@@ -146,10 +146,13 @@ fn the_error_gate_checks_every_secret() {
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
 
+#[cfg(feature = "webui")]
 const UNSAFE_WHAT: &str = "The response could not be printed safely.";
+#[cfg(feature = "webui")]
 const UNSAFE_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
 
 /// T9a, successes: the stderr note is redacted per secret under either rule; stdout is printed as given.
+#[cfg(feature = "webui")]
 #[test]
 fn the_success_note_is_redacted_per_secret() {
     let corpus = [
@@ -180,6 +183,7 @@ fn the_success_note_is_redacted_per_secret() {
 
 /// T9a, D6: `RefuseToken` refuses stdout still holding the token, in both forms; it does not refuse the email (data);
 /// `RedactedJsonBody` (api) prints its already-checked body as given.
+#[cfg(feature = "webui")]
 #[test]
 fn stdout_rules_refuse_only_the_token() {
     let mut misses = Vec::new();
@@ -244,8 +248,10 @@ fn stdout_rules_refuse_only_the_token() {
 }
 
 /// A writer that fails every write with `kind`.
+#[cfg(feature = "webui")]
 struct Failing(std::io::ErrorKind);
 
+#[cfg(feature = "webui")]
 impl std::io::Write for Failing {
     fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
         Err(std::io::Error::from(self.0))
@@ -257,6 +263,7 @@ impl std::io::Write for Failing {
 }
 
 /// `emit_to` with a stdout failing with `kind`: the exit and what reached stderr.
+#[cfg(feature = "webui")]
 fn emitted_with_stdout(kind: std::io::ErrorKind, json: bool, token: &str) -> (CliExit, String) {
     let ok = CliOutcome::success(
         b"data\n".to_vec(),
@@ -270,9 +277,11 @@ fn emitted_with_stdout(kind: std::io::ErrorKind, json: bool, token: &str) -> (Cl
     (exit, String::from_utf8(stderr).expect("utf-8"))
 }
 
+#[cfg(feature = "webui")]
 const WRITE_FAILED: &str = "error: Could not write command output.\nCheck the output destination before repeating the command.\n";
 
 /// T10: a closed reader ends quietly with 0; any other stdout failure is the gated write error, exit 1.
+#[cfg(feature = "webui")]
 #[test]
 fn the_emitter_maps_write_failures() {
     use std::io::ErrorKind::{BrokenPipe, Other};
@@ -355,6 +364,7 @@ fn the_emitter_maps_write_failures() {
 /// escaped by JSON, so the byte search alone cannot see it: each case first proves the raw token is absent from the
 /// bytes, then that the gate still refuses it in a nested object value, an array item and an object key (each
 /// alone), and that the same shapes without it pass.
+#[cfg(feature = "webui")]
 #[test]
 fn the_json_gate_scans_decoded_strings() {
     let mut misses = Vec::new();

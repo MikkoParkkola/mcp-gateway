@@ -22,9 +22,10 @@ mod audit_lookup;
 mod backend_url_keys;
 mod cap;
 mod capability_dirs;
-/// The shared exit table and error shape; used by the webui-only remote commands until `MIK-9765.LERR.2`.
-#[cfg(feature = "webui")]
+/// The shared exit table and error shape: the remote commands' transport half (web UI only) and the three local
+/// exits every command leaves through.
 mod cli_exit;
+pub(crate) use cli_exit::{CliExit, fail, usage, verdict};
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -136,17 +137,22 @@ pub fn run_init_command(
     profile: InitProfile,
 ) -> ExitCode {
     if output.exists() {
-        eprintln!(
-            "Error: {} already exists. Remove it first or choose a different path with --output.",
-            output.display()
+        return fail(
+            CliExit::LocalFailure,
+            &format!("{} already exists.", output.display()),
+            "Remove it first or choose a different path with --output.",
         );
-        return ExitCode::FAILURE;
     }
+    let writable = || {
+        format!(
+            "Check that the folder of {} exists and that you can write to it.",
+            output.display()
+        )
+    };
 
     let sample_files = init_sample_capability_files(output, with_examples, profile);
     if let Err(e) = preflight_init_targets(output, &sample_files) {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
+        return fail(CliExit::LocalFailure, &e.to_string(), &writable());
     }
 
     let (starter, skipped) = if with_examples && profile == InitProfile::Local {
@@ -164,10 +170,7 @@ pub fn run_init_command(
             print_init_success(output, profile, !sample_files.is_empty(), &reference);
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(CliExit::LocalFailure, &e.to_string(), &writable()),
     }
 }
 
@@ -412,19 +415,21 @@ fn refuse_existing_tls_output(out: &std::path::Path, stem: &str) -> Result<(), E
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Ok(_) => {
-                eprintln!(
-                    "Error: {} already exists. Remove it first or choose a different --out.",
-                    path.display()
-                );
-                return Err(ExitCode::FAILURE);
+                return Err(fail(
+                    CliExit::LocalFailure,
+                    &format!("{} already exists.", path.display()),
+                    "Remove it first or choose a different --out.",
+                ));
             }
             Err(e) => {
-                eprintln!(
-                    "Error: cannot tell whether {} exists ({e}); nothing was written. \
-                     Check the directory's access permissions, or choose a different --out.",
-                    path.display()
-                );
-                return Err(ExitCode::FAILURE);
+                return Err(fail(
+                    CliExit::LocalFailure,
+                    &format!(
+                        "cannot tell whether {} exists ({e}); nothing was written.",
+                        path.display()
+                    ),
+                    "Check the directory's access permissions, or choose a different --out.",
+                ));
             }
         }
     }
@@ -440,8 +445,11 @@ fn tls_init_ca(cn: &str, validity_days: u32, out: &std::path::Path) -> ExitCode 
     match CertGenerator::init_ca(&params) {
         Ok(cert) => {
             if let Err(e) = CertGenerator::write_to_dir(&cert, out, "ca") {
-                eprintln!("Error: Failed to write CA files: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("Failed to write CA files: {e}"),
+                    &out_writable(out),
+                );
             }
             println!("  CA cert: {}", out.join("ca.crt").display());
             println!("  CA key:  {}", out.join("ca.key").display());
@@ -452,10 +460,11 @@ fn tls_init_ca(cn: &str, validity_days: u32, out: &std::path::Path) -> ExitCode 
             println!("    ca_cert: \"{}\"", out.join("ca.crt").display());
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: CA generation failed: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("CA generation failed: {e}"),
+            "Check the --cn and --validity-days values, then rerun 'mcp-gateway tls init-ca'.",
+        ),
     }
 }
 
@@ -471,7 +480,7 @@ fn tls_issue_server(
         return code;
     }
     println!("Issuing server certificate for: {cn}");
-    let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
+    let (ca_cert_pem, ca_key_pem) = match read_ca_files("tls issue-server", ca_cert, ca_key) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -490,8 +499,11 @@ fn tls_issue_server(
     match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
         Ok(cert) => {
             if let Err(e) = CertGenerator::write_to_dir(&cert, out, "server") {
-                eprintln!("Error: Failed to write server cert files: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("Failed to write server cert files: {e}"),
+                    &out_writable(out),
+                );
             }
             println!("  Cert: {}", out.join("server.crt").display());
             println!("  Key:  {}", out.join("server.key").display());
@@ -503,10 +515,11 @@ fn tls_issue_server(
             println!("    server_key:  \"{}\"", out.join("server.key").display());
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: Server cert generation failed: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Server cert generation failed: {e}"),
+            "Check the CA files and the --cn and --san-dns values, then rerun 'mcp-gateway tls issue-server'.",
+        ),
     }
 }
 
@@ -526,7 +539,7 @@ fn tls_issue_client(
         return code;
     }
     println!("Issuing client certificate for: {cn}");
-    let (ca_cert_pem, ca_key_pem) = match read_ca_files(ca_cert, ca_key) {
+    let (ca_cert_pem, ca_key_pem) = match read_ca_files("tls issue-client", ca_cert, ca_key) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -541,8 +554,11 @@ fn tls_issue_client(
     match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
         Ok(cert) => {
             if let Err(e) = CertGenerator::write_to_dir(&cert, out, &stem) {
-                eprintln!("Error: Failed to write client cert files: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("Failed to write client cert files: {e}"),
+                    &out_writable(out),
+                );
             }
             println!("  Cert: {}", out.join(format!("{stem}.crt")).display());
             println!("  Key:  {}", out.join(format!("{stem}.key")).display());
@@ -558,30 +574,49 @@ fn tls_issue_client(
             );
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: Client cert generation failed: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Client cert generation failed: {e}"),
+            "Check the CA files and the --cn and --spiffe-uri values, then rerun 'mcp-gateway tls issue-client'.",
+        ),
     }
 }
 
-/// Read CA cert and key PEM files, returning early with `FAILURE` on I/O errors.
+/// The remedy when a file under `out` could not be written.
+fn out_writable(out: &std::path::Path) -> String {
+    format!(
+        "Check that {} exists and that you can write to it.",
+        out.display()
+    )
+}
+
+/// Read CA cert and key PEM files for `leaf` (`tls issue-server` or `tls issue-client`), returning early with the
+/// error already printed.
 fn read_ca_files(
+    leaf: &str,
     ca_cert: &std::path::Path,
     ca_key: &std::path::Path,
 ) -> Result<(String, String), ExitCode> {
+    let readable = |path: &std::path::Path| {
+        format!(
+            "Check that {} exists and that you can read it.",
+            path.display()
+        )
+    };
     let cert = std::fs::read_to_string(ca_cert).map_err(|e| {
-        eprintln!("Error: Cannot read CA cert '{}': {e}", ca_cert.display());
-        ExitCode::FAILURE
+        fail(
+            CliExit::LocalFailure,
+            &format!("Cannot read CA cert '{}': {e}", ca_cert.display()),
+            &readable(ca_cert),
+        )
     })?;
     // Through the library's mode-checked key loader (F18 R6): the CA key signs
     // every client identity the gateway trusts, so one other users can read is
     // refused before anything is issued. The DER it returns is re-encoded as
     // the PEM `issue_leaf` takes; both accept PKCS#8 only, as before.
-    let key_path = ca_key.to_str().ok_or_else(|| {
-        eprintln!("Error: CA key path is not valid UTF-8");
-        ExitCode::FAILURE
-    })?;
+    let key_path = ca_key
+        .to_str()
+        .ok_or_else(|| usage(leaf, "CA key path is not valid UTF-8"))?;
     let key = mcp_gateway::mtls::cert_manager::load_private_key(key_path)
         .map_err(|e| e.to_string())
         .and_then(|der| {
@@ -589,10 +624,7 @@ fn read_ca_files(
                 .map(|pair| pair.serialize_pem())
                 .map_err(|e| format!("Cannot use CA key '{}': {e}", ca_key.display()))
         })
-        .map_err(|e| {
-            eprintln!("Error: {e}");
-            ExitCode::FAILURE
-        })?;
+        .map_err(|e| fail(CliExit::LocalFailure, &e, &readable(ca_key)))?;
     Ok((cert, key))
 }
 #[cfg(tp2)]

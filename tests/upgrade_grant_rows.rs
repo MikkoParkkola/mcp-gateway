@@ -23,7 +23,7 @@ const WARNS: &str = "meta_mcp:\n  cache_tools: true\n";
 const BAD_PORT: &str = "server:\n  port: not-a-port\n";
 const NAMELESS: &str = "1 row(s) name no one: grant 'g-empty' (empty subject)";
 const CONFIG_ERROR: &str =
-    "Error: the config does not load, so its identity grants were not checked";
+    "error: the config does not load, so its identity grants were not checked";
 const DEFERRED: &str = "Identity grants are checked once the rewrite above is applied.";
 
 struct Setup {
@@ -100,14 +100,14 @@ fn a_dry_run_defers_the_grants_of_a_config_the_rewrite_must_fix() {
     assert!(!printed.contains("name no one"), "{printed}");
     let (code, printed) = run(&rows, REFUSING, &[]);
     assert_eq!(code, Some(1), "{printed}");
-    assert!(line(&printed, NAMELESS).starts_with("Error: "), "{printed}");
+    assert!(line(&printed, NAMELESS).starts_with("error: "), "{printed}");
 }
 
 #[test]
 fn a_dry_run_checks_grants_when_the_config_loads_as_it_stands() {
     let (code, printed) = run(&format!("{ROW_OK}{ROW_EMPTY}"), WARNS, &["--dry-run"]);
     assert_eq!(code, Some(1), "{printed}");
-    assert!(line(&printed, NAMELESS).starts_with("Error: "), "{printed}");
+    assert!(line(&printed, NAMELESS).starts_with("error: "), "{printed}");
     assert!(!printed.contains(DEFERRED), "{printed}");
 }
 
@@ -127,7 +127,7 @@ fn a_config_no_rewrite_makes_load_defers_in_a_dry_run_and_fails_the_apply() {
     let printed = text(&out);
     assert_eq!(out.status.code(), Some(1), "{printed}");
     assert!(
-        line(&printed, "does not parse as a config").starts_with("Error: Not saved: "),
+        line(&printed, "does not parse as a config").starts_with("error: Not saved: "),
         "{printed}"
     );
     assert_eq!(
@@ -172,6 +172,6 @@ fn an_upgrade_names_the_rules_and_edits_nothing() {
     let out = upgrade(&s, &[]);
     let printed = text(&out);
     assert_eq!(out.status.code(), Some(1), "{printed}");
-    assert!(line(&printed, NAMELESS).starts_with("Error: "), "{printed}");
+    assert!(line(&printed, NAMELESS).starts_with("error: "), "{printed}");
     assert_eq!(std::fs::read(&grants).unwrap(), before);
 }

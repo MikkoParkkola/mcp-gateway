@@ -54,6 +54,7 @@ use mcp_gateway::{
 };
 
 use crate::commands::paths::{claude_desktop_path, home_path, windsurf_path, zed_settings_path};
+use crate::commands::{CliExit, check_config_command, fail};
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -527,8 +528,14 @@ pub async fn run_config_export(
                 return ExitCode::SUCCESS;
             }
             Err(e) => {
-                eprintln!("Error: Rollback failed: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("Rollback failed: {e}"),
+                    &format!(
+                        "Check that {} exists and that you can read it.",
+                        backup_path.display()
+                    ),
+                );
             }
         }
     }
@@ -536,8 +543,11 @@ pub async fn run_config_export(
     let config = match Config::load(Some(config_path)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error: Cannot load {}: {e}", config_path.display());
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("Cannot load {}: {e}", config_path.display()),
+                &format!("Run '{}' to see why.", check_config_command(config_path)),
+            );
         }
     };
 
@@ -547,8 +557,11 @@ pub async fn run_config_export(
     let gateway = match build_gateway_entry(&config, Some(config_path), resolved) {
         Ok(gateway) => gateway,
         Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &e,
+                "Pass --mode stdio, or give the gateway an address clients can reach in its config, then rerun 'mcp-gateway setup export'.",
+            );
         }
     };
 
@@ -586,7 +599,7 @@ pub async fn run_config_export(
     let results = do_export(target, name, dry_run, &entry);
 
     let mut written = 0usize;
-    let mut failed = false;
+    let mut failed = 0_usize;
 
     for r in &results {
         let path = r.path.display();
@@ -603,7 +616,7 @@ pub async fn run_config_export(
             }
             ExportAction::Skipped(reason) => format!("Skipped  ({reason})"),
             ExportAction::Failed(err) => {
-                failed = true;
+                failed += 1;
                 format!("FAILED   {err}")
             }
         };
@@ -626,8 +639,12 @@ pub async fn run_config_export(
         watch::run_watch_loop(target, mode, name, config_path).await;
     }
 
-    if failed {
-        ExitCode::FAILURE
+    if failed > 0 {
+        fail(
+            CliExit::LocalFailure,
+            &format!("{failed} client config(s) could not be written."),
+            "Fix the clients marked FAILED above, then rerun 'mcp-gateway setup export'.",
+        )
     } else {
         ExitCode::SUCCESS
     }

@@ -15,7 +15,12 @@ use std::process::Output;
 use clap::CommandFactory as _;
 
 /// The remote leaves, which report on the remote error shape instead.
-const REMOTE: [&str; 4] = ["api", "audit lookup-email", "dashboard-link", "events dead-letters"];
+const REMOTE: [&str; 4] = [
+    "api",
+    "audit lookup-email",
+    "dashboard-link",
+    "events dead-letters",
+];
 
 /// What one stderr line must hold.
 enum Pin {
@@ -51,14 +56,21 @@ fn leaves() -> Vec<String> {
     let mut found = Vec::new();
     let mut todo: Vec<(String, &clap::Command)> = vec![(String::new(), &root)];
     while let Some((path, node)) = todo.pop() {
-        let mut children = node.get_subcommands().filter(|c| c.get_name() != "help").peekable();
+        let mut children = node
+            .get_subcommands()
+            .filter(|c| c.get_name() != "help")
+            .peekable();
         if children.peek().is_none() {
             found.push(path);
             continue;
         }
         for child in children {
             let name = child.get_name();
-            let joined = if path.is_empty() { name.to_owned() } else { format!("{path} {name}") };
+            let joined = if path.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{path} {name}")
+            };
             todo.push((joined, child));
         }
     }
@@ -164,7 +176,9 @@ fn table() -> Vec<(&'static str, Expect)> {
                 fail_case(
                     strings(&["init", "--output", &text(&file)]),
                     Pin::Exact(format!("error: {} already exists.", text(&file))),
-                    Pin::Exact("Remove it first or choose a different path with --output.".to_owned()),
+                    Pin::Exact(
+                        "Remove it first or choose a different path with --output.".to_owned(),
+                    ),
                 )
             }),
         ),
@@ -175,30 +189,57 @@ fn table() -> Vec<(&'static str, Expect)> {
                 fail_case(strings(&["tls", "init-ca", "--out", &out]), first, second)
             }),
         ),
-        ("tls issue-server", Expect::TwoLines(|p| tls_issue(p, "issue-server", "gw", "server.crt"))),
-        ("tls issue-client", Expect::TwoLines(|p| tls_issue(p, "issue-client", "agent 1", "agent-1.crt"))),
+        (
+            "tls issue-server",
+            Expect::TwoLines(|p| tls_issue(p, "issue-server", "gw", "server.crt")),
+        ),
+        (
+            "tls issue-client",
+            Expect::TwoLines(|p| tls_issue(p, "issue-client", "agent 1", "agent-1.crt")),
+        ),
         (
             "doctor",
             Expect::TwoLines(|_| Case {
                 args: strings(&["doctor", "--shadow", "--shadow-format", "bogus"]),
                 exit: 2,
                 stdout: String::new(),
-                first: Pin::Exact("error: unknown --shadow-format 'bogus'. Valid values: grep, nginx, yaml".to_owned()),
+                first: Pin::Exact(
+                    "error: unknown --shadow-format 'bogus'. Valid values: grep, nginx, yaml"
+                        .to_owned(),
+                ),
                 second: Pin::Exact("Run 'mcp-gateway doctor --help' for usage.".to_owned()),
             }),
         ),
-        ("ranking eval", Expect::TwoLines(|p| missing_input(p, &["ranking", "eval"], "missing.yaml", &[]))),
+        (
+            "ranking eval",
+            Expect::TwoLines(|p| missing_input(p, &["ranking", "eval"], "missing.yaml", &[])),
+        ),
         (
             "import preview",
-            Expect::TwoLines(|p| missing_input(p, &["import", "preview", "--kind", "openapi"], "missing.json", &[])),
+            Expect::TwoLines(|p| {
+                missing_input(
+                    p,
+                    &["import", "preview", "--kind", "openapi"],
+                    "missing.json",
+                    &[],
+                )
+            }),
         ),
         (
             "import apply",
             Expect::TwoLines(|p| {
-                missing_input(p, &["import", "apply", "--kind", "openapi"], "missing.json", &["--output", "{p}/drafts"])
+                missing_input(
+                    p,
+                    &["import", "apply", "--kind", "openapi"],
+                    "missing.json",
+                    &["--output", "{p}/drafts"],
+                )
             }),
         ),
-        ("identity grants list", Expect::TwoLines(|p| grants_case(p, &["list"]))),
+        (
+            "identity grants list",
+            Expect::TwoLines(|p| grants_case(p, &["list"])),
+        ),
         (
             "identity grants grant",
             Expect::TwoLines(|p| {
@@ -219,7 +260,10 @@ fn table() -> Vec<(&'static str, Expect)> {
                 )
             }),
         ),
-        ("identity grants revoke", Expect::TwoLines(|p| grants_case(p, &["revoke", "--grant-id", "g1"]))),
+        (
+            "identity grants revoke",
+            Expect::TwoLines(|p| grants_case(p, &["revoke", "--grant-id", "g1"])),
+        ),
         (
             "setup wizard",
             Expect::TwoLines(|p| Case {
@@ -231,7 +275,11 @@ fn table() -> Vec<(&'static str, Expect)> {
             "stats",
             Expect::TwoLines(|_| {
                 let url = closed_url();
-                fail_case(strings(&["stats", "--gateway", &url]), Pin::Starts("error: "), Pin::Has(url))
+                fail_case(
+                    strings(&["stats", "--gateway", &url]),
+                    Pin::Starts("error: "),
+                    Pin::Has(url),
+                )
             }),
         ),
         (
@@ -240,15 +288,26 @@ fn table() -> Vec<(&'static str, Expect)> {
                 let file = p.join("missing.yaml");
                 let data = p.join("data");
                 fail_case(
-                    strings(&["--config", &text(&file), "upgrade", "--data-dir", &text(&data)]),
-                    Pin::Exact(format!("error: {} not found; nothing was upgraded.", text(&file))),
+                    strings(&[
+                        "--config",
+                        &text(&file),
+                        "upgrade",
+                        "--data-dir",
+                        &text(&data),
+                    ]),
+                    Pin::Exact(format!(
+                        "error: {} not found; nothing was upgraded.",
+                        text(&file)
+                    )),
                     Pin::Has(text(&file)),
                 )
             }),
         ),
         (
             "serve",
-            Expect::Exempt("start failures keep the one escaped fatal line of tests/serve_fatal_lines.rs"),
+            Expect::Exempt(
+                "start failures keep the one escaped fatal line of tests/serve_fatal_lines.rs",
+            ),
         ),
     ];
     #[cfg(feature = "config-export")]
@@ -360,12 +419,19 @@ fn two_lines(label: &str, out: &Output, case: &Case) -> Vec<String> {
         miss(format!("exit {:?}, want {}", out.status.code(), case.exit));
     }
     if out.stdout != case.stdout.as_bytes() {
-        miss(format!("stdout {:?}, want {:?}", String::from_utf8_lossy(&out.stdout), case.stdout));
+        miss(format!(
+            "stdout {:?}, want {:?}",
+            String::from_utf8_lossy(&out.stdout),
+            case.stdout
+        ));
     }
     let utf8 = std::str::from_utf8(&out.stderr).is_ok();
     let lines: Vec<&str> = stderr.lines().collect();
     if !utf8 || !stderr.ends_with('\n') || stderr.ends_with("\n\n") || lines.len() != 2 {
-        miss(format!("want exactly two UTF-8 lines ending in one newline, got {}", lines.len()));
+        miss(format!(
+            "want exactly two UTF-8 lines ending in one newline, got {}",
+            lines.len()
+        ));
         return misses;
     }
     if !lines[0].starts_with("error: ") {
@@ -374,7 +440,10 @@ fn two_lines(label: &str, out: &Output, case: &Case) -> Vec<String> {
     if lines[1].is_empty() {
         miss("the second line is empty".to_owned());
     }
-    for (which, line, pin) in [("first", lines[0], &case.first), ("second", lines[1], &case.second)] {
+    for (which, line, pin) in [
+        ("first", lines[0], &case.first),
+        ("second", lines[1], &case.second),
+    ] {
         let held = match pin {
             Pin::Exact(want) => line == want,
             Pin::Has(want) => line.contains(want.as_str()),
@@ -398,7 +467,10 @@ fn two_lines(label: &str, out: &Output, case: &Case) -> Vec<String> {
 fn the_table_covers_every_local_leaf() {
     let all = leaves();
     for known in ["init", "cap list", "audit verify", "tls issue-client"] {
-        assert!(all.iter().any(|l| l == known), "the walk missed {known}: {all:?}");
+        assert!(
+            all.iter().any(|l| l == known),
+            "the walk missed {known}: {all:?}"
+        );
     }
     assert!(all.len() >= 59, "only {} leaves walked", all.len());
     let want: Vec<String> = all
@@ -414,7 +486,10 @@ fn the_table_covers_every_local_leaf() {
     assert_eq!(unique, keys, "a leaf appears twice in the table");
     let missing: Vec<&String> = want.iter().filter(|l| !keys.contains(l)).collect();
     let extra: Vec<&String> = keys.iter().filter(|k| !want.contains(k)).collect();
-    assert!(missing.is_empty(), "leaves with no table entry: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "leaves with no table entry: {missing:?}"
+    );
     assert!(extra.is_empty(), "table entries for no leaf: {extra:?}");
     let mut converted: Vec<&str> = rows
         .iter()
@@ -480,7 +555,10 @@ fn a_line_break_in_a_path_keeps_two_lines() {
     write(&file, "x\n");
     let case = fail_case(
         strings(&["init", "--output", &text(&file)]),
-        Pin::Exact(format!("error: {}/a b.yaml already exists.", text(scratch.path()))),
+        Pin::Exact(format!(
+            "error: {}/a b.yaml already exists.",
+            text(scratch.path())
+        )),
         Pin::Exact("Remove it first or choose a different path with --output.".to_owned()),
     );
     let misses = two_lines("init (line break)", &run(&case.args), &case);
@@ -502,7 +580,15 @@ fn a_bad_ca_key_path_is_a_usage_error() {
     let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
     command
         .env("MCP_GATEWAY_CONFIG_DIR", home.path())
-        .args(["--log-level", "off", "tls", "issue-server", "--cn", "gw", "--ca-cert"])
+        .args([
+            "--log-level",
+            "off",
+            "tls",
+            "issue-server",
+            "--cn",
+            "gw",
+            "--ca-cert",
+        ])
         .arg(p.join("ca.crt"))
         .arg("--ca-key")
         .arg(OsString::from_vec(key))
@@ -544,9 +630,19 @@ fn doctor_missing_config_verdict() {
     let out = run(&strings(&["doctor", "--config", &text(&file)]));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
-    assert!(stdout.starts_with("Gateway Doctor\n==============\n"), "{stdout}");
-    assert!(stdout.contains(&format!("{} not found", text(&file))), "{stdout}");
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "", "a verdict prints nothing on stderr");
+    assert!(
+        stdout.starts_with("Gateway Doctor\n==============\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("{} not found", text(&file))),
+        "{stdout}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "",
+        "a verdict prints nothing on stderr"
+    );
 }
 
 /// V2: doctor whose checks fail is a verdict: its report on stdout, exit 1, nothing on stderr.
@@ -559,13 +655,25 @@ fn doctor_failed_check_verdict() {
         "backends:\n  b1:\n    command: \"mcp-nonexistent-probe\"\n",
     )
     .expect("write config");
-    let out = run(&strings(&["doctor", "--config", &text(&file), "--no-registry-check"]));
+    let out = run(&strings(&[
+        "doctor",
+        "--config",
+        &text(&file),
+        "--no-registry-check",
+    ]));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("'mcp-nonexistent-probe' not found in PATH"),
         "the run did not reach the backend check: {stdout}"
     );
-    assert!(!stdout.contains(&format!("{} not found", text(&file))), "the config did not load: {stdout}");
+    assert!(
+        !stdout.contains(&format!("{} not found", text(&file))),
+        "the config did not load: {stdout}"
+    );
     assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "", "a verdict prints nothing on stderr");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "",
+        "a verdict prints nothing on stderr"
+    );
 }

@@ -22,16 +22,24 @@ use serde_json::json;
 
 /// Run an `identity` subcommand.
 pub async fn run_identity_command(cmd: IdentityCommand) -> ExitCode {
-    let result = match cmd {
-        IdentityCommand::Grants(command) => run_identity_grants_command(command).await,
+    let IdentityCommand::Grants(command) = cmd;
+    let file = match &command {
+        IdentityGrantsCommand::List { file, .. }
+        | IdentityGrantsCommand::Grant { file, .. }
+        | IdentityGrantsCommand::Revoke { file, .. } => file.clone(),
     };
-
-    match result {
+    match run_identity_grants_command(command).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("Error: {error}");
-            ExitCode::FAILURE
-        }
+        // One error type carries both a bad flag value and a file that cannot be read or written, so the remedy
+        // names both places to look.
+        Err(error) => super::fail(
+            super::CliExit::LocalFailure,
+            &error,
+            &format!(
+                "Check that {} is a grants file you can read and write, and the flags against 'mcp-gateway identity grants --help'.",
+                file.display()
+            ),
+        ),
     }
 }
 

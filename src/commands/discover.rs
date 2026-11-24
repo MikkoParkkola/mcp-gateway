@@ -11,6 +11,8 @@ use crate::cli::stdout::println;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use super::{CliExit, fail};
+
 use tracing::info;
 
 use mcp_gateway::capability::CapabilityLoader;
@@ -93,21 +95,20 @@ pub async fn cap_import_url(
             println!();
             println!("Wrote {success_count} capability file(s) to {out_path}/");
             if fail_count > 0 {
-                eprintln!("{fail_count} file(s) failed to write.");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("{fail_count} file(s) failed to write."),
+                    &format!("Check that {out_path} exists and that you can write to it."),
+                );
             }
 
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Discovery failed: {e}");
-            eprintln!();
-            eprintln!("Tips:");
-            eprintln!("  - Ensure the URL is publicly accessible");
-            eprintln!("  - Try --auth if the API requires authentication");
-            eprintln!("  - Use 'cap import <file>' for local spec files");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("discovery failed: {e}"),
+            "Check that the URL is publicly reachable, add --auth if the API needs a credential, or use 'mcp-gateway cap import <file>' for a local spec file.",
+        ),
     }
 }
 

@@ -490,8 +490,14 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
     let current = SemVer::parse(current_str).expect("CARGO_PKG_VERSION is always valid semver");
 
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("Error: cannot create data directory {}: {e}", dir.display());
-        return ExitCode::FAILURE;
+        return super::fail(
+            super::CliExit::LocalFailure,
+            &format!("cannot create data directory {}: {e}", dir.display()),
+            &format!(
+                "Check that you can create {}, or pass another --data-dir.",
+                dir.display()
+            ),
+        );
     }
 
     let stamp = stamp_path(&dir);
@@ -499,8 +505,14 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
     let raw_stamp = match read_stamp(&stamp) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Error: cannot read stamp file: {e}");
-            return ExitCode::FAILURE;
+            return super::fail(
+                super::CliExit::LocalFailure,
+                &format!("cannot read stamp file: {e}"),
+                &format!(
+                    "Check that {} exists and that you can read it.",
+                    stamp.display()
+                ),
+            );
         }
     };
 
@@ -510,15 +522,24 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
             println!("Fresh install detected — writing version stamp {current_str}.");
         }
         if !dry_run && let Err(e) = write_stamp(&stamp, current_str) {
-            eprintln!("Error: failed to write stamp: {e}");
-            return ExitCode::FAILURE;
+            return super::fail(
+                super::CliExit::LocalFailure,
+                &format!("failed to write stamp: {e}"),
+                &format!("Check that you can write to {}.", stamp.display()),
+            );
         }
         return ExitCode::SUCCESS;
     };
 
     let Some(installed) = SemVer::parse(&raw) else {
-        eprintln!("Error: unreadable version stamp '{raw}'.");
-        return ExitCode::FAILURE;
+        return super::fail(
+            super::CliExit::LocalFailure,
+            &format!("unreadable version stamp '{raw}'."),
+            &format!(
+                "Delete {} and run 'mcp-gateway upgrade' again.",
+                stamp.display()
+            ),
+        );
     };
 
     match installed.cmp(&current) {
@@ -548,10 +569,11 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
                     print_upgrade_summary(&installed, &current, n, dry_run, quiet);
                     ExitCode::SUCCESS
                 }
-                Err(e) => {
-                    eprintln!("Error: upgrade failed: {e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) => super::fail(
+                    super::CliExit::LocalFailure,
+                    &format!("upgrade failed: {e}"),
+                    "Run 'mcp-gateway upgrade --dry-run' to see the pending steps, then run 'mcp-gateway upgrade' again.",
+                ),
             }
         }
     }

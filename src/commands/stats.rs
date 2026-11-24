@@ -50,7 +50,27 @@ fn stats_client() -> Result<reqwest::Client, String> {
         .timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| format!("❌ Failed to build HTTP client: {e}\n"))
+        .map_err(|e| {
+            failure(
+                format_args!("Failed to build HTTP client: {e}"),
+                "Rerun 'mcp-gateway stats'; if it fails again, run 'mcp-gateway doctor'.",
+            )
+        })
+}
+
+/// Doctor checks a gateway that answered badly.
+const RUN_DOCTOR: &str = "Run 'mcp-gateway doctor' to check the gateway.";
+
+/// A failure as the `Err` text of the seams below: the message, a line break, then what to do. The remedy is
+/// ours and holds no line break, so the last one splits the two even when the message holds some.
+fn failure(message: std::fmt::Arguments<'_>, remedy: &str) -> String {
+    format!("{message}\n{remedy}")
+}
+
+/// Leaves with the two-line local error built from a [`failure`] text.
+fn exit_with(text: &str) -> ExitCode {
+    let (message, remedy) = text.rsplit_once('\n').unwrap_or((text, RUN_DOCTOR));
+    super::fail(super::CliExit::LocalFailure, message, remedy)
 }
 
 /// `stats` output text for stdout (`Ok`) or stderr (`Err`). (MIK-8660 seam)
@@ -75,8 +95,9 @@ async fn stats_outcome(
 
     match client.post(&endpoint).json(&request_body).send().await {
         Ok(response) => handle_stats_response(response, &endpoint, render).await,
-        Err(e) => Err(format!(
-            "❌ Failed to connect to gateway: {e}\n   Make sure the gateway is running at {url}\n"
+        Err(e) => Err(failure(
+            format_args!("Failed to connect to gateway: {e}"),
+            &format!("Make sure the gateway is running at {url}."),
         )),
     }
 }
@@ -85,20 +106,14 @@ async fn stats_outcome(
 pub async fn run_stats_command(url: &str, render: crate::cli::output::Render) -> ExitCode {
     let client = match stats_client() {
         Ok(client) => client,
-        Err(text) => {
-            eprint!("{text}");
-            return ExitCode::FAILURE;
-        }
+        Err(text) => return exit_with(&text),
     };
     match stats_outcome(&client, url, render).await {
         Ok(text) => {
             print!("{text}");
             ExitCode::SUCCESS
         }
-        Err(text) => {
-            eprint!("{text}");
-            ExitCode::FAILURE
-        }
+        Err(text) => exit_with(&text),
     }
 }
 
@@ -109,19 +124,23 @@ async fn handle_stats_response(
 ) -> Result<String, String> {
     if response.status().is_redirection() {
         let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
-        return Err(format!(
-            "❌ the gateway URL redirected to {phrase}; point stats at the final URL\n"
+        return Err(failure(
+            format_args!("the gateway URL redirected to {phrase}; point stats at the final URL"),
+            "Pass the final URL with --gateway.",
         ));
     }
     if !response.status().is_success() {
-        return Err(format!(
-            "❌ Gateway returned error: {}\n",
-            response.status()
+        return Err(failure(
+            format_args!("Gateway returned error: {}", response.status()),
+            RUN_DOCTOR,
         ));
     }
     match response.json::<serde_json::Value>().await {
         Ok(body) => print_stats_body(&body, url, render),
-        Err(e) => Err(format!("❌ Failed to parse response: {e}\n")),
+        Err(e) => Err(failure(
+            format_args!("Failed to parse response: {e}"),
+            RUN_DOCTOR,
+        )),
     }
 }
 
@@ -148,15 +167,21 @@ fn print_stats_body(
         return Ok(out);
     }
     if let Some(error) = body.get("error") {
-        return Err(format!(
-            "❌ Error: {}\n",
-            error
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
+        return Err(failure(
+            format_args!(
+                "the gateway answered with an error: {}",
+                error
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown")
+            ),
+            RUN_DOCTOR,
         ));
     }
-    Err("❌ Unexpected response format\n".to_string())
+    Err(failure(
+        format_args!("Unexpected response format"),
+        RUN_DOCTOR,
+    ))
 }
 
 fn extract_stats_text(body: &serde_json::Value) -> Option<&str> {
@@ -207,7 +232,12 @@ fn stats_document(stats: &serde_json::Value) -> Result<String, String> {
         tools_available: stats.get("tools_available"),
         top_tools,
     })
-    .map_err(|why| format!("❌ Could not print the statistics: {why}\n"))
+    .map_err(|why| {
+        failure(
+            format_args!("Could not print the statistics: {why}"),
+            "Rerun without --json for the text summary.",
+        )
+    })
 }
 
 fn print_top_tools(stats: &serde_json::Value) -> String {

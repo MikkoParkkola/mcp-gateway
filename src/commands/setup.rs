@@ -50,8 +50,11 @@ pub async fn run_setup_command(
     // Refuse an unloadable destination before discovery can lead to bootstrap
     // or client configuration, including the empty-discovery path.
     if let Err(e) = load_existing_or_default(output) {
-        eprintln!("Error: Failed to load {}: {e}", output.display());
-        return ExitCode::FAILURE;
+        return super::fail(
+            super::CliExit::LocalFailure,
+            &format!("Failed to load {}: {e}", output.display()),
+            &format!("Run '{}' to see why.", super::check_config_command(output)),
+        );
     }
 
     // ── 1. Discover ────────────────────────────────────────────────────────
@@ -73,8 +76,11 @@ pub async fn run_setup_command(
         match interactive_select(&servers) {
             Ok(sel) => sel,
             Err(e) => {
-                eprintln!("Error: Selection failed: {e}");
-                return ExitCode::FAILURE;
+                return super::fail(
+                    super::CliExit::LocalFailure,
+                    &format!("Selection failed: {e}"),
+                    "Rerun with --yes to import every discovered server without a prompt.",
+                );
             }
         }
     };
@@ -170,8 +176,11 @@ async fn configure_ai_clients(output: &Path) -> ExitCode {
     #[cfg(not(feature = "config-export"))]
     {
         let _ = output;
-        eprintln!("Error: setup --configure-client requires the config-export feature");
-        ExitCode::FAILURE
+        super::fail(
+            super::CliExit::LocalFailure,
+            "setup --configure-client requires the config-export feature",
+            "Rerun without --configure-client, or install a build with the config-export feature.",
+        )
     }
 }
 
@@ -335,8 +344,11 @@ fn import_servers(
     written.map_err(|e| {
         // The message can name a client's server and keys: escaped once,
         // here, where it is printed.
-        eprintln!("Error: {}", shown(&e));
-        ExitCode::FAILURE
+        super::fail(
+            super::CliExit::LocalFailure,
+            &shown(&e),
+            "Fix the server entry or file named above, then rerun 'mcp-gateway setup wizard'.",
+        )
     })?;
     Ok(added)
 }

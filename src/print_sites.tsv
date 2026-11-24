@@ -6,7 +6,6 @@
 # P: one exact site; a changed site text needs a fresh review.
 P	src/lib.rs	setup_tracing_flush	std::io::stderr()	the log writer's own stream: every line it writes went through the escaping layer
 P	src/cli/entry.rs	fatal	eprintln!("{}" , crate :: log_escape :: escaped (message))	escaped by log_escape::escaped, printed only when the log drops the fatal event
-P	src/cli/entry.rs	run	eprintln!("Failed to setup tracing: {e}")	before logging exists: the log writer spawn error, no config text
 P	src/cli/stdout.rs		macro_rules!(() => { { use :: std :: io :: Write as _ ; let written = :: std :: writeln ! (:: std :: io :: stdout () . lock ()) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ; ($ ($ arg : tt) *) => { { use :: std :: io :: Write as _ ; let written = :: std :: writeln ! (:: std :: io :: stdout () . lock () , $ ($ arg) *) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ;)	the CLI own println/print macros: CLI output only
 P	src/cli/stdout.rs		macro_rules!(($ ($ arg : tt) *) => { { use :: std :: io :: Write as _ ; let written = :: std :: write ! (:: std :: io :: stdout () . lock () , $ ($ arg) *) ; if let :: std :: result :: Result :: Err (error) = written { if error . kind () == :: std :: io :: ErrorKind :: BrokenPipe { :: std :: process :: exit (0) ; } :: std :: panic ! ("failed printing to stdout: {error}") ; } } } ;)	the CLI own println/print macros: CLI output only
 P	src/commands/upgrade.rs	check_upgrade	std::io::stderr()	serve path: the stream for the once-only webhook notice, fixed text
@@ -87,7 +86,6 @@ T	src/commands/doctor/shadow.rs	run_doctor_shadow_command	-	CLI subcommand outpu
 T	src/commands/hash_key.rs	run_hash_key_command	-	CLI subcommand output (hash_key.rs)
 T	src/commands/identity.rs	print_grant_result	-	CLI subcommand output (identity.rs)
 T	src/commands/identity.rs	print_grants	-	CLI subcommand output (identity.rs)
-T	src/commands/identity.rs	run_identity_command	-	CLI subcommand output (identity.rs)
 T	src/commands/kubernetes.rs	print_cluster_apply_plan	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	print_cluster_execution_report	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	print_controller_report	-	CLI subcommand output (kubernetes.rs)
@@ -95,8 +93,6 @@ T	src/commands/kubernetes.rs	print_plan	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	run_controller_command	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	run_kubernetes_command	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/mod.rs	print_init_success	-	CLI subcommand output (mod.rs)
-T	src/commands/mod.rs	read_ca_files	-	CLI subcommand output (mod.rs)
-T	src/commands/mod.rs	refuse_existing_tls_output	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	run_init_command	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	tls_init_ca	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	tls_issue_client	-	CLI subcommand output (mod.rs)
@@ -106,14 +102,10 @@ T	src/commands/protocol_import.rs	print_apply_table	-	CLI subcommand output (pro
 T	src/commands/protocol_import.rs	print_json	-	CLI subcommand output (protocol_import.rs)
 T	src/commands/protocol_import.rs	print_plain	-	CLI subcommand output (protocol_import.rs)
 T	src/commands/protocol_import.rs	print_table	-	CLI subcommand output (protocol_import.rs)
-T	src/commands/protocol_import.rs	run_protocol_import_command	-	CLI subcommand output (protocol_import.rs)
 T	src/commands/ranking.rs	print_ranking_eval_report	-	CLI subcommand output (ranking.rs)
-T	src/commands/ranking.rs	run_ranking_command	-	CLI subcommand output (ranking.rs)
 T	src/commands/setup.rs	bootstrap_local_profile	-	CLI subcommand output (setup.rs)
-T	src/commands/setup.rs	configure_ai_clients	-	CLI subcommand output (setup.rs)
 T	src/commands/setup.rs	discover_all_servers	-	CLI subcommand output (setup.rs)
 T	src/commands/setup.rs	handle_empty_discovery	-	CLI subcommand output (setup.rs)
-T	src/commands/setup.rs	import_servers	-	CLI subcommand output (setup.rs)
 T	src/commands/setup.rs	interactive_select	-	CLI subcommand output (setup.rs)
 T	src/commands/setup.rs	merge_servers_into_config	-	CLI subcommand output (setup.rs)
 T	src/commands/setup.rs	print_discovery_summary	-	CLI subcommand output (setup.rs)
@@ -145,7 +137,6 @@ T	src/commands/trust/output.rs	print_json	-	CLI subcommand output (trust/output.
 T	src/commands/trust/output.rs	print_lab_evaluations	-	CLI subcommand output (trust/output.rs)
 T	src/commands/trust/output.rs	print_lab_table	-	CLI subcommand output (trust/output.rs)
 T	src/commands/trust/output.rs	print_validation_report	-	CLI subcommand output (trust/output.rs)
-T	src/commands/upgrade_grant_rows.rs	check_grant_rows	-	CLI subcommand output (upgrade_grant_rows.rs)
 T	src/commands/upgrade_url_keys.rs	run_upgrade_with_config	-	CLI subcommand output (upgrade_url_keys.rs)
 T	src/commands/upgrade.rs	print_upgrade_summary	-	CLI subcommand output (upgrade.rs)
 T	src/commands/upgrade.rs	run_upgrade_command	-	CLI subcommand output (upgrade.rs)
