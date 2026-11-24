@@ -1368,6 +1368,7 @@ jobs:
       # tests the change can reach, then runs all of them anyway. The four steps may fail without failing the
       # leg, and no other step reads what they produce.
       - name: Affected tests map
+        id: affected-map
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
         continue-on-error: true
         timeout-minutes: 3
@@ -1383,6 +1384,7 @@ jobs:
         env:
           LEG: ${{ matrix.shard }}
           RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
         run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD"
       - name: Affected tests record
         if: ${{ !cancelled() }}
@@ -1392,6 +1394,7 @@ jobs:
           LEG: ${{ matrix.shard }}
           OUTCOME: ${{ steps.select.outcome }}
           ATTEMPT: ${{ github.run_attempt }}
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
         # No repository file is used here: when an earlier step failed, checkout may never have run.
         run: |
           f="$RUNNER_TEMP/affected-select/$LEG.json"
@@ -1399,8 +1402,10 @@ jobs:
           if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
             printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
           fi
-          if [ -f map/affected-map.json ] && ! git ls-files --error-unmatch map/affected-map.json > /dev/null 2>&1; then
+          # Only a map the restore wrote is removed (with its folder); without a restore, map/ is the PR's own.
+          if [ -n "$RESTORED" ]; then
             rm -f map/affected-map.json
+            rmdir map 2> /dev/null || true
           fi
       - name: Upload the affected tests record
         if: ${{ !cancelled() }}
@@ -1501,6 +1506,7 @@ jobs:
       # Affected tests, shadow only, as in test-shards. Here the select step comes after the part binaries are
       # fetched, because a lib leg must list them to see tests the map has never met.
       - name: Affected tests map
+        id: affected-map
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
         continue-on-error: true
         timeout-minutes: 3
@@ -1516,6 +1522,7 @@ jobs:
         env:
           LEG: ${{ matrix.shard }}
           RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
         run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD" --lib-bin "$RUNNER_TEMP/lib-bin"
       - name: Affected tests record
         if: ${{ !cancelled() }}
@@ -1525,6 +1532,7 @@ jobs:
           LEG: ${{ matrix.shard }}
           OUTCOME: ${{ steps.select.outcome }}
           ATTEMPT: ${{ github.run_attempt }}
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
         # No repository file is used here: when an earlier step failed, checkout may never have run.
         run: |
           f="$RUNNER_TEMP/affected-select/$LEG.json"
@@ -1532,8 +1540,10 @@ jobs:
           if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
             printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
           fi
-          if [ -f map/affected-map.json ] && ! git ls-files --error-unmatch map/affected-map.json > /dev/null 2>&1; then
+          # Only a map the restore wrote is removed (with its folder); without a restore, map/ is the PR's own.
+          if [ -n "$RESTORED" ]; then
             rm -f map/affected-map.json
+            rmdir map 2> /dev/null || true
           fi
       - name: Upload the affected tests record
         if: ${{ !cancelled() }}

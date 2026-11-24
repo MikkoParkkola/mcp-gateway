@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import affected_map  # noqa: E402  (the map's own schema, so producer and reader cannot drift apart)
 import shard_tests  # noqa: E402  (filters and part binaries come from here so the split has one source)
 
 LINE = "docs/ranking-1-release-line"
@@ -33,8 +34,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MAP_PATH = "map/affected-map.json"
 LEGS = ("int-a", "int-b", "lib-a", "lib-b")
 LIB_LEGS = ("lib-a", "lib-b")
-MAP_KEYS = {"map_sha", "built_at", "units"}
-UNIT_KEYS = {"files", "dirs", "probes", "tests", "seconds", "binary", "unmapped"}
+MAP_KEYS = set(affected_map.MAP_KEYS)
+UNIT_KEYS = set(affected_map.UNIT_KEYS)
 RECORD_KEYS = ("leg", "mode", "reason", "map_sha", "names", "run_attempt")
 # Seconds per git command. Slower than this and the answer is full, so the shard step keeps its job time.
 GIT_TIMEOUT = 30
@@ -277,14 +278,15 @@ def lib_listing(leg: str, lib_bin: str) -> set[str]:
     return names
 
 
-def int_scope(leg: str) -> tuple[list[str], bool, bool]:
-    """Read the integration leg's cargo arguments: its `--test` globs, and whether `--bins` and `--doc` appear."""
+def int_scope(leg: str) -> tuple[list[str], bool, bool, bool]:
+    """Read the integration leg's cargo arguments: its `--test` globs, and whether `--bins` and `--doc` appear;
+    plus whether shard_tests gives this leg the examples build."""
     globs, bins, doc = [], False, False
     for _step, cargo, _test_args, _floor in _shard(leg):
         bins |= "--bins" in cargo
         doc |= "--doc" in cargo
         globs += [cargo[i + 1] for i, a in enumerate(cargo) if a == "--test" and i + 1 < len(cargo)]
-    return globs, bins, doc
+    return globs, bins, doc, shard_tests.EXAMPLES.get("linux") == leg
 
 
 def leg_record(leg: str, units: dict, chosen: set[str], listing: set[str] | None) -> tuple[str, list[str]]:
@@ -301,13 +303,15 @@ def leg_record(leg: str, units: dict, chosen: set[str], listing: set[str] | None
         names |= listing - known
         names |= {t for prefix in ALWAYS.get(leg, ()) for t in listing if t.startswith(prefix)}
         return ("reduced" if names else "none"), sorted(names)
-    globs, bins, doc = int_scope(leg)
+    globs, bins, doc, examples = int_scope(leg)
     names = {label for label in chosen if label.startswith("test:")
              and any(fnmatch.fnmatchcase(label[len("test:"):], g) for g in globs)}
     if bins:
         names |= {label for label in units if label.startswith("bin:")} | {"bins"}
     if doc:
         names.add("doc")
+    if examples:
+        names.add("examples")
     names |= set(ALWAYS.get(leg, ()))
     return "reduced", sorted(names)
 
@@ -340,7 +344,7 @@ class Inputs:
     lib_bin: str | None
     attempt: int
     checkout: str = str(ROOT)
-    tracked_map: bool = False
+    restored: bool = False
     scratch: str | None = None
 
 
@@ -351,8 +355,9 @@ def decide(inp: Inputs) -> dict:
         cls = event_class(inp.event_name, inp.event, inp.repository, inp.ref)
         if cls != "lane PR":
             raise Full(cls)
-        if inp.tracked_map:
-            raise Full("map path taken")
+        if not inp.restored:
+            # The restore skips when map/ already exists, so a file there now is the PR's own, never a map.
+            raise Full("map path taken" if os.path.exists(os.path.dirname(inp.map_path)) else "map missing")
         doc = read_map(inp.map_path)
         map_sha = doc["map_sha"]
         head_sha = ((inp.event.get("pull_request") or {}).get("head") or {}).get("sha", "")
@@ -368,16 +373,17 @@ def decide(inp: Inputs) -> dict:
         return record(inp.leg, "full", "error", map_sha, [], inp.attempt)
 
 
-def map_is_tracked(checkout: str) -> bool:
-    """Whether the checkout's own commit holds anything under map/ (then the restore never ran, see ci.yml)."""
-    out = subprocess.run(["git", "-C", checkout, "ls-files", "--", "map"], capture_output=True, text=True)
-    return out.returncode == 0 and bool(out.stdout.strip())
-
-
-def drop_restored_map(map_path: str, tracked: bool) -> None:
-    """Delete the map the cache restore wrote, so the suite runs on the PR's tree alone; a tracked one stays."""
-    if not tracked and os.path.isfile(map_path):
+def drop_restored_map(map_path: str, restored: bool) -> None:
+    """Remove what the cache restore created (the file, then its folder if now empty), so the suite sees the PR's
+    tree alone. Without a restore, nothing here is ours, so nothing is touched."""
+    if not restored:
+        return
+    if os.path.isfile(map_path):
         os.remove(map_path)
+    try:
+        os.rmdir(os.path.dirname(map_path))
+    except OSError:
+        pass
 
 
 def main(argv: list[str]) -> int:
@@ -397,17 +403,18 @@ def main(argv: list[str]) -> int:
             event = {}
     checkout = env.get("GITHUB_WORKSPACE") or str(ROOT)
     map_path = opts.get("--map", os.path.join(checkout, MAP_PATH))
-    tracked = map_is_tracked(checkout)
+    # The restore step's matched cache key: set only when the restore ran and found a map.
+    restored = bool(env.get("RESTORED"))
     inp = Inputs(
         leg=leg, event_name=env.get("GITHUB_EVENT_NAME", ""), event=event,
         repository=env.get("GITHUB_REPOSITORY", ""), ref=env.get("GITHUB_REF", ""), merge=env.get("GITHUB_SHA", ""),
         origin=f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env.get('GITHUB_REPOSITORY', '')}.git",
         map_path=map_path, lib_bin=opts.get("--lib-bin"), attempt=int(env.get("GITHUB_RUN_ATTEMPT", "1") or 1),
-        checkout=checkout, tracked_map=tracked, scratch=env.get("RUNNER_TEMP"),
+        checkout=checkout, restored=restored, scratch=env.get("RUNNER_TEMP"),
     )
     rec = decide(inp)
     write_record(out, rec)
-    drop_restored_map(map_path, tracked)
+    drop_restored_map(map_path, restored)
     line = (f"affected tests (shadow) {leg}: {rec['mode']} ({rec['reason']}), {len(rec['names'])} names, "
             f"map {rec['map_sha'] or 'none'}, {time.monotonic() - started:.0f} s")
     print(line)

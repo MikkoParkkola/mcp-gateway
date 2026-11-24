@@ -59,7 +59,7 @@ def lane_event(head_sha: str = "h" * 40, base: str = "docs/ranking-1-release-lin
 
 def inputs(**kw) -> "sel.Inputs":
     base = dict(leg="int-a", event_name="pull_request", event=lane_event(), repository=REPO_NAME, ref="", merge="m",
-                origin="o", map_path="/nonexistent/map.json", lib_bin=None, attempt=1)
+                origin="o", map_path="/nonexistent/map.json", lib_bin=None, attempt=1, restored=True)
     base.update(kw)
     return sel.Inputs(**base)
 
@@ -199,6 +199,11 @@ class Rule(unittest.TestCase):
         self.assertEqual(pick(units, [change("M", "src/extra/mod.rs")], ("", "src", "src/extra"),
                               ("", "src", "src/extra")), "full: unmapped .rs")
 
+    def test_a_path_with_a_space_survives_the_diff_parse(self) -> None:
+        raw = ":100644 100644 aaa bbb M\0fixtures/new data.txt\0:000000 100644 000 ccc A\0docs/a b/c.md\0"
+        self.assertEqual([(c.status, c.path) for c in sel.parse_raw(raw)],
+                         [("M", "fixtures/new data.txt"), ("A", "docs/a b/c.md")])
+
     def test_a_link_or_a_type_change_is_full(self) -> None:
         for c in (sel.Change("A", "docs/l", "000000", "120000"), sel.Change("M", "docs/l", "120000", "120000"),
                   sel.Change("D", "docs/l", "120000", "000000"), sel.Change("T", "docs/l", "100644", "120000"),
@@ -241,7 +246,7 @@ class Legs(unittest.TestCase):
         self.assertEqual(sel.leg_record("int-a", self.UNITS, {"test:alpha", "test:zeta"}, None)[1],
                          ["bin:mcp-gateway", "bins", "test:alpha", "test:integration_tests"])
         self.assertEqual(sel.leg_record("int-b", self.UNITS, {"test:alpha", "test:zeta"}, None),
-                         ("reduced", ["doc", "test:upgrading_summary_rows", "test:zeta"]))
+                         ("reduced", ["doc", "examples", "test:upgrading_summary_rows", "test:zeta"]))
 
     def test_tests_run_beside_the_shard_step_are_always_recorded(self) -> None:
         listing = {"commands::upgrade::upgrade_notice_tests::shown", "a::one"}
@@ -367,18 +372,20 @@ class GitHistory(unittest.TestCase):
     def test_a_map_commit_the_origin_lacks_is_an_unread_diff(self) -> None:
         self.assertEqual(self.outcome(map_sha="f" * 40), "full: diff unread")
 
-    def run_main(self, checkout: str, tracked: bool) -> dict:
+    def run_main(self, checkout: str, tracked: bool, restored: bool) -> dict:
         map_path = os.path.join(checkout, "map", "affected-map.json")
         os.makedirs(os.path.dirname(map_path), exist_ok=True)
         units = {"test:alpha": unit(files=["src/x.rs"], tests=["t"]), "test:beta": unit(files=["src/y.rs"])}
         Path(map_path).write_text(json.dumps({"map_sha": self.map_sha, "built_at": "t", "units": units}))
+        self.map_bytes = Path(map_path).read_bytes()
         if tracked:
             sh("git", "-C", checkout, "add", "map/affected-map.json")
         with tempfile.TemporaryDirectory() as d:
             Path(d, "event.json").write_text(json.dumps(lane_event(head_sha=self.head)))
             env = {"GITHUB_EVENT_PATH": os.path.join(d, "event.json"), "GITHUB_EVENT_NAME": "pull_request",
                    "GITHUB_REPOSITORY": REPO_NAME, "GITHUB_SHA": self.merge, "GITHUB_SERVER_URL": "file://" + self.server,
-                   "GITHUB_WORKSPACE": checkout, "RUNNER_TEMP": d, "GITHUB_RUN_ATTEMPT": "1"}
+                   "GITHUB_WORKSPACE": checkout, "RUNNER_TEMP": d, "GITHUB_RUN_ATTEMPT": "1",
+                   "RESTORED": "affected-map-" + self.map_sha if restored else ""}
             saved = dict(os.environ)
             os.environ.update(env)
             try:
@@ -394,19 +401,22 @@ class GitHistory(unittest.TestCase):
             checkout = os.path.join(d, "co")
             shutil.copytree(self.checkout, checkout, symlinks=True)
             before = {n: Path(checkout, ".git", n).read_bytes() for n in ("config", "shallow")}
-            rec = self.run_main(checkout, tracked=False)
+            rec = self.run_main(checkout, tracked=False, restored=True)
             after = {n: Path(checkout, ".git", n).read_bytes() for n in ("config", "shallow")}
             self.assertEqual((rec["mode"], rec["reason"]), ("reduced", "lane PR"))
             self.assertEqual(after, before)
-            self.assertFalse(os.path.exists(os.path.join(checkout, "map", "affected-map.json")))
+            # The restore made map/ as well as the file: both are gone.
+            self.assertFalse(os.path.exists(os.path.join(checkout, "map")))
 
-    def test_a_tracked_map_file_is_kept_and_the_record_is_full(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            checkout = os.path.join(d, "co")
-            shutil.copytree(self.checkout, checkout, symlinks=True)
-            rec = self.run_main(checkout, tracked=True)
-            self.assertEqual((rec["mode"], rec["reason"]), ("full", "map path taken"))
-            self.assertTrue(os.path.isfile(os.path.join(checkout, "map", "affected-map.json")))
+    def test_a_map_file_the_pr_put_there_is_kept_and_the_record_is_full(self) -> None:
+        for tracked in (True, False):
+            with tempfile.TemporaryDirectory() as d:
+                checkout = os.path.join(d, "co")
+                shutil.copytree(self.checkout, checkout, symlinks=True)
+                rec = self.run_main(checkout, tracked=tracked, restored=False)
+                self.assertEqual((rec["mode"], rec["reason"]), ("full", "map path taken"), tracked)
+                kept = Path(checkout, "map", "affected-map.json")
+                self.assertEqual(kept.read_bytes() if kept.exists() else b"", self.map_bytes, tracked)
 
 
 class Timeout(unittest.TestCase):
@@ -482,6 +492,9 @@ class Wiring(unittest.TestCase):
                 self.assertLessEqual(int(s.get("timeout-minutes", 99)), 3, (job, name))
             self.assertEqual(new["Affected tests map"]["if"], "${{ " + LANE_PR + " && hashFiles('map/**') == '' }}")
             self.assertEqual(new["Affected tests (shadow)"].get("id"), "select")
+            self.assertEqual(new["Affected tests map"].get("id"), "affected-map")
+            for name in ("Affected tests (shadow)", "Affected tests record"):
+                self.assertEqual(new[name]["env"]["RESTORED"], "${{ steps.affected-map.outputs.cache-matched-key }}")
             for name in ("Affected tests record", "Upload the affected tests record"):
                 self.assertEqual(new[name]["if"], "${{ !cancelled() }}", (job, name))
         lib = [s.get("name") for s in self.steps("test-shards-lib")]
@@ -514,17 +527,28 @@ class Wiring(unittest.TestCase):
                 self.assertNotIn("affected_select", json.dumps(s), (job, s.get("name")))
                 self.assertNotIn(s.get("name"), NEW_STEPS, job)
 
-    def run_finalize(self, existing: str | None) -> dict:
+    def run_finalize(self, existing: str | None, restored: str = "") -> dict:
+        """The record step's own script, in a folder that is not a repository; also notes whether map/ is left."""
         with tempfile.TemporaryDirectory() as d:
             record = Path(d, "affected-select", "lib-a.json")
             if existing is not None:
                 record.parent.mkdir()
                 record.write_text(existing)
-            env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": d, "LEG": "lib-a", "OUTCOME": "failure", "ATTEMPT": "3"}
-            # bash as GitHub runs a step (-e, pipefail), in a folder that is not a repository.
+            Path(d, "map").mkdir()
+            Path(d, "map", "affected-map.json").write_text("{}")
+            env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": d, "LEG": "lib-a", "OUTCOME": "failure", "ATTEMPT": "3",
+                   "RESTORED": restored}
+            # bash as GitHub runs a step (-e, pipefail).
             subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", finalize_text(self.doc)],
                            cwd=d, env=env, check=False, capture_output=True)
+            self.map_left = Path(d, "map").exists()
             return json.loads(record.read_text()) if record.exists() else {}
+
+    def test_the_record_step_removes_only_a_restored_map(self) -> None:
+        self.run_finalize(None, restored="affected-map-abc")
+        self.assertFalse(self.map_left)
+        self.run_finalize(None, restored="")
+        self.assertTrue(self.map_left)
 
     def test_the_record_step_writes_a_record_without_the_repository(self) -> None:
         made = self.run_finalize(None)
@@ -551,8 +575,8 @@ def _mutants() -> list:
     """(name, row class, [(object, attribute, replacement), ...]). Each replacement wraps the real code."""
     me = sys.modules[__name__]
     real = {k: getattr(sel, k) for k in ("event_class", "select_units", "leg_record", "lib_listing", "history",
-                                         "git", "is_ancestor", "record", "write_record", "map_is_tracked")}
-    real_doc, real_final = ci_doc, finalize_text
+                                         "git", "is_ancestor", "record", "write_record", "drop_restored_map")}
+    real_doc, real_final, real_decide = ci_doc, finalize_text, sel.decide
 
     def head_of(e: dict) -> dict:
         return ((e.get("pull_request") or {}).get("head") or {})
@@ -693,7 +717,13 @@ def _mutants() -> list:
         ("S23 a failed git read as empty", "GitHistory", [(sel, "git", failures_as_empty)]),
         ("CLEAN fetched into the checkout", "GitHistory", [(sel, "history", fetch_into_checkout)]),
         ("CLEAN the restored map left", "GitHistory", [(sel, "drop_restored_map", lambda p, t: None)]),
-        ("CLEAN a tracked map deleted", "GitHistory", [(sel, "map_is_tracked", lambda c: False)]),
+        ("CLEAN the PR's own map file deleted", "GitHistory", [(sel, "drop_restored_map",
+                                                               lambda p, r: real["drop_restored_map"](p, True))]),
+        ("CLEAN a map read without a restore", "GitHistory", [(sel, "decide", lambda inp: real_decide(
+            sel.Inputs(**{**inp.__dict__, "restored": True})))]),
+        ("CLEAN the record step removes a map it did not restore", "Wiring", [(me, "finalize_text", lambda doc:
+            real_final(doc).replace('[ -n "$RESTORED" ]', "true", 1))]),
+        ("S21 the examples build left out", "Legs", [(sel.shard_tests, "EXAMPLES", {})]),
         ("TIME no timeout on git", "Timeout", [(sel, "git", no_timeout)]),
         ("S10' an if added to the shard step", "Wiring", [(me, "ci_doc", doc_with("test-shards", "Shard suite",
                                                                               **{"if": "false"}))]),

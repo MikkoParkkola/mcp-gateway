@@ -327,7 +327,10 @@ def shadow_step(step: dict) -> bool:
     if name == "Affected tests (shadow)":
         return "uses" not in step and run == SHADOW_SELECT
     if name == "Affected tests record":
-        return "uses" not in step and not any(word in run for word in ("lib-bin", "lib-tests", "shard_tests"))
+        env = step.get("env") if isinstance(step.get("env"), dict) else {}
+        # The env values count too: `run: "$X"` with X naming a part binary would otherwise slip through.
+        text = " ".join([run, *(str(v) for v in env.values())])
+        return "uses" not in step and not any(word in text for word in ("lib-bin", "lib-tests", "shard_tests"))
     return False
 
 
@@ -689,6 +692,10 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
     lib_step(shadow_runs_binary, "Affected tests (shadow)")["run"] = '"$RUNNER_TEMP/lib-bin"/p1/lib-tests-p1/lib-tests-p1'
     shadow_names_bin = fresh()
     lib_step(shadow_names_bin, "Affected tests record")["run"] = 'ls "$RUNNER_TEMP/lib-bin"\n'
+    shadow_env_binary = fresh()
+    record = lib_step(shadow_env_binary, "Affected tests record")
+    record["env"] = {**record.get("env", {}), "PART": "${{ runner.temp }}/lib-bin/p1/lib-tests-p1/lib-tests-p1"}
+    record["run"] = '"$PART"\n'
     shadow_named_upload = fresh()
     lib_step(shadow_named_upload, "Upload the affected tests record")["with"]["path"] = UPLOAD_PATH
 
@@ -716,6 +723,7 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
         ("the step running the part binaries gains continue-on-error", binary_continues),
         ("a shadow-named step runs a part binary", shadow_runs_binary),
         ("a shadow-named step names the part binaries' folder", shadow_names_bin),
+        ("a shadow-named step runs a part binary named in its env", shadow_env_binary),
         ("a shadow-named upload sends the part binaries", shadow_named_upload),
     ]
 
