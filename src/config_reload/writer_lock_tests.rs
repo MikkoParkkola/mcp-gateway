@@ -337,6 +337,7 @@ async fn a_dropped_write_still_publishes_its_reload() {
         }),
         replaced: super::reload_context::replace::Replaced::Discard,
         secrets: None,
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let a = tokio::spawn(async move {
         super::reload_context::replace::replace_detached(a_ctx, add_b_bytes, Duration::from_secs(5))

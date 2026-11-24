@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::{
-    BackendOp, Expected, IntentKind, ReloadOutcome, Replace, ReplaceError, Replaced,
+    BackendOp, Expected, IntentKind, ReloadOutcome, Replace, ReplaceError, Replaced, StatusChange,
 };
 use crate::gateway::router::AppState;
 
@@ -145,6 +145,7 @@ where
         compute: Box::new(compute),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let kind = IntentKind::Backend {
         operation,
@@ -161,11 +162,17 @@ where
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
             Err(Box::new(flat_error(code, message).into_response()))
         }
-        (Ok(outcome), Some(Ok(value))) => Ok(Written {
-            value,
-            reload: outcome.reload,
-            secrets: outcome.secrets,
-        }),
+        (Ok(outcome), Some(Ok(value))) => match outcome.reload {
+            crate::config_reload::ReplaceReload::Applied(reload) => Ok(Written {
+                value,
+                reload,
+                secrets: outcome.secrets,
+            }),
+            // A backend write passes `Refuse`; the writer never holds it.
+            crate::config_reload::ReplaceReload::HeldForRestart { .. } => {
+                Err(Box::new(incomplete(BACKEND_WRITE, "held_for_restart")))
+            }
+        },
         (Ok(_), _) => Err(Box::new(incomplete(BACKEND_WRITE, "no_answer"))),
         (Err(e), _) => Err(Box::new(refused_write(BACKEND_WRITE, &e))),
     }

@@ -705,3 +705,6 @@ mod credentials;
 
 #[path = "backends_secret_keep_tests.rs"]
 mod keep;
+
+#[path = "backends_header_tests.rs"]
+mod headers;
