@@ -138,7 +138,8 @@ fn s_cli_remove_refuses_to_take_over_a_root_owned_config() {
     let others: Vec<OsString> = std::fs::read_dir(&conf_dir)
         .expect("list config dir")
         .map(|entry| entry.expect("config dir entry").file_name())
-        .filter(|name| name != "gateway.yaml")
+        // The lock sidecar stays by design (src/config_persistence_lock.rs:14-16).
+        .filter(|name| name != "gateway.yaml" && name != ".gateway.yaml.lock")
         .collect();
     assert!(
         others.is_empty(),
