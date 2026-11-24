@@ -208,7 +208,7 @@ async fn t10b_a_busy_refusal_publishes_nothing_and_the_retry_applies() {
 // reload task, not through `reload_outcome`, because the gap is the wiring.
 #[tokio::test]
 async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config_path = dir.path().join("gateway.yaml");
     // The watcher's reload takes the config lock on a thread that can outlive
     // this test; only a kept dir waits for it (`crate::spawn_keep`).

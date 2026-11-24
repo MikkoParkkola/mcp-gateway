@@ -17,7 +17,7 @@ use crate::identity_grants::LocalIdentityGrantStore;
 use crate::identity_grants::journal::{GrantChange, Hooks, apply_change, apply_change_with};
 
 struct Reload {
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
     grants: std::path::PathBuf,
     state_dir: std::path::PathBuf,
     store: Arc<FlakyStore>,
@@ -29,7 +29,9 @@ struct Reload {
 
 impl Reload {
     fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Kept, so a config lock thread a watcher reload leaves running holds
+        // the dir until it ends (T2c).
+        let dir = crate::test_dir_keep::kept_tempdir();
         let grants = dir.path().join("grants.yaml");
         let state_dir = dir.path().join("store");
         std::fs::create_dir_all(&state_dir).unwrap();
