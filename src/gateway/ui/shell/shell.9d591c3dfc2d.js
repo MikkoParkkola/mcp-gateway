@@ -2102,7 +2102,7 @@ async function signOut() {
  */
 function showSignIn() {
   accessResets++;
-  endRestart(); // before api() asks for a refresh after the 401 that brought us here
+  // MUTANT kept-after-401: endRestart() skipped; probe branch only
   // The count belongs to the identity that is leaving: the next one starts with none.
   const hadCount = DECISIONS.count !== null;
   DECISIONS.count = null;
