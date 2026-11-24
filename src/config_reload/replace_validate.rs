@@ -10,11 +10,24 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{RefusalClass, ReplaceError, SecretStep};
+use super::{RefusalClass, ReplaceError, SecretStep, StatusChange};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
+use crate::config_reload::first_key::{
+    Decision, FaultCause, KeyListRefusal, Waiting, pending_reason, restart_pending_decision,
+    waiting_first_key, waiting_names,
+};
+
+/// A key list refused for one of the first-key question's own reasons: the
+/// class carries which, and the reason is its fixed sentence.
+fn key_list(refusal: KeyListRefusal) -> ReplaceError {
+    ReplaceError::ReloadRefused {
+        class: RefusalClass::KeyList(refusal),
+        reason: refusal.sentence().to_owned(),
+    }
+}
 use crate::config_reload::reload_context::EvaluatedReload;
 use crate::config_reload::reload_context::refusals::BeforeApplyKind;
 
@@ -93,7 +106,12 @@ impl ReloadContext {
     /// anything, in its order, for a candidate the config writer validates
     /// before any store entry exists. The reload still runs them again on the
     /// written bytes; this only refuses earlier.
-    fn refuse_candidate(&self, evaluated: EvaluatedReload) -> Result<(), ReplaceError> {
+    fn refuse_candidate(
+        &self,
+        evaluated: EvaluatedReload,
+        status_change: StatusChange,
+        file_waiting: Vec<String>,
+    ) -> Result<(), ReplaceError> {
         let invalid = |reason| ReplaceError::ReloadRefused {
             class: RefusalClass::Invalid,
             reason,
@@ -104,6 +122,38 @@ impl ReloadContext {
             return Err(invalid(refusal));
         }
         self.restart_only_refusal(&evaluated).map_err(invalid)?;
+        // The status refusal alone is replaced, and asked before the
+        // empty-patch return, so the answer never depends on whether a key
+        // change shows in the patch. Every other refusal decides as before.
+        let waiting = waiting_first_key(
+            self.live_config.running(),
+            &self.live_config.generation(),
+            &evaluated.config,
+            &evaluated.overlay,
+        );
+        let held =
+            status_change == StatusChange::HoldForRestart && matches!(waiting, Waiting::Yes { .. });
+        if !held {
+            match restart_pending_decision(&waiting, file_waiting) {
+                Decision::Pending(waiting) => {
+                    return Err(ReplaceError::ReloadRefused {
+                        reason: pending_reason(&waiting),
+                        class: RefusalClass::RestartPending { waiting },
+                    });
+                }
+                Decision::Invalid(refusal) => return Err(key_list(refusal)),
+                Decision::Continue => {}
+            }
+        }
+        match waiting {
+            // A removal only: the question's own sentence, typed for the routes.
+            Waiting::Faulty {
+                cause: FaultCause::RemovalOnly,
+                ..
+            } => return Err(key_list(KeyListRefusal::RemovalOnly)),
+            Waiting::Faulty { reason, .. } => return Err(invalid(reason)),
+            Waiting::No | Waiting::Yes { .. } => {}
+        }
         if evaluated.patch.is_empty() {
             return Ok(());
         }
@@ -117,6 +167,10 @@ impl ReloadContext {
                 },
                 reason: refusal.text,
             });
+        }
+        // Held: the question already built its key table and judged its start.
+        if held {
+            return Ok(());
         }
         self.live_config
             .prepare(evaluated.config, &evaluated.overlay)
@@ -136,6 +190,7 @@ impl ReloadContext {
         target: &Path,
         template: &Template,
         step: Option<&SecretStep>,
+        status_change: StatusChange,
     ) -> Result<(), ReplaceError> {
         // The loader's rule: a reference, never a comment that mentions it.
         let reserved = std::str::from_utf8(template.bytes()).ok();
@@ -169,6 +224,11 @@ impl ReloadContext {
             class: RefusalClass::Invalid,
             reason: format!("Failed to parse config: {e}"),
         })?;
+        // The file's waiting keys, from the bytes being replaced: what a
+        // restart from them would bring in. None when they do not load.
+        let file_waiting = replaced.as_ref().map_or_else(Vec::new, |file| {
+            waiting_names(&self.live_config.generation(), file)
+        });
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
         }
@@ -191,14 +251,18 @@ impl ReloadContext {
                 .map_err(refused)?;
         }
         let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
-        self.refuse_candidate(EvaluatedReload {
-            config: evaluated.config,
-            patch,
-            overlay: evaluated.overlay,
-            secret_refs: evaluated.secret_refs,
-            inputs: evaluated.inputs,
-            configured: evaluated.configured,
-        })
+        self.refuse_candidate(
+            EvaluatedReload {
+                config: evaluated.config,
+                patch,
+                overlay: evaluated.overlay,
+                secret_refs: evaluated.secret_refs,
+                inputs: evaluated.inputs,
+                configured: evaluated.configured,
+            },
+            status_change,
+            file_waiting,
+        )
     }
 
     /// `Err(NoConfigFile)` when the file read under this lock is gone now.

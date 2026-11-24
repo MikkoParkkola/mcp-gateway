@@ -31,7 +31,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
+    Expected, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome, Replaced,
+    SecretStep, StatusChange,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -142,6 +143,11 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
         Err(ReplaceError::Secrets(_)) => failed("secrets"),
+        // The adopt keeps API keys still waiting in gateway.yaml.
+        Err(ReplaceError::ReloadRefused {
+            class: crate::config_reload::RefusalClass::RestartPending { waiting },
+            ..
+        }) => super::super::errors::restart_pending(waiting.names()),
         Err(ReplaceError::ReloadRefused { .. }) => failed("reload_refused"),
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),
@@ -393,18 +399,17 @@ pub(super) async fn adopt_discovery(
         .iter()
         .map(|literal| (literal.header, literal.key.clone()))
         .collect();
-    let secrets = match opened {
-        None => None,
-        Some((store, vault)) => match secret_step(&name, adoption.literals, store, vault) {
-            Ok(step) => Some(step),
-            Err(refused) => return *refused,
-        },
+    let step = opened.map(|(store, vault)| secret_step(&name, adoption.literals, store, vault));
+    let secrets = match step.transpose() {
+        Ok(secrets) => secrets,
+        Err(refused) => return *refused,
     };
     let replace = Replace {
         expected: Expected::Revision(revision.clone()),
         compute: Box::new(compute(name.clone(), adoption.backend, slots)),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let who = super::super::admin_audit::caller_who(
         &state,
