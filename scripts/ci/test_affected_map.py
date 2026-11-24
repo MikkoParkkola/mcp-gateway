@@ -11,6 +11,7 @@ trace's cost (M5c) and the replay of the historical misses (M7) run on Spark aga
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import os
 import re
@@ -34,7 +35,7 @@ NOW = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
 
 
 def run(**kw) -> "am.Run":
-    base = dict(seconds=1.0, passed=2, ignored=0, listed=2, trace_rc=0, trace_text="", covered=set())
+    base = dict(seconds=1.0, passed=2, ignored=0, listed=2, trace_rc=0, trace_text="", covered=set(), coverage_ok=True)
     base.update(kw)
     return am.Run(**base)
 
@@ -124,6 +125,11 @@ class Units(unittest.TestCase):
         out = "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured\ntest result: ok. 2 passed; 0 failed; 0 ignored"
         self.assertEqual(am.results(out), (2, 0))
         self.assertEqual(am.results("no summary"), (0, 0))
+
+    def test_a_run_must_say_whether_its_coverage_was_written(self) -> None:
+        # A default of True failed open: a caller that left it out recorded the unit as covered (register 2091).
+        with self.assertRaises(TypeError):
+            am.Run(1.0, 1, 0, 1, 0, "", set())
 
     def test_missing_or_failed_coverage_is_unmapped(self) -> None:
         self.assertTrue(am.unit_record(run(coverage_ok=False), ["t1", "t2"], "b", set(), REPO)["unmapped"])
@@ -393,7 +399,7 @@ class Merge(unittest.TestCase):
         def fake_run(binary, args, listed, unit_dir, objects):
             names = [a for a in args if a != "--exact"]
             calls.append(sorted(names))
-            return am.Run(sum(seconds[n] for n in names), len(names), 0, listed, 0, "", {"src/deep.rs"})
+            return am.Run(sum(seconds[n] for n in names), len(names), 0, listed, 0, "", {"src/deep.rs"}, True)
 
         with tempfile.TemporaryDirectory() as tmp:
             for name, doc in (("p1", part), ("p2", other)):
@@ -523,7 +529,12 @@ def _mutants() -> list[tuple[str, str, dict]]:
             rec["unmapped"] = r.trace_rc != 0 or not r.coverage_ok or r.passed + r.ignored != r.listed
         return rec
 
+    @dataclasses.dataclass
+    class covered_unless_told(am.Run):
+        coverage_ok: bool = True
+
     return [
+        ("M3 a run's coverage flag defaults to covered", "Units", {"Run": covered_unless_told}),
         ("M1 no counter relocation", "Coverage", {"COVERAGE_RUSTFLAGS": "-C instrument-coverage"}),
         ("M1 no continuous mode (%c)", "Coverage", {"PROFILE_NAME": "%m-%p.profraw"}),
         ("M1 the profile outside the unit folder", "Coverage", {"unit_env": lambda d: {"LLVM_PROFILE_FILE": "x"}}),
