@@ -140,7 +140,9 @@ const LOOK: i32 =
 
 /// What the writer knows of the file a save replaces (or a backup copies):
 /// owner, group, mode and identity, all from one look. The identity pins the
-/// file: it is compared again just before the rename.
+/// file, and its size and modification time catch a rewrite in place: all
+/// are compared again just before the rename. A filesystem with coarse times
+/// can miss a same-size rewrite within one tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Model {
     uid: u32,
@@ -148,6 +150,8 @@ struct Model {
     mode: u32,
     dev: u64,
     ino: u64,
+    size: u64,
+    mtime: (i64, i64),
 }
 
 impl Model {
@@ -158,14 +162,27 @@ impl Model {
             mode: meta.mode() & 0o7777,
             dev: meta.dev(),
             ino: meta.ino(),
+            size: meta.size(),
+            mtime: (meta.mtime(), meta.mtime_nsec()),
         }
     }
 }
 
-/// Step 1: the regular file at `target`, or `None` when nothing is there or
-/// a link is (a link is replaced, never modelled). Any other failure to look
-/// is returned: a file the writer cannot inspect is not an absent one.
-fn model_at(target: &Path) -> io::Result<Option<Model>> {
+/// What step 1 found at a save's target: a regular file (modelled), nothing,
+/// or another entry, such as a link, that the rename replaces unmodelled.
+/// Step 9 requires the same: the same file, still nothing, or the same entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seen {
+    File(Model),
+    Absent,
+    Entry { dev: u64, ino: u64 },
+}
+
+/// Step 1: what is at `target`, from one look: the regular file's model,
+/// nothing, or another entry (a link is replaced, never modelled). Any other
+/// failure to look is returned: a file the writer cannot inspect is not an
+/// absent one.
+fn model_at(target: &Path) -> io::Result<Seen> {
     #[cfg(test)]
     if let Some(forced) = seams::open_error(target) {
         return Err(forced);
@@ -173,12 +190,15 @@ fn model_at(target: &Path) -> io::Result<Option<Model>> {
     let looked = File::options().read(true).custom_flags(LOOK).open(target);
     let file = match looked {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Seen::Absent),
         // A no-follow open of a link fails with ELOOP off Linux; only a path
         // confirmed to be a link takes the no-model path.
         Err(e) if e.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
             return match std::fs::symlink_metadata(target) {
-                Ok(meta) if meta.file_type().is_symlink() => Ok(None),
+                Ok(meta) if meta.file_type().is_symlink() => Ok(Seen::Entry {
+                    dev: meta.dev(),
+                    ino: meta.ino(),
+                }),
                 _ => Err(e),
             };
         }
@@ -187,7 +207,14 @@ fn model_at(target: &Path) -> io::Result<Option<Model>> {
         Err(e) => return Err(e),
     };
     let meta = file.metadata()?;
-    Ok(meta.is_file().then(|| Model::of(&meta)))
+    Ok(if meta.is_file() {
+        Seen::File(Model::of(&meta))
+    } else {
+        Seen::Entry {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        }
+    })
 }
 
 /// Step 2: a file another user owns is saved only by a process that may give
@@ -210,6 +237,9 @@ struct Save<'a> {
     model_path: &'a Path,
     mode: FileMode,
     model: Option<&'a Model>,
+    /// A save's target as step 1 saw it; `None` for a backup, whose
+    /// destination is replaced whatever is there.
+    seen: Option<Seen>,
 }
 
 /// What the new copy was settled to; step 9 checks it is still that.
@@ -230,7 +260,11 @@ pub(super) fn write(
     observe: impl FnOnce(&File),
     check: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    let model = model_at(target)?;
+    let seen = model_at(target)?;
+    let model = match seen {
+        Seen::File(model) => Some(model),
+        Seen::Absent | Seen::Entry { .. } => None,
+    };
     if let Some(model) = &model {
         owner_allows(target, model)?;
     }
@@ -251,6 +285,7 @@ pub(super) fn write(
         model_path: target,
         mode,
         model: model.as_ref(),
+        seen: Some(seen),
     };
     let filled = fill(&save, &mut file, bytes, observe, check);
     finish(&save, file, filled, bytes)
@@ -282,6 +317,7 @@ pub(super) fn copy(src: &Path, dst: &Path) -> io::Result<()> {
         model_path: &src,
         mode: FileMode::Inherit,
         model: Some(&model),
+        seen: None,
     };
     let filled = fill(&save, &mut file, &bytes, |_| {}, || Ok(()));
     finish(&save, file, filled, &bytes)
@@ -362,8 +398,9 @@ fn settle(save: &Save<'_>, file: &File) -> io::Result<Settled> {
     if model.uid != euid {
         #[cfg(test)]
         seams::event(save.target, "chown");
-        std::os::unix::fs::fchown(file, Some(model.uid), None)
-            .map_err(|_| foreign_owner(save.target, model.uid))?;
+        // Only root gets here (step 2); a filesystem that refuses its chown
+        // says why in its own error.
+        std::os::unix::fs::fchown(file, Some(model.uid), None)?;
     }
     let (mode, gid) = match save.mode {
         FileMode::Private => (0o600, None),
@@ -419,9 +456,18 @@ fn verify(save: &Save<'_>, file: &File, settled: &Settled) -> io::Result<()> {
         std::fs::symlink_metadata(save.model_path)
             .is_ok_and(|meta| meta.is_file() && Model::of(&meta) == *model)
     });
+    // A target that was nothing, or a link, must still be that: a file
+    // created or swapped in meanwhile is another writer's, never replaced.
+    let target_unchanged = match save.seen {
+        None | Some(Seen::File(_)) => true,
+        Some(Seen::Absent) => std::fs::symlink_metadata(save.target)
+            .is_err_and(|e| e.kind() == io::ErrorKind::NotFound),
+        Some(Seen::Entry { dev, ino }) => std::fs::symlink_metadata(save.target)
+            .is_ok_and(|at| (at.dev(), at.ino()) == (dev, ino)),
+    };
     let name_unchanged = std::fs::symlink_metadata(save.scratch)
         .is_ok_and(|at| (at.dev(), at.ino()) == (now.dev(), now.ino()));
-    if scratch_as_settled && model_unchanged && name_unchanged {
+    if scratch_as_settled && model_unchanged && target_unchanged && name_unchanged {
         Ok(())
     } else {
         Err(changed(save.target))

@@ -8,16 +8,16 @@
 //! (stored bytes) both write through [`replace_audited`]. It refuses a write
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
-//! accepted the new bytes, and puts the original back on a refused reload or
-//! a failed write. A crash anywhere is recovered by the next holder of the
-//! config lock.
+//! accepted the new bytes, and puts the original back on a refused reload; a
+//! failed write never replaced the file, so it only drops the journal. A crash
+//! anywhere is recovered by the next holder of the config lock.
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
 //! ranked earlier is taken while a later one is held: the config sidecar
 //! before the vault, never the reverse.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -174,7 +174,7 @@ pub(crate) enum ReplaceError {
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
     Stage(String),
-    /// Writing the new bytes failed; the original is back.
+    /// Writing the new bytes failed before the rename; the file was left alone.
     Write(String),
     /// The shared writer turned the save down before replacing anything:
     /// another user owns gateway.yaml, or another process changed it during
@@ -624,6 +624,7 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
+        let journal_file = journal::journal_path(target);
         if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
@@ -643,7 +644,7 @@ impl ReloadContext {
                 Some((code, text)) => ReplaceError::WriterRefused { code, text },
                 None => ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
             };
-            return Err(Self::abandon(target, error));
+            return Err(Self::abandon(target, [&journal_file, &original], error));
         }
         #[cfg(test)]
         order::record(target, "commit");
@@ -763,15 +764,14 @@ impl ReloadContext {
         }
     }
 
-    /// Our rename never ran: drop the journal, never the file (maybe another's).
-    fn abandon(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
-        match journal::finish(target) {
-            Ok(()) => error,
-            Err(e) => ReplaceError::RollbackFailed {
-                journal: journal::journal_path(target),
-                error: e.to_string(),
-            },
-        }
+    /// Our rename never ran: drop what this save staged, by the names it gave
+    /// them before the write (never re-resolved), and never the file.
+    fn abandon(target: &Path, staged: [&Path; 2], error: ReplaceError) -> ReplaceError {
+        let Err(e) = journal::finish_exact(target, staged[0], staged[1]) else {
+            return error;
+        };
+        let (journal, error) = (staged[0].to_path_buf(), e.to_string());
+        ReplaceError::RollbackFailed { journal, error }
     }
 }
 
