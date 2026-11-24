@@ -27,6 +27,13 @@ enum Pin {
     Exact(String),
     Has(String),
     Starts(&'static str),
+    #[cfg_attr(
+        not(feature = "discovery"),
+        allow(
+            dead_code,
+            reason = "only the cap import-url row, built with discovery, uses it"
+        )
+    )]
     NonEmpty,
 }
 
@@ -87,12 +94,10 @@ fn write(path: &Path, body: &str) {
     std::fs::write(path, body).expect("write fixture");
 }
 
-/// A loopback URL nothing listens on: bound, read, dropped.
+/// A loopback URL nothing can listen on: port 0 is never a listening port, so the connection is refused at once,
+/// and no port is picked and released for a parallel test to take.
 fn closed_url() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("address").port();
-    drop(listener);
-    format!("http://127.0.0.1:{port}")
+    "http://127.0.0.1:0".to_owned()
 }
 
 fn fail_case(args: Vec<String>, first: Pin, second: Pin) -> Case {
@@ -394,15 +399,18 @@ fn run(args: &[String]) -> Output {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    finish(command.spawn().expect("start mcp-gateway"))
+    finish(command)
 }
 
-/// Waits up to 60 s for `child`; one that has not returned by then is killed and fails the row.
-fn finish(mut child: std::process::Child) -> Output {
+/// Starts `command` and waits up to 60 s for it; one that has not returned by then is killed, reaped, and fails the
+/// row. Either way the child has exited before this returns, so no caller's folder is removed under it.
+fn finish(mut command: std::process::Command) -> Output {
+    let mut child = command.spawn().expect("start mcp-gateway"); // spawn-check: waits for exit: wait_with_output below, or kill then wait after 60 s
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while child.try_wait().expect("poll").is_none() {
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
+            let _ = child.wait();
             panic!("the command did not return within 60 s");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -598,7 +606,7 @@ fn a_bad_ca_key_path_is_a_usage_error() {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let out = finish(command.spawn().expect("start mcp-gateway"));
+    let out = finish(command);
     let case = Case {
         args: Vec::new(),
         exit: 2,
@@ -753,7 +761,7 @@ fn setup_export_with_a_failed_client_ends_with_two_lines() {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let out = finish(command.spawn().expect("start mcp-gateway"));
+    let out = finish(command);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
