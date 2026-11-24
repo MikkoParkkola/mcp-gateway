@@ -709,9 +709,10 @@ async fn xport2_the_patch_route_refuses_an_own_card_path_on_another_origin() {
         .update("agent", json!({"url": "https://other.example"}))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
     let sentence = format!(
-        "Backend 'agent' {CARD_TO_OTHER_ORIGIN}; change the address and the card path \
-         together in gateway.yaml."
+        "Backend 'agent' {marker}; change the address and the card path together in \
+         gateway.yaml."
     );
     assert_eq!(body["error"], sentence, "{body}");
     assert_eq!(panel.text(), text);
