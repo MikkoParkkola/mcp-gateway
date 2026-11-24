@@ -466,6 +466,34 @@ pub(super) fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
+/// How long the executor's workers get to finish, in tokio time.
+const JOIN_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Await `wait` with tokio's clock paused, then restart it.
+///
+/// A bound inside `wait` then counts only runtime time: it passes when no
+/// task can run, never because the host stalled, and work on the blocking
+/// pool holds the clock still while it runs. A row whose clock is already
+/// paused must not call this: pausing twice panics.
+pub(super) async fn on_paused_clock<T>(wait: impl std::future::Future<Output = T>) -> T {
+    tokio::time::pause();
+    let out = wait.await;
+    tokio::time::resume();
+    out
+}
+
+/// Drain the executor and require every worker to have finished within
+/// [`JOIN_BOUND`] of tokio time, on whatever clock the row runs.
+pub(super) async fn drain_clean(state: &Arc<AppState>) {
+    let outcome = state.task_executor.drain(JOIN_BOUND).await;
+    std::assert!(outcome.is_clean(), "the worker must finish: {outcome:?}");
+}
+
+/// [`drain_clean`] on a paused clock, for rows that run on the real one.
+pub(super) async fn join_workers(state: &Arc<AppState>) {
+    on_paused_clock(drain_clean(state)).await;
+}
+
 /// Poll `tasks/get` until the task is terminal, bounded by a deadline.
 ///
 /// Not a sleep and not a timeout: every row that needs the worker to have

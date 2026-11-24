@@ -155,16 +155,25 @@ impl Recovery {
         self.release.add_permits(1_000);
     }
 
+    /// Wait for `count` queries within [`ARRIVAL_BOUND`] of runtime time.
     async fn wait_for_queries(&self, count: usize) {
-        let deadline = Instant::now() + ARRIVAL_BOUND;
-        while self.queries() < count {
-            std::assert!(
-                Instant::now() < deadline,
-                "only {} upstream queries in {ARRIVAL_BOUND:?}; {count} expected",
-                self.queries()
-            );
-            tokio::task::yield_now().await;
-        }
+        let recovery = self;
+        let arrived = on_paused_clock(crate::test_wait::wait_until(
+            ARRIVAL_BOUND,
+            move || async move {
+                if recovery.queries() >= count {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(String::new())
+                }
+            },
+        ))
+        .await;
+        std::assert!(
+            arrived.is_ok(),
+            "only {} upstream queries in {ARRIVAL_BOUND:?}; {count} expected",
+            self.queries()
+        );
     }
 }
 
@@ -337,14 +346,6 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
         log_dir,
         _store: store,
     }
-}
-
-async fn join_workers(state: &Arc<AppState>) {
-    let bound = Duration::from_secs(5);
-    let joined = tokio::time::timeout(bound, state.task_executor.drain(bound))
-        .await
-        .expect("the worker settles within the fixture bound");
-    std::assert!(joined.is_clean(), "the worker must finish: {joined:?}");
 }
 
 impl Fixture {
