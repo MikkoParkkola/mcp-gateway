@@ -5,12 +5,19 @@
 //! the Policies screen's fold of it into hits per rule ([`count_rule_hits`]).
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
 
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset, TimeDelta};
+use serde::Deserialize;
+use serde_json::json;
 
 use super::access::{Access, AccessScope};
 use super::answer::Joined;
@@ -19,6 +26,7 @@ use super::reader::{
     Cursor, Limits, Line, Look, Seen, WINDOW, read_page_joined, restarted_mid_read, timestamp,
 };
 use super::rows::{Check, Kind, row_id};
+use super::{Admitted, AppState, Logs, blocking};
 use crate::clock::ClockBeforeEpoch;
 use crate::security::decision_record::read::decision_evidence;
 
@@ -159,6 +167,53 @@ pub(super) fn scan_window(
         }
         cursor = Some(next);
     }
+}
+
+/// The Outcome group's counts query: the list's filters and its window. Any
+/// other parameter lands in `other`, so it can be refused by its name.
+#[derive(Debug, Default, Deserialize)]
+#[expect(dead_code, reason = "C1 stub: the fold reads these in C2")]
+pub(super) struct CountsQuery {
+    pub(super) effect: Option<String>,
+    pub(super) server: Option<String>,
+    pub(super) caller: Option<String>,
+    pub(super) rule: Option<String>,
+    pub(super) q: Option<String>,
+    pub(super) from: Option<String>,
+    pub(super) to: Option<String>,
+    #[serde(flatten)]
+    pub(super) other: BTreeMap<String, String>,
+}
+
+/// The count of each Outcome value for `query` under `access`, as the list
+/// would show them. Blocking: it reads the log files. C1 stub.
+pub(super) fn count_page(
+    logs: &Logs,
+    access: &Access,
+    query: &CountsQuery,
+    byte_cap: u64,
+    after_pass: impl FnMut(Pass) -> ControlFlow<()>,
+) -> Response {
+    let _ = (logs, access, query, byte_cap, after_pass);
+    Json(json!({})).into_response()
+}
+
+/// `GET /ui/api/activity/counts`, read off the runtime under a read slot.
+/// C1 stub: it takes no counts permit yet and tells no hook of its passes.
+pub(super) async fn counts_route(
+    State(state): State<Arc<AppState>>,
+    read: Admitted<Query<CountsQuery>>,
+) -> Response {
+    let Admitted {
+        access,
+        logs,
+        input: Query(query),
+    } = read;
+    blocking(state.process.activity_reads(), move || {
+        let go_on = |_| ControlFlow::Continue(());
+        count_page(&logs, &access, &query, COUNT_SCAN_BYTES, go_on)
+    })
+    .await
 }
 
 /// Why a count stopped, as its answer names it: the scan's three ends, and a

@@ -63,6 +63,7 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_ACTIVITY, get(list))
         .route(routes::UI_ACTIVITY_EXPORT, get(export_route))
+        .route(routes::UI_ACTIVITY_COUNTS, get(counts::counts_route))
         .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
         .route(routes::UI_KEY_SERVER_LOOKUP_EMAIL, post(key_lookup::lookup))
 }
@@ -695,6 +696,10 @@ mod answer_unattributed_tests;
 #[cfg(test)]
 #[path = "answer_window_tests.rs"]
 mod answer_window_tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "counts_tests.rs"]
+mod counts_tests;
 #[cfg(tp5)]
 #[cfg(test)]
 #[path = "decision_export_tests.rs"]

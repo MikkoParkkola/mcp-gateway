@@ -8,6 +8,7 @@
 //! builds the state, a test builds the state with a start it chooses, and
 //! nothing falls back to "the first request".
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -74,6 +75,11 @@ pub struct ProcessFacts {
     /// process in production and once per state in a test, so one test's reads
     /// never hold another's slots.
     activity_reads: Arc<tokio::sync::Semaphore>,
+    /// The permits a counts read takes before its read slot (see
+    /// [`COUNT_READS`]), so counts never hold more than two of the four.
+    counts_reads: Arc<tokio::sync::Semaphore>,
+    /// A test's look at each pass of a counts read; `None` in production.
+    counts_hook: Option<CountsHook>,
     /// The one budget every admin email lookup is charged to, in any session.
     #[cfg(feature = "webui")]
     lookup_budget: super::LookupBudget,
@@ -86,6 +92,22 @@ pub struct ProcessFacts {
 /// at once. Each is bounded by its own budget; this bounds how many budgets run
 /// together, so callers cannot multiply them into the disk and the blocking pool.
 pub(crate) const MAX_CONCURRENT_READS: usize = 4;
+
+/// The most Activity counts reads running at once: a counts read takes one of
+/// these before a read slot, so the list always keeps two slots.
+pub(crate) const COUNT_READS: usize = 2;
+
+/// What a test sees after each pass of a counts read: the read's byte cap,
+/// the bytes the pass examined, and the request's drop flag. It returns
+/// nothing, so it cannot stop the read.
+#[derive(Clone)]
+pub(crate) struct CountsHook(pub(crate) Arc<dyn Fn(u64, u64, &AtomicBool) + Send + Sync>);
+
+impl std::fmt::Debug for CountsHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CountsHook")
+    }
+}
 
 #[cfg_attr(
     not(feature = "webui"),
@@ -100,6 +122,8 @@ impl ProcessFacts {
             host_name: resolve_host_name(),
             refused_at_start: OnceLock::new(),
             activity_reads: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
+            counts_reads: Arc::new(tokio::sync::Semaphore::new(COUNT_READS)),
+            counts_hook: None,
             #[cfg(feature = "webui")]
             lookup_budget: super::LookupBudget::new(),
             #[cfg(feature = "webui")]
@@ -134,6 +158,29 @@ impl ProcessFacts {
     /// The read slots Activity reads take, [`MAX_CONCURRENT_READS`] of them.
     pub(crate) fn activity_reads(&self) -> &Arc<tokio::sync::Semaphore> {
         &self.activity_reads
+    }
+
+    /// The permits counts reads take, [`COUNT_READS`] of them unless a test
+    /// set another number.
+    #[cfg_attr(not(test), expect(dead_code, reason = "C1 stub: unused"))]
+    pub(crate) fn counts_reads(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.counts_reads
+    }
+
+    /// The test's pass hook, when one is installed.
+    #[expect(dead_code, reason = "C1 stub: the route calls it in C2")]
+    pub(crate) fn counts_hook(&self) -> Option<&CountsHook> {
+        self.counts_hook.as_ref()
+    }
+
+    /// The same facts with a test's pass hook and `permits` counts permits.
+    #[cfg(test)]
+    pub(crate) fn with_counts(self, hook: CountsHook, permits: usize) -> Self {
+        Self {
+            counts_reads: Arc::new(tokio::sync::Semaphore::new(permits)),
+            counts_hook: Some(hook),
+            ..self
+        }
     }
 
     /// Whole seconds since the process started.

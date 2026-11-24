@@ -509,6 +509,13 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_ACTIVITY_COUNTS,
+        Get,
+        ActivityReader,
+        &[(Page::Activity, Tab::Status)],
+        false,
+    ),
+    row(
         routes::UI_ACTIVITY_RECEIPT,
         Get,
         ActivityReader,
