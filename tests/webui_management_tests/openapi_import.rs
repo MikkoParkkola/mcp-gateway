@@ -52,7 +52,9 @@ paths:
 #[tokio::test]
 async fn test_import_preview_with_inline_spec_returns_tools() {
     // GIVEN: a gateway (no config_path needed for preview)
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     let router = create_router(state);
 
     // WHEN: POST /ui/api/import/openapi/preview with inline spec
@@ -132,7 +134,9 @@ async fn test_import_inline_spec_creates_yaml_files() {
 #[tokio::test]
 async fn test_import_preview_rejects_both_url_and_spec() {
     // GIVEN: a gateway
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     let router = create_router(state);
 
     // WHEN: both url and spec are provided simultaneously
@@ -158,7 +162,9 @@ async fn test_import_preview_rejects_both_url_and_spec() {
 #[tokio::test]
 async fn test_import_preview_rejects_neither_url_nor_spec() {
     // GIVEN: a gateway
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     let router = create_router(state);
 
     // WHEN: no url and no spec in the body
@@ -183,7 +189,9 @@ async fn test_import_preview_rejects_neither_url_nor_spec() {
 /// `metadata.read_only` (GET and HEAD read, everything else write).
 #[tokio::test]
 async fn the_spec_preview_has_the_preview_block_and_a_class_per_tool() {
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     let router = create_router(state);
     let (status, body) = send_json(
         &router,
@@ -239,7 +247,9 @@ async fn the_spec_preview_echoes_the_url_without_its_query() {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     // The flag applies from the published config (ADR-023).
     let mut config = (*state.live_config.get()).clone();
     config.security.ssrf_protection = false;
@@ -272,18 +282,23 @@ async fn a_spec_over_its_budget_is_a_502_naming_the_budget() {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let (state, _store) = make_app_state(None, None).await;
+    // A capability directory: with none, both routes refuse before anything.
+    let caps = TempDir::new().unwrap();
+    let (state, _store) = make_app_state(caps.path().to_str(), None).await;
     // The flag applies from the published config (ADR-023).
     let mut config = (*state.live_config.get()).clone();
     config.security.ssrf_protection = false;
     state.live_config.set(config);
     let router = create_router(state);
     for route in ["/ui/api/import/openapi/preview", "/ui/api/import/openapi"] {
+        // An import by address needs a digest before it fetches; any one
+        // reaches the fetch, and the budget refuses before it is compared.
+        let url = format!("http://{address}/spec.yaml");
         let (status, body) = send_json(
             &router,
             Method::POST,
             route,
-            Some(json!({ "url": format!("http://{address}/spec.yaml") })),
+            Some(json!({ "url": url, "digest": "0" })),
         )
         .await;
         let message = body["error"].as_str().unwrap_or_default();
@@ -574,6 +589,174 @@ async fn impow3_an_import_with_no_clash_answers_as_before() {
         let written = std::fs::read_to_string(dir.path().join(format!("{}.yaml", cap.name)));
         assert_eq!(written.unwrap(), cap.yaml, "{}", cap.name);
     }
+}
+
+// ── An import writes only the document that was previewed ───────────────────
+
+/// One read operation, `listusers`, a GET.
+const DOC_A: &str = "openapi: 3.0.0\ninfo:\n  title: a\n  version: \"1\"\npaths:\n  /users:\n    get:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n";
+
+/// The same name, `listusers`, now a DELETE: what an operator never approved.
+const DOC_B: &str = "openapi: 3.0.0\ninfo:\n  title: a\n  version: \"1\"\npaths:\n  /users:\n    delete:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n";
+
+/// A local server answering request `n` with `bodies[n]` (the last one
+/// again past the end); its address and how many requests it took.
+async fn serving(bodies: Vec<Vec<u8>>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let hits = Arc::new(AtomicUsize::new(0));
+    let (count, bodies) = (Arc::clone(&hits), Arc::new(bodies));
+    let app = axum::Router::new().fallback(move || {
+        let n = count.fetch_add(1, Ordering::SeqCst);
+        let body = bodies[n.min(bodies.len() - 1)].clone();
+        async move { body }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{address}/spec.yaml"), hits)
+}
+
+/// A router over capability directory `dir` that may fetch from loopback.
+async fn fetching_router(dir: &Path) -> (Router, TempDir) {
+    let (mut state, store) = make_app_state(dir.to_str(), None).await;
+    let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
+    let mut config = (*seat.live_config.get()).clone();
+    config.security.ssrf_protection = false;
+    seat.live_config.set(config);
+    (create_router(state), store)
+}
+
+async fn preview_of(router: &Router, body: Value) -> (StatusCode, Value) {
+    send_json(
+        router,
+        Method::POST,
+        "/ui/api/import/openapi/preview",
+        Some(body),
+    )
+    .await
+}
+
+/// The lowercase hex SHA-256 of `text`.
+fn sha256_of(text: &str) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(text.as_bytes()))
+}
+
+fn requests(hits: &std::sync::atomic::AtomicUsize) -> usize {
+    hits.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// IMPBIND.1: the document changes between preview and import (a GET
+/// becomes a DELETE under the same name): 409, and nothing is written.
+#[tokio::test]
+async fn impbind1_a_document_that_changed_since_its_preview_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = fetching_router(dir.path()).await;
+    let (url, _hits) = serving(vec![DOC_A.into(), DOC_B.into()]).await;
+
+    let (status, shown) = preview_of(&router, json!({ "url": url })).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["tools"][0]["method"], "GET", "{shown}");
+    assert_eq!(shown["digest"], sha256_of(DOC_A), "{shown}");
+
+    let body = json!({ "url": url, "digest": shown["digest"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body,
+        json!({ "error": mcp_gateway::gateway::test_helpers::DOCUMENT_CHANGED })
+    );
+    assert!(names_in(dir.path()).is_empty(), "{body}");
+}
+
+/// IMPBIND.1, the bracket: the same document twice imports as before.
+#[tokio::test]
+async fn impbind1_an_unchanged_document_imports_with_its_digest() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = fetching_router(dir.path()).await;
+    let (url, _hits) = serving(vec![DOC_A.into()]).await;
+
+    let (_, shown) = preview_of(&router, json!({ "url": url })).await;
+    let body = json!({ "url": url, "digest": shown["digest"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"], json!(["listusers.yaml"]), "{body}");
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
+}
+
+/// IMPBIND.1: an import by address with no digest, or a blank one, is 422
+/// before any fetch: the server sees no request.
+#[tokio::test]
+async fn impbind1_an_import_by_address_without_a_digest_never_fetches() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = fetching_router(dir.path()).await;
+    let (url, hits) = serving(vec![DOC_A.into()]).await;
+
+    for body in [json!({ "url": url }), json!({ "url": url, "digest": "  " })] {
+        let (status, answer) = import(&router, body.clone()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}: {answer}");
+        let want = json!({ "error": mcp_gateway::gateway::test_helpers::DIGEST_REQUIRED });
+        assert_eq!(answer, want, "{body}");
+    }
+    assert_eq!(requests(&hits), 0, "an import without a digest fetched");
+    assert!(names_in(dir.path()).is_empty());
+}
+
+/// IMPBIND.2: the digest covers the text exactly as the parser gets it:
+/// the served bytes when they are UTF-8, the lossily decoded text when not;
+/// a change of whitespace alone is a changed document.
+#[tokio::test]
+async fn impbind2_the_digest_is_of_the_text_the_parser_reads() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = fetching_router(dir.path()).await;
+
+    let (url, _hits) = serving(vec![DOC_A.into()]).await;
+    let (_, shown) = preview_of(&router, json!({ "url": url })).await;
+    assert_eq!(shown["digest"], sha256_of(DOC_A), "{shown}");
+
+    let mut invalid = DOC_A.as_bytes().to_vec();
+    invalid.extend_from_slice(b"# \xff\n");
+    let decoded = String::from_utf8_lossy(&invalid).into_owned();
+    let (url, _hits) = serving(vec![invalid]).await;
+    let (_, shown) = preview_of(&router, json!({ "url": url })).await;
+    assert_eq!(shown["digest"], sha256_of(&decoded), "{shown}");
+
+    // The same tools from text that differs only in whitespace: refused.
+    let spaced = format!("{DOC_A}\n\n");
+    let (url, _hits) = serving(vec![DOC_A.into(), spaced.into()]).await;
+    let (_, shown) = preview_of(&router, json!({ "url": url })).await;
+    let body = json!({ "url": url, "digest": shown["digest"] });
+    let (status, body) = import(&router, body).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(names_in(dir.path()).is_empty(), "{body}");
+}
+
+/// IMPBIND.2, inline: the preview's digest is the one the import checks; the
+/// same text with it writes, with another digest it is refused.
+#[tokio::test]
+async fn impbind2_an_inline_document_is_checked_when_a_digest_is_sent() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = fetching_router(dir.path()).await;
+
+    let (_, shown) = preview_of(&router, json!({ "spec": DOC_A })).await;
+    assert_eq!(shown["digest"], sha256_of(DOC_A), "{shown}");
+
+    // Another document's digest, and a blank one: a digest sent is compared.
+    for digest in [sha256_of(DOC_B), "  ".to_string()] {
+        let wrong = json!({ "spec": DOC_A, "digest": digest });
+        let (status, body) = import(&router, wrong).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{digest:?}: {body}");
+        assert!(names_in(dir.path()).is_empty(), "{body}");
+    }
+
+    let right = json!({ "spec": DOC_A, "digest": shown["digest"] });
+    let (status, body) = import(&router, right).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
 }
 
 /// IMPOW.1, the writer's own refusal through the UI: a dangling link at the

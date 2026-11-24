@@ -658,7 +658,16 @@ pub(super) async fn create_capability(
         .into_response();
     }
 
-    let dir = PathBuf::from(primary_write_dir(dirs).unwrap_or("capabilities"));
+    // No capability directory: a written file would never load, so refuse
+    // instead of writing into a fallback.
+    let Some(dir) = primary_write_dir(dirs).map(PathBuf::from) else {
+        return structured_error(
+            StatusCode::CONFLICT,
+            "capabilities_off",
+            super::errors::CAPABILITIES_OFF,
+        )
+        .into_response();
+    };
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
