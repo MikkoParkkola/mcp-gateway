@@ -469,3 +469,85 @@ fn nothing_fallible_follows_the_writers_rename() {
         }
     }
 }
+
+/// P-inplace (bytes): another writer rewrites the target in place, same
+/// file, owner, mode and length, just before the final checks. The save
+/// refuses and the other bytes stay. The fixture's modification time is set
+/// in the past first, so the rewrite moves it whatever the clock's tick.
+#[test]
+fn p_inplace_rewrite_refuses() {
+    for mode in MODES {
+        let row = format!("P-inplace-bytes/{mode:?}");
+        let (dir, target) = fixture(0o600);
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .and_then(|f| {
+                f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30))
+            })
+            .expect("age the fixture");
+        let armed = seams::arm(
+            dir.path(),
+            Seams {
+                before_verify: Some(Box::new(|target, _scratch| {
+                    std::fs::write(target, b"sub").expect("rewrite in place");
+                })),
+                ..Seams::default()
+            },
+        );
+        assert_changed(
+            write_atomic(&target, b"new", mode, Symlink::Replace),
+            &target,
+            &row,
+        );
+        drop(armed);
+        assert_eq!(
+            std::fs::read(&target).expect("read"),
+            b"sub",
+            "{row}: the other bytes"
+        );
+        assert_eq!(names(dir.path()), ["state.json"], "{row}: no scratch left");
+    }
+}
+
+/// P-unmodelled: a target that was nothing, or a link, when the save looked
+/// gets a regular file from another writer just before the final checks. The
+/// save refuses and that file stays.
+#[test]
+fn p_a_file_put_where_nothing_or_a_link_was_refuses() {
+    for (case, link) in [("absent", false), ("link", true)] {
+        for mode in MODES {
+            let row = format!("P-unmodelled/{case}/{mode:?}");
+            let dir = tempfile::tempdir().expect("tempdir");
+            let target = dir.path().join(TARGET);
+            let mut left = vec![TARGET];
+            if link {
+                std::fs::write(dir.path().join("linked.json"), b"old").expect("link target");
+                std::os::unix::fs::symlink("linked.json", &target).expect("link");
+                left.insert(0, "linked.json");
+            }
+            let armed = seams::arm(
+                dir.path(),
+                Seams {
+                    before_verify: Some(Box::new(|target, _scratch| {
+                        let _ = std::fs::remove_file(target);
+                        std::fs::write(target, b"sub").expect("another writer's file");
+                    })),
+                    ..Seams::default()
+                },
+            );
+            assert_changed(
+                write_atomic(&target, b"new", mode, Symlink::Replace),
+                &target,
+                &row,
+            );
+            drop(armed);
+            assert_eq!(
+                std::fs::read(&target).expect("read"),
+                b"sub",
+                "{row}: that file stays"
+            );
+            assert_eq!(names(dir.path()), left, "{row}: no scratch left");
+        }
+    }
+}
