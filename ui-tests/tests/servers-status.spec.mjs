@@ -516,37 +516,24 @@ test.describe('refresh on the gateway-status event', () => {
   }
 
   test('off the screen nothing listens; back on it, one listener', async ({ page }) => {
-    await page.addInitScript(() => {
-      const live = new Set();
-      const add = window.addEventListener;
-      const drop = window.removeEventListener;
-      window.addEventListener = function (type, fn, ...rest) {
-        if (type === 'gateway-status') live.add(fn);
-        return add.call(this, type, fn, ...rest);
-      };
-      window.removeEventListener = function (type, fn, ...rest) {
-        if (type === 'gateway-status') live.delete(fn);
-        return drop.call(this, type, fn, ...rest);
-      };
-      window.__statusListeners = () => live.size;
-    });
+    await countListeners(page, ['gateway-status']);
     const reads = await fakeGateway(page, { status: [MIXED] });
     await openScreen(page);
     await expect(block(page, 'Answering')).toBeVisible();
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
     await page.getByRole('navigation').getByRole('link', { name: 'Tools', exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/tools\//);
     await statusEvent(page);
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(0);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(0);
     await page.getByRole('navigation').getByRole('link', { name: 'Servers', exact: true }).click();
     await expect(block(page, 'Answering')).toBeVisible();
     // The away event made no read: the read on return is the second, not the third.
     expect(reads.status).toBe(2);
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
   });
 
   test('leaving and coming back twice with no event between leaves one listener', async ({ page }) => {
-    await countListeners(page);
+    await countListeners(page, ['gateway-status']);
     await fakeGateway(page, { status: [MIXED] });
     await openScreen(page);
     await expect(block(page, 'Answering')).toBeVisible();
@@ -555,7 +542,7 @@ test.describe('refresh on the gateway-status event', () => {
       await expect(page).toHaveURL(link === 'Tools' ? /\/ui\/tools\// : /\/ui\/servers\//);
     }
     await expect(block(page, 'Answering')).toBeVisible();
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
   });
 
   test('a tooltip module that never loads holds up no refresh, and a group keeps its focus', async ({ page }) => {
