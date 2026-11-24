@@ -301,7 +301,7 @@ fn admission_refusal<'t>(
         tool: Some(tool),
         tenants: BTreeSet::new(),
         context: RefusalContext {
-            policy: IfUnwritten::FollowLog,
+            policy: mutant!("M5", IfUnwritten::AnswerAnyway, IfUnwritten::FollowLog),
             kind: KindSource::Site(crate::security::decision_record::DecisionKind::Unrecorded),
             id: AnswerId::Present(id),
         },
@@ -332,6 +332,14 @@ pub(crate) async fn settle_stdio_admission(
         tenants: meta.request_tenants(arguments),
         ..refusal
     };
+    let refusal = mutant!(
+        "M3",
+        {
+            let _ = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
+            refusal
+        },
+        refusal
+    );
     match refused
         .settle(meta, meta.transparency_logger.as_ref(), refusal)
         .await
@@ -491,6 +499,14 @@ impl<'a> Refused<'a> {
             ..refusal
         };
         let session_id = self.session_id;
+        let refusal = mutant!(
+            "M3",
+            {
+                let _ = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
+                refusal
+            },
+            refusal
+        );
         match self
             .settle(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
             .await

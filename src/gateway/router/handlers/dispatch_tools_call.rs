@@ -518,22 +518,32 @@ pub(super) async fn tools_call(
         Err(error) => {
             delivery_facts::outlet(&error);
             // Written before it is answered; the answer below is today's.
-            let error = match refused.admission(state, tool_name, id.clone(), error).await {
+            let flow = mutant!(
+                "M1",
+                std::ops::ControlFlow::Continue(error),
+                refused.admission(state, tool_name, id.clone(), error).await
+            );
+            let error = match flow {
                 std::ops::ControlFlow::Continue(error) => error,
                 std::ops::ControlFlow::Break(unavailable) => return Err(unavailable),
             };
-            let status = match &error {
-                crate::Error::Forbidden { status, .. } => {
-                    StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
+            let status = mutant!(
+                "M4",
+                StatusCode::BAD_REQUEST,
+                match &error {
+                    crate::Error::Forbidden { status, .. } => {
+                        StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
+                    }
+                    _ if error.to_rpc_code() == 409 => StatusCode::CONFLICT,
+                    _ => StatusCode::BAD_REQUEST,
                 }
-                _ if error.to_rpc_code() == 409 => StatusCode::CONFLICT,
-                _ => StatusCode::BAD_REQUEST,
-            };
+            );
             // MIK-8747: an admission refusal that carries gateway-authored
             // data (the cross-era replay refusal) keeps it on the wire.
+            let unrelated = crate::Error::AuditUnavailable;
             if let crate::Error::JsonRpc {
                 data: Some(data), ..
-            } = &error
+            } = mutant!("M4", &unrelated, &error)
             {
                 return Err(build_error_response_with_data(
                     Some(id),

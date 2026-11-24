@@ -165,6 +165,16 @@ impl MetaMcp {
                 session,
                 caller,
             );
+            let checked = mutant!(
+                "M6",
+                checked.inspect_err(|(_, (kind, rule_id))| {
+                    crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                        *kind,
+                        rule_id.clone(),
+                    );
+                }),
+                checked
+            );
             match checked {
                 // MIK-8387 S2b′: a scoped key's absent step is the per-step
                 // gate's on a fresh call; a replay meets the backend miss, the
@@ -178,7 +188,7 @@ impl MetaMcp {
                         .absent_step(server, tool) =>
                 {
                     let missing = Error::BackendNotFound(server.to_owned());
-                    let pair = checked.err().map(|(_, pair)| pair);
+                    let pair = mutant!("M8", None, checked.err().map(|(_, pair)| pair));
                     deferred.push(((server.to_owned(), tool.to_owned()), (missing, pair)));
                 }
                 Ok(()) => {}
