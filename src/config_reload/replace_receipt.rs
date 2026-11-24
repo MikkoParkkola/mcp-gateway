@@ -72,7 +72,9 @@ pub(super) fn record_write_intent(
     unchanged: bool,
     recovery_intent_id: Option<audit::IntentId>,
     target: &std::path::Path,
+    trace: &super::WriteTrace,
 ) -> Result<(), ReplaceError> {
+    let _ = trace;
     #[cfg(not(test))]
     let _ = target;
     if let Audit::Required { sink, kind, writer } = audit {

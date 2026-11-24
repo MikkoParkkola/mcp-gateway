@@ -260,6 +260,24 @@ pub(crate) async fn replace_audited(
     source: crate::config_reload::history::Source,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
+    replace_traced(ctx, replace, audit, source, wait)
+        .await
+        .map_err(|(error, _)| error)
+}
+
+/// [`replace_audited`] with what the write got to beside an error: the
+/// intent id it appended, whether the new bytes were written, and whether
+/// the original was put back. The one implementation; the wrapper above
+/// drops the trace.
+pub(crate) async fn replace_traced(
+    ctx: Arc<ReloadContext>,
+    replace: Replace,
+    audit: Audit,
+    source: crate::config_reload::history::Source,
+    wait: Duration,
+) -> Result<ReplaceOutcome, (ReplaceError, super::Trace)> {
+    #[cfg(test)]
+    super::order::record(&ctx.trusted_config, "traced");
     super::spawn_locked(ctx, replace, audit, source, wait, None)
         .await
         .map(|(outcome, _)| outcome)
@@ -285,7 +303,9 @@ pub(crate) async fn replace_audited_revoke(
             "revoke requires its audit intent".into(),
         ));
     }
-    let (_, receipt) = super::spawn_locked(ctx, replace, audit, source, wait, Some(check)).await?;
+    let (_, receipt) = super::spawn_locked(ctx, replace, audit, source, wait, Some(check))
+        .await
+        .map_err(|(error, _)| error)?;
     receipt.ok_or_else(|| ReplaceError::Failed("missing revoke receipt".into()))
 }
 

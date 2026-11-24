@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::config::UnreadConfig;
@@ -143,6 +144,39 @@ pub(crate) struct ReplaceOutcome {
     /// it, in the secret step's order; empty without one. Read from this write
     /// itself, never from the file afterwards (another writer may follow).
     pub(crate) secrets: Vec<(String, String)>,
+    /// The entry hash of the intent this write appended; `None` without an
+    /// audit log. The id a request's admin action carries.
+    pub(crate) intent_id: Option<IntentId>,
+}
+
+/// What a write got to, filled by its task as it goes and read by
+/// [`spawn_locked`] after the join, so a task that panicked or was aborted
+/// after its append still yields the intent id.
+#[derive(Debug, Default)]
+pub(crate) struct WriteTrace {
+    intent_id: std::sync::OnceLock<IntentId>,
+    /// Set immediately before the new bytes are written.
+    written: AtomicBool,
+    /// Set when the original was put back after `written`.
+    restored: AtomicBool,
+}
+
+impl WriteTrace {
+    fn snapshot(&self) -> Trace {
+        Trace {
+            intent_id: self.intent_id.get().cloned(),
+            written: self.written.load(Ordering::SeqCst),
+            restored: self.restored.load(Ordering::SeqCst),
+        }
+    }
+}
+
+/// The plain copy of a [`WriteTrace`] a caller gets beside a refused write.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Trace {
+    pub(crate) intent_id: Option<IntentId>,
+    pub(crate) written: bool,
+    pub(crate) restored: bool,
 }
 
 /// Why nothing was applied. Every kind but `RollbackFailed` and
@@ -215,7 +249,7 @@ async fn spawn_locked(
     source: Source,
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
-) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
+) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), (ReplaceError, Trace)> {
     // The gate admits before the task exists; the guard lives in the task, so a
     // dead task releases it, and the task moves it into `Entries` before any
     // secret entry is staged.
@@ -223,9 +257,12 @@ async fn spawn_locked(
         .registry
         .config_gate()
         .admit(AdmitKind::Write)
-        .map_err(ReplaceError::Gated)?;
-    tokio::spawn(async move {
-        ctx.replace_locked(replace, audit, source, wait, receipt, admitted)
+        .map_err(|refusal| (ReplaceError::Gated(refusal), Trace::default()))?;
+    // Read after the join, whatever became of the task.
+    let trace = Arc::new(WriteTrace::default());
+    let filled = Arc::clone(&trace);
+    let result = tokio::spawn(async move {
+        ctx.replace_locked(replace, audit, source, wait, receipt, admitted, filled)
             .await
     })
     .await
@@ -233,7 +270,14 @@ async fn spawn_locked(
         Err(ReplaceError::Failed(format!(
             "the config write task failed: {e}"
         )))
-    })
+    });
+    match result {
+        Ok((mut outcome, receipt)) => {
+            outcome.intent_id = None;
+            Ok((outcome, receipt))
+        }
+        Err(error) => Err((error, Trace::default())),
+    }
 }
 
 #[cfg(test)]
@@ -244,16 +288,17 @@ pub(crate) mod order;
 mod audit;
 #[path = "replace_receipt.rs"]
 mod receipt;
+pub(crate) use audit::IntentId;
 #[cfg(feature = "webui")]
 pub(crate) use audit::replace_audited_revoke;
+#[cfg(test)]
+pub(crate) use audit::replace_detached;
 pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
 pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
-#[cfg(test)]
-pub(crate) use audit::{IntentId, replace_detached};
 #[cfg(any(test, feature = "webui"))]
-pub(crate) use audit::{IntentKind, replace_audited};
+pub(crate) use audit::{IntentKind, replace_audited, replace_traced};
 #[cfg(feature = "webui")]
 pub(crate) use receipt::RevokeCheck;
 
@@ -406,6 +451,7 @@ impl ReloadContext {
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
         admitted: AdmissionGuard,
+        trace: Arc<WriteTrace>,
     ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
@@ -452,6 +498,7 @@ impl ReloadContext {
             pending: None,
             renamed: false,
             admitted: Some(admitted),
+            trace,
             #[cfg(test)]
             gate: self.registry.config_gate(),
         };
@@ -477,7 +524,14 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        receipt::record_write_intent(&mut audit, &current, unchanged, recovery_intent_id, &target)?;
+        receipt::record_write_intent(
+            &mut audit,
+            &current,
+            unchanged,
+            recovery_intent_id,
+            &target,
+            &entries.trace,
+        )?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
@@ -575,6 +629,7 @@ impl ReloadContext {
                 kept_beside: None,
                 reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
+                intent_id: None,
             });
         }
         self.commit(
@@ -608,7 +663,11 @@ impl ReloadContext {
             Replaced::KeepBeside => match keep_beside(&original, target) {
                 Ok(kept) => Some(kept),
                 Err(e) => {
-                    return Err(Self::roll_back(target, ReplaceError::Stage(e)));
+                    return Err(Self::roll_back(
+                        target,
+                        ReplaceError::Stage(e),
+                        &entries.trace,
+                    ));
                 }
             },
             Replaced::Discard => None,
@@ -623,6 +682,7 @@ impl ReloadContext {
             return Err(Self::roll_back(
                 target,
                 ReplaceError::Stage(format!("writing the replace journal failed: {e}")),
+                &entries.trace,
             ));
         }
         // From here the file on disk may name this save's entries: set before
@@ -630,12 +690,16 @@ impl ReloadContext {
         // rather than deleting what the new file may already name. A write
         // error comes back after a proven rollback and discards.
         entries.renamed = true;
+        // Test seam: a hook here can make the write below fail.
+        #[cfg(test)]
+        order::record(target, "write");
         // gateway.yaml is owner-only, as every config write leaves it.
         if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
             unkeep();
             return Err(Self::roll_back(
                 target,
                 ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+                &entries.trace,
             ));
         }
         #[cfg(test)]
@@ -655,6 +719,7 @@ impl ReloadContext {
                     "{} was re-pointed during the write; nothing was applied",
                     self.config_path.display()
                 )),
+                &entries.trace,
             ));
         }
         let reload = match reloaded {
@@ -685,6 +750,7 @@ impl ReloadContext {
                         class: post_write_class(&refusal),
                         reason: refusal.text,
                     },
+                    &entries.trace,
                 ));
             }
         };
@@ -704,6 +770,7 @@ impl ReloadContext {
             kept_beside,
             reload,
             secrets: Vec::new(),
+            intent_id: None,
         })
     }
 
@@ -743,12 +810,19 @@ impl ReloadContext {
     /// Put the original back, or remove a staged copy no journal names yet
     /// (the same recovery the next lock holder would run), and report
     /// `error`; or `RollbackFailed` when that fails too.
-    fn roll_back(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+    fn roll_back(
+        target: &std::path::Path,
+        error: ReplaceError,
+        trace: &WriteTrace,
+    ) -> ReplaceError {
         // Test-only: a write that is undone still leaves its mark in the trace.
         #[cfg(test)]
         order::record(target, "rollback");
         match journal::recover(target) {
-            Ok(_) => error,
+            Ok(_) => {
+                let _ = trace;
+                error
+            }
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
                 error: rollback.into_message(),

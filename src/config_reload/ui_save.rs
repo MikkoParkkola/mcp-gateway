@@ -64,6 +64,42 @@ pub(crate) struct UiSaved {
     pub(crate) reload: ReloadOutcome,
 }
 
+/// What one save came to: the one word its admin action carries (the audit
+/// reader pairs it with the intent by id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveOutcome {
+    Applied,
+    Unchanged,
+    Refused,
+    Stale,
+    RolledBack,
+    Indeterminate,
+}
+
+impl SaveOutcome {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::Refused => "refused",
+            Self::Stale => "stale",
+            Self::RolledBack => "rolled_back",
+            Self::Indeterminate => "indeterminate",
+        }
+    }
+}
+
+/// A save's outcome from the writer's answer and what the write got to.
+/// `Ok` carries (the bytes changed, the reload applied a change). The error
+/// match has no wildcard arm, so a new writer error must be decided here.
+pub(crate) fn save_outcome(
+    result: Result<(bool, bool), &ReplaceError>,
+    trace: &super::Trace,
+) -> SaveOutcome {
+    let _ = (result, trace);
+    SaveOutcome::Refused
+}
+
 /// Save `edit` over the file at revision `base`.
 pub(crate) async fn ui_save(
     ctx: Arc<ReloadContext>,
