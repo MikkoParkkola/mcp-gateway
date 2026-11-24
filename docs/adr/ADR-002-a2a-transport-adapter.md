@@ -215,7 +215,6 @@ backends:
     # Agent Card fetched from: https://travel.example.com/.well-known/agent.json
     # Alternative: explicit agent card path
     # a2a_agent_card_path: "/custom/agent.json"
-    idle_timeout: 300s
     timeout: 60s
     headers:
       Authorization: "Bearer ${TRAVEL_AGENT_API_KEY}"

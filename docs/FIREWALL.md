@@ -7,7 +7,7 @@ auth:
   enabled: true
   api_keys:
     - name: support-bot   # `keys` names API keys, so the rule needs one
-      key_sha256: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+      key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"   # from hash-key
       backends: ["*"]
 security:
   firewall:

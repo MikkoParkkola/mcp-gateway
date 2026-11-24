@@ -1275,7 +1275,7 @@ ever needs the key's hash, so 4.0 stores the digest instead.
     api_keys:
       - name: laptop
         # What hash-key printed: sha256: and 64 lowercase hex characters.
-        key_sha256: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"
   ```
 
   The key is read from stdin, never an argument, so it stays out of shell history. One trailing
@@ -3229,7 +3229,7 @@ dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio i
 auth:
   api_keys:
     - name: alice
-      key_sha256: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"  # from hash-key
+      key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"  # from hash-key
       kind: personal
 ```
 
