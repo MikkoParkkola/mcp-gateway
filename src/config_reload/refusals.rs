@@ -40,6 +40,8 @@ pub enum RefusalCode {
     Posture,
     RuntimeDenied,
     InvalidConfig,
+    /// The file holds a first key that only a restart applies.
+    FirstKeyWaiting,
 }
 
 /// One refusal as served.
@@ -226,6 +228,35 @@ impl RefusalLedger {
         }
         let (code, named) = classify(error);
         let backend = named.or_else(|| backend_hint.map(str::to_owned));
+        self.record_coded(kind, backend, code, line);
+    }
+
+    /// Record a reload refused only because the file holds a first key that
+    /// a restart applies: its own code, never classified from text.
+    pub(crate) fn record_first_key_waiting(&self) {
+        self.record_coded(
+            RefusalKind::Reload,
+            None,
+            RefusalCode::FirstKeyWaiting,
+            None,
+        );
+    }
+
+    /// Record a reload refused because the file's first key fails another
+    /// check: invalid config by type. The refusal's text carries the shared
+    /// reload prefix, which classifying by text would call posture.
+    pub(crate) fn record_invalid_config(&self) {
+        self.record_coded(RefusalKind::Reload, None, RefusalCode::InvalidConfig, None);
+    }
+
+    /// Record one refusal whose code is already known.
+    fn record_coded(
+        &self,
+        kind: RefusalKind,
+        backend: Option<String>,
+        code: RefusalCode,
+        line: Option<u32>,
+    ) {
         let (cause, fix) = explain(code, kind, backend.as_deref());
         // Both fields belong to an invalid-config reload. An admin write
         // classified the same way, and every other code, serve neither.
@@ -490,6 +521,15 @@ fn explain(code: RefusalCode, kind: RefusalKind, backend: Option<&str>) -> (Stri
                 }
                 _ => "Correct gateway.yaml; the previous configuration is still running.",
             },
+        ),
+        // No claim about a restart: a later edit can leave the file unable
+        // to start, and the Gateway page says whether it would.
+        RefusalCode::FirstKeyWaiting => (
+            "gateway.yaml holds API keys that would change the gateway between \
+             single-user and multi-user, which a running gateway never does."
+                .to_owned(),
+            "The Gateway page shows whether a start from this file would succeed; to \
+             cancel, revoke the keys.",
         ),
     }
 }

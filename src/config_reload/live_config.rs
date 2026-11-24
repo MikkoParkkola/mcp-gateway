@@ -102,6 +102,9 @@ pub struct LiveConfig {
     published: crate::observer::Observer<Arc<Generation>>,
     /// The configuration history each applied publish is recorded into.
     history: Option<Arc<crate::config_reload::history::HistoryHook>>,
+    /// A first-key file's wait: the most recent file-reading reload's
+    /// verdict, set and cleared by the reload alone.
+    first_key: RwLock<Option<FirstKeyWait>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -110,6 +113,10 @@ pub struct LiveConfig {
     #[cfg(test)]
     record_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 }
+
+#[path = "live_config_pending.rs"]
+mod pending;
+pub(crate) use pending::FirstKeyWait;
 
 impl LiveConfig {
     /// A `LiveConfig` for `config` whose key table is resolved with no env
@@ -154,6 +161,7 @@ impl LiveConfig {
             admission: RwLock::new(()),
             published: crate::observer::Observer::default(),
             history: None,
+            first_key: RwLock::new(None),
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
@@ -320,26 +328,6 @@ impl LiveConfig {
     #[must_use]
     pub fn pending_restart_fields(&self) -> Vec<&'static str> {
         pending_restart_fields(&self.running, &self.get())
-    }
-
-    /// Everything only a restart would apply, as the Gateway page shows it:
-    /// the published config's fields plus the startup-environment marker,
-    /// read from one snapshot.
-    #[cfg(any(test, feature = "webui"))]
-    #[must_use]
-    pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
-        // One read, so a publish cannot land between taking the stored set and
-        // the generation it was computed for.
-        let (applied, generation) = {
-            let inner = self.inner.read();
-            (inner.applied.clone(), Arc::clone(&inner.generation))
-        };
-        match applied {
-            Some(applied) => applied.pending_restart.clone(),
-            // No revision published (a config built in memory): no reload of
-            // an env file can have happened, so the config fields are all.
-            None => pending_restart_fields(&self.running, generation.config()),
-        }
     }
 
     /// Clone the current active configuration snapshot.

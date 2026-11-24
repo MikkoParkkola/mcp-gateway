@@ -1,0 +1,6 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_reload/first_key.rs	waiting_first_key	next_start_refusal	1	not-delivered	the first-key question's start check: a candidate a restart would refuse is reported by that check and never held; no call delivery
+src/config_reload/first_key.rs	waiting_first_key	refuse_multi_user_flip	1	no-record	the first-key question asks the status rule once, and its sentence travels with the answer to the reload and the writer; no call delivery
+src/config_reload/reload_context.rs	first_key_check	held_refusal	1	feeds	the reload refuses a file whose one fault is a first key, naming the keys; gateway_reload_config answers it as the rows inside it say
+src/config_reload/reload_context.rs	wait_judged_on	next_start_refusal	1	not-delivered	while a first key waits, judges again whether a start from the file read would be refused; kept on the waiting fact for the Gateway page, no call delivery
+src/gateway/ui/keys_create.rs	check_waiting	refuse_with	1	no-record	admin UI key create: records that API keys already wait in the file as read, which the route answers with the shared 409, fixed text, no call delivery

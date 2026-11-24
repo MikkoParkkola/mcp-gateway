@@ -25,6 +25,7 @@ fn counted_save(dir: &Path) -> (Replace, Arc<std::sync::atomic::AtomicUsize>) {
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
         secrets: Some(step(dir, Arc::new(store))),
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     (save, creates)
 }
