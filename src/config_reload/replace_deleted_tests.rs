@@ -80,6 +80,7 @@ fn deleting_compute(config: &Path) -> Replace {
         }),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: crate::config_reload::StatusChange::Refuse,
     }
 }
 
@@ -150,6 +151,7 @@ async fn an_audited_deletion_during_compute_creates_nothing() {
         }),
         replaced: Replaced::Discard,
         secrets: Some(step(dir.path(), Arc::new(store))),
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let kinds = Kinds::default();
     let result = audited(ctx, save, &kinds).await;
@@ -178,6 +180,7 @@ async fn a_recovered_config_deleted_during_compute_is_no_config_file() {
         }),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let kinds = Kinds::default();
     let result = audited(ctx, replace, &kinds).await;
@@ -250,6 +253,7 @@ fn deleting_save(dir: &Path, config: &Path) -> (Replace, Arc<AtomicUsize>, Arc<A
         compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
         secrets: Some(step(dir, Arc::new(store))),
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     (save, creates, deletes)
 }

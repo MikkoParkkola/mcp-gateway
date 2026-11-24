@@ -31,7 +31,7 @@ use super::ui_diff::{
 };
 use super::{
     AuditPosture, Expected, FileRevision, IntentKind, Replace, ReplaceError, Replaced, SecretStep,
-    replace_audited,
+    StatusChange, replace_audited,
 };
 
 /// What a save asks for one field. A secret carries its value here only.
@@ -121,6 +121,7 @@ pub(crate) async fn ui_save(
         compute: compute(checked, Arc::clone(&stop)),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let error = match replace_audited(
         Arc::clone(&ctx),
@@ -137,7 +138,16 @@ pub(crate) async fn ui_save(
             return Ok(UiSaved {
                 changed: outcome.revision.is_some(),
                 revision: outcome.revision.unwrap_or(base),
-                reload: outcome.reload,
+                reload: match outcome.reload {
+                    super::ReplaceReload::Applied(reload) => reload,
+                    // A settings save passes `Refuse`; the writer never holds it.
+                    super::ReplaceReload::HeldForRestart { .. } => {
+                        tracing::error!("a settings save came back held for a restart");
+                        return Err(UiRefused::ReloadRefused {
+                            class: super::RefusalClass::Internal,
+                        });
+                    }
+                },
             });
         }
         Err(error) => error,

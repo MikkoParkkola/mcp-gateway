@@ -63,6 +63,24 @@ A static bearer that was handed out for a single-user deployment keeps working
 as an unrestricted credential after you enable the key server. Inventory them,
 and keep the master bearer operator-only.
 
+### Adding the first API key from the web UI
+
+On a gateway whose only credential is the bearer token, the first API key you
+create in the web UI (or with `POST /ui/api/keys`) makes two
+credentials, which is multi-user. A running gateway never changes that, so the
+key is written to `gateway.yaml` and its secret shown once, but it starts to
+work only after a restart:
+
+- Until the restart, the new secret is refused and the bearer token stays the
+  only credential.
+- `gateway.yaml` takes no other change that keeps the key: the UI routes answer
+  409 `restart_pending` naming the key (a change with a fault of its own is
+  refused for that fault instead), and a hand edit is refused at reload.
+  The gateway status (`GET /ui/api/gateway`) lists the waiting keys, with
+  the start command where the platform has one while a start from the file
+  would succeed, or the reason it would be refused.
+- To cancel, revoke the key before restarting; the freeze ends at once.
+
 ## 1. Who is calling
 
 The key server verifies an OIDC token from your identity provider and exchanges
