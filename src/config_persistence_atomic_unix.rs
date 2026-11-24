@@ -175,7 +175,23 @@ impl Model {
 enum Seen {
     File(Model),
     Absent,
-    Entry { dev: u64, ino: u64 },
+    /// Identity and file type: a freed inode number can come back at once as
+    /// a different kind of file (a link removed, a file created).
+    Entry {
+        dev: u64,
+        ino: u64,
+        kind: u32,
+    },
+}
+
+impl Seen {
+    fn entry(meta: &std::fs::Metadata) -> Self {
+        Self::Entry {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            kind: meta.mode() & 0o170_000,
+        }
+    }
 }
 
 /// Step 1: what is at `target`, from one look: the regular file's model,
@@ -195,10 +211,7 @@ fn model_at(target: &Path) -> io::Result<Seen> {
         // confirmed to be a link takes the no-model path.
         Err(e) if e.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
             return match std::fs::symlink_metadata(target) {
-                Ok(meta) if meta.file_type().is_symlink() => Ok(Seen::Entry {
-                    dev: meta.dev(),
-                    ino: meta.ino(),
-                }),
+                Ok(meta) if meta.file_type().is_symlink() => Ok(Seen::entry(&meta)),
                 _ => Err(e),
             };
         }
@@ -210,10 +223,7 @@ fn model_at(target: &Path) -> io::Result<Seen> {
     Ok(if meta.is_file() {
         Seen::File(Model::of(&meta))
     } else {
-        Seen::Entry {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        }
+        Seen::entry(&meta)
     })
 }
 
@@ -462,8 +472,9 @@ fn verify(save: &Save<'_>, file: &File, settled: &Settled) -> io::Result<()> {
         None | Some(Seen::File(_)) => true,
         Some(Seen::Absent) => std::fs::symlink_metadata(save.target)
             .is_err_and(|e| e.kind() == io::ErrorKind::NotFound),
-        Some(Seen::Entry { dev, ino }) => std::fs::symlink_metadata(save.target)
-            .is_ok_and(|at| (at.dev(), at.ino()) == (dev, ino)),
+        Some(entry @ Seen::Entry { .. }) => {
+            std::fs::symlink_metadata(save.target).is_ok_and(|at| Seen::entry(&at) == entry)
+        }
     };
     let name_unchanged = std::fs::symlink_metadata(save.scratch)
         .is_ok_and(|at| (at.dev(), at.ino()) == (now.dev(), now.ino()));
