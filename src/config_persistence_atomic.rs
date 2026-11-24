@@ -184,6 +184,8 @@ mod unix;
 #[cfg(unix)]
 use unix::apply_inherited_mode;
 #[cfg(all(test, unix))]
+pub(crate) use unix::seams as writer_seams;
+#[cfg(all(test, unix))]
 use unix::{AclPresence, GidMatch, inherit_mode};
 
 /// How a scratch file is created.
@@ -347,6 +349,12 @@ pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(all(test, unix))]
 #[path = "config_persistence_atomic_tests.rs"]
 mod atomic_tests;
+
+// WRITER.7: the pin, the order and the backup, unprivileged.
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+#[path = "config_persistence_pin_tests.rs"]
+mod pin_tests;
 
 // Linux only: writes POSIX ACL xattrs, which only the Linux probe reads.
 #[cfg(tp3)]

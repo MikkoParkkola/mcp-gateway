@@ -130,9 +130,9 @@ pub(crate) mod seams {
     use std::sync::{Mutex, PoisonError};
 
     /// Runs with (target or destination, scratch or source).
-    pub(crate) type PathHook = Box<dyn FnOnce(&Path, &Path) + Send>;
+    pub(crate) type PathHook = Box<dyn FnMut(&Path, &Path) + Send>;
     /// Runs with the scratch's own descriptor.
-    pub(crate) type FileHook = Box<dyn FnOnce(&std::fs::File) + Send>;
+    pub(crate) type FileHook = Box<dyn FnMut(&std::fs::File) + Send>;
 
     /// What one folder's saves meet.
     #[derive(Default)]
@@ -222,22 +222,26 @@ pub(crate) mod seams {
         with(target, |s| s.events.push(step));
     }
 
-    // Each hook is taken out under the lock and run after it is released.
+    // Each hook is taken out under the lock, run after it is released (it
+    // may touch the folder), and put back for the folder's next save.
     pub(crate) fn first_write(target: &Path, scratch: &std::fs::File) {
-        if let Some(hook) = with(target, |s| s.first_write.take()).flatten() {
+        if let Some(mut hook) = with(target, |s| s.first_write.take()).flatten() {
             hook(scratch);
+            with(target, |s| s.first_write = Some(hook));
         }
     }
 
     pub(crate) fn before_verify(target: &Path, scratch: &Path) {
-        if let Some(hook) = with(target, |s| s.before_verify.take()).flatten() {
+        if let Some(mut hook) = with(target, |s| s.before_verify.take()).flatten() {
             hook(target, scratch);
+            with(target, |s| s.before_verify = Some(hook));
         }
     }
 
     pub(crate) fn after_model(source: &Path, destination: &Path) {
-        if let Some(hook) = with(destination, |s| s.after_model.take()).flatten() {
+        if let Some(mut hook) = with(destination, |s| s.after_model.take()).flatten() {
             hook(source, destination);
+            with(destination, |s| s.after_model = Some(hook));
         }
     }
 }

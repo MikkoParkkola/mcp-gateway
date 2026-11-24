@@ -265,13 +265,47 @@ fn o_root_keeps_owner() {
     let ids = ids();
     let fx = fixture(ids.b, ids.g, 0o770, 0o620);
     write_atomic(&fx.target, b"new", FileMode::Inherit, Symlink::Follow).expect("root saves");
-    assert_saved_as(&fx, ids.b, 0o620, "O-root-keeps/inherit");
+    // macOS keeps the owner bits only until the writer reads the target's
+    // ACL; reading it widens this to 0620 when neither file holds an entry.
+    let kept = if cfg!(target_os = "macos") {
+        0o600
+    } else {
+        0o620
+    };
+    assert_saved_as(&fx, ids.b, kept, "O-root-keeps/inherit");
     let gid = std::fs::metadata(&fx.target).expect("stat target").gid();
     assert_eq!(gid, ids.g, "O-root-keeps/inherit: replacement gid");
 
     let fx = fixture(ids.b, ids.g, 0o770, 0o620);
     write_atomic(&fx.target, b"new", FileMode::Private, Symlink::Follow).expect("root saves");
     assert_saved_as(&fx, ids.b, 0o600, "O-root-keeps/private");
+}
+
+/// P-copy (b): root backing up B's file makes a backup with B's owner, group
+/// and mode, not root's.
+#[test]
+#[ignore = "access-rows root job"]
+fn p_copy_root_keeps_owner() {
+    let ids = ids();
+    let fx = fixture(ids.b, ids.g, 0o770, 0o640);
+    let backup = fx.dir.join("target.json.bak");
+    crate::config_persistence::copy_keeping_access(&fx.target, &backup).expect("root copies");
+    let meta = std::fs::metadata(&backup).expect("stat backup");
+    let kept = if cfg!(target_os = "macos") {
+        0o600
+    } else {
+        0o640
+    };
+    assert_eq!(
+        (meta.uid(), meta.gid(), meta.mode() & 0o7777),
+        (ids.b, ids.g, kept),
+        "P-copy(b): backup uid, gid, mode"
+    );
+    assert_eq!(
+        std::fs::read(&backup).expect("read backup"),
+        b"old",
+        "P-copy(b): bytes"
+    );
 }
 
 /// O-own-file (control): C saving its own file whose group (0) it cannot

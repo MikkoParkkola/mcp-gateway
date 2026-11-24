@@ -697,6 +697,46 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }
 
+/// S-ui: a UI write that the shared writer refuses answers a failure whose
+/// error carries the refusal's own text, and gateway.yaml keeps what the
+/// other writer put there.
+#[cfg(unix)]
+#[tokio::test]
+async fn s_ui_a_refused_config_write_answers_with_its_reason() {
+    use crate::config_persistence::writer_seams::{self as seams, Seams};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let panel = Panel::new().await;
+    let other = format!("{START}# another writer\n");
+    let put = other.clone();
+    let fired = AtomicBool::new(false);
+    let _armed = seams::arm(
+        panel.dir.path(),
+        Seams {
+            before_verify: Some(Box::new(move |target, _scratch| {
+                let config = target
+                    .file_name()
+                    .is_some_and(|name| name == "gateway.yaml");
+                if config && !fired.swap(true, Ordering::SeqCst) {
+                    std::fs::rename(target, target.with_extension("moved")).expect("move away");
+                    write_owner_only(target, &put).expect("the other writer");
+                }
+            })),
+            ..Seams::default()
+        },
+    );
+    let (status, body) = panel.update("a", json!({"description": "new"})).await;
+    assert!(
+        !status.is_success(),
+        "S-ui: the write fails: {status}: {body}"
+    );
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("target-changed: refused to replace"),
+        "S-ui: the error carries the refusal: {body}"
+    );
+    assert_eq!(panel.text(), other, "S-ui: the other writer's file stays");
+}
+
 #[path = "backends_secret_name_tests.rs"]
 mod names;
 
