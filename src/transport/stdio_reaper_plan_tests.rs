@@ -297,7 +297,9 @@ fn the_allocator_plan_across_its_edges() {
 /// Test-only: [`super::StopDeadline::move_earlier`] with the set-time given
 /// instead of read from the clock, so a row can place the cut's set-time on a
 /// chosen side of a planned SIGTERM whatever the host's scheduling. The body is
-/// `move_earlier`'s, with `set_at` in place of `Instant::now()`.
+/// `move_earlier`'s, with `set_at` in place of `Instant::now()`. Unix only, as
+/// its callers are (the child-tree rows).
+#[cfg(unix)]
 impl super::StopDeadline {
     /// Test-only: start the clock set-times are stored against, so an instant
     /// read after this call encodes exactly (an earlier one saturates).
