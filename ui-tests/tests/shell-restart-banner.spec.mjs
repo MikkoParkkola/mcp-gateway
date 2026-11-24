@@ -145,7 +145,8 @@ test('B4 a page error and the restart banner are both shown, each once', async (
   await open(page);
   await expect(page.locator('#content [data-state="error"]')).toHaveCount(1);
   await expect(banner(page)).toHaveCount(1);
-  await go(page, '/ui/overview/actions');
+  // Away and back: each route change reads the banner again and redraws the page.
+  await go(page, '/ui/tools/status');
   await go(page, '/ui/overview/status');
   await expect(page.locator('#content [data-state="error"]')).toHaveCount(1);
   await expect(banner(page)).toHaveCount(1);

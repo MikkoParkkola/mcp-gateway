@@ -8,7 +8,7 @@
 // and the list is read again, so a kept entry stays listed. Status and Actions
 // come with the rest of this page; until then they are not drawn. Every
 // server-supplied string goes in with textContent.
-import { register, render, el as h } from '/ui/assets/shell.5e1afdd3105a.js';
+import { register, render, el as h } from '/ui/assets/shell.35401de8724f.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
