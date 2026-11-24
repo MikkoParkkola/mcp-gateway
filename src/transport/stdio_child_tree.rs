@@ -708,6 +708,9 @@ const PRE_REAP_SETTLE: std::time::Duration = std::time::Duration::from_millis(50
 /// that lands late on a busy host.
 #[cfg(unix)]
 const NESTED_TERM_MARGIN: std::time::Duration = std::time::Duration::from_millis(150);
+/// The margin alone, so a row can play a nested gateway's slowest hurried path.
+#[cfg(all(test, unix))]
+pub(super) const NESTED_TERM_MARGIN_FOR_TEST: std::time::Duration = NESTED_TERM_MARGIN;
 
 /// What a nested gateway needs after the SIGTERM that tells it to hurry: its
 /// hurried backend waits ([`super::reaper::HURRY_WINDOW`]), then the reap's

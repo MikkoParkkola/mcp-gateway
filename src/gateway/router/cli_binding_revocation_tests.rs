@@ -155,18 +155,22 @@ async fn event_admission_and_admin_standing_end_with_the_root() {
         digest_tag: Some(crate::gateway::auth::secret_tag(CHILD)),
     };
     let args = serde_json::json!({});
+    // The subscriber as the transport presents it: the key's owner key.
+    let subscriber = crate::gateway::auth::credential_owner_key(
+        &crate::gateway::record_principal::InternalPrincipal::new(principal.clone()),
+    );
     // Reuses operational_source_tests' EventSource authorization and K5's event admission harness.
     assert!(services().admits(Some(&watch), "x"));
     assert!(
         source
-            .authorize(&principal, "gateway.kill_switch.changed", &args)
+            .authorize(&subscriber, "gateway.kill_switch.changed", &args)
             .await
             .is_ok()
     );
     remove_root(&state, dir.path(), &keys).await;
     let admitted = services().admits(Some(&watch), "x");
     let standing = source
-        .authorize(&principal, "gateway.kill_switch.changed", &args)
+        .authorize(&subscriber, "gateway.kill_switch.changed", &args)
         .await;
     assert!(
         !admitted && standing.is_err(),

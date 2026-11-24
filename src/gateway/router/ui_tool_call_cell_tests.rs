@@ -177,7 +177,7 @@ async fn t13b_mcp_bytes_are_unchanged_by_a_ui_call_in_scope() {
 /// Spawns on the path that are not the send: (file, line text, why).
 const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
     (
-        "src/gateway/meta_mcp/grant_audit.rs",
+        "src/gateway/meta_mcp/grant_audit/record.rs",
         "handle.spawn(async move {",
         "spawn_write: a bounded write of grant records, after the call",
     ),
@@ -219,6 +219,7 @@ fn t20_no_spawn_wraps_the_send() {
     }
     files.push(root.join("src/gateway/meta_mcp/call_dispatch.rs"));
     files.push(root.join("src/gateway/meta_mcp/grant_audit.rs"));
+    files.push(root.join("src/gateway/meta_mcp/grant_audit/record.rs"));
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("a scanned directory") {
             let path = entry.expect("entry").path();

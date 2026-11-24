@@ -569,6 +569,33 @@ async fn post_to_raw(
     body: &str,
     caller: &Caller,
 ) -> (StatusCode, axum::body::Bytes) {
+    post_to_raw_named(fx, uri, body, caller, None).await
+}
+
+/// [`post_to`] with the modern `mcp-name` header set to `name` rather than
+/// the body's tool name: for a body name the sanitizer rewrites, which a
+/// header cannot carry (a control character).
+async fn post_to_named(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+    name: &str,
+) -> (StatusCode, Value) {
+    let (status, bytes) = post_to_raw_named(fx, uri, body, caller, Some(name)).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+async fn post_to_raw_named(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+    name: Option<&str>,
+) -> (StatusCode, axum::body::Bytes) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -592,7 +619,10 @@ async fn post_to_raw(
                 crate::protocol::meta::MODERN_VERSIONS[0],
             )
             .header("mcp-method", parsed["method"].as_str().unwrap())
-            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
+            .header(
+                "mcp-name",
+                name.unwrap_or_else(|| parsed["params"]["name"].as_str().unwrap()),
+            );
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))

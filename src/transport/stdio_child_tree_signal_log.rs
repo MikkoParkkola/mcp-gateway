@@ -51,6 +51,7 @@ fn log() -> std::sync::MutexGuard<'static, Log> {
 pub(crate) fn arm(pid: Pid) {
     let raw = pid.as_raw_nonzero().get();
     log().insert(raw, Vec::new());
+    kills_at().remove(&raw);
     forget_injection(pid);
     // Read while the leader runs: macOS refuses getpgid once it is exiting.
     if rustix::process::getpgid(Some(pid)) == Ok(pid) {
@@ -84,7 +85,30 @@ fn forget_injection(pid: Pid) {
 pub(super) fn record(pid: Pid, sent: Sent) {
     if let Some(entries) = log().get_mut(&pid.as_raw_nonzero().get()) {
         entries.push(sent);
+        if matches!(sent, Sent::Kill | Sent::KillGone | Sent::KillFailed { .. }) {
+            kills_at()
+                .entry(pid.as_raw_nonzero().get())
+                .or_insert_with(std::time::Instant::now);
+        }
     }
+}
+
+/// When the reaper sent its first kill to each armed pid's group.
+static KILLS_AT: std::sync::Mutex<std::collections::BTreeMap<i32, std::time::Instant>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn kills_at() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<i32, std::time::Instant>>
+{
+    KILLS_AT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// When the reaper sent its first kill to the armed `pid`'s group, if it did:
+/// a row compares it with marks of its own, since a kill may come before the
+/// plan's instant (a leader already gone is killed at once).
+pub(crate) fn kill_sent_at(pid: Pid) -> Option<std::time::Instant> {
+    kills_at().get(&pid.as_raw_nonzero().get()).copied()
 }
 
 /// How an injected group kill answers ESRCH, as macOS answers a group with no

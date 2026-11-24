@@ -432,7 +432,9 @@ async fn u_dark_the_production_entry_refuses_uv() {
     .map(|_| ());
     assert_eq!(
         refused,
-        Err(Refusal::Step("the uv fetch is not built yet".into()))
+        Err(Refusal::Command(
+            "uvx previews are not enabled in this build".into()
+        ))
     );
     assert!(!marker.exists(), "a probe ran before the refusal");
     // Positive control: the stand-in's version call does leave the marker.

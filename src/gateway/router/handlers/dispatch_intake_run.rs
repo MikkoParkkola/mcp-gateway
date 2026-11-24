@@ -358,13 +358,18 @@ pub(in crate::gateway::router::handlers) async fn intake(
     if let Some(context) = signing_context.as_mut()
         && let Err(error) = context.restore(&mut request)
     {
-        return Err(build_error_response(
-            None,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        ));
+        // An envelope the context cannot restore (an unusable id, an origin
+        // changed after capture) is a refusal of the request's form like the
+        // malformed nonce below, and is recorded the same way. It is answered
+        // with no id, as before: the id was not accepted, or the origin it
+        // came with is not the one the request now has.
+        let who = (client.as_ref(), grant_subject.as_ref());
+        let (refused, called, _) = intake_refused(state, &request, who, &session_id);
+        let site = crate::gateway::router::meta_refusal_audit::SigningSite::Intake;
+        let no_id = crate::gateway::router::AnswerId::Absent;
+        return Err(refused
+            .answer_signing(state, called, (no_id, site), error)
+            .await);
     }
     if let Some(error) = signing_context
         .as_ref()

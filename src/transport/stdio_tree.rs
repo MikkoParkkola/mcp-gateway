@@ -227,7 +227,7 @@ pub const CEILING_MAX_FRAME_BYTES: usize = 1024 * 1024 * 1024;
 /// Read one newline-terminated frame (without its `\n` or `\r\n`).
 /// `Ok(None)` at end of stream; an error for a frame over
 /// `max` bytes or one that is not UTF-8.
-pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+pub(in crate::transport) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     frame: &mut Vec<u8>,
     max: usize,

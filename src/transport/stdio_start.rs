@@ -4,11 +4,11 @@
 //! the MCP handshake with protocol version negotiation.
 
 use super::{
-    Arc, BufReader, Command, Error, Ordering, PROTOCOL_VERSION, Result, Selectable, Stdio,
-    StdioTransport, Transport, checked_selection, configure_child_environment, debug, early_exit,
-    error, info, initialize_params, is_version_mismatch_error, negotiate_best_version,
-    parse_supported_versions_from_error, read_frame, reaper, spawn_in_own_tree, warn,
+    Arc, BufReader, Command, Error, Ordering, PROTOCOL_VERSION, Result, Stdio, StdioTransport,
+    configure_child_environment, debug, early_exit, error, info, read_frame, reaper,
+    spawn_in_own_tree,
 };
+use crate::transport::handshake;
 
 impl StdioTransport {
     /// The child's command, with piped stdio, environment and working
@@ -227,79 +227,16 @@ impl StdioTransport {
             "Sending MCP initialize"
         );
 
-        let mut response = self.init_request(initialize_params(&version)).await?;
-        let mut proposed = version.as_str();
-
-        if let Some(ref error) = response.error {
-            // Code only, here and below: the message is the backend's own
-            // text and may quote back a credential the gateway passed it.
-            if !is_version_mismatch_error(&error.message) {
-                return Err(Error::Protocol(format!(
-                    "Initialize failed for '{command}': backend error code {}",
-                    error.code
-                )));
-            }
-            let Some(negotiated) = parse_supported_versions_from_error(&error.message)
-                .as_deref()
-                .and_then(negotiate_best_version)
-            else {
-                return Err(Error::Protocol(format!(
-                    "Protocol version negotiation failed for '{command}': server rejected {version}, \
-                     no compatible version found (backend error code {})",
-                    error.code
-                )));
-            };
-            warn!(
-                command = %command,
-                rejected = %version,
-                negotiated = %negotiated,
-                "Retrying initialize with negotiated protocol version"
-            );
-            response = self.init_request(initialize_params(negotiated)).await?;
-            if let Some(ref error) = response.error {
-                return Err(Error::Protocol(format!(
-                    "Initialize failed for '{command}' even with negotiated version {negotiated}: \
-                     backend error code {}",
-                    error.code
-                )));
-            }
-            proposed = negotiated;
-        }
-
-        // The client proposes and the server selects: what this handshake's
-        // answer selected governs the session, or what was proposed when it
-        // names nothing. Checked before it is written, so a refusal leaves
-        // the stored version as it was.
-        let selected = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?
-            .unwrap_or(proposed);
-        info!(
-            command = %command,
-            requested = %proposed,
-            negotiated = %selected,
-            "Protocol version agreed"
-        );
-        *self.protocol_version.write() = Some(selected.to_string());
+        let selected =
+            handshake::negotiate(&version, &command, |params| self.init_request(params)).await?;
+        *self.protocol_version.write() = Some(selected);
 
         self.finish_initialization().await
     }
 
     /// Complete the initialization handshake (send `initialized` notification).
     async fn finish_initialization(&self) -> Result<()> {
-        // Yield to ensure I/O is processed before sending notification
-        tokio::task::yield_now().await;
-
-        // Send initialized notification
-        self.notify("notifications/initialized", None).await?;
-
-        // Yield again to ensure notification reaches the server
-        tokio::task::yield_now().await;
-
-        // Give the server time to fully transition to ready state
-        // This is necessary because some MCP servers (like fulcrum) have async
-        // initialization that continues after receiving the notification
-        debug!("Waiting for server to complete initialization");
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-
+        handshake::settle(self).await?;
         self.connected.store(true, Ordering::Relaxed);
 
         let negotiated = self.protocol_version.read().clone();

@@ -32,9 +32,10 @@ const WRAPPERS: [&str; 2] = ["backend_request", "backend_wait"];
 
 /// The production transports. A new one is a reviewed addition here, and
 /// keeps the scan from passing because it found nothing.
-const TRANSPORTS: [&str; 4] = [
+const TRANSPORTS: [&str; 5] = [
     "A2aTransport",
     "HttpTransport",
+    "PreviewPipe",
     "StdioTransport",
     "WebSocketTransport",
 ];

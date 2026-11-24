@@ -28,7 +28,10 @@
 
 use crate::cli::stdout::println;
 
+mod entry_url;
 mod watch;
+
+use entry_url::{GatewayEntry, gateway_url, print_notes, probe_addr, url_notes};
 
 #[cfg(tp1)]
 #[cfg(test)]
@@ -103,17 +106,25 @@ const BACKUP_MARKER: &str = ".mcp-gateway.bak.";
 
 /// Build the JSON entry to insert for this gateway instance.
 ///
-/// Proxy mode produces `{"url": "http://host:port/mcp"}`.
-/// Stdio mode produces `{"command": "mcp-gateway", "args": ["serve", "--stdio", ...]}`.
-pub fn build_gateway_entry(
+/// Proxy mode produces `{"url": ...}` from [`gateway_url`], with its notes.
+/// Stdio mode produces `{"command": "mcp-gateway", "args": ["serve", "--stdio", ...]}`
+/// and no notes: the entry holds no URL.
+///
+/// # Errors
+///
+/// In proxy mode, a `server.public_url` no client can use.
+pub(crate) fn build_gateway_entry(
     config: &Config,
     config_path: Option<&Path>,
     mode: ConnectionMode,
-) -> Value {
+) -> Result<GatewayEntry, String> {
     match resolve_mode(mode, config) {
         ConnectionMode::Proxy | ConnectionMode::Auto => {
-            json!({
-                "url": format!("http://{}:{}/mcp", config.server.host, config.server.port)
+            let url = gateway_url(config)?;
+            Ok(GatewayEntry {
+                value: json!({ "url": url }),
+                url: Some(url),
+                notes: url_notes(config),
             })
         }
         ConnectionMode::Stdio => {
@@ -122,9 +133,13 @@ pub fn build_gateway_entry(
                 args.push("-c".to_string());
                 args.push(p.display().to_string());
             }
-            json!({
-                "command": "mcp-gateway",
-                "args": args
+            Ok(GatewayEntry {
+                value: json!({
+                    "command": "mcp-gateway",
+                    "args": args
+                }),
+                url: None,
+                notes: Vec::new(),
             })
         }
     }
@@ -133,18 +148,14 @@ pub fn build_gateway_entry(
 /// Resolve `Auto` mode to a concrete `Proxy` or `Stdio` decision.
 ///
 /// Auto resolution:
-/// 1. If a gateway daemon is reachable at `host:port/health` → Proxy.
+/// 1. If a TCP connect to `probe_addr` succeeds (a gateway runs here) → Proxy.
 /// 2. If `mcp-gateway` is on `PATH` → Stdio.
 /// 3. Otherwise → Proxy (user must start daemon manually).
 pub fn resolve_mode(mode: ConnectionMode, config: &Config) -> ConnectionMode {
     if mode != ConnectionMode::Auto {
         return mode;
     }
-    let health_url = format!(
-        "http://{}:{}/health",
-        config.server.host, config.server.port
-    );
-    if probe_health(&health_url) {
+    if probe_health(&probe_addr(config)) {
         return ConnectionMode::Proxy;
     }
     if which_mcp_gateway().is_some() {
@@ -154,19 +165,12 @@ pub fn resolve_mode(mode: ConnectionMode, config: &Config) -> ConnectionMode {
     }
 }
 
-/// Probe the gateway health endpoint with a 500 ms TCP-connect timeout.
+/// Probe `host_port` with a 500 ms TCP-connect timeout.
 ///
 /// Returns `true` if a TCP connection succeeds (daemon is reachable).
-fn probe_health(url: &str) -> bool {
+fn probe_health(host_port: &str) -> bool {
     use std::net::{TcpStream, ToSocketAddrs};
     use std::time::Duration;
-
-    let host_port = url
-        .trim_start_matches("http://")
-        .trim_start_matches("https://")
-        .split('/')
-        .next()
-        .unwrap_or("");
 
     let addr = host_port
         .to_socket_addrs()
@@ -537,17 +541,28 @@ pub async fn run_config_export(
         }
     };
 
+    let resolved = resolve_mode(mode, &config);
+    // Decided before anything is printed or written: a URL no client can use
+    // stops the export here.
+    let gateway = match build_gateway_entry(&config, Some(config_path), resolved) {
+        Ok(gateway) => gateway,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     if dry_run {
         println!("Dry-run mode — no files will be written.");
         println!();
     }
-
-    let resolved = resolve_mode(mode, &config);
     let mode_label = match resolved {
         ConnectionMode::Proxy | ConnectionMode::Auto => "proxy",
         ConnectionMode::Stdio => "stdio",
     };
-    let entry = build_gateway_entry(&config, Some(config_path), resolved);
+    // Notes go to stderr, so stdout stays the JSON document for --target generic.
+    print_notes(&gateway, &mut std::io::stderr());
+    let entry = gateway.value.clone();
 
     if target == ExportTarget::Generic {
         // Generic: print JSON to stdout.
@@ -604,7 +619,8 @@ pub async fn run_config_export(
     }
     println!();
     println!("Entry name: \"{name}\"");
-    println!("Gateway endpoint: configured from server.host/server.port");
+    let endpoint = gateway.url.as_deref().unwrap_or("none (stdio entry)");
+    println!("Gateway endpoint: {endpoint}");
 
     if watch {
         watch::run_watch_loop(target, mode, name, config_path).await;

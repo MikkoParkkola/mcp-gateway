@@ -775,6 +775,9 @@ fn u_direct_a_dist_info_named_in_raw_bytes_is_checked() {
     assert_eq!(check_direct_url(&env, far()), Err(direct_url_refusal()));
 }
 
+#[path = "install_lock_names_tests.rs"]
+mod lock_names;
+
 #[cfg(unix)]
 #[path = "install_link_tests.rs"]
 mod link_tests;

@@ -99,7 +99,7 @@ pub struct Isolation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Network {
     /// Where the fetch phase may connect; `None` when there is no fetch phase.
-    pub fetch: Option<&'static str>,
+    pub fetch: Option<String>,
     pub run: &'static str,
 }
 
@@ -184,6 +184,24 @@ impl std::error::Error for Refusal {}
 #[must_use]
 pub fn dispatch_helper(args: &[OsString]) -> Option<ExitCode> {
     os::dispatch(args)
+}
+
+/// The refusal every uvx command answers until the uv fetch is enabled.
+pub(crate) const UV_NOT_ENABLED: &str = "uvx previews are not enabled in this build";
+
+/// Whether the route may offer `target` a preview at all, before any token
+/// or start: the command plan's own refusals, and the uv gate.
+///
+/// # Errors
+///
+/// The plan's [`Refusal::Command`], or the uv gate's.
+#[cfg_attr(not(test), expect(dead_code, reason = "the preview route calls it"))]
+pub(crate) fn check(target: &Target) -> Result<(), Refusal> {
+    let phases = fetch::plan(target)?;
+    if matches!(phases.fetch, Some(fetch::Fetch::Uv(_))) {
+        return Err(Refusal::Command(UV_NOT_ENABLED.to_owned()));
+    }
+    Ok(())
 }
 
 /// Start `target` in the sandbox. `protected` adds the gateway's own config
@@ -322,6 +340,9 @@ pub async fn availability() -> &'static Result<(), Refusal> {
     AVAILABILITY.get_or_init(probe).await
 }
 
+#[cfg(tp1)]
+#[cfg(test)]
+mod check_tests;
 mod fetch_output;
 #[cfg(tp1)]
 #[cfg(test)]

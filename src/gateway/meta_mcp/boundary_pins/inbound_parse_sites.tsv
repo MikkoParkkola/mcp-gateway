@@ -20,6 +20,8 @@ src/transport/http/sse_decoder.rs	drain_events	from_str	1	scrubbed	notifications
 src/transport/http/sse_listen.rs	request_unscrubbed	from_slice	1	scrubbed-by	by src/transport/http/sse_listen.rs::request: the session's only entry to it
 src/transport/notification_sink.rs	passes_level_filter	from_value	1	not-backend-data	reads a logging level, never forwarded content
 src/transport/notification_sink.rs	set_request_log_level	from_value	1	not-backend-data	reads the caller's logging level
+src/transport/preview_pipe.rs	exchange	from_value	1	no-injected-values	a command preview's answer; its launch is a program and its arguments only, so no injected value is there to scrub
+src/transport/preview_pipe.rs	read_value	from_str	1	no-injected-values	each frame a command preview's server sends; its launch is a program and its arguments only, so no injected value is there to scrub
 src/transport/stdio.rs	handle_response	from_line	1	scrubbed	calls ingress_scrub on each line before routing it
 src/transport/websocket.rs	dispatch_inbound	from_text	1	scrubbed	calls scrub_frame on each frame; routing keys are read as sent (DELTA-5)
 src/transport/websocket.rs	from_text	from_str	1	scrubbed-by	by src/transport/websocket.rs::dispatch_inbound: its only production caller
