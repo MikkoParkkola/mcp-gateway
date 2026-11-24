@@ -65,6 +65,8 @@ pub(super) fn apply_inherited_mode(
     use std::os::unix::fs::PermissionsExt as _;
     // Take the target's group when the process may; a refusal only narrows
     // what the chmod below keeps, and is never an error of the write.
+    #[cfg(test)]
+    seams::event(target, "chown");
     let gid = match std::os::unix::fs::fchown(scratch, None, Some(target_meta.gid())) {
         Ok(()) => GidMatch::Matched,
         Err(_) => GidMatch::Unmatched,
@@ -81,6 +83,8 @@ pub(super) fn apply_inherited_mode(
     } else {
         AclPresence::PresentOrUnknown
     };
+    #[cfg(test)]
+    seams::event(target, "chmod");
     scratch.set_permissions(std::fs::Permissions::from_mode(inherit_mode(
         target_meta.mode() & 0o7777,
         gid,
@@ -115,4 +119,125 @@ fn acl_presence(target: &std::fs::File, scratch: &std::fs::File) -> AclPresence 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 fn acl_presence(_target: &std::fs::File, _scratch: &std::fs::File) -> AclPresence {
     AclPresence::PresentOrUnknown
+}
+
+/// The pin and order rows' seams, armed per folder so parallel tests never
+/// meet and a save on a blocking thread still finds them. Test builds only.
+#[cfg(test)]
+pub(crate) mod seams {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    /// Runs with (target or destination, scratch or source).
+    pub(crate) type PathHook = Box<dyn FnOnce(&Path, &Path) + Send>;
+    /// Runs with the scratch's own descriptor.
+    pub(crate) type FileHook = Box<dyn FnOnce(&std::fs::File) + Send>;
+
+    /// What one folder's saves meet.
+    #[derive(Default)]
+    pub(crate) struct Seams {
+        /// The target's open (or stat) fails with this errno.
+        pub(crate) open_error: Option<i32>,
+        /// Just before the first byte is written.
+        pub(crate) first_write: Option<FileHook>,
+        /// Just before the final checks and the rename: (target, scratch).
+        pub(crate) before_verify: Option<PathHook>,
+        /// A backup, after its source is modelled: (source, destination).
+        pub(crate) after_model: Option<PathHook>,
+        creates: usize,
+        events: Vec<&'static str>,
+    }
+
+    static ARMED: Mutex<Option<HashMap<PathBuf, Seams>>> = Mutex::new(None);
+
+    /// The folder `path` sits in, as the key both sides compute alike.
+    fn key(path: &Path) -> PathBuf {
+        let dir = path.parent().unwrap_or(path);
+        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+    }
+
+    fn with<R>(path: &Path, f: impl FnOnce(&mut Seams) -> R) -> Option<R> {
+        let mut armed = ARMED.lock().unwrap_or_else(PoisonError::into_inner);
+        armed.as_mut()?.get_mut(&key(path)).map(f)
+    }
+
+    /// Seams for every save into `dir` until the guard drops.
+    pub(crate) fn arm(dir: &Path, seams: Seams) -> Armed {
+        let dir = std::fs::canonicalize(dir).expect("an armed folder exists");
+        ARMED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(dir.clone(), seams);
+        Armed(dir)
+    }
+
+    /// The armed folder; reads what its saves did.
+    pub(crate) struct Armed(PathBuf);
+
+    impl Armed {
+        fn read<R>(&self, f: impl FnOnce(&Seams) -> R) -> R {
+            let armed = ARMED.lock().unwrap_or_else(PoisonError::into_inner);
+            f(armed
+                .as_ref()
+                .and_then(|map| map.get(&self.0))
+                .expect("armed until dropped"))
+        }
+
+        /// Scratch files created so far.
+        pub(crate) fn creates(&self) -> usize {
+            self.read(|s| s.creates)
+        }
+
+        /// The steps the saves took, in order.
+        pub(crate) fn events(&self) -> Vec<&'static str> {
+            self.read(|s| s.events.clone())
+        }
+    }
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            if let Some(map) = ARMED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_mut()
+            {
+                map.remove(&self.0);
+            }
+        }
+    }
+
+    pub(crate) fn open_error(target: &Path) -> Option<std::io::Error> {
+        with(target, |s| s.open_error)
+            .flatten()
+            .map(std::io::Error::from_raw_os_error)
+    }
+
+    pub(crate) fn created(target: &Path) {
+        with(target, |s| s.creates += 1);
+    }
+
+    pub(crate) fn event(target: &Path, step: &'static str) {
+        with(target, |s| s.events.push(step));
+    }
+
+    // Each hook is taken out under the lock and run after it is released.
+    pub(crate) fn first_write(target: &Path, scratch: &std::fs::File) {
+        if let Some(hook) = with(target, |s| s.first_write.take()).flatten() {
+            hook(scratch);
+        }
+    }
+
+    pub(crate) fn before_verify(target: &Path, scratch: &Path) {
+        if let Some(hook) = with(target, |s| s.before_verify.take()).flatten() {
+            hook(target, scratch);
+        }
+    }
+
+    pub(crate) fn after_model(source: &Path, destination: &Path) {
+        if let Some(hook) = with(destination, |s| s.after_model.take()).flatten() {
+            hook(source, destination);
+        }
+    }
 }

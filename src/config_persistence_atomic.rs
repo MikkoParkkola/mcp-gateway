@@ -87,7 +87,10 @@ fn write_atomic_observed(
     // failure under `Inherit` is returned before any scratch is created, so a
     // target we could not stat is never replaced by a wider default-mode file,
     // while a `Private` write never needed the stat.
-    let target_meta = match std::fs::symlink_metadata(&target) {
+    let stat = std::fs::symlink_metadata(&target);
+    #[cfg(all(test, unix))]
+    let stat = unix::seams::open_error(&target).map_or(stat, Err);
+    let target_meta = match stat {
         Ok(meta) if !meta.file_type().is_symlink() => Some(meta),
         Ok(_) => None,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -103,6 +106,8 @@ fn write_atomic_observed(
         super::next_scratch_seed(),
         scratch_create_for(mode, target_meta.as_ref()),
     )?;
+    #[cfg(all(test, unix))]
+    unix::seams::created(&target);
     // Leave no debris behind on any failure before the rename. The scratch
     // name is unique per call, so without cleanup each failure would strand
     // one more file next to the target.
@@ -111,7 +116,16 @@ fn write_atomic_observed(
     };
     // Write through the handle the exclusive create returned. Reopening by
     // path would reopen the gap the exclusive create just closed.
-    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    #[cfg(all(test, unix))]
+    unix::seams::first_write(&target, &file);
+    #[cfg(all(test, unix))]
+    unix::seams::event(&target, "write");
+    let written = file.write_all(bytes).and_then(|()| {
+        #[cfg(all(test, unix))]
+        unix::seams::event(&target, "sync");
+        file.sync_all()
+    });
+    if let Err(e) = written {
         // Close before cleanup: Windows cannot delete a file held open
         // without delete sharing.
         drop(file);
@@ -132,10 +146,14 @@ fn write_atomic_observed(
     }
     // Closed before the rename: Windows renames only a closed file.
     drop(file);
+    #[cfg(all(test, unix))]
+    unix::seams::event(&target, "check");
     if let Err(e) = check() {
         cleanup(&scratch);
         return Err(e);
     }
+    #[cfg(all(test, unix))]
+    unix::seams::before_verify(&target, &scratch);
     if let Err(e) = super::rename_with_retry(&scratch, &target) {
         cleanup(&scratch);
         return Err(e);
@@ -145,6 +163,13 @@ fn write_atomic_observed(
         super::crash_fs::bind(&target, staged);
     }
     Ok(())
+}
+
+/// The typed code a writer refusal carries (`foreign-owner`,
+/// `target-changed`, ...), or `None` when `e` is not one.
+#[cfg(test)]
+pub(crate) fn refusal_code(_e: &std::io::Error) -> Option<&'static str> {
+    None
 }
 
 // Windows `Inherit` keeps the target's access list.
@@ -276,6 +301,8 @@ fn finish_kept(
 pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
     #[cfg(not(windows))]
     {
+        #[cfg(all(test, unix))]
+        unix::seams::after_model(src, dst);
         std::fs::copy(src, dst).map(|_| ())
     }
     #[cfg(windows)]
