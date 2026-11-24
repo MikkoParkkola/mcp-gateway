@@ -49,6 +49,7 @@ mod strict_keys;
 pub(crate) use strict_keys::is_retired_key;
 mod validation;
 pub(crate) use validation::CLEARTEXT_REFUSAL;
+pub(crate) use validation::name_refusal;
 mod ws_backend;
 
 use std::{

@@ -73,6 +73,7 @@ fn p1_a_full_body_writes_the_entry_and_answers_the_secret_once() {
         "previous_expires_at": null,
         "rate_limit": 7,
         "live": true,
+        "addressable": true,
     });
     let mut entry = listed["keys"][1].clone();
     let last_used = entry.as_object_mut().and_then(|e| e.remove("last_used"));

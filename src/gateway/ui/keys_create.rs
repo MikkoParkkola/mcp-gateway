@@ -550,6 +550,17 @@ pub(super) async fn create_key(
         Ok(checked) => checked,
         Err(refused) => return *refused,
     };
+    // A name the key's own routes could not address, or one holding a
+    // control character: the one shared rule says so, before the loader is
+    // asked about anything (the loader itself keeps accepting such a name).
+    if let Some(message) = crate::config::name_refusal("API key name", &body.name) {
+        return structured_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "name_not_addressable",
+            message,
+        )
+        .into_response();
+    }
     if let Some(field) = refused_field(&body) {
         return invalid_field(field);
     }
