@@ -19,11 +19,13 @@
 //! `firewall`), which release images carry: the docs describe those builds.
 #![cfg(all(feature = "a2a", feature = "cost-governance", feature = "firewall"))]
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::collections::BTreeMap;
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
-use mcp_gateway::config::Config;
+use mcp_gateway::config::{Config, api_key_digest_spec};
 use regex::Regex;
 
 /// The line that marks a block showing a config the gateway refuses.
@@ -75,33 +77,73 @@ struct Block {
     text: String,
 }
 
-/// The fenced `yaml` blocks in `lines`. Each entry is a line's content, or
-/// `None` for a line no block can span (code between rustdoc lines), which
-/// drops a block left open. The fence's indentation is cut from the body.
+/// A fence: its character (`` ` `` or `~`), its length (three or more) and its
+/// info string's first word.
+fn fence(trimmed: &str) -> Option<(char, usize, &str)> {
+    let ch = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let len = trimmed.chars().take_while(|c| *c == ch).count();
+    let info = trimmed[len..].trim();
+    (len >= 3 && !(ch == '`' && info.contains('`'))).then(|| {
+        (
+            ch,
+            len,
+            info.split([' ', '{', ',']).next().unwrap_or_default(),
+        )
+    })
+}
+
+/// One open block: its fence's line, indentation, character and length, and
+/// whether it is yaml (other fences are followed only so a yaml fence inside
+/// one is not taken for a block).
+struct Open<'a> {
+    start: usize,
+    indent: usize,
+    ch: char,
+    len: usize,
+    yaml: bool,
+    body: Vec<&'a str>,
+}
+
+/// The fenced `yaml` blocks in `lines`, by CommonMark's fence rules: a run of
+/// three or more `` ` `` or `~` opens one, the same character at least as long
+/// closes it. Each entry is a line's content, or `None` for a line no block can
+/// span (code between rustdoc lines), which drops a block left open. Up to the
+/// fence's indentation in leading spaces is cut from each body line.
 fn fenced(file: &str, lines: &[Option<&str>]) -> Vec<Block> {
     let mut blocks = Vec::new();
-    let mut open: Option<(usize, usize, Vec<&str>)> = None;
+    let mut open: Option<Open<'_>> = None;
     for (i, line) in lines.iter().enumerate() {
         let Some(line) = *line else {
             open = None;
             continue;
         };
         let trimmed = line.trim_start();
-        let fence = trimmed.trim_end();
-        if let Some((start, indent, mut body)) = open.take() {
-            if fence == "```" {
-                let mut text = body.join("\n");
+        let found = fence(trimmed.trim_end());
+        if let Some(mut block) = open.take() {
+            let closes = found.is_some_and(|(ch, len, info)| {
+                ch == block.ch && len >= block.len && info.is_empty()
+            });
+            if !closes {
+                let cut = line.len() - line.trim_start_matches(' ').len();
+                block.body.push(&line[cut.min(block.indent)..]);
+                open = Some(block);
+            } else if block.yaml {
+                let mut text = block.body.join("\n");
                 text.push('\n');
                 blocks.push(Block {
-                    at: format!("{file}:{start}"),
+                    at: format!("{file}:{}", block.start),
                     text,
                 });
-            } else {
-                body.push(line.get(indent..).unwrap_or(trimmed));
-                open = Some((start, indent, body));
             }
-        } else if fence == "```yaml" || fence == "```yml" {
-            open = Some((i + 1, line.len() - trimmed.len(), Vec::new()));
+        } else if let Some((ch, len, info)) = found {
+            open = Some(Open {
+                start: i + 1,
+                indent: line.len() - trimmed.len(),
+                ch,
+                len,
+                yaml: matches!(info.to_ascii_lowercase().as_str(), "yaml" | "yml"),
+                body: Vec::new(),
+            });
         }
     }
     blocks
@@ -116,12 +158,25 @@ fn doc_line(line: &str) -> Option<&str> {
     Some(rest.strip_prefix(' ').unwrap_or(rest))
 }
 
-/// The keys a block sets at column 0.
-fn top_keys(text: &str) -> Vec<&str> {
+/// The keys a block sets at its top level, as the gateway's YAML reader sees
+/// them (quoted keys and flow mappings included). A block it cannot read still
+/// names its keys at column 0, so a broken gateway example is checked rather
+/// than skipped.
+fn top_keys(text: &str) -> Vec<String> {
+    if let Ok(doc) = yaml::from_str::<yaml::Value>(text) {
+        return doc
+            .as_mapping()
+            .map(|map| {
+                map.keys()
+                    .filter_map(|key| key.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
     text.lines()
         .filter(|line| !line.starts_with([' ', '\t', '#', '-']))
         .filter_map(|line| line.split_once(':'))
-        .map(|(key, _)| key.trim().trim_matches('"'))
+        .map(|(key, _)| key.trim().trim_matches(['"', '\'']).to_owned())
         .filter(|key| !key.is_empty())
         .collect()
 }
@@ -177,12 +232,17 @@ fn without_env_files(yaml: &str) -> String {
     kept
 }
 
-/// Load `yaml` as the gateway would, `Err` holding the refusal. A block that
-/// names variables or sets `env_files` loads with an `env_files` entry
-/// defining each variable it names.
-fn load_example(yaml: &str) -> Result<(), String> {
+/// The one file whose example's own `env_files` names an illustrative path
+/// (under the reader's home), so the guard's file takes its place. Any other
+/// example keeps its own `env_files`, which then decides the load.
+const ILLUSTRATIVE_ENV_FILES: &str = "docs/OAUTH_CONFIG.md:";
+
+/// Load the example at `at` as the gateway would, `Err` holding the refusal. A
+/// block that names variables loads with an `env_files` entry defining each.
+fn load_example(at: &str, yaml: &str) -> Result<(), String> {
     let values = env_values(yaml);
-    if values.is_empty() && !yaml.lines().any(|line| line.starts_with("env_files:")) {
+    let swap = at.starts_with(ILLUSTRATIVE_ENV_FILES);
+    if values.is_empty() && !swap {
         return load(yaml).map(drop).map_err(|e| e.to_string());
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -192,11 +252,12 @@ fn load_example(yaml: &str) -> Result<(), String> {
         .map(|(var, value)| format!("{var}={value}\n"))
         .collect();
     mcp_gateway::gateway::test_helpers::write_owner_only(&env, &lines).expect("write env file");
-    let yaml = format!(
-        "env_files: ['{}']\n{}",
-        env.display(),
+    let body = if swap {
         without_env_files(yaml)
-    );
+    } else {
+        yaml.to_owned()
+    };
+    let yaml = format!("env_files: ['{}']\n{body}", env.display());
     load(&yaml).map(drop).map_err(|e| e.to_string())
 }
 
@@ -222,13 +283,13 @@ fn misbehaving(blocks: &[Block], known: &mut BTreeMap<String, bool>) -> (Vec<Str
         }
         if !top_keys(&block.text)
             .into_iter()
-            .any(|key| gateway_key(key, known))
+            .any(|key| gateway_key(&key, known))
         {
             continue;
         }
         checked.push(block.at.clone());
         let marked = block.text.lines().any(|line| line.trim() == REFUSED);
-        match (load_example(&block.text), marked) {
+        match (load_example(&block.at, &block.text), marked) {
             (Ok(()), true) => wrong.push(format!("{}: marked refused, but loads", block.at)),
             (Err(error), false) => {
                 let error: String = error.chars().take(240).collect();
@@ -241,7 +302,6 @@ fn misbehaving(blocks: &[Block], known: &mut BTreeMap<String, bool>) -> (Vec<Str
 }
 
 /// The files with extension `ext` in `dir`, and below it when `deep`, sorted.
-#[cfg(unix)]
 fn files(dir: &Path, ext: &str, deep: bool) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
@@ -259,7 +319,6 @@ fn files(dir: &Path, ext: &str, deep: bool) -> Vec<PathBuf> {
 }
 
 /// Every fenced yaml block the docs ship, CRLF normalised.
-#[cfg(unix)]
 fn shipped_blocks(root: &Path) -> Vec<Block> {
     let mut markdown = vec![root.join("README.md")];
     markdown.extend(files(&root.join("docs"), "md", false));
@@ -302,6 +361,14 @@ fn every_documented_gateway_yaml_example_loads() {
         .find(|b| b.at.starts_with("docs/UPGRADING-4.0.md:") && b.text.contains("a2a_url"))
         .expect("the UPGRADING A2A backend example is a fenced yaml block");
     assert!(checked.contains(&a2a.at), "{} was not checked", a2a.at);
+    // Each source the guard promises gives at least one checked example, so a
+    // source that stopped being read cannot pass unnoticed.
+    for source in ["README.md:", "docs/", "upgrading.d/", "src/config/"] {
+        assert!(
+            checked.iter().any(|at| at.starts_with(source)),
+            "no example from {source} was checked"
+        );
+    }
     assert!(
         wrong.is_empty(),
         "{} of {} documented gateway.yaml examples do not do what they show:\n{}",
@@ -321,6 +388,25 @@ fn fences_are_found_in_markdown_and_rustdoc() {
             at: "a.md:2".into(),
             text: "server:\n  port: 1\n".into()
         }]
+    );
+    // Tilde and longer fences, an info string after the language, a body line
+    // indented less than its fence (only spaces are cut), and a yaml fence
+    // inside another block, which is that block's text.
+    let md = "~~~yaml title=gateway.yaml\nserver: {}\n~~~\n  ````yml\n  a: 1\nb: 2\n  ```\n  ````\n\
+              ```markdown\n```yaml\nnot: me\n```\n";
+    let lines: Vec<Option<&str>> = md.lines().map(Some).collect();
+    assert_eq!(
+        fenced("c.md", &lines),
+        [
+            Block {
+                at: "c.md:1".into(),
+                text: "server: {}\n".into()
+            },
+            Block {
+                at: "c.md:4".into(),
+                text: "a: 1\nb: 2\n```\n".into()
+            },
+        ]
     );
     // The second block is cut by a code line, so it is dropped.
     let rs = "/// ```yaml\n/// backends: {}\n/// ```\nfn f() {}\n/// ```yaml\nconst X: u8 = 0;\n/// cut: 1\n/// ```\n";
@@ -356,7 +442,7 @@ fn a_digest_reference_gets_a_digest() {
     let key = "auth:\n  enabled: true\n  api_keys:\n    - name: a\n      key_sha256: env:DOCS_GUARD_A\n      \
                backends: [\"*\"]\n";
     load(key).expect_err("refused while the variable is unset");
-    load_example(key).expect("loads with the digest placeholder");
+    load_example("docs/x.md:1", key).expect("loads with the digest placeholder");
 }
 
 /// A signing key reference gets a base64 32-byte seed.
@@ -387,14 +473,86 @@ fn any_other_reference_gets_its_own_placeholder() {
     }
 }
 
-/// A block's own `env_files` gives way to the guard's file.
+/// The OAUTH_CONFIG example's own `env_files` gives way to the guard's file;
+/// any other file's example keeps its own, which then decides the load.
 #[test]
-fn an_examples_own_env_files_gives_way_to_the_guards() {
+fn only_the_named_examples_env_files_gives_way_to_the_guards() {
     let own =
         format!("env_files:\n  - ~/.config/nowhere/.env   # holds the token\n\n{ENV_EXAMPLE}");
     assert_eq!(without_env_files(&own), format!("\n{ENV_EXAMPLE}"));
     load(&own).expect_err("refused with the illustrative path");
-    load_example(&own).expect("loads with the guard's env file");
+    load_example("docs/OAUTH_CONFIG.md:163", &own).expect("loads with the guard's env file");
+    load_example("docs/OTHER.md:1", &own).expect_err("keeps its own env_files and is refused");
+}
+
+/// Placeholder words a documented digest must not be the SHA-256 of: an
+/// example carrying one would accept that word as a key wherever it is copied.
+const COMMON_WORDS: &[&str] = &[
+    "", "foo", "bar", "baz", "test", "secret", "password", "admin", "example", "key", "token",
+    "api-key", "apikey", "mysecret", "hello", "changeme", "letmein", "demo", "sample", "default",
+    "qwerty", "123456", "root", "user",
+];
+
+/// Each 64-hex value in `text` that is the SHA-256 of a [`COMMON_WORDS`] word,
+/// with the word.
+fn common_preimages(text: &str) -> Vec<(String, &'static str)> {
+    let known: BTreeMap<String, &'static str> = COMMON_WORDS
+        .iter()
+        .map(|word| {
+            let digest = api_key_digest_spec(word.as_bytes());
+            let hex = digest.strip_prefix("sha256:").expect("sha256: form");
+            (hex.to_owned(), *word)
+        })
+        .collect();
+    let hex = Regex::new(r"[0-9a-fA-F]{64}").expect("regex");
+    hex.find_iter(text)
+        .filter_map(|m| {
+            let found = m.as_str().to_ascii_lowercase();
+            known.get(&found).map(|word| (found, *word))
+        })
+        .collect()
+}
+
+/// No documented example carries a digest anyone can reverse: the digest of
+/// "foo" once sat in three of them as an API key's `key_sha256`.
+#[test]
+fn no_documented_digest_is_the_hash_of_a_common_word() {
+    let planted = format!("key_sha256: \"{}\"\n", api_key_digest_spec(b"foo"));
+    assert_eq!(
+        common_preimages(&planted)
+            .iter()
+            .map(|(_, word)| *word)
+            .collect::<Vec<_>>(),
+        ["foo"],
+        "the planted digest must be caught"
+    );
+    let found: Vec<String> = shipped_blocks(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .iter()
+        .flat_map(|block| {
+            common_preimages(&block.text)
+                .into_iter()
+                .map(|(hex, word)| format!("{}: {hex} is the SHA-256 of {word:?}", block.at))
+        })
+        .collect();
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+/// Top-level keys as the reader sees them: quoted and flow-style keys count,
+/// and a block that does not parse still names its column-0 keys.
+#[test]
+fn top_level_keys_follow_the_yaml_reader() {
+    assert_eq!(
+        top_keys("'backends': {}\n\"server\": {}\n"),
+        ["backends", "server"]
+    );
+    assert_eq!(
+        top_keys("{backends: {}, server: {}}\n"),
+        ["backends", "server"]
+    );
+    assert_eq!(
+        top_keys("backends:\n  x: [\nserver: {}\n"),
+        ["backends", "server"]
+    );
 }
 
 /// A backend whose header names a variable no run sets.
