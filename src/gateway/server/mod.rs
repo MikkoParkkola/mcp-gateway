@@ -369,9 +369,11 @@ pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 pub(super) enum Unprepared {
     /// Answered as it stands: nothing to record.
     Answered(serde_json::Value),
-    /// A malformed nonce refused early, under the every-call scope and ahead
-    /// of every gate, with the request's id: recorded before it is answered.
-    MalformedNonce(crate::gateway::router::AnswerId, crate::Error),
+    /// A signing refusal of the request's form, under the every-call scope
+    /// and ahead of every gate: an envelope that cannot be restored (answered
+    /// with no id) or a malformed nonce (with the request's id). Recorded
+    /// before it is answered.
+    SigningRefused(crate::gateway::router::AnswerId, crate::Error),
 }
 
 /// Every other early stop is answered as it stands.
@@ -405,8 +407,8 @@ pub(super) fn stdio_audit_who(
 }
 
 /// The answer to a request [`Unprepared`] stopped: as it stands, or, for a
-/// malformed nonce refused early, recorded first by the writer `/mcp` uses,
-/// keeping its early place ahead of every gate.
+/// signing refusal, recorded first by the writer `/mcp` uses, keeping its
+/// early place ahead of every gate.
 pub(super) async fn answer_unprepared(
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
     request: &serde_json::Value,
@@ -415,7 +417,7 @@ pub(super) async fn answer_unprepared(
 ) -> serde_json::Value {
     let (id, error) = match stop {
         Unprepared::Answered(answer) => return answer,
-        Unprepared::MalformedNonce(id, error) => (id, error),
+        Unprepared::SigningRefused(id, error) => (id, error),
     };
     let (called, arguments) = crate::gateway::router::call_name_and_arguments(request);
     crate::gateway::router::answer_stdio_signing_refusal(

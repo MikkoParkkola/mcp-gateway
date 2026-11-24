@@ -7,7 +7,8 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
-use super::test_source_text::{rust_files, sanitize};
+use super::test_source_files::rust_files;
+use super::test_source_text::sanitize;
 use super::test_stub::write_executable;
 
 /// The one product file allowed a shebang plus an executable mode: the uv

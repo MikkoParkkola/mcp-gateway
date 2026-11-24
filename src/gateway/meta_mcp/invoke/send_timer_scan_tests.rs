@@ -2,26 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Source pins for where the send timer is started and finished.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::test_source_files::rust_files;
 use crate::test_source_text::production_text;
-
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let mut dirs = vec![dir.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).expect("a scanned directory") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                files.push(path);
-            }
-        }
-    }
-    files
-}
 
 /// The send primitives each tree may call only from its timed file.
 const SITES: [(&str, &[&str], &str); 2] = [
@@ -93,7 +77,9 @@ fn every_send_has_a_timer() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     for tree in ["src/backend", "src/capability/executor"] {
-        for path in rust_files(&root.join(tree)) {
+        let mut listed = Vec::new();
+        rust_files(&root.join(tree), &mut listed);
+        for path in listed {
             let rel = path
                 .strip_prefix(root)
                 .expect("under the root")
