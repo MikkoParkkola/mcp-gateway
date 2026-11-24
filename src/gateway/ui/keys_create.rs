@@ -6,7 +6,9 @@
 //! The route checks, in order: admin, a config file, reload and a loadable
 //! file, a free name, a current revision, then the values themselves. Every
 //! refusal is fixed text that names a field at most, never the body or a
-//! value. The secret is generated here and nowhere else (see `write`).
+//! value. One refusal quotes a name: a name its own routes cannot address
+//! gets the shared name rule's message, the name escaped (a key's name is
+//! no secret). The secret is generated here and nowhere else (see `write`).
 
 use std::sync::{Arc, Mutex};
 
@@ -628,6 +630,17 @@ pub(super) async fn create_key(
         Ok(checked) => checked,
         Err(refused) => return *refused,
     };
+    // A name the key's own routes could not address, or one holding a
+    // control character: the one shared rule says so, before the loader is
+    // asked about anything (the loader itself keeps accepting such a name).
+    if let Some(message) = crate::config::name_refusal("API key name", &body.name) {
+        return structured_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "name_not_addressable",
+            message,
+        )
+        .into_response();
+    }
     if let Some(field) = refused_field(&body) {
         return invalid_field(field);
     }

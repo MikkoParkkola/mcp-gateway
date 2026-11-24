@@ -56,6 +56,7 @@ or, for one backend:
 ```yaml
 backends:
   my-backend:
+    http_url: "https://mcp.example.com/mcp"
     oauth:
       shared_account: true
 ```

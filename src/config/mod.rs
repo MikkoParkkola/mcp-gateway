@@ -49,6 +49,9 @@ mod strict_keys;
 pub(crate) use strict_keys::is_retired_key;
 mod validation;
 pub(crate) use validation::CLEARTEXT_REFUSAL;
+// The web UI's key routes ask the shared name rule; without the UI nothing outside config does.
+#[cfg(feature = "webui")]
+pub(crate) use validation::name_refusal;
 mod ws_backend;
 
 use std::{

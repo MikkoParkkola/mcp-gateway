@@ -411,6 +411,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.stop_when_idle_for` | KEEP | `None` | operator trades memory for cold starts per backend | - | src/config/backend_config.rs:35 |
 | `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set; see UPGRADING 148 (tests: unset reaches both shapes, a streamable server exactly as a streamable pin, `an_unpinned_flavour_connects_exactly_as_a_streamable_pin` src/transport/http/tests/unpinned_flavour.rs, and a legacy SSE server, `add_url_still_reaches_a_legacy_sse_server` tests/add_url_transport_autodetect.rs; a set value is honoured, `explicit_streamable_false_is_honoured` tests/add_url_transport_autodetect.rs) | src/config/backend_config.rs:231 |
 | `backends.<name>.timeout` | KEEP | `Duration::from_secs(30)` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:43 |
+| `backends.<name>.transport` | REMOVE | — | never read: `a2a_url`, `url`, `http_url`, `ws_url` or `command` picks the transport; earlier docs showed `transport: a2a` | refused at load with its reason; `mcp-gateway upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 162 | src/config/strict_keys.rs:38 |
 | `backends.<name>.url` | KEEP | — | where to reach the backend; its scheme picks HTTP or WebSocket | - | src/config/config_file.rs:80 |
 | `backends.<name>.ws_url` | INTERNAL | `see impl Default` | older spelling of the backend `url` key (P2c1); still read | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it | src/config/backend_config.rs:246 |
 | `cache` | INTERNAL | `type default` | only hidden keys remain after `enabled` is removed | hidden key: still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/mod.rs:109 |
@@ -840,10 +841,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway --protocol-revision-window` | INTERNAL | the operator's RFC-0060 U1 measurement window (`record`), hidden from `--help` (env MCP_GATEWAY_PROTOCOL_REVISION_WINDOW; MIK-8783) | replaces `server.protocol_revision_window`; see upgrading.d/8783.md | src/cli/mod.rs:165 |
 | `mcp-gateway --port` | KEEP | where the config is and how to listen and log (env MCP_GATEWAY_PORT) | - | src/cli/mod.rs:132 |
 | `mcp-gateway -p` | KEEP | short alias of `--port` | - | src/cli/mod.rs:132 |
-| `mcp-gateway accounts` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:274 |
-| `mcp-gateway accounts --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:274 |
-| `mcp-gateway accounts -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:274 |
-| `mcp-gateway accounts help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:274 |
+| `mcp-gateway accounts` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:103 |
+| `mcp-gateway accounts --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:103 |
+| `mcp-gateway accounts -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:103 |
+| `mcp-gateway accounts help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:103 |
 | `mcp-gateway accounts init-store` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:180 |
 | `mcp-gateway accounts init-store --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:180 |
 | `mcp-gateway accounts init-store -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:180 |
@@ -853,24 +854,24 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway accounts migrate-credentials --descriptor-id` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:195 |
 | `mcp-gateway accounts migrate-credentials --legacy-backend-name` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:195 |
 | `mcp-gateway accounts migrate-credentials --legacy-issuer` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:195 |
-| `mcp-gateway add` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:401 |
-| `mcp-gateway add -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --command` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:401 |
-| `mcp-gateway add -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:401 |
-| `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --env-file` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --keep-as-text` | INTERNAL | rare escape hatch for secret detection | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:401 |
-| `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway api` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:364 |
-| `mcp-gateway api --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:364 |
-| `mcp-gateway api -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:364 |
+| `mcp-gateway add` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:243 |
+| `mcp-gateway add -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:243 |
+| `mcp-gateway add --command` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:243 |
+| `mcp-gateway add -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:243 |
+| `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/command.rs:243 |
+| `mcp-gateway add --env-file` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add --keep-as-text` | INTERNAL | rare escape hatch for secret detection | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/command.rs:243 |
+| `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:243 |
+| `mcp-gateway api` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:158 |
+| `mcp-gateway api --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:158 |
+| `mcp-gateway api -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:158 |
 | `mcp-gateway api --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
 | `mcp-gateway api --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
 | `mcp-gateway api --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
@@ -883,10 +884,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway api -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway api <METHOD>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:45 |
 | `mcp-gateway api <PATH>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:49 |
-| `mcp-gateway audit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:587 |
-| `mcp-gateway audit --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:587 |
-| `mcp-gateway audit -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:587 |
-| `mcp-gateway audit help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:587 |
+| `mcp-gateway audit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:438 |
+| `mcp-gateway audit --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:438 |
+| `mcp-gateway audit -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:438 |
+| `mcp-gateway audit help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:438 |
 | `mcp-gateway audit lookup-email` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands/trust.rs:297 |
 | `mcp-gateway audit lookup-email --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands/trust.rs:297 |
 | `mcp-gateway audit lookup-email -h` | KEEP | short alias of `--help` | - | src/cli/subcommands/trust.rs:297 |
@@ -914,10 +915,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit verify --export` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --jwk` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
 | `mcp-gateway audit verify --path` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:708 |
-| `mcp-gateway cap` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:240 |
-| `mcp-gateway cap --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:240 |
-| `mcp-gateway cap -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:240 |
-| `mcp-gateway cap help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:240 |
+| `mcp-gateway cap` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:53 |
+| `mcp-gateway cap --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:53 |
+| `mcp-gateway cap -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:53 |
+| `mcp-gateway cap help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:53 |
 | `mcp-gateway cap discover` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:93 |
 | `mcp-gateway cap discover --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:93 |
 | `mcp-gateway cap discover -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:93 |
@@ -987,32 +988,32 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway cap validate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:20 |
 | `mcp-gateway cap validate -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:20 |
 | `mcp-gateway cap validate <FILE>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:20 |
-| `mcp-gateway dashboard-link` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:320 |
-| `mcp-gateway dashboard-link --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:320 |
-| `mcp-gateway dashboard-link -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:320 |
+| `mcp-gateway dashboard-link` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:153 |
+| `mcp-gateway dashboard-link --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:153 |
+| `mcp-gateway dashboard-link -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:153 |
 | `mcp-gateway dashboard-link --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
 | `mcp-gateway dashboard-link --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
 | `mcp-gateway dashboard-link --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
 | `mcp-gateway dashboard-link --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway dashboard-link --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway dashboard-link -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
-| `mcp-gateway doctor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --config` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor -c` | KEEP | short alias of `--config` | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --no-registry-check` | KEEP | skips doctor's npm deprecation lookup, for hosts that must not contact registry.npmjs.org (MIK-8512); env `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --shadow` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --shadow-format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --show-stderr` | KEEP | diagnose a stdio backend that dies at start | - | src/cli/mod.rs:500 |
-| `mcp-gateway doctor --start-stdio` | KEEP | diagnose a stdio backend that dies at start | - | src/cli/mod.rs:500 |
-| `mcp-gateway events` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:322 |
-| `mcp-gateway events --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:322 |
-| `mcp-gateway events -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:322 |
-| `mcp-gateway events help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:322 |
+| `mcp-gateway doctor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --config` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor -c` | KEEP | short alias of `--config` | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor -f` | KEEP | short alias of `--format` | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --no-registry-check` | KEEP | skips doctor's npm deprecation lookup, for hosts that must not contact registry.npmjs.org (MIK-8512); env `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --shadow` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --shadow-format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --show-stderr` | KEEP | diagnose a stdio backend that dies at start | - | src/cli/command.rs:344 |
+| `mcp-gateway doctor --start-stdio` | KEEP | diagnose a stdio backend that dies at start | - | src/cli/command.rs:344 |
+| `mcp-gateway events` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:155 |
+| `mcp-gateway events --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:155 |
+| `mcp-gateway events -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:155 |
+| `mcp-gateway events help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:155 |
 | `mcp-gateway events dead-letters` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:19 |
 | `mcp-gateway events dead-letters --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/events.rs:19 |
 | `mcp-gateway events dead-letters -h` | KEEP | short alias of `--help` | - | src/cli/events.rs:19 |
@@ -1027,20 +1028,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway events dead-letters -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway events dead-letters <ACTION>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:37 |
 | `mcp-gateway events dead-letters <ID>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:39 |
-| `mcp-gateway get` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:467 |
-| `mcp-gateway get --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:467 |
-| `mcp-gateway get -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:467 |
-| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:467 |
-| `mcp-gateway get -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:467 |
-| `mcp-gateway get <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:467 |
-| `mcp-gateway hash-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:282 |
-| `mcp-gateway hash-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:282 |
-| `mcp-gateway hash-key -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:282 |
-| `mcp-gateway hash-key --verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:282 |
-| `mcp-gateway identity` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:270 |
-| `mcp-gateway identity --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:270 |
-| `mcp-gateway identity -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:270 |
-| `mcp-gateway identity help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:270 |
+| `mcp-gateway get` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:312 |
+| `mcp-gateway get --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:312 |
+| `mcp-gateway get -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:312 |
+| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:312 |
+| `mcp-gateway get -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:312 |
+| `mcp-gateway get <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:312 |
+| `mcp-gateway hash-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:111 |
+| `mcp-gateway hash-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:111 |
+| `mcp-gateway hash-key -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:111 |
+| `mcp-gateway hash-key --verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:111 |
+| `mcp-gateway identity` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:99 |
+| `mcp-gateway identity --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:99 |
+| `mcp-gateway identity -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:99 |
+| `mcp-gateway identity help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:99 |
 | `mcp-gateway identity grants` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/identity.rs:16 |
 | `mcp-gateway identity grants --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/identity.rs:16 |
 | `mcp-gateway identity grants -h` | KEEP | short alias of `--help` | - | src/cli/identity.rs:16 |
@@ -1081,10 +1082,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway identity grants revoke -f` | KEEP | short alias of `--format` | - | src/cli/identity.rs:114 |
 | `mcp-gateway identity grants revoke --grant-id` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/identity.rs:114 |
 | `mcp-gateway identity grants revoke --revoked-at` | AUTO | use current time | `#[arg(hide = true)]`: still accepted; unset uses the current time (src/commands/identity.rs:203); no UPGRADING item: the flag and its default behave as before | src/cli/identity.rs:114 |
-| `mcp-gateway import` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:247 |
-| `mcp-gateway import --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:247 |
-| `mcp-gateway import -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:247 |
-| `mcp-gateway import help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:247 |
+| `mcp-gateway import` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:60 |
+| `mcp-gateway import --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:60 |
+| `mcp-gateway import -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:60 |
+| `mcp-gateway import help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:60 |
 | `mcp-gateway import apply` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:233 |
 | `mcp-gateway import apply --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:233 |
 | `mcp-gateway import apply -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:233 |
@@ -1106,17 +1107,17 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway import preview --kind` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:209 |
 | `mcp-gateway import preview --source-name` | AUTO | derive from file name | `#[arg(hide = true)]`: still accepted; unset derives the name from the file name (src/commands/protocol_import.rs:122); no UPGRADING item: the flag and its default behave as before | src/cli/subcommands.rs:209 |
 | `mcp-gateway import preview <FILE>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:209 |
-| `mcp-gateway init` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:291 |
-| `mcp-gateway init --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:291 |
-| `mcp-gateway init -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:291 |
-| `mcp-gateway init --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:291 |
-| `mcp-gateway init -o` | KEEP | short alias of `--output` | - | src/cli/mod.rs:291 |
-| `mcp-gateway init --profile` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:291 |
-| `mcp-gateway init --with-examples` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:291 |
-| `mcp-gateway kubernetes` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/mod.rs:251 |
-| `mcp-gateway kubernetes --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/mod.rs:251 |
-| `mcp-gateway kubernetes -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/mod.rs:251 |
-| `mcp-gateway kubernetes help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/mod.rs:251 |
+| `mcp-gateway init` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:123 |
+| `mcp-gateway init --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:123 |
+| `mcp-gateway init -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:123 |
+| `mcp-gateway init --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:123 |
+| `mcp-gateway init -o` | KEEP | short alias of `--output` | - | src/cli/command.rs:123 |
+| `mcp-gateway init --profile` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:123 |
+| `mcp-gateway init --with-examples` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:123 |
+| `mcp-gateway kubernetes` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/command.rs:68 |
+| `mcp-gateway kubernetes --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/command.rs:68 |
+| `mcp-gateway kubernetes -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/command.rs:68 |
+| `mcp-gateway kubernetes help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/command.rs:68 |
 | `mcp-gateway kubernetes apply-plan` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:347 |
 | `mcp-gateway kubernetes apply-plan --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:347 |
 | `mcp-gateway kubernetes apply-plan -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:347 |
@@ -1146,17 +1147,17 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway kubernetes plan --namespace` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:300 |
 | `mcp-gateway kubernetes plan -n` | INTERNAL | short alias of `--namespace` | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:300 |
 | `mcp-gateway kubernetes plan <RESOURCES>` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:300 |
-| `mcp-gateway list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
-| `mcp-gateway list --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:453 |
-| `mcp-gateway list -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:453 |
-| `mcp-gateway list --available` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
-| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
-| `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
-| `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
-| `mcp-gateway provenance` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:283 |
-| `mcp-gateway provenance --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:283 |
-| `mcp-gateway provenance -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:283 |
-| `mcp-gateway provenance help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:283 |
+| `mcp-gateway list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:299 |
+| `mcp-gateway list --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:299 |
+| `mcp-gateway list -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:299 |
+| `mcp-gateway list --available` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:299 |
+| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:299 |
+| `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:299 |
+| `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:299 |
+| `mcp-gateway provenance` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:95 |
+| `mcp-gateway provenance --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:95 |
+| `mcp-gateway provenance -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:95 |
+| `mcp-gateway provenance help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:95 |
 | `mcp-gateway provenance public-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:738 |
 | `mcp-gateway provenance public-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:738 |
 | `mcp-gateway provenance public-key -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:738 |
@@ -1168,40 +1169,40 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway provenance verify --signature-only` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway provenance verify --trust` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway provenance verify <RECEIPT>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
-| `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
-| `mcp-gateway ranking --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
-| `mcp-gateway ranking -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
-| `mcp-gateway ranking help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
+| `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:76 |
+| `mcp-gateway ranking --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:76 |
+| `mcp-gateway ranking -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:76 |
+| `mcp-gateway ranking help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:76 |
 | `mcp-gateway ranking eval` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
 | `mcp-gateway ranking eval --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
 | `mcp-gateway ranking eval -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
 | `mcp-gateway ranking eval --format` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
 | `mcp-gateway ranking eval -f` | INTERNAL | short alias of `--format` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
 | `mcp-gateway ranking eval <FILE>` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:269 |
-| `mcp-gateway remove` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
-| `mcp-gateway remove --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:437 |
-| `mcp-gateway remove -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:437 |
-| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:437 |
-| `mcp-gateway remove -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:437 |
-| `mcp-gateway remove --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
-| `mcp-gateway remove <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
-| `mcp-gateway runtime` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature (feature runtime-substrate) | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:592 |
-| `mcp-gateway runtime --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:592 |
-| `mcp-gateway runtime -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:592 |
-| `mcp-gateway runtime help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:592 |
+| `mcp-gateway remove` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:287 |
+| `mcp-gateway remove --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:287 |
+| `mcp-gateway remove -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:287 |
+| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:287 |
+| `mcp-gateway remove -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/command.rs:287 |
+| `mcp-gateway remove --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:287 |
+| `mcp-gateway remove <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:287 |
+| `mcp-gateway runtime` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature (feature runtime-substrate) | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:447 |
+| `mcp-gateway runtime --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:447 |
+| `mcp-gateway runtime -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:447 |
+| `mcp-gateway runtime help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:447 |
 | `mcp-gateway runtime compile` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:602 |
 | `mcp-gateway runtime compile --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:602 |
 | `mcp-gateway runtime compile -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:602 |
 | `mcp-gateway runtime compile --both` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:602 |
 | `mcp-gateway runtime compile <DESCRIPTOR>` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:602 |
-| `mcp-gateway serve` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:223 |
-| `mcp-gateway serve --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:223 |
-| `mcp-gateway serve -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:223 |
-| `mcp-gateway serve --stdio` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:223 |
-| `mcp-gateway setup` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:374 |
-| `mcp-gateway setup --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:374 |
-| `mcp-gateway setup -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:374 |
-| `mcp-gateway setup help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:374 |
+| `mcp-gateway serve` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:36 |
+| `mcp-gateway serve --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:36 |
+| `mcp-gateway serve -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:36 |
+| `mcp-gateway serve --stdio` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:36 |
+| `mcp-gateway setup` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:211 |
+| `mcp-gateway setup --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:211 |
+| `mcp-gateway setup -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:211 |
+| `mcp-gateway setup help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:211 |
 | `mcp-gateway setup export` | KEEP | user-facing command or flag for setup, operation or capability authoring (feature config-export) | - | src/cli/setup.rs:67 |
 | `mcp-gateway setup export --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/setup.rs:67 |
 | `mcp-gateway setup export -h` | KEEP | short alias of `--help` | - | src/cli/setup.rs:67 |
@@ -1225,10 +1226,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway setup wizard --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/setup.rs:22 |
 | `mcp-gateway setup wizard -o` | KEEP | short alias of `--output` | - | src/cli/setup.rs:22 |
 | `mcp-gateway setup wizard --yes` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/setup.rs:22 |
-| `mcp-gateway skills` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:366 |
-| `mcp-gateway skills --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:366 |
-| `mcp-gateway skills -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:366 |
-| `mcp-gateway skills help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:366 |
+| `mcp-gateway skills` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:203 |
+| `mcp-gateway skills --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:203 |
+| `mcp-gateway skills -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:203 |
+| `mcp-gateway skills help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:203 |
 | `mcp-gateway skills generate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate -h` | KEEP | short alias of `--help` | - | src/cli/skills.rs:47 |
@@ -1263,16 +1264,16 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway skills show -h` | KEEP | short alias of `--help` | - | src/cli/skills.rs:123 |
 | `mcp-gateway skills show --registry` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_SKILLS_REGISTRY) | - | src/cli/skills.rs:123 |
 | `mcp-gateway skills show <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:123 |
-| `mcp-gateway stats` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:309 |
-| `mcp-gateway stats --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:309 |
-| `mcp-gateway stats -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:309 |
+| `mcp-gateway stats` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:141 |
+| `mcp-gateway stats --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:141 |
+| `mcp-gateway stats -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:141 |
 | `mcp-gateway stats --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway stats --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway stats -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
-| `mcp-gateway tls` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:262 |
-| `mcp-gateway tls --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:262 |
-| `mcp-gateway tls -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:262 |
-| `mcp-gateway tls help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:262 |
+| `mcp-gateway tls` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:83 |
+| `mcp-gateway tls --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:83 |
+| `mcp-gateway tls -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:83 |
+| `mcp-gateway tls help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:83 |
 | `mcp-gateway tls init-ca` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls init-ca --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:628 |
 | `mcp-gateway tls init-ca -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:628 |
@@ -1301,10 +1302,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tls issue-server -o` | KEEP | short alias of `--out` | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --san-dns` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
 | `mcp-gateway tls issue-server --validity-days` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:644 |
-| `mcp-gateway tool` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:359 |
-| `mcp-gateway tool --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:359 |
-| `mcp-gateway tool -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:359 |
-| `mcp-gateway tool help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/mod.rs:359 |
+| `mcp-gateway tool` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:196 |
+| `mcp-gateway tool --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:196 |
+| `mcp-gateway tool -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:196 |
+| `mcp-gateway tool help` | KEEP | clap-generated: prints a subcommand's usage | - | src/cli/command.rs:196 |
 | `mcp-gateway tool completions` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:717 |
@@ -1337,10 +1338,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool list -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_list_reads_the_configured_directories`, `flag_and_env_override_the_config`, `no_config_keeps_the_local_capabilities_directory`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:666 |
 | `mcp-gateway tool list --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:666 |
-| `mcp-gateway trust` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
-| `mcp-gateway trust --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
-| `mcp-gateway trust -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
-| `mcp-gateway trust help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
+| `mcp-gateway trust` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:91 |
+| `mcp-gateway trust --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:91 |
+| `mcp-gateway trust -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:91 |
+| `mcp-gateway trust help` | INTERNAL | clap-generated: prints a subcommand's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/command.rs:91 |
 | `mcp-gateway trust generate` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:451 |
 | `mcp-gateway trust generate --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:451 |
 | `mcp-gateway trust generate -h` | INTERNAL | short alias of `--help` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:451 |
@@ -1391,23 +1392,23 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway trust validate --format` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:493 |
 | `mcp-gateway trust validate -f` | INTERNAL | short alias of `--format` | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:493 |
 | `mcp-gateway trust validate --strict` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:493 |
-| `mcp-gateway upgrade` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade --data-dir` | KEEP | flag form of `MCP_GATEWAY_CONFIG_DIR` for volume-mounted deployments (env MCP_GATEWAY_CONFIG_DIR) | - | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade --quiet` | INTERNAL | log-level covers it | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:560 |
-| `mcp-gateway upgrade -q` | INTERNAL | log-level covers it | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:560 |
-| `mcp-gateway validate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate --no-color` | AUTO | unset: colour follows the terminal and `NO_COLOR` | hidden flag, still honoured; see upgrading.d/3730.md | src/cli/mod.rs:330 |
-| `mcp-gateway validate --severity` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
-| `mcp-gateway validate -s` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/mod.rs:330 |
-| `mcp-gateway validate <PATHS>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
+| `mcp-gateway upgrade` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:411 |
+| `mcp-gateway upgrade --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:411 |
+| `mcp-gateway upgrade -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:411 |
+| `mcp-gateway upgrade --data-dir` | KEEP | flag form of `MCP_GATEWAY_CONFIG_DIR` for volume-mounted deployments (env MCP_GATEWAY_CONFIG_DIR) | - | src/cli/command.rs:411 |
+| `mcp-gateway upgrade --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:411 |
+| `mcp-gateway upgrade --quiet` | INTERNAL | log-level covers it | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/command.rs:411 |
+| `mcp-gateway upgrade -q` | INTERNAL | log-level covers it | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/command.rs:411 |
+| `mcp-gateway validate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:166 |
+| `mcp-gateway validate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/command.rs:166 |
+| `mcp-gateway validate -h` | KEEP | short alias of `--help` | - | src/cli/command.rs:166 |
+| `mcp-gateway validate --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:166 |
+| `mcp-gateway validate --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:166 |
+| `mcp-gateway validate -f` | KEEP | short alias of `--format` | - | src/cli/command.rs:166 |
+| `mcp-gateway validate --no-color` | AUTO | unset: colour follows the terminal and `NO_COLOR` | hidden flag, still honoured; see upgrading.d/3730.md | src/cli/command.rs:166 |
+| `mcp-gateway validate --severity` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/command.rs:166 |
+| `mcp-gateway validate -s` | INTERNAL | output tuning | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/command.rs:166 |
+| `mcp-gateway validate <PATHS>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/command.rs:166 |
 | `mcp-gateway audit verify --json` | KEEP | the verdict as one JSON document, pass or fail | - | src/cli/subcommands/trust.rs:296 |
 | `mcp-gateway cap list --json` | KEEP | the listing as one JSON document | - | src/cli/subcommands.rs:55 |
 | `mcp-gateway cap registry-list --json` | KEEP | the index as one JSON document | - | src/cli/subcommands.rs:183 |
@@ -1415,13 +1416,13 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway cap test --json` | KEEP | the call's result as one JSON document | - | src/cli/subcommands.rs:93 |
 | `mcp-gateway cap validate --json` | KEEP | the validated capability as one JSON document | - | src/cli/subcommands.rs:31 |
 | `mcp-gateway dashboard-link --json` | KEEP | the link as one JSON document; errors as the shared JSON error | - | src/cli/dashboard_link.rs:18 |
-| `mcp-gateway get --json` | KEEP | the backend as one JSON document, values hidden | - | src/cli/mod.rs:535 |
-| `mcp-gateway hash-key --json` | KEEP | the digest as one JSON document | - | src/cli/mod.rs:334 |
+| `mcp-gateway get --json` | KEEP | the backend as one JSON document, values hidden | - | src/cli/command.rs:317 |
+| `mcp-gateway hash-key --json` | KEEP | the digest as one JSON document | - | src/cli/command.rs:118 |
 | `mcp-gateway provenance verify --json` | KEEP | the verdict as one JSON document, valid or not | - | src/cli/subcommands/trust.rs:351 |
 | `mcp-gateway skills list --json` | KEEP | the registry as one JSON document | - | src/cli/skills.rs:104 |
 | `mcp-gateway skills search --json` | KEEP | the hits as one JSON document | - | src/cli/skills.rs:119 |
 | `mcp-gateway skills show --json` | KEEP | the skill as one JSON document | - | src/cli/skills.rs:134 |
-| `mcp-gateway stats --json` | KEEP | the statistics as one JSON document | - | src/cli/mod.rs:367 |
+| `mcp-gateway stats --json` | KEEP | the statistics as one JSON document | - | src/cli/command.rs:149 |
 
 ## Surface: env
 
@@ -1434,8 +1435,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_CLIENT_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:23 |
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |
 | `MCP_GATEWAY_CONFIG` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:127 |
-| `MCP_GATEWAY_CONFIG_DIR` | KEEP | data directory for persisted state (src/gateway/server/persistence.rs:181); volume-mounted deployments set it | - | src/cli/mod.rs:571 |
-| `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | INTERNAL | env twin of a diagnostic flag | hidden variable: still read and applied; left out of the docs; UPGRADING names it | src/cli/mod.rs:552 |
+| `MCP_GATEWAY_CONFIG_DIR` | KEEP | data directory for persisted state (src/gateway/server/persistence.rs:181); volume-mounted deployments set it | - | src/cli/command.rs:422 |
+| `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | INTERNAL | env twin of a diagnostic flag | hidden variable: still read and applied; left out of the docs; UPGRADING names it | src/cli/command.rs:386 |
 | `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | KEEP | security policy list (rule 1): replaces the argument keys the injection scan treats as free text, so it can widen or narrow the scan; an explicit operator decision (rule 2) | - | src/security/firewall/input_scanner.rs:85 |
 | `MCP_GATEWAY_HOST` | INTERNAL | follows --host; config server.host remains | hidden variable: still read and applied; left out of the docs; UPGRADING names it | src/cli/mod.rs:135 |
 | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | INTERNAL | the operator's RFC-0060 U1 measurement window (`record`), hidden like its flag (MIK-8783) | replaces `server.protocol_revision_window`; see upgrading.d/8783.md | src/cli/mod.rs:163 |
@@ -1539,7 +1540,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/markers` | INTERNAL | private JSON API of the bundled web UI | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts | src/gateway/routes.rs:UI_MARKERS |
 | `/ui/api/metrics/series` | INTERNAL | private JSON API of the bundled web UI | admin only; windowed call counters for the charts (ADR-017) | src/gateway/routes.rs:UI_METRICS_SERIES |
 | `/ui/api/overview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_OVERVIEW |
-| `/ui/api/policies` | INTERNAL | private JSON API of the bundled web UI | admin only; the Policies screen's read model: the tool policy (switches, the built-in denies and each entry, with each deny's coverage by the allow entries) and the finding rules (each as written, its editability, whether the firewall-on load refuses it, the earlier rules that shadow it per scan type, and where a scoped rule applies differently), the six scan types the screen offers (each with its side and preconditions, and whether it is produced), the guards (each with its running state, its rule-proof cases and its rule-decidable findings, and the cross-tenant read verdict), the credentials pair (the redaction switch and the pinned `warn` rule with the earlier rules that shadow it fully or partly), the relay settings (with what the action does and the gate's inferred classes) and the four tool limits with where each is edited; every setting carries the file's value and the enforced value, which differ until a restart for a restart-only field; `finding_rules`, `scan_types`, `guards`, `credentials` and `relay` are `null` in a build without the firewall and `finding_rules` is `[]` when it has no rule; read-only; admin only means gateway admin credentials (an admin API key, an admin bearer or a dashboard session), not an OIDC control-plane Admin role | src/gateway/routes.rs:UI_POLICIES |
+| `/ui/api/policies` | INTERNAL | private JSON API of the bundled web UI | admin only; the Policies screen's read model: the tool policy (switches, the built-in denies and each entry, with each deny's coverage by the allow entries) and the finding rules (each as written, its editability, whether the firewall-on load refuses it, the earlier rules that shadow it per scan type, and where a scoped rule applies differently), the six scan types the screen offers (each with its side and preconditions, and whether it is produced), the guards (each with its running state, its rule-proof cases and its rule-decidable findings, and the cross-tenant read verdict), the credentials pair (the redaction switch and the pinned `warn` rule with the earlier rules that shadow it fully or partly), the relay settings (with what the action does and the gate's inferred classes) and the four tool limits with where each is edited; every setting carries the file's value and the enforced value, which differ until a restart for a restart-only field; `finding_rules`, `scan_types`, `guards`, `credentials` and `relay` are `null` in a build without the firewall and `finding_rules` is `[]` when it has no rule; `request_checks` serves the two request checks (input sanitizing and SSRF protection) as in force, in every build; each setting also carries `read_only`, true unless the settings save lists its path, and under the hardened posture SSRF protection carries `forced_by: security.posture` and reads as read-only, since the posture holds it on; the tool policy's `enabled`, `default_action` and `use_default_deny` are setting objects with their paths, and the relay section has no section-wide `read_only`; read-only; admin only means gateway admin credentials (an admin API key, an admin bearer or a dashboard session), not an OIDC control-plane Admin role | src/gateway/routes.rs:UI_POLICIES |
 | `/ui/api/previews` | INTERNAL | private JSON API of the bundled web UI | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted | src/gateway/routes.rs:UI_PREVIEWS |
 | `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY |
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_REGISTRY_SEARCH |

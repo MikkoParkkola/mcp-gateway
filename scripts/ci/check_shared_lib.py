@@ -308,13 +308,39 @@ def check_no_compile(name: str, steps: list[dict]) -> list[str]:
     return problems
 
 
+# C6 keeps a consumer from hiding a failed run of the shared binary. The affected-tests shadow steps
+# (scripts/ci/affected_select.py) only record what the leg would run, never gate on the binaries' results, and no
+# step reads their outcome, so they may carry continue-on-error. One counts as a shadow step only by its name AND a
+# content that cannot run the binaries: the restore and upload actions on their own paths, the exact select command
+# (it lists the binaries with --lib-bin, and nothing else), or a run that names neither the binaries' folder,
+# a lib-tests file, nor shard_tests.
+SHADOW_SELECT = 'python3 scripts/ci/affected_select.py "$LEG" "$RECORD" --lib-bin "$RUNNER_TEMP/lib-bin"'
+SHADOW_UPLOAD_PATH = "${{ runner.temp }}/affected-select/${{ matrix.shard }}.json"
+
+
+def shadow_step(step: dict) -> bool:
+    name, body, run = step.get("name"), with_map(step), run_text(step)
+    if name == "Affected tests map":
+        return "run" not in step and uses_action(step, "actions/cache/restore") and body.get("path") == "map/affected-map.json"
+    if name == "Upload the affected tests record":
+        return "run" not in step and uses_action(step, "actions/upload-artifact") and body.get("path") == SHADOW_UPLOAD_PATH
+    if name == "Affected tests (shadow)":
+        return "uses" not in step and run == SHADOW_SELECT
+    if name == "Affected tests record":
+        env = step.get("env") if isinstance(step.get("env"), dict) else {}
+        # The env values count too: `run: "$X"` with X naming a part binary would otherwise slip through.
+        text = " ".join([run, *(str(v) for v in env.values())])
+        return "uses" not in step and not any(word in text for word in ("lib-bin", "lib-tests", "shard_tests"))
+    return False
+
+
 def check_no_continue(name: str, job: dict, steps: list[dict]) -> list[str]:
-    """C6."""
+    """C6. No consumer step may carry continue-on-error, except the shadow steps above."""
     problems: list[str] = []
     if "continue-on-error" in job:
         problems.append(f"{name} job: carries continue-on-error")
     for index, step in enumerate(steps):
-        if "continue-on-error" in step:
+        if "continue-on-error" in step and not shadow_step(step):
             problems.append(f"{name} {step_label(index, step)}: carries continue-on-error")
     return problems
 
@@ -655,6 +681,24 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
     consumer_continues = fresh()
     consumer_continues["linux-keychain"]["continue-on-error"] = True
 
+    def lib_step(jobs: dict, step_name: str) -> dict:
+        return next(s for s in jobs[LIB_SHARDS]["steps"] if s.get("name") == step_name)
+
+    other_continues = fresh()
+    lib_step(other_continues, "The gateway binary is executable")["continue-on-error"] = True
+    binary_continues = fresh()
+    lib_step(binary_continues, "Shard suite from the part binaries")["continue-on-error"] = True
+    shadow_runs_binary = fresh()
+    lib_step(shadow_runs_binary, "Affected tests (shadow)")["run"] = '"$RUNNER_TEMP/lib-bin"/p1/lib-tests-p1/lib-tests-p1'
+    shadow_names_bin = fresh()
+    lib_step(shadow_names_bin, "Affected tests record")["run"] = 'ls "$RUNNER_TEMP/lib-bin"\n'
+    shadow_env_binary = fresh()
+    record = lib_step(shadow_env_binary, "Affected tests record")
+    record["env"] = {**record.get("env", {}), "PART": "${{ runner.temp }}/lib-bin/p1/lib-tests-p1/lib-tests-p1"}
+    record["run"] = '"$PART"\n'
+    shadow_named_upload = fresh()
+    lib_step(shadow_named_upload, "Upload the affected tests record")["with"]["path"] = UPLOAD_PATH
+
     return [
         ("live jobs unchanged", live),
         ("drop the gate step from gws-dry-run", drop_gate),
@@ -675,6 +719,12 @@ def _cases(live: dict) -> list[tuple[str, dict]]:
         ("ROLLUP drops test-shards-lib from needs", rollup_needs),
         ("ROLLUP_EXPECTS drops linux-lib-build", rollup_expects),
         ("a consumer job gains continue-on-error", consumer_continues),
+        ("a non-shadow step of test-shards-lib gains continue-on-error", other_continues),
+        ("the step running the part binaries gains continue-on-error", binary_continues),
+        ("a shadow-named step runs a part binary", shadow_runs_binary),
+        ("a shadow-named step names the part binaries' folder", shadow_names_bin),
+        ("a shadow-named step runs a part binary named in its env", shadow_env_binary),
+        ("a shadow-named upload sends the part binaries", shadow_named_upload),
     ]
 
 

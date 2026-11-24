@@ -281,7 +281,6 @@ pub enum TransportConfig {
     /// ```yaml
     /// backends:
     ///   travel-agent:
-    ///     transport: a2a
     ///     a2a_url: "https://travel.example.com"
     /// ```
     #[cfg(feature = "a2a")]

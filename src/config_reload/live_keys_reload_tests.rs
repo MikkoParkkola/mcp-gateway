@@ -14,10 +14,22 @@ use crate::gateway::test_helpers::write_owner_only;
 const A: &str = "reload-keys-a-secret";
 const B: &str = "reload-keys-b-secret";
 
+/// The name a key goes by, never its secret: a refusal that quoted a secret
+/// must not pass for one that named the key.
+fn name_of(secret: &str) -> &'static str {
+    match secret {
+        A => "alpha",
+        B => "beta",
+        // A bearer reused as a key (K10): at most one per list here.
+        _ => "gamma",
+    }
+}
+
 /// One key entry in YAML.
 fn key_yaml(secret: &str, admin: bool) -> String {
     format!(
-        "    - name: {secret}\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n      admin: {admin}\n",
+        "    - name: {}\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n      admin: {admin}\n",
+        name_of(secret),
         crate::config::api_key_digest_spec(secret.as_bytes())
     )
 }
@@ -88,10 +100,24 @@ impl Running {
     }
 }
 
+/// `err` shows neither `secret` nor its digest.
+fn hides(err: &str, secret: &str) {
+    let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+    let hex = digest.trim_start_matches("sha256:");
+    assert!(
+        !err.contains(secret) && !err.contains(hex),
+        "a secret shown: {err}"
+    );
+}
+
 /// A refusal names the key table and leaves the published generation as it
 /// was.
 fn assert_refused(err: &str, before: &Arc<crate::config_reload::Generation>, gw: &Running) {
     assert!(err.contains("auth.api_keys"), "{err}");
+    // It may name keys, never show what authenticates them.
+    for secret in [A, B] {
+        hides(err, secret);
+    }
     assert!(
         Arc::ptr_eq(before, &gw.live.generation()),
         "a refused key edit published"
@@ -287,6 +313,7 @@ async fn k10_a_key_equal_to_the_generated_bearer_is_refused() {
         .await
         .expect_err("a key sharing the running bearer is refused");
     assert_refused(&err, &before, &gw);
+    hides(&err, &bearer);
 }
 
 /// K10: the edited bearer differs from the running one; the RUNNING bearer
@@ -308,4 +335,7 @@ async fn k10_the_running_bearer_decides_a_collision() {
         .await
         .expect_err("collides with the running bearer");
     assert_refused(&err, &before, &gw);
+    for bearer in ["running-bearer-secret", "edited-bearer-secret"] {
+        hides(&err, bearer);
+    }
 }
