@@ -20,6 +20,7 @@
 #![cfg(all(feature = "a2a", feature = "cost-governance", feature = "firewall"))]
 
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::config::Config;
@@ -223,6 +224,7 @@ fn misbehaving(blocks: &[Block], known: &mut BTreeMap<String, bool>) -> (Vec<Str
 }
 
 /// The files with extension `ext` in `dir`, and below it when `deep`, sorted.
+#[cfg(unix)]
 fn files(dir: &Path, ext: &str, deep: bool) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
@@ -240,6 +242,7 @@ fn files(dir: &Path, ext: &str, deep: bool) -> Vec<PathBuf> {
 }
 
 /// Every fenced yaml block the docs ship, CRLF normalised.
+#[cfg(unix)]
 fn shipped_blocks(root: &Path) -> Vec<Block> {
     let mut markdown = vec![root.join("README.md")];
     markdown.extend(files(&root.join("docs"), "md", false));
@@ -269,6 +272,9 @@ fn shipped_blocks(root: &Path) -> Vec<Block> {
     blocks
 }
 
+/// Unix only: the docs' examples use Unix absolute paths (`/var/lib/...`),
+/// which a Windows loader refuses for want of a drive; that is not a doc bug.
+#[cfg(unix)]
 #[test]
 fn every_documented_gateway_yaml_example_loads() {
     let blocks = shipped_blocks(Path::new(env!("CARGO_MANIFEST_DIR")));
