@@ -224,13 +224,14 @@ async fn t10a_reload_waits_for_the_cli_append() {
 #[tokio::test]
 async fn t2c_watcher_reload_records_the_change() {
     let r = Reload::new();
-    // The watcher's reload takes the config lock on a thread that can outlive
-    // this test; only a kept dir waits for it (`crate::spawn_keep`).
-    assert!(
-        !crate::test_dir_keep::kept_dirs_for(&r.grants).is_empty(),
-        "T2c: the fixture's dir is kept"
-    );
     let config_path = r.grants.with_file_name("gateway.yaml");
+    // The watcher's reload takes the config lock on this path, on a thread
+    // that can outlive this test; only a kept dir waits for it
+    // (`crate::spawn_keep`).
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&config_path).is_empty(),
+        "T2c: the config's dir is kept"
+    );
     crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default()).unwrap();
     r.cli(add(row("g1", "r"))).await;
 

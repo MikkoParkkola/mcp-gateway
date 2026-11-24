@@ -236,6 +236,7 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let watched = config_path.clone();
     ConfigWatcher::spawn_reload_task(
         config_path,
         Arc::new(LiveConfig::new(Config::default())),
@@ -266,6 +267,11 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let _ = shutdown_tx.send(());
+    // Still kept after shutdown, when a reload's lock thread may still run.
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&watched).is_empty(),
+        "W: the test's dir is still kept at shutdown"
+    );
 
     assert!(
         !allows(&store, "alice", "cal"),
