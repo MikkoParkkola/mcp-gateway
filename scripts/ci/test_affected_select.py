@@ -440,7 +440,7 @@ LANE_PR = ("github.event_name == 'pull_request' && github.base_ref == 'docs/rank
            "!startsWith(github.head_ref, 'train/')")
 # sha256 over the four legs' other steps (name, if, uses, run), as at the base: this part changes none of them.
 # Child E, which gates those steps, updates this value; the failure message prints the current one.
-EXISTING_DIGEST = "PENDING"
+EXISTING_DIGEST = "4fc5a2a0846d0d1f2a629ecc0963b35f5c23dd517427937ec328c7126380f907"
 
 
 def _yaml(name: str) -> dict:
@@ -618,7 +618,7 @@ def _mutants() -> list:
             return ""
 
     def fetch_into_checkout(origin, merge, head, map_sha, scratch):
-        sh("git", "-C", os.environ["GITHUB_WORKSPACE"], "fetch", "-q", "--depth=2", "--filter=blob:none", origin, merge)
+        sh("git", "-C", os.environ["GITHUB_WORKSPACE"], "fetch", "-q", "--depth=2", origin, merge)
         return real["history"](origin, merge, head, map_sha, scratch)
 
     def no_timeout(repo, *a):
@@ -664,8 +664,10 @@ def _mutants() -> list:
         ("S14 the files rule dropped", "Rule", [(sel, "select_units", units_map(lambda v: {**v, "files": []}))]),
         ("S16 probes dropped", "Rule", [(sel, "select_units", units_map(lambda v: {**v, "probes": []}))]),
         ("S16 only the direct parent", "Rule", [(sel, "ancestors", lambda p: [os.path.dirname(p)])]),
-        ("S22 dirs counted as executed", "Rule", [(sel, "select_units", units_map(
-            lambda v: {**v, "files": [*v["files"], *v["dirs"]]}))]),
+        ("S22 a file under a listed folder counted as executed", "Rule", [(sel, "select_units", lambda u, h, b:
+            real["select_units"]({k: {**v, "files": [*v["files"], *(c.path for c in h.changes
+                                                                    if os.path.dirname(c.path) in v["dirs"])]}
+                                  for k, v in u.items()}, h, b))]),
         ("LINK only the new side's mode", "Rule", [(sel, "select_units", changes_map(
             lambda c: sel.Change(c.status, c.path, "100644", c.new_mode)))]),
         ("LINK the type change ignored", "Rule", [(sel, "select_units", changes_map(
