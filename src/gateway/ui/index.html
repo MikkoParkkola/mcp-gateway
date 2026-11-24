@@ -2368,8 +2368,9 @@ async function doImport() {
     const data = await r.json();
     if (!r.ok) {
       // A 409 (the document changed, or no capability directory) needs a
-      // new preview before Import is offered again.
-      if (r.status === 409) dropImportPreview();
+      // new preview before Import is offered again; a newer preview kept
+      // meanwhile stays.
+      if (r.status === 409 && importKept === kept) dropImportPreview();
       throw new Error(data.error || r.statusText);
     }
     closeImportModal();

@@ -745,10 +745,13 @@ async fn impbind2_an_inline_document_is_checked_when_a_digest_is_sent() {
     let (_, shown) = preview_of(&router, json!({ "spec": DOC_A })).await;
     assert_eq!(shown["digest"], sha256_of(DOC_A), "{shown}");
 
-    let wrong = json!({ "spec": DOC_A, "digest": sha256_of(DOC_B) });
-    let (status, body) = import(&router, wrong).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(names_in(dir.path()).is_empty(), "{body}");
+    // Another document's digest, and a blank one: a digest sent is compared.
+    for digest in [sha256_of(DOC_B), "  ".to_string()] {
+        let wrong = json!({ "spec": DOC_A, "digest": digest });
+        let (status, body) = import(&router, wrong).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{digest:?}: {body}");
+        assert!(names_in(dir.path()).is_empty(), "{body}");
+    }
 
     let right = json!({ "spec": DOC_A, "digest": shown["digest"] });
     let (status, body) = import(&router, right).await;

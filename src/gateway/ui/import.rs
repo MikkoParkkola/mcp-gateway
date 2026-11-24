@@ -183,8 +183,10 @@ async fn import_handler(
     let Some(output_dir) = state.capability_dirs.first().cloned() else {
         return flat_error(StatusCode::CONFLICT, CAPABILITIES_OFF.to_string()).into_response();
     };
-    let sent = body.digest.as_deref().filter(|d| !d.trim().is_empty());
-    if body.url.is_some() && sent.is_none() {
+    // A blank digest is no digest for an import by address; any digest sent
+    // at all, blank included, is compared below.
+    let blank = body.digest.as_deref().is_none_or(|d| d.trim().is_empty());
+    if body.url.is_some() && blank {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, DIGEST_REQUIRED).into_response();
     }
 
@@ -195,6 +197,7 @@ async fn import_handler(
         }
     };
     // The text fetched now must be the text previewed.
+    let sent = body.digest.as_deref();
     if sent.is_some_and(|digest| digest != document_digest(&spec_content)) {
         return flat_error(StatusCode::CONFLICT, DOCUMENT_CHANGED.to_string()).into_response();
     }
