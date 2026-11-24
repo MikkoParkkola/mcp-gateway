@@ -76,13 +76,11 @@ function rowLink(row) {
 function changeText(row) {
   const named = (v) => typeof v === 'string' && v !== '';
   if (row.surface !== 'capability_editor') {
-    if (named(row.tool)) return row.tool;
-    if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
     return '';
   }
   // An older record names no capability: nothing to name, and no pin words.
   if (!named(row.capability)) return 'Capability file changed';
-  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Saved';
+  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
   const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;
@@ -688,7 +686,7 @@ async function receiptTab(body, ctx) {
     copy.addEventListener('click', () => copyJson(JSON.stringify(p, null, 2), copyOut));
     const parts = [facts, h('p', {}, copy), copyOut];
     // An admin action's receipt opens with the sentence its list row says.
-    if (kind === 'admin_action') parts.unshift(h('h2', {}, changeText(p)));
+    if (kind === 'admin_action') parts.splice(1, 0, h('h2', {}, changeText(p)));
     if (p.effect === 'no_record') {
       const again = h('button', { class: 'btn', type: 'button' }, 'Check again');
       again.addEventListener('click', () => load(true));
