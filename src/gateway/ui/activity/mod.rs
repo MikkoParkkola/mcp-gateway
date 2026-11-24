@@ -40,7 +40,7 @@ use self::access::{Access, Refused};
 use self::answer::{DELIVERY_WINDOW, Effect, Joined, SCOPE_LABEL, SUPPORTED_EFFECTS};
 use self::joiner::Joiner;
 use self::reader::{Limits, Look, read_page_joined};
-use self::rows::{FeedOutcome, Filter, Kind, NOT_A_CALL, kind_of, row};
+use self::rows::{FeedOutcome, Filter, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
@@ -114,6 +114,12 @@ fn logs(state: &AppState) -> Option<Logs> {
         governance,
         secret: verification_secret(&state.live_config),
     })
+}
+
+/// The invocation log and the governance log, as every Activity read finds
+/// them; `None` when this gateway keeps no transparency log.
+pub(in crate::gateway::ui) fn log_paths(state: &AppState) -> Option<(PathBuf, Option<PathBuf>)> {
+    logs(state).map(|l| (l.invocation, l.governance))
 }
 
 /// The key rows' HMACs are checked with: the one the logger runs with. A
@@ -377,25 +383,9 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         joiner.borrow_mut().observe(line, above);
     };
     let keep = |line: &reader::Line, seen: reader::Seen| {
-        let mut j = joiner.borrow_mut();
-        if j.observe(line, seen.above) {
-            return false;
-        }
-        let Some(kind) = kind_of(line) else {
+        let Some((kind, this)) = joiner.borrow_mut().admit(line, seen, access) else {
             return false;
         };
-        // Only a call has an answer to join; a refusal has none.
-        let this = if kind == Kind::Call {
-            j.join(line, seen)
-        } else {
-            NOT_A_CALL
-        };
-        if !access.admits(line, kind) {
-            return false;
-        }
-        if kind == Kind::Call {
-            j.count(&this);
-        }
         let hit = parsed.filter.matches(line, kind, &this);
         if hit {
             answers.push(this);

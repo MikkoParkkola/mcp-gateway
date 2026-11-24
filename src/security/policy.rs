@@ -304,10 +304,25 @@ impl ToolPolicy {
     #[cfg(feature = "webui")]
     pub(crate) fn entry_id(
         &self,
-        _list: &str,
-        _pattern: &str,
+        list: &str,
+        pattern: &str,
     ) -> Option<&crate::security::rule_id::RuleId> {
-        None
+        let ids = self.ids.as_deref()?;
+        // Looked up where `from_config_keyed` filed it: prefixes by their
+        // stripped prefix, exact patterns by name.
+        match pattern.strip_suffix('*') {
+            Some(prefix) => ids
+                .prefixes
+                .iter()
+                .find(|e| e.list.name() == list && e.prefix == prefix)
+                .map(|e| &e.id),
+            None => ids
+                .exact
+                .get(pattern)?
+                .iter()
+                .find(|(of, _, _)| of.name() == list)
+                .map(|(_, _, id)| id),
+        }
     }
 
     /// [`Self::check`], naming the entry that decided: an explicit allow on

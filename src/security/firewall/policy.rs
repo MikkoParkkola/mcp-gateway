@@ -46,8 +46,8 @@ impl FirewallPolicy {
     /// compiled rules pair with configured rules one to one, a refused shape
     /// included. `None` on a policy compiled without a key.
     #[cfg(feature = "webui")]
-    pub(crate) fn rule_id(&self, _index: usize) -> Option<&crate::security::rule_id::RuleId> {
-        None
+    pub(crate) fn rule_id(&self, index: usize) -> Option<&crate::security::rule_id::RuleId> {
+        self.rules.get(index)?.id.as_ref()
     }
 
     /// Compile `config`'s rules. Never fails: a rule whose glob does not

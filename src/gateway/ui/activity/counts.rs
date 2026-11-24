@@ -4,18 +4,23 @@
 //! window ([`scan_window`]) that every count the UI shows is folded from, and
 //! the Policies screen's fold of it into hits per rule ([`count_rule_hits`]).
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta};
 
 use super::access::{Access, AccessScope};
 use super::answer::Joined;
-use super::reader::{Line, WINDOW};
+use super::joiner::Joiner;
+use super::reader::{
+    Cursor, Limits, Line, Look, Seen, WINDOW, read_page_joined, restarted_mid_read, timestamp,
+};
 use super::rows::{Check, Kind};
 use crate::clock::ClockBeforeEpoch;
+use crate::security::decision_record::read::decision_evidence;
 
 /// The most bytes one counting read examines: eight list pages.
 pub(in crate::gateway::ui) const COUNT_SCAN_BYTES: u64 = 8 * super::PAGE_SCAN_BYTES;
@@ -47,7 +52,22 @@ pub(in crate::gateway::ui) struct Pass {
 
 /// Read the logs newest first, pass by pass, and hand `each_record` every
 /// record the caller may read that carries a time inside `window`, with its
-/// kind and its joined delivery record.
+/// kind and its joined delivery record. Every line goes through the list's
+/// own steps ([`Joiner::admit`]), and one join is held across the passes,
+/// so a delivery read in one pass reaches its call in the next.
+///
+/// Each pass reads [`COUNT_PASS_BYTES`]; `after_pass` is told what it read
+/// and may stop the scan (`Err(ConnectionAborted)`). The scan ends at the
+/// logs' oldest line ([`ScanEnd::End`]), after two passes in a row that each
+/// held a timed line and none at or after the window's start
+/// ([`ScanEnd::WindowPassed`]; a log keeps its recorded order, not time
+/// order, so one old stamp proves nothing), or once `byte_cap` is spent
+/// ([`ScanEnd::Cap`]). The window rule reads every timed line, whoever may
+/// read it: it asks where the log's time stands, not what this caller sees.
+///
+/// A pass after the first that finds its segment gone (retention removed
+/// it) ends the scan with `Err(Interrupted)`. That pass has already handed
+/// records to `each_record`, so a caller drops whatever it folded.
 #[expect(
     clippy::too_many_arguments,
     reason = "the logs, the read's bounds and the two callbacks, each owned by the caller"
@@ -59,12 +79,81 @@ pub(super) fn scan_window(
     check: &Check<'_>,
     access: &Access,
     byte_cap: u64,
-    each_record: impl FnMut(&Line, Kind, &Joined, DateTime<FixedOffset>),
-    after_pass: impl FnMut(Pass) -> ControlFlow<()>,
+    mut each_record: impl FnMut(&Line, Kind, &Joined, DateTime<FixedOffset>),
+    mut after_pass: impl FnMut(Pass) -> ControlFlow<()>,
 ) -> io::Result<ScanEnd> {
-    let _ = (window, invocation, governance, check, access, byte_cap);
-    drop((each_record, after_pass));
-    Ok(ScanEnd::End)
+    let joiner = RefCell::new(Joiner::new(check));
+    // This pass held a timed line; one of them at or after the start.
+    let (timed, fresh) = (Cell::new(false), Cell::new(false));
+    let mut keep = |line: &Line, seen: Seen| {
+        let admitted = joiner.borrow_mut().admit(line, seen, access);
+        let Some(at) = timestamp(&line.entry) else {
+            return false;
+        };
+        timed.set(true);
+        if at >= *window.start() {
+            fresh.set(true);
+        }
+        if let Some((kind, joined)) = admitted
+            && window.contains(&at)
+        {
+            each_record(line, kind, &joined, at);
+        }
+        // Nothing is held: the caller folds as the records go by.
+        false
+    };
+    let mut cursor: Option<Cursor> = None;
+    let mut carried = Seen {
+        above: 0,
+        head_covered: true,
+    };
+    let (mut scanned, mut old_passes) = (0_u64, 0_u8);
+    loop {
+        timed.set(false);
+        fresh.set(false);
+        let limits = Limits {
+            matches: usize::MAX,
+            bytes: COUNT_PASS_BYTES.min(byte_cap.saturating_sub(scanned)),
+        };
+        // One read across every pass: what lies above a pass's top was read
+        // by the pass before, so the position carries, as in the export.
+        let look = Look::Carried(carried);
+        let page = read_page_joined(
+            invocation,
+            governance,
+            cursor.as_ref(),
+            limits,
+            look,
+            &mut keep,
+        )?;
+        restarted_mid_read(cursor.as_ref(), &page)?;
+        carried = page.above_end;
+        scanned += page.bytes_examined;
+        let pass = Pass {
+            bytes: page.bytes_examined,
+        };
+        if after_pass(pass).is_break() {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "the caller stopped the scan",
+            ));
+        }
+        let Some(next) = page.next else {
+            return Ok(ScanEnd::End);
+        };
+        old_passes = if timed.get() && !fresh.get() {
+            old_passes + 1
+        } else {
+            0
+        };
+        if old_passes == 2 {
+            return Ok(ScanEnd::WindowPassed);
+        }
+        if scanned >= byte_cap {
+            return Ok(ScanEnd::Cap);
+        }
+        cursor = Some(next);
+    }
 }
 
 /// Why a count stopped, as its answer names it: the scan's three ends, and a
@@ -103,20 +192,57 @@ pub(in crate::gateway::ui) struct RuleHits {
 }
 
 impl RuleHits {
-    /// Nothing read, for `scope`.
-    pub(in crate::gateway::ui) fn unread(scope: AccessScope) -> Self {
+    /// Nothing read, for a caller with `access`.
+    pub(in crate::gateway::ui) fn unread(access: &Access) -> Self {
         Self {
             per_rule: HashMap::new(),
             stop: None,
             to: None,
-            scope,
+            scope: access.scope(),
         }
     }
 
-    /// `(newer day, older day)` for the rule `id`.
+    /// `(newer day, older day)` for the rule `id`: `None` when nothing was
+    /// counted (no read, or a rotation), `(0, 0)` for a rule with no id or no
+    /// record. Counts from a stop other than the end are what was read: the
+    /// answer's `complete` says so.
     pub(in crate::gateway::ui) fn counts(&self, id: Option<&str>) -> Option<(u64, u64)> {
-        let _ = id;
-        None
+        match self.stop {
+            None | Some(Stopped::Rotated) => None,
+            Some(_) => Some(
+                id.and_then(|id| self.per_rule.get(id))
+                    .copied()
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
+    /// The two days' bounds, when the clock could be read.
+    pub(in crate::gateway::ui) fn days(&self) -> Option<Days> {
+        self.to.map(Days::ending)
+    }
+}
+
+/// The two days counted: the newer `[split, to]`, the older `[from, split)`,
+/// stated as `[from, older_to]` to the second.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::gateway::ui) struct Days {
+    pub(in crate::gateway::ui) from: DateTime<FixedOffset>,
+    pub(in crate::gateway::ui) older_to: DateTime<FixedOffset>,
+    pub(in crate::gateway::ui) split: DateTime<FixedOffset>,
+    pub(in crate::gateway::ui) to: DateTime<FixedOffset>,
+}
+
+impl Days {
+    fn ending(to: DateTime<FixedOffset>) -> Self {
+        let day = TimeDelta::hours(24);
+        let split = to - day;
+        Self {
+            from: split - day,
+            older_to: split - TimeDelta::seconds(1),
+            split,
+            to,
+        }
     }
 }
 
@@ -129,7 +255,50 @@ pub(in crate::gateway::ui) fn count_rule_hits(
     byte_cap: u64,
     after_pass: impl FnMut(Pass) -> ControlFlow<()>,
 ) -> io::Result<RuleHits> {
-    let _ = (now, invocation, governance, byte_cap);
-    drop(after_pass);
-    Ok(RuleHits::unread(access.scope()))
+    let Ok(to) = now else {
+        return Ok(RuleHits::unread(access));
+    };
+    let days = Days::ending(to);
+    // No secret: a count reads no signature, and the join only decides what
+    // an answer row would say.
+    let check = Check::new(None, invocation, governance);
+    let mut per_rule: HashMap<String, (u64, u64)> = HashMap::new();
+    let end = scan_window(
+        days.from..=days.to,
+        invocation,
+        governance,
+        &check,
+        access,
+        byte_cap,
+        |line, _, _, at| {
+            // The rule the Activity filter matches (`read::matches_rule`).
+            let Some(rule) = decision_evidence(&line.entry).and_then(|d| d.rule_id) else {
+                return;
+            };
+            let slot = per_rule.entry(rule).or_default();
+            if at >= days.split {
+                slot.0 += 1;
+            } else {
+                slot.1 += 1;
+            }
+        },
+        after_pass,
+    );
+    let stop = match end {
+        Ok(ScanEnd::End) => Stopped::End,
+        Ok(ScanEnd::WindowPassed) => Stopped::WindowPassed,
+        Ok(ScanEnd::Cap) => Stopped::Cap,
+        Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+            // Records may have been read twice: none of it is a count.
+            per_rule.clear();
+            Stopped::Rotated
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(RuleHits {
+        per_rule,
+        stop: Some(stop),
+        to: Some(to),
+        scope: access.scope(),
+    })
 }
