@@ -37,7 +37,11 @@ pub(super) fn expected(original: &Value, changes: &[(FieldPath, Change)]) -> Opt
             let seq = seq.as_sequence_mut()?;
             match change {
                 Change::Insert(new) if i <= seq.len() => {
-                    seq.insert(i, super::element::value(new));
+                    mutant!(
+                        "EM7",
+                        seq.push(super::element::value(new)),
+                        seq.insert(i, super::element::value(new))
+                    );
                 }
                 Change::Drop if i < seq.len() => {
                     seq.remove(i);

@@ -106,12 +106,15 @@ pub(super) fn checked(
                 "an element change names a list position",
             )
         })?;
-        if changes
-            .iter()
-            .filter(|(p, _)| p.0.starts_with(list))
-            .count()
-            != 1
-        {
+        if mutant!(
+            "EM6",
+            false,
+            changes
+                .iter()
+                .filter(|(p, _)| p.0.starts_with(list))
+                .count()
+                != 1
+        ) {
             return Err(give_up(
                 GiveUp::SequenceShape,
                 "an element change must be the save's only change in its list",
@@ -259,6 +262,20 @@ pub(super) fn insert(
                 }
                 Some(None) => return Err(unprovable("a position past the list's end")),
             };
+            let after = mutant!(
+                "EM2",
+                kids.get(i)
+                    .and_then(|next| super::revoke::element_lines(&text, next))
+                    .map_or(after, |r| r.start.saturating_sub(1)),
+                after
+            );
+            if mutant!("EM1", true, false)
+                && let Some(Some(range)) = kids
+                    .get(i)
+                    .map(|next| super::revoke::element_lines(&text, next))
+            {
+                lines.delete(range);
+            }
             lines.insert(Some(after), &block_lines(element, dash));
             Ok(())
         }
@@ -267,7 +284,7 @@ pub(super) fn insert(
             let quoted = crate::yaml::double_quoted(s);
             // One splice into the bytes already there: after the last item,
             // or between the brackets of an empty list.
-            let spliced = match kids.last() {
+            let spliced = mutant!("CM10", rebuilt_items(&text, list, None, Some(&quoted))?, match kids.last() {
                 None => format!("{}{quoted}]", &text[after_colon..close]),
                 Some(tail) if i == kids.len() => format!(
                     "{}, {quoted}{}",
@@ -277,7 +294,7 @@ pub(super) fn insert(
                 Some(_) => {
                     return Err(give_up(GiveUp::Flow, "a new item inside an inline list"));
                 }
-            };
+            });
             replace(lines, after_colon..close + 1, &spliced)
         }
         (Shape::Sequence, Element::Map(_)) if kids.is_empty() => {
@@ -364,7 +381,11 @@ pub(super) fn remove(lines: &mut Lines, path: &[Segment]) -> Result<(), ComputeR
             .ok_or_else(|| unprovable("a list element without its dash"))?;
         // Operator text is never deleted here: refuse, citing the line
         // number in the file as read, not what the line says.
-        if let Some(hit) = range.clone().find(|&n| lines.content(n).contains('#')) {
+        if let Some(hit) = mutant!(
+            "EM4",
+            None,
+            range.clone().find(|&n| lines.content(n).contains('#'))
+        ) {
             let why = lines.original_line(hit).map_or_else(
                 || "a deleted line carries a comment".to_owned(),
                 |at| format!("a deleted line carries a comment (line {at})"),
@@ -374,7 +395,14 @@ pub(super) fn remove(lines: &mut Lines, path: &[Segment]) -> Result<(), ComputeR
         lines.delete(range);
         // The lines went from below the key's line: its colon has not moved.
         if kids.len() == 1 {
-            replace(lines, after_colon..after_colon, " []")?;
+            mutant!(
+                "EM3",
+                shape::remove_entry(lines, list, shape::CommentRule::Refuse, shape::Span::Entry)?,
+                {
+                    replace(lines, after_colon..after_colon, " []")?;
+                    true
+                }
+            );
         }
         return Ok(());
     }
@@ -388,14 +416,39 @@ pub(super) fn remove(lines: &mut Lines, path: &[Segment]) -> Result<(), ComputeR
     let cut = if kids.len() == 1 {
         node.bytes.end..close
     } else {
-        with_comma(&text, element.bytes.clone())
+        mutant!("EM5", element.bytes.clone(), with_comma(&text, element.bytes.clone()))
     };
-    let rebuilt = format!(
+    let rebuilt = mutant!("CM10", rebuilt_items(&text, list, Some(i), None)?, format!(
         "{}{}",
         &text[after_colon..cut.start],
         &text[cut.end..=close]
-    );
+    ));
     replace(lines, after_colon..close + 1, &rebuilt)
+}
+
+/// CM10's mutated arm: the inline list rebuilt from its parsed items.
+#[cfg(mutants)]
+fn rebuilt_items(
+    text: &str,
+    list: &[Segment],
+    drop: Option<usize>,
+    add: Option<&str>,
+) -> Result<String, ComputeRefusal> {
+    let doc: Value = crate::yaml::from_str(text).map_err(|_| unprovable("no parse"))?;
+    let mut items: Vec<String> = super::list::value_at(&doc, list)
+        .as_sequence()
+        .map_or_else(Vec::new, |seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(crate::yaml::double_quoted))
+                .collect()
+        });
+    if let Some(at) = drop {
+        items.remove(at);
+    }
+    if let Some(new) = add {
+        items.push(new.to_owned());
+    }
+    Ok(format!(" [{}]", items.join(", ")))
 }
 
 /// An inline item's bytes with one separating comma: the following comma
