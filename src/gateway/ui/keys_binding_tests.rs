@@ -75,7 +75,8 @@ fn file_answer(keys: &[ApiKeyConfig], name: &str) -> Value {
 }
 
 /// The fields an entry may carry, and nothing else.
-const ALLOWED: [&str; 11] = [
+const ALLOWED: [&str; 12] = [
+    "addressable",
     "name",
     "backends",
     "allowed_tools",

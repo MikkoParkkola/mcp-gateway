@@ -72,6 +72,15 @@ fn with_cli_host(host: Option<&str>, mut entry: Value) -> Value {
     entry
 }
 
+/// Whether `name` passes the shared name rule, the one the create route
+/// applies: false for `.`, `..` and a name holding a control character. A
+/// `.` or `..` key cannot be revoked by its address (a client drops that
+/// path segment), so only a hand edit of gateway.yaml removes it; a
+/// control-character key can still be revoked with its encoded address.
+fn addressable(name: &str) -> bool {
+    crate::config::name_refusal("API key name", name).is_none()
+}
+
 /// One file entry, joined with the live key of its name.
 fn file_entry(auth: &ResolvedAuthConfig, live: &[ResolvedApiKey], key: &ApiKeyConfig) -> Value {
     let (last_used, is_live) = joined(auth, live.iter().find(|l| l.name == key.name));
@@ -88,6 +97,7 @@ fn file_entry(auth: &ResolvedAuthConfig, live: &[ResolvedApiKey], key: &ApiKeyCo
             "rate_limit": key.rate_limit,
             "last_used": last_used,
             "live": is_live,
+            "addressable": addressable(&key.name),
         }),
     )
 }
@@ -105,6 +115,7 @@ fn live_entry(auth: &ResolvedAuthConfig, key: &ResolvedApiKey) -> Value {
             "admin": key.admin,
             "expires_at": key.expires_at.map(rfc3339),
             "previous_expires_at": key.previous.as_ref().map(|p| rfc3339(p.expires_at)),
+            "addressable": addressable(&key.name),
             "rate_limit": key.rate_limit,
             "last_used": last_used,
             "live": is_live,
