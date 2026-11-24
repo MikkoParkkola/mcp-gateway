@@ -1,0 +1,26 @@
+head_sha	0d2f7c6b57a8c35535453c71176e674f2da21ef6
+#mutant M1
+mcp_gateway	capability::executor::mcp::stop_tests::r2_the_stdio_stop_ends_a_live_capability_child	src/capability/executor/mcp_stop_tests.rs:230
+#mutant M2
+mcp_gateway	capability::executor::mcp::tests::the_gateway_stop_ends_a_live_capability_mcp_child	src/capability/executor/mcp_tests.rs:333
+mcp_gateway	capability::executor::mcp::stop_tests::r2b_the_stdio_hurry_hands_the_child_over_and_the_stop_waits_for_it	src/capability/executor/mcp_stop_tests.rs:250
+#mutant M3
+mcp_gateway	capability::executor::mcp::stop_tests::r3_the_stop_ends_the_child_by_closing_its_stdin	src/capability/executor/mcp_stop_tests.rs:267
+#mutant M4a
+mcp_gateway	capability::executor::mcp::stop_tests::r10_a_stop_does_not_wait_for_a_child_being_prepared	src/capability/executor/mcp_stop_tests.rs:470
+mcp_gateway	capability::executor::mcp::stop_tests::r11_an_unload_during_preparation_refuses_the_candidate	src/capability/executor/mcp_stop_tests.rs:500
+mcp_gateway	capability::executor::mcp::tests::a_generation_bump_during_a_start_refuses_that_call	src/capability/executor/mcp_tests.rs:424
+#mutant M4b
+mcp_gateway	capability::executor::mcp::stop_tests::r5_after_the_stop_a_call_is_refused_and_starts_nothing	src/capability/executor/mcp_stop_tests.rs:354
+mcp_gateway	capability::executor::mcp::stop_tests::r10_a_stop_does_not_wait_for_a_child_being_prepared	src/capability/executor/mcp_stop_tests.rs:470
+#mutant M5
+mcp_gateway	capability::executor::mcp::stop_tests::r8_a_stop_racing_an_eviction_still_ends_the_evicted_child	src/capability/executor/mcp_stop_tests.rs:406
+#mutant M6
+mcp_gateway	capability::executor::mcp::stop_tests::r9_a_failed_start_leaves_the_stale_child_tracked	src/capability/executor/mcp_stop_tests.rs:434
+#mutant M7
+mcp_gateway	capability::executor::mcp::stop_tests::r10_a_stop_does_not_wait_for_a_child_being_prepared	src/capability/executor/mcp_stop_tests.rs:469
+mcp_gateway	capability::executor::mcp::stop_tests::r12_two_preparations_for_one_key_leave_one_child	src/capability/executor/mcp_stop_tests.rs:541
+#mutant M8
+mcp_gateway	capability::executor::mcp::stop_tests::r4b_a_busy_call_fails_at_once_after_the_stop	src/capability/executor/mcp_stop_tests.rs:328
+#mutant M9
+mcp_gateway	capability::executor::mcp::stop_tests::r12_two_preparations_for_one_key_leave_one_child	src/capability/executor/mcp_stop_tests.rs:543
