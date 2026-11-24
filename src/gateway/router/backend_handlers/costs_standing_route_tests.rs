@@ -150,6 +150,37 @@ async fn s10_the_ui_costs_rows_carry_the_four_members_and_the_body_resets_at() {
     }
 }
 
+/// Each row's rate is its own key's spend over the three complete hours
+/// before now, over three; the current hour does not count.
+#[tokio::test]
+async fn s10b_each_row_carries_its_own_keys_three_hour_rate() {
+    let (state, _dir, enforcer) = {
+        let _clock = test_clock::at_secs(NOW);
+        governed(governance(&[("ci", 25.0)], default_rules())).await
+    };
+    for (at, key, usd) in [
+        (NOW - 7200 + 60, "ci", 0.6),
+        (NOW - 3600 + 60, "ci", 0.9),
+        (NOW - 3600 + 60, "other", 3.0),
+        (NOW + 60, "ci", 5.0),
+    ] {
+        let _clock = test_clock::at_secs(at);
+        spent(&state, &enforcer, key, usd);
+    }
+    let _clock = test_clock::at_secs(NOW + 120);
+    let body = costs(&state).await;
+    assert_eq!(
+        row(&body, "ci")["rate_3h_usd_per_hour"],
+        json!(0.5),
+        "{body}"
+    );
+    assert_eq!(
+        row(&body, "other")["rate_3h_usd_per_hour"],
+        json!(1.0),
+        "{body}"
+    );
+}
+
 /// A rule change by reload changes `at_limit` with no restart.
 #[tokio::test]
 async fn s11_a_rule_change_by_reload_changes_at_limit_without_a_restart() {
