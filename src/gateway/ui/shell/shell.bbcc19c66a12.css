@@ -272,6 +272,10 @@ table.t { width: 100%; border-collapse: collapse; }
 .banner { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) var(--space-4); border-left: 5px solid var(--color-status-neutral-fg);
   border-block: var(--size-rule) solid var(--color-border-default); color: var(--color-text-primary); }
 .banner.warning { border-left-color: var(--color-status-warning-fg); } .banner.danger { border-left-color: var(--color-status-danger-fg); }
+/* The restart banner: a column of lines under the top bar; a long command wraps rather than scrolls. */
+.banner.restart { display: grid; justify-items: start; align-items: start; margin: var(--space-2) 0 0; }
+.restart .cmd { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); max-width: 100%; }
+.restart code { font-family: var(--font-family-mono); overflow-wrap: anywhere; }
 .toast { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); max-width: 380px; background: var(--color-bg-raised);
   border: var(--size-rule) solid var(--color-border-control); border-radius: var(--radius-sm); box-shadow: var(--shadow-2); }
 .modal { width: min(460px, 100%); background: var(--color-bg-surface); box-shadow: var(--shadow-3); padding: var(--space-5) var(--space-5) var(--space-4); display: grid; gap: var(--space-3); }

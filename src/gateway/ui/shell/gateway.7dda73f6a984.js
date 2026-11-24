@@ -5,12 +5,12 @@
 // entries (entries a failed or rolled-back save left in a secret store, named
 // by nothing) from GET /ui/api/settings/secrets/unused, and deletes one at a
 // time after the shell's confirm. A refusal shows the gateway's own sentence
-// and the list is read again, so a kept entry stays listed. Gateway › Actions
-// has Reload now: POST /ui/api/reload, its outcome drawn under the button, the
-// restart part by the shell's restartAdvice(). Status comes with the rest of
-// this page; until then it is not drawn. Every server-supplied string goes in
-// with textContent.
-import { register, render, restartAdvice, el as h } from '/ui/assets/shell.cf0295cac5d3.js';
+// and the list is read again, so a kept entry stays listed.
+// Gateway › Actions draws Reload now: one press posts /ui/api/reload and the answer shows
+// under the button, its restart block from the shell's restartAdvice(). Status
+// is the rest of this page and stays undrawn until it is built. Every
+// server-supplied string goes in with textContent.
+import { register, render, restartAdvice, el as h } from '/ui/assets/shell.250be1879d1f.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
