@@ -4,7 +4,9 @@
 //! untouched byte (ADR-024). A change sets a field's value (inserting the key,
 //! and any missing parents, when it is absent), makes it a secret slot, or
 //! removes the key; a list may gain one new element, at its end, which also
-//! creates a missing list. One `auth.api_keys` element may be removed (the
+//! creates a missing list. One element of any list may be inserted at a
+//! position or dropped, alone in its list (`element`); a dropped element's
+//! list stays, `[]` when emptied. One `auth.api_keys` element may be removed (the
 //! web UI's key revoke): its lines go, with the comments on them reported by
 //! original line number, and so do a list and parent it empties. Anything
 //! the meaning and bytes proofs cannot cover is `Unprovable`, and nothing is
@@ -115,6 +117,21 @@ pub(crate) enum Scalar {
     Num(FiniteF64),
 }
 
+/// One list element an edit writes: a string, or a flat mapping in member
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Element {
+    Str(String),
+    Map(Vec<(String, Member)>),
+}
+
+/// One member of a mapping element: a string, or a list of strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Member {
+    Str(String),
+    Strings(Vec<String>),
+}
+
 /// One change to one field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Change {
@@ -125,6 +142,12 @@ pub(crate) enum Change {
     Remove,
     /// The field becomes exactly these strings, written as one inline list.
     List(Vec<String>),
+    /// A new element at the path's last position, an index into the list as
+    /// the file holds it; the element there and every later one move down.
+    Insert(Element),
+    /// The element at the path's last position goes; the list stays, empty
+    /// or not.
+    Drop,
 }
 
 /// Why an edit was refused. Nothing is written for any of them.
@@ -275,6 +298,7 @@ fn edit_unmarked(
         }
     }
     let before = shape::nodes(original)?;
+    element::checked(&before, changes)?;
     let revoked = one_revocation(changes)?;
     if let Some(path) = revoked
         && let Some(i) = revoke::revoked_index(path)
@@ -290,11 +314,16 @@ fn edit_unmarked(
         };
         match change {
             Change::List(items) => list::set(&mut lines, path, items, &value)?,
+            Change::Insert(new) => element::insert(&mut lines, path, new)?,
             _ => write_value(&mut lines, path, &value)?,
         }
     }
     let mut removed: Vec<&[Segment]> = Vec::new();
     for (path, change) in changes {
+        if *change == Change::Drop {
+            element::remove(&mut lines, &path.0)?;
+            continue;
+        }
         if *change != Change::Remove {
             continue;
         }
@@ -417,6 +446,16 @@ fn deleted_as_planned(
             take(&path.0, revoke::Taken::Under);
         }
     }
+    // A drop from a block list takes the element's lines; an inline drop
+    // rewrites its line and deletes none.
+    for (path, change) in changes {
+        let in_block = element::split(&path.0)
+            .and_then(|(list, _)| shape::find(before, list))
+            .is_some_and(|n| !n.flow);
+        if *change == Change::Drop && in_block {
+            take(&path.0, revoke::Taken::Element);
+        }
+    }
     for &path in removed {
         let taken = if Some(path) == revoked {
             revoke::Taken::Element
@@ -468,7 +507,8 @@ fn rendered(change: &Change) -> Option<String> {
         Change::Set(Scalar::Num(n)) => float_text(n.0),
         Change::Secret(id) => quoted_placeholder(id),
         Change::List(items) => inline_list(items),
-        Change::Remove => return None,
+        Change::Insert(new) => element::inline(new),
+        Change::Remove | Change::Drop => return None,
     })
 }
 
@@ -544,8 +584,10 @@ fn one_new_element(
     changes: &[(FieldPath, Change)],
 ) -> Result<(), ComputeRefusal> {
     let mut new: BTreeMap<Vec<Segment>, usize> = BTreeMap::new();
-    // A removal past a list's end is a no-op, never a new element.
-    for (path, _) in changes.iter().filter(|(_, c)| *c != Change::Remove) {
+    // A removal past a list's end is a no-op, never a new element; an insert
+    // and a drop name their position themselves (`element::checked`).
+    let positioned = |c: &Change| matches!(c, Change::Remove | Change::Insert(_) | Change::Drop);
+    for (path, _) in changes.iter().filter(|(_, c)| !positioned(c)) {
         for (d, segment) in path.0.iter().enumerate() {
             let Segment::Index(at) = segment else {
                 continue;
@@ -669,7 +711,7 @@ fn expected_value(change: &Change) -> Option<Value> {
                 .map(|item| Value::from(item.as_str()))
                 .collect(),
         ),
-        Change::Remove => return None,
+        Change::Remove | Change::Insert(_) | Change::Drop => return None,
     })
 }
 
@@ -732,6 +774,9 @@ mod revoke;
 
 #[path = "config_persistence_keyedit_list.rs"]
 mod list;
+
+#[path = "config_persistence_keyedit_element.rs"]
+mod element;
 
 #[path = "config_persistence_keyedit_template.rs"]
 mod template;
