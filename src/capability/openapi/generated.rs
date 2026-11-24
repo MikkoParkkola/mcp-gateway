@@ -80,7 +80,16 @@ impl GeneratedCapability {
         let filename = format!("{}.yaml", self.name);
         let path = dir.join(filename);
         let failed = |e: io::Error| Error::Config(format!("Failed to write capability file: {e}"));
+        let taken = || {
+            let e = io::Error::new(io::ErrorKind::AlreadyExists, name_taken(&self.name));
+            Error::Io(e)
+        };
 
+        // The loader reads `.yml` too, so a file (or link) of that name holds
+        // the name as well.
+        if fs::symlink_metadata(dir.join(format!("{}.yml", self.name))).is_ok() {
+            return Err(taken());
+        }
         // Created only if absent, in one step: no check made before the write
         // can be passed by two writers at once.
         let mut file = match fs::OpenOptions::new()
@@ -89,10 +98,7 @@ impl GeneratedCapability {
             .open(&path)
         {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let taken = io::Error::new(io::ErrorKind::AlreadyExists, name_taken(&self.name));
-                return Err(Error::Io(taken));
-            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(taken()),
             Err(e) => return Err(failed(e)),
         };
         // Never removed on failure: by then the path may name another
