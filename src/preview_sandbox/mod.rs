@@ -30,11 +30,17 @@ mod os {
         None
     }
 
-    pub(super) fn start(
+    pub(super) async fn start(
         _: &std::path::Path,
         _: &Target,
         _: &[std::path::PathBuf],
+        _: tokio::time::Instant,
+        _: Option<std::ffi::OsString>,
     ) -> Result<Started, Refusal> {
+        Err(Refusal::Unsupported)
+    }
+
+    pub(super) async fn probe(_: &std::path::Path) -> Result<(), Refusal> {
         Err(Refusal::Unsupported)
     }
 
@@ -48,10 +54,6 @@ mod os {
     ) -> Result<Started, Refusal> {
         Err(Refusal::Unsupported)
     }
-
-    pub(super) fn classify(stderr: &str) -> Refusal {
-        Refusal::Step(stderr.trim().to_owned())
-    }
 }
 
 mod install;
@@ -59,9 +61,11 @@ mod install;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+#[cfg(any(test, target_os = "linux"))]
 use std::time::Duration;
 
 use serde::Serialize;
+#[cfg(target_os = "linux")]
 use tokio::io::AsyncReadExt as _;
 
 /// The command to preview: a program and its arguments, as typed.
@@ -204,17 +208,49 @@ pub(crate) fn check(target: &Target) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// How long a refused start waits for its killed `unshare` to be reaped
+/// before it hands the process back unreaped.
+#[cfg(target_os = "linux")]
+pub(crate) const TEARDOWN_CAP: Duration = Duration::from_secs(5);
+
+/// A start refused once `unshare` existed: the refusal, and the killed
+/// process when it was not reaped within [`TEARDOWN_CAP`].
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub(crate) struct StartFailed {
+    pub(crate) refusal: Refusal,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the preview route keeps a process a refused start could not reap"
+        )
+    )]
+    pub(crate) unreaped: Option<tokio::process::Child>,
+}
+
+/// The gateway's own binary, which the sandbox runs as its helper: the one
+/// place a preview reads it.
+fn gateway() -> Result<PathBuf, Refusal> {
+    std::env::current_exe().map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))
+}
+
 /// Start `target` in the sandbox. `protected` adds the gateway's own config
-/// paths (the loaded config file's directory) to those it hides itself.
+/// paths (the loaded config file's directory) to those it hides itself. It
+/// returns once the helper has reported its setup over the control
+/// connection, by `deadline`.
 ///
 /// # Errors
 ///
-/// A [`Refusal`] when the sandbox cannot be set up on this host. The
-/// sandbox's own steps refuse from inside the child; [`probe`] reads those.
-pub fn start(target: &Target, protected: &[PathBuf]) -> Result<Started, Refusal> {
-    let gateway = std::env::current_exe()
-        .map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))?;
-    os::start(&gateway, target, protected)
+/// A [`Refusal`] when the sandbox cannot be set up on this host or a step of
+/// its setup failed; [`probe`] names a host that refuses before any step.
+pub async fn start(
+    target: &Target,
+    protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+) -> Result<Started, Refusal> {
+    let runtime_dir = ambient_runtime_dir(|name| std::env::var_os(name));
+    os::start(&gateway()?, target, protected, deadline, runtime_dir).await
 }
 
 /// [`start`] with the gateway binary named, for integration tests, whose own
@@ -224,12 +260,13 @@ pub fn start(target: &Target, protected: &[PathBuf]) -> Result<Started, Refusal>
 ///
 /// As [`start`].
 #[doc(hidden)]
-pub fn start_with_helper(
+pub async fn start_with_helper(
     gateway: &Path,
     target: &Target,
     protected: &[PathBuf],
+    deadline: tokio::time::Instant,
 ) -> Result<Started, Refusal> {
-    os::start(gateway, target, protected)
+    os::start(gateway, target, protected, deadline, None).await
 }
 
 /// [`start`] after the helper's fetch step: the gateway serves the helper's
@@ -245,8 +282,7 @@ pub async fn start_fetching(
     protected: &[PathBuf],
     deadline: tokio::time::Instant,
 ) -> Result<Started, Refusal> {
-    let gateway = std::env::current_exe()
-        .map_err(|e| Refusal::Step(format!("finding the gateway binary ({e})")))?;
+    let gateway = gateway()?;
     // A closure: `var_os` is generic, so its path alone is not a `Fn(&str)`.
     let ca_bundle = ambient_ca_bundle(|name| std::env::var_os(name));
     let runtime_dir = ambient_runtime_dir(|name| std::env::var_os(name));
@@ -295,6 +331,7 @@ pub async fn start_fetching_with_helper(
 }
 
 /// How long the probe's `/bin/true` may take through the whole setup.
+#[cfg(target_os = "linux")]
 const PROBE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Run the real setup once with `/bin/true` as the target. Any failure is the
@@ -304,32 +341,40 @@ const PROBE_DEADLINE: Duration = Duration::from_secs(10);
 ///
 /// The [`Refusal`] naming the step that failed.
 pub async fn probe() -> Result<(), Refusal> {
-    let target = Target {
-        program: PathBuf::from("/bin/true"),
-        args: Vec::new(),
-    };
-    let Started { mut child, .. } = start(&target, &[])?;
-    drop(child.stdin.take());
-    let mut stderr = child.stderr.take();
-    let finished = tokio::time::timeout(PROBE_DEADLINE, async {
-        let mut text = String::new();
-        if let Some(stderr) = stderr.as_mut() {
-            // Bounded by the deadline; the helper prints one line at most.
-            let _ = stderr.take(64 * 1024).read_to_string(&mut text).await;
-        }
-        (child.wait().await, text)
-    })
-    .await;
-    match finished {
-        Ok((Ok(status), _)) if status.success() => Ok(()),
-        Ok((Ok(_), stderr)) => Err(os::classify(&stderr)),
-        Ok((Err(e), _)) => Err(Refusal::Step(format!("waiting for the probe ({e})"))),
-        // Dropping the child kills `unshare` and the namespace with it.
-        Err(_) => Err(Refusal::Step(format!(
-            "the probe (no answer within {} s)",
-            PROBE_DEADLINE.as_secs()
-        ))),
+    probe_with_helper(&gateway()?).await
+}
+
+/// [`probe`] with the gateway binary named, for integration tests, as
+/// [`start_with_helper`] is for [`start`].
+///
+/// # Errors
+///
+/// As [`probe`].
+#[doc(hidden)]
+pub async fn probe_with_helper(gateway: &Path) -> Result<(), Refusal> {
+    os::probe(gateway).await
+}
+
+/// What the probe's sandbox printed, from its untouched stderr: at most
+/// 64 KiB, read within 1 s.
+#[cfg(target_os = "linux")]
+async fn probe_stderr(stderr: Option<tokio::process::ChildStderr>) -> String {
+    let mut text = String::new();
+    if let Some(stderr) = stderr {
+        let mut capped = stderr.take(64 * 1024);
+        let read = capped.read_to_string(&mut text);
+        let _ = tokio::time::timeout(Duration::from_secs(1), read).await;
     }
+    text
+}
+
+/// The probe that got no answer by its deadline.
+#[cfg(target_os = "linux")]
+fn probe_unanswered() -> Refusal {
+    Refusal::Step(format!(
+        "the probe (no answer within {} s)",
+        PROBE_DEADLINE.as_secs()
+    ))
 }
 
 static AVAILABILITY: tokio::sync::OnceCell<Result<(), Refusal>> =
