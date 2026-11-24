@@ -189,9 +189,14 @@ async fn wait_ready(
             call_tool(backend, &wait.tool, args.clone()),
         )
         .await;
-        // A dead or broken transport ends the wait now; only the server's own
-        // "not there yet" answers (tool errors) count as not ready.
-        if let Ok(Err(e @ (Error::Transport(_) | Error::TransportPermanent(_)))) = &poll {
+        // A dead or broken transport ends the wait now, and so does a stopped
+        // one (every `BackendNotFound` a start returns is a stop or a retire,
+        // never a start still on its way); only the server's own "not there
+        // yet" answers (tool errors) count as not ready.
+        if let Ok(Err(
+            e @ (Error::Transport(_) | Error::TransportPermanent(_) | Error::BackendNotFound(_)),
+        )) = &poll
+        {
             return Err(Error::Transport(format!("wait aborted: {e}")));
         }
         if let Ok(Ok(result)) = poll
