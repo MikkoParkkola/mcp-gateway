@@ -27,7 +27,7 @@ pub(super) fn reloaded(startup: &Config, reloads: &[&Config]) -> Value {
 }
 
 /// An expected setting object, every field given: the values a row pins.
-pub(super) fn setting_obj(path: &str, file: Value, enforced: Value, read_only: bool) -> Value {
+pub(super) fn setting_obj(path: &str, file: &Value, enforced: &Value, read_only: bool) -> Value {
     let pending_restart = file != enforced;
     json!({
         "path": path,
@@ -40,7 +40,7 @@ pub(super) fn setting_obj(path: &str, file: Value, enforced: Value, read_only: b
 
 /// An expected switch object: a setting object that also says `on`.
 pub(super) fn switch_obj(path: &str, file: bool, enforced: bool, read_only: bool) -> Value {
-    let mut s = setting_obj(path, json!(file), json!(enforced), read_only);
+    let mut s = setting_obj(path, &json!(file), &json!(enforced), read_only);
     s["on"] = json!(enforced);
     s
 }

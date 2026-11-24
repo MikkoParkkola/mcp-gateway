@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Which settings the save can change: each setting object on the Policies
-//! screen carries read_only from the save table, and a value the hardened
+//! screen carries `read_only` from the save table, and a value the hardened
 //! posture holds says so. Firewall builds only: a hardened load needs the
 //! firewall.
 

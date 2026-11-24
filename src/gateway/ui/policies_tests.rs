@@ -543,7 +543,7 @@ fn assert_policy_values(model: &Value, enabled: bool, action: &str, use_default_
     );
     assert_eq!(
         policy["default_action"],
-        setting_obj(&at("default_action"), json!(action), json!(action), false),
+        setting_obj(&at("default_action"), &json!(action), &json!(action), false),
         "{model}"
     );
 }
