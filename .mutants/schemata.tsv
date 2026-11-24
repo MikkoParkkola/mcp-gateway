@@ -1,0 +1,21 @@
+head_sha	7b01572519400d91fe21084800a14f15a0243da3
+#mutant M1
+mcp_gateway	gateway::router::direct_audit_tests::meta_missing_target::an_admission_refusal_is_recorded_on_mcp	src/gateway/router/direct_audit_tests/meta_missing_target.rs:69
+#mutant M2
+mcp_gateway	gateway::server::tests::stdio_dispatch::an_admission_refusal_is_recorded_on_stdio	src/gateway/server/tests/stdio_dispatch.rs:433
+#mutant M3 multi=2
+mcp_gateway	gateway::router::direct_audit_tests::meta_missing_target::missing_server_is_recorded_as_syntax_on_mcp	src/gateway/router/direct_audit_tests/meta_missing_target.rs:48
+mcp_gateway	gateway::server::tests::stdio_dispatch::missing_server_is_recorded_as_syntax_on_stdio	src/gateway/server/tests/stdio_dispatch.rs:366
+#mutant M4 multi=3
+mcp_gateway	gateway::router::direct_audit_tests::meta_missing_target::an_admission_refusal_keeps_its_status_and_data_on_mcp	src/gateway/router/direct_audit_tests/meta_missing_target.rs:137
+mcp_gateway	gateway::server::route_matrix_driver_tests::admission::an_admission_refusal_keeps_its_data_on_stdio	src/gateway/server/route_matrix_driver_admission_tests.rs:139
+#mutant M5
+mcp_gateway	gateway::router::meta_refusal_audit::tests::an_admission_refusal_the_log_cannot_take_breaks_as_unavailable	src/gateway/router/meta_refusal_audit_tests.rs:231
+#mutant M6
+mcp_gateway	gateway::meta_mcp::admission_deferred_note_tests::a_fresh_admission_notes_no_deferred_pair	src/gateway/meta_mcp/admission_deferred_note_tests.rs:224
+mcp_gateway	gateway::router::direct_audit_tests::backend_oracle::keyed::d1_a_deferred_step_does_not_label_a_later_refusal_on_mcp	src/gateway/router/direct_audit_tests/backend_oracle/keyed.rs:310
+mcp_gateway	gateway::server::route_matrix_driver_tests::admission::d1_a_deferred_step_does_not_label_a_later_refusal_on_stdio	src/gateway/server/route_matrix_driver_admission_tests.rs:105
+#mutant M7
+mcp_gateway	gateway::meta_mcp::admission_deferred_note_tests::a_replay_notes_the_pair_of_the_deferred_refusal_it_meets	src/gateway/meta_mcp/admission_deferred_note_tests.rs:185
+#mutant M8
+mcp_gateway	gateway::meta_mcp::admission_deferred_note_tests::a_replayed_absent_step_notes_its_check_pair	src/gateway/meta_mcp/admission_deferred_note_tests.rs:210
