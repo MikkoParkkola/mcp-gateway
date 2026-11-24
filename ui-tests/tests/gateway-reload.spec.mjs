@@ -137,12 +137,17 @@ async function press(page) {
   await expect(button(page)).toHaveText('Reload now');
 }
 
-/** The standing check after a press: these lines exactly, the button enabled and focused. */
+/**
+ * The standing check after a press: these lines exactly, the button enabled and focused.
+ * It ends once the announcer is idle, so the next press's lines are a new entry: the
+ * announcer joins whatever is queued at one write, and a quick next press would join them.
+ */
 async function settled(page, expected) {
   await expect(button(page)).toBeEnabled();
   await expect(button(page)).toHaveText('Reload now');
   expect(await lines(page)).toEqual(expected);
   await expect(button(page)).toBeFocused();
+  await idle(page);
 }
 
 /** One press with `answer`, its lines and its one entry. */
