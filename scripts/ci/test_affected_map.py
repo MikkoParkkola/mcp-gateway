@@ -206,6 +206,21 @@ class Trace(unittest.TestCase):
         got = self.parse(text)
         self.assertEqual(got.probes, {"tests/fixtures/a.json", "docs/guide.md", "tests/later.json"})
 
+    def test_a_child_acting_before_its_creation_returns_still_inherits(self) -> None:
+        # strace -f may print the child's first call between the creator's unfinished clone and its resumption.
+        text = (
+            '20 chdir("/w/repo/tests") = 0\n'
+            "20 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD <unfinished ...>\n"
+            '21 access("fixtures/a.json", R_OK) = 0\n'
+            "20 <... clone resumed>, child_tidptr=0x7f) = 21\n"
+            "20 clone3({flags=CLONE_VM|CLONE_FS|CLONE_THREAD, exit_signal=0} <unfinished ...>\n"
+            '22 chdir("/w/repo/docs") = 0\n'
+            "20 <... clone3 resumed>, 88) = 22\n"
+            '20 access("guide.md", F_OK) = 0\n'
+        )
+        got = self.parse(text)
+        self.assertEqual(got.probes, {"tests/fixtures/a.json", "docs/guide.md"})
+
     def test_escaped_descriptor_paths_are_decoded(self) -> None:
         text = (
             "6 getdents64(5</w/repo/p\\303\\244iv\\303\\244>, 0x1 /* 2 entries */, 32768) = 48\n"
@@ -453,6 +468,7 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M6 a library's dep-info not found", "Inputs",
          {"artifact_depinfo_path": lambda a: a["executable"] + ".d" if a.get("executable") else None}),
         ("M2 the merge never splits deeper", "Merge", {"SPLIT_SHARE": 1.0}),
+        ("M5 the creation tree not read", "Trace", {"creation_tree": lambda calls: {}}),
     ]
 
 

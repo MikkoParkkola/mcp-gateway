@@ -7,8 +7,9 @@ Built on Linux on release-line pushes (.github/workflows/affected-map.yml) and p
 it yet. A unit is one integration target, or a group of lib tests: grouped by module path at depth 2, and any
 group over SPLIT_SHARE of the run's lib test time split one level deeper, down to single tests (the times are
 this run's own). Each unit runs as its own process with coverage on (a killed child still writes its counters)
-under a file-access trace; a unit whose trace failed, or whose pass count differs from its listing, is unmapped:
-it selects with every change.
+under a file-access trace. A unit is unmapped, and selects with every change, when its traced run failed or left
+no trace, when its coverage is missing or a coverage tool failed, when its listing failed, or when its pass count
+differs from its listing.
 
     affected_map.py guard MAP NOW_ISO           prints build=true|false: false while MAP is younger than MAP_AGE
     affected_map.py part PART OUT               one part (lib-K, int-a or int-b): its depth-2 units, OUT/part.json
@@ -164,6 +165,17 @@ def repo_key(path: str, repo: str) -> str | None:
     return None
 
 
+def creation_tree(calls: list[tuple[str, str]]) -> dict[str, tuple[str, bool]]:
+    """child pid -> (its creator, whether it shares the creator's working directory: a clone with CLONE_FS). Read
+    whole before the trace is walked: strace can print a child's first calls before its creator's clone returns."""
+    tree: dict[str, tuple[str, bool]] = {}
+    for pid, call in calls:
+        m = _CALL.match(call)
+        if m and m.group(1) in ("clone", "clone3", "fork", "vfork") and int(m.group(3)) > 0:
+            tree[m.group(3)] = (pid, m.group(1).startswith("clone") and "CLONE_FS" in m.group(2))
+    return tree
+
+
 def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     """Opens become files (a failed open a probe), folder reads dirs, the stat/access/readlink families probes.
     A relative path resolves against the call's directory descriptor (strace -y shows its path) or the process's
@@ -171,25 +183,41 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     escapes are decoded in every path, descriptor paths included. Paths outside `repo` are dropped, but an open
     whose descriptor resolves inside it (reached through a link from outside) credits that real path."""
     access = Access()
+    calls = _completed_calls(text.splitlines())
+    creator = creation_tree(calls)
     fs_of: dict[str, str] = {}  # pid -> the process whose working directory it uses (itself, or a CLONE_FS sharer)
     cwd_of: dict[str, str] = {}
+    started: set[str] = set()
 
     def cwd(pid: str) -> str:
         return cwd_of.get(fs_of.get(pid, pid), start_cwd)
 
-    for pid, call in _completed_calls(text.splitlines()):
+    def start(pid: str) -> None:
+        """A process takes its creator's working directory the first time it acts or its creation returns,
+        whichever comes first; the creator is still inside the creating call then, so its directory is the one
+        it had at creation."""
+        if pid in started:
+            return
+        started.add(pid)
+        if pid in creator:
+            parent, shares = creator[pid]
+            start(parent)
+            if shares:
+                fs_of[pid] = fs_of.get(parent, parent)
+            else:
+                cwd_of[pid] = cwd(parent)
+
+    for pid, call in calls:
         m = _CALL.match(call)
         if not m:
             continue
+        start(pid)
         name, args, ret, ret_path, _err = m.groups()
         ok = not ret.startswith("-")
         ret_path = _unescape(ret_path) if ret_path else None
         if name in ("clone", "clone3", "fork", "vfork"):
             if ok and ret != "0":
-                if name.startswith("clone") and "CLONE_FS" in args:
-                    fs_of[ret] = fs_of.get(pid, pid)
-                else:
-                    cwd_of[ret] = cwd(pid)
+                start(ret)
             continue
         fd = _FD.match(args)
         fd_path = _unescape(fd.group(1)) if fd and fd.group(1) else None
