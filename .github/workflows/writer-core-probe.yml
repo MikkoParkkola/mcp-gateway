@@ -1,0 +1,68 @@
+name: Writer core probe
+
+# One-off probe on a throwaway branch: the shared writer's root rows on Linux
+# and macOS, which otherwise run only in a pull request's CI, judged red on
+# the rows before the fix and green after it; the macOS leg first compiles
+# every target. Never on a pull request branch or the release line.
+on:
+  push:
+    branches: ["throwaway/writer-core-9887"]
+
+permissions:
+  contents: read
+
+jobs:
+  root-rows:
+    name: writer root rows (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - name: Swap
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/add-swap
+      - name: Every target compiles on macOS
+        if: runner.os == 'macOS'
+        run: cargo check --lib --all-targets --all-features
+      - name: The lib test part holding the root rows, where user C can run it
+        env:
+          MCP_GATEWAY_TEST_PART: "3"
+        run: |
+          set -euo pipefail
+          lib="$(cargo test --lib --all-features --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.kind == ["lib"] and .executable != null) | .executable')"
+          [ -x "$lib" ]
+          sudo mkdir -p -m 0755 /opt/writer-rows
+          sudo cp "$lib" /opt/writer-rows/lib-tests
+          sudo chmod 0755 /opt/writer-rows/lib-tests
+      - name: Local users for the writer's root rows
+        uses: ./.github/actions/access-rows-setup
+      - name: Writer root rows (library)
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E /opt/writer-rows/lib-tests
+          filter: "config_persistence_access_tests::root::"
+      - name: The CLI refusal rows' test binary
+        id: refusal-rows
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --all-features --test writer_refusals --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.name == "writer_refusals" and .executable != null) | .executable')"
+          [ -x "$exe" ]
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: The CLI refusal rows, as root
+        if: ${{ !cancelled() && steps.refusal-rows.outcome == 'success' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E ${{ steps.refusal-rows.outputs.exe }}
+          filter: ""
