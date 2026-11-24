@@ -122,6 +122,16 @@ fn delete_at(fx: &Fixture, addr: SocketAddr, seen: &Seen, written: &str) -> Stri
         .expect("the router received the request")
 }
 
+/// POST a create for `name` with a secret of its own: the fixture's fixed
+/// test secret would give a second key the first one's digest.
+fn create(fx: &Fixture, name: &str) -> super::keys_create_fixture_tests::Sent {
+    let known = format!("mcpgw_key-name-row-{}-0123456789abcdef", hex::encode(name));
+    fx.post(Call {
+        known: Some(known),
+        ..Call::new(&fx.body(name))
+    })
+}
+
 /// The list's entry for `name`, if it lists one.
 fn listed(answer: &Value, name: &str) -> Option<Value> {
     answer["keys"]
@@ -140,7 +150,7 @@ fn listed(answer: &Value, name: &str) -> Option<Value> {
 fn keyname1_a_dot_name_cannot_be_revoked_by_its_address() {
     let fx = Fixture::new(seeded(&[".", "..", BEL]));
     for name in ["a/b", "a?b", "a#b"] {
-        let sent = fx.post(Call::new(&fx.body(name)));
+        let sent = create(&fx, name);
         assert_eq!(sent.status, StatusCode::CREATED, "{name}: {}", sent.body);
     }
     let (addr, seen) = serve(&fx);
@@ -185,7 +195,7 @@ fn keyname2_the_create_route_refuses_an_unaddressable_name() {
     let fx = Fixture::new(Setup::default());
     for name in [".", "..", BEL] {
         let before = fx.bytes();
-        let sent = fx.post(Call::new(&fx.body(name)));
+        let sent = create(&fx, name);
         assert_eq!(
             sent.status,
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -204,7 +214,7 @@ fn keyname2_the_create_route_refuses_an_unaddressable_name() {
         assert_eq!(fx.bytes(), before, "{name:?}: gateway.yaml changed");
     }
     for name in ["a/b", "a?b", "a#b"] {
-        let sent = fx.post(Call::new(&fx.body(name)));
+        let sent = create(&fx, name);
         assert_eq!(sent.status, StatusCode::CREATED, "{name}: {}", sent.body);
     }
 }
