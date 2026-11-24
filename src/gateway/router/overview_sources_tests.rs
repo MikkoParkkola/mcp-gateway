@@ -3,9 +3,11 @@
 //! `GET /ui/api/overview`'s counter rows: the call totals, server ranking,
 //! top flows, chart markers, last-hour latency, server state, the counter
 //! fields' absence and degradation, and the store's read count. The needs-you
-//! rows live in overview_needs_you_tests.rs. Every counter row pins the clock to 2026-06-15T12:00:00Z (a date
-//! with no daylight-saving change) and records calls relative to it. The
-//! clock seam is per thread, so each row runs on a current-thread runtime.
+//! rows live in overview_needs_you_tests.rs. A row that records calls pins the
+//! clock to 2026-06-15T12:00:00Z (a date with no daylight-saving change) and
+//! records them relative to it; S8b pins it before the epoch instead, and S6
+//! and S8 set no clock. The clock seam is per thread, so each row runs on a
+//! current-thread runtime.
 
 use std::sync::Arc;
 use std::time::Duration;
