@@ -339,6 +339,55 @@ async fn identity_grants_reload_refused_keeps_live() {
     assert_eq!(epoch.load(Ordering::Acquire), epoch_before);
 }
 
+/// Lead ruling 2026-11-22: the grants reload stays ungated. Goes red when it
+/// asks the restart gate: with the gate paused a removed grant still applies.
+/// It must never become a config reload either: gateway.yaml is edited too,
+/// and the running config stays the one loaded before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revocation_applies_while_the_gate_is_paused_and_without_a_restart() {
+    use crate::gateway::restart_config_floor::support::{BASE, booted_floor};
+    use crate::gateway::restart_floor::FloorAdapter as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (grants, config) = (
+        dir.path().join("grants.json"),
+        dir.path().join("gateway.yaml"),
+    );
+    crate::gateway::test_helpers::write_owner_only(&config, BASE).expect("config");
+    let (store, _epoch, sink) = live_store(&grants);
+    let loaded = Config::load(Some(&config)).expect("the fixture config loads");
+    let ctx = ReloadContext::new(
+        config.clone(),
+        Arc::new(LiveConfig::new(loaded)),
+        Arc::new(BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    )
+    .expect("the registry pairs with the config")
+    .with_identity_grant_sink(sink);
+    let mut floor = booted_floor(&ctx.registry, &config);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    floor.pause(deadline).await.expect("pause");
+    let edited = format!("{BASE}environment: \"edited\"\n");
+    crate::gateway::test_helpers::write_owner_only(&config, edited).expect("edit");
+    let running = ctx.live_config.get();
+    assert!(allows(&store, "alice", "cal"), "alice holds cal before");
+
+    write_grants(&grants, &[grant("g2", "bob", "mail")]);
+    let got = reload_bounded(&ctx).await;
+    assert!(matches!(got, Some(Ok(_))), "reloaded while paused: {got:?}");
+    assert!(!allows(&store, "alice", "cal"), "the revocation applies");
+    let same = Arc::ptr_eq(&running, &ctx.live_config.get());
+    assert!(same, "the grants reload loaded no config");
+
+    let refused = ctx.reload_outcome().await.map(|o| o.changes);
+    let gate_text = crate::config_reload::RELOAD_REPLAY_OWED.to_owned();
+    assert_eq!(refused, Err(gate_text), "a config reload is still refused");
+    let same = Arc::ptr_eq(&running, &ctx.live_config.get());
+    assert!(same, "still the config loaded before");
+    // One pause and one context throughout: nothing restarted in between.
+    drop(floor);
+}
+
 /// L3: a grants file that stays unreadable across retried reloads logs its
 /// ERROR once, and a successful read in between resets that, so the next
 /// failure is logged again (#1286: a failed reload is retried every poll).

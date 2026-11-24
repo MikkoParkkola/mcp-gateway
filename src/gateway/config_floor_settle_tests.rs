@@ -397,3 +397,106 @@ async fn p3_watcher_reload_queued_behind_outside_reload_lock() {
     .await;
     ticking.await.expect("tick joined");
 }
+
+/// How a row closes the gate before it calls a public reload.
+#[derive(Clone, Copy, Debug)]
+enum Shut {
+    Paused,
+    Restarting,
+    Stopping,
+}
+
+/// The floor that closed `booted`'s gate `how`; the row keeps it alive.
+async fn shut(booted: &Booted, how: Shut) -> ConfigFloor {
+    let mut floor = booted.floor();
+    match how {
+        Shut::Paused => floor.pause(deadline()).await.expect("pause"),
+        Shut::Restarting => floor.commit(),
+        Shut::Stopping => floor.release_for_stop(),
+    }
+    floor
+}
+
+/// The two public reload entries of the library.
+#[derive(Clone, Copy, Debug)]
+enum Entry {
+    ReloadOutcome,
+    Reload,
+}
+
+/// One public reload, bounded so a reload that waits on a lock fails the row.
+async fn public_reload(booted: &Booted, entry: Entry) -> Result<String, String> {
+    let ctx = &booted.ctx;
+    let call = async {
+        match entry {
+            Entry::ReloadOutcome => ctx.reload_outcome().await.map(|o| o.changes),
+            Entry::Reload => ctx.reload().await,
+        }
+    };
+    tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap_or_else(|_| panic!("never answered: {entry:?}"))
+}
+
+/// API.4: the public reload entries ask the restart gate. Paused, restarting
+/// and stopping each answer the gate's text and leave the running config; with
+/// the gate open the same call reloads the edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_reload_is_refused_while_the_gate_is_paused() {
+    use crate::config_reload::{RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING};
+    let closed = [
+        (Shut::Paused, RELOAD_REPLAY_OWED),
+        (Shut::Restarting, RELOAD_RESTARTING),
+        (Shut::Stopping, RELOAD_STOPPING),
+    ];
+    for entry in [Entry::ReloadOutcome, Entry::Reload] {
+        for (how, text) in closed {
+            let row = format!("API.4 {entry:?} {how:?}");
+            let booted = edited_booted("api4");
+            let _floor = shut(&booted, how).await;
+            let got = public_reload(&booted, entry).await;
+            assert_eq!(got, Err(text.to_owned()), "{row}: the gate's text");
+            assert_eq!(
+                booted.running_environment(),
+                None,
+                "{row}: running config kept"
+            );
+        }
+        let row = format!("API.4 {entry:?} open");
+        let booted = edited_booted("api4");
+        let got = public_reload(&booted, entry).await;
+        assert!(got.is_ok(), "{row}: reloads: {got:?}");
+        let running = booted.running_environment();
+        assert_eq!(
+            running.as_deref(),
+            Some("api4"),
+            "{row}: the edit is running"
+        );
+    }
+}
+
+/// The watcher reloads on its own admission. A pause that lands after that
+/// admission must not refuse its reload, as asking the gate a second time
+/// would; the tick finishes within 5 s and the edit is running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watcher_tick_still_reloads_once_admitted() {
+    const ROW: &str = "watcher admitted";
+    let booted = edited_booted("w9535");
+    // Plays the OS delivering the notify event for the outside edit.
+    booted.gate.record_file_event();
+    let hold = hold_at(&booted.gate, AdmittedPoint::WatcherAfterAdmission);
+    let watcher = super::support::WatcherFixture::new(&booted);
+    let ticking = tokio::spawn(async move { tick(&watcher).await });
+    hold.wait_reached(ROW, "the watcher after admission");
+    let mut floor = booted.floor();
+    floor.pause(deadline()).await.expect("pause");
+    hold.release();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(5), ticking).await;
+    assert!(matches!(joined, Ok(Ok(()))), "{ROW}: tick done in 5 s");
+    let running = booted.running_environment();
+    assert_eq!(
+        running.as_deref(),
+        Some("w9535"),
+        "{ROW}: the edit is running"
+    );
+}
