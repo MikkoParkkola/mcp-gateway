@@ -453,10 +453,11 @@ fn the_usage_remedy_names_the_commands_help() {
 }
 
 /// U3: an empty remedy is a bug at the call site, caught before anything is written. Caught with `catch_unwind`
-/// rather than `should_panic`, so a missing panic fails as an assertion the rows tooling can judge.
+/// rather than `should_panic`, so a missing panic fails as an assertion the rows tooling can judge; driven through
+/// `error_outcome`, where the check lives, so the row writes nothing to the process stderr either way.
 #[test]
 fn fail_refuses_an_empty_remedy() {
-    let caught = std::panic::catch_unwind(|| fail(CliExit::LocalFailure, "m", ""));
+    let caught = std::panic::catch_unwind(|| error_outcome(CliExit::LocalFailure, "m", ""));
     let message = caught.err().map(|payload| {
         payload
             .downcast_ref::<String>()
@@ -522,16 +523,23 @@ fn verdict_returns_its_code() {
     assert_ne!(code(verdict(1)), code(verdict(3)), "two codes stay apart");
 }
 
-/// U9: `fail` returns its kind's code: 2 for usage, 1 for a local failure.
+/// U9: `fail` leaves with its kind's code, 2 for usage and 1 for a local failure. Driven through `fail`'s own two
+/// steps (`error_outcome`, then the emitter on in-memory streams): `fail` writes to the process stderr, which the
+/// test harness does not capture, and a log line starting `error: ` reads to the rows tooling as a build error. The
+/// binary rows pin `fail`'s process exit codes end to end.
 #[test]
 fn fail_returns_the_kinds_code() {
-    let code = |exit: std::process::ExitCode| format!("{exit:?}");
-    assert_eq!(
-        code(fail(CliExit::Usage, "m", "r")),
-        code(std::process::ExitCode::from(2))
-    );
-    assert_eq!(
-        code(fail(CliExit::LocalFailure, "m", "r")),
-        code(std::process::ExitCode::from(1))
-    );
+    for (kind, code) in [(CliExit::Usage, 2), (CliExit::LocalFailure, 1)] {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let exit = emit_to(
+            &error_outcome(kind, "m", "r"),
+            false,
+            &[],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(exit.code(), code, "{kind:?}");
+        assert_eq!(err, b"error: m\nr\n", "{kind:?}");
+        assert!(out.is_empty(), "{kind:?}");
+    }
 }
