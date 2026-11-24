@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.2885a89b422b.js';
+import { register, segmented } from '/ui/assets/shell.525de9790ead.js';
 import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
@@ -78,13 +78,13 @@ function changeText(row) {
   if (row.surface !== 'capability_editor') {
     if (named(row.tool)) return row.tool;
     if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
-    return text(row.surface);
+    return '';
   }
   // An older record names no capability: nothing to name, and no pin words.
   if (!named(row.capability)) return 'Capability file changed';
-  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
+  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Saved';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? (row.pin ? ' · pinned' : '');
+  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;
 }
 
@@ -688,7 +688,7 @@ async function receiptTab(body, ctx) {
     copy.addEventListener('click', () => copyJson(JSON.stringify(p, null, 2), copyOut));
     const parts = [facts, h('p', {}, copy), copyOut];
     // An admin action's receipt opens with the sentence its list row says.
-    if (kind) parts.unshift(h('h2', {}, changeText(p)));
+    if (kind === 'admin_action') parts.unshift(h('h2', {}, changeText(p)));
     if (p.effect === 'no_record') {
       const again = h('button', { class: 'btn', type: 'button' }, 'Check again');
       again.addEventListener('click', () => load(true));
