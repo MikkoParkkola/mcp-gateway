@@ -1192,6 +1192,28 @@ test.describe('LE list screen', () => {
     expect(TOKENS.filter((t) => text.includes(t)), 'LE9b tokens found in the core').toEqual([]);
   });
 
+  test('V5 the list cell and the receipt heading both word an admin row through one changeText', () => {
+    // Comments go first: a doc comment that quotes a sentence must not fail correct code.
+    const text = served(/^activity\.[0-9a-f]{12}\.js$/).text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+    expect(text.split('function changeText(').length - 1, 'V5 changeText is written once').toBe(1);
+    const body = (name) => {
+      const span = functionSpan(text, name);
+      expect(span, `V5 the screen has a function ${name}`).not.toBeNull();
+      return text.slice(...span);
+    };
+    expect(body('rowLink'), 'V5 the list cell asks changeText').toContain('changeText(');
+    expect(body('receiptTab'), 'V5 the receipt heading asks changeText').toContain('changeText(');
+    // The sentences the behavioural rows pin; none may be written out anywhere else.
+    const [start, end] = functionSpan(text, 'changeText');
+    const elsewhere = text.slice(0, start) + text.slice(end);
+    const PINNED = [
+      'Capability file changed',
+      'Saved capability billing · re-pinned', 'Created capability billing · pinned', 'Deleted capability billing',
+      'Saved capability billing', 'Saved capability billing · pinned',
+    ];
+    expect(PINNED.filter((s) => elsewhere.includes(s)), 'V5 pinned sentences outside changeText').toEqual([]);
+  });
+
   test('LE10 a frame draws nothing of its own; rows come from the list answer', async ({ page, request }, testInfo) => {
     const { screen, stream } = await screenFor(page, request, testInfo);
     const SECRETS = ['SECRET-TOP-7f3', 'SECRET-WHO-7f3'];
