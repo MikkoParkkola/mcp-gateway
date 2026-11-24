@@ -440,6 +440,8 @@ export async function api(path, init = {}) {
   }
   // A 401 to a request sent before the latest sign-in says nothing about now.
   if (reply.status === 401 && epoch === authEpoch) showSignIn();
+  // Any answered write may have changed what waits for a restart.
+  if (request.method !== 'GET' && request.method !== 'HEAD') refreshRestart();
   // A refusal is judged by its status alone. Its body only lends the gateway's own
   // sentence to a screen that shows it, and a 401's is never read.
   if (!reply.ok) throw new ApiError(reply.status, path, reply.status === 401 ? {} : await refusalWords(reply));
@@ -1252,6 +1254,7 @@ function setHeader({ title, subtitle } = {}) {
 /** Render the current address. */
 export function render() {
   draw(++renderSeq);
+  refreshRestart();
 }
 
 /**
@@ -1837,6 +1840,11 @@ function showWho(auth) {
   document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
   for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
   showEnvironment(auth);
+  const admin = signedIn && auth.admin === true;
+  const became = admin && !restartAdmin;
+  restartAdmin = admin;
+  if (!admin) document.querySelector('[data-state="restart-pending"]')?.remove();
+  if (became) refreshRestart();
 }
 
 /** The sign-in whose environment chip is drawn or on its way; null while there is none. */
@@ -1885,6 +1893,122 @@ async function showEnvironment(auth) {
   }
   if (!wrap.isConnected) return;
   wrap.append(source === 'hostname' ? m.tip('gateway.status.environment-from-hostname') : m.tip('gateway.status.environment-not-set'));
+}
+
+// ---------------------------------------------------------------- restart banner
+
+/** Whether the signed-in key is an admin's: only an admin's shell asks for the gateway read. */
+let restartAdmin = false;
+/** Banner reads, numbered as sent, and the newest one drawn: an older answer arriving later is dropped. */
+let restartSent = 0;
+let restartDrawn = 0;
+
+/**
+ * Read the gateway's restart block again and draw the banner from it: at an
+ * admin's sign-in, on every route change and after every answered write. The
+ * banner is as of that read, so it says when the read was. A refused or
+ * failed read leaves it out, silently, like the environment chip.
+ */
+async function refreshRestart() {
+  if (!restartAdmin) return;
+  const seq = ++restartSent;
+  const epoch = authEpoch;
+  let block = null;
+  try {
+    block = (await api('/ui/api/gateway'))?.pending_restart ?? null;
+  } catch {
+    block = null;
+  }
+  if (epoch !== authEpoch || !restartAdmin || seq < restartDrawn) return;
+  restartDrawn = seq;
+  drawRestart(block, new Date());
+}
+
+/** `keys` as one phrase: "a", "a and b", "a, b and c". */
+const listed = (keys) => (keys.length === 1 ? keys[0] : `${keys.slice(0, -1).join(', ')} and ${keys.at(-1)}`);
+
+/**
+ * The banner while gateway.yaml holds keys only a restart puts into use, one
+ * region under the top bar on every page; none when nothing waits. The same
+ * content again only moves its check time, so focus stays where it was.
+ * Announced once, when it appears.
+ */
+function drawRestart(block, at) {
+  const old = document.querySelector('[data-state="restart-pending"]');
+  const keys = block?.frozen === true && Array.isArray(block.waiting_keys)
+    ? block.waiting_keys.filter((k) => typeof k === 'string' && k !== '') : [];
+  if (!keys.length) {
+    old?.remove();
+    return;
+  }
+  const node = restartBanner(block, keys, at);
+  if (old?.dataset.shows === node.dataset.shows) {
+    old.lastElementChild.replaceWith(node.lastElementChild);
+    return;
+  }
+  if (old) {
+    old.replaceWith(node);
+    return;
+  }
+  document.querySelector('.top').after(node);
+  announce(node.querySelector('h2').textContent, { subject: 'restart' });
+}
+
+/**
+ * What the banner says, in order. While a start from the file would work: a
+ * restart finishes adding the keys (named); which changes still apply; the
+ * guidance line; the start command with Copy where the platform has one.
+ * While a start would be refused: the keys wait, that refusal, and the same
+ * rule for changes, with no restart claim and no command. Both end with the
+ * time of the read.
+ */
+function restartBanner(block, keys, at) {
+  const one = keys.length === 1;
+  const refusal = typeof block.start_refusal === 'string' ? block.start_refusal : null;
+  const advice = typeof block.restart_advice === 'string' ? block.restart_advice : null;
+  const command = typeof block.start_command === 'string' ? block.start_command : null;
+  const title = refusal
+    ? `The API ${one ? 'key' : 'keys'} ${listed(keys)} ${one ? 'waits' : 'wait'} in gateway.yaml, but a start from that file would be refused.`
+    : `A restart finishes adding the API ${one ? 'key' : 'keys'} ${listed(keys)}.`;
+  const rule = one
+    ? 'No change to gateway.yaml that keeps the key is applied; one that takes it out is: revoke it, or restore a revision without it.'
+    : 'No change to gateway.yaml that keeps these keys is applied; one that takes all of them out is: restore a revision without them, or edit gateway.yaml by hand.';
+  const node = state('restart-pending', { title, body: refusal ?? rule });
+  node.classList.add('banner', 'warning', 'restart');
+  const heading = node.querySelector('h2');
+  heading.id = 'restart-title';
+  node.setAttribute('aria-labelledby', heading.id);
+  if (refusal) node.append(el('p', {}, rule));
+  else {
+    if (advice) node.append(el('p', {}, advice));
+    if (command) node.append(copyRow(command));
+  }
+  node.append(el('p', { class: 'muted' }, `Checked at ${stamp(at)}`));
+  node.dataset.shows = JSON.stringify([keys, refusal, advice, command]);
+  return node;
+}
+
+/**
+ * `text` to copy, shown as is, and a button that copies it and says so in
+ * words; where the clipboard refuses, the text is selected for a manual copy.
+ */
+function copyRow(text) {
+  const code = el('code', {}, text);
+  const button = el('button', { type: 'button', class: 'btn' }, 'Copy');
+  button.addEventListener('click', async () => {
+    let said;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+      await navigator.clipboard.writeText(text);
+      said = 'Copied';
+    } catch {
+      getSelection()?.selectAllChildren(code);
+      said = 'Selected: copy it with your keyboard';
+    }
+    button.textContent = said;
+    announce(said, { subject: 'restart' });
+  });
+  return el('div', { class: 'cmd' }, code, button);
 }
 
 /**
