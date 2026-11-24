@@ -12,7 +12,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::keys_create_fixture_tests::{Call, Fixture, KNOWN, Sent, Setup, admin_client};
+use super::keys_create_fixture_tests::{Call, Fixture, KNOWN, ROOT, Sent, Setup, admin_client};
 use crate::config::{AuthConfig, Config};
 
 /// The single operator's token in these rows.
@@ -112,16 +112,24 @@ fn gateway_read(fx: &Fixture) -> Value {
             .expect("infallible");
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
-        // The status read names keys, never a credential.
-        let text = String::from_utf8_lossy(&bytes);
-        for secret in [BEARER, OTHER, KNOWN] {
-            assert!(
-                !text.contains(secret),
-                "a secret in the status read: {text}"
-            );
-        }
+        shows_no_credential(&bytes);
         serde_json::from_slice(&bytes).expect("json")
     })
+}
+
+/// A refusal or status answer names keys, never a credential these rows
+/// use, nor its digest. (A held create's 201 hands out its own secret; `post`
+/// checks those with the shared leak check.)
+fn shows_no_credential(bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    for secret in [BEARER, OTHER, KNOWN, ROOT] {
+        let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+        let hex = digest.trim_start_matches("sha256:");
+        assert!(
+            !text.contains(secret) && !text.contains(hex),
+            "a credential in the answer: {text}"
+        );
+    }
 }
 
 fn reload_context(fx: &Fixture) -> Arc<crate::config_reload::ReloadContext> {
@@ -146,6 +154,7 @@ fn call(fx: &Fixture, method: &str, uri: &str, body: &Value) -> (StatusCode, Val
             .expect("infallible");
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+        shows_no_credential(&bytes);
         (
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
