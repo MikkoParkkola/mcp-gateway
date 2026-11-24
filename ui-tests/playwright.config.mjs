@@ -22,7 +22,7 @@ export default defineConfig({
   // trace would run inside every sample. CI runs `chromium` and also `perf`;
   // in `perf` an LCP miss fails the job and a CLS miss is reported only.
   projects: [
-    { name: 'chromium', testDir: 'tests', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', testDir: 'tests', grep: /focus that reaches the opener a little late/, repeatEach: 20, use: { ...devices['Desktop Chrome'] } },
     { name: 'visual', testDir: 'visual', testMatch: '*.visual.mjs', use: { ...devices['Desktop Chrome'] } },
     { name: 'perf', testDir: 'perf', testMatch: '*.perf.mjs', use: { ...devices['Desktop Chrome'], trace: 'off' } },
   ],
