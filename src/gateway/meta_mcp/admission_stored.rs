@@ -203,10 +203,11 @@ pub(super) fn refusal_to_meet(
     crate::Error,
     Option<crate::security::decision_record::Refusal>,
 )> {
+    let first = withheld.first().and_then(|(_, (_, pair))| pair.clone());
     withheld
         .into_iter()
         .find(|(step, _)| served.is_none_or(|ran| ran.contains(step)))
-        .map(|(_, refusal)| refusal)
+        .map(|(_, (error, pair))| (error, mutant!("M7", first.clone(), pair)))
 }
 
 impl super::SyncLease {
