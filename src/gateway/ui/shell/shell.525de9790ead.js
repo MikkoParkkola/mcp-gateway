@@ -218,6 +218,10 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** The banner and next step for a server whose config entry turns it off; its word comes from the glossary. */
+export const OFF_BANNER = (name) => `${name} is ${GLOSSARY.server.off.toLowerCase()} in its gateway.yaml entry. The gateway leaves it stopped, and its tools are out of reach for every key.`;
+export const OFF_NEXT = 'Turn it back on from its Settings tab.';
+
 /**
  * The one word for each state, used across every screen (UI1.24). Server
  * states are keyed by the gateway's ServerState wire values. A dropped live
@@ -233,9 +237,14 @@ export const GLOSSARY = {
     refused: 'Refused',
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
+    // Not Off: that word is also a value the HTML autocomplete attribute takes.
+    off: 'Disabled',
   },
   stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
+
+/** The word for a server whose config entry turns it off, read from the glossary. */
+export const OFF_WORD = GLOSSARY.server.off;
 
 const unlistedStates = new Set();
 
@@ -302,6 +311,8 @@ export const SERVER_STATES = {
     banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
     next: () => 'Add it from the Servers Actions tab.',
   },
+  // Switched off by its owner: nothing is wrong, so the quiet glyph and tone.
+  off: { glyph: 'ⓘ', tone: 'neutral', banner: (s) => OFF_BANNER(s.name), next: () => OFF_NEXT },
 };
 
 /** A state the table lacks is not shown as harmless. */

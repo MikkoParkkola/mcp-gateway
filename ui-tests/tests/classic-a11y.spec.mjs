@@ -20,7 +20,7 @@ const STATUS = {
   servers: [{ name: 'alpha', status: 'healthy', circuit_state: 'closed', transport: 'http', tool_count: 1, request_count: 3, failure_count: 0, latency_p50_ms: 4, latency_p95_ms: 9 }],
 };
 
-async function classicPage(page) {
+async function classicPage(page, status = STATUS) {
   await page.route('**/ui/classic', (route) => route.fulfill({
     status: 200,
     headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' },
@@ -29,7 +29,7 @@ async function classicPage(page) {
   await page.route('**/ui/api/**', (route) => {
     const path = new URL(route.request().url()).pathname;
     const body = {
-      '/ui/api/status': STATUS,
+      '/ui/api/status': status,
       '/ui/api/registry': { entries: [{ name: 'filesystem', description: 'Files on this host', login: 'none' }] },
       '/ui/api/tools': { tools: [{ server: 'alpha', name: 'read_a', description: 'Reads a thing' }] },
       '/ui/api/capabilities': { capabilities: [{ name: 'weather_lookup', description: 'Looks up weather' }] },
@@ -56,6 +56,18 @@ test('every classic tab and dialog in the page has an axe row', () => {
   // Each dialog named here has its own axe test below; a new one needs a test, then a name.
   expect(DIALOGS).toEqual(['import-modal']);
   expect(INDEX.match(/role="dialog"/g)).toHaveLength(DIALOGS.length);
+});
+
+test('a server turned off in the config reads Down, with a dash for its breaker and counters', async ({ page }) => {
+  // The off row's wire shape: no breaker and no live counters, so null.
+  const parked = {
+    name: 'parked', running: false, state: 'off', transport: 'http', circuit_state: null,
+    request_count: null, success_count: null, failure_count: null, latency_p50_ms: null, latency_p95_ms: null,
+  };
+  await classicPage(page, { ...STATUS, server_count: 2, servers: [...STATUS.servers, parked] });
+  await page.evaluate(() => { location.hash = 'servers'; });
+  const row = page.locator('#servers-tbody tr').filter({ hasText: 'parked' });
+  await expect(row.locator('td')).toHaveText(['parked', 'http', 'Down', '-', '-', '-', '-', '-', '-', 'Remove']);
 });
 
 for (const width of WIDTHS) {

@@ -306,7 +306,7 @@ impl BudgetEnforcer {
 ///
 /// Uses `f64` comparison to avoid integer truncation errors near thresholds
 /// (e.g. 99.7 % must not be cast to 99 and miss the 100 % block rule).
-pub(super) fn evaluate_alerts(alerts: &[AlertRule], spend: f64, limit: f64) -> Option<AlertAction> {
+pub(crate) fn evaluate_alerts(alerts: &[AlertRule], spend: f64, limit: f64) -> Option<AlertAction> {
     if limit <= 0.0 {
         return None;
     }

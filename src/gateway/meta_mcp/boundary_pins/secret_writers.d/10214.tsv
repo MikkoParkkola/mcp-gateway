@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/gateway/ui/backends/add_checks.rs	put_headers	headers=	1	stores	H1: src/gateway/ui/backends_header_tests.rs::h1_a_url_add_stores_a_secret_header_and_answers_its_reference; sets the add's headers before the panel's slotting, which stores each value and writes only its reference

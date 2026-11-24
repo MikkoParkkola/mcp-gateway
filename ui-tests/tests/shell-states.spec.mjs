@@ -241,6 +241,36 @@ for (const width of WIDTHS) {
   });
 }
 
+test('T12 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
+  await open(page);
+  // A missing export reads as null, so a shell without them fails at the expects below, not in the page.
+  const got = await inShell(page, (m) => {
+    const banner = m.serverBanner({ name: 'github', state: 'off', reason: '', next_retry_at: null });
+    return {
+      word: m.stateWord('off'),
+      offWord: m.OFF_WORD ?? null,
+      banner: banner?.querySelector('h2')?.textContent ?? null,
+      offBanner: typeof m.OFF_BANNER === 'function' ? m.OFF_BANNER('github') : null,
+      next: banner?.querySelector('p')?.textContent ?? null,
+      offNext: m.OFF_NEXT ?? null,
+      glyph: m.SERVER_STATES.off?.glyph ?? null,
+      tone: m.SERVER_STATES.off?.tone ?? null,
+    };
+  });
+  expect(got.word).toBe(got.offWord);
+  expect(got.word).not.toBe('Unknown state');
+  expect(got.banner).toBe(got.offBanner);
+  expect(got.banner).toContain('github');
+  expect(got.next).toBe(got.offNext);
+  expect(got.glyph).toBe('ⓘ');
+  expect(got.tone).toBe('neutral');
+  // The words carry their meaning, not only agree with themselves: where it is
+  // turned off, that its tools are out of reach, and where to turn it on.
+  expect(got.offBanner).toContain('gateway.yaml');
+  expect(got.offBanner).toContain('tools are out of reach');
+  expect(got.offNext).toContain('Settings');
+});
+
 test('T9 the half-open breaker value the paused copy reads is the gateway\'s own wire value', () => {
   const file = fileURLToPath(new URL('../../src/failsafe/circuit_breaker.rs', import.meta.url));
   const source = readFileSync(file, 'utf8');
