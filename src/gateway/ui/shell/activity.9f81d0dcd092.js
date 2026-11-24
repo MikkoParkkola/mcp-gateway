@@ -76,15 +76,15 @@ function rowLink(row) {
 function changeText(row) {
   const named = (v) => typeof v === 'string' && v !== '';
   if (row.surface !== 'capability_editor') {
-    if (named(row.tool)) return row.tool;
     if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
+    if (named(row.tool)) return row.tool;
     return text(row.surface);
   }
   // An older record names no capability: nothing to name, and no pin words.
   if (!named(row.capability)) return 'Capability file changed';
   const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  const pin = new Map([['updated', ' · re-pinned'], ['added', row.action === 'create' ? ' · pinned' : '']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;
 }
 
