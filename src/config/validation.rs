@@ -14,6 +14,26 @@ pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext 
      machine. Use TLS, or set allow_cleartext_credentials on this backend to accept that the \
      credentials are readable and replayable in transit.";
 
+/// Why a name that must be printable and addressable is refused, if it is; `kind` says which setting holds it. A
+/// control character could start a forged line wherever the name is printed, and the message itself names it escaped.
+/// No address can reach `.` or `..`: clients fold those path segments before the request is sent. The one copy of
+/// this rule: loading uses it for backend names and `capabilities.name`, and the routes that add a server use it too.
+/// Another name with the same need (an API key's, say) calls it rather than copying it.
+pub(crate) fn name_refusal(kind: &str, name: &str) -> Option<String> {
+    if name.chars().any(char::is_control) {
+        let shown = crate::log_escape::escaped(name);
+        return Some(format!(
+            "{kind} '{shown}' contains a control character; rename it"
+        ));
+    }
+    if name == "." || name == ".." {
+        return Some(format!(
+            "{kind} '{name}' cannot be reached: no address can name '.' or '..'; rename it"
+        ));
+    }
+    None
+}
+
 impl Config {
     /// A firewall rule's `keys` and an exception's `key` name configured API
     /// keys, and need API-key authentication to match anything: a rule that
@@ -402,9 +422,13 @@ impl Config {
                     "Backend name must not be empty".to_string(),
                 ));
             }
+            if let Some(why) = name_refusal("Backend name", name) {
+                return Err(Error::ConfigValidation(why));
+            }
             if let Some(bad) = INVALID_CHARS.iter().find(|&&c| name.contains(c)) {
+                let shown = crate::log_escape::escaped(name);
                 return Err(Error::ConfigValidation(format!(
-                    "Backend name '{name}' contains invalid character '{bad}'"
+                    "Backend name '{shown}' contains invalid character '{bad}'"
                 )));
             }
         }
@@ -413,9 +437,13 @@ impl Config {
         // registry membership, so one name may not mean both
         // (MIK-8358.CAPCFG.1). Checked whatever `enabled` says (MIK-8298).
         let capabilities = &self.capabilities.name;
+        if let Some(why) = name_refusal("capabilities.name", capabilities) {
+            return Err(Error::ConfigValidation(why));
+        }
         if self.backends.contains_key(capabilities) {
+            let shown = crate::log_escape::escaped(capabilities);
             return Err(Error::ConfigValidation(format!(
-                "capabilities.name = {capabilities:?} is also backends.{capabilities}; the \
+                "capabilities.name = {capabilities:?} is also backends.{shown}; the \
                  capabilities backend shares the backend name space. Rename one of them."
             )));
         }
