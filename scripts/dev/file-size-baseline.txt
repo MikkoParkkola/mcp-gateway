@@ -3,11 +3,11 @@
 # may cross. Delete a row once the file drops under the ceiling.
 # 92 files, 67167 lines of excess.
 6557 src/gateway/meta_mcp/tests.rs
-6281 src/gateway/meta_mcp/invoke.rs
+6291 src/gateway/meta_mcp/invoke.rs
 5407 src/gateway/server/mod.rs
 3905 src/gateway/router/tests.rs
 2983 src/config_reload/tests.rs
-2760 src/transport/http/tests.rs
+2801 src/transport/http/tests.rs
 2805 src/gateway/meta_mcp/mod.rs
 2350 tests/mik_7272_task_1_acs.rs
 2327 src/config/mod.rs
@@ -20,7 +20,7 @@
 2038 src/config_reload/mod.rs
 2037 tests/webui_management_tests.rs
 2001 src/gateway/auth.rs
-1929 src/transport/http/mod.rs
+2007 src/transport/http/mod.rs
 1894 src/commands/trust.rs
 1892 src/backend/tests.rs
 1815 src/control_plane/store.rs

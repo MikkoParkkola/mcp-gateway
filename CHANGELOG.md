@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it falls behind, because a stale runtime is only visible when a backend
   that needs it stops starting.
 
+- **Tool invocations log both ends of the call.** `tool invoked` carries
+  `session_id`, and a matching `tool response returned` line reports the
+  `trace_id`, `session_id`, elapsed time, and whether the response was produced
+  or errored. Both lines carry `trace_id`, so one call can be followed from
+  arrival to response — the join that separates a slow backend from a completed
+  response that never reached its caller. This is a diagnostic, not the delivery
+  fix: it makes the fault findable, and the drop itself is still unexplained.
+
 ### Fixed
 
 - **`x-mcp-header` mirroring covers nested properties and encoded values.**
