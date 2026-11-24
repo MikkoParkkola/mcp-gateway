@@ -10,7 +10,7 @@ use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta};
 
 use super::access::{Access, AccessScope};
 use super::answer::Joined;
@@ -18,7 +18,7 @@ use super::joiner::Joiner;
 use super::reader::{
     Cursor, Limits, Line, Look, Seen, WINDOW, read_page_joined, restarted_mid_read, timestamp,
 };
-use super::rows::{Check, Kind};
+use super::rows::{Check, Kind, row_id};
 use crate::clock::ClockBeforeEpoch;
 use crate::security::decision_record::read::decision_evidence;
 
@@ -51,8 +51,9 @@ pub(in crate::gateway::ui) struct Pass {
 }
 
 /// Read the logs newest first, pass by pass, and hand `each_record` every
-/// record the caller may read that carries a time inside `window`, with its
-/// kind and its joined delivery record. Every line goes through the list's
+/// record the caller may read, that the list would show as a row, and that
+/// carries a time inside `window`, with its kind and its joined delivery
+/// record. Every line goes through the list's
 /// own steps ([`Joiner::admit`]), and one join is held across the passes,
 /// so a delivery read in one pass reaches its call in the next.
 ///
@@ -94,8 +95,12 @@ pub(super) fn scan_window(
         if at >= *window.start() {
             fresh.set(true);
         }
+        // Only a record the list can show as a row counts (it needs its
+        // counter and entry hash), so a count never exceeds what Activity
+        // lists for the same window.
         if let Some((kind, joined)) = admitted
             && window.contains(&at)
+            && row_id(line).is_some()
         {
             each_record(line, kind, &joined, at);
         }
@@ -224,7 +229,9 @@ impl RuleHits {
 }
 
 /// The two days counted: the newer `[split, to]`, the older `[from, split)`,
-/// stated as `[from, older_to]` to the second.
+/// stated as `[from, older_to]`. Stamps carry fractions of a second, so
+/// `older_to` is one nanosecond before `split`: the Activity filter, which
+/// compares parsed times inclusively, then lists exactly the older day.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::gateway::ui) struct Days {
     pub(in crate::gateway::ui) from: DateTime<FixedOffset>,
@@ -239,7 +246,7 @@ impl Days {
         let split = to - day;
         Self {
             from: split - day,
-            older_to: split - crate::duration_bound::delta!(seconds, 1),
+            older_to: split - TimeDelta::nanoseconds(1),
             split,
             to,
         }

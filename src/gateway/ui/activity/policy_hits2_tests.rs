@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Hits per rule, continued: an edited rule, a scoped caller, a dark clock,
 //! the members already served, one pattern listed twice, the window's
-//! edges, an inactive built-in, a rotation during the read and no log.
+//! edges, an inactive built-in, a rotation during the read, no log, a record
+//! the list cannot show, and a read that fails.
 
 use super::policy_hits_tests::{
     a_rows, cells, config, decided, entries, firewall_id, p1_config, p1_fixture, policy_id, read,
@@ -13,7 +14,7 @@ use super::scan_window_tests::{
 };
 use super::{
     access::Access,
-    counts::COUNT_SCAN_BYTES,
+    counts::{COUNT_SCAN_BYTES, count_rule_hits},
     decision_fixtures::decision,
     reader::{Limits, read_page},
     rows::{Filter, NOT_A_CALL, kind_of},
@@ -26,7 +27,7 @@ use crate::security::{
     decision_record::Decision,
     transparency_log::{CorrelationKey, CorrelationSource},
 };
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta};
 use serde_json::{Map, Value, json};
 use std::ops::ControlFlow;
 
@@ -154,10 +155,16 @@ fn p10_the_window_edges() {
     let id = policy_id(&live.generation(), "srv", "x");
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("inv.jsonl");
-    let rows = [n(), ago(24), ago(48)]
-        .into_iter()
-        .map(|at| decided("srv", "x", "tool_policy", &id, at))
-        .collect();
+    // An hour past `n()` lies in neither day.
+    let rows = [
+        n() + crate::duration_bound::delta!(hours, 1),
+        n(),
+        ago(24),
+        ago(48),
+    ]
+    .into_iter()
+    .map(|at| decided("srv", "x", "tool_policy", &id, at))
+    .collect();
     write_log(&path, rows);
     let model = read(&live, &path);
     let deny = &model["tool_policy"]["deny"][0];
@@ -165,28 +172,63 @@ fn p10_the_window_edges() {
         (&deny["hits_24h"], &deny["hits_prev_24h"]),
         (&json!(2), &json!(1))
     );
-    let older_end = ago(24) - crate::duration_bound::delta!(seconds, 1);
-    assert_eq!(model["hits"]["older_to"], older_end.to_rfc3339());
-    // The Activity list's own filter over the same bounds.
-    let listed = |from: DateTime<FixedOffset>, to: DateTime<FixedOffset>| {
-        let filter = Filter {
-            rule: Some(id.clone()),
-            from: Some(from),
-            to: Some(to),
-            ..Filter::default()
-        };
-        let limits = Limits {
-            matches: 100,
-            bytes: MIB,
-        };
-        let page = read_page(&path, None, None, limits, |line| {
-            kind_of(line).is_some_and(|kind| filter.matches(line, kind, &NOT_A_CALL))
-        })
-        .expect("read");
-        page.lines.len()
+    let older_end = ago(24) - TimeDelta::nanoseconds(1);
+    assert_eq!(
+        model["hits"]["older_to"],
+        "2026-11-23T11:59:59.999999999+00:00"
+    );
+    assert_eq!(listed(&path, &id, ago(24), n()).len(), 2);
+    assert_eq!(listed(&path, &id, ago(48), older_end).len(), 1);
+}
+
+/// The stamps of the rows the Activity list's own filter gives for rule `id`
+/// over `[from, to]`.
+fn listed(
+    path: &std::path::Path,
+    id: &str,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
+) -> Vec<String> {
+    let filter = Filter {
+        rule: Some(id.to_owned()),
+        from: Some(from),
+        to: Some(to),
+        ..Filter::default()
     };
-    assert_eq!(listed(ago(24), n()), 2);
-    assert_eq!(listed(ago(48), older_end), 1);
+    let limits = Limits {
+        matches: 100,
+        bytes: MIB,
+    };
+    let page = read_page(path, None, None, limits, |line| {
+        kind_of(line).is_some_and(|kind| filter.matches(line, kind, &NOT_A_CALL))
+    })
+    .expect("read");
+    page.lines
+        .iter()
+        .map(|l| l.entry["timestamp"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+#[test]
+fn p10b_a_sub_second_record_before_the_split() {
+    let live = LiveConfig::new(config(Vec::new(), &[], &["srv:x"], false));
+    let id = policy_id(&live.generation(), "srv", "x");
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("inv.jsonl");
+    let late = ago(24) - crate::duration_bound::delta!(milliseconds, 500);
+    write_log(&path, vec![decided("srv", "x", "tool_policy", &id, late)]);
+    let model = read(&live, &path);
+    let deny = &model["tool_policy"]["deny"][0];
+    assert_eq!(
+        (&deny["hits_24h"], &deny["hits_prev_24h"]),
+        (&json!(0), &json!(1))
+    );
+    // The older day as the answer states it lists exactly that record; the
+    // newer day from the split lists nothing.
+    let older_to = model["hits"]["older_to"].as_str().expect("an end");
+    let older_to = DateTime::parse_from_rfc3339(older_to).expect("a time");
+    assert_eq!(listed(&path, &id, ago(48), older_to), [late.to_rfc3339()]);
+    assert!(listed(&path, &id, ago(24), n()).is_empty());
 }
 
 #[test]
@@ -287,6 +329,72 @@ fn p13_no_log_serves_the_rules_with_every_count_null() {
     let model = read_with(&live, None, &Access::All, Ok(n()), COUNT_SCAN_BYTES);
     assert_eq!(model["finding_rules"].as_array().map(Vec::len), Some(2));
     assert!(!entries(&model).is_empty());
+    for e in entries(&model) {
+        assert!(
+            e["hits_24h"].is_null() && e["hits_prev_24h"].is_null(),
+            "{e}"
+        );
+    }
+    assert_eq!(
+        (&model["hits"]["complete"], &model["hits"]["stopped"]),
+        (&json!(false), &Value::Null)
+    );
+}
+
+/// Code seat finding (count and list parity): a record the list cannot show
+/// as a row (no counter) is not counted, so a count never exceeds the list.
+#[test]
+fn p14_a_record_the_list_cannot_show_is_not_counted() {
+    let live = LiveConfig::new(config(Vec::new(), &[], &["srv:x"], false));
+    let id = policy_id(&live.generation(), "srv", "x");
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("inv.jsonl");
+    let rows = [ago(1), ago(2)]
+        .into_iter()
+        .map(|at| decided("srv", "x", "tool_policy", &id, at))
+        .collect();
+    write_log(&path, rows);
+    let unlisted = ago(1).to_rfc3339();
+    let text = std::fs::read_to_string(&path).expect("the log");
+    let edited: String = text
+        .lines()
+        .map(|line| {
+            let mut entry: Value = serde_json::from_str(line).expect("a record");
+            if entry["timestamp"] == unlisted.as_str() {
+                entry.as_object_mut().expect("an object").remove("counter");
+            }
+            entry.to_string() + "\n"
+        })
+        .collect();
+    std::fs::write(&path, edited).expect("the log");
+    // Premise: both records name the rule, and the list shows one of them.
+    let text = std::fs::read_to_string(&path).expect("the log");
+    assert_eq!(text.matches(&id).count(), 2);
+    assert_eq!(listed(&path, &id, ago(24), n()).len(), 1);
+    let model = read(&live, &path);
+    assert_eq!(model["tool_policy"]["deny"][0]["hits_24h"], 1);
+}
+
+/// A read that fails for any reason but a rotation still serves the rules,
+/// with every count unknown (the builder's rule; the spec names none).
+#[test]
+fn p15_a_failed_read_serves_the_rules_with_every_count_null() {
+    let live = LiveConfig::new(p1_config());
+    let dir = crate::test_dir_keep::kept_tempdir();
+    // A folder where the log file should be: the read fails.
+    let path = dir.path().join("inv.jsonl");
+    std::fs::create_dir(&path).expect("a folder");
+    let failed = count_rule_hits(Ok(n()), &path, None, &Access::All, COUNT_SCAN_BYTES, |_| {
+        ControlFlow::Continue(())
+    });
+    let kind = failed.expect_err("premise: the read fails").kind();
+    assert_ne!(
+        kind,
+        std::io::ErrorKind::Interrupted,
+        "premise: not a rotation"
+    );
+    let model = read(&live, &path);
+    assert_eq!(model["finding_rules"].as_array().map(Vec::len), Some(2));
     for e in entries(&model) {
         assert!(
             e["hits_24h"].is_null() && e["hits_prev_24h"].is_null(),

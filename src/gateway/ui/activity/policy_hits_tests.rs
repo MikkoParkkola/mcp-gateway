@@ -257,7 +257,8 @@ pub(super) fn p1_fixture(dir: &Path) -> (LiveConfig, P1, std::path::PathBuf) {
 }
 
 /// The `hits` object an admin's whole read at `n()` must equal, its bounds
-/// worked out here from `n()` and the spec's 48 h, 24 h and 1 s.
+/// worked out here from `n()`, 48 h, 24 h and the older day's end one
+/// nanosecond before the split (test-plan sidecar 1).
 fn whole_read_hits() -> Value {
     let day = delta!(hours, 24);
     let text = |t: DateTime<FixedOffset>| Value::from(t.to_rfc3339());
@@ -265,7 +266,10 @@ fn whole_read_hits() -> Value {
     expected.insert("scope".into(), "all".into());
     expected.insert("to".into(), text(n()));
     expected.insert("split".into(), text(n() - day));
-    expected.insert("older_to".into(), text(n() - day - delta!(seconds, 1)));
+    expected.insert(
+        "older_to".into(),
+        text(n() - day - TimeDelta::nanoseconds(1)),
+    );
     expected.insert("from".into(), text(n() - day - day));
     expected.insert("stopped".into(), "end".into());
     expected.insert("complete".into(), true.into());
@@ -393,6 +397,11 @@ fn p2_counts_only() {
         "scope", "to", "split", "older_to", "from", "stopped", "complete",
     ];
     assert_eq!(keys(&model["hits"]), sorted(&hits));
+    // The older day's stated end, to the nanosecond (test-plan sidecar 1).
+    assert_eq!(
+        model["hits"]["older_to"],
+        "2026-11-23T11:59:59.999999999+00:00"
+    );
     // The added values: an id or null, counts, nothing naming a call.
     for e in entries(&model) {
         assert!(e["rule_id"].as_str().is_none_or(is_rule_id), "{e}");
