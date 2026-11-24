@@ -252,10 +252,6 @@ pub(super) fn add_restart(body: &mut Value, view: StatusView, record: Option<Res
     }
 }
 
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each flag is one independent fact on the wire; no two encode a state"
-)]
 #[derive(Debug, Serialize)]
 struct ServerStatus {
     name: String,
