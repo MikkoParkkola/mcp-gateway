@@ -1,0 +1,3 @@
+head_sha	3085235002831bd9413006cac1e9a4247ff66186
+#mutant XM1
+mcp_gateway	gateway::ui::backend_ops::tests::transport::xport1_a_same_kind_update_keeps_the_members_it_did_not_send	src/gateway/ui/backend_ops_transport_tests.rs:43
