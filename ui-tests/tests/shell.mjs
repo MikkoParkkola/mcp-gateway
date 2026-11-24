@@ -259,3 +259,16 @@ export function frame(event, data, id = null) {
   const head = event === 'hello' ? 'retry: 3000\n' : '';
   return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
 }
+
+/** From before the shell loads, keep a count of live gateway-status listeners as window.__statusListeners(). */
+export const countListeners = (page) => page.addInitScript(() => {
+  const fns = new Set();
+  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
+    const real = window[name];
+    window[name] = function (type, fn, ...more) {
+      if (type === 'gateway-status') fns[op](fn);
+      return real.call(this, type, fn, ...more);
+    };
+  }
+  window.__statusListeners = () => fns.size;
+});

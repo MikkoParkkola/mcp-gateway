@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady, tooltipCoversNothing } from './shell.mjs';
+import { countListeners, shellReady, tooltipCoversNothing } from './shell.mjs';
 import { readCopy, readScreens, scanScreens } from './copy-check.mjs';
 
 // ------------------------------------------------------------ fake gateway
@@ -59,19 +59,6 @@ function gate() {
 
 /** What the live stream does on a status frame: tell the screens. */
 const statusEvent = (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent('gateway-status', { detail: {} })));
-
-/** From before the shell loads, keep a count of live gateway-status listeners as window.__statusListeners(). */
-const countListeners = (page) => page.addInitScript(() => {
-  const fns = new Set();
-  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
-    const real = window[name];
-    window[name] = function (type, fn, ...more) {
-      if (type === 'gateway-status') fns[op](fn);
-      return real.call(this, type, fn, ...more);
-    };
-  }
-  window.__statusListeners = () => fns.size;
-});
 
 async function openScreen(page, query = '') {
   await page.goto(`/ui/servers/status${query}`);
