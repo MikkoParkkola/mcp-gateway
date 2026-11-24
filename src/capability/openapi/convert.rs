@@ -227,7 +227,9 @@ impl OpenApiConverter {
                     components,
                     auth_scheme.as_ref(),
                 ) {
-                    Ok(cap) => capabilities.push(cap),
+                    Ok(cap) => {
+                        capabilities.push((path.as_str(), method.to_ascii_uppercase(), cap));
+                    }
                     Err(e) => {
                         warn!(path = %path, method = %method, error = %e, "Skipping operation");
                     }
@@ -235,8 +237,16 @@ impl OpenApiConverter {
             }
         }
 
-        // Stable ordering for deterministic output (tests + diffs).
-        capabilities.sort_by(|a, b| a.name.cmp(&b.name));
+        // Name order, then path, then method: the maps walked above have no
+        // order of their own, and two operations can share a tool name.
+        capabilities.sort_by(|(pa, ma, a), (pb, mb, b)| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| pa.cmp(pb))
+                .then_with(|| ma.cmp(mb))
+        });
+        let capabilities: Vec<GeneratedCapability> =
+            capabilities.into_iter().map(|(_, _, cap)| cap).collect();
 
         info!(
             count = capabilities.len(),
@@ -258,43 +268,45 @@ impl OpenApiConverter {
 
     /// Pick a representative security scheme from `components.securitySchemes`.
     ///
-    /// Preference order: bearer > `api_key` > oauth2 > basic. The first match
-    /// wins; the full mapping is emitted in the generated `auth:` block.
+    /// Preference order: bearer > `api_key` > oauth2 > basic. Among schemes of
+    /// one preference the name that sorts first wins, so one document always
+    /// gives one `auth:` block; the full mapping is emitted there.
     #[allow(clippy::unused_self)]
     fn pick_security_scheme(&self, components: &OpenApiComponents) -> Option<ResolvedAuth> {
-        let schemes = &components.security_schemes;
+        let mut schemes: Vec<_> = components.security_schemes.iter().collect();
         if schemes.is_empty() {
             return None;
         }
+        schemes.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         // Prefer bearer HTTP auth.
-        for (name, scheme) in schemes {
+        for &(name, scheme) in &schemes {
             let t = scheme.scheme_type.to_ascii_lowercase();
             if t == "http" && scheme.scheme.as_deref() == Some("bearer") {
                 return Some(ResolvedAuth::bearer(name));
             }
         }
         // Then apiKey (header or query).
-        for (name, scheme) in schemes {
+        for &(name, scheme) in &schemes {
             if scheme.scheme_type.eq_ignore_ascii_case("apikey") {
                 return Some(ResolvedAuth::api_key(name, scheme));
             }
         }
         // Then oauth2.
-        for (name, scheme) in schemes {
+        for &(name, scheme) in &schemes {
             if scheme.scheme_type.eq_ignore_ascii_case("oauth2") {
                 return Some(ResolvedAuth::oauth2(name));
             }
         }
         // Finally basic.
-        for (name, scheme) in schemes {
+        for &(name, scheme) in &schemes {
             let t = scheme.scheme_type.to_ascii_lowercase();
             if t == "http" && scheme.scheme.as_deref() == Some("basic") {
                 return Some(ResolvedAuth::basic(name));
             }
         }
         // Unknown — emit a bearer placeholder so the capability still lists auth.
-        schemes.keys().next().map(|n| ResolvedAuth::bearer(n))
+        schemes.first().map(|(n, _)| ResolvedAuth::bearer(n))
     }
 
     /// Resolve the base URL from the `OpenAPI` `servers` block, combining it
@@ -467,13 +479,19 @@ impl OpenApiConverter {
         }
 
         // Add request body properties (simplified — assumes object type).
-        // Prefer application/json, then the first entry, then form types.
+        // Prefer application/json, then form, then the media type whose name
+        // sorts first (the content map has no order of its own).
         if let Some(body) = body {
             let media = body
                 .content
                 .get("application/json")
                 .or_else(|| body.content.get("application/x-www-form-urlencoded"))
-                .or_else(|| body.content.values().next());
+                .or_else(|| {
+                    body.content
+                        .iter()
+                        .min_by_key(|(name, _)| *name)
+                        .map(|(_, m)| m)
+                });
             if let Some(media) = media
                 && let Some(ref raw_schema) = media.schema
             {
