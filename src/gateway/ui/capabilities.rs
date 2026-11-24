@@ -398,6 +398,9 @@ fn record_edit(
     name: &str,
     committed: &Committed,
 ) -> Option<axum::response::Response> {
+    if mutant!("M21", true, false) {
+        return None;
+    }
     let mut fields = serde_json::Map::new();
     fields.insert("action".into(), action.into());
     fields.insert("capability".into(), name.into());

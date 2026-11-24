@@ -331,19 +331,53 @@ pub(super) fn row(line: &Line, check: &Check<'_>, joined: &Joined) -> Option<Val
             copy(
                 &mut row,
                 e,
-                &[
-                    "surface",
-                    "route",
-                    "method",
-                    "http_status",
-                    "tool",
-                    "action",
-                    "capability",
-                    "pin",
-                ],
+                mutant!(
+                    "M2",
+                    &[
+                        "surface",
+                        "route",
+                        "method",
+                        "http_status",
+                        "tool",
+                        "action",
+                        "capability",
+                        "pin",
+                        "sha256_before",
+                        "sha256_after",
+                    ][..],
+                    &[
+                        "surface",
+                        "route",
+                        "method",
+                        "http_status",
+                        "tool",
+                        "action",
+                        "capability",
+                        "pin",
+                    ][..]
+                ),
             );
+            if mutant!(
+                "M6",
+                str_field(e, "surface") != Some("capability_editor"),
+                false
+            ) {
+                row.remove("action");
+            }
+            if mutant!("M32", row.contains_key("action"), false) {
+                row.insert("action".into(), "save".into());
+            }
             row.insert("outcome".into(), "change".into());
-            row.insert("who".into(), named_who(e));
+            if mutant!("M4", false, mutant!("M5", e.get("who").is_some(), true)) {
+                row.insert(
+                    "who".into(),
+                    mutant!(
+                        "M3",
+                        e.get("who").cloned().unwrap_or_default(),
+                        named_who(e)
+                    ),
+                );
+            }
         }
     }
     Some(row.into())
@@ -356,6 +390,15 @@ fn named_who(e: &Value) -> Value {
     let mut who = Map::new();
     if let Some(w) = e.get("who") {
         copy(&mut who, w, &["account", "authority", "subject"]);
+    }
+    if mutant!("M31", true, false) {
+        let authority = who.remove("authority");
+        if let Some(subject) = who.remove("subject") {
+            who.insert("authority".into(), subject);
+        }
+        if let Some(authority) = authority {
+            who.insert("subject".into(), authority);
+        }
     }
     who.into()
 }
@@ -431,11 +474,17 @@ impl Filter {
             let tool = str_field(e, "tool");
             // A capability save has no tool; its capability is what it names.
             let capability = || {
-                kind == Kind::AdminAction
-                    && str_field(e, "capability").is_some_and(|c| c.contains(q.as_str()))
+                mutant!("M8b", true, kind == Kind::AdminAction)
+                    && str_field(e, "capability").is_some_and(|c| {
+                        mutant!(
+                            "M8",
+                            c == q.as_str(),
+                            mutant!("M29", c.starts_with(q.as_str()), c.contains(q.as_str()))
+                        )
+                    })
             };
             let hit = tool.is_some_and(|t| t.contains(q.as_str()))
-                || capability()
+                || mutant!("M7", false, capability())
                 || (kind.is_call() && str_field(e, "trace_id") == Some(q.as_str()));
             if !hit {
                 return false;
