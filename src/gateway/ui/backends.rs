@@ -461,9 +461,12 @@ async fn update_backend(
             }
             // A slot that became a secret reference since the read above
             // never gets a literal written over it as typed.
-            if let Some(raced) = env
-                .as_ref()
-                .and_then(|env| slotting::now_held(config, &name, env, &stored))
+            if let Some(raced) = mutant!(
+                "M4",
+                None,
+                env.as_ref()
+                    .and_then(|env| slotting::now_held(config, &name, env, &stored))
+            )
             {
                 return Err((StatusCode::CONFLICT, raced));
             }

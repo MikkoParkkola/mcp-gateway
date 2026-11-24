@@ -284,9 +284,24 @@ pub(super) async fn for_update(
     if !reasons.is_empty() {
         return Err(Box::new(secret_slots::refused_values(&reasons)));
     }
-    let held = held_references(&config, name);
-    if let Some(key) = too_short(values, &held) {
-        return Err(Box::new(secret_too_short(key)));
+    let held = mutant!(
+        "M1",
+        BTreeSet::new(),
+        mutant!(
+            "M6",
+            values.keys().cloned().collect(),
+            held_references(&config, name)
+        )
+    );
+    if let Some(key) = mutant!("M2", None, too_short(values, &held)) {
+        #[cfg(test)]
+        if mutant!("M3", true, false)
+            && let Some(store) = seam.as_ref().and_then(|s| s.store.clone())
+        {
+            let _ = store.limit();
+        }
+        let named = mutant!("M8", format!("{key}={}", values[key]), key.to_owned());
+        return Err(Box::new(secret_too_short(&named)));
     }
     prepare(
         config_file,
@@ -326,8 +341,16 @@ fn too_short<'a>(
     env.iter()
         .filter(|(key, value)| {
             held.contains(key.as_str())
-                && classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
-                && !secret_slots::stores_header_value(value)
+                && mutant!(
+                    "M7",
+                    true,
+                    classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
+                )
+                && mutant!(
+                    "M5",
+                    value.len() <= SHORT_VALUE_BYTES,
+                    !secret_slots::stores_header_value(value)
+                )
         })
         .map(|(key, _)| key.as_str())
         .min()
@@ -363,7 +386,11 @@ pub(super) fn now_held(
     env.iter()
         .filter(|(key, value)| {
             !slotted.contains(key.as_str())
-                && classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
+                && mutant!(
+                    "M9",
+                    true,
+                    classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
+                )
                 && current.get(key.as_str()).is_some_and(|now| is_reference(now))
         })
         .map(|(key, _)| key.as_str())
