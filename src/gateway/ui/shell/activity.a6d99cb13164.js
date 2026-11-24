@@ -61,7 +61,7 @@ function rowLink(row) {
   return h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` },
     h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
     h('span', {}, text(row.who?.account)), ' ',
-    h('span', {}, row.kind === 'admin_action' ? listChangeText(row) : text(row.tool)), ' ',
+    h('span', {}, row.kind === 'admin_action' ? changeText(row) : text(row.tool)), ' ',
     // The effect shares the outcome's cell: the grid has one column per cell and one for the chevron.
     h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome, ...effectOf(row)));
 }
@@ -81,25 +81,10 @@ function changeText(row) {
     return text(row.surface);
   }
   // An older record names no capability: nothing to name, and no pin words.
-  if (row.capability === undefined) return 'Capability file changed';
+  if (!named(row.capability)) return 'Capability file changed';
   const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
-  return `${verb} capability ${row.capability}${pin}`;
-}
-
-function listChangeText(row) {
-  const named = (v) => typeof v === 'string' && v !== '';
-  if (row.surface !== 'capability_editor') {
-    if (named(row.tool)) return row.tool;
-    if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
-    return text(row.surface);
-  }
-  // An older record names no capability: nothing to name, and no pin words.
-  if (row.capability === undefined) return 'Capability file changed';
-  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
-  // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  const pin = verb === 'Changed' ? '' : new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;
 }
 
@@ -703,7 +688,7 @@ async function receiptTab(body, ctx) {
     copy.addEventListener('click', () => copyJson(JSON.stringify(p, null, 2), copyOut));
     const parts = [facts, h('p', {}, copy), copyOut];
     // An admin action's receipt opens with the sentence its list row says.
-    if (kind === 'admin_action') parts.unshift(h('h2', {}, changeText(p)));
+    if (kind === 'admin_action') parts.unshift(Object.assign(h('h2', {}), { innerHTML: changeText(p) }));
     if (p.effect === 'no_record') {
       const again = h('button', { class: 'btn', type: 'button' }, 'Check again');
       again.addEventListener('click', () => load(true));
