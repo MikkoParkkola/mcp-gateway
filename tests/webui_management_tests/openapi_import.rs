@@ -489,15 +489,22 @@ fn impow1_cap_import_keeps_an_existing_file_and_exits_1() {
     let dir = dir_with_listusers();
     let out = run(dir.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains(&name_taken("listusers")), "{stderr}");
+    // The summary counts what was written, not what was generated.
+    assert!(stdout.contains("Imported 1 tools"), "{stdout}");
+    assert!(stderr.contains("1 tools could not be written"), "{stderr}");
     assert_kept(dir.path());
     assert_eq!(names_in(dir.path()), ["getuser.yaml", "listusers.yaml"]);
 
     let fresh = TempDir::new().unwrap();
     let out = run(fresh.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stdout.contains("Imported 2 tools"), "{stdout}");
+    assert!(!stderr.contains("could not be written"), "{stderr}");
     assert_eq!(names_in(fresh.path()), ["getuser.yaml", "listusers.yaml"]);
 }
 
