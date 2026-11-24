@@ -29,8 +29,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.5a3aa2fa9dc0.js",
-        include_bytes!("shell/activity.5a3aa2fa9dc0.js"),
+        "activity.c3a79c42ac63.js",
+        include_bytes!("shell/activity.c3a79c42ac63.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -53,20 +53,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.80b27eda0fb3.js",
-        include_bytes!("shell/gateway.80b27eda0fb3.js"),
+        "gateway.bd2e7b9f9941.js",
+        include_bytes!("shell/gateway.bd2e7b9f9941.js"),
+    ),
+    (
+        "overview.0633d53ca09b.js",
+        include_bytes!("shell/overview.0633d53ca09b.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.42427c1fc32c.js",
-        include_bytes!("shell/overview.42427c1fc32c.js"),
-    ),
-    (
-        "servers.2b83722b2e76.js",
-        include_bytes!("shell/servers.2b83722b2e76.js"),
+        "servers.65097014d60a.js",
+        include_bytes!("shell/servers.65097014d60a.js"),
     ),
     (
         "servers.a2711ee29891.css",
@@ -77,8 +77,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/shell.c460caebf770.css"),
     ),
     (
-        "shell.e97c8490b811.js",
-        include_bytes!("shell/shell.e97c8490b811.js"),
+        "shell.e85a2a4327f1.js",
+        include_bytes!("shell/shell.e85a2a4327f1.js"),
     ),
     (
         "shell.nojs.4e34f233c1ba.css",
@@ -93,8 +93,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
     ),
     (
-        "tools.526586200610.js",
-        include_bytes!("shell/tools.526586200610.js"),
+        "tools.7f4d57224cf5.js",
+        include_bytes!("shell/tools.7f4d57224cf5.js"),
     ),
     (
         "tooltip.5251c22696fd.css",

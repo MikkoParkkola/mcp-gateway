@@ -1788,7 +1788,7 @@ function streamFrame(frame) {
   } catch {
     return;
   }
-  dispatchEvent(new CustomEvent(`gateway-${frame.event}`, { detail }));
+  dispatchEvent(new CustomEvent(`gateway-${frame.event === 'reset' ? 'activity' : frame.event}`, { detail }));
 }
 
 /** The first status attempt, started once: by a screen about to read, or after first paint. */
