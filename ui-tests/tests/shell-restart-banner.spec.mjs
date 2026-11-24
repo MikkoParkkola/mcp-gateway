@@ -122,12 +122,14 @@ test('B2 the banner appears after a create without a page load, and goes after t
   await write(page, 'DELETE', '/ui/api/keys/first');
   await expect(banner(page)).toHaveCount(0);
   expect(await page.evaluate(() => window.__sameLoad)).toBe(true);
-  // A restart pending for another field alone draws nothing.
-  state.block = NOT_FROZEN;
-  const read = gatewayAnswer(page);
+  // A restart pending for another field alone draws nothing: starting from a
+  // drawn banner, that answer must take it away, so the check waits on a
+  // real change rather than on time.
+  state.block = ONE;
   await go(page, '/ui/tools/status');
-  await read;
-  await settle(page);
+  await expect(banner(page)).toHaveCount(1);
+  state.block = NOT_FROZEN;
+  await go(page, '/ui/servers/status');
   await expect(banner(page)).toHaveCount(0);
 });
 
