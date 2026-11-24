@@ -45,7 +45,7 @@ providers:
       command: '{python}'
       args: ['{script}']
       transport: stdio
-      env: [CAP_EXEC_TEST_EOF_MARK]
+      env: [CAP_EXEC_TEST_EOF_MARK, CAP_EXEC_TEST_POLL_MARK]
       tool_selector:
         param: operation
         tools:
@@ -74,6 +74,8 @@ providers:
 struct Rig {
     _dir: tempfile::TempDir,
     mark: PathBuf,
+    /// Written by the child on each poll of a wait.
+    poll_mark: PathBuf,
     registry: Arc<BackendRegistry>,
     executor: CapabilityExecutor,
     cap: CapabilityDefinition,
@@ -82,10 +84,15 @@ struct Rig {
 fn rig() -> Rig {
     let dir = tempfile::tempdir().expect("a temp dir");
     let mark = dir.path().join("child-read-eof");
+    let poll_mark = dir.path().join("child-polled");
     let file = dir.path().join(".env");
     crate::gateway::test_helpers::write_owner_only(
         &file,
-        format!("CAP_EXEC_TEST_EOF_MARK={}\n", mark.display()),
+        format!(
+            "CAP_EXEC_TEST_EOF_MARK={}\nCAP_EXEC_TEST_POLL_MARK={}\n",
+            mark.display(),
+            poll_mark.display()
+        ),
     )
     .expect("the env file writes");
     let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
@@ -100,6 +107,7 @@ fn rig() -> Rig {
     Rig {
         _dir: dir,
         mark,
+        poll_mark,
         registry,
         executor,
         cap: parse_capability(&stop_capability_yaml()).expect("the probe parses"),
@@ -138,10 +146,35 @@ fn alive(pid: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// Room past a stop's own deadline before a row calls it hung.
+const HUNG: Duration = Duration::from_secs(10);
+
+/// A stop of `rig`'s registry planned to end within `budget`; a stop still
+/// running `HUNG` past that fails the row instead of hanging it.
+async fn stop_within(rig: &Rig, budget: Duration, handover: Handover) {
+    let stopping = rig
+        .registry
+        .stop_all_by(tokio::time::Instant::now() + budget, handover);
+    tokio::time::timeout(budget + HUNG, stopping)
+        .await
+        .expect("the stop came back");
+}
+
 async fn stop(rig: &Rig, handover: Handover) {
-    rig.registry
-        .stop_all_by(tokio::time::Instant::now() + STAGE, handover)
-        .await;
+    stop_within(rig, STAGE, handover).await;
+}
+
+/// Until the child has answered a poll of the slow call: the call is then
+/// inside its wait, not still starting.
+async fn polled(rig: &Rig) {
+    let give_up = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !rig.poll_mark.exists() {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the slow call never polled its child"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Stop `registry` from a thread that owns its own runtime; the receiver
@@ -246,7 +279,10 @@ async fn r2b_the_stdio_hurry_hands_the_child_over_and_the_stop_waits_for_it() {
             .hurry(std::time::Instant::now()),
     );
     rig.registry.hand_over_now(cut);
-    rig.registry.stop_all_by(cut, Handover::WhenHurried).await;
+    let hurried = rig.registry.stop_all_by(cut, Handover::WhenHurried);
+    tokio::time::timeout(STAGE + HUNG, hurried)
+        .await
+        .expect("the hurried stop came back");
     assert!(
         gone_within(&pid, Duration::from_millis(300)).await,
         "child {pid} was still running when the hurried stop came back"
@@ -282,8 +318,7 @@ async fn r4_a_busy_child_is_ended_and_its_call_fails() {
         &same_caller,
     );
     let stopping = async {
-        // By now the slow call is polling the child.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        polled(&rig).await;
         stop(&rig, Handover::AtEntry).await;
         gone_within(&pid, Duration::from_secs(1)).await
     };
@@ -315,7 +350,7 @@ async fn r4b_a_busy_call_fails_at_once_after_the_stop() {
         (answer, tokio::time::Instant::now())
     };
     let stopping = async {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        polled(&rig).await;
         stop(&rig, Handover::AtEntry).await;
         tokio::time::Instant::now()
     };
@@ -361,21 +396,20 @@ async fn r5_after_the_stop_a_call_is_refused_and_starts_nothing() {
 }
 
 /// R6. Deaf: a server that stops reading its input and shrugs off SIGTERM.
-/// Only the kill at the deadline ends it, and the stop is not back before.
+/// Only the kill at the deadline ends it, and the stop is not back before:
+/// at its return the kill has landed and the child has been reaped. The
+/// budget leaves the graceful phases room beyond the kill's own reserve.
 #[tokio::test]
 async fn r6_the_stop_waits_for_the_kill_of_a_child_that_ignores_it() {
     let rig = rig();
     let pid = child_pid(&rig, "deaf").await;
-    rig.registry
-        .stop_all_by(
-            tokio::time::Instant::now() + Duration::from_secs(2),
-            Handover::AtEntry,
-        )
-        .await;
+    let budget = crate::transport::KILL_RESERVE_FOR_TEST + Duration::from_secs(2);
+    stop_within(&rig, budget, Handover::AtEntry).await;
     assert!(
-        gone_within(&pid, Duration::from_millis(300)).await,
-        "deaf child {pid} was still running when the stop came back"
+        rig.registry.stop_deadline().handed_all_reaped(),
+        "the stop came back before deaf child {pid} was killed and reaped"
     );
+    assert!(!alive(&pid), "deaf child {pid} still running at the return");
 }
 
 /// R8. An idle eviction is paused inside its locked section, the child already

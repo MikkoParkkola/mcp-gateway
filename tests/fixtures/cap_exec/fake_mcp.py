@@ -64,6 +64,11 @@ for line in sys.stdin:
             base = os.path.basename(args.get("binary_path", ""))
             result(req_id, {"content": [], "structuredContent": {"program_name": "prog-" + base}})
         elif name == "list_project_binaries":
+            # A row that names a poll mark learns a wait is really polling.
+            poll_mark = os.environ.get("CAP_EXEC_TEST_POLL_MARK")
+            if poll_mark:
+                with open(poll_mark, "w") as out:
+                    out.write("polled\n")
             # Analysis "finishes" on the third poll; the first two answer an error
             # for an absent program, as the real server does.
             if args.get("expect") == "die":
