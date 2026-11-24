@@ -260,6 +260,14 @@ table.t { width: 100%; border-collapse: collapse; }
 .t tr:hover td { background: var(--color-bg-raised); }
 .t tr.sel td { background: var(--color-bg-raised); } .t tr.sel td:first-child { box-shadow: inset 3px 0 var(--color-text-primary); }
 
+/* restartAdvice(): a refusal to restart or the advice to restart, the glyph in its tone; the command copies whole. */
+.restart { display: grid; gap: var(--space-1-5); }
+.restart p { margin: 0; }
+.restart [data-tone="warning"] .glyph { color: var(--color-status-warning-fg); }
+.restart [data-tone="waiting"] .glyph { color: var(--color-status-neutral-fg); }
+.restart .start-command { display: block; padding: var(--space-1-5) var(--space-2); overflow-wrap: anywhere; font-family: var(--font-family-mono);
+  background: var(--color-bg-surface); border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-sm); user-select: all; }
+
 /* Banner, toast, confirmation */
 .banner { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) var(--space-4); border-left: 5px solid var(--color-status-neutral-fg);
   border-block: var(--size-rule) solid var(--color-border-default); color: var(--color-text-primary); }

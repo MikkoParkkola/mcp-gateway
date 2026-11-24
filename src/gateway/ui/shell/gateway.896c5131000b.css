@@ -13,3 +13,12 @@
 /* A generated name is long and has no spaces: it may break anywhere rather than widen the card. */
 .unused-table td:first-child { overflow-wrap: anywhere; }
 .unused-table td:last-child { text-align: right; }
+
+/* Reload gateway.yaml: the line and its button side by side (stacked on a phone), the outcome underneath. */
+.reload-card { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); }
+.reload-card h2, .reload-card p { margin: 0; }
+.reload-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.reload-row p { flex: 1 1 20rem; }
+.reload-outcome { display: grid; gap: var(--space-1-5); }
+.reload-outcome:empty { display: none; }
+.reload-outcome [data-line="head"] { font-weight: var(--font-weight-semibold); }
