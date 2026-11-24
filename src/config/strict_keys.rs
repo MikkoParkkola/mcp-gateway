@@ -35,6 +35,11 @@ const REMOVED_BACKEND_KEYS: &[(&str, &str)] = &[
         "a per-backend breaker was never read; every backend's breaker uses \
          `failsafe.circuit_breaker`, so tune that and delete this block",
     ),
+    (
+        "transport",
+        "it was never read, though our own 3.x docs showed it; the transport follows from \
+         `a2a_url` (or `url`, `http_url`, `ws_url`, `command`), so delete the line",
+    ),
 ];
 
 /// Keys outside `backends` removed in 4.0, by path segments, with the reason.

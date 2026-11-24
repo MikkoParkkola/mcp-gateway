@@ -228,6 +228,7 @@ The directory is created automatically if it does not exist.
 Each generated capability YAML contains:
 
 ```yaml
+# example: not gateway.yaml
 # Auto-generated from OpenAPI spec
 # Get a user by ID
 

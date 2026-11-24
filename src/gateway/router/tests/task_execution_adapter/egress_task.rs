@@ -92,7 +92,7 @@ async fn egress_no_planted_credential_reaches_a_task_client() {
 /// screened by the worker before the task is committed. The row reads the
 /// committed record, not only `tasks/get`: a read rescans what it serves, so
 /// a client-visible check alone would pass with the worker's scan gone. The
-/// agent is registered under `BACKEND` with `transport: a2a`, so the call takes
+/// agent is registered under `BACKEND` with an `a2a_url`, so the call takes
 /// the A2A transport and `Backend::is_a2a` holds. The agent's own JSON-RPC
 /// error is a cell too: `gateway_invoke` folds a dispatch error into an
 /// `isError` result carrying its message (`invoke/post_dispatch.rs`,
