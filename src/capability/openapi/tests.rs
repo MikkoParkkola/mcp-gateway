@@ -715,3 +715,23 @@ fn impbind6_equal_names_on_one_path_order_by_method() {
         assert_eq!(got, want, "run {run}");
     }
 }
+
+/// IMPBIND.6 leg 6b: one path keyed both `GET` and `get`, the two equal-named
+/// operations told apart by summary: the key as written decides, every run.
+#[test]
+fn impbind6_method_keys_that_differ_only_in_case_keep_one_order() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /a:\n    get:\n      operationId: listUsers\n      summary: lower key\n      responses:\n        \"200\":\n          description: ok\n    GET:\n      operationId: ListUsers\n      summary: upper key\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        assert_eq!(caps.len(), 2, "run {run}");
+        assert!(
+            caps[0].yaml.contains("upper key"),
+            "run {run}:\n{}",
+            caps[0].yaml
+        );
+        assert!(
+            caps[1].yaml.contains("lower key"),
+            "run {run}:\n{}",
+            caps[1].yaml
+        );
+    }
+}

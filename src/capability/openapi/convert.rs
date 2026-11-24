@@ -228,7 +228,7 @@ impl OpenApiConverter {
                     auth_scheme.as_ref(),
                 ) {
                     Ok(cap) => {
-                        capabilities.push((path.as_str(), method.to_ascii_uppercase(), cap));
+                        capabilities.push((path.as_str(), method.as_str(), cap));
                     }
                     Err(e) => {
                         warn!(path = %path, method = %method, error = %e, "Skipping operation");
@@ -237,12 +237,15 @@ impl OpenApiConverter {
             }
         }
 
-        // Name order, then path, then method: the maps walked above have no
-        // order of their own, and two operations can share a tool name.
+        // Name order, then path, then method (case-blind, then the key as
+        // written, so `get` and `GET` on one path still have one order): the
+        // maps walked above have no order of their own, and two operations
+        // can share a tool name.
         capabilities.sort_by(|(pa, ma, a), (pb, mb, b)| {
             a.name
                 .cmp(&b.name)
                 .then_with(|| pa.cmp(pb))
+                .then_with(|| ma.to_ascii_uppercase().cmp(&mb.to_ascii_uppercase()))
                 .then_with(|| ma.cmp(mb))
         });
         let capabilities: Vec<GeneratedCapability> =
