@@ -528,6 +528,7 @@ fn variant_of(error: &ReplaceError) -> &'static str {
         ReplaceError::Unsupported(_) => "unsupported",
         ReplaceError::Stage(_) => "stage",
         ReplaceError::Write(_) => "write",
+        ReplaceError::WriterRefused { .. } => "writer_refused",
         ReplaceError::ReloadRefused { .. } => "reload_refused",
         ReplaceError::RollbackFailed { .. } => "rollback_failed",
         ReplaceError::Unconfirmed { .. } => "unconfirmed",
@@ -582,6 +583,7 @@ fn refused_write(
                 | ReplaceError::Unsupported(_)
                 | ReplaceError::Stage(_)
                 | ReplaceError::Write(_)
+                | ReplaceError::WriterRefused { .. }
                 | ReplaceError::Secrets(_),
             ),
         ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
