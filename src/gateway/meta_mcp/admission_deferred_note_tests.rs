@@ -109,7 +109,7 @@ impl Keyed {
                 idempotency_key: Some(key.into()),
                 ..RetryFields::default()
             },
-            args: json!({ "chain": chain }),
+            args: Value::Object(serde_json::Map::from_iter([("chain".to_owned(), chain)])),
         }
     }
 

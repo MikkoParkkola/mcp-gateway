@@ -98,10 +98,11 @@ async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavai
 
 /// A keyed `tools/call` of `name` with `arguments`, numbered 5.
 fn keyed(name: &str, arguments: Value, key: &str) -> String {
-    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
-           "params": {"name": name, "arguments": arguments,
-                      "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}}})
-    .to_string()
+    let mut call = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+           "params": {"name": name,
+                      "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}}});
+    call["params"]["arguments"] = arguments;
+    call.to_string()
 }
 
 /// The one record whose code is `code`.
