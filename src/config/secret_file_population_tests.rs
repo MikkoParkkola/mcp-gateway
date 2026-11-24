@@ -387,6 +387,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "test-only (cfg(test)): copies the real uv and uvx into a fixture Python's scratch bin; no secret",
     ),
     (
+        "src/preview_sandbox/linux/helper.rs",
+        "debug builds only, at a row's request: /dev/null opened and kept as a stray descriptor the helper's own checks must catch; reads nothing, no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/status_rows.rs",
+        "test-only (cfg(test)): /proc/<pid>/stat for the helper's pid and a target's marker, and a plain file written into a scratch dir; no secret",
+    ),
+    (
         "src/preview_sandbox/mod.rs",
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),

@@ -290,6 +290,15 @@ impl AllowlistProxy {
             .map_or(0, |l| l.tunnels.len())
     }
 
+    /// The live fetch's credential, for the row that tries it after the
+    /// helper died.
+    #[cfg(test)]
+    pub(crate) fn live_credential(&self) -> Option<Credential> {
+        lock(&self.shared.live)
+            .as_ref()
+            .map(|l| l.credential.clone())
+    }
+
     /// Install `hook` to run as each revoke's teardown starts, for the rows.
     #[cfg(test)]
     pub(crate) fn set_on_end(&self, hook: Box<dyn Fn() + Send + Sync>) {
@@ -448,7 +457,7 @@ async fn serve<A: Accept>(listener: A, shared: Arc<Shared>) {
 
 /// Where a preview's private directory goes: `$XDG_RUNTIME_DIR` when it is
 /// an absolute path, else the temp dir.
-fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
+pub(super) fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
     match xdg {
         Some(value) if Path::new(&value).is_absolute() => PathBuf::from(value),
         _ => std::env::temp_dir(),
@@ -458,7 +467,7 @@ fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
 /// A fresh owner-only directory under `base`, with a random name so another local user cannot pre-create
 /// it; made exclusively, so an existing path is an error and a new name is
 /// tried.
-fn private_dir(base: &Path) -> io::Result<PathBuf> {
+pub(super) fn private_dir(base: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt as _;
     let mut last = io::Error::other("no private directory name was free");
     for _ in 0..8 {
