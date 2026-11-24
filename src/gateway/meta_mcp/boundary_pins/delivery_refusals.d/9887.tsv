@@ -2,3 +2,4 @@
 src/config_persistence_atomic_unix.rs	changed	refusal	1	no-record	the shared writer's target-changed refusal of a file save: answered by the CLI, the admin UI or a state save's log line; no tool call is delivered
 src/config_persistence_atomic_unix.rs	foreign_owner	refusal	1	no-record	the shared writer's foreign-owner refusal of a file save: answered by the CLI, the admin UI or a state save's log line; no tool call is delivered
 src/config_persistence_atomic_unix.rs	unreadable	refusal	1	no-record	macOS: the shared writer's acl-not-kept refusal of a target it cannot read; answered by the CLI, the admin UI or a log line; no tool call is delivered
+src/config_reload/replace.rs	commit	writer_refusal	1	no-record	a config replace hands the writer's refusal code and text to the admin route that asked for the save; nothing reaches a backend
