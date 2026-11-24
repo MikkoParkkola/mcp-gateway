@@ -111,7 +111,8 @@ fn foreign_owner(target: &Path, owner: u32) -> io::Error {
 
 /// macOS: the writer cannot open the file for reading, so it cannot check
 /// what access the file grants (its access control list) and will not guess.
-#[cfg(target_os = "macos")]
+/// (Built in tests elsewhere too, for the seam that injects each refusal.)
+#[cfg(any(target_os = "macos", test))]
 fn unreadable(target: &Path) -> io::Error {
     let shown = target.display();
     let me = rustix::process::geteuid().as_raw();
@@ -402,6 +403,10 @@ fn set_mode(save: &Save<'_>, file: &File, mode: u32) -> io::Result<()> {
 /// was modelled, unchanged; and the scratch's name still names this scratch.
 /// Anything else is another writer's work, and the save refuses.
 fn verify(save: &Save<'_>, file: &File, settled: &Settled) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(refused) = seams::refused(save.target) {
+        return Err(refused);
+    }
     let now = file.metadata()?;
     let scratch_as_settled = now.uid() == settled.uid
         && settled.gid.is_none_or(|gid| now.gid() == gid)
@@ -466,6 +471,9 @@ pub(crate) mod seams {
     pub(crate) struct Seams {
         /// The target's open (or stat) fails with this errno.
         pub(crate) open_error: Option<i32>,
+        /// The final check before the rename turns the save down with the
+        /// writer's own refusal of this code (`foreign-owner` names uid 4101).
+        pub(crate) refuse: Option<&'static str>,
         /// Just before the first byte is written.
         pub(crate) first_write: Option<FileHook>,
         /// Just before the final checks and the rename: (target, scratch).
@@ -551,6 +559,15 @@ pub(crate) mod seams {
         with(target, |s| s.seams.open_error)
             .flatten()
             .map(std::io::Error::from_raw_os_error)
+    }
+
+    pub(crate) fn refused(target: &Path) -> Option<std::io::Error> {
+        Some(match with(target, |s| s.seams.refuse).flatten()? {
+            "foreign-owner" => super::foreign_owner(target, 4101),
+            "target-changed" => super::changed(target),
+            "acl-not-kept" => super::unreadable(target),
+            other => panic!("no writer refusal has the code {other}"),
+        })
     }
 
     pub(crate) fn created(target: &Path) {

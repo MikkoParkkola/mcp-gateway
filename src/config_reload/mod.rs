@@ -412,6 +412,9 @@ mod replace_audit_key_tests;
 #[cfg(test)]
 mod replace_audit_tests;
 #[cfg(tp3)]
+#[cfg(all(test, unix))]
+mod replace_refusal_tests;
+#[cfg(tp3)]
 #[cfg(test)]
 mod replace_secret_tests;
 #[cfg(test)]
