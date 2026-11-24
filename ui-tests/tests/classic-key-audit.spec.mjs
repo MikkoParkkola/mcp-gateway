@@ -62,6 +62,8 @@ test("KA1 Key audit by email shows the holder's issuance, then the empty answer"
 
   await search(page, HOLDER);
   await expect(results).toHaveCount(1);
+  // Counts and text also match on a hidden page; the admin must actually see the answer.
+  await expect(results.first()).toBeVisible();
   // textContent from the DOM keeps the two spaces the page puts between fields.
   expect(await results.first().evaluate((el) => el.textContent))
     .toBe('2026-10-03T14:02:11Z  svc-reports-2  audit-issuer  [jira, slack]');
@@ -73,6 +75,7 @@ test("KA1 Key audit by email shows the holder's issuance, then the empty answer"
 
   await search(page, STRANGER);
   await expect(page.locator('#kl-status')).toHaveText('No retained issuance matches.');
+  await expect(page.locator('#kl-status')).toBeVisible();
   await expect(results).toHaveCount(0);
   expect(sent).toEqual([{ email: HOLDER }, { email: STRANGER }]);
 });
