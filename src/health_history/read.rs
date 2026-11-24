@@ -136,6 +136,7 @@ impl HealthHistory {
     /// The first second this history covers.
     #[cfg(feature = "webui")]
     pub(crate) fn observed_since(&self) -> u64 {
-        self.0.lock().observed_since
+        let inner = self.0.lock();
+        mutant!("m16", inner.started_at, inner.observed_since)
     }
 }
