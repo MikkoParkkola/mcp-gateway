@@ -70,7 +70,9 @@ fn the_three_new_pages_are_backed_by_the_routes_they_call() {
     use super::Page::{Access, Policies, ToDo};
     use super::Tab::{Actions, Settings, Status};
     use Verb::{Delete, Get, Post};
-    let backing: [((super::Page, super::Tab), &[(&str, Verb)]); 9] = [
+    type Pair = (super::Page, super::Tab);
+    type Routes = &'static [(&'static str, Verb)];
+    let backing: [(Pair, Routes); 9] = [
         ((ToDo, Status), &[(routes::UI_DECISIONS, Get)]),
         ((ToDo, Actions), &[]),
         ((ToDo, Settings), &[]),
