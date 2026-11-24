@@ -62,6 +62,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "ci-env: reads the pull request number, labels and head sha from the event payload",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "linux", "${{matrix.shard}}", "<TMP>/lib-bin")):
         "artifact: runs the lib test part binaries linux-lib-build built",
+    # The shadow selection needs CI's own inputs: the event payload, the merge commit and the restored map.
+    ("scripts/ci/affected_select.py", ("$LEG", "$RECORD")): "ci-env: a test leg's event, merge commit and map",
+    ("scripts/ci/affected_select.py", ("$LEG", "$RECORD", "--lib-bin", "<TMP>/lib-bin")):
+        "artifact: also lists the part binaries linux-lib-build uploaded",
     ("scripts/ci/shard_tests.py", ("run-one", "--module", "commands::upgrade::upgrade_notice_tests::", "<TMP>/lib-bin"),
      ('python3 scripts/ci/shard_tests.py run-one --module commands::upgrade::upgrade_notice_tests:: "$RUNNER_TEMP/lib-bin" 2>&1',
       'tee "$RUNNER_TEMP/assembled-lib.log"')):
