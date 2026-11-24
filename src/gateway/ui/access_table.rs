@@ -557,8 +557,9 @@ pub(super) static ROWS: &[Row] = &[
         routes::UI_CONTROL_PLANE,
         Get,
         ControlPlane(CpCheck::Read),
-        // The Access and Policies pages call the gateway's own routes, so the
-        // control-plane rows back no tab; their needs still gate them.
+        // The Access and Policies pages call the gateway's own routes, so this
+        // read and the three control-plane writes below back no tab; their
+        // needs still gate them. The export-status row keeps Gateway Status.
         &[],
         false,
     ),

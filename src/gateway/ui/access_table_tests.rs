@@ -62,7 +62,9 @@ fn every_row_names_an_owned_route() {
 }
 
 /// To do, Access and Policies: each tab is backed by exactly the routes its
-/// page calls for it, and only the three reads decide whether a tab opens.
+/// page calls for it, and the three reads are their only load rows. Access
+/// Actions and Settings have no load row, so their revoke and create rows
+/// open them.
 #[test]
 fn the_three_new_pages_are_backed_by_the_routes_they_call() {
     use super::Page::{Access, Policies, ToDo};
