@@ -29,7 +29,8 @@ const SUMMARY = 'mock summary: backends changed';
 const PENDING = 'mock summary — NOT YET APPLIED, restart required for: auth.enabled';
 const ADDR = 'server address changed (restart required)';
 const ADVICE = 'Restart the mock gateway now.';
-const CMD = "'/opt/mock gw' serve --config '/srv/mock.yaml'";
+// Two spaces inside a quoted path: the command must render, and so copy, exactly.
+const CMD = "'/opt/mock  gw' serve --config '/srv/mock.yaml'";
 const REFUSAL = 'A restart would not start: mock reason. Fix the config file first.';
 const WARNED = `${PENDING} — WARNING: a restart would not start: mock reason`;
 const H = '<img src=x onerror="window.__pwned=1">';
@@ -228,7 +229,10 @@ test('R-OK-CHANGES: an applied reload shows the gateway\'s summary; prose about 
 
 test('R-RESTART-ADVICE: a pending restart shows the advice and the start command, whole-selectable, never the reason', async ({ page }) => {
   await oneOutcome(page, ADVICE_ANSWER, ADVICE_LINES, ADVICE_SAID, [RR]);
-  await expect(section(page).locator('code.start-command')).toHaveCSS('user-select', 'all');
+  const code = section(page).locator('code.start-command');
+  await expect(code).toHaveCSS('user-select', 'all');
+  // innerText is the rendered text, what a selection copies: no space collapsed.
+  expect(await code.evaluate((n) => n.innerText)).toBe(CMD);
 });
 
 test('R-RESTART-WIN: advice with no start command shows no code line', async ({ page }) => {

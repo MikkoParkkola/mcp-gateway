@@ -265,7 +265,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .restart p { margin: 0; }
 .restart [data-tone="warning"] .glyph { color: var(--color-status-warning-fg); }
 .restart [data-tone="waiting"] .glyph { color: var(--color-status-neutral-fg); }
-.restart .start-command { display: block; padding: var(--space-1-5) var(--space-2); overflow-wrap: anywhere; font-family: var(--font-family-mono);
+.restart .start-command { display: block; padding: var(--space-1-5) var(--space-2); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-family-mono);
   background: var(--color-bg-surface); border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-sm); user-select: all; }
 
 /* Banner, toast, confirmation */
