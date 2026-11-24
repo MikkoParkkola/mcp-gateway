@@ -178,8 +178,10 @@ async fn the_snapshot_follows_the_pinned_mapping() {
     follows_the_pin("GET", routes::UI_CONTROL_PLANE).await;
 }
 
-/// Whether the status report opens `tab` of `page`.
-fn tab_open(report: &str, page: &str, tab: &str) -> bool {
+/// Whether the status report opens `tab` of `page`, or `None` when the report
+/// does not list that tab. A listed tab without a boolean `open` fails here,
+/// so a broken shape never reads as an absent tab.
+fn listed_tab(report: &str, page: &str, tab: &str) -> Option<bool> {
     let body: Value = serde_json::from_str(report).expect("status is JSON");
     body["access"]["pages"]
         .as_array()
@@ -188,24 +190,43 @@ fn tab_open(report: &str, page: &str, tab: &str) -> bool {
         .filter(|p| p["id"] == page)
         .flat_map(|p| p["tabs"].as_array().into_iter().flatten())
         .find(|t| t["id"] == tab)
-        .and_then(|t| t["open"].as_bool())
+        .map(|t| {
+            t["open"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{page}/{tab} has no boolean open: {t}"))
+        })
+}
+
+/// Whether the status report opens `tab` of `page`, which it must list.
+fn tab_open(report: &str, page: &str, tab: &str) -> bool {
+    listed_tab(report, page, tab)
         .unwrap_or_else(|| panic!("no {page}/{tab} tab in the report: {report}"))
 }
 
-/// The status report decides the action tabs by the pinned mapping: open for
-/// a pinned Admin while Developer is live, closed the other way round.
+/// The action tabs follow the routes their pages call, not a control-plane
+/// role: Access › Actions opens only for a gateway admin (its revoke row), and
+/// Policies › Actions backs no route, so the report leaves it out. A caller
+/// whose group either generation maps to Admin, but who is no gateway admin,
+/// finds Access › Actions closed and Policies › Actions absent, whichever
+/// mapping is pinned. That the report reads the pinned mapping at all is the
+/// Activity row's subject, below.
 #[tokio::test]
-async fn the_report_decides_the_action_tabs_by_the_pinned_mapping() {
+async fn a_pinned_control_plane_role_opens_no_action_tab() {
     let fx = fixture(Gateway::On, true).await;
     let admin = mapping(&fx, Some(ControlPlaneRole::Admin));
     let developer = mapping(&fx, Some(ControlPlaneRole::Developer));
     let forward = answer(&fx, ("GET", routes::UI_STATUS), &admin, &developer).await;
     let reverse = answer(&fx, ("GET", routes::UI_STATUS), &developer, &admin).await;
-    for page in ["access", "policies"] {
-        assert!(tab_open(&forward, page, "actions"), "pinned Admin: {page}");
-        assert!(
-            !tab_open(&reverse, page, "actions"),
-            "pinned Developer: {page}"
+    for (pinned, report) in [("Admin", &forward), ("Developer", &reverse)] {
+        assert_eq!(
+            listed_tab(report, "access", "actions"),
+            Some(false),
+            "pinned {pinned}: Access › Actions is listed and closed: {report}"
+        );
+        assert_eq!(
+            listed_tab(report, "policies", "actions"),
+            None,
+            "pinned {pinned}: Policies › Actions is not in the report: {report}"
         );
     }
 }
