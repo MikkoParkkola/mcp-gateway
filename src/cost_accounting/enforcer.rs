@@ -614,8 +614,12 @@ impl BudgetEnforcer {
             }
             self.tool_attribution.sweep(today);
             self.key_attribution.sweep(today);
-            // A refusal of an earlier day is never read again.
-            self.key_refused.retain(|_, held| Some(held.day) == today);
+            // A refusal of an earlier day is never read again. `today` was read
+            // before the sweep began: a refusal recorded since, on a day that
+            // has begun meanwhile, is newer and stays, and an unknown day
+            // removes nothing.
+            self.key_refused
+                .retain(|_, held| today.is_none_or(|today| held.day >= today));
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }

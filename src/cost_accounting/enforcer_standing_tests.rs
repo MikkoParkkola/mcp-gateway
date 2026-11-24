@@ -79,6 +79,46 @@ fn s5_the_first_key_refusal_of_the_day_is_recorded_once() {
     assert_eq!(refusal(&global, T1), None, "not the key's own limit");
 }
 
+/// The day sweep keeps a record from its own day, and one from a day that
+/// began after the sweep read its day: a sweep paused across midnight must
+/// not erase the new day's first refusal.
+#[test]
+fn s5d_a_day_sweep_keeps_records_of_its_day_and_later() {
+    let today = enforcer(None, 25.0).day_key(T1);
+    let held = KeyRefusal {
+        day: today,
+        at_secs: T1,
+        limit: 25.0,
+    };
+    let e = enforcer(None, 25.0);
+    e.note_first_block(KEY, today, T1, 25.0);
+    {
+        let _clock = test_clock::at_secs(T2);
+        // The day's first spend sweeps, with `today` as its day.
+        e.record_spend("cheap", Some(KEY), 0.01);
+    }
+    assert_eq!(refusal(&e, T2), Some(held), "the sweep's own day stays");
+
+    let tomorrow = enforcer(None, 25.0).day_key(MIDNIGHT);
+    let later = KeyRefusal {
+        day: tomorrow,
+        at_secs: MIDNIGHT + 60,
+        limit: 25.0,
+    };
+    let e = enforcer(None, 25.0);
+    // Recorded on the new day while a sweep that read the old day waits.
+    e.note_first_block(KEY, tomorrow, MIDNIGHT + 60, 25.0);
+    {
+        let _clock = test_clock::at_secs(T1);
+        e.record_spend("cheap", Some(KEY), 0.01);
+    }
+    assert_eq!(
+        refusal(&e, MIDNIGHT + 120),
+        Some(later),
+        "a newer day's record stays"
+    );
+}
+
 /// Many refusals at once, from 8 threads: the record ends at the smallest
 /// time. A correct write cannot lose it under any schedule; a read followed
 /// by a separate insert loses an update on practically every run.
