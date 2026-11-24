@@ -274,11 +274,12 @@ async fn r3_the_stop_ends_the_child_by_closing_its_stdin() {
 async fn r4_a_busy_child_is_ended_and_its_call_fails() {
     let rig = rig();
     let pid = child_pid(&rig, "say").await;
+    let same_caller = caller("a");
     let busy = call(
         &rig.executor,
         &rig.cap,
         json!({ "operation": "slow" }),
-        &caller("a"),
+        &same_caller,
     );
     let stopping = async {
         // By now the slow call is polling the child.
