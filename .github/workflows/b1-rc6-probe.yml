@@ -1,0 +1,29 @@
+name: B1 rc6 probe
+
+# One-off probe on a throwaway branch: runs one policies row in the build
+# without the firewall, which no recurring job runs. Never on a pull request
+# branch or the release line.
+on:
+  push:
+    branches: ["throwaway/b1-10234-rc6"]
+
+permissions:
+  contents: read
+
+jobs:
+  rc6:
+    name: rc6 without the firewall
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: ./.github/actions/add-swap
+      - name: rc6 in the no-firewall build
+        env:
+          MCP_GATEWAY_TEST_PART: "3"
+        run: cargo test --lib --no-default-features --features webui -- --exact gateway::ui::policies_tests::rc6_built_without_the_firewall
