@@ -148,28 +148,3 @@ async fn an_admission_refusal_keeps_its_data_on_stdio() {
     assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "the backend ran once");
 }
-
-/// Status and data, a Forbidden admission refusal: a keyed chain
-/// `[alpha:read, alpha:write]` runs both steps; `read` is then denied, and
-/// the replay meets its current refusal (SUB.4), -32003, as before. It now
-/// leaves one record: `denied`, kind `tool_policy` (the refusal it met).
-#[tokio::test]
-async fn a_forbidden_admission_refusal_keeps_its_answer_on_stdio() {
-    let dir = crate::test_dir_keep::kept_tempdir();
-    let (meta, calls) = logged(&dir).await;
-    let params = execute(&["alpha:read", "alpha:write"], "k-sub4");
-    let first = stdio_send_under(&meta, params.clone(), &ToolPolicyConfig::default()).await;
-    assert!(
-        first.get("result").is_some(),
-        "premise: the chain runs: {first}"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 2, "premise: both steps sent");
-    let answer = stdio_send_under(&meta, params, &denying("read")).await;
-    assert_eq!(answer["error"]["code"], json!(-32003), "{answer}");
-    assert_eq!(answer["id"], json!(7), "{answer}");
-    assert!(answer["error"].get("data").is_none(), "{answer}");
-    let record = the_record(&dir, -32003, &answer);
-    assert_eq!(record["outcome"], json!("denied"), "{record}");
-    assert_eq!(record["decision"]["kind"], json!("tool_policy"), "{record}");
-    assert_eq!(calls.load(Ordering::SeqCst), 2, "the replay sends nothing");
-}

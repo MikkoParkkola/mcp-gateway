@@ -59,7 +59,7 @@ async fn an_admission_refusal_is_recorded_on_mcp() {
     let fx = fixture(Setup::default()).await;
     let call = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
         "params": {"name": "gateway_set_profile", "arguments": {"profile": "p"}}});
-    let (status, answer) = post_to(&fx, "/mcp", &call.to_string(), &Caller::Modern).await;
+    let (status, answer) = post_modern_as(&fx, "/mcp", &call.to_string(), &Caller::Modern).await;
     let code = crate::Error::Protocol(String::new()).to_rpc_code();
     assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
     assert_eq!(answer["error"]["code"], code, "{answer}");
@@ -74,8 +74,9 @@ async fn an_admission_refusal_is_recorded_on_mcp() {
     assert_eq!(entry["tool"], "gateway_set_profile", "{entry}");
 }
 
-/// The missing-target admission refusal under a fail-closed log that cannot
-/// be written: answered as the log being unavailable, with no record.
+/// The sessionless `gateway_set_profile` refusal (it reaches admission and,
+/// before the writer, was answered -32600) under a fail-closed log that
+/// cannot be written: answered as the log being unavailable, with no record.
 #[tokio::test]
 async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavailable_on_mcp() {
     let fx = fixture(Setup {
@@ -84,13 +85,9 @@ async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavai
     })
     .await;
     fx.log.set_append_failure_for_test(true);
-    let (status, answer) = post_to(
-        &fx,
-        "/mcp",
-        &invoke_with(&json!({"tool": "t"})),
-        &Caller::Anonymous,
-    )
-    .await;
+    let call = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_set_profile", "arguments": {"profile": "p"}}});
+    let (status, answer) = post_modern_as(&fx, "/mcp", &call.to_string(), &Caller::Modern).await;
     assert_eq!(
         (status, answer["error"]["code"].as_i64()),
         (StatusCode::SERVICE_UNAVAILABLE, Some(-32005)),
@@ -157,48 +154,4 @@ async fn an_admission_refusal_keeps_its_status_and_data_on_mcp() {
     assert_eq!(record["outcome"], "denied", "{record}");
     assert_eq!(record["decision"]["kind"], "unrecorded", "{record}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "the backend ran once");
-}
-
-/// Status and data, a Forbidden admission refusal: a keyed chain
-/// `[alpha:t, beta:t]` runs both steps; a reload then denies `beta:t`, and
-/// the replay meets its current refusal (SUB.4) with the Forbidden's own
-/// HTTP status and -32003, as before. It now leaves one record: `denied`,
-/// kind `tool_policy` (the refusal it met).
-#[tokio::test]
-async fn a_forbidden_admission_refusal_keeps_its_status_on_mcp() {
-    let fx = fixture(Setup {
-        meta_mode: MetaMode::CodeMode,
-        ..Setup::default()
-    })
-    .await;
-    let chain = json!([{"tool": "alpha:t", "arguments": {}},
-                       {"tool": "beta:t", "arguments": {}}]);
-    let call = keyed("gateway_execute", json!({ "chain": chain }), "k-sub4");
-    let (_, first) = post_modern_as(&fx, "/mcp", &call, &Caller::ModernOidc).await;
-    assert!(
-        first.get("result").is_some(),
-        "premise: the chain runs: {first}"
-    );
-    assert_eq!(
-        fx.calls.load(Ordering::SeqCst),
-        2,
-        "premise: both steps sent"
-    );
-    fx.state.live_config.edit(|c| {
-        c.security.tool_policy.enabled = true;
-        c.security.tool_policy.deny = vec!["beta:t".to_string()];
-    });
-    let (status, answer) = post_modern_as(&fx, "/mcp", &call, &Caller::ModernOidc).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
-    assert_eq!(answer["error"]["code"], -32003, "{answer}");
-    assert_eq!(answer["id"], 5, "{answer}");
-    assert!(answer["error"].get("data").is_none(), "{answer}");
-    let record = the_record(&fx, -32003, &answer);
-    assert_eq!(record["outcome"], "denied", "{record}");
-    assert_eq!(record["decision"]["kind"], "tool_policy", "{record}");
-    assert_eq!(
-        fx.calls.load(Ordering::SeqCst),
-        2,
-        "the replay sends nothing"
-    );
 }

@@ -1,0 +1,9 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/meta_mcp/admission.rs	check_target_policy	refuse_missing_str	2	feeds	a gateway_invoke missing its server or tool, refused in admission with its syntax note; the route's admission writer records it (meta_refusal_audit.rs::admission, settle_stdio_admission) and the route answers it
+src/gateway/meta_mcp/invoke/intake.rs	intake	refuse_missing_str	2	feeds	the same missing target on the in-process invoke path; invoke_tool_sourced records it with its syntax note
+src/gateway/router/meta_refusal_audit.rs	admission	admission_refusal	1	recorded	a /mcp admission refusal, written through settle before the route builds its answer as before (the log's unavailability when a fail-closed log cannot take it)
+src/gateway/router/meta_refusal_audit.rs	answer_malformed	malformed_refusal	1	recorded	a /mcp call refused for malformed retry fields, written through settle as invalid -32602 of kind syntax, then answered
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_malformed	answer_stdio_refusal	1	recorded	the stdio malformed-retry refusal, written through the meta layer's log by the shared stdio settle and answered -32602
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_malformed	malformed_refusal	1	recorded	the stdio malformed-retry refusal's record, the one /mcp writes
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	answer_stdio_refusal	1	recorded	a stdio signing refusal, written by the shared stdio settle and answered with its code and words
+src/gateway/router/meta_refusal_audit.rs	settle_stdio_admission	admission_refusal	1	recorded	a stdio admission refusal, written through settle before the route builds its answer as before

@@ -225,7 +225,6 @@ src/gateway/search_disclosure.rs	parse_detail	Error::json_rpc	1
 src/gateway/search_disclosure.rs	resolve_search_disclosure	Error::json_rpc	1
 src/gateway/server/stdio_catalogue.rs	dispatch_catalogue	JsonRpcResponse::error	1
 src/gateway/server/stdio_dispatch.rs	dispatch_relay_scoped	JsonRpcResponse::error	1
-src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	JsonRpcResponse::error	3
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	JsonRpcResponse::error_with_data	1
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	to_value_lossy	3
 src/gateway/server/stdio_dispatch.rs	prepare_signing	JsonRpcResponse::error	2

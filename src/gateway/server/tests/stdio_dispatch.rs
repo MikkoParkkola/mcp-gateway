@@ -438,8 +438,9 @@ async fn an_admission_refusal_is_recorded_on_stdio() {
     assert_eq!(record["tool"], json!("gateway_set_profile"), "{record}");
 }
 
-/// The missing-target admission refusal on stdio under a fail-closed log
-/// that cannot be written: the log's unavailability, no record.
+/// The sessionless `gateway_set_profile` refusal on stdio (answered -32600
+/// before the writer) under a fail-closed log that cannot be written: the
+/// log's unavailability, no record.
 #[tokio::test]
 async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavailable_on_stdio() {
     let dir = crate::test_dir_keep::kept_tempdir();
@@ -449,7 +450,7 @@ async fn an_admission_refusal_under_an_unwritable_fail_closed_log_answers_unavai
         .set_append_failure_for_test(true);
     let response = stdio_call(
         &meta,
-        json!({"name": "gateway_invoke", "arguments": {"tool": "t"}}),
+        json!({"name": "gateway_set_profile", "arguments": {"profile": "p"}, "_meta": modern_meta()}),
     )
     .await;
     assert_eq!(

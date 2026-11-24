@@ -196,7 +196,6 @@ pub(crate) async fn answer_stdio_signing_refusal(
     (id, site): (AnswerId, SigningSite),
     error: crate::Error,
 ) -> crate::protocol::JsonRpcResponse {
-    use crate::protocol::JsonRpcResponse;
     let code = error.to_rpc_code();
     let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
     let refusal = signing_refusal(error, request_target(arguments, called), (id, site));

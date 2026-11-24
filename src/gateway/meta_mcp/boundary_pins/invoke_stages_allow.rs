@@ -63,7 +63,7 @@ pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
     "CallerProof::new",          // invoke.rs:139
     "support::credential_owner", // invoke.rs:141 canonical: `super::` stripped for the move
     "gateway_writes::mark",      // invoke.rs:151
-    "extract_required_str",      // invoke.rs:153
+    "refuse_missing_str", // invoke.rs:153's required read, now noting the syntax kind (intake.rs:115-116)
     "TracedOutcome::Live", // invoke.rs:156 the gate answer mapping; the stage exit keeps this shape in the live body
 ];
 
