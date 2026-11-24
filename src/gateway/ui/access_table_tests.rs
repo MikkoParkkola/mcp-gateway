@@ -61,6 +61,108 @@ fn every_row_names_an_owned_route() {
     }
 }
 
+/// To do, Access and Policies: each tab is backed by exactly the routes its
+/// page calls for it, and the three reads are their only load rows. Access
+/// Actions and Settings have no load row, so their revoke and create rows
+/// open them.
+#[test]
+fn the_three_new_pages_are_backed_by_the_routes_they_call() {
+    use super::Page::{Access, Policies, ToDo};
+    use super::Tab::{Actions, Settings, Status};
+    use Verb::{Delete, Get, Post};
+    type Pair = (super::Page, super::Tab);
+    type Routes = &'static [(&'static str, Verb)];
+    let backing: [(Pair, Routes); 9] = [
+        ((ToDo, Status), &[(routes::UI_DECISIONS, Get)]),
+        ((ToDo, Actions), &[]),
+        ((ToDo, Settings), &[]),
+        ((Access, Status), &[(routes::UI_KEYS, Get)]),
+        ((Access, Actions), &[(routes::UI_KEYS_NAME, Delete)]),
+        ((Access, Settings), &[(routes::UI_KEYS, Post)]),
+        ((Policies, Status), &[(routes::UI_POLICIES, Get)]),
+        ((Policies, Actions), &[]),
+        (
+            (Policies, Settings),
+            &[
+                (routes::UI_POLICIES, Get),
+                (routes::UI_SETTINGS_DIFF, Post),
+                (routes::UI_SETTINGS, Post),
+            ],
+        ),
+    ];
+    for ((page, tab), want) in backing {
+        let got: BTreeSet<(&str, Verb)> = ROWS
+            .iter()
+            .filter(|r| r.tabs.contains(&(page, tab)))
+            .map(|r| (r.path, r.method))
+            .collect();
+        let want: BTreeSet<(&str, Verb)> = want.iter().copied().collect();
+        assert_eq!(got, want, "{} {}", page.id(), tab.id());
+    }
+    let loads: BTreeSet<(&str, Verb)> = ROWS
+        .iter()
+        .filter(|r| {
+            r.load
+                && r.tabs
+                    .iter()
+                    .any(|&(p, _)| [ToDo, Access, Policies].contains(&p))
+        })
+        .map(|r| (r.path, r.method))
+        .collect();
+    let want = BTreeSet::from([
+        (routes::UI_DECISIONS, Get),
+        (routes::UI_KEYS, Get),
+        (routes::UI_POLICIES, Get),
+    ]);
+    assert_eq!(loads, want, "the load rows of the three pages");
+}
+
+/// The rows those pages no longer read back no tab, and still ask what they
+/// asked before: the guard reads a row's need, never its tabs.
+#[test]
+fn rows_left_without_a_tab_keep_their_need() {
+    use super::AdminShape::{AdminRequired, Forbidden};
+    use super::CpCheck::{Action, FromBody, Read};
+    use super::Need::{Admin, ControlPlane};
+    use crate::control_plane::ControlPlaneAction::{MutateGrant, MutatePolicy};
+    use Verb::{Get, Post};
+    let emptied: [(&str, Verb, super::Need); 8] = [
+        (routes::UI_REFUSALS, Get, Admin(Forbidden)),
+        (routes::UI_DEAD_LETTERS, Get, Admin(AdminRequired)),
+        (routes::UI_DEAD_LETTERS_REPLAY, Post, Admin(AdminRequired)),
+        (routes::UI_DEAD_LETTER_REPLAY, Post, Admin(AdminRequired)),
+        (routes::UI_CONTROL_PLANE, Get, ControlPlane(Read)),
+        (
+            routes::UI_CONTROL_PLANE_GRANTS,
+            Post,
+            ControlPlane(Action(MutateGrant)),
+        ),
+        (
+            routes::UI_CONTROL_PLANE_POLICIES,
+            Post,
+            ControlPlane(Action(MutatePolicy)),
+        ),
+        (
+            routes::UI_CONTROL_PLANE_DECISIONS,
+            Post,
+            ControlPlane(FromBody(&[MutateGrant, MutatePolicy])),
+        ),
+    ];
+    for (path, method, need) in emptied {
+        let row = ROWS
+            .iter()
+            .find(|r| r.path == path && r.method == method)
+            .unwrap_or_else(|| panic!("a row for {path} {method:?}"));
+        assert!(
+            row.tabs.is_empty() && !row.load,
+            "{path} {method:?} still backs {:?} (load: {})",
+            row.tabs,
+            row.load
+        );
+        assert_eq!(row.need, need, "{path} {method:?} changed its need");
+    }
+}
+
 #[test]
 fn every_page_but_a_feature_off_one_has_a_row() {
     for page in PAGES {

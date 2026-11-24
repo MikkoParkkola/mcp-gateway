@@ -150,6 +150,50 @@ async fn the_report_agrees_with_the_guards_for_every_caller() {
     }
 }
 
+/// To do, Access and Policies, per caller: each lists the tabs its routes back,
+/// open only for a caller those routes admit; a closed page says why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_three_pages_report_per_caller() {
+    let listed: [(&str, &[&str]); 3] = [
+        (concat!("to", "do"), &["status"]),
+        ("access", &["status", "actions", "settings"]),
+        ("policies", &["status", "settings"]),
+    ];
+    for (caller, open, reason) in [
+        (Caller::AdminKey, true, None),
+        // Reads but may not resolve: resolving backs no tab.
+        (Caller::AdminKeyUnmapped, true, None),
+        (Caller::StandardKey, false, Some(REASONS[0])),
+        (Caller::AuthOff, false, Some(REASONS[3])),
+        (Caller::OidcAdmin, false, Some(REASONS[0])),
+    ] {
+        let fx = fixture(caller.gateway(), false).await;
+        let router = create_router(Arc::clone(&fx.state));
+        let cookie = session(&fx.state);
+        let req = (axum::http::Method::GET.as_str(), routes::UI_STATUS, "plain");
+        let (status, body) = send(&router, request(caller, req, &fx, Some(&cookie))).await;
+        assert_eq!(status, StatusCode::OK, "{caller:?}");
+        let answer: Value = serde_json::from_slice(&body).expect("JSON");
+        let pages = answer["access"]["pages"].as_array().expect("pages");
+        for (id, tabs) in listed {
+            let page = pages
+                .iter()
+                .find(|p| p["id"] == id)
+                .unwrap_or_else(|| panic!("{caller:?}: no page {id}"));
+            let got: Vec<(&str, bool)> = page["tabs"]
+                .as_array()
+                .expect("tabs")
+                .iter()
+                .map(|t| (t["id"].as_str().expect("a tab id"), t["open"] == true))
+                .collect();
+            let want: Vec<(&str, bool)> = tabs.iter().map(|&t| (t, open)).collect();
+            assert_eq!(got, want, "{caller:?}: page {id}");
+            assert_eq!(page["open"] == true, open, "{caller:?}: page {id}");
+            assert_eq!(page["reason"].as_str(), reason, "{caller:?}: page {id}");
+        }
+    }
+}
+
 /// An admin key sees every page that has a tab in this build, and every tab.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_admin_key_reports_everything_open() {
