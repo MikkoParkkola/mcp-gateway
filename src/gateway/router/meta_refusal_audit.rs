@@ -292,8 +292,11 @@ fn admission_refusal<'t>(
     let code = error.to_rpc_code();
     let result: crate::Result<Value> = Err(error);
     let outcome = AuditOutcome::from_result(&result).unwrap_or(AuditOutcome::Error(code));
-    let Err(error) = result else {
-        unreachable!("built as an error above")
+    // Built as an error two lines up; the `Ok` arm only satisfies the match,
+    // with no panic on a request path.
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => crate::Error::AuditUnavailable,
     };
     let (server, tool) = request_target(arguments, called);
     let refusal = Refusal {
