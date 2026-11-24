@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.2885a89b422b.js';
+import { register, segmented } from '/ui/assets/shell.525de9790ead.js';
 import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
@@ -61,7 +61,7 @@ function rowLink(row) {
   return h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` },
     h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
     h('span', {}, text(row.who?.account)), ' ',
-    h('span', {}, row.kind === 'admin_action' ? changeText(row) : text(row.tool)), ' ',
+    h('span', {}, row.kind === 'admin_action' ? listChangeText(row) : text(row.tool)), ' ',
     // The effect shares the outcome's cell: the grid has one column per cell and one for the chevron.
     h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome, ...effectOf(row)));
 }
@@ -78,11 +78,26 @@ function changeText(row) {
   if (row.surface !== 'capability_editor') {
     if (named(row.tool)) return row.tool;
     if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
-    return '';
+    return text(row.surface);
   }
   // An older record names no capability: nothing to name, and no pin words.
-  if (!named(row.capability)) return 'Capability file changed';
-  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Saved';
+  if (row.capability === undefined) return 'Capability file changed';
+  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
+  // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
+  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  return `${verb} capability ${row.capability}${pin}`;
+}
+
+function listChangeText(row) {
+  const named = (v) => typeof v === 'string' && v !== '';
+  if (row.surface !== 'capability_editor') {
+    if (named(row.tool)) return row.tool;
+    if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
+    return text(row.surface);
+  }
+  // An older record names no capability: nothing to name, and no pin words.
+  if (row.capability === undefined) return 'Capability file changed';
+  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
   const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;

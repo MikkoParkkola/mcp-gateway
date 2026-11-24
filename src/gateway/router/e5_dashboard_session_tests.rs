@@ -8,6 +8,7 @@
 //! `DashboardBootstrap::backdate`, which moves both clocks of one session back,
 //! so no test sleeps.
 
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,7 +41,14 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
         key: None,
         key_sha256: Some(crate::config::api_key_digest_spec(key.as_bytes())),
         expires_at: None,
-        name: key.to_string(),
+        // Its own name, never the secret, so a reply that showed a secret
+        // cannot pass for one that named the key.
+        name: if key == ADMIN_KEY {
+            "admin"
+        } else {
+            "standard"
+        }
+        .to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -151,10 +159,32 @@ pub(super) async fn send_to(router: axum::Router, request: Request<Body>) -> Rep
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body reads");
+    shows_no_credential(&headers, &body);
     Reply {
         status,
         headers,
         body: String::from_utf8_lossy(&body).into_owned(),
+    }
+}
+
+/// No reply, headers or body, shows a credential of this fixture or its
+/// digest; a reply may name keys.
+fn shows_no_credential(headers: &HeaderMap, body: &[u8]) {
+    let mut text = String::from_utf8_lossy(body).into_owned();
+    for (name, value) in headers {
+        let _ = write!(
+            text,
+            "\n{name}: {}",
+            String::from_utf8_lossy(value.as_bytes())
+        );
+    }
+    for secret in [BEARER, ADMIN_KEY, STANDARD_KEY] {
+        let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+        let hex = digest.trim_start_matches("sha256:");
+        assert!(
+            !text.contains(secret) && !text.contains(hex),
+            "a credential in the reply: {text}"
+        );
     }
 }
 
