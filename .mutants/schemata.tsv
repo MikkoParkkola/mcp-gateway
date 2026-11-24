@@ -1,0 +1,27 @@
+head_sha	8822382b02609fd7ac86c8862d88cf31f64a01b7
+#mutant M17
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p10_the_window_edges	src/gateway/ui/activity/policy_hits2_tests.rs:171
+#mutant M18
+mcp_gateway	gateway::ui::activity::policy_hits_tests::p4_complete_only_at_end_and_every_other_stop_says_why	src/gateway/ui/activity/policy_hits_tests.rs:553
+#mutant M19
+mcp_gateway	gateway::ui::activity::scan_window_tests::s1_a_narrow_window_on_a_long_log_stops_at_the_window	src/gateway/ui/activity/scan_window_tests.rs:262
+#mutant M20
+mcp_gateway	gateway::ui::activity::scan_window_tests::s2_one_old_stamp_above_newer_records_does_not_stop_the_read	src/gateway/ui/activity/scan_window_tests.rs:280
+#mutant M22
+mcp_gateway	gateway::ui::activity::scan_window_tests::s4_a_log_that_rotates_during_the_read_is_not_read_twice	src/gateway/ui/activity/scan_window_tests.rs:346
+#mutant M24
+mcp_gateway	gateway::ui::activity::scan_window_tests::s5_between_can_stop_the_scan	src/gateway/ui/activity/scan_window_tests.rs:369
+#mutant M25
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p12_a_rotated_read_keeps_the_rules_and_nulls_the_counts	src/gateway/ui/activity/policy_hits2_tests.rs:317
+#mutant M26
+mcp_gateway	gateway::ui::activity::policy_hits2_tests::p12_a_rotated_read_keeps_the_rules_and_nulls_the_counts	src/gateway/ui/activity/policy_hits2_tests.rs:312
+#mutant M27
+mcp_gateway	gateway::ui::activity::scan_window_tests::s1_a_narrow_window_on_a_long_log_stops_at_the_window	src/gateway/ui/activity/scan_window_tests.rs:264
+#mutant M28
+mcp_gateway	gateway::ui::activity::scan_window_tests::s5_between_can_stop_the_scan	src/gateway/ui/activity/scan_window_tests.rs:370
+#mutant M29
+mcp_gateway	gateway::ui::activity::scan_window_tests::s6_visit_gets_each_call_s_joined_delivery_record	src/gateway/ui/activity/scan_window_tests.rs:443
+#mutant M30
+mcp_gateway	gateway::ui::activity::scan_window_tests::s6_visit_gets_each_call_s_joined_delivery_record	src/gateway/ui/activity/scan_window_tests.rs:443
+#mutant M31
+mcp_gateway	gateway::ui::activity::scan_window_tests::s1_a_narrow_window_on_a_long_log_stops_at_the_window	src/gateway/ui/activity/scan_window_tests.rs:267
