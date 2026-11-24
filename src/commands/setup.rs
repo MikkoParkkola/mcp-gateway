@@ -346,7 +346,7 @@ fn import_servers(
         // here, where it is printed.
         super::fail(
             super::CliExit::LocalFailure,
-            &shown(&e),
+            &shown(&e).to_string(),
             "Fix the server entry or file named above, then rerun 'mcp-gateway setup wizard'.",
         )
     })?;

@@ -32,9 +32,8 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
                     super::CliExit::LocalFailure,
                     &e,
                     &format!(
-                        "Check that {} exists, that you can read it, and that it holds a {} source.",
-                        file.display(),
-                        source_kind_label(kind)
+                        "Check that {} exists, that you can read it, and that it holds the kind of source --kind names.",
+                        file.display()
                     ),
                 ),
             }
@@ -63,9 +62,8 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
                     super::CliExit::LocalFailure,
                     &e,
                     &format!(
-                        "Check that {} exists and holds a {} source, and that you can write to {}.",
+                        "Check that {} exists and holds the kind of source --kind names, and that you can write to {}.",
                         file.display(),
-                        source_kind_label(kind),
                         output.display()
                     ),
                 ),

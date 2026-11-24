@@ -108,10 +108,11 @@ pub fn run_upgrade_with_config(
         };
     }
     let message = format!(
-        "{blocking} key(s) are still in the config, which will not load while they remain."
+        "{blocking} key(s) could not be removed and the config will not load until \
+         they are."
     );
     let remedy = if quiet {
-        "Run 'mcp-gateway upgrade' without --quiet to see them."
+        "Run `mcp-gateway upgrade` without --quiet to see them."
     } else {
         "Remove the keys listed above by hand, then run 'mcp-gateway upgrade' again."
     };

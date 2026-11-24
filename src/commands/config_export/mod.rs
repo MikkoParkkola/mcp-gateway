@@ -560,7 +560,7 @@ pub async fn run_config_export(
             return fail(
                 CliExit::LocalFailure,
                 &e,
-                "Pass --mode stdio, or give the gateway an address clients can reach in its config, then rerun 'mcp-gateway setup export'.",
+                "Give the gateway an address clients can reach in its config, then rerun 'mcp-gateway setup export'.",
             );
         }
     };
