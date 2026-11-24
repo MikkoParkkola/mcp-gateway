@@ -295,7 +295,8 @@ def leg_record(leg: str, units: dict, chosen: set[str], listing: set[str] | None
     Lib leg: names are the chosen lib units' tests that the leg lists, plus listed names no lib unit knows
     (new tests, compared against lib units only since test names are free text), plus its ALWAYS prefixes;
     "none" only if that is empty. Integration leg: never "none"; chosen targets matching its globs, plus "bins"
-    and every bin unit when it runs --bins, "doc" when it runs --doc, plus its ALWAYS names."""
+    and every bin unit when it runs --bins, "doc" when it runs --doc, "examples" when shard_tests gives it the
+    examples build, plus its ALWAYS names."""
     if leg in LIB_LEGS:
         assert listing is not None
         known = {t for label, u in units.items() if label.startswith("lib:") for t in u["tests"]}
