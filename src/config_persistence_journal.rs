@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The replace journal: what a byte replacement of gateway.yaml needs so that
 //! a crash, or a refused reload, never leaves bytes on disk that no reload
-//! accepted (ADR-024).
+//! accepted (ADR-024). One bounded exception (ADR-024's 2026-11-23
+//! amendment): a first API key whose reload was refused only because a running
+//! gateway cannot become multi-user, after the writer checked that a start
+//! from those bytes succeeds. Those bytes wait on disk for the next start.
 //!
 //! A replacement writes, in order: a private copy of the original beside the
 //! file, this journal in state `staged`, the new bytes over the file, then,
-//! once the reload is accepted, state `all_renamed`. Whoever next takes the
+//! once the reload has accepted them (or refused them for that waiting first
+//! key alone), state `all_renamed`. Whoever next takes the
 //! config lock (any gateway writer, the CLI, a starting gateway) recovers a
 //! journal it finds before reading the file: `staged` puts the original
 //! back, `all_renamed` keeps the new bytes. Either way the journal and the
@@ -41,7 +45,8 @@ pub(crate) enum State {
     /// The original is staged; the new bytes may or may not be in place, and
     /// no reload accepted them. Recovery puts the original back.
     Staged,
-    /// The new bytes are in place and a reload accepted them. Recovery keeps
+    /// The new bytes are in place, and a reload accepted them or refused them
+    /// only for a first key that waits for the next start. Recovery keeps
     /// them.
     AllRenamed,
 }
@@ -207,6 +212,16 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
     )
 )]
 pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if fault::fires(&resolved(target), |f| {
+        matches!(f, fault::Fault::FailJournalMark)
+    })
+    .is_some()
+    {
+        return Err(std::io::Error::other(
+            "injected: the journal cannot be marked",
+        ));
+    }
     let path = journal_path(target);
     let mut journal = match read(&path) {
         Ok(Some(journal)) => journal,
@@ -533,6 +548,9 @@ pub(crate) mod fault {
     pub(crate) enum Fault {
         /// `finish` fails before removing the journal.
         FailJournalRemove,
+        /// `mark_all_renamed` fails before touching the journal, which stays
+        /// `staged`.
+        FailJournalMark,
         /// Recovery of a `staged` journal stops until released.
         Pause(Arc<Pause>),
         /// A commit fails before its rename.

@@ -888,5 +888,10 @@ mod keys_create_writer_tests;
 
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "keys_first_key_tests.rs"]
+mod keys_first_key_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "keys_revoke_request_tests.rs"]
 mod keys_revoke_request_tests;

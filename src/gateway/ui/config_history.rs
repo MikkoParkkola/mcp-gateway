@@ -15,11 +15,16 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::errors::{WriteRoute, flat_error, no_config_file, refused_write, structured_error};
+use super::errors::{
+    WriteRoute, flat_error, incomplete, no_config_file, refused_write, structured_error,
+};
 use super::guard::Guard;
 use crate::config_persistence::keyedit::Template;
 use crate::config_reload::history::{Event, Lookup, Snapshot, Source};
-use crate::config_reload::{Expected, IntentKind, Replace, ReplaceOutcome, Replaced};
+use crate::config_reload::{
+    Expected, IntentKind, ReloadOutcome, Replace, ReplaceOutcome, ReplaceReload, Replaced,
+    StatusChange,
+};
 use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
@@ -228,11 +233,18 @@ async fn restore(
         }),
         replaced: Replaced::KeepBeside,
         secrets: None,
+        // A restore never holds bytes for a restart: one that would bring
+        // in a first key, or keep a waiting one, is refused by the writer.
+        status_change: StatusChange::Refuse,
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
     match super::write_audited(&state, context, replace, IntentKind::Restore, &who).await {
-        Ok(outcome) => restored(&version, &outcome, unwritten),
+        Ok(outcome) => match &outcome.reload {
+            ReplaceReload::Applied(reload) => restored(&version, &outcome, reload, unwritten),
+            // A restore passes `Refuse`; the writer never holds it.
+            ReplaceReload::HeldForRestart { .. } => incomplete(RESTORE_WRITE, "held_for_restart"),
+        },
         Err(error) => refused_write(RESTORE_WRITE, &error),
     }
 }
@@ -243,7 +255,12 @@ fn refusal(status: StatusCode, code: &'static str, text: &'static str) -> Respon
 
 /// The success answer. `changed` is false when the bytes were already the
 /// file's: then no revision, no kept copy and no grants entry.
-fn restored(version: &str, outcome: &ReplaceOutcome, mut unwritten: Vec<Value>) -> Response {
+fn restored(
+    version: &str,
+    outcome: &ReplaceOutcome,
+    reload: &ReloadOutcome,
+    mut unwritten: Vec<Value>,
+) -> Response {
     let changed = outcome.revision.is_some();
     if changed {
         // A restore never writes the grants file and a version holds no
@@ -253,8 +270,8 @@ fn restored(version: &str, outcome: &ReplaceOutcome, mut unwritten: Vec<Value>) 
     let mut answer = json!({
         "version": version,
         "changed": changed,
-        "reload": outcome.reload,
-        "restart_required": outcome.reload.pending_restart_fields,
+        "reload": reload,
+        "restart_required": reload.pending_restart_fields,
         "not_restored": unwritten,
     });
     if let Some(revision) = &outcome.revision {
@@ -314,6 +331,10 @@ fn not_restored(kept: &Snapshot, baseline: Option<&Snapshot>, config: &str) -> V
 #[cfg(test)]
 #[path = "config_history_cli_tests.rs"]
 mod cli_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_history_first_key_tests.rs"]
+mod first_key_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "config_history_restore_scope_tests.rs"]

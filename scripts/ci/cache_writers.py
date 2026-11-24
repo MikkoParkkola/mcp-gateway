@@ -24,6 +24,12 @@ MAIN_ONLY = "github.ref == 'refs/heads/main'"
 ACCEPTED = (G, LINE_ONLY, MAIN_ONLY)
 BARE_G = G[1:-1]
 MAIN_ONLY_STEP = ("docker.yml", "Build and push by digest (no tag)")
+# The affected-tests map (scripts/ci/affected_map.py) is read by every lane PR's test legs, so one workflow alone
+# saves its key, and only on a push to the release line: a dispatch, a PR or a push to main cannot plant a map.
+MAP_KEY_PREFIX = "affected-map-"
+MAP_WORKFLOW = "affected-map.yml"
+MAP_PUSH = "github.event_name == 'push'"
+MAP_MSG = f"only {MAP_WORKFLOW} saves the {MAP_KEY_PREFIX} key, on a release-line push: if: {LINE_ONLY} && {MAP_PUSH}"
 
 PINS = {
     "aquasecurity/trivy-action": "ed142fd0673e97e23eac54620cfb913e5ce36c25",
@@ -544,6 +550,10 @@ def judge_uses(
             dangerous=dangerous,
             out=out,
         )
+        if name == "actions/cache/save" and str(inputs.get("key", "")).strip().startswith(MAP_KEY_PREFIX):
+            terms = {collapse(t) for t in split_and(strip_wrapper(str(step.get("if", ""))))}
+            if file != MAP_WORKFLOW or LINE_ONLY not in terms or MAP_PUSH not in terms:
+                out.append(problem(file, job, label, "R11", MAP_MSG))
         return
     if name == COMBINED:
         out.append(problem(file, job, label, "combined", COMBINED_MSG))
@@ -817,6 +827,18 @@ def self_test() -> list[str]:
         if got:
             out.append(f"self-test: {label}: expected pass, got {got}")
 
+    # The affected-tests map's key: saved by its own workflow on a release-line push, and by nothing else.
+    map_save = {"name": "save the map", "uses": "actions/cache/save@x", "with": {"key": "affected-map-${{ github.sha }}"}}
+    good("11 the map workflow saves its key on a release-line push",
+         _doc([{**map_save, "if": _expr(LINE_ONLY + " && " + MAP_PUSH)}], filename=MAP_WORKFLOW))
+    bad("11 another workflow saves the map key", _doc([{**map_save, "if": _expr(LINE_ONLY + " && " + MAP_PUSH)}],
+                                                       filename="ci.yml"), contains="R11")
+    bad("11 the map key saved on a dispatch too", _doc([{**map_save, "if": _expr(LINE_ONLY)}], filename=MAP_WORKFLOW),
+        contains="R11")
+    bad("11 the map key saved on main too", _doc([{**map_save, "if": _expr(G + " && " + MAP_PUSH)}],
+                                                 filename=MAP_WORKFLOW), contains="R11")
+    good("11 another key in another workflow is not the map's",
+         _doc([{**map_save, "with": {"key": "other-${{ github.sha }}"}, "if": _expr(LINE_ONLY)}], filename="ci.yml"))
     bare = {"name": "cache", "uses": "Swatinem/rust-cache@x"}
     for uses in ("Swatinem/rust-cache@x", build, "actions/cache/save@x", "astral-sh/setup-uv@x"):
         bad(f"1 unguarded {uses.split('@')[0]}", _doc([{"uses": uses, **unguarded.get(uses, {})}]))
