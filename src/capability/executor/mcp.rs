@@ -152,10 +152,11 @@ fn ends_after(deadline: Duration) -> Result<Instant> {
 }
 
 /// Poll `wait.tool` until `until` holds, `max_wait_s` passes, or the call's
-/// own deadline cuts in. A poll that errors or does not match yet is "not
-/// ready", never fatal: the server answers an absent or unfinished item with
-/// an error. Running out of time says so and leaves the child alone, since a
-/// busy server is not a wedged one.
+/// own deadline cuts in. A tool error or an answer that does not match yet is
+/// "not ready": the server answers an absent or unfinished item with an
+/// error. A dead transport or a stopped backend ends the wait at once.
+/// Running out of time says so and leaves the child alone, since a busy
+/// server is not a wedged one.
 async fn wait_ready(
     backend: &Backend,
     wait: &crate::capability::definition::WaitStep,

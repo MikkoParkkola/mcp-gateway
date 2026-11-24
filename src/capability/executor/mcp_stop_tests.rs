@@ -324,7 +324,13 @@ async fn r4b_a_busy_call_fails_at_once_after_the_stop() {
     })
     .await
     .expect("the call and the stop both end");
-    assert!(answer.is_err(), "the cut-off call answered {answer:?}");
+    // The wait's own abort, not some earlier failure of the call.
+    assert!(
+        answer
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("wait aborted")),
+        "the cut-off call answered {answer:?}"
+    );
     let lingered = answered.saturating_duration_since(stopped);
     assert!(
         lingered < Duration::from_secs(3),
