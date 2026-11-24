@@ -144,6 +144,19 @@ fn s5d_a_day_sweep_keeps_records_of_its_day_and_later() {
         Some(later),
         "a newer day's record stays"
     );
+
+    // And the sweep still cleans: a later day's sweep removes the earlier
+    // day's record from the map, not only from what the reader returns.
+    let e = enforcer(None, 25.0);
+    e.note_first_block(KEY, today, T1, 25.0);
+    {
+        let _clock = test_clock::at_secs(MIDNIGHT + 60);
+        e.record_spend("cheap", Some(KEY), 0.01);
+    }
+    assert!(
+        !e.key_refused.contains_key(KEY),
+        "an earlier day's record is gone"
+    );
 }
 
 /// Many refusals at once, from 8 threads: the record ends at the smallest
