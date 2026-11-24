@@ -63,9 +63,10 @@ pub(crate) enum SigningSite {
     /// The signing check, inside the route's note scope: its check noted
     /// the kind, so a refusal reaching the writer unnoted is `unrecorded`.
     Check,
-    /// The intake's early refusal of a malformed nonce under the every-call
-    /// scope, before any note scope opens: only a nonce's shape is
-    /// refused there, so it is `syntax`, as the check notes the same refusal.
+    /// The intake's early refusals under the every-call scope, before any
+    /// note scope opens: a signing envelope that cannot be restored (an
+    /// unusable id, a changed origin) and a malformed nonce. Both refuse the
+    /// request's form, so they are `syntax`, as the check notes the nonce.
     Intake,
 }
 
