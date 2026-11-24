@@ -144,6 +144,14 @@ impl CapabilityExecutor {
     /// executor builds, so a gateway stop also cuts their trees' exit waits.
     #[must_use]
     pub(crate) fn with_stop_deadline(self, deadline: Arc<crate::transport::StopDeadline>) -> Self {
+        // The gateway stop ends these children too; a weak link, so the stop
+        // never keeps a dropped executor's children alive.
+        let children = Arc::downgrade(&self.mcp_children);
+        deadline.join_stop(move |ends| {
+            if let Some(children) = children.upgrade() {
+                children.stop_for_gateway(ends);
+            }
+        });
         let _ = self.mcp_children.stop_deadline.set(deadline);
         self
     }

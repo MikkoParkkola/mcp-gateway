@@ -587,25 +587,26 @@ fn a_linked_node_is_found_on_path_through_its_real_directory() {
     assert_eq!(node_dir, real_bin);
 }
 
-/// RF8 (G2), kills "the helper's stderr reaches the caller after the
-/// credential": once the credential is out, a sandbox that ended first is
-/// refused in fixed words whatever its stderr held; before it, the helper's
-/// own refusal is still classified from its stderr.
+/// RF8 (G2), kills "the helper's stderr reaches the caller": a sandbox that
+/// ended before any status is refused in fixed words, with no stderr to take
+/// them from, before the credential as after it; only the after-credential
+/// case says the fetch began, and only the silent one lets the probe read.
 #[test]
-fn rf8_no_helper_stderr_reaches_the_caller_after_the_credential() {
-    let url = ["https", "://x", ":0123abcd", "@registry.npmjs.org/p"].concat();
-    let stderr = format!(
-        "preview-sandbox: refused at fetching the package (npm ERR! {url} /home/runner/.npmrc)"
-    );
-    let after = super::ended_refusal(true, &stderr);
-    let text = format!("{after:?} {after}");
-    for leaked in ["0123abcd", "registry.npmjs.org", ".npmrc", "npm ERR"] {
-        assert!(!text.contains(leaked), "{text}");
-    }
-    assert_eq!(after, super::ended_refusal(true, ""));
+fn rf8_no_helper_stderr_reaches_the_caller() {
+    use super::launcher::{How, ended_first};
     assert_eq!(
-        super::ended_refusal(false, &stderr),
-        super::classify(&stderr)
+        ended_first(true),
+        (
+            Refusal::Step("the fetch (the sandbox ended before it finished)".into()),
+            How::Reported
+        )
+    );
+    assert_eq!(
+        ended_first(false),
+        (
+            Refusal::Step("the sandbox helper sent no valid status".into()),
+            How::EndedSilently
+        )
     );
 }
 
@@ -665,4 +666,77 @@ fn r26l_r35l_only_the_one_control_descriptor_is_exempt() {
     assert_eq!(extra_descriptors(&[0, 1, 2, 9, 10], Some(9)), vec![10]);
     assert_eq!(extra_descriptors(&[0, 1, 2, 9], None), vec![9]);
     assert_eq!(extra_descriptors(&[0, 1, 2], None), Vec::<u32>::new());
+}
+
+/// A fake launcher standing in for `unshare`: `sh -c script`, connecting to
+/// nothing.
+fn fake_launcher(
+    script: &'static str,
+) -> impl FnOnce(&Path, &plan::Plan) -> Result<tokio::process::Child, Refusal> {
+    move |_: &Path, _: &plan::Plan| {
+        tokio::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| Refusal::Step(format!("the fake launcher ({e})")))
+    }
+}
+
+/// R48, kills m-probe-drops-stderr and m-run-reads-stderr: the probe names
+/// the host's refusal from what the sandbox printed, judged by the host's
+/// facts; a run on a launcher that also prints a helper line never reads it.
+#[tokio::test]
+async fn r48_the_probe_reads_the_sandboxs_words_and_a_run_never_does() {
+    const DENIED: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; exit 1";
+    const CANARY: &str = "echo 'unshare: unshare failed: Operation not permitted' >&2; \
+                          echo 'preview-sandbox: refused at CANARY' >&2; exit 1";
+    // A helper's own non-mount refusal: only a probe that read the words can
+    // name it; one that dropped them falls through to the host's facts.
+    const HELPER_LINE: &str =
+        "echo 'preview-sandbox: refused at checking descriptors (inherited: [5])' >&2; exit 97";
+    let apparmor = HostFacts {
+        apparmor_restricts_userns: Some("1".into()),
+        ..HostFacts::default()
+    };
+    assert_eq!(
+        probe_with(fake_launcher(DENIED), &apparmor).await,
+        Err(Refusal::AppArmorRestricted)
+    );
+    assert_eq!(
+        probe_with(fake_launcher(HELPER_LINE), &apparmor).await,
+        Err(Refusal::Step(
+            "checking descriptors (inherited: [5])".into()
+        ))
+    );
+    let container = HostFacts {
+        in_container: true,
+        ..HostFacts::default()
+    };
+    assert_eq!(
+        probe_with(fake_launcher(DENIED), &container).await,
+        Err(Refusal::Container)
+    );
+    let runtime = tempfile::tempdir().expect("runtime");
+    let ambient = Ambient {
+        ca_bundle: None,
+        runtime_dir: Some(runtime.path().as_os_str().to_owned()),
+        path: system_path(),
+    };
+    let mut prepared = launcher::prepare(&target("/bin/true"), &[], ambient, launcher::Phase::Run)
+        .expect("prepared");
+    let spawn = |plan: &plan::Plan| fake_launcher(CANARY)(Path::new("/unused"), plan);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let bounds = super::super::control::CONTROL_BOUNDS;
+    let (launched, _) =
+        launcher::launch_with(&mut prepared, spawn, deadline, bounds, launcher::reap_exit).await;
+    let refusal = launched.expect_err("a fake launcher never starts").refusal;
+    assert_eq!(
+        refusal,
+        Refusal::Step("the sandbox helper sent no valid status".into())
+    );
+    assert!(!format!("{refusal:?} {refusal}").contains("CANARY"));
 }

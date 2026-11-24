@@ -36,10 +36,11 @@ src/config/mod.rs	prepare	File::open	1	no-content	opens the selected config only
 src/config/record_key.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config/secret_file.rs	open_for_guarded_read	.open	1	guard	Windows: the config guard's open; the DACL and owner are judged on this handle before its bytes are read
 src/config/secret_file.rs	open_for_guarded_read	open_nonblocking	1	guard	the config guard: type, mode and owner are judged on this handle before its bytes are read
-src/config_persistence_atomic.rs	apply_inherited_mode	open_nonblocking	1	no-content	opens the write target only to probe its ACL; no bytes are read
+src/config_persistence_atomic_unix.rs	settle	open_nonblocking	1	no-content	opens the modelled file only to probe its ACL; no bytes are read
+src/config_persistence_atomic_unix.rs	model_at	.open	1	no-content	looks at the write target once without following links (O_PATH on Linux, events-only on macOS) to pin it and read its owner and mode; no bytes are read
 src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	backup-copy	Windows: copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
-src/config_persistence_atomic.rs	copy_keeping_access	fs::copy	1	backup-copy	Unix (fs::copy keeps the mode): copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
-src/config_persistence_atomic.rs	create_scratch	.open	1	write-only	creates the atomic writer's scratch file (create_new): owner-only for a private write, the process default for an inherit write; reads nothing
+src/config_persistence_atomic_unix.rs	copy	File::open	1	backup-copy	Unix (one descriptor for the bytes and the model; the backup keeps the source's owner and never a wider mode): copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
+src/config_persistence_atomic.rs	create_scratch	.open	2	write-only	creates the atomic writer's scratch file (create_new): mode 0000 on unix until its access settles, owner-only elsewhere for a private write, the process default for an inherit write with nothing to inherit from; reads nothing
 src/config_persistence_atomic.rs	finish_kept	.open	1	write-only	Windows: creates the scratch (create_new) on a volume that keeps no access lists; reads nothing
 src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: opens the write target with READ_CONTROL only, to copy its access list; no bytes are read
 src/config_persistence.rs	sync_dir_for	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
@@ -113,6 +114,7 @@ src/preview_sandbox/linux/mounts.rs	mountinfo	fs::read_to_string	1	not-config	/p
 src/preview_sandbox/linux/fetch_step.rs	read_lock	File::open	1	not-config	the package-lock.json npm wrote in the preview home, inside the sandbox, capped at 4 MiB; never gateway config
 src/preview_sandbox/linux/uv_probe.rs	refuse_script	File::open	1	not-config	the first two bytes of the uv or python3 file a uvx preview would bind, to refuse a script (a version manager's shim); never gateway config
 src/preview_sandbox/linux/uv_probe.rs	links_libpython	File::open	1	not-config	the host interpreter's own binary, capped at 256 MiB, searched for its libpython name; never gateway config
+src/preview_sandbox/linux/helper.rs	plant	File::open	1	not-config	/dev/null, opened in a debug build only at a row's request as a stray descriptor the helper's checks must catch; reads nothing, never gateway config
 src/private_fs.rs	open_dir	.open	1	no-content	Windows: opens a directory for its access list or a flush; no file bytes
 src/private_fs.rs	open_file_read	.open	1	not-config	Windows store custody: a secret-store record or manifest, judged by its DACL on this handle (ADR-016)
 src/private_fs.rs	same_place	.open	1	no-content	Windows: opens a path only for its file identity

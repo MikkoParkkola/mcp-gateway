@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/config_persistence_scratch.rs	write_yaml_at	helper:write_atomic	1	helper	calls the crate's write_atomic: the config text writer saves through the shared writer

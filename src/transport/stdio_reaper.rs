@@ -76,7 +76,11 @@ pub(crate) struct StopDeadline {
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
     handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
+    participant: participant::Participant,
 }
+
+#[path = "stdio_reaper_participant.rs"]
+mod participant;
 
 /// The fixed origin [`StopDeadline`] counts from.
 static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -87,6 +91,7 @@ impl Default for StopDeadline {
             hurried: std::sync::atomic::AtomicBool::new(false),
             cut: parking_lot::Mutex::new((u64::MAX, u64::MAX)),
             handed: parking_lot::Mutex::default(),
+            participant: participant::Participant::default(),
         }
     }
 }

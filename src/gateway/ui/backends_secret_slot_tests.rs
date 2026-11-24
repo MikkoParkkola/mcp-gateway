@@ -725,14 +725,16 @@ async fn s_ui_a_refused_config_write_answers_with_its_reason() {
         },
     );
     let (status, body) = panel.update("a", json!({"description": "new"})).await;
-    assert!(
-        !status.is_success(),
-        "S-ui: the write fails: {status}: {body}"
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "S-ui: nothing was written: {body}"
     );
-    let error = body["error"].as_str().unwrap_or_default();
+    assert_eq!(body["error"], "target-changed", "S-ui: the code: {body}");
+    let message = body["message"].as_str().unwrap_or_default();
     assert!(
-        error.contains("target-changed: refused to replace"),
-        "S-ui: the error carries the refusal: {body}"
+        message.starts_with("target-changed: refused to replace "),
+        "S-ui: the refusal's own sentence: {body}"
     );
     assert_eq!(panel.text(), other, "S-ui: the other writer's file stays");
 }

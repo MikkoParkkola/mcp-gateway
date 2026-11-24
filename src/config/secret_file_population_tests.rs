@@ -136,6 +136,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_atomic_unix.rs",
+        "the atomic writer's unix half: looks at the save target without reading it (O_PATH, or events-only on macOS) to pin it; a backup reads its source's bytes once, through the descriptor it models, into a closed scratch",
+    ),
+    (
         "src/config_persistence_atomic_windows.rs",
         "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
     ),
@@ -385,6 +389,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/preview_sandbox/linux/fetch_uv_real_rows.rs",
         "test-only (cfg(test)): copies the real uv and uvx into a fixture Python's scratch bin; no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/helper.rs",
+        "debug builds only, at a row's request: /dev/null opened and kept as a stray descriptor the helper's own checks must catch; reads nothing, no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/status_rows.rs",
+        "test-only (cfg(test)): /proc/<pid>/stat for the helper's pid and a target's marker, and a plain file written into a scratch dir; no secret",
     ),
     (
         "src/preview_sandbox/mod.rs",

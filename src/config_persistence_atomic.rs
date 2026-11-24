@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shared atomic writer.
 
+#[cfg(not(unix))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -35,8 +36,9 @@ pub fn write_atomic(
     write_atomic_observed(path, bytes, mode, link, |_| {}, || Ok(()))
 }
 
-/// [`write_atomic`] with `check` run after the scratch is written, synced and
-/// closed, and before the rename: an `Err` from it removes the scratch and
+/// [`write_atomic`] with `check` run once the scratch's bytes are written and
+/// synced, before the rename (on unix also before the scratch's access is
+/// settled; elsewhere after the scratch is closed): an `Err` removes it and
 /// leaves `path` untouched. Config history's save checks there that its
 /// record is still the store's newest (design D-2), so a save past its
 /// deadline never renames over newer history.
@@ -65,9 +67,9 @@ pub(crate) fn write_atomic_observed_for_test(
     write_atomic_observed(path, bytes, mode, link, observe, || Ok(()))
 }
 
-/// `write_atomic` with `observe` called on the open scratch after `sync_all` and
-/// before the mode step: the test seam that pins "private while the bytes are in it".
-/// `check` runs once the scratch is closed, just before the rename.
+/// `write_atomic` with `observe` called on the open scratch after `sync_all`
+/// and before its access settles: the seam that pins "nobody else can open it
+/// while the bytes go in". `check` runs as [`write_atomic_checked`] says.
 fn write_atomic_observed(
     path: &Path,
     bytes: &[u8],
@@ -81,6 +83,19 @@ fn write_atomic_observed(
         Symlink::Follow => crate::identity_grants::journal::resolved(path),
         Symlink::Replace => path.to_path_buf(),
     };
+    write_at(&target, bytes, mode, observe, check)
+}
+
+/// The save off unix: the writer keeps the mode (`Inherit`) and, on Windows,
+/// the access list; see `windows` for its owner rule.
+#[cfg(not(unix))]
+fn write_at(
+    target: &Path,
+    bytes: &[u8],
+    mode: FileMode,
+    observe: impl FnOnce(&std::fs::File),
+    check: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     // The target's metadata, when there is a file to inherit from. A symlink
     // at the destination is not one: the rename swaps the link itself away,
     // so there is no mode to keep. Absence reads as absent; any other stat
@@ -88,8 +103,6 @@ fn write_atomic_observed(
     // target we could not stat is never replaced by a wider default-mode file,
     // while a `Private` write never needed the stat.
     let stat = std::fs::symlink_metadata(&target);
-    #[cfg(all(test, unix))]
-    let stat = unix::seams::open_error(&target).map_or(stat, Err);
     let target_meta = match stat {
         Ok(meta) if !meta.file_type().is_symlink() => Some(meta),
         Ok(_) => None,
@@ -106,8 +119,6 @@ fn write_atomic_observed(
         super::next_scratch_seed(),
         scratch_create_for(mode, target_meta.as_ref()),
     )?;
-    #[cfg(all(test, unix))]
-    unix::seams::created(&target);
     // Leave no debris behind on any failure before the rename. The scratch
     // name is unique per call, so without cleanup each failure would strand
     // one more file next to the target.
@@ -116,15 +127,7 @@ fn write_atomic_observed(
     };
     // Write through the handle the exclusive create returned. Reopening by
     // path would reopen the gap the exclusive create just closed.
-    #[cfg(all(test, unix))]
-    unix::seams::first_write(&target, &file);
-    #[cfg(all(test, unix))]
-    unix::seams::event(&target, "write");
-    let written = file.write_all(bytes).and_then(|()| {
-        #[cfg(all(test, unix))]
-        unix::seams::event(&target, "sync");
-        file.sync_all()
-    });
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
     if let Err(e) = written {
         // Close before cleanup: Windows cannot delete a file held open
         // without delete sharing.
@@ -135,25 +138,12 @@ fn write_atomic_observed(
     #[cfg(test)]
     let staged = super::crash_fs::stage(&target, &scratch, bytes);
     observe(&file);
-    #[cfg(unix)]
-    if matches!(mode, FileMode::Inherit)
-        && let Some(meta) = target_meta.as_ref()
-        && let Err(e) = apply_inherited_mode(&file, &target, meta)
-    {
-        drop(file);
-        cleanup(&scratch);
-        return Err(e);
-    }
     // Closed before the rename: Windows renames only a closed file.
     drop(file);
-    #[cfg(all(test, unix))]
-    unix::seams::event(&target, "check");
     if let Err(e) = check() {
         cleanup(&scratch);
         return Err(e);
     }
-    #[cfg(all(test, unix))]
-    unix::seams::before_verify(&target, &scratch);
     if let Err(e) = super::rename_with_retry(&scratch, &target) {
         cleanup(&scratch);
         return Err(e);
@@ -167,9 +157,26 @@ fn write_atomic_observed(
 
 /// The typed code a writer refusal carries (`foreign-owner`,
 /// `target-changed`, ...), or `None` when `e` is not one.
-#[cfg(test)]
-pub(crate) fn refusal_code(_e: &std::io::Error) -> Option<&'static str> {
-    None
+#[cfg(all(test, unix))]
+pub(crate) fn refusal_code(e: &std::io::Error) -> Option<&'static str> {
+    writer_refusal(e).map(|(code, _)| code)
+}
+
+/// A save the writer turned down: its code and the sentence the user reads,
+/// which names the file and user ids only, so a caller may show it as is.
+/// `None` for any other error, and off unix, where refusals carry no type.
+pub(crate) fn writer_refusal(e: &std::io::Error) -> Option<(&'static str, String)> {
+    #[cfg(unix)]
+    {
+        e.get_ref()
+            .and_then(|inner| inner.downcast_ref::<unix::WriterRefusal>())
+            .map(|refusal| (refusal.code, refusal.to_string()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        None
+    }
 }
 
 // Windows `Inherit` keeps the target's access list.
@@ -181,10 +188,10 @@ mod windows;
 #[cfg(unix)]
 #[path = "config_persistence_atomic_unix.rs"]
 mod unix;
-#[cfg(unix)]
-use unix::apply_inherited_mode;
 #[cfg(all(test, unix))]
 pub(crate) use unix::seams as writer_seams;
+#[cfg(unix)]
+use unix::write as write_at;
 #[cfg(all(test, unix))]
 use unix::{AclPresence, GidMatch, inherit_mode};
 
@@ -192,7 +199,12 @@ use unix::{AclPresence, GidMatch, inherit_mode};
 #[derive(Clone, Copy)]
 enum ScratchCreate {
     /// Owner-only from creation, via [`create_new_private`].
+    #[cfg(not(unix))]
     Private,
+    /// Unix: mode 0000, so nobody but the writer, through the descriptor the
+    /// create returns, can open it until its access is settled.
+    #[cfg(unix)]
+    Closed,
     /// Default creation: the umask mode on unix, the directory's inherited
     /// ACL on Windows.
     Default,
@@ -204,6 +216,7 @@ enum ScratchCreate {
 
 /// How the scratch for a (`mode`, `target`) write is created: private
 /// from creation whenever the bytes must never sit in a wider file.
+#[cfg(not(unix))]
 fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
     match mode {
         FileMode::Private => ScratchCreate::Private,
@@ -231,7 +244,17 @@ fn create_scratch(
     create: ScratchCreate,
 ) -> std::io::Result<(std::fs::File, PathBuf)> {
     super::claim_scratch(path, first, |candidate| match create {
+        #[cfg(not(unix))]
         ScratchCreate::Private => super::create_new_private(candidate),
+        #[cfg(unix)]
+        ScratchCreate::Closed => {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0)
+                .open(candidate)
+        }
         ScratchCreate::Default => std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -291,8 +314,10 @@ fn finish_kept(
     }
 }
 
-/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix
-/// `std::fs::copy`, which keeps the mode; on Windows, where a copy takes the
+/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix it is made
+/// like a save with `src` as the model (its owner kept or `foreign-owner`
+/// refused, never a wider mode, a link at `dst` replaced, the bytes and the
+/// model read through one descriptor); on Windows, where a copy takes the
 /// folder's list instead, the bytes are written to a scratch created with
 /// `src`'s list (checked as an `Inherit` save is) and renamed over `dst`.
 ///
@@ -301,11 +326,9 @@ fn finish_kept(
 /// Returns the copy's I/O error, or on Windows a refusal when `src`'s list
 /// cannot be copied exactly; `dst` is then left as it was.
 pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        #[cfg(all(test, unix))]
-        unix::seams::after_model(src, dst);
-        std::fs::copy(src, dst).map(|_| ())
+        unix::copy(src, dst)
     }
     #[cfg(windows)]
     {
