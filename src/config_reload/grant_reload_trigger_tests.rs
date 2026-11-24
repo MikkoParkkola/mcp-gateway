@@ -266,6 +266,7 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
     while allows(&store, "alice", "cal") && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    mutant!("w-drop", drop(dir), ());
     let _ = shutdown_tx.send(());
     // Still kept after shutdown, when a reload's lock thread may still run.
     assert!(
