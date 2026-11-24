@@ -112,6 +112,14 @@ fn gateway_read(fx: &Fixture) -> Value {
             .expect("infallible");
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+        // The status read names keys, never a credential.
+        let text = String::from_utf8_lossy(&bytes);
+        for secret in [BEARER, OTHER, KNOWN] {
+            assert!(
+                !text.contains(secret),
+                "a secret in the status read: {text}"
+            );
+        }
         serde_json::from_slice(&bytes).expect("json")
     })
 }
