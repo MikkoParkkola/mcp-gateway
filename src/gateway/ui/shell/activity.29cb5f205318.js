@@ -61,9 +61,31 @@ function rowLink(row) {
   return h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` },
     h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
     h('span', {}, text(row.who?.account)), ' ',
-    h('span', {}, text(row.tool)), ' ',
+    h('span', {}, row.kind === 'admin_action' ? changeText(row) : text(row.tool)), ' ',
     // The effect shares the outcome's cell: the grid has one column per cell and one for the chevron.
     h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome, ...effectOf(row)));
+}
+
+/**
+ * What an admin action did, in one line: the list's middle cell and the
+ * heading of its receipt. A capability editor's record is worded; any other
+ * surface reads its tool, else its method and route, else the surface itself,
+ * so no admin row is ever blank. Wording the other surfaces belongs to the
+ * Overview's last-actions table.
+ */
+function changeText(row) {
+  const named = (v) => typeof v === 'string' && v !== '';
+  if (row.surface !== 'capability_editor') {
+    if (named(row.tool)) return row.tool;
+    if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
+    return text(row.surface);
+  }
+  // An older record names no capability: nothing to name, and no pin words.
+  if (!named(row.capability)) return 'Capability file changed';
+  const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
+  // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
+  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  return `${verb} capability ${row.capability}${pin}`;
 }
 
 /** A call's delivery effect, when the row has one. no_record is never final: the record lands after the call. */
@@ -549,7 +571,10 @@ const SHOWN = {
     action: true, actor_id: true, target_id: true, outcome: true,
     reason: { recorded: true, length: true }, rollback_summary: { recorded: true, length: true },
   },
-  admin_action: { ...BASE, surface: true, route: true, method: true, http_status: true, tool: true, outcome: true },
+  admin_action: {
+    ...BASE, surface: true, route: true, method: true, http_status: true, tool: true, outcome: true,
+    action: true, capability: true, pin: true, who: { account: true, authority: true, subject: true },
+  },
 };
 
 const plain = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
@@ -662,6 +687,8 @@ async function receiptTab(body, ctx) {
     const copy = h('button', { class: 'btn', type: 'button' }, 'Copy as JSON');
     copy.addEventListener('click', () => copyJson(JSON.stringify(p, null, 2), copyOut));
     const parts = [facts, h('p', {}, copy), copyOut];
+    // An admin action's receipt opens with the sentence its list row says.
+    if (kind === 'admin_action') parts.unshift(h('h2', {}, changeText(p)));
     if (p.effect === 'no_record') {
       const again = h('button', { class: 'btn', type: 'button' }, 'Check again');
       again.addEventListener('click', () => load(true));
