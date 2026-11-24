@@ -8,7 +8,7 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -19,6 +19,7 @@ use super::activity::counts::{COUNT_SCAN_BYTES, Days, Pass, RuleHits, Stopped, c
 use super::activity::{log_paths, stream_read};
 use super::guard::Guard;
 use crate::config::Config;
+use crate::config_reload::Generation;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 use crate::security::policy::{ToolPolicy, ToolPolicyConfig};
@@ -29,20 +30,15 @@ pub(super) fn policies_router() -> Router<Arc<AppState>> {
     Router::new().route(routes::UI_POLICIES, get(read_policies))
 }
 
-pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
+pub(super) async fn read_policies(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
+    guard: Guard,
+) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    // Counted under the caller's Activity access, as the Activity list
-    // counts. The route admits only a gateway admin, so in practice this is
-    // every row; a resolver refusal counts no one's calls.
-    let generation = state.live_config.generation();
-    let mapping = &generation.config().control_plane.role_mapping;
-    let access = access::resolve(guard.client.as_ref(), guard.identity.as_ref(), mapping)
-        .unwrap_or(Access::Scoped {
-            owner: None,
-            backends: Vec::new(),
-        });
+    let access = caller_access(&generation, &guard);
     let logs = log_paths(&state);
     let served = Arc::clone(&state);
     let reader = access.clone();
@@ -68,6 +64,20 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
         with_hits(read_model(&sources), &sources, &RuleHits::unread(&access))
     });
     Json(model).into_response()
+}
+
+/// Whose calls the hits count: the caller's Activity access, as the Activity
+/// list applies it, resolved with the request's pinned role mapping. The
+/// route admits only a gateway admin, so in practice this is every row; a
+/// resolver refusal counts no one's calls.
+fn caller_access(generation: &Generation, guard: &Guard) -> Access {
+    let mapping = &generation.config().control_plane.role_mapping;
+    access::resolve(guard.client.as_ref(), guard.identity.as_ref(), mapping).unwrap_or(
+        Access::Scoped {
+            owner: None,
+            backends: Vec::new(),
+        },
+    )
 }
 
 /// What the read model reads: one published generation (the file's values,

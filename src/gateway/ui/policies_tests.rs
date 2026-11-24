@@ -56,7 +56,8 @@ fn client(admin: bool) -> AuthenticatedClient {
 
 async fn get(state: &Arc<AppState>, caller: Option<AuthenticatedClient>) -> (StatusCode, Value) {
     let guard = Guard::for_route(routes::UI_POLICIES, &Method::GET, caller);
-    let response = read_policies(State(Arc::clone(state)), guard).await;
+    let pinned = axum::extract::Extension(state.live_config.generation());
+    let response = read_policies(State(Arc::clone(state)), pinned, guard).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
     (
