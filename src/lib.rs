@@ -137,6 +137,9 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+#[cfg(tp3)]
+#[cfg(test)]
+mod print_sites_tests;
 
 // The preview sandbox's test seams must never ship: a release build with them
 // fails here, and CI proves it with a build that must fail.

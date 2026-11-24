@@ -14,6 +14,7 @@ mod idle_and_agents;
 mod load_error;
 mod loading;
 mod pattern_grammar;
+mod server_name_refusal;
 mod validate_config;
 
 /// The child half of ENVFILE.19d: with `HOME` unset or empty, `~` still
