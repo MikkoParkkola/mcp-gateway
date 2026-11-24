@@ -91,8 +91,8 @@ function schemaBlock(t, { compact = false } = {}) {
 /** The rows a search and a server choice leave. */
 function matching(list, query, server) {
   const q = query.trim().toLowerCase();
-  return list.filter((t) => (!server || t.server === server)
-    && (!q || t.name.toLowerCase().includes(q) || t.server.toLowerCase().startsWith(q)
+  return list.filter((t) => (!server || t.server === server || (q && t.server.toLowerCase().includes(q)))
+    && (!q || t.name.toLowerCase().includes(q) || t.server.toLowerCase().includes(q)
       || (t.description ?? '').toLowerCase().includes(q)));
 }
 
