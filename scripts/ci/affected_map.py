@@ -192,6 +192,13 @@ def creation_tree(calls: list[tuple[str, str, int]]) -> tuple[dict[str, tuple[st
     return tree, reused
 
 
+def unknown_creation(call: str) -> bool:
+    """A creating call whose result is not a number (strace prints `= ?` when the creator was killed inside it):
+    a child may exist whose creator the trace cannot name."""
+    name = call.split("(", 1)[0]
+    return name in _CREATE and _CALL.match(call) is None
+
+
 def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     """Opens become files (a failed open a probe), folder reads dirs, the stat/access/readlink families probes.
     A relative path resolves against the call's directory descriptor (strace -y shows its path) or the process's
@@ -204,7 +211,8 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     access = Access()
     calls, dangling = _completed_calls(text.splitlines())
     creator, reused = creation_tree(calls)
-    access.ambiguous = reused or any(head.split("(", 1)[0] in _CREATE for head in dangling)
+    access.ambiguous = (reused or any(head.split("(", 1)[0] in _CREATE for head in dangling)
+                        or any(unknown_creation(call) for _pid, call, _start in calls))
     fs_of: dict[str, str] = {}  # pid -> the process whose working directory it uses (itself, or a CLONE_FS sharer)
     cwd_of: dict[str, str] = {}
     started: set[str] = set()
@@ -347,13 +355,30 @@ def results(output: str) -> tuple[int, int]:
     return int(passed), int(ignored)
 
 
-def unit_record(run: Run, tests: list[str], binary: str, extra_files: set[str], repo: str) -> dict:
-    """A unit as the map stores it, exactly UNIT_KEYS. Unmapped when the traced run failed or left no trace, when
-    its coverage is missing or a coverage tool failed, or when passed plus ignored differs from the tests it listed
-    (a failed listing never matches); a trace that names no repository file is normal."""
+def unmapped_reasons(run: Run, access: Access) -> list[str]:
+    """Why a unit is unmapped, each reason a fixed label (none: the unit is mapped). Counted per reason in the
+    merge's log, so the share of always-run units can be read by cause."""
+    reasons = []
+    if run.trace_text is None:
+        reasons.append("no trace")
+    elif run.trace_rc != 0:
+        reasons.append("traced run failed")
+    if not run.coverage_ok:
+        reasons.append("coverage")
+    if run.listed < 0:
+        reasons.append("listing failed")
+    elif run.passed + run.ignored != run.listed:
+        reasons.append("pass count")
+    if access.ambiguous:
+        reasons.append("ambiguous process tree")
+    return reasons
+
+
+def unit_record_and_reasons(run: Run, tests: list[str], binary: str, extra_files: set[str],
+                            repo: str) -> tuple[dict, list[str]]:
+    """The unit's record and why it is unmapped (see unit_record)."""
     access = parse_trace(run.trace_text, repo, repo) if run.trace_text is not None else Access()
-    unmapped = (run.trace_rc != 0 or run.trace_text is None or not run.coverage_ok or access.ambiguous
-                or run.passed + run.ignored != run.listed)
+    reasons = unmapped_reasons(run, access)
     return {
         "files": sorted(run.covered | access.files | extra_files),
         "dirs": sorted(access.dirs),
@@ -361,8 +386,16 @@ def unit_record(run: Run, tests: list[str], binary: str, extra_files: set[str], 
         "tests": sorted(tests),
         "seconds": round(run.seconds, 3),
         "binary": binary,
-        "unmapped": bool(unmapped),
-    }
+        "unmapped": bool(reasons),
+    }, reasons
+
+
+def unit_record(run: Run, tests: list[str], binary: str, extra_files: set[str], repo: str) -> dict:
+    """A unit as the map stores it, exactly UNIT_KEYS. Unmapped when the traced run failed or left no trace, when
+    its coverage is missing or a coverage tool failed, when its process tree is ambiguous, or when passed plus
+    ignored differs from the tests it listed (a failed listing never matches); a trace that names no repository
+    file is normal."""
+    return unit_record_and_reasons(run, tests, binary, extra_files, repo)[0]
 
 
 def map_document(sha: str, built_at: str, units: dict[str, dict]) -> dict:
@@ -502,11 +535,12 @@ def _lib_part(k: str, out: Path) -> dict:
     built = re.search(r"export-lib: (\S+) -> ", proc.stdout + proc.stderr)
     names = [line[: -len(": test")] for line in (out / "bin" / f"p{k}" / "list.txt").read_text().splitlines()
              if line.endswith(": test")]
-    units = {}
+    units, reasons = {}, {}
     for key, members in sorted(group(names, 2).items()):
         run = run_unit(str(binary), ["--exact", *members], len(members), str(out / "units" / key), [str(binary)])
-        units["lib:" + key] = unit_record(run, members, LIB_BINARY, set(), str(ROOT))
-    return {"part": f"lib-{k}", "binary": str(binary.relative_to(out)), "units": units,
+        units["lib:" + key], reasons["lib:" + key] = unit_record_and_reasons(run, members, LIB_BINARY, set(),
+                                                                             str(ROOT))
+    return {"part": f"lib-{k}", "binary": str(binary.relative_to(out)), "units": units, "unmapped_reasons": reasons,
             "extra_files": sorted(_depinfo(built.group(1)) if built else set())}
 
 
@@ -522,7 +556,7 @@ def _int_part(name: str, out: Path) -> dict:
     artifacts = _artifacts(proc.stdout.splitlines())
     shared = _workspace_inputs(_all_artifacts(proc.stdout.splitlines()))
     gateway = [a["executable"] for a in artifacts if "bin" in a["target"]["kind"] and not a["profile"]["test"]]
-    units = {}
+    units, reasons = {}, {}
     for art in artifacts:
         if not art["profile"]["test"]:
             continue
@@ -533,8 +567,9 @@ def _int_part(name: str, out: Path) -> dict:
         # A listing that failed never matches the pass count, so the unit is unmapped.
         run = run_unit(exe, [], -1 if listed is None else len(listed), str(out / "units" / label), [exe, *gateway])
         src = repo_key(art["target"]["src_path"], str(ROOT)) or art["target"]["name"]
-        units[label] = unit_record(run, listed or [], src, _depinfo(exe) | shared, str(ROOT))
-    return {"part": name, "binary": None, "units": units, "extra_files": []}
+        units[label], reasons[label] = unit_record_and_reasons(run, listed or [], src, _depinfo(exe) | shared,
+                                                               str(ROOT))
+    return {"part": name, "binary": None, "units": units, "unmapped_reasons": reasons, "extra_files": []}
 
 
 def parts() -> list[str]:
@@ -566,12 +601,14 @@ def merge(sha: str, part_dirs: list[str], out_dir: str, now: datetime | None = N
     parts = [(Path(d), json.loads((Path(d) / "part.json").read_text(encoding="utf-8"))) for d in part_dirs]
     total = sum(u["seconds"] for _, doc in parts for u in doc["units"].values() if u["binary"] == LIB_BINARY)
     units: dict[str, dict] = {}
+    why: dict[str, list[str]] = {}
     for where, doc in parts:
         extra = set(doc["extra_files"])
         for label, unit in doc["units"].items():
             single = len(unit["tests"]) == 1
             if unit["binary"] != LIB_BINARY or unit["seconds"] <= SPLIT_SHARE * total or single:
                 units[label] = {**unit, "files": sorted(set(unit["files"]) | extra)}
+                why[label] = doc.get("unmapped_reasons", {}).get(label, ["unknown"] if unit["unmapped"] else [])
                 continue
             binary = str(where / doc["binary"])
             key = label[len("lib:"):]
@@ -587,14 +624,28 @@ def merge(sha: str, part_dirs: list[str], out_dir: str, now: datetime | None = N
 
             for leaf in split_heavy(key, unit["tests"], len(key.split("::")), total, measure):
                 run, names = runs[leaf]
-                units["lib:" + leaf] = unit_record(run, names, LIB_BINARY, extra, str(ROOT))
+                units["lib:" + leaf], why["lib:" + leaf] = unit_record_and_reasons(run, names, LIB_BINARY, extra,
+                                                                                   str(ROOT))
     stamp = (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     doc = map_document(sha, stamp, units)
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     (Path(out_dir) / "affected-map.json").write_text(json.dumps(doc, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"affected_map: {len(units)} units, {sum(1 for u in units.values() if u['unmapped'])} unmapped, "
-          f"lib {total:.0f} s")
+    counts = reason_counts(why)
+    (Path(out_dir) / "unmapped-reasons.json").write_text(json.dumps(counts, sort_keys=True) + "\n", encoding="utf-8")
+    unmapped = sum(1 for u in units.values() if u["unmapped"])
+    print(f"affected_map: {len(units)} units, {unmapped} unmapped ({100 * unmapped / max(len(units), 1):.1f}%), "
+          f"lib {total:.0f} s; unmapped by reason: "
+          + (", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "none"))
     return 0
+
+
+def reason_counts(why: dict[str, list[str]]) -> dict[str, int]:
+    """How many units each unmapped reason covers (a unit with two reasons counts under both)."""
+    counts: dict[str, int] = {}
+    for reasons in why.values():
+        for reason in reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
 
 
 # ---- commands -----------------------------------------------------------------------------------------------------

@@ -128,6 +128,22 @@ class Units(unittest.TestCase):
     def test_missing_or_failed_coverage_is_unmapped(self) -> None:
         self.assertTrue(am.unit_record(run(coverage_ok=False), ["t1", "t2"], "b", set(), REPO)["unmapped"])
 
+    def test_each_unmapped_case_names_its_reason(self) -> None:
+        none = am.Access()
+        self.assertEqual(am.unmapped_reasons(run(), none), [])
+        self.assertEqual(am.unmapped_reasons(run(trace_text=None), none), ["no trace"])
+        self.assertEqual(am.unmapped_reasons(run(trace_rc=1), none), ["traced run failed"])
+        self.assertEqual(am.unmapped_reasons(run(coverage_ok=False), none), ["coverage"])
+        self.assertEqual(am.unmapped_reasons(run(listed=-1), none), ["listing failed"])
+        self.assertEqual(am.unmapped_reasons(run(passed=1), none), ["pass count"])
+        self.assertEqual(am.unmapped_reasons(run(), am.Access(ambiguous=True)), ["ambiguous process tree"])
+        self.assertEqual(am.unmapped_reasons(run(trace_rc=1, coverage_ok=False), none),
+                         ["traced run failed", "coverage"])
+
+    def test_reasons_are_counted_per_unit(self) -> None:
+        why = {"a": ["coverage"], "b": ["coverage", "pass count"], "c": []}
+        self.assertEqual(am.reason_counts(why), {"coverage": 2, "pass count": 1})
+
     def test_a_failed_listing_is_unmapped(self) -> None:
         self.assertTrue(am.unit_record(run(listed=-1), [], "b", set(), REPO)["unmapped"])
 
@@ -205,6 +221,8 @@ class Trace(unittest.TestCase):
         )
         got = self.parse(text)
         self.assertEqual(got.probes, {"tests/fixtures/a.json", "docs/guide.md", "tests/later.json"})
+        # The thread's chdir in a shared directory could race a copying creation: the unit is unmapped.
+        self.assertTrue(got.ambiguous)
 
     def test_a_child_acting_before_its_creation_returns_still_inherits(self) -> None:
         # strace -f may print the child's first call between the creator's unfinished clone and its resumption.
@@ -252,6 +270,15 @@ class Trace(unittest.TestCase):
         text = ('50 chdir("/w/repo/tests") = 0\n'
                 "50 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
                 '51 access("a.txt", F_OK) = 0\n')
+        self.assertTrue(self.parse(text).ambiguous)
+
+    def test_a_creation_whose_creator_was_killed_is_ambiguous(self) -> None:
+        # The creator dies inside clone: strace resumes it with `= ?`; its child's relative paths cannot be placed.
+        text = ('55 chdir("/w/repo/tests") = 0\n'
+                "55 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
+                '56 access("fixture.json", F_OK) = 0\n'
+                "55 <... clone resumed>) = ?\n"
+                "55 +++ killed by SIGKILL +++\n")
         self.assertTrue(self.parse(text).ambiguous)
 
     def test_a_reused_pid_is_ambiguous(self) -> None:
@@ -355,8 +382,9 @@ class Merge(unittest.TestCase):
             "binary": binary, "unmapped": False}
         part = {"part": "lib-1", "binary": "bin/p1/lib-tests-p1", "extra_files": ["fixtures/x.json"], "units": {
             "lib:a::b": unit(["a::b::x::t1", "a::b::x::t2", "a::b::y::t3"], 30.0),
-            "lib:c::d": unit(["c::d::t4"], 5.0),
-            "test:e2e": unit(["t5"], 50.0, binary="tests/e2e.rs")}}
+            "lib:c::d": {**unit(["c::d::t4"], 5.0), "unmapped": True},
+            "test:e2e": unit(["t5"], 50.0, binary="tests/e2e.rs")},
+            "unmapped_reasons": {"lib:c::d": ["coverage"], "lib:a::b": [], "test:e2e": []}}
         other = {"part": "lib-2", "binary": "bin/p2/lib-tests-p2", "extra_files": [], "units": {
             "lib:f::g": unit(["f::g::t6"], 65.0)}}
         seconds = {"a::b::x::t1": 4.0, "a::b::x::t2": 4.0, "a::b::y::t3": 3.0}
@@ -378,6 +406,8 @@ class Merge(unittest.TestCase):
             finally:
                 am.run_unit = saved
             doc = __import__("json").loads(Path(tmp, "out", "affected-map.json").read_text())
+            reasons = __import__("json").loads(Path(tmp, "out", "unmapped-reasons.json").read_text())
+        self.assertEqual(reasons, {"coverage": 1})
         # lib total = 30 + 5 + 65 = 100 s: a::b (30%) splits into x (8%) and y (3%); f::g (65%) is one test, kept.
         self.assertEqual(set(doc["units"]), {"lib:a::b::x", "lib:a::b::y", "lib:c::d", "lib:f::g", "test:e2e"})
         self.assertEqual(sorted(t for u in doc["units"].values() for t in u["tests"]),
@@ -433,6 +463,8 @@ def _mutants() -> list[tuple[str, str, dict]]:
     """(name, the row class that must fail, the module attributes the mutant replaces). Each patch keeps the
     original's signature, so only the behaviour the row guards changes."""
     real_tree = am.creation_tree
+    real_reasons = am.unmapped_reasons
+    real_counts = am.reason_counts
     real = {name: getattr(am, name) for name in (
         "split_heavy", "unit_record", "parse_trace", "depinfo_inputs", "group", "repo_key", "_completed_calls",
         "should_build", "lcov_files", "results", "map_document", "unit_env", "artifact_depinfo_path")}
@@ -528,6 +560,11 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M2 the merge never splits deeper", "Merge", {"SPLIT_SHARE": 1.0}),
         ("M5 the creation tree not read", "Trace", {"creation_tree": lambda calls: ({}, False)}),
         ("M5 an ambiguous trace kept mapped", "Trace", {"unit_record": ambiguity_ignored}),
+        ("M5 a killed creator's `= ?` not seen", "Trace", {"unknown_creation": lambda call: False}),
+        ("M3 the coverage reason dropped", "Units",
+         {"unmapped_reasons": lambda r, acc: [x for x in real_reasons(r, acc) if x != "coverage"]}),
+        ("M3 only a unit's first reason counted", "Units",
+         {"reason_counts": lambda why: real_counts({k: v[:1] for k, v in why.items()})}),
         ("M5 pid reuse not seen", "Trace",
          {"creation_tree": lambda calls: (real_tree(calls)[0], False)}),
     ]
