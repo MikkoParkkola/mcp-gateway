@@ -12,11 +12,17 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::AppState;
-use super::overview_sources_tests::{calls, record, register, timed, with_store};
-use super::overview_tests::{ADMIN_KEY, fixture, get, overview};
+use super::overview_sources_tests::register;
+#[cfg(feature = "cost-governance")]
+use super::overview_sources_tests::{record, timed, with_store};
+#[cfg(feature = "cost-governance")]
+use super::overview_tests::{ADMIN_KEY, get};
+use super::overview_tests::{fixture, overview};
 use crate::backend::Backend;
+#[cfg(feature = "cost-governance")]
 use crate::clock::test_clock;
 use crate::config::{BackendConfig, FailsafeConfig};
+#[cfg(feature = "cost-governance")]
 use crate::counters::{CounterStore, MarkerKind, Tally};
 
 /// A reload refused with no backend named and no parser line.

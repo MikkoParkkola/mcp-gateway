@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `GET /ui/api/overview` rows S1-S13: the call totals, server ranking, top
-//! flows, chart markers, last-hour latency, server state and the
-//! invalid-config and refused rows. Every counter row pins the clock to 2026-06-15T12:00:00Z (a date
+//! `GET /ui/api/overview`'s counter rows: the call totals, server ranking,
+//! top flows, chart markers, last-hour latency, server state, the counter
+//! fields' absence and degradation, and the store's read count. The needs-you
+//! rows live in overview_needs_you_tests.rs. Every counter row pins the clock to 2026-06-15T12:00:00Z (a date
 //! with no daylight-saving change) and records calls relative to it. The
 //! clock seam is per thread, so each row runs on a current-thread runtime.
 
@@ -52,7 +53,7 @@ pub(super) fn timed(store: &CounterStore, server: &str, at: u64, ms: u64) {
 }
 
 /// `count` plain calls to `server` just before the pinned instant.
-pub(super) fn calls(store: &CounterStore, server: &str, count: u64) {
+fn calls(store: &CounterStore, server: &str, count: u64) {
     for _ in 0..count {
         record(store, "key:a", server, NOW - 600, Tally::default());
     }
