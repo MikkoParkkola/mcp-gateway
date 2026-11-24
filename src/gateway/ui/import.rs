@@ -23,7 +23,7 @@ use serde_json::json;
 
 use super::super::router::AppState;
 use super::capabilities::find_capability_file;
-use super::errors::flat_error;
+use super::errors::{CAPABILITIES_OFF, DIGEST_REQUIRED, DOCUMENT_CHANGED, flat_error};
 use super::guard::Guard;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
 use crate::security::validate_url_not_ssrf;
@@ -41,6 +41,18 @@ pub struct ImportRequest {
     /// Subset of tool names to import. `None` means "import all".
     /// Only used by the write endpoint; ignored by preview.
     pub selected_tools: Option<Vec<String>>,
+    /// What the preview answered as `digest`. An import from a `url` must
+    /// send it; with an inline `spec` it is checked only if present. The
+    /// preview ignores it.
+    pub digest: Option<String>,
+}
+
+/// Hex-encoded (lowercase) SHA-256 of the text the parser is given. Two
+/// equal digests mean the same text, and conversion depends on the text
+/// alone, so an import carrying the preview's digest writes what was shown.
+fn document_digest(text: &str) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(text.as_bytes()))
 }
 
 /// One tool entry returned by the preview endpoint.
@@ -66,8 +78,12 @@ pub struct ToolPreview {
 /// Response from `POST /ui/api/import/openapi/preview`.
 #[derive(Debug, Serialize)]
 pub struct PreviewResponse {
+    /// The block a server preview carries too.
+    pub preview: serde_json::Value,
     /// List of tools that would be generated from the spec.
     pub tools: Vec<ToolPreview>,
+    /// The previewed text's digest, for the import to send back.
+    pub digest: String,
 }
 
 /// Response from `POST /ui/api/import/openapi`.
@@ -98,12 +114,18 @@ pub fn import_router() -> Router<Arc<AppState>> {
 /// existing [`OpenApiConverter`], and returns the list of would-be tools.
 /// No files are written.
 async fn preview_handler(
+    State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     guard: Guard,
     Json(body): Json<ImportRequest>,
 ) -> impl IntoResponse {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
+    }
+    // After admission, so a caller who may not use the route learns nothing
+    // about the setting; before any fetch.
+    if state.capability_dirs.is_empty() {
+        return flat_error(StatusCode::CONFLICT, CAPABILITIES_OFF.to_string()).into_response();
     }
 
     let spec_content = match resolve_spec(&generation, &body).await {
@@ -132,11 +154,12 @@ async fn preview_handler(
         "package": null,
     });
 
-    (
-        StatusCode::OK,
-        Json(json!({"preview": preview, "tools": tools})),
-    )
-        .into_response()
+    let answer = PreviewResponse {
+        preview,
+        tools,
+        digest: document_digest(&spec_content),
+    };
+    (StatusCode::OK, Json(answer)).into_response()
 }
 
 /// `POST /ui/api/import/openapi`
@@ -155,12 +178,15 @@ async fn import_handler(
         return refused.into_response();
     }
 
-    // Determine output directory — use first configured cap dir, fall back to "capabilities".
-    let output_dir = state
-        .capability_dirs
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "capabilities".to_string());
+    // Everything below runs before anything is written. No capability
+    // directory: nothing would load what is written, so nothing is.
+    let Some(output_dir) = state.capability_dirs.first().cloned() else {
+        return flat_error(StatusCode::CONFLICT, CAPABILITIES_OFF.to_string()).into_response();
+    };
+    let sent = body.digest.as_deref().filter(|d| !d.trim().is_empty());
+    if body.url.is_some() && sent.is_none() {
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, DIGEST_REQUIRED).into_response();
+    }
 
     let spec_content = match resolve_spec(&generation, &body).await {
         Ok(s) => s,
@@ -168,6 +194,10 @@ async fn import_handler(
             return flat_error(status, msg).into_response();
         }
     };
+    // The text fetched now must be the text previewed.
+    if sent.is_some_and(|digest| digest != document_digest(&spec_content)) {
+        return flat_error(StatusCode::CONFLICT, DOCUMENT_CHANGED.to_string()).into_response();
+    }
 
     let caps = match parse_spec(&spec_content) {
         Ok(c) => c,
@@ -602,6 +632,7 @@ paths:
             url: None,
             spec: Some("   ".to_string()),
             selected_tools: None,
+            digest: None,
         };
         // We cannot easily construct AppState in unit tests, so we test the
         // validation branch via the public helper directly.
