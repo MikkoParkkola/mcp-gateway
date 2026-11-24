@@ -15,6 +15,15 @@ const LATE: Sent = Sent::SkipLate {
 const EARLY: Sent = Sent::SkipLate {
     late: Duration::ZERO,
 };
+/// The threshold's two sides, as literals: the slack is 6 s - 5 s - 0.1 s.
+const JUST_OVER: Sent = Sent::SkipLate {
+    // limit-under-test (injected-clock): a recorded lateness handed straight to the pure judge
+    late: Duration::from_millis(901),
+};
+const AT_THRESHOLD: Sent = Sent::SkipLate {
+    // limit-under-test (injected-clock): a recorded lateness handed straight to the pure judge
+    late: Duration::from_millis(900),
+};
 
 /// `judge` on each shape: `None` must pass, `Some(reason)` must be refused
 /// with a message containing `reason`.
@@ -44,12 +53,22 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
             (&[LATE, LATE, Kill, Kill], None),
             (&[Term, KillGone], None),
             (&[Term, KillGone, KillGone], None),
+            (&[Term, KillGone, Kill], None),
             (&[Term, Kill, KillGone], None),
+            (&[Term, Kill, KillGone, KillGone], None),
             (&[LATE, KillGone], None),
+            (&[JUST_OVER, Kill], None),
+            (&[AT_THRESHOLD, Kill], Some("under the")),
+            (&[JUST_OVER, KillGone], None),
+            (&[AT_THRESHOLD, KillGone], Some("under the")),
             (&[Term, FAILED], Some("a kill failed")),
             (&[Term, FAILED, KillGone], Some("a kill failed")),
             (&[KillGone, Term, KillGone], Some("not one SIGTERM")),
             (&[Kill], Some("no recorded reason")),
+            (&[KillGone], Some("no recorded reason")),
+            (&[LeaderGone, KillGone], Some("leader was already gone")),
+            (&[LATE, Term, Kill], Some("not one SIGTERM")),
+            (&[LeaderGone, Term, Kill], Some("not one SIGTERM")),
             (&[Unproven, Kill], Some("ownership was not shown")),
             (&[Unproven, LATE, Kill], Some("ownership was not shown")),
             (&[LeaderGone, Kill], Some("leader was already gone")),
@@ -60,31 +79,6 @@ fn the_live_rule_accepts_sigterm_then_kill_or_a_justified_late_skip_only() {
             (&[Term, Kill, Term], Some("not one SIGTERM")),
             (&[Term], Some("not one SIGTERM")),
             (&[LATE], Some("no kill after the skip")),
-        ],
-    );
-}
-
-#[test]
-fn the_strict_rule_accepts_the_normal_path_only() {
-    use Sent::{Kill, KillGone, LeaderGone, Term, Unproven};
-    check(
-        judge_strict,
-        &[
-            (&[Term, Kill], None),
-            (&[Unproven, Term, Kill], None),
-            (&[LATE, Kill], Some("not one SIGTERM")),
-            (&[LATE, Term, Kill], Some("not one SIGTERM")),
-            (&[LeaderGone, Term, Kill], Some("not one SIGTERM")),
-            (&[Kill], Some("not one SIGTERM")),
-            (&[Term, KillGone], None),
-            (&[Term, KillGone, Kill], None),
-            (&[Term, Kill, KillGone], None),
-            (&[Term, Kill, KillGone, KillGone], None),
-            (&[KillGone], Some("not one SIGTERM")),
-            (&[LATE, KillGone], Some("not one SIGTERM")),
-            (&[LeaderGone, KillGone], Some("not one SIGTERM")),
-            (&[Term, FAILED], Some("a kill failed")),
-            (&[Term, FAILED, KillGone], Some("a kill failed")),
         ],
     );
 }
