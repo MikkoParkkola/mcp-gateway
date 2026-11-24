@@ -210,6 +210,12 @@ async fn t10b_a_busy_refusal_publishes_nothing_and_the_retry_applies() {
 async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("gateway.yaml");
+    // The watcher's reload takes the config lock on a thread that can outlive
+    // this test; only a kept dir waits for it (`crate::spawn_keep`).
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&config_path).is_empty(),
+        "W: the test's dir is kept"
+    );
     crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default())
         .expect("write config");
     let grants_path = dir.path().join("grants.json");
