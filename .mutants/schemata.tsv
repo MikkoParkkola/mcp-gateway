@@ -1,0 +1,13 @@
+head_sha	61a9e3f82ac67a7f7479f87c155a240e610ab4ca
+#mutant of-reg
+mcp_gateway	gateway::ui::status::tests::a_switched_off_server_is_listed_off_with_null_live_figures	src/gateway/ui/status_tests.rs:164
+mcp_gateway	gateway::router::ui_stream_tests::off_servers::a_server_a_reload_switches_off_stays_in_the_next_status_frame	src/gateway/router/ui_stream_tests/off_servers.rs:84
+#mutant of-cb
+mcp_gateway	gateway::ui::status::tests::a_switched_off_server_is_listed_off_with_null_live_figures	src/gateway/ui/status_tests.rs:212
+mcp_gateway	gateway::router::ui_stream_tests::off_servers::a_server_a_reload_switches_off_stays_in_the_next_status_frame	src/gateway/router/ui_stream_tests/off_servers.rs:88
+#mutant of-def
+mcp_gateway	gateway::ui::status::tests::a_switched_off_server_is_listed_off_with_null_live_figures	src/gateway/ui/status_tests.rs:190
+#mutant of-sort
+mcp_gateway	gateway::router::ui_stream_tests::off_servers::off_rows_keep_name_order_so_a_new_map_order_sends_no_frame	src/gateway/router/ui_stream_tests/off_servers.rs:102
+#mutant of-dup
+mcp_gateway	gateway::ui::status::tests::a_switched_off_entry_still_running_is_listed_once	src/gateway/ui/status_tests.rs:238
