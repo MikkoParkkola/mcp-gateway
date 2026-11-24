@@ -10,7 +10,7 @@
 // under the button, its restart block from the shell's restartAdvice(). Status
 // is the rest of this page and stays undrawn until it is built. Every
 // server-supplied string goes in with textContent.
-import { register, render, restartAdvice, el as h } from '/ui/assets/shell.250be1879d1f.js';
+import { register, render, restartAdvice, el as h } from '/ui/assets/shell.60857ec1239d.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
@@ -128,7 +128,7 @@ function refusedLines(err) {
 }
 
 /** What is said for drawn lines: each line's text, never the start command. */
-const spoken = (lines) => lines.flatMap((n) => (n.classList.contains('restart')
+const spoken = (lines) => lines.flatMap((n) => (n.classList.contains('restart-advice')
   ? [...n.querySelectorAll('p > span:not(.glyph)')] : [n])).map((n) => n.textContent);
 
 async function reloadTab(body, ctx) {

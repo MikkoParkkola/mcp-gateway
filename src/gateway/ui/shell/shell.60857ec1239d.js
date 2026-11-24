@@ -347,8 +347,9 @@ export function serverBanner(server) {
 }
 
 /**
- * The restart block for an answer carrying the gateway's restart keys, the one
- * place they are drawn (a reload's outcome and any settings save import it):
+ * The restart block for an answer carrying the gateway's restart keys, shared by
+ * a reload's outcome and the settings save. restartBanner (the waiting-keys
+ * banner below) still draws the same keys itself until the two are unified:
  * `start_refusal` alone as a warning; else `restart_advice` as a waiting line,
  * with `start_command` as one code line that selects whole when it came too.
  * null when the answer has neither a refusal nor advice. Text only.
@@ -358,10 +359,10 @@ export function restartAdvice(answer) {
   const line = (tone, glyph, text) => el('p', { 'data-tone': tone },
     el('span', { class: 'glyph', 'aria-hidden': 'true' }, glyph), ' ', el('span', {}, text));
   if (given(answer?.start_refusal)) {
-    return el('div', { class: 'restart', 'data-kind': 'refusal' }, line('warning', '⚠', answer.start_refusal));
+    return el('div', { class: 'restart-advice', 'data-kind': 'refusal' }, line('warning', '⚠', answer.start_refusal));
   }
   if (!given(answer?.restart_advice)) return null;
-  const node = el('div', { class: 'restart', 'data-kind': 'advice' }, line('waiting', '↻', answer.restart_advice));
+  const node = el('div', { class: 'restart-advice', 'data-kind': 'advice' }, line('waiting', '↻', answer.restart_advice));
   if (given(answer.start_command)) node.append(el('code', { class: 'start-command' }, answer.start_command));
   return node;
 }

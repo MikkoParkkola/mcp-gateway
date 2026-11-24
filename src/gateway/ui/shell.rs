@@ -29,8 +29,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.44b9dbf30ac6.js",
-        include_bytes!("shell/activity.44b9dbf30ac6.js"),
+        "activity.8f3c33050a26.js",
+        include_bytes!("shell/activity.8f3c33050a26.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -49,8 +49,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "gateway.7dda73f6a984.js",
-        include_bytes!("shell/gateway.7dda73f6a984.js"),
+        "gateway.69167896a48b.js",
+        include_bytes!("shell/gateway.69167896a48b.js"),
     ),
     (
         "gateway.896c5131000b.css",
@@ -61,24 +61,24 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.2fad790d5b99.js",
-        include_bytes!("shell/overview.2fad790d5b99.js"),
+        "overview.f2a4b89873f3.js",
+        include_bytes!("shell/overview.f2a4b89873f3.js"),
     ),
     (
-        "servers.7fe37e5bcf38.js",
-        include_bytes!("shell/servers.7fe37e5bcf38.js"),
+        "servers.065e64e6dc59.js",
+        include_bytes!("shell/servers.065e64e6dc59.js"),
     ),
     (
         "servers.a2711ee29891.css",
         include_bytes!("shell/servers.a2711ee29891.css"),
     ),
     (
-        "shell.250be1879d1f.js",
-        include_bytes!("shell/shell.250be1879d1f.js"),
+        "shell.41809b035384.css",
+        include_bytes!("shell/shell.41809b035384.css"),
     ),
     (
-        "shell.bbcc19c66a12.css",
-        include_bytes!("shell/shell.bbcc19c66a12.css"),
+        "shell.60857ec1239d.js",
+        include_bytes!("shell/shell.60857ec1239d.js"),
     ),
     (
         "shell.nojs.4e34f233c1ba.css",
@@ -93,8 +93,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
     ),
     (
-        "tools.97e2baa735ed.js",
-        include_bytes!("shell/tools.97e2baa735ed.js"),
+        "tools.d79c596dafec.js",
+        include_bytes!("shell/tools.d79c596dafec.js"),
     ),
     (
         "tooltip.5251c22696fd.css",

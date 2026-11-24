@@ -124,7 +124,7 @@ const lines = (page) => section(page).locator('.reload-outcome').evaluate((slot)
   for (const g of bare.querySelectorAll('.glyph')) g.remove();
   return {
     tag: n.tagName.toLowerCase(),
-    line: n.dataset.line ?? n.closest('.restart')?.dataset.kind ?? null,
+    line: n.dataset.line ?? n.closest('.restart-advice')?.dataset.kind ?? null,
     tone: n.dataset.tone ?? null,
     glyph: n.querySelector('.glyph')?.textContent ?? null,
     text: bare.textContent.trim(),
@@ -222,7 +222,7 @@ test('R-OK-CHANGES: an applied reload shows the gateway\'s summary; prose about 
   await settled(page, OK_LINES);
   await press(page);
   await settled(page, [head(RELOADED), changes(ADDR)]);
-  await expect(section(page).locator('.restart')).toHaveCount(0);
+  await expect(section(page).locator('.restart-advice')).toHaveCount(0);
   await expect(page.locator('dialog')).toHaveCount(0);
   expect(await saidSince(page, from)).toEqual([OK_SAID, `${RELOADED} ${ADDR}.`]);
 });
