@@ -422,3 +422,50 @@ fn the_writer_seams_are_compiled_out_of_production() {
         }
     }
 }
+
+/// The premise a replace relies on to drop its journal without restoring
+/// after a write error: `write_atomic` fails only before its rename. Each
+/// path ends in the step holding the rename, and after the rename's own
+/// error arm nothing can return an error.
+#[test]
+fn nothing_fallible_follows_the_writers_rename() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let body = |file: &str, start: &str| {
+        let raw = std::fs::read_to_string(root.join(file)).expect("read the writer");
+        let from = raw.find(start).expect("the function");
+        let len = raw[from..].find("\n}\n").expect("its end");
+        raw[from..from + len].to_owned()
+    };
+    for (file, start, tail) in [
+        (
+            "config_persistence_atomic.rs",
+            "fn write_atomic_observed(",
+            "write_at(&target, bytes, mode, observe, check)",
+        ),
+        (
+            "config_persistence_atomic_unix.rs",
+            "pub(super) fn write(",
+            "finish(&save, file, filled, bytes)",
+        ),
+    ] {
+        assert!(
+            body(file, start).trim_end().ends_with(tail),
+            "{file}: `{start}` no longer ends in `{tail}`"
+        );
+    }
+    for (file, start) in [
+        ("config_persistence_atomic_unix.rs", "fn finish("),
+        ("config_persistence_atomic.rs", "fn write_at("),
+    ] {
+        let body = body(file, start);
+        let after = &body[body.find("rename_with_retry(").expect("the rename")..];
+        let arm = "return Err(e);";
+        let after = &after[after.find(arm).expect("the rename's error arm") + arm.len()..];
+        for fallible in ["?", "Err(", "return"] {
+            assert!(
+                !after.contains(fallible),
+                "{file}: `{fallible}` after the rename in `{start}`: {after}"
+            );
+        }
+    }
+}
