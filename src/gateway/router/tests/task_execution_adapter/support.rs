@@ -485,13 +485,31 @@ pub(super) async fn on_paused_clock<T>(wait: impl std::future::Future<Output = T
 /// Drain the executor and require every worker to have finished within
 /// [`JOIN_BOUND`] of tokio time, on whatever clock the row runs.
 pub(super) async fn drain_clean(state: &Arc<AppState>) {
-    let outcome = state.task_executor.drain(JOIN_BOUND).await;
-    std::assert!(outcome.is_clean(), "the worker must finish: {outcome:?}");
+    let outcome = state
+        .task_executor
+        .drain(mutant!(
+            "m3",
+            std::time::Duration::from_secs(60),
+            mutant!("m3b", std::time::Duration::from_secs(8), JOIN_BOUND)
+        ))
+        .await;
+    std::assert!(
+        mutant!("m2", true, outcome.is_clean()),
+        "the worker must finish: {outcome:?}"
+    );
 }
 
 /// [`drain_clean`] on a paused clock, for rows that run on the real one.
 pub(super) async fn join_workers(state: &Arc<AppState>) {
-    on_paused_clock(drain_clean(state)).await;
+    mutant!(
+        "m3",
+        drain_clean(state).await,
+        mutant!(
+            "m3b",
+            drain_clean(state).await,
+            on_paused_clock(drain_clean(state)).await
+        )
+    );
 }
 
 /// Poll `tasks/get` until the task is terminal, bounded by a deadline.

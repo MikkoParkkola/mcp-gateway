@@ -366,7 +366,7 @@ impl Fixture {
             join_workers(&self.state).await;
         }
         before(self);
-        self.recovery.release_all();
+        mutant!("m1", (), self.recovery.release_all());
         if matches!(path, Path::Worker) {
             join_workers(&self.state).await;
         }

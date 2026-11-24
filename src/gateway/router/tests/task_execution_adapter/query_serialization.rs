@@ -48,6 +48,15 @@ use crate::gateway::task_service::{
     CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
+// Mutant M7: this module's joins stay on the real clock while the rest move.
+async fn join_workers(state: &Arc<AppState>) {
+    mutant!(
+        "m7",
+        drain_clean(state).await,
+        super::support::join_workers(state).await
+    );
+}
+
 /// R2h (MIK-8202 P4a): a read queued behind a worker's dark-clock settle.
 mod dark_clock_settle;
 
@@ -284,17 +293,14 @@ impl BarrierRecovery {
     /// Wait until at least `count` queries have entered the adapter.
     async fn wait_for_queries(&self, count: usize) {
         let adapter = self;
-        let arrived = on_paused_clock(crate::test_wait::wait_until(
-            ARRIVAL_BOUND,
-            move || async move {
-                if adapter.queries() >= count {
-                    std::ops::ControlFlow::Break(())
-                } else {
-                    std::ops::ControlFlow::Continue(String::new())
-                }
-            },
-        ))
-        .await;
+        let poll = crate::test_wait::wait_until(ARRIVAL_BOUND, move || async move {
+            if adapter.queries() >= count {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(String::new())
+            }
+        });
+        let arrived = mutant!("m8", poll.await, on_paused_clock(poll).await);
         assert!(
             arrived.is_ok(),
             "only {} upstream queries entered the adapter in {ARRIVAL_BOUND:?}; \
@@ -311,17 +317,14 @@ impl BarrierRecovery {
     /// row can tell those two apart.
     async fn wait_for_claims_after(&self, seen: usize) {
         let adapter = self;
-        let reached = on_paused_clock(crate::test_wait::wait_until(
-            ARRIVAL_BOUND,
-            move || async move {
-                if adapter.claims_seen() > seen {
-                    std::ops::ControlFlow::Break(())
-                } else {
-                    std::ops::ControlFlow::Continue(String::new())
-                }
-            },
-        ))
-        .await;
+        let poll = crate::test_wait::wait_until(ARRIVAL_BOUND, move || async move {
+            if adapter.claims_seen() > seen {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(String::new())
+            }
+        });
+        let reached = mutant!("m11", poll.await, on_paused_clock(poll).await);
         assert!(
             reached.is_ok(),
             "no recovery read reached the adapter's trust check in {ARRIVAL_BOUND:?}; \
@@ -627,7 +630,7 @@ async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
     adapter.release_all();
     let fetched = reader.await.expect("the owner's read must answer");
     // This row's clock is already paused, so it drains directly.
-    drain_clean(&state).await;
+    mutant!("m6", join_workers(&state).await, drain_clean(&state).await);
 
     std::assert_eq!(
         status_of(&fetched),

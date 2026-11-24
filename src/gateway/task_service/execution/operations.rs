@@ -283,7 +283,7 @@ impl TaskExecutor {
         let join = async {
             self.handoffs.join().await;
             let mut held = Vec::with_capacity(self.max_workers);
-            for _ in 0..self.max_workers {
+            for _ in 0..mutant!("m5", self.max_workers - 1, self.max_workers) {
                 let permit = self
                     .workers
                     .clone()
