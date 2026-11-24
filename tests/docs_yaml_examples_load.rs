@@ -32,16 +32,41 @@ const REFUSED: &str = "# example: refused";
 /// The line that marks a block that is some other file, never loaded.
 const NOT_GATEWAY: &str = "# example: not gateway.yaml";
 
-/// An API key digest's form: `sha256:` and 64 lowercase hex characters.
-const DIGEST: &str = "sha256:abababababababababababababababababababababababababababababababab";
+/// The form the loader checks a variable's value for, by the key it sits under.
+/// The docs that use these are right as written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// `sha256:` and 64 lowercase hex characters (`key_sha256`).
+    Digest,
+    /// Standard base64 of a 32-byte seed (`signing_key`).
+    Seed,
+    /// Anything else: base64 of 32 bytes as well, so a key the operator names
+    /// (an accounts `keys` entry) loads, and still an opaque token or secret.
+    Plain,
+}
 
-/// A chain signing key's form: standard base64 of a 32-byte seed.
-const SEED: &str = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=";
+impl Shape {
+    fn of(key: &str) -> Self {
+        match key {
+            "key_sha256" | "previous_key_sha256" => Self::Digest,
+            "signing_key" => Self::Seed,
+            _ => Self::Plain,
+        }
+    }
 
-/// Any other variable's value: base64 of 32 bytes, so a key the operator
-/// names (an accounts `keys` entry, read as a 32-byte key) loads too, and still
-/// an opaque string where a token or secret goes.
-const PLACEHOLDER: &str = "ZG9jcy1leGFtcGxlLXBsYWNlaG9sZGVyLTAxMjM0NTY=";
+    /// The value of a block's `n`th variable. No two are equal: the loader
+    /// refuses two API keys with one principal (a digest's first 48 bits, so
+    /// `n` leads it) and a secret reused as another.
+    fn value(self, n: usize) -> String {
+        use base64::Engine as _;
+        let base64 = |text: String| base64::engine::general_purpose::STANDARD.encode(text);
+        match self {
+            Self::Digest => format!("sha256:{n:012x}{}", "ab".repeat(26)),
+            Self::Seed => base64(format!("docs-example-signing-seed-{n:06}")),
+            Self::Plain => base64(format!("docs-example-placeholder-{n:07}")),
+        }
+    }
+}
 
 /// One fenced block: the `file:line` of its opening fence, and its text.
 #[derive(Debug, PartialEq)]
@@ -108,20 +133,9 @@ fn load(yaml: &str) -> mcp_gateway::Result<Config> {
     Config::load(Some(&path))
 }
 
-/// The value for a variable referenced under `key`. The loader checks the
-/// form of a digest and of a seed, so those get that form; the docs that use
-/// them are right as written.
-fn placeholder(key: &str) -> &'static str {
-    match key {
-        "key_sha256" | "previous_key_sha256" => DIGEST,
-        "signing_key" => SEED,
-        _ => PLACEHOLDER,
-    }
-}
-
 /// Each variable `text` names (`${NAME}`, with or without a default, and
-/// `env:NAME`) with its value, by the key on the reference's line.
-fn env_values(text: &str) -> BTreeMap<String, &'static str> {
+/// `env:NAME`) with its value, shaped by the key on its first reference's line.
+fn env_values(text: &str) -> BTreeMap<String, String> {
     let name =
         Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)|env:([A-Za-z_][A-Za-z0-9_]*)").expect("regex");
     let mut values = BTreeMap::new();
@@ -133,7 +147,10 @@ fn env_values(text: &str) -> BTreeMap<String, &'static str> {
                 .get(1)
                 .or_else(|| found.get(2))
                 .expect("one group matched");
-            values.insert(var.as_str().to_owned(), placeholder(key));
+            let n = values.len();
+            values
+                .entry(var.as_str().to_owned())
+                .or_insert_with(|| Shape::of(key).value(n));
         }
     }
     values
@@ -323,15 +340,19 @@ fn a_digest_reference_gets_a_digest() {
     let text = "auth:\n  api_keys:\n    - name: a\n      key_sha256: env:DOCS_GUARD_A\n      \
                 previous_key_sha256: \"env:DOCS_GUARD_B\"\n";
     let values = env_values(text);
-    assert_eq!(values["DOCS_GUARD_A"], DIGEST);
-    assert_eq!(values["DOCS_GUARD_B"], DIGEST);
-    let hex = DIGEST.strip_prefix("sha256:").expect("prefix");
-    assert!(
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    );
+    let (a, b) = (&values["DOCS_GUARD_A"], &values["DOCS_GUARD_B"]);
+    for digest in [a, b] {
+        let hex = digest.strip_prefix("sha256:").expect("prefix");
+        assert!(
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{digest}"
+        );
+    }
+    // Two keys with one principal (the first 48 bits) are refused.
+    assert_ne!(a[..7 + 12], b[..7 + 12]);
     let key = "auth:\n  enabled: true\n  api_keys:\n    - name: a\n      key_sha256: env:DOCS_GUARD_A\n      \
                backends: [\"*\"]\n";
     load(key).expect_err("refused while the variable is unset");
@@ -344,18 +365,26 @@ fn a_signing_key_reference_gets_a_seed() {
     use base64::Engine as _;
     let values =
         env_values("security:\n  signature_chain:\n    signing_key: \"${DOCS_GUARD_SEED}\"\n");
-    assert_eq!(values["DOCS_GUARD_SEED"], SEED);
     let seed = base64::engine::general_purpose::STANDARD
-        .decode(SEED)
+        .decode(&values["DOCS_GUARD_SEED"])
         .expect("base64");
     assert_eq!(seed.len(), 32);
 }
 
-/// Any other reference gets the plain placeholder.
+/// Any other reference gets a 32-byte base64 value, a different one for each
+/// variable, so a secret never equals another (the loader refuses reuse).
 #[test]
-fn any_other_reference_gets_the_placeholder() {
-    let values = env_values(ENV_EXAMPLE);
-    assert_eq!(values["DOCS_YAML_GUARD_FIXTURE_TOKEN"], PLACEHOLDER);
+fn any_other_reference_gets_its_own_placeholder() {
+    use base64::Engine as _;
+    let values = env_values("a: ${DOCS_GUARD_P}\nb: env:DOCS_GUARD_Q\nc: ${DOCS_GUARD_P}\n");
+    assert_eq!(values.len(), 2);
+    assert_ne!(values["DOCS_GUARD_P"], values["DOCS_GUARD_Q"]);
+    for value in values.values() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .expect("base64");
+        assert_eq!(bytes.len(), 32, "{value}");
+    }
 }
 
 /// A block's own `env_files` gives way to the guard's file.
