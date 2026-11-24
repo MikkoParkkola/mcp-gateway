@@ -593,3 +593,17 @@ pub(super) fn observe_dispatched(state: &Arc<AppState>) -> (Arc<HoldObserver>, H
         },
     )
 }
+
+/// Run a join that must fail and return its panic message.
+///
+/// A join that returns instead fails here, at a line of its own: a row built
+/// on `should_panic` would fail with no panic location at all.
+pub(super) async fn join_panic(join: impl std::future::Future<Output = ()>) -> String {
+    use futures::FutureExt as _;
+    let joined = std::panic::AssertUnwindSafe(join).catch_unwind().await;
+    let payload = joined.expect_err("a worker that is never released must fail the join");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("the join panics with a formatted message")
+}
