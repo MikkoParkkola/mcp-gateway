@@ -438,7 +438,7 @@ test('R-KEY: Enter and Space on the button each reload once', async ({ page }) =
   expect(await saidSince(page, from)).toEqual([OK_SAID, OK_SAID]);
 });
 
-test('R-ADVICE-FN: the shell exports restartAdvice, the one renderer of the restart keys', async ({ page }) => {
+test('R-ADVICE-FN: the shell exports restartAdvice, the shared renderer of the restart keys', async ({ page }) => {
   await reloadScreen(page, [CLASS2]);
   await open(page);
   const got = await page.evaluate(async (url) => {
