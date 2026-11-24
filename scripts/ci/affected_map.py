@@ -45,6 +45,8 @@ TRACE_CALLS = (
     "openat", "openat2", "open", "creat", "getdents64", "chdir", "fchdir",
     "stat", "lstat", "newfstatat", "fstatat64", "statx", "access", "faccessat", "faccessat2",
     "readlink", "readlinkat",
+    # A new process starts in its parent's working directory; a thread (CLONE_FS) shares it.
+    "clone", "clone3", "fork", "vfork",
 )
 UNIT_KEYS = ("files", "dirs", "probes", "tests", "seconds", "binary", "unmapped")
 MAP_KEYS = ("map_sha", "built_at", "units")
@@ -98,7 +100,8 @@ def split_heavy(prefix: str, members: list[str], depth: int, total: float,
     while pending:
         key, names, d = pending.pop()
         seconds = measure(key, names)
-        single = len(names) == 1 and names[0] == key
+        # One test cannot be split, whatever its group is called: re-running it would only spend time.
+        single = len(names) == 1
         if seconds > share * total and not single:
             pending.extend((k, v, d + 1) for k, v in group(names, d + 1).items())
         else:
@@ -164,21 +167,35 @@ def repo_key(path: str, repo: str) -> str | None:
 def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     """Opens become files (a failed open a probe), folder reads dirs, the stat/access/readlink families probes.
     A relative path resolves against the call's directory descriptor (strace -y shows its path) or the process's
-    working directory, which chdir and fchdir move. Paths outside `repo` are dropped."""
+    working directory, which chdir and fchdir move, a new process inherits and a CLONE_FS thread shares. strace's
+    escapes are decoded in every path, descriptor paths included. Paths outside `repo` are dropped, but an open
+    whose descriptor resolves inside it (reached through a link from outside) credits that real path."""
     access = Access()
-    cwd: dict[str, str] = {}
+    fs_of: dict[str, str] = {}  # pid -> the process whose working directory it uses (itself, or a CLONE_FS sharer)
+    cwd_of: dict[str, str] = {}
+
+    def cwd(pid: str) -> str:
+        return cwd_of.get(fs_of.get(pid, pid), start_cwd)
+
     for pid, call in _completed_calls(text.splitlines()):
         m = _CALL.match(call)
         if not m:
             continue
         name, args, ret, ret_path, _err = m.groups()
         ok = not ret.startswith("-")
-        here = cwd.get(pid, start_cwd)
+        ret_path = _unescape(ret_path) if ret_path else None
+        if name in ("clone", "clone3", "fork", "vfork"):
+            if ok and ret != "0":
+                if name.startswith("clone") and "CLONE_FS" in args:
+                    fs_of[ret] = fs_of.get(pid, pid)
+                else:
+                    cwd_of[ret] = cwd(pid)
+            continue
         fd = _FD.match(args)
-        fd_path = fd.group(1) if fd else None
+        fd_path = _unescape(fd.group(1)) if fd and fd.group(1) else None
         if name == "fchdir":
             if ok and fd_path:
-                cwd[pid] = fd_path
+                cwd_of[fs_of.get(pid, pid)] = fd_path
             continue
         if name == "getdents64":
             key = repo_key(fd_path, repo) if fd_path else None
@@ -190,27 +207,25 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
             continue
         target = _unescape(s.group(1))
         if not os.path.isabs(target):
-            base = fd_path if name in _DIRFD and fd_path else here
+            base = fd_path if name in _DIRFD and fd_path else cwd(pid)
             target = os.path.join(base, target)
         if name == "chdir":
             if ok:
-                cwd[pid] = os.path.normpath(target)
+                cwd_of[fs_of.get(pid, pid)] = os.path.normpath(target)
             continue
         key = repo_key(target, repo)
+        # A successful open's descriptor names the file really opened: credit it under that name too (a link,
+        # from inside or outside the repository), so an edit under either name selects the unit.
+        real = repo_key(ret_path, repo) if name in _OPENS and ok and ret_path else None
+        kind = access.dirs if "O_DIRECTORY" in args else access.files
+        if real:
+            kind.add(real)
         if key is None:
             continue
-        if name not in _OPENS:
+        if name not in _OPENS or not ok:
             access.probes.add(key)
-        elif not ok:
-            access.probes.add(key)
-        elif "O_DIRECTORY" in args:
-            access.dirs.add(key)
         else:
-            access.files.add(key)
-            # A file opened through a link: also its real name, so an edit under either name selects the unit.
-            real = repo_key(ret_path, repo) if ret_path else None
-            if real:
-                access.files.add(real)
+            kind.add(key)
     access.files.discard("")
     return access
 
@@ -252,7 +267,9 @@ def depinfo_inputs(text: str, repo: str) -> set[str]:
 
 @dataclass
 class Run:
-    """One unit's run: its time, libtest's counts, its trace (None when the file is missing) and coverage."""
+    """One unit's run: its time, libtest's counts (listed -1 when the listing failed), its trace (None when the file
+    is missing; trace_rc the traced run's exit status), and its coverage (coverage_ok False when no profile was
+    written or a coverage tool failed)."""
     seconds: float
     passed: int
     ignored: int
@@ -260,24 +277,28 @@ class Run:
     trace_rc: int
     trace_text: str | None
     covered: set[str]
+    coverage_ok: bool = True
 
 
 _RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
 
 
 def results(output: str) -> tuple[int, int]:
-    """(passed, ignored), summed over libtest's result lines."""
-    passed = ignored = 0
-    for m in _RESULT.finditer(output):
-        passed += int(m.group(1))
-        ignored += int(m.group(3))
-    return passed, ignored
+    """(passed, ignored) from libtest's last result line: a test that runs its own binary as a child can print a
+    child's summary before the run's own (as coverage_shards.results reads it)."""
+    found = _RESULT.findall(output)
+    if not found:
+        return 0, 0
+    passed, _failed, ignored = found[-1]
+    return int(passed), int(ignored)
 
 
 def unit_record(run: Run, tests: list[str], binary: str, extra_files: set[str], repo: str) -> dict:
-    """A unit as the map stores it, exactly UNIT_KEYS. Unmapped when the trace failed or is missing, or when passed
-    plus ignored differs from the tests it listed; a trace that names no repository file is normal."""
-    unmapped = run.trace_rc != 0 or run.trace_text is None or run.passed + run.ignored != run.listed
+    """A unit as the map stores it, exactly UNIT_KEYS. Unmapped when the traced run failed or left no trace, when
+    its coverage is missing or a coverage tool failed, or when passed plus ignored differs from the tests it listed
+    (a failed listing never matches); a trace that names no repository file is normal."""
+    unmapped = (run.trace_rc != 0 or run.trace_text is None or not run.coverage_ok
+                or run.passed + run.ignored != run.listed)
     access = parse_trace(run.trace_text, repo, repo) if run.trace_text is not None else Access()
     return {
         "files": sorted(run.covered | access.files | extra_files),
@@ -317,6 +338,7 @@ def run_unit(binary: str, args: list[str], listed: int, unit_dir: str, objects: 
     passed, ignored = results(proc.stdout)
     text = Path(trace).read_text(encoding="utf-8", errors="replace") if os.path.exists(trace) else None
     covered: set[str] = set()
+    coverage_ok = False
     raws = sorted(Path(unit_dir).glob("*.profraw"))
     if raws:
         profdata = os.path.join(unit_dir, "unit.profdata")
@@ -325,19 +347,23 @@ def run_unit(binary: str, args: list[str], listed: int, unit_dir: str, objects: 
             cmd = [llvm_tool("llvm-cov"), "export", "-format=lcov", "-instr-profile", profdata, objects[0]]
             for extra in objects[1:]:
                 cmd += ["-object", extra]
-            covered = lcov_files(subprocess.run(cmd, capture_output=True, text=True).stdout, str(ROOT))
+            export = subprocess.run(cmd, capture_output=True, text=True)
+            if export.returncode == 0:
+                covered = lcov_files(export.stdout, str(ROOT))
+                coverage_ok = True
         for raw in raws:
             raw.unlink()
-    # strace exits with the traced program's status, so a failing test is not a failed trace; a trace that never
-    # started leaves no file or an empty one.
-    trace_rc = 0 if text else 1
-    return Run(seconds, passed, ignored, listed, trace_rc, text, covered)
+    # strace exits with the traced program's status: any failure, a test's or the trace's own, leaves it unmapped.
+    trace_rc = proc.returncode if text else 1
+    return Run(seconds, passed, ignored, listed, trace_rc, text, covered, coverage_ok)
 
 
-def list_tests(binary: str, args: list[str]) -> list[str]:
-    """The test names `binary` lists for `args` (libtest --list), ignored ones included."""
+def list_tests(binary: str, args: list[str]) -> list[str] | None:
+    """The test names `binary` lists for `args` (libtest --list), ignored ones included; None when listing fails."""
     out = subprocess.run([binary, "--list", *args], capture_output=True, text=True, cwd=ROOT,
                          env={**os.environ, "CARGO_MANIFEST_DIR": str(ROOT)})
+    if out.returncode != 0:
+        return None
     return [line[: -len(": test")] for line in out.stdout.splitlines() if line.endswith(": test")]
 
 
@@ -372,6 +398,43 @@ def _depinfo(executable: str) -> set[str]:
     return depinfo_inputs(Path(path).read_text(encoding="utf-8"), str(ROOT)) if os.path.exists(path) else set()
 
 
+def artifact_depinfo_path(artifact: dict) -> str | None:
+    """Where cargo wrote an artifact's dep-info: beside an executable as `<exe>.d`; for a library, `<crate>-<hash>.d`
+    beside its `lib<crate>-<hash>.rlib`."""
+    if artifact.get("executable"):
+        return artifact["executable"] + ".d"
+    for filename in artifact.get("filenames", []):
+        base = os.path.basename(filename)
+        if base.startswith("lib") and base.endswith(".rlib"):
+            return os.path.join(os.path.dirname(filename), base[3:-len(".rlib")] + ".d")
+    return None
+
+
+def _all_artifacts(lines: list[str]) -> list[dict]:
+    out = []
+    for line in lines:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("reason") == "compiler-artifact":
+            out.append(msg)
+    return out
+
+
+def _workspace_inputs(artifacts: list[dict]) -> set[str]:
+    """The non-.rs compile inputs of this package's library and binaries: an integration test reaches them through
+    the library it links and the gateway child it spawns, so they belong to every integration unit."""
+    out: set[str] = set()
+    for art in artifacts:
+        if art.get("profile", {}).get("test") or str(ROOT) not in art.get("package_id", ""):
+            continue
+        path = artifact_depinfo_path(art)
+        if path and os.path.exists(path):
+            out |= depinfo_inputs(Path(path).read_text(encoding="utf-8"), str(ROOT))
+    return out
+
+
 def _lib_part(k: str, out: Path) -> dict:
     """lib-K: the part's binary, built instrumented by lib-parts.sh (the one place the part is chosen), its
     depth-2 groups each run as a unit."""
@@ -403,6 +466,7 @@ def _int_part(name: str, out: Path) -> dict:
         sys.stderr.write(proc.stderr[-4000:])
         raise SystemExit(f"affected_map: {name} did not build")
     artifacts = _artifacts(proc.stdout.splitlines())
+    shared = _workspace_inputs(_all_artifacts(proc.stdout.splitlines()))
     gateway = [a["executable"] for a in artifacts if "bin" in a["target"]["kind"] and not a["profile"]["test"]]
     units = {}
     for art in artifacts:
@@ -411,10 +475,11 @@ def _int_part(name: str, out: Path) -> dict:
         kind = "test" if "test" in art["target"]["kind"] else "bin"
         label = f"{kind}:{art['target']['name']}"
         exe = art["executable"]
-        tests = list_tests(exe, [])
-        run = run_unit(exe, [], len(tests), str(out / "units" / label), [exe, *gateway])
+        listed = list_tests(exe, [])
+        # A listing that failed never matches the pass count, so the unit is unmapped.
+        run = run_unit(exe, [], -1 if listed is None else len(listed), str(out / "units" / label), [exe, *gateway])
         src = repo_key(art["target"]["src_path"], str(ROOT)) or art["target"]["name"]
-        units[label] = unit_record(run, tests, src, _depinfo(exe), str(ROOT))
+        units[label] = unit_record(run, listed or [], src, _depinfo(exe) | shared, str(ROOT))
     return {"part": name, "binary": None, "units": units, "extra_files": []}
 
 
@@ -450,7 +515,7 @@ def merge(sha: str, part_dirs: list[str], out_dir: str, now: datetime | None = N
     for where, doc in parts:
         extra = set(doc["extra_files"])
         for label, unit in doc["units"].items():
-            single = len(unit["tests"]) == 1 and "lib:" + unit["tests"][0] == label
+            single = len(unit["tests"]) == 1
             if unit["binary"] != LIB_BINARY or unit["seconds"] <= SPLIT_SHARE * total or single:
                 units[label] = {**unit, "files": sorted(set(unit["files"]) | extra)}
                 continue

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -78,6 +79,18 @@ class Weight(unittest.TestCase):
         times = {"a::b::t1": 30.0, "a::b::t2": 1.0}
         self.assertEqual(self.units(times, "a::b", 100.0), {"a::b::t1": ["a::b::t1"], "a::b::t2": ["a::b::t2"]})
 
+    def test_a_heavy_group_of_one_test_is_not_run_again(self) -> None:
+        # a::b::x holds one test at 30%: it stays the unit a::b::x, measured once, not split to its test and re-run.
+        times = {"a::b::x::t1": 30.0, "a::b::y::t2": 1.0}
+        measured = []
+
+        def measure(key, names):
+            measured.append(key)
+            return sum(times[n] for n in names)
+        got = am.split_heavy("a::b", list(times), 2, 100.0, measure)
+        self.assertEqual(set(got), {"a::b::x", "a::b::y"})
+        self.assertEqual(sorted(measured), ["a::b", "a::b::x", "a::b::y"])
+
 
 class Units(unittest.TestCase):
     """M3, M4, M8: the unit record and the map document."""
@@ -106,9 +119,17 @@ class Units(unittest.TestCase):
         self.assertFalse(rec["unmapped"])
         self.assertEqual(rec["files"], ["src/a.rs"])
 
-    def test_libtest_counts_are_summed(self) -> None:
+    def test_libtest_counts_come_from_the_last_summary(self) -> None:
+        # A child run of the same binary can print its own summary first; the run's own comes last.
         out = "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured\ntest result: ok. 2 passed; 0 failed; 0 ignored"
-        self.assertEqual(am.results(out), (5, 1))
+        self.assertEqual(am.results(out), (2, 0))
+        self.assertEqual(am.results("no summary"), (0, 0))
+
+    def test_missing_or_failed_coverage_is_unmapped(self) -> None:
+        self.assertTrue(am.unit_record(run(coverage_ok=False), ["t1", "t2"], "b", set(), REPO)["unmapped"])
+
+    def test_a_failed_listing_is_unmapped(self) -> None:
+        self.assertTrue(am.unit_record(run(listed=-1), [], "b", set(), REPO)["unmapped"])
 
 
 class Trace(unittest.TestCase):
@@ -172,6 +193,36 @@ class Trace(unittest.TestCase):
         text = '2 openat(AT_FDCWD</w/repo>, "linked/a.txt", O_RDONLY) = 3</w/repo/real/a.txt>\n'
         self.assertEqual(self.parse(text).files, {"linked/a.txt", "real/a.txt"})
 
+    def test_a_child_process_inherits_the_working_directory_and_a_thread_shares_it(self) -> None:
+        text = (
+            '10 chdir("/w/repo/tests") = 0\n'
+            "10 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD, child_tidptr=0x7f) = 11\n"
+            '11 access("fixtures/a.json", R_OK) = 0\n'
+            "10 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_THREAD, exit_signal=0}, 88) = 12\n"
+            '12 chdir("/w/repo/docs") = 0\n'
+            '10 access("guide.md", F_OK) = 0\n'
+            '11 access("later.json", F_OK) = 0\n'
+        )
+        got = self.parse(text)
+        self.assertEqual(got.probes, {"tests/fixtures/a.json", "docs/guide.md", "tests/later.json"})
+
+    def test_escaped_descriptor_paths_are_decoded(self) -> None:
+        text = (
+            "6 getdents64(5</w/repo/p\\303\\244iv\\303\\244>, 0x1 /* 2 entries */, 32768) = 48\n"
+            '6 openat(5</w/repo/p\\303\\244iv\\303\\244>, "f.txt", O_RDONLY) = 7</w/repo/p\\303\\244iv\\303\\244/f.txt>\n'
+        )
+        got = self.parse(text)
+        self.assertEqual(got.dirs, {"päivä"})
+        self.assertEqual(got.files, {"päivä/f.txt"})
+
+    def test_a_link_from_outside_credits_the_file_it_reaches(self) -> None:
+        text = '2 openat(AT_FDCWD</tmp>, "/tmp/link/a.txt", O_RDONLY) = 3</w/repo/real/a.txt>\n'
+        self.assertEqual(self.parse(text).files, {"real/a.txt"})
+
+    def test_a_folder_opened_through_a_link_credits_both_names(self) -> None:
+        text = ('2 openat(AT_FDCWD</w/repo>, "linkdir", O_RDONLY|O_DIRECTORY) = 4</w/repo/realdir>\n')
+        self.assertEqual(self.parse(text).dirs, {"linkdir", "realdir"})
+
     def test_escaped_bytes_in_a_path_are_read_back_as_its_name(self) -> None:
         text = '5 openat(AT_FDCWD</w/repo>, "docs/p\\303\\244iv\\303\\244 \\"q\\".md", O_RDONLY) = 3\n'
         self.assertEqual(self.parse(text).files, {'docs/päivä "q".md'})
@@ -189,6 +240,14 @@ class Inputs(unittest.TestCase):
         depinfo = (f"/w/repo/target/debug/deps/x-1: {REPO}/src/lib.rs {REPO}/src/a.rs {REPO}/fixtures/data.json "
                    f"{REPO}/docs/guide.md /home/u/.cargo/registry/dep.rs\n")
         self.assertEqual(am.depinfo_inputs(depinfo, REPO), {"fixtures/data.json", "docs/guide.md"})
+
+    def test_an_artifacts_depinfo_is_found_beside_it(self) -> None:
+        exe = {"executable": "/w/repo/target/debug/deps/serve-1a2b", "filenames": ["/w/repo/target/debug/deps/serve-1a2b"]}
+        lib = {"executable": None, "filenames": ["/w/repo/target/debug/deps/libmcp_gateway-9f8e.rlib",
+                                                 "/w/repo/target/debug/deps/libmcp_gateway-9f8e.rmeta"]}
+        self.assertEqual(am.artifact_depinfo_path(exe), "/w/repo/target/debug/deps/serve-1a2b.d")
+        self.assertEqual(am.artifact_depinfo_path(lib), "/w/repo/target/debug/deps/mcp_gateway-9f8e.d")
+        self.assertIsNone(am.artifact_depinfo_path({"executable": None, "filenames": ["/x/libfoo.so"]}))
 
     def test_lcov_files_are_those_with_an_executed_function(self) -> None:
         lcov = (f"SF:{REPO}/src/a.rs\nFN:1,f\nFNDA:3,f\nend_of_record\n"
@@ -219,6 +278,48 @@ class Age(unittest.TestCase):
             out = subprocess.run([sys.executable, str(HERE / "affected_map.py"), "guard", str(Path(tmp, "none")),
                                   "2026-01-02T10:00:00Z"], capture_output=True, text=True)
             self.assertEqual(out.stdout.strip(), "build=true")
+
+
+class Merge(unittest.TestCase):
+    """The merge: the run's lib total over every part, a heavy group re-run deeper, nothing lost or counted twice."""
+
+    def test_a_heavy_group_is_replaced_by_its_leaves_and_the_rest_kept(self) -> None:
+        unit = lambda tests, seconds, binary=am.LIB_BINARY: {  # noqa: E731
+            "files": ["src/a.rs"], "dirs": [], "probes": [], "tests": tests, "seconds": seconds,
+            "binary": binary, "unmapped": False}
+        part = {"part": "lib-1", "binary": "bin/p1/lib-tests-p1", "extra_files": ["fixtures/x.json"], "units": {
+            "lib:a::b": unit(["a::b::x::t1", "a::b::x::t2", "a::b::y::t3"], 30.0),
+            "lib:c::d": unit(["c::d::t4"], 5.0),
+            "test:e2e": unit(["t5"], 50.0, binary="tests/e2e.rs")}}
+        other = {"part": "lib-2", "binary": "bin/p2/lib-tests-p2", "extra_files": [], "units": {
+            "lib:f::g": unit(["f::g::t6"], 65.0)}}
+        seconds = {"a::b::x::t1": 4.0, "a::b::x::t2": 4.0, "a::b::y::t3": 3.0}
+        calls = []
+
+        def fake_run(binary, args, listed, unit_dir, objects):
+            names = [a for a in args if a != "--exact"]
+            calls.append(sorted(names))
+            return am.Run(sum(seconds[n] for n in names), len(names), 0, listed, 0, "", {"src/deep.rs"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, doc in (("p1", part), ("p2", other)):
+                Path(tmp, name).mkdir()
+                Path(tmp, name, "part.json").write_text(__import__("json").dumps(doc))
+            saved = am.run_unit
+            am.run_unit = fake_run
+            try:
+                am.merge("abc", [str(Path(tmp, "p1")), str(Path(tmp, "p2"))], str(Path(tmp, "out")), NOW)
+            finally:
+                am.run_unit = saved
+            doc = __import__("json").loads(Path(tmp, "out", "affected-map.json").read_text())
+        # lib total = 30 + 5 + 65 = 100 s: a::b (30%) splits into x (8%) and y (3%); f::g (65%) is one test, kept.
+        self.assertEqual(set(doc["units"]), {"lib:a::b::x", "lib:a::b::y", "lib:c::d", "lib:f::g", "test:e2e"})
+        self.assertEqual(sorted(t for u in doc["units"].values() for t in u["tests"]),
+                         sorted(["a::b::x::t1", "a::b::x::t2", "a::b::y::t3", "c::d::t4", "f::g::t6", "t5"]))
+        self.assertIn("fixtures/x.json", doc["units"]["lib:a::b::x"]["files"])
+        self.assertIn("fixtures/x.json", doc["units"]["lib:c::d"]["files"])
+        self.assertEqual(doc["map_sha"], "abc")
+        self.assertNotIn(["f::g::t6"], calls, "a single heavy test is not re-run")
 
 
 class Workflow(unittest.TestCase):
@@ -267,7 +368,29 @@ def _mutants() -> list[tuple[str, str, dict]]:
     original's signature, so only the behaviour the row guards changes."""
     real = {name: getattr(am, name) for name in (
         "split_heavy", "unit_record", "parse_trace", "depinfo_inputs", "group", "repo_key", "_completed_calls",
-        "should_build", "lcov_files", "results", "map_document", "unit_env")}
+        "should_build", "lcov_files", "results", "map_document", "unit_env", "artifact_depinfo_path")}
+
+    def split_by_name(prefix, members, depth, total, measure, share=None):
+        share = am.SPLIT_SHARE if share is None else share
+        units, pending = {}, [(prefix, members, depth)]
+        while pending:
+            key, names, d = pending.pop()
+            if measure(key, names) > share * total and not (len(names) == 1 and names[0] == key):
+                pending.extend((k, v, d + 1) for k, v in am.group(names, d + 1).items())
+            else:
+                units[key] = sorted(names)
+        return units
+
+    def summed(output):
+        found = am._RESULT.findall(output)
+        return sum(int(p) for p, _f, _i in found), sum(int(i) for _p, _f, i in found)
+
+    def no_inheritance(text, repo, cwd):
+        keep = [x for x in text.splitlines() if not re.search(r"^\d+ (clone3?|v?fork)\(", x)]
+        return real["parse_trace"]("\n".join(keep) + "\n", repo, cwd)
+
+    def no_descriptor_names(text, repo, cwd):
+        return real["parse_trace"](re.sub(r"(= \d+)<[^>]*>", r"\1", text), repo, cwd)
 
     def one_level(prefix, members, depth, total, measure, share=None):
         share = am.SPLIT_SHARE if share is None else share
@@ -321,6 +444,15 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M10 the age compared the wrong way", "Age",
          {"should_build": lambda b, now: not real["should_build"](b, now) if b else True}),
         ("M10 a 24-hour age", "Age", {"MAP_AGE": timedelta(hours=24)}),
+        ("M2 a one-test group split again by its name", "Weight", {"split_heavy": split_by_name}),
+        ("M3 missing or failed coverage kept mapped", "Units",
+         {"unit_record": lambda r, *a: {**real["unit_record"](am.Run(**{**r.__dict__, "coverage_ok": True}), *a)}}),
+        ("M4 the libtest summaries summed", "Units", {"results": summed}),
+        ("M5 a new process does not inherit the working directory", "Trace", {"parse_trace": no_inheritance}),
+        ("M5 the descriptor's real path ignored", "Trace", {"parse_trace": no_descriptor_names}),
+        ("M6 a library's dep-info not found", "Inputs",
+         {"artifact_depinfo_path": lambda a: a["executable"] + ".d" if a.get("executable") else None}),
+        ("M2 the merge never splits deeper", "Merge", {"SPLIT_SHARE": 1.0}),
     ]
 
 
