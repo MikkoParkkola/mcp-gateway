@@ -128,7 +128,7 @@ async function unreachedControls(page, state, { width, plant }) {
     return [...missed, 'trap still visible after Escape'];
   }
   try {
-    await expect(state.opener(page)).toBeFocused();
+    if (!(await state.opener(page).evaluate((el) => el === document.activeElement))) throw new Error('read once');
   } catch {
     const holder = await page.evaluate(() => {
       const el = document.activeElement;
