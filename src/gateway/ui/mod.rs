@@ -34,6 +34,8 @@ mod config_history;
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;
+#[cfg(feature = "cost-governance")]
+mod costs_standing;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
@@ -724,21 +726,33 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
 /// `GET /ui/api/costs` — aggregate cost data for the web UI (admin only).
 ///
 /// Returns aggregate totals, per-API-key breakdown, and per-session breakdown.
+/// Each key row also says where the key stands against its own daily limit,
+/// read under this request's generation, and the body when limits reset.
 /// Requires admin access (returns 401 for unauthenticated public requests).
 #[cfg(feature = "cost-governance")]
-async fn costs(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoResponse {
+async fn costs(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
+) -> impl IntoResponse {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
     let tracker = state.meta_mcp.cost_tracker();
-    Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
         "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
         // The zone daily budgets count days in (ADR-026).
         "day_zone": state.meta_mcp.day_zone(),
-    }))
-    .into_response()
+    });
+    let read = state
+        .meta_mcp
+        .budget_enforcer
+        .as_deref()
+        .map(|enforcer| (enforcer, enforcer.governance(Some(&generation))));
+    costs_standing::add_members(&mut body, &tracker, read, crate::clock::unix_secs().ok());
+    Json(body).into_response()
 }
 
 // ── Private helpers ──────────────────────────────────────────────────

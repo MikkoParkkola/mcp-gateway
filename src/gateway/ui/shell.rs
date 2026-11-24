@@ -29,8 +29,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.b743559cb3a2.js",
-        include_bytes!("shell/activity.b743559cb3a2.js"),
+        "activity.9cbb77fd8a6b.js",
+        include_bytes!("shell/activity.9cbb77fd8a6b.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -53,32 +53,32 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.b16747429970.js",
-        include_bytes!("shell/gateway.b16747429970.js"),
+        "gateway.fe650e4dea5e.js",
+        include_bytes!("shell/gateway.fe650e4dea5e.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.feaca128a7e8.js",
-        include_bytes!("shell/overview.feaca128a7e8.js"),
+        "overview.5381112c0e94.js",
+        include_bytes!("shell/overview.5381112c0e94.js"),
     ),
     (
         "servers.a2711ee29891.css",
         include_bytes!("shell/servers.a2711ee29891.css"),
     ),
     (
-        "servers.f6fe46f71bae.js",
-        include_bytes!("shell/servers.f6fe46f71bae.js"),
+        "servers.bbd715fe9294.js",
+        include_bytes!("shell/servers.bbd715fe9294.js"),
+    ),
+    (
+        "shell.525de9790ead.js",
+        include_bytes!("shell/shell.525de9790ead.js"),
     ),
     (
         "shell.7fc60493c93f.css",
         include_bytes!("shell/shell.7fc60493c93f.css"),
-    ),
-    (
-        "shell.a9428bb8983a.js",
-        include_bytes!("shell/shell.a9428bb8983a.js"),
     ),
     (
         "shell.nojs.4e34f233c1ba.css",
@@ -89,8 +89,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.e494b4eeb750.json"),
     ),
     (
-        "tools.092aae85c67e.js",
-        include_bytes!("shell/tools.092aae85c67e.js"),
+        "tools.1fa0e5f7445c.js",
+        include_bytes!("shell/tools.1fa0e5f7445c.js"),
     ),
     (
         "tools.49b4ad43fcf0.css",

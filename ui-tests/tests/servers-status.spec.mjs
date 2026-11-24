@@ -220,6 +220,56 @@ test('a state outside the table goes last under needs a look, in the shell badge
   await expect(content(page).getByRole('rowheader', { name: 'drifter', exact: true })).toHaveCount(1);
 });
 
+/**
+ * Named exports of the loaded `servers` and `shell` modules. An import of a URL
+ * the page already loaded returns that same module, so nothing runs twice.
+ */
+async function screenWords(page) {
+  return page.evaluate(async () => {
+    const loaded = (stem) => performance.getEntriesByType('resource').map((e) => e.name)
+      .find((name) => new RegExp(`/ui/assets/${stem}\\.[0-9a-f]{12}\\.js$`).test(name));
+    const servers = await import(loaded('servers'));
+    const shell = await import(loaded('shell'));
+    return { block: servers.OFF_BLOCK_TITLE, word: shell.OFF_WORD };
+  });
+}
+
+// A server turned off in the config, in the wire shape the gateway sends it.
+const PARKED = {
+  name: 'parked', state: 'off', running: false, transport: 'http', reason: '', next_retry_at: null,
+  tools_cached: 0, calls_24h: 12, calls_prev_24h: 3, latency_p50_ms: null, latency_p95_ms: null, latency_p99_ms: null,
+  circuit_state: null, circuit_trips: null, current_failures: null, healthy: null,
+  request_count: null, success_count: null, failure_count: null,
+  cleartext_credentials_accepted: false, needs_sign_in: false,
+};
+
+test('a server turned off in the config has a block of its own, never answering and never a thing to look at', async ({ page }) => {
+  await fakeGateway(page, {
+    status: [fullView(srv('forge', 'running'), srv('lookout', 'running'), PARKED)],
+    // Discovery sees it on this machine too: it is a status row, so not outside the gateway.
+    discovery: finds(['parked', false]),
+  });
+  await openScreen(page);
+  const words = await screenWords(page);
+  expect(words.block, 'the screen exports its block title').toBeTruthy();
+  const off = block(page, words.block);
+  await expect(off.getByRole('heading')).toHaveText(`${words.block} · 1`);
+  await expect(off.getByRole('columnheader')).toHaveCount(5);
+  await expect(statusRow(off, 'parked').getByRole('cell')).toHaveText([new RegExp(`${words.word}$`), '0', '12', '—']);
+  await expect(block(page, 'Answering').getByRole('heading')).toHaveText('Answering · 2');
+  await expect(block(page, 'Needs a look')).toHaveCount(0);
+  await expect(block(page, 'Not behind the gateway')).toHaveCount(0);
+});
+
+test('a gateway whose every server is turned off shows the off block, not the empty state', async ({ page }) => {
+  await fakeGateway(page, { status: [fullView(PARKED)] });
+  await openScreen(page);
+  const words = await screenWords(page);
+  expect(words.block, 'the screen exports its block title').toBeTruthy();
+  await expect(block(page, words.block).getByRole('heading')).toHaveText(`${words.block} · 1`);
+  await expect(content(page).locator('[data-state="empty"]')).toHaveCount(0);
+});
+
 test('answering: groups by registry category, Other last, sums and the highest p95', async ({ page }) => {
   await fakeGateway(page, { status: [MIXED] });
   await openScreen(page);
