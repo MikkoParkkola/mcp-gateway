@@ -1,0 +1,7 @@
+{
+  "sha": "f2b227f69f7c3c7ece9bda2c0d6c160c026b0f28",
+  "filter": "gateway::router::tests::task_execution_adapter::query_serialization::",
+  "runs": 50,
+  "parallel": 4,
+  "exact": false
+}
