@@ -145,11 +145,16 @@ pub(crate) mod seams {
         pub(crate) before_verify: Option<PathHook>,
         /// A backup, after its source is modelled: (source, destination).
         pub(crate) after_model: Option<PathHook>,
+    }
+
+    /// One armed folder: its seams and what its saves did.
+    struct Folder {
+        seams: Seams,
         creates: usize,
         events: Vec<&'static str>,
     }
 
-    static ARMED: Mutex<Option<HashMap<PathBuf, Seams>>> = Mutex::new(None);
+    static ARMED: Mutex<Option<HashMap<PathBuf, Folder>>> = Mutex::new(None);
 
     /// The folder `path` sits in, as the key both sides compute alike.
     fn key(path: &Path) -> PathBuf {
@@ -157,7 +162,7 @@ pub(crate) mod seams {
         std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
     }
 
-    fn with<R>(path: &Path, f: impl FnOnce(&mut Seams) -> R) -> Option<R> {
+    fn with<R>(path: &Path, f: impl FnOnce(&mut Folder) -> R) -> Option<R> {
         let mut armed = ARMED.lock().unwrap_or_else(PoisonError::into_inner);
         armed.as_mut()?.get_mut(&key(path)).map(f)
     }
@@ -169,7 +174,14 @@ pub(crate) mod seams {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert_with(HashMap::new)
-            .insert(dir.clone(), seams);
+            .insert(
+                dir.clone(),
+                Folder {
+                    seams,
+                    creates: 0,
+                    events: Vec::new(),
+                },
+            );
         Armed(dir)
     }
 
@@ -177,7 +189,7 @@ pub(crate) mod seams {
     pub(crate) struct Armed(PathBuf);
 
     impl Armed {
-        fn read<R>(&self, f: impl FnOnce(&Seams) -> R) -> R {
+        fn read<R>(&self, f: impl FnOnce(&Folder) -> R) -> R {
             let armed = ARMED.lock().unwrap_or_else(PoisonError::into_inner);
             f(armed
                 .as_ref()
@@ -209,7 +221,7 @@ pub(crate) mod seams {
     }
 
     pub(crate) fn open_error(target: &Path) -> Option<std::io::Error> {
-        with(target, |s| s.open_error)
+        with(target, |s| s.seams.open_error)
             .flatten()
             .map(std::io::Error::from_raw_os_error)
     }
@@ -225,23 +237,23 @@ pub(crate) mod seams {
     // Each hook is taken out under the lock, run after it is released (it
     // may touch the folder), and put back for the folder's next save.
     pub(crate) fn first_write(target: &Path, scratch: &std::fs::File) {
-        if let Some(mut hook) = with(target, |s| s.first_write.take()).flatten() {
+        if let Some(mut hook) = with(target, |s| s.seams.first_write.take()).flatten() {
             hook(scratch);
-            with(target, |s| s.first_write = Some(hook));
+            with(target, |s| s.seams.first_write = Some(hook));
         }
     }
 
     pub(crate) fn before_verify(target: &Path, scratch: &Path) {
-        if let Some(mut hook) = with(target, |s| s.before_verify.take()).flatten() {
+        if let Some(mut hook) = with(target, |s| s.seams.before_verify.take()).flatten() {
             hook(target, scratch);
-            with(target, |s| s.before_verify = Some(hook));
+            with(target, |s| s.seams.before_verify = Some(hook));
         }
     }
 
     pub(crate) fn after_model(source: &Path, destination: &Path) {
-        if let Some(mut hook) = with(destination, |s| s.after_model.take()).flatten() {
+        if let Some(mut hook) = with(destination, |s| s.seams.after_model.take()).flatten() {
             hook(source, destination);
-            with(destination, |s| s.after_model = Some(hook));
+            with(destination, |s| s.seams.after_model = Some(hook));
         }
     }
 }
