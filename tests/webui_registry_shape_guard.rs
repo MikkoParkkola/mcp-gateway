@@ -4,12 +4,12 @@
 //! returns its entries under, so the Add Server search has entries to show.
 
 const INDEX: &str = include_str!("../src/gateway/ui/index.html");
-const BACKENDS: &str = include_str!("../src/gateway/ui/backends.rs");
+const REGISTRY: &str = include_str!("../src/gateway/ui/backends/registry.rs");
 
 #[test]
 fn the_registry_loader_reads_the_endpoints_entries() {
     assert!(
-        BACKENDS.contains(r#"Json(json!({"entries": entries, "total": entries.len()}))"#),
+        REGISTRY.contains(r#"Json(json!({"entries": entries, "total": entries.len()}))"#),
         "the registry endpoint answers {{\"entries\": [...]}}"
     );
     let start = INDEX
