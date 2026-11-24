@@ -1,0 +1,3 @@
+# path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
+#@ scoped
+/ui/api/activity/counts	DELETE	plain	AdminKey	405

@@ -9,11 +9,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
-
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset, TimeDelta};
 use serde::Deserialize;
@@ -25,8 +26,8 @@ use super::joiner::Joiner;
 use super::reader::{
     Cursor, Limits, Line, Look, Seen, WINDOW, read_page_joined, restarted_mid_read, timestamp,
 };
-use super::rows::{Check, Kind, row_id};
-use super::{Admitted, AppState, Logs, blocking};
+use super::rows::{Check, FeedOutcome, Filter, Kind, row_id};
+use super::{Admitted, AppState, Early, ListQuery, Logs, bad_request, blocking, flat_error, parse};
 use crate::clock::ClockBeforeEpoch;
 use crate::security::decision_record::read::decision_evidence;
 
@@ -172,7 +173,6 @@ pub(super) fn scan_window(
 /// The Outcome group's counts query: the list's filters and its window. Any
 /// other parameter lands in `other`, so it can be refused by its name.
 #[derive(Debug, Default, Deserialize)]
-#[expect(dead_code, reason = "C1 stub: the fold reads these in C2")]
 pub(super) struct CountsQuery {
     pub(super) effect: Option<String>,
     pub(super) server: Option<String>,
@@ -185,8 +185,37 @@ pub(super) struct CountsQuery {
     pub(super) other: BTreeMap<String, String>,
 }
 
-/// The count of each Outcome value for `query` under `access`, as the list
-/// would show them. Blocking: it reads the log files. C1 stub.
+/// The counts query as the list parses its filters, with its window, or the
+/// 400 that refuses it: a parameter the route does not take, a missing bound,
+/// or a window that does not end after it starts.
+fn checked(query: &CountsQuery) -> Result<(Filter, RangeInclusive<DateTime<FixedOffset>>), Early> {
+    let refuse = |error: String| Box::new(bad_request(json!({ "error": error })));
+    if let Some(name) = query.other.keys().next() {
+        return Err(refuse(format!("`{name}` is not a counts parameter")));
+    }
+    let as_listed = ListQuery {
+        effect: query.effect.clone(),
+        server: query.server.clone(),
+        caller: query.caller.clone(),
+        rule: query.rule.clone(),
+        q: query.q.clone(),
+        from: query.from.clone(),
+        to: query.to.clone(),
+        ..ListQuery::default()
+    };
+    let filter = parse(&as_listed)?.filter;
+    let (Some(from), Some(to)) = (filter.from, filter.to) else {
+        return Err(refuse("`from` and `to` are both required".to_owned()));
+    };
+    if to <= from {
+        return Err(refuse("`to` must be after `from`".to_owned()));
+    }
+    Ok((filter, from..=to))
+}
+
+/// The count of each Outcome value for `query` under `access`: for each, the
+/// number of rows the list shows for that value over the same window. Blocking:
+/// it reads the log files, in one scan of at most `byte_cap` bytes.
 pub(super) fn count_page(
     logs: &Logs,
     access: &Access,
@@ -194,12 +223,97 @@ pub(super) fn count_page(
     byte_cap: u64,
     after_pass: impl FnMut(Pass) -> ControlFlow<()>,
 ) -> Response {
-    let _ = (logs, access, query, byte_cap, after_pass);
-    Json(json!({})).into_response()
+    let (filter, window) = match checked(query) {
+        Ok(parsed) => parsed,
+        Err(refusal) => return *refusal,
+    };
+    // The list's filter with only the outcome changed, once per value.
+    let values = [
+        Filter {
+            outcome: Some(FeedOutcome::Ok),
+            ..filter.clone()
+        },
+        Filter {
+            outcome: Some(FeedOutcome::Failed),
+            ..filter.clone()
+        },
+        Filter {
+            outcome: Some(FeedOutcome::Blocked),
+            ..filter.clone()
+        },
+        Filter {
+            cleaned: true,
+            ..filter.clone()
+        },
+    ];
+    // All, then each value in the order above.
+    let mut tally = [0_u64; 5];
+    let check = logs.check();
+    let end = scan_window(
+        window,
+        &logs.invocation,
+        logs.governance.as_deref(),
+        &check,
+        access,
+        byte_cap,
+        |line, kind, joined, _| {
+            if !filter.matches(line, kind, joined) {
+                return;
+            }
+            tally[0] += 1;
+            for (count, value) in tally[1..].iter_mut().zip(&values) {
+                if value.matches(line, kind, joined) {
+                    *count += 1;
+                }
+            }
+        },
+        after_pass,
+    );
+    let stop = match Stopped::of(end) {
+        Ok(Stopped::Rotated) => {
+            return flat_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the log rotated while it was being counted: try again",
+            )
+            .into_response();
+        }
+        Ok(stop) => stop,
+        Err(error) => {
+            // A caller that went away stopped its own read: nothing to report.
+            if error.kind() != io::ErrorKind::ConnectionAborted {
+                tracing::warn!(%error, "activity counts read failed");
+            }
+            return flat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the activity log could not be read",
+            )
+            .into_response();
+        }
+    };
+    let [all, ok, failed, blocked, cleaned] = tally;
+    Json(json!({
+        "access": access.scope(),
+        "counts": {"all": all, "ok": ok, "failed": failed, "blocked": blocked, "cleaned": cleaned},
+        "complete": stop == Stopped::End,
+        "stopped": stop.word(),
+    }))
+    .into_response()
 }
 
-/// `GET /ui/api/activity/counts`, read off the runtime under a read slot.
-/// C1 stub: it takes no counts permit yet and tells no hook of its passes.
+/// Set once the request it belongs to is dropped (its caller went away). The
+/// read checks it between passes, so an abandoned count stops within a pass.
+#[derive(Default)]
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// `GET /ui/api/activity/counts`. Its bounds are checked before anything is
+/// held; then it takes one of the counts permits, and only then a read slot,
+/// so counts never hold more than two of the four.
 pub(super) async fn counts_route(
     State(state): State<Arc<AppState>>,
     read: Admitted<Query<CountsQuery>>,
@@ -209,9 +323,32 @@ pub(super) async fn counts_route(
         logs,
         input: Query(query),
     } = read;
+    if let Err(refusal) = checked(&query) {
+        return *refusal;
+    }
+    let dropped = DropFlag::default();
+    let Ok(permit) = Arc::clone(state.process.counts_reads())
+        .acquire_owned()
+        .await
+    else {
+        let failed = "the activity read failed";
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, failed).into_response();
+    };
+    let flag = Arc::clone(&dropped.0);
+    let hook = state.process.counts_hook().cloned();
     blocking(state.process.activity_reads(), move || {
-        let go_on = |_| ControlFlow::Continue(());
-        count_page(&logs, &access, &query, COUNT_SCAN_BYTES, go_on)
+        let _held = permit;
+        let cap = COUNT_SCAN_BYTES;
+        count_page(&logs, &access, &query, cap, |pass| {
+            if let Some(hook) = &hook {
+                (hook.0)(cap, pass.bytes, &flag);
+            }
+            if flag.load(Ordering::SeqCst) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
     })
     .await
 }
@@ -234,6 +371,18 @@ impl Stopped {
             Self::WindowPassed => "window_passed",
             Self::Cap => "cap",
             Self::Rotated => "rotated",
+        }
+    }
+
+    /// How a scan ended, a rotation during the read being its own stop. Any
+    /// other error stays an error.
+    fn of(scan: io::Result<ScanEnd>) -> io::Result<Self> {
+        match scan {
+            Ok(ScanEnd::End) => Ok(Self::End),
+            Ok(ScanEnd::WindowPassed) => Ok(Self::WindowPassed),
+            Ok(ScanEnd::Cap) => Ok(Self::Cap),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => Ok(Self::Rotated),
+            Err(e) => Err(e),
         }
     }
 }
@@ -346,17 +495,11 @@ pub(in crate::gateway::ui) fn count_rule_hits(
         },
         after_pass,
     );
-    let stop = match end {
-        Ok(ScanEnd::End) => Stopped::End,
-        Ok(ScanEnd::WindowPassed) => Stopped::WindowPassed,
-        Ok(ScanEnd::Cap) => Stopped::Cap,
-        Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-            // Records may have been read twice: none of it is a count.
-            per_rule.clear();
-            Stopped::Rotated
-        }
-        Err(e) => return Err(e),
-    };
+    let stop = Stopped::of(end)?;
+    if stop == Stopped::Rotated {
+        // Records may have been read twice: none of it is a count.
+        per_rule.clear();
+    }
     Ok(RuleHits {
         per_rule,
         stop: Some(stop),

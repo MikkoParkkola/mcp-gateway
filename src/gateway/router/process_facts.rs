@@ -162,13 +162,11 @@ impl ProcessFacts {
 
     /// The permits counts reads take, [`COUNT_READS`] of them unless a test
     /// set another number.
-    #[cfg_attr(not(test), expect(dead_code, reason = "C1 stub: unused"))]
     pub(crate) fn counts_reads(&self) -> &Arc<tokio::sync::Semaphore> {
         &self.counts_reads
     }
 
     /// The test's pass hook, when one is installed.
-    #[expect(dead_code, reason = "C1 stub: the route calls it in C2")]
     pub(crate) fn counts_hook(&self) -> Option<&CountsHook> {
         self.counts_hook.as_ref()
     }
