@@ -10,7 +10,9 @@ use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta};
+
+use crate::duration_bound::delta;
 use serde_json::{Value, json};
 
 use super::access::Access;
@@ -35,7 +37,7 @@ pub(super) fn n() -> DateTime<FixedOffset> {
 
 /// `hours` before `n()`.
 pub(super) fn ago(hours: i64) -> DateTime<FixedOffset> {
-    n() - Duration::hours(hours)
+    n() - TimeDelta::try_hours(hours).expect("hours in range")
 }
 
 /// The 48 hours ending at `n()`.
@@ -50,7 +52,7 @@ pub(super) fn wall_now() -> DateTime<FixedOffset> {
 
 /// An hour either side of `t0`.
 fn around(t0: DateTime<FixedOffset>) -> RangeInclusive<DateTime<FixedOffset>> {
-    t0 - Duration::hours(1)..=t0 + Duration::hours(1)
+    t0 - delta!(hours, 1)..=t0 + delta!(hours, 1)
 }
 
 /// A call on `tool` stamped `at`, padded to about a KiB.
@@ -209,12 +211,12 @@ fn total(passes: &[Pass]) -> u64 {
 
 /// x-late's stamp: inside the window, and unlike any whole-hour stamp.
 fn x_stamp() -> DateTime<FixedOffset> {
-    n() - Duration::minutes(90)
+    n() - delta!(minutes, 90)
 }
 
 /// y-late's stamp.
 fn y_stamp() -> DateTime<FixedOffset> {
-    n() - Duration::minutes(150)
+    n() - delta!(minutes, 150)
 }
 
 /// s1's log, newest first: 20 calls inside the window, then 17 MiB stamped
@@ -290,11 +292,10 @@ fn governance_row(at: DateTime<FixedOffset>) -> Value {
 /// `count` rows from `row`, newest first, stamped evenly from 1 h to 47 h
 /// before `n()`.
 fn spread(count: usize, row: impl Fn(DateTime<FixedOffset>) -> Value) -> Vec<Value> {
-    let span = Duration::hours(46).num_seconds();
+    let span = delta!(hours, 46).num_seconds();
     let count_i = i64::try_from(count).expect("a count");
-    (0..count_i)
-        .map(|i| row(ago(1) - Duration::seconds(i * span / count_i)))
-        .collect()
+    let step = |i: i64| TimeDelta::try_seconds(i * span / count_i).expect("seconds in range");
+    (0..count_i).map(|i| row(ago(1) - step(i))).collect()
 }
 
 #[test]

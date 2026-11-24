@@ -26,7 +26,7 @@ use crate::security::{
     decision_record::Decision,
     transparency_log::{CorrelationKey, CorrelationSource},
 };
-use chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, FixedOffset};
 use serde_json::{Map, Value, json};
 use std::ops::ControlFlow;
 
@@ -165,7 +165,7 @@ fn p10_the_window_edges() {
         (&deny["hits_24h"], &deny["hits_prev_24h"]),
         (&json!(2), &json!(1))
     );
-    let older_end = ago(24) - Duration::seconds(1);
+    let older_end = ago(24) - crate::duration_bound::delta!(seconds, 1);
     assert_eq!(model["hits"]["older_to"], older_end.to_rfc3339());
     // The Activity list's own filter over the same bounds.
     let listed = |from: DateTime<FixedOffset>, to: DateTime<FixedOffset>| {
@@ -215,7 +215,7 @@ fn p11_an_inactive_built_in_deny() {
     }
 }
 
-/// A call on srv/delete_x decided by `decision`, through the logger.
+/// A call on `srv/delete_x` decided by `decision`, through the logger.
 fn deny_call(log: &TransparencyLogger, decision: &Decision) {
     log.log_invocation_attributed(
         CorrelationKey {

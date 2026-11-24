@@ -10,7 +10,7 @@ use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset, TimeDelta};
+use chrono::{DateTime, FixedOffset};
 
 use super::access::{Access, AccessScope};
 use super::answer::Joined;
@@ -235,11 +235,11 @@ pub(in crate::gateway::ui) struct Days {
 
 impl Days {
     fn ending(to: DateTime<FixedOffset>) -> Self {
-        let day = TimeDelta::hours(24);
+        let day = crate::duration_bound::delta!(hours, 24);
         let split = to - day;
         Self {
             from: split - day,
-            older_to: split - TimeDelta::seconds(1),
+            older_to: split - crate::duration_bound::delta!(seconds, 1),
             split,
             to,
         }

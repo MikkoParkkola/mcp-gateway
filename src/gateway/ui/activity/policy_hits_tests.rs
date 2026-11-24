@@ -8,7 +8,9 @@
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, FixedOffset, TimeDelta};
+
+use crate::duration_bound::delta;
 use serde_json::{Map, Value, json};
 
 use super::access::Access;
@@ -69,11 +71,15 @@ pub(super) fn config(
 
 /// The id the tool policy names when it decides `server`/`tool`.
 pub(super) fn policy_id(g: &Generation, server: &str, tool: &str) -> String {
-    let id = match g.tool_policy().check_explained(server, tool) {
-        Ok(Some(id)) | Err((_, Some(id))) => id,
-        _ => panic!("no entry decided {server}/{tool}"),
-    };
-    id.as_str().to_owned()
+    // An allow names its entry on `Ok`, a refusal on `Err`.
+    let named = g
+        .tool_policy()
+        .check_explained(server, tool)
+        .map_or_else(|(_, refusing)| refusing, |allowing| allowing);
+    named
+        .unwrap_or_else(|| panic!("no entry decided {server}/{tool}"))
+        .as_str()
+        .to_owned()
 }
 
 /// A shell injection the request scan finds.
@@ -253,13 +259,13 @@ pub(super) fn p1_fixture(dir: &Path) -> (LiveConfig, P1, std::path::PathBuf) {
 /// The `hits` object an admin's whole read at `n()` must equal, its bounds
 /// worked out here from `n()` and the spec's 48 h, 24 h and 1 s.
 fn whole_read_hits() -> Value {
-    let day = Duration::hours(24);
+    let day = delta!(hours, 24);
     let text = |t: DateTime<FixedOffset>| Value::from(t.to_rfc3339());
     let mut expected = Map::new();
     expected.insert("scope".into(), "all".into());
     expected.insert("to".into(), text(n()));
     expected.insert("split".into(), text(n() - day));
-    expected.insert("older_to".into(), text(n() - day - Duration::seconds(1)));
+    expected.insert("older_to".into(), text(n() - day - delta!(seconds, 1)));
     expected.insert("from".into(), text(n() - day - day));
     expected.insert("stopped".into(), "end".into());
     expected.insert("complete".into(), true.into());
@@ -449,9 +455,12 @@ fn p3_a_refused_rule_keeps_its_place() {
 fn filler(bytes: u64, newest: i64, oldest: i64) -> Vec<Value> {
     let per = super::scan_window_tests::line_len(&stamped("filler", n()));
     let count = i64::try_from(bytes / per).expect("a count");
-    let span = Duration::hours(oldest - newest).num_seconds();
+    let span = TimeDelta::try_hours(oldest - newest)
+        .expect("hours in range")
+        .num_seconds();
+    let step = |i: i64| TimeDelta::try_seconds(i * span / count).expect("seconds in range");
     (0..count)
-        .map(|i| stamped("filler", ago(newest) - Duration::seconds(i * span / count)))
+        .map(|i| stamped("filler", ago(newest) - step(i)))
         .collect()
 }
 
