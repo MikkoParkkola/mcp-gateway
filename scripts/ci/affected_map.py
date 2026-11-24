@@ -114,10 +114,12 @@ def split_heavy(prefix: str, members: list[str], depth: int, total: float,
 
 @dataclass
 class Access:
-    """What one unit's trace shows, by repository-relative path."""
+    """What one unit's trace shows, by repository-relative path. `ambiguous`: the trace cannot say for certain
+    which directory some relative path was read against, so the unit must be unmapped."""
     files: set[str] = field(default_factory=set)
     dirs: set[str] = field(default_factory=set)
     probes: set[str] = field(default_factory=set)
+    ambiguous: bool = False
 
 
 _LINE = re.compile(r"^(?:\[pid\s+)?(\d+)\]?\s+(.*)$")
@@ -135,23 +137,26 @@ def _unescape(text: str) -> str:
     return raw.encode("latin-1", "replace").decode("utf-8", "replace")
 
 
-def _completed_calls(lines: list[str]) -> list[tuple[str, str]]:
-    """(pid, call text) for every completed call, joining strace -f's `<unfinished ...>` and `<... resumed>`."""
-    halves: dict[str, str] = {}
+def _completed_calls(lines: list[str]) -> tuple[list[tuple[str, str, int]], list[str]]:
+    """(pid, call text, the line its call started on) for every completed call, joining strace -f's
+    `<unfinished ...>` and `<... resumed>` halves; and the text of every call still unfinished when the trace ends."""
+    halves: dict[str, tuple[str, int]] = {}
     out = []
-    for raw in lines:
+    for index, raw in enumerate(lines):
         m = _LINE.match(raw.rstrip("\n"))
         if not m:
             continue
         pid, rest = m.groups()
         if rest.endswith("<unfinished ...>"):
-            halves[pid] = rest[: -len("<unfinished ...>")].rstrip()
+            halves[pid] = (rest[: -len("<unfinished ...>")].rstrip(), index)
             continue
+        start = index
         resumed = re.match(r"^<\.\.\. \w+ resumed>\s?(.*)$", rest)
         if resumed:
-            rest = halves.pop(pid, "") + resumed.group(1)
-        out.append((pid, rest))
-    return out
+            head, start = halves.pop(pid, ("", index))
+            rest = head + resumed.group(1)
+        out.append((pid, rest, start))
+    return out, [head for head, _ in halves.values()]
 
 
 def repo_key(path: str, repo: str) -> str | None:
@@ -165,15 +170,26 @@ def repo_key(path: str, repo: str) -> str | None:
     return None
 
 
-def creation_tree(calls: list[tuple[str, str]]) -> dict[str, tuple[str, bool]]:
-    """child pid -> (its creator, whether it shares the creator's working directory: a clone with CLONE_FS). Read
-    whole before the trace is walked: strace can print a child's first calls before its creator's clone returns."""
+_CREATE = ("clone", "clone3", "fork", "vfork")
+
+
+def creation_tree(calls: list[tuple[str, str, int]]) -> tuple[dict[str, tuple[str, bool]], bool]:
+    """child pid -> (its creator, whether it shares the creator's working directory: a clone with CLONE_FS), read
+    whole before the trace is walked (strace can print a child's first calls before its creator's clone returns);
+    and whether a pid was reused: created twice, or acting before its creating call began (an earlier lifetime)."""
     tree: dict[str, tuple[str, bool]] = {}
-    for pid, call in calls:
+    first: dict[str, int] = {}
+    for pid, _call, start in calls:
+        first.setdefault(pid, start)
+    reused = False
+    for pid, call, start in calls:
         m = _CALL.match(call)
-        if m and m.group(1) in ("clone", "clone3", "fork", "vfork") and int(m.group(3)) > 0:
-            tree[m.group(3)] = (pid, m.group(1).startswith("clone") and "CLONE_FS" in m.group(2))
-    return tree
+        if m and m.group(1) in _CREATE and int(m.group(3)) > 0:
+            child = m.group(3)
+            if child in tree or first.get(child, start + 1) < start:
+                reused = True
+            tree[child] = (pid, m.group(1).startswith("clone") and "CLONE_FS" in m.group(2))
+    return tree, reused
 
 
 def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
@@ -181,10 +197,14 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
     A relative path resolves against the call's directory descriptor (strace -y shows its path) or the process's
     working directory, which chdir and fchdir move, a new process inherits and a CLONE_FS thread shares. strace's
     escapes are decoded in every path, descriptor paths included. Paths outside `repo` are dropped, but an open
-    whose descriptor resolves inside it (reached through a link from outside) credits that real path."""
+    whose descriptor resolves inside it (reached through a link from outside) credits that real path. Where the
+    trace cannot say which directory a process had, it is `ambiguous` and the unit unmapped rather than guessed:
+    a creation that never returned (its creator died), a reused pid, or a directory change by a process sharing its
+    directory with another (it could land while a sibling is inside a creation that copies the directory)."""
     access = Access()
-    calls = _completed_calls(text.splitlines())
-    creator = creation_tree(calls)
+    calls, dangling = _completed_calls(text.splitlines())
+    creator, reused = creation_tree(calls)
+    access.ambiguous = reused or any(head.split("(", 1)[0] in _CREATE for head in dangling)
     fs_of: dict[str, str] = {}  # pid -> the process whose working directory it uses (itself, or a CLONE_FS sharer)
     cwd_of: dict[str, str] = {}
     started: set[str] = set()
@@ -207,7 +227,11 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
             else:
                 cwd_of[pid] = cwd(parent)
 
-    for pid, call in calls:
+    def shares_directory(pid: str) -> bool:
+        group = fs_of.get(pid, pid)
+        return any(fs_of.get(other, other) == group for other in started if other != pid)
+
+    for pid, call, _start in calls:
         m = _CALL.match(call)
         if not m:
             continue
@@ -215,10 +239,12 @@ def parse_trace(text: str, repo: str, start_cwd: str) -> Access:
         name, args, ret, ret_path, _err = m.groups()
         ok = not ret.startswith("-")
         ret_path = _unescape(ret_path) if ret_path else None
-        if name in ("clone", "clone3", "fork", "vfork"):
+        if name in _CREATE:
             if ok and ret != "0":
                 start(ret)
             continue
+        if name in ("chdir", "fchdir") and ok and shares_directory(pid):
+            access.ambiguous = True
         fd = _FD.match(args)
         fd_path = _unescape(fd.group(1)) if fd and fd.group(1) else None
         if name == "fchdir":
@@ -325,9 +351,9 @@ def unit_record(run: Run, tests: list[str], binary: str, extra_files: set[str], 
     """A unit as the map stores it, exactly UNIT_KEYS. Unmapped when the traced run failed or left no trace, when
     its coverage is missing or a coverage tool failed, or when passed plus ignored differs from the tests it listed
     (a failed listing never matches); a trace that names no repository file is normal."""
-    unmapped = (run.trace_rc != 0 or run.trace_text is None or not run.coverage_ok
-                or run.passed + run.ignored != run.listed)
     access = parse_trace(run.trace_text, repo, repo) if run.trace_text is not None else Access()
+    unmapped = (run.trace_rc != 0 or run.trace_text is None or not run.coverage_ok or access.ambiguous
+                or run.passed + run.ignored != run.listed)
     return {
         "files": sorted(run.covered | access.files | extra_files),
         "dirs": sorted(access.dirs),

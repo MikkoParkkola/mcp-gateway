@@ -221,6 +221,57 @@ class Trace(unittest.TestCase):
         got = self.parse(text)
         self.assertEqual(got.probes, {"tests/fixtures/a.json", "docs/guide.md"})
 
+    def test_ordinary_orders_resolve_and_stay_unambiguous(self) -> None:
+        # A grandchild acts before its parent's creation returns; a vfork child; a copying child's own chdir.
+        text = (
+            '40 chdir("/w/repo/tests") = 0\n'
+            "40 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
+            "41 vfork( <unfinished ...>\n"
+            '42 access("deep.txt", F_OK) = 0\n'
+            "41 <... vfork resumed>) = 42\n"
+            "40 <... clone resumed>) = 41\n"
+            '41 chdir("/w/repo/docs") = 0\n'
+            '41 access("own.md", F_OK) = 0\n'
+            '40 access("parent.txt", F_OK) = 0\n'
+        )
+        got = self.parse(text)
+        self.assertEqual(got.probes, {"tests/deep.txt", "docs/own.md", "tests/parent.txt"})
+        self.assertFalse(got.ambiguous)
+
+    def test_a_childs_own_chdir_survives_its_creators_later_return(self) -> None:
+        text = ('45 chdir("/w/repo/tests") = 0\n'
+                "45 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
+                '46 chdir("/w/repo/docs") = 0\n'
+                "45 <... clone resumed>) = 46\n"
+                '46 access("own.md", F_OK) = 0\n')
+        got = self.parse(text)
+        self.assertEqual(got.probes, {"docs/own.md"})
+        self.assertFalse(got.ambiguous)
+
+    def test_a_creation_that_never_returned_is_ambiguous(self) -> None:
+        text = ('50 chdir("/w/repo/tests") = 0\n'
+                "50 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
+                '51 access("a.txt", F_OK) = 0\n')
+        self.assertTrue(self.parse(text).ambiguous)
+
+    def test_a_reused_pid_is_ambiguous(self) -> None:
+        before = '60 access("x", F_OK) = 0\n61 clone(child_stack=NULL, flags=SIGCHLD) = 60\n'
+        twice = ("61 clone(child_stack=NULL, flags=SIGCHLD) = 62\n"
+                 "61 clone(child_stack=NULL, flags=SIGCHLD) = 62\n")
+        self.assertTrue(self.parse(before).ambiguous)
+        self.assertTrue(self.parse(twice).ambiguous)
+
+    def test_a_directory_change_in_a_shared_directory_is_ambiguous(self) -> None:
+        text = ("70 clone3({flags=CLONE_VM|CLONE_FS|CLONE_THREAD, exit_signal=0}, 88) = 71\n"
+                '71 chdir("/w/repo/docs") = 0\n')
+        self.assertTrue(self.parse(text).ambiguous)
+        alone = '72 chdir("/w/repo/docs") = 0\n'
+        self.assertFalse(self.parse(alone).ambiguous)
+
+    def test_an_ambiguous_trace_is_unmapped(self) -> None:
+        text = "80 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>\n"
+        self.assertTrue(am.unit_record(run(trace_text=text), ["t1", "t2"], "b", set(), REPO)["unmapped"])
+
     def test_escaped_descriptor_paths_are_decoded(self) -> None:
         text = (
             "6 getdents64(5</w/repo/p\\303\\244iv\\303\\244>, 0x1 /* 2 entries */, 32768) = 48\n"
@@ -381,6 +432,7 @@ class Workflow(unittest.TestCase):
 def _mutants() -> list[tuple[str, str, dict]]:
     """(name, the row class that must fail, the module attributes the mutant replaces). Each patch keeps the
     original's signature, so only the behaviour the row guards changes."""
+    real_tree = am.creation_tree
     real = {name: getattr(am, name) for name in (
         "split_heavy", "unit_record", "parse_trace", "depinfo_inputs", "group", "repo_key", "_completed_calls",
         "should_build", "lcov_files", "results", "map_document", "unit_env", "artifact_depinfo_path")}
@@ -431,7 +483,13 @@ def _mutants() -> list[tuple[str, str, dict]]:
                 for k in (am.repo_key(d, repo) for d in line.split(":", 1)[1].split()) if k}
 
     def no_split_halves(lines):
-        return [(m.group(1), m.group(2)) for m in (am._LINE.match(x) for x in lines) if m]
+        return [(m.group(1), m.group(2), i) for i, m in enumerate(am._LINE.match(x) for x in lines) if m], []
+
+    def ambiguity_ignored(r, *a):
+        rec = real["unit_record"](r, *a)
+        if r.trace_text is not None and real["parse_trace"](r.trace_text, a[-1], a[-1]).ambiguous:
+            rec["unmapped"] = r.trace_rc != 0 or not r.coverage_ok or r.passed + r.ignored != r.listed
+        return rec
 
     return [
         ("M1 no counter relocation", "Coverage", {"COVERAGE_RUSTFLAGS": "-C instrument-coverage"}),
@@ -468,7 +526,10 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M6 a library's dep-info not found", "Inputs",
          {"artifact_depinfo_path": lambda a: a["executable"] + ".d" if a.get("executable") else None}),
         ("M2 the merge never splits deeper", "Merge", {"SPLIT_SHARE": 1.0}),
-        ("M5 the creation tree not read", "Trace", {"creation_tree": lambda calls: {}}),
+        ("M5 the creation tree not read", "Trace", {"creation_tree": lambda calls: ({}, False)}),
+        ("M5 an ambiguous trace kept mapped", "Trace", {"unit_record": ambiguity_ignored}),
+        ("M5 pid reuse not seen", "Trace",
+         {"creation_tree": lambda calls: (real_tree(calls)[0], False)}),
     ]
 
 
