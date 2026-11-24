@@ -141,8 +141,9 @@ fn bad_name(name: &str) -> (StatusCode, Json<Value>) {
 /// Find the YAML file for `name` across all configured capability directories.
 ///
 /// Returns `(path, dir_index)` of the first match found (`.yaml` preferred
-/// over `.yml`).
-fn find_capability_file(dirs: &[String], name: &str) -> Option<PathBuf> {
+/// over `.yml`). The `OpenAPI` import checks a name against it too, so both
+/// writers see a file in any directory the gateway loads.
+pub(super) fn find_capability_file(dirs: &[String], name: &str) -> Option<PathBuf> {
     for dir in dirs {
         for ext in &["yaml", "yml"] {
             let candidate = Path::new(dir).join(format!("{name}.{ext}"));
