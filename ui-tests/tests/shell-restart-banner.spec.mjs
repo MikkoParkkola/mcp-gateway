@@ -147,7 +147,12 @@ test('B4 a page error and the restart banner are both shown, each once', async (
   await expect(banner(page)).toHaveCount(1);
   // Away and back: each route change reads the banner again and redraws the page.
   await go(page, '/ui/tools/status');
+  // Counted only once the read on the way back is answered and drawn, so a
+  // second copy drawn by that read is seen.
+  const read = gatewayAnswer(page);
   await go(page, '/ui/overview/status');
+  await read;
+  await settle(page);
   await expect(page.locator('#content [data-state="error"]')).toHaveCount(1);
   await expect(banner(page)).toHaveCount(1);
 });
