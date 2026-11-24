@@ -77,8 +77,8 @@ work only after a restart:
   409 `restart_pending` naming the key (a change with a fault of its own is
   refused for that fault instead), and a hand edit is refused at reload.
   The gateway status (`GET /ui/api/gateway`) lists the waiting keys, with
-  the start command while a start from the file would succeed, or the reason
-  it would be refused.
+  the start command where the platform has one while a start from the file
+  would succeed, or the reason it would be refused.
 - To cancel, revoke the key before restarting; the freeze ends at once.
 
 ## 1. Who is calling
