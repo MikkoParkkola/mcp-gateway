@@ -83,6 +83,15 @@ async fn r4_a_restore_bringing_in_a_first_key_is_refused_without_a_wait() {
     let (rig, kept) = rig_after_multi_user(&one_operator(&[entry("first")], ""), &later).await;
     let (code, body) = rig.restore(&kept, Caller::Root).await;
     assert_ne!(body["error"], "restart_pending", "{code} {body}");
+    // R10 for the restore: a 422 whose message is the question's sentence
+    // for a key only the create may bring in.
+    assert_eq!(code, Code::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "invalid", "{body}");
+    let said = body["message"].as_str().unwrap_or_default();
+    assert!(
+        said.contains("API key") && said.contains("multi-user"),
+        "{said}"
+    );
     assert!(body.get("waiting_keys").is_none(), "{body}");
     let shown = body.to_string().to_lowercase();
     assert!(!shown.contains("restart"), "{body}");

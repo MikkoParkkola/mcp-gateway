@@ -378,7 +378,8 @@ async fn w2_the_same_first_key_under_refuse_is_invalid_with_its_own_sentence() {
         .expect_err("refused");
     match error {
         ReplaceError::ReloadRefused { class, reason } => {
-            assert_eq!(class, RefusalClass::Invalid);
+            // Typed, so the routes show this sentence without reading text.
+            assert_eq!(class, RefusalClass::KeyList(KeyListRefusal::OnlyCreateAdds));
             says_only_create_adds(&reason);
         }
         other => panic!("expected ReloadRefused, got {other:?}"),
@@ -434,7 +435,7 @@ async fn r10_a_removal_only_write_is_refused_without_a_restart_claim() {
         .expect_err("refused");
     match error {
         ReplaceError::ReloadRefused { class, reason } => {
-            assert_eq!(class, RefusalClass::Invalid);
+            assert_eq!(class, RefusalClass::KeyList(KeyListRefusal::RemovalOnly));
             assert!(reason.contains("multi-user"), "{reason}");
             no_restart_claim(&reason);
         }

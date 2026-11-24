@@ -514,6 +514,37 @@ fn l1_the_gateway_read_serves_the_wait() {
     assert_eq!(block["start_command"], start_command(&fx));
 }
 
+/// R10 on the settings route: the gateway runs the token and "first" (two
+/// credentials); "first" was then taken out of gateway.yaml by hand. A save
+/// on top of that file only removes a key yet changes the multi-user status,
+/// so it is a 422 `invalid` whose message is the question's own sentence for
+/// that case, never the loader's generic one, and claims nothing about a
+/// restart. Nothing is written.
+#[test]
+fn r10_a_settings_save_that_only_removes_a_key_shows_its_own_sentence() {
+    let running_key = crate::config::ApiKeyConfig {
+        backends: vec!["*".into()],
+        key_sha256: Some(digest_of(KNOWN)),
+        name: "first".into(),
+        ..Default::default()
+    };
+    let mut two_credentials = starter("");
+    two_credentials.running.api_keys.push(running_key);
+    two_credentials.text.push_str("  api_keys:\n");
+    two_credentials.text.push_str(&key_item("first", KNOWN));
+    let fx = Fixture::new(two_credentials);
+    by_hand(&fx, &starter_text(""));
+    let untouched = fx.bytes();
+    let (code, body) = save_environment(&fx, "after-removal");
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "invalid", "{body}");
+    let said = body["message"].as_str().unwrap_or_default();
+    assert!(said.contains("multi-user"), "{said}");
+    assert!(!said.contains("config loader"), "{said}");
+    assert!(!said.to_lowercase().contains("restart"), "{said}");
+    assert_eq!(fx.bytes(), untouched, "the save wrote gateway.yaml");
+}
+
 /// Two replicas with the task store on: a start the starter never refuses.
 const START_FAULT: &str = "server:\n  replicas: 2\n  modern_protocol: true\n";
 
