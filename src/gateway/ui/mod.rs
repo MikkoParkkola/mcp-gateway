@@ -41,6 +41,7 @@ pub(in crate::gateway) mod decisions;
 mod discovery;
 mod errors;
 mod events;
+mod gateway_health;
 mod gateway_status;
 mod gateway_upgrade;
 mod guard;

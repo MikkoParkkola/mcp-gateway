@@ -31,6 +31,12 @@ pub(crate) fn install(history: Arc<HealthHistory>) {
     let _ = INSTALLED.set(history);
 }
 
+/// The history this process records into, if one was installed.
+#[cfg(any(test, feature = "webui"))]
+pub(crate) fn installed() -> Option<Arc<HealthHistory>> {
+    INSTALLED.get().cloned()
+}
+
 /// Record one call's added latency in the installed history, if any.
 pub(crate) fn record_latency_now(secs: f64) {
     if let (Some(history), Ok(now)) = (INSTALLED.get(), crate::clock::unix_secs()) {

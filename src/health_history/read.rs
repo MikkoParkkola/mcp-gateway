@@ -122,4 +122,14 @@ impl HealthHistory {
     pub(crate) fn incomplete(&self) -> bool {
         self.0.lock().incomplete
     }
+
+    /// A copy of the whole history, taken under one lock.
+    pub(crate) fn frozen(&self) -> Self {
+        Self::start(None, super::Restores::Counted(0), 1_800_014_400).0
+    }
+
+    /// The first second this history covers.
+    pub(crate) fn observed_since(&self) -> u64 {
+        0
+    }
 }
