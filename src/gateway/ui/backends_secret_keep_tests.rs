@@ -199,48 +199,28 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
     let value = "zq-keep-canary-5521-xy";
     let short = "zq5";
     let (seen, logs) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(async {
-                let held = held_file();
-                let mut panel =
-                    Panel::with(&holding("DATABASE_HOST", &held.reference), Reloads::Accept).await;
-                // The log gets a registered folder of its own, handed to it,
-                // so the folder outlives the log and is cleared at exit.
-                let log_dir = crate::test_dir_keep::kept_tempdir();
-                let journal = log_dir.path().join("audit.jsonl");
-                let logger = crate::security::TransparencyLogger::open(Arc::new(
-                    crate::security::transparency_log::TransparencyLogConfig {
-                        enabled: true,
-                        path: journal.to_string_lossy().into_owned(),
-                        key_id: "keep-rows".to_string(),
-                        ..Default::default()
-                    },
-                ))
-                .expect("an audit log");
-                logger.keep_test_dir(Arc::clone(&log_dir));
-                Arc::get_mut(&mut panel.state)
-                    .expect("the panel's state is not shared yet")
-                    .transparency_log = Some(Arc::new(logger));
-                let (status, accepted) = panel
-                    .update("a", json!({"env": {"DATABASE_HOST": value}}))
-                    .await;
-                assert_eq!(status, StatusCode::OK, "{accepted}");
-                let (status, refused) = panel
-                    .update("a", json!({"env": {"DATABASE_HOST": short}}))
-                    .await;
-                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-                let audit = std::fs::read_to_string(&journal).unwrap_or_default();
-                assert!(!audit.is_empty(), "the audited write left no record");
-                [
-                    ("accepted answer", accepted.to_string()),
-                    ("refused answer", refused.to_string()),
-                    ("gateway.yaml", panel.text()),
-                    ("audit log", audit),
-                ]
-            })
+        current_thread().block_on(async {
+            let held = held_file();
+            let mut panel =
+                Panel::with(&holding("DATABASE_HOST", &held.reference), Reloads::Accept).await;
+            let journal = audited(&mut panel);
+            let (status, accepted) = panel
+                .update("a", json!({"env": {"DATABASE_HOST": value}}))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{accepted}");
+            let (status, refused) = panel
+                .update("a", json!({"env": {"DATABASE_HOST": short}}))
+                .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+            let audit = std::fs::read_to_string(&journal).unwrap_or_default();
+            assert!(!audit.is_empty(), "the audited write left no record");
+            [
+                ("accepted answer", accepted.to_string()),
+                ("refused answer", refused.to_string()),
+                ("gateway.yaml", panel.text()),
+                ("audit log", audit),
+            ]
+        })
     });
     for (what, text) in seen
         .iter()
@@ -248,10 +228,44 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
         .chain([("log lines", logs.as_str())])
     {
         assert!(!text.contains(short), "{what} shows the short value");
-        for window in value.as_bytes().windows(BOUND) {
-            let run = std::str::from_utf8(window).expect("ascii");
-            assert!(!text.contains(run), "{what} shows {run:?}");
-        }
+        no_run(what, text, value);
+    }
+}
+
+/// A current-thread runtime, so an async body inside a log capture logs on
+/// the capture's own thread.
+fn current_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+/// Hands the panel an admin audit log whose folder is registered and owned
+/// by the log, so it outlives the log and goes at exit; returns the log path.
+fn audited(panel: &mut Panel) -> std::path::PathBuf {
+    let folder = crate::test_dir_keep::kept_tempdir();
+    let journal = folder.path().join("audit.jsonl");
+    let config = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: journal.to_string_lossy().into_owned(),
+        key_id: "keep-rows".to_string(),
+        ..Default::default()
+    };
+    let logger = crate::security::TransparencyLogger::open(Arc::new(config)).expect("an audit log");
+    logger.keep_test_dir(folder);
+    Arc::get_mut(&mut panel.state)
+        .expect("the panel's state is not shared yet")
+        .transparency_log = Some(Arc::new(logger));
+    journal
+}
+
+/// No slice of `secret` as long as the short-value bound appears in `text`.
+#[track_caller]
+fn no_run(what: &str, text: &str, secret: &str) {
+    for window in secret.as_bytes().windows(BOUND) {
+        let run = std::str::from_utf8(window).expect("ascii");
+        assert!(!text.contains(run), "{what} shows {run:?}");
     }
 }
 
@@ -282,6 +296,38 @@ async fn k5_a_slot_that_became_a_reference_meanwhile_is_not_overwritten() {
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
     no_value(&body, value);
     no_value(&body, TOKEN);
+}
+
+/// K5b (D4, with K4's checks): on that same race, neither submitted value nor
+/// any bound-length slice of it shows in the refusal, the admin audit log or a
+/// log line on the test's own thread.
+#[test]
+fn k5b_the_race_refusal_leaves_no_value_in_the_audit_log_or_logs() {
+    let value = "a-plain-value-longer-than-the-bound";
+    let ((status, body, audit), logs) =
+        crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
+            current_thread().block_on(async {
+                let held = held_file();
+                let mut panel = Panel::new().await;
+                let journal = audited(&mut panel);
+                let raced = holding("PLAIN", &held.reference);
+                let sent = json!({"env": {"PLAIN": value, "SERVICE_TOKEN": TOKEN}});
+                let (status, body) = panel
+                    .update_seamed("a", sent, Some(lands(&panel, &raced)))
+                    .await;
+                let audit = std::fs::read_to_string(&journal).unwrap_or_default();
+                (status, body, audit)
+            })
+        });
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    for (what, text) in [
+        ("the refusal", body.to_string()),
+        ("audit log", audit),
+        ("log lines", logs),
+    ] {
+        no_run(what, &text, value);
+        no_run(what, &text, TOKEN);
+    }
 }
 
 /// K6 (D2, with D4's seam for M9): a held reference set to another
