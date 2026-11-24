@@ -270,6 +270,28 @@ fn the_writer_refuses_a_name_held_by_a_yml_file() {
     assert_eq!(kept, "first");
 }
 
+/// A dangling link as `<name>.yml` holds the name too: the look does not
+/// follow links, so a check that did (as `exists` does) would miss it.
+#[cfg(unix)]
+#[test]
+fn the_writer_refuses_a_name_held_by_a_dangling_yml_link() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("listusers.yml"))
+        .unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let outcome = cap.write_to_file(dir.path().to_str().unwrap());
+
+    assert!(outcome.is_err(), "a name held by a dangling .yml link");
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+}
+
 // ── petstore fixture ─────────────────────────────────────────────────────
 
 fn petstore_caps() -> Vec<GeneratedCapability> {
