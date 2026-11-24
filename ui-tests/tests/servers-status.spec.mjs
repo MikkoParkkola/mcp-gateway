@@ -261,6 +261,15 @@ test('a server turned off in the config has a block of its own, never answering 
   await expect(block(page, 'Not behind the gateway')).toHaveCount(0);
 });
 
+test('a gateway whose every server is turned off shows the off block, not the empty state', async ({ page }) => {
+  await fakeGateway(page, { status: [fullView(PARKED)] });
+  await openScreen(page);
+  const words = await screenWords(page);
+  expect(words.block, 'the screen exports its block title').toBeTruthy();
+  await expect(block(page, words.block).getByRole('heading')).toHaveText(`${words.block} · 1`);
+  await expect(content(page).locator('[data-state="empty"]')).toHaveCount(0);
+});
+
 test('answering: groups by registry category, Other last, sums and the highest p95', async ({ page }) => {
   await fakeGateway(page, { status: [MIXED] });
   await openScreen(page);

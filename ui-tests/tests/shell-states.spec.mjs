@@ -241,7 +241,7 @@ for (const width of WIDTHS) {
   });
 }
 
-test('T11 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
+test('T12 a server turned off in the config has the glossary word, its banner and next step, quietly', async ({ page }) => {
   await open(page);
   // A missing export reads as null, so a shell without them fails at the expects below, not in the page.
   const got = await inShell(page, (m) => {
