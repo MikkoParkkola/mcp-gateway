@@ -33,11 +33,15 @@ mod estimate;
 #[cfg(feature = "cost-governance")]
 mod rows;
 mod snapshot;
+#[cfg(feature = "cost-governance")]
+pub(crate) mod standing;
 #[cfg(all(feature = "cost-governance", test))]
 use rows::MAX_UNBUDGETED_ROWS;
 #[cfg(feature = "cost-governance")]
 use rows::add_capped;
-use snapshot::evaluate_alerts;
+/// The Costs list reads a key's standing through this same rule choice, so the
+/// two cannot disagree.
+pub(crate) use snapshot::evaluate_alerts;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
@@ -444,6 +448,9 @@ pub struct BudgetEnforcer {
     /// Which earlier spend a name budgeted by reload is charged with.
     tool_attribution: estimate::Attribution,
     key_attribution: estimate::Attribution,
+    /// Each key's first refusal under its own limit today. Not saved: after
+    /// a restart it is empty until the next refusal, never a guessed time.
+    key_refused: DashMap<String, standing::KeyRefusal>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -466,6 +473,7 @@ impl BudgetEnforcer {
             legacy_utc_day: std::sync::atomic::AtomicU64::new(0),
             tool_attribution: estimate::Attribution::owning(config.budgets.per_tool.keys()),
             key_attribution: estimate::Attribution::owning(config.budgets.per_key.keys()),
+            key_refused: DashMap::new(),
             config,
         }
     }
@@ -606,6 +614,12 @@ impl BudgetEnforcer {
             }
             self.tool_attribution.sweep(today);
             self.key_attribution.sweep(today);
+            // A refusal of an earlier day is never read again. `today` was read
+            // before the sweep began: a refusal recorded since, on a day that
+            // has begun meanwhile, is newer and stays, and an unknown day
+            // removes nothing.
+            self.key_refused
+                .retain(|_, held| today.is_none_or(|today| held.day >= today));
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }
@@ -654,6 +668,11 @@ mod atomic_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 #[path = "enforcer_local_day_tests.rs"]
 mod local_day_tests;
+
+#[cfg(tp2)]
+#[cfg(all(test, feature = "cost-governance"))]
+#[path = "enforcer_standing_tests.rs"]
+mod standing_tests;
 
 #[cfg(test)]
 pub(crate) mod settle_seam;
