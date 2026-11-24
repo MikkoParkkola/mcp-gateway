@@ -195,7 +195,7 @@ async fn the_old_writer_entry_delegates_to_the_traced_one() {
 /// writer, a recovery's, names the gateway.
 #[test]
 fn a_key_write_keeps_its_subject_and_a_recovery_names_the_gateway() {
-    use crate::config_reload::reload_context::replace::{Audit, Intent, IntentKind, IntentSink};
+    use crate::config_reload::reload_context::replace::{Audit, Intent, IntentKind};
     use crate::security::audit::AuditWho;
     let (logger, log) = audit_log();
     let posture = AuditPosture::of(Some(Arc::clone(&logger)), GatewayAuth::Off);

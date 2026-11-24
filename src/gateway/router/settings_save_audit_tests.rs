@@ -404,7 +404,32 @@ async fn w2_an_unchanged_save_the_reload_refuses_is_refused() {
     let fx = gateway(&format!("{START}environment: \"prod\"\n"), Reloads::Refuse).await;
     let before = kept(&fx);
     save(&fx, "prod").await;
-    assert_refused(&fx, "W2.h", &before, "refused", &Id::OfTheIntent);
+    assert_eq!(file(&fx.path), before.file, "W2.h: the file is unchanged");
+    assert_eq!(store(&fx), before.store, "W2.h: the store is unchanged");
+    // The refused reload records itself: exactly one new entry, a refusal.
+    let deadline = tokio::time::Instant::now() + GUARD;
+    while history(&fx) <= before.history {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "W2.h: no refusal entry"
+        );
+        tokio::task::yield_now().await;
+    }
+    let events = fx
+        .ctx
+        .live_config
+        .history_hook()
+        .expect("a history")
+        .store
+        .events();
+    assert_eq!(events.len(), before.history + 1, "W2.h: one new entry");
+    let last = events.last().expect("the new entry");
+    let refused = matches!(
+        last.outcome,
+        crate::config_reload::history::Outcome::Refused
+    );
+    assert!(refused, "W2.h: the new entry records a refusal");
+    assert_record(&fx, "W2.h", "refused", &Id::OfTheIntent);
 }
 
 /// W2 i: auth on and the log refuses the intent: nothing is written.
