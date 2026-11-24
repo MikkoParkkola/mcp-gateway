@@ -16,8 +16,8 @@ throwaway worktree; the branch only fast-forwards to the finished merge commit o
 refusal (exit 1, `merge_ui_line: refused R<n>: ...`) leaves the branch and the tree exactly as they were.
 
 For every text the branch changed it prints the branch's own -/+ lines before the merge and after it. They must be
-equal, and the merged text must equal an independent three-way merge; MERGE evidence for "the branch's reviewed
-edits were carried byte for byte".
+equal, and the merged text must equal an independent three-way merge. Together they show the branch's reviewed
+edits were carried byte for byte, hashes apart.
 """
 
 import difflib
@@ -220,7 +220,7 @@ def read_back(wt: Path, key: str, kind: str):
 
 
 def prove(b: dict, o: dict, t: dict, results: dict, wt: Path) -> None:
-    """MERGE.2: per text the branch changed, print its -/+ lines before and after; refuse on any difference, then
+    """Per text the branch changed, print its -/+ lines before and after; refuse on any difference, then
     compare the merged text with an independent three-way merge."""
     for key, (kind, content) in results.items():
         if kind == "binary":
@@ -286,7 +286,7 @@ def source_conflicts(root: str, line: str) -> None:
         raise Refused("R2", "conflicts outside the generated files", outside)
 
 
-def build(root: str, line: str, b: dict, o: dict, t: dict, results: dict, wt: Path) -> str:
+def build(line: str, subject: str, b: dict, o: dict, t: dict, results: dict, wt: Path) -> str:
     """The merge commit, made in the throwaway worktree `wt`; returns its id."""
     git("merge", "--no-commit", "--no-ff", "-q", line, cwd=wt, check=False)
     # Every hashed asset is rewritten from `results`; anything untracked under the UI folder now is a merge
@@ -319,14 +319,16 @@ def build(root: str, line: str, b: dict, o: dict, t: dict, results: dict, wt: Pa
         raise Refused("R7", "unresolved paths after staging", unmerged)
     check_tree(wt, results)
     prove(b, o, t, results, wt)
-    msg_path = Path(out("rev-parse", "--git-path", "MERGE_MSG", cwd=wt))
-    msg_path = msg_path if msg_path.is_absolute() else wt / msg_path
-    message = msg_path.read_text() + "\nUI generated files re-derived by scripts/dev/merge_ui_line.py\n"
+    # Git's own merge subject would name the throwaway branch and a 40-character id; the repo's commit-msg hook
+    # caps a subject at 72 characters.
+    message = f"{subject}\n\nUI generated files re-derived by scripts/dev/merge_ui_line.py\n"
     with tempfile.NamedTemporaryFile("w", suffix=".msg", delete=False) as f:
         f.write(message)
     try:
-        if git("commit", "-q", "--cleanup=strip", "-F", f.name, cwd=wt, check=False).returncode != 0:
-            raise Refused("R7", "commit failed (a hook refused it?)")
+        committed = git("commit", "-q", "--cleanup=strip", "-F", f.name, cwd=wt, check=False)
+        if committed.returncode != 0:
+            sys.stderr.write(committed.stdout + committed.stderr)
+            raise Refused("R7", "commit failed (git's output is above)")
     finally:
         os.unlink(f.name)
     return out("rev-parse", "HEAD", cwd=wt)
@@ -342,13 +344,17 @@ def run(root: str, line_ref: str) -> int:
     source_conflicts(root, line)
     b, o, t = (tree_files(rev, root) for rev in (base, "HEAD", line))
     results = plan(b, o, t)
+    branch = out("symbolic-ref", "--short", "HEAD", cwd=root)
+    subject = f"Merge {line_ref} into {branch}"
+    if len(subject) > 72:
+        subject = f"Merge {line[:10]} into {branch}"[:72]
     common = Path(out("rev-parse", "--git-common-dir", cwd=root))
     common = common if common.is_absolute() else Path(root) / common
     name = f"merge-ui-line-{os.getpid()}"
     wt = common / name
     git("worktree", "add", "-q", "-b", name, str(wt), "HEAD", cwd=root)
     try:
-        commit = build(root, line, b, o, t, results, wt)
+        commit = build(line, subject, b, o, t, results, wt)
         git("merge", "--ff-only", "-q", commit, cwd=root)
     finally:
         # The throwaway tree is this script's own and freshly made: reset and clean it, then remove it without

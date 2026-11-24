@@ -427,6 +427,10 @@ class Rows(unittest.TestCase):
         self.assertEqual(after, want)
         self.assertIn("-  return 2;", before)
         self.assertIn("+  const x = 2;", before)
+        # The script's own subject: git's default names the throwaway branch and a 40-character id, and the
+        # repo's commit-msg hook caps a subject at 72 characters.
+        self.assertEqual(self.fx.git("log", "-1", "--format=%s"), "Merge line into ui")
+        self.assertIn("re-derived by scripts/dev/merge_ui_line.py", self.fx.git("log", "-1", "--format=%b"))
 
     def test_t1b_both_edit_the_shared_shell(self):
         tip, line = self.fx.setup(lambda fx: fx.edit(f"{SHELL}/shell.js", '"s1"', '"S1"'),
