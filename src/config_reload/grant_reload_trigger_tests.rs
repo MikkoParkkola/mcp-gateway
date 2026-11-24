@@ -345,8 +345,7 @@ async fn identity_grants_reload_refused_keeps_live() {
 /// and the running config stays the one loaded before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_revocation_applies_while_the_gate_is_paused_and_without_a_restart() {
-    use crate::gateway::restart_config_floor::support::{BASE, booted_floor};
-    use crate::gateway::restart_floor::FloorAdapter as _;
+    use crate::gateway::restart_config_floor::support::{BASE, paused_floor};
     let dir = tempfile::tempdir().expect("tempdir");
     let (grants, config) = (
         dir.path().join("grants.json"),
@@ -364,9 +363,7 @@ async fn a_revocation_applies_while_the_gate_is_paused_and_without_a_restart() {
     )
     .expect("the registry pairs with the config")
     .with_identity_grant_sink(sink);
-    let mut floor = booted_floor(&ctx.registry, &config);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    floor.pause(deadline).await.expect("pause");
+    let floor = paused_floor(&ctx.registry, &config).await;
     let edited = format!("{BASE}environment: \"edited\"\n");
     crate::gateway::test_helpers::write_owner_only(&config, edited).expect("edit");
     let running = ctx.live_config.get();
