@@ -536,7 +536,7 @@ pub fn run_upgrade_command(dry_run: bool, quiet: bool, config_dir: Option<&Path>
             super::CliExit::LocalFailure,
             &format!("unreadable version stamp '{raw}'."),
             &format!(
-                "Delete {} and run 'mcp-gateway upgrade' again.",
+                "Write the version this data was last upgraded to (for example 3.2.0) into {}, then run 'mcp-gateway upgrade' again.",
                 stamp.display()
             ),
         );

@@ -532,7 +532,7 @@ pub async fn run_config_export(
                     CliExit::LocalFailure,
                     &format!("Rollback failed: {e}"),
                     &format!(
-                        "Check that {} exists and that you can read it.",
+                        "Fix what the error names in {} or in the client config it restores, then run the rollback again.",
                         backup_path.display()
                     ),
                 );

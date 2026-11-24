@@ -86,7 +86,8 @@ pub async fn cap_import_url(
                         success_count += 1;
                     }
                     Err(e) => {
-                        eprintln!("  FAIL  {}: {e}", cap.name);
+                        // Beside the OK rows on stdout: stderr carries only the closing two-line error.
+                        println!("  FAIL  {}: {e}", cap.name);
                         fail_count += 1;
                     }
                 }

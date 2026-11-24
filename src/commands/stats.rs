@@ -64,7 +64,8 @@ const RUN_DOCTOR: &str = "Run 'mcp-gateway doctor' to check the gateway.";
 /// A failure as the `Err` text of the seams below: the message, a line break, then what to do. The remedy is
 /// ours and holds no line break, so the last one splits the two even when the message holds some.
 fn failure(message: std::fmt::Arguments<'_>, remedy: &str) -> String {
-    format!("{message}\n{remedy}")
+    // A URL in the remedy may hold a line break; folded here, so the last break is always the delimiter.
+    format!("{message}\n{}", remedy.replace(['\r', '\n'], " "))
 }
 
 /// Leaves with the two-line local error built from a [`failure`] text.

@@ -23,33 +23,46 @@ use serde_json::json;
 /// Run an `identity` subcommand.
 pub async fn run_identity_command(cmd: IdentityCommand) -> ExitCode {
     let IdentityCommand::Grants(command) = cmd;
-    let file = match &command {
-        IdentityGrantsCommand::List { file, .. }
-        | IdentityGrantsCommand::Grant { file, .. }
-        | IdentityGrantsCommand::Revoke { file, .. } => file.clone(),
+    let (leaf, file) = match &command {
+        IdentityGrantsCommand::List { file, .. } => ("identity grants list", file.clone()),
+        IdentityGrantsCommand::Grant { file, .. } => ("identity grants grant", file.clone()),
+        IdentityGrantsCommand::Revoke { file, .. } => ("identity grants revoke", file.clone()),
     };
     match run_identity_grants_command(command).await {
         Ok(()) => ExitCode::SUCCESS,
-        // One error type carries both a bad flag value and a file that cannot be read or written, so the remedy
-        // names both places to look.
-        Err(error) => super::fail(
+        Err(GrantsError::Usage(message)) => super::usage(leaf, &message),
+        Err(GrantsError::Failure(message)) => super::fail(
             super::CliExit::LocalFailure,
-            &error,
+            &message,
             &format!(
-                "Check that {} is a grants file you can read and write, and the flags against 'mcp-gateway identity grants --help'.",
+                // Covers a taken or missing grant id as well as a file problem: listing shows which.
+                "Run 'mcp-gateway identity grants list --file {}' to see its grants, and check that you can read and write it.",
                 file.display()
             ),
         ),
     }
 }
 
-async fn run_identity_grants_command(command: IdentityGrantsCommand) -> Result<(), String> {
+/// Why a grants command stopped: its arguments were wrong (exit 2, checked before the file is touched), or the
+/// work on the file failed (exit 1). A plain `String` error is a failure.
+enum GrantsError {
+    Usage(String),
+    Failure(String),
+}
+
+impl From<String> for GrantsError {
+    fn from(message: String) -> Self {
+        Self::Failure(message)
+    }
+}
+
+async fn run_identity_grants_command(command: IdentityGrantsCommand) -> Result<(), GrantsError> {
     match command {
         IdentityGrantsCommand::List {
             file,
             active_only,
             format,
-        } => list_local_grants(&file, active_only, format).await,
+        } => Ok(list_local_grants(&file, active_only, format).await?),
         IdentityGrantsCommand::Grant {
             file,
             grant_id,
@@ -141,36 +154,42 @@ struct LocalGrantInput {
     replace: bool,
 }
 
-async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, IdentityGrant), String> {
+async fn upsert_local_grant(
+    input: LocalGrantInput,
+) -> Result<(PathBuf, IdentityGrant), GrantsError> {
     let path = expand_home_path(&input.file);
 
-    let subject = parse_subject_spec(&input.subject, input.subject_label, "subject")?;
-    let owner = match input.owner {
-        Some(owner) => Some(parse_subject_spec(&owner, input.owner_label, "owner")?),
-        None => Some(
-            GrantSubject::new(
-                subject.authority().to_owned(),
-                subject.subject().to_owned(),
-                input
-                    .owner_label
-                    .or_else(|| subject.label().map(str::to_owned)),
-            )
-            .map_err(|e| format!("owner: {e}"))?,
-        ),
+    // Everything before the write reads the arguments: a refusal here is a wrong invocation.
+    let check_arguments = || -> Result<IdentityGrant, String> {
+        let subject = parse_subject_spec(&input.subject, input.subject_label, "subject")?;
+        let owner = match input.owner {
+            Some(owner) => Some(parse_subject_spec(&owner, input.owner_label, "owner")?),
+            None => Some(
+                GrantSubject::new(
+                    subject.authority().to_owned(),
+                    subject.subject().to_owned(),
+                    input
+                        .owner_label
+                        .or_else(|| subject.label().map(str::to_owned)),
+                )
+                .map_err(|e| format!("owner: {e}"))?,
+            ),
+        };
+        Ok(IdentityGrant {
+            grant_id: non_empty(&input.grant_id, "grant-id")?,
+            subject,
+            agent: parse_agent_binding(input.agent, input.any_agent)?,
+            capability: non_empty(&input.capability, "capability")?,
+            tool: trim_optional(input.tool),
+            scope: grant_scope(input.scope),
+            owner,
+            expires_at: parse_expiry(input.expires_at.as_deref(), input.ttl_seconds)?,
+            revoked_at: None,
+            provenance: non_empty(&input.provenance, "provenance")?,
+            reason: non_empty(&input.reason, "reason")?,
+        })
     };
-    let grant = IdentityGrant {
-        grant_id: non_empty(&input.grant_id, "grant-id")?,
-        subject,
-        agent: parse_agent_binding(input.agent, input.any_agent)?,
-        capability: non_empty(&input.capability, "capability")?,
-        tool: trim_optional(input.tool),
-        scope: grant_scope(input.scope),
-        owner,
-        expires_at: parse_expiry(input.expires_at.as_deref(), input.ttl_seconds)?,
-        revoked_at: None,
-        provenance: non_empty(&input.provenance, "provenance")?,
-        reason: non_empty(&input.reason, "reason")?,
-    };
+    let grant = check_arguments().map_err(GrantsError::Usage)?;
 
     let replace = input.replace;
     let change: journal::GrantChange = Box::new(move |grant_file: &mut IdentityGrantFile| {
@@ -206,11 +225,12 @@ async fn revoke_local_grant(
     file: &Path,
     grant_id: &str,
     revoked_at: Option<&str>,
-) -> Result<(PathBuf, IdentityGrant), String> {
+) -> Result<(PathBuf, IdentityGrant), GrantsError> {
     let path = expand_home_path(file);
-    let revoked_at = revoked_at.map_or_else(super::clock_now, |value| {
-        parse_timestamp(value, "revoked-at")
-    })?;
+    let revoked_at = match revoked_at {
+        Some(value) => parse_timestamp(value, "revoked-at").map_err(GrantsError::Usage)?,
+        None => super::clock_now()?,
+    };
     let grant_id = grant_id.to_string();
     let shown = path.display().to_string();
     let change: journal::GrantChange = Box::new(move |grant_file: &mut IdentityGrantFile| {

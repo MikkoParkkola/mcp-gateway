@@ -62,7 +62,7 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
                     super::CliExit::LocalFailure,
                     &e,
                     &format!(
-                        "Check that {} exists and holds the kind of source --kind names, and that you can write to {}.",
+                        "Take the step the error names (--force, or import preview), else check that {} holds the kind of source --kind names and that you can write to {}.",
                         file.display(),
                         output.display()
                     ),

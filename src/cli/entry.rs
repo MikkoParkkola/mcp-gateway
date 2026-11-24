@@ -459,7 +459,6 @@ fn resolve_stats_url(
     })
 }
 
-/// Apply CLI overrides (port, host, measurement window, meta-mcp) to `config`.
 /// A command this build leaves out because it was compiled without the web UI: `command` is its path as typed.
 #[cfg(not(feature = "webui"))]
 fn without_webui(command: &str) -> ExitCode {
@@ -470,6 +469,7 @@ fn without_webui(command: &str) -> ExitCode {
     )
 }
 
+/// Apply CLI overrides (port, host, measurement window, meta-mcp) to `config`.
 fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if let Some(port) = cli.port {
         config.server.port = port;

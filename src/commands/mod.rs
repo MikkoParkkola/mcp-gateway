@@ -152,7 +152,13 @@ pub fn run_init_command(
 
     let sample_files = init_sample_capability_files(output, with_examples, profile);
     if let Err(e) = preflight_init_targets(output, &sample_files) {
-        return fail(CliExit::LocalFailure, &e.to_string(), &writable());
+        // A path in the way (a file where the folder goes, a sample already there) is named in the error.
+        let remedy = if e.kind() == std::io::ErrorKind::AlreadyExists {
+            "Remove the path named above, or choose a different path with --output.".to_owned()
+        } else {
+            writable()
+        };
+        return fail(CliExit::LocalFailure, &e.to_string(), &remedy);
     }
 
     let (starter, skipped) = if with_examples && profile == InitProfile::Local {
@@ -624,7 +630,14 @@ fn read_ca_files(
                 .map(|pair| pair.serialize_pem())
                 .map_err(|e| format!("Cannot use CA key '{}': {e}", ca_key.display()))
         })
-        .map_err(|e| fail(CliExit::LocalFailure, &e, &readable(ca_key)))?;
+        .map_err(|e| {
+            // The key loader refuses a missing file, one others can read, and anything but a PKCS#8 key.
+            let remedy = format!(
+                "Check that {} exists, that only its owner can read it, and that it holds a PKCS#8 private key.",
+                ca_key.display()
+            );
+            fail(CliExit::LocalFailure, &e, &remedy)
+        })?;
     Ok((cert, key))
 }
 #[cfg(tp2)]

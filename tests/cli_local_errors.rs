@@ -255,7 +255,8 @@ fn table() -> Vec<(&'static str, Expect)> {
                         "--grant-id",
                         "g1",
                         "--subject",
-                        "s1",
+                        // AUTHORITY:SUBJECT, so every argument is valid and the row reaches the file.
+                        "api_key:s1",
                         "--any-agent",
                         "--capability",
                         "c1",
@@ -775,4 +776,40 @@ fn setup_export_with_a_failed_client_ends_with_two_lines() {
         "error: 1 client config(s) could not be written.\n\
          Fix the clients marked FAILED above, then rerun 'mcp-gateway setup export'.\n"
     );
+}
+
+/// N3: a grant argument that cannot be read is a wrong invocation, noticed before the file is touched: exit 2, the
+/// grant command's help as the remedy, and no grants file written.
+#[test]
+fn a_bad_grant_argument_is_a_usage_error() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let file = scratch.path().join("grants.yaml");
+    let mut args = strings(&["identity", "grants", "grant", "--file", &text(&file)]);
+    args.extend(strings(&[
+        "--grant-id",
+        "g1",
+        "--subject",
+        "api_key:s1",
+        "--any-agent",
+        "--capability",
+        "c1",
+        "--reason",
+        "r",
+        "--expires-at",
+        "not-a-time",
+    ]));
+    let case = Case {
+        args,
+        exit: 2,
+        stdout: String::new(),
+        first: Pin::Starts("error: expires-at must be RFC3339"),
+        second: Pin::Exact("Run 'mcp-gateway identity grants grant --help' for usage.".to_owned()),
+    };
+    let misses = two_lines(
+        "identity grants grant (bad --expires-at)",
+        &run(&case.args),
+        &case,
+    );
+    assert!(misses.is_empty(), "{}", misses.join("\n"));
+    assert!(!file.exists(), "a refused invocation writes no grants file");
 }
