@@ -222,6 +222,10 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
             ]
         })
     });
+    // The accepted update's reload logs this on the capture's thread every
+    // time: without it the capture saw nothing and the checks below prove
+    // nothing.
+    assert!(logs.contains(RELOADED), "the log capture is dead: {logs:?}");
     for (what, text) in seen
         .iter()
         .map(|(w, t)| (*w, t.as_str()))
@@ -231,6 +235,10 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
         no_run(what, text, value);
     }
 }
+
+/// The line a reload logs for every backend it updates, on the thread that
+/// applies it: a capture holding it is live.
+const RELOADED: &str = "Config reload: backend updated backend=a";
 
 /// A current-thread runtime, so an async body inside a log capture logs on
 /// the capture's own thread.
@@ -322,10 +330,15 @@ fn k5b_the_race_refusal_leaves_no_value_in_the_audit_log_or_logs() {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
                     Err(e) => panic!("the audit log does not read: {e}"),
                 };
+                // The refusal itself logs nothing on this thread; an accepted
+                // update in the same capture shows the capture was live.
+                let (later, answer) = panel.update("a", json!({"env": {"AFTER": "1"}})).await;
+                assert_eq!(later, StatusCode::OK, "{answer}");
                 (status, body, audit)
             })
         });
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(logs.contains(RELOADED), "the log capture is dead: {logs:?}");
     for (what, text) in [
         ("the refusal", body.to_string()),
         ("audit log", audit),
