@@ -258,19 +258,22 @@ async fn t7_the_answer_is_the_configured_keys_in_table_order() {
             "name": "zeta", "backends": ["fs"], "allowed_tools": ["read_file"],
             "denied_tools": null, "admin": true, "expires_at": "2999-01-01T00:00:00Z",
             "previous_expires_at": "2999-01-01T00:00:00Z",
-            "rate_limit": 30, "last_used": null, "live": true
+            "rate_limit": 30, "last_used": null, "live": true,
+            "addressable": true
         },
         {
             "name": "alpha", "backends": ["*"], "allowed_tools": null,
             "denied_tools": ["write_file"], "admin": false, "expires_at": null,
             "previous_expires_at": null,
-            "rate_limit": 0, "last_used": null, "live": true
+            "rate_limit": 0, "last_used": null, "live": true,
+            "addressable": true
         },
         {
             "name": "mu", "backends": ["*"], "allowed_tools": null,
             "denied_tools": null, "admin": false, "expires_at": null,
             "previous_expires_at": "2999-01-01T00:00:00Z",
-            "rate_limit": 0, "last_used": null, "live": true
+            "rate_limit": 0, "last_used": null, "live": true,
+            "addressable": true
         }
     ]);
     assert_eq!(answer["keys"], expected);

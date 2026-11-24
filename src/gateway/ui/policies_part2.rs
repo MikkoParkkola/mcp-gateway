@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use super::policies::Sources;
+use super::policies::{Sources, setting, setting_pending, switch};
 use super::policies_rules::{as_compiled, decides, name, offered, shadowed};
 use crate::security::firewall::memory_scanner::MemoryScanner;
 use crate::security::firewall::tenant_guard::CrossTenantReads;
@@ -20,29 +20,6 @@ use crate::security::firewall::{
 use crate::security::posture::SecurityPosture;
 
 const FW: &str = "security.firewall";
-
-/// One setting: its path, the file's value, the enforced value and whether
-/// they differ (the screen says "takes effect after restart").
-fn setting(path: &str, file: Value, enforced: Value) -> Value {
-    let pending = file != enforced;
-    setting_pending(path, file, enforced, pending)
-}
-
-fn setting_pending(path: &str, file: Value, enforced: Value, pending: bool) -> Value {
-    let mut s = serde_json::Map::new();
-    s.insert("path".to_owned(), Value::from(path));
-    s.insert("file".to_owned(), file);
-    s.insert("enforced".to_owned(), enforced);
-    s.insert("pending_restart".to_owned(), Value::Bool(pending));
-    Value::Object(s)
-}
-
-/// A switch, `on` when its enforced value is.
-fn switch(path: &str, file: bool, enforced: bool) -> Value {
-    let mut s = setting(path, json!(file), json!(enforced));
-    s["on"] = json!(enforced);
-    s
-}
 
 fn fw_path(field: &str) -> String {
     format!("{FW}.{field}")
@@ -338,6 +315,5 @@ fn relay(file: &FirewallConfig, run: &FirewallConfig, view: &CollusionView) -> V
         ],
         "firewall": switch(&fw_path("enabled"), file.enabled, run.enabled),
         "inferred_classes": SENSITIVE_CLASSES,
-        "read_only": true,
     })
 }

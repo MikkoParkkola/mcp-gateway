@@ -127,6 +127,15 @@ fn upgrade_deletes_backend_circuit_breaker_block() {
     );
 }
 
+#[cfg(feature = "a2a")]
+#[test]
+fn upgrade_deletes_backend_transport() {
+    upgrade_deletes(
+        "backends:\n  agent:\n    transport: a2a\n    a2a_url: \"https://agent.invalid\"\n",
+        "backends:\n  agent:\n    a2a_url: \"https://agent.invalid\"\n",
+    );
+}
+
 /// T6b, T7b: a column-0 comment after a removed block stays.
 #[test]
 fn upgrade_deletes_marketplace_block_and_keeps_the_next_comment() {
