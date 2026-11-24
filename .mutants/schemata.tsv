@@ -1,0 +1,3 @@
+head_sha	40ad514974e43dc87eec4771e3adbde2dc1d0f7a
+#mutant s5-clr
+mcp_gateway	cost_accounting::enforcer::standing_tests::s5_the_first_key_refusal_of_the_day_is_recorded_once	src/cost_accounting/enforcer_standing_tests.rs:132
