@@ -64,6 +64,31 @@ pub(in crate::gateway::ui) fn request_answer(req: &AddBackendRequest) -> Option<
     None
 }
 
+/// The add's own checks on the request, in order, before anything is
+/// resolved: the tool selection, the faults [`request_answer`] names, then a
+/// credential in the saved command or URL (it would land in gateway.yaml as
+/// text), refused by field.
+pub(super) fn add_answer(state: &AppState, req: &AddBackendRequest) -> Option<Response> {
+    if let Some(list) = &req.allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(&req.name, list)
+    {
+        let refused = refused.to_string();
+        return Some(
+            crate::gateway::ui::errors::flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused)
+                .into_response(),
+        );
+    }
+    request_answer(req).or_else(|| {
+        super::update_refusals::credential_answer(
+            state,
+            RefusalKind::Add,
+            &req.name,
+            req.command.as_deref(),
+            req.url.as_deref(),
+        )
+    })
+}
+
 /// The request's headers onto the backend about to be written, and the
 /// override only when asked as `true`. Both are set only when given: a
 /// registry entry's own headers (a login template) are never replaced by an

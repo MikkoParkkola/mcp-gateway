@@ -478,7 +478,9 @@ async fn recording_server(seen: Seen) -> String {
                 async move {
                     let mut line = String::from_utf8_lossy(&body).into_owned();
                     for (name, value) in &headers {
-                        line.push_str(&format!(" {name}={}", value.to_str().unwrap_or("")));
+                        let value = value.to_str().unwrap_or("");
+                        let _ =
+                            std::fmt::Write::write_fmt(&mut line, format_args!(" {name}={value}"));
                     }
                     seen.lock().push(line);
                     let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);

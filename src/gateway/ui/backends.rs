@@ -172,24 +172,7 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
 
-    if let Some(list) = &req.allowed_tools
-        && let Err(refused) = crate::config::check_backend_allowed_tools(&req.name, list)
-    {
-        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
-    }
-    if let Some(answer) = add_checks::request_answer(&req) {
-        return answer;
-    }
-
-    // A credential in the saved command or URL is refused by field before
-    // anything is resolved (it would land in gateway.yaml as text).
-    if let Some(answer) = update_refusals::credential_answer(
-        &state,
-        RefusalKind::Add,
-        &req.name,
-        req.command.as_deref(),
-        req.url.as_deref(),
-    ) {
+    if let Some(answer) = add_checks::add_answer(&state, &req) {
         return answer;
     }
     // Resolve the whole backend: transport, description, and for a registry
