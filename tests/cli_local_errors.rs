@@ -524,7 +524,8 @@ fn the_table_covers_every_local_leaf() {
     assert_eq!(converted, expected, "the converted leaves");
     let exempt: Vec<&str> = rows
         .iter()
-        .filter(|(_, e)| matches!(e, Expect::Exempt(_)))
+        // An exemption counts only with its reason written down.
+        .filter(|(_, e)| matches!(e, Expect::Exempt(why) if !why.trim().is_empty()))
         .map(|(k, _)| *k)
         .collect();
     assert_eq!(exempt, ["serve"]);

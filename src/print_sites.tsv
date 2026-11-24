@@ -30,7 +30,6 @@ P	src/security/firewall/construct.rs	Firewall::from_config	audit::AuditLogger::s
 T	src/bin/provenance-eval.rs	main	-	the provenance-eval tool (its own binary)
 T	src/bin/provenance-eval.rs	print_report	-	the provenance-eval tool (its own binary)
 T	src/capability/pin_file.rs	pin_file_until	-	only production caller is commands/cap.rs:171 (the cap subcommand)
-T	src/cli/entry.rs	dispatch	-	CLI dispatch: a subcommand this build lacks
 T	src/cli/entry.rs	resolve_stats_url	-	the stats subcommand
 T	src/cli/entry.rs	run_runtime_command	-	the runtime subcommand
 T	src/cli/entry.rs	write_discovered_to_config	-	the discover subcommand write report
