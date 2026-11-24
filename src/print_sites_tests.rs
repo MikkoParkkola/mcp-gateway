@@ -160,6 +160,8 @@ impl<'ast> Visit<'ast> for Finder {
         }
     }
 
+    // A site is where a print or a stream handle is made. A serve-path call into a tier T output fn, or a write
+    // through a handle whose creation site is already listed, changes no site, so this check does not see it.
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let syn::Expr::Path(callee) = &*call.func
             && call.args.is_empty()

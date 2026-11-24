@@ -441,8 +441,9 @@ impl Config {
             return Err(Error::ConfigValidation(why));
         }
         if self.backends.contains_key(capabilities) {
+            let shown = crate::log_escape::escaped(capabilities);
             return Err(Error::ConfigValidation(format!(
-                "capabilities.name = {capabilities:?} is also backends.{capabilities}; the \
+                "capabilities.name = {capabilities:?} is also backends.{shown}; the \
                  capabilities backend shares the backend name space. Rename one of them."
             )));
         }
