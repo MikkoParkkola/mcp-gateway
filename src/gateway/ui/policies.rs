@@ -198,7 +198,11 @@ fn with_hits(mut model: Value, sources: &Sources<'_>, hits: &RuleHits) -> Value 
         days.as_ref().map(|d| at(d).to_rfc3339())
     };
     model["hits"] = json!({
-        "complete": hits.stop == Some(Stopped::End),
+        "complete": mutant!(
+            "M18",
+            matches!(hits.stop, Some(Stopped::End | Stopped::WindowPassed)),
+            hits.stop == Some(Stopped::End)
+        ),
         "stopped": hits.stop.map(Stopped::word),
         "from": bound(|d| d.from),
         "older_to": bound(|d| d.older_to),

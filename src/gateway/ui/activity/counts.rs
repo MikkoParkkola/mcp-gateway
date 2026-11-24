@@ -18,7 +18,7 @@ use super::joiner::Joiner;
 use super::reader::{
     Cursor, Limits, Line, Look, Seen, WINDOW, read_page_joined, restarted_mid_read, timestamp,
 };
-use super::rows::{Check, Kind, row_id};
+use super::rows::{Check, Kind, NOT_A_CALL, row_id};
 use crate::clock::ClockBeforeEpoch;
 use crate::security::decision_record::read::decision_evidence;
 
@@ -86,6 +86,7 @@ pub(super) fn scan_window(
     let joiner = RefCell::new(Joiner::new(check));
     // This pass held a timed line; one of them at or after the start.
     let (timed, fresh) = (Cell::new(false), Cell::new(false));
+    let saw_old = Cell::new(false);
     let mut keep = |line: &Line, seen: Seen| {
         let admitted = joiner.borrow_mut().admit(line, seen, access);
         let Some(at) = timestamp(&line.entry) else {
@@ -94,6 +95,8 @@ pub(super) fn scan_window(
         timed.set(true);
         if at >= *window.start() {
             fresh.set(true);
+        } else {
+            saw_old.set(true);
         }
         // Only a record the list can show as a row counts (it needs its
         // counter and entry hash), so a count never exceeds what Activity
@@ -102,7 +105,7 @@ pub(super) fn scan_window(
             && window.contains(&at)
             && row_id(line).is_some()
         {
-            each_record(line, kind, &joined, at);
+            each_record(line, kind, mutant!("M29", &NOT_A_CALL, &joined), at);
         }
         // Nothing is held: the caller folds as the records go by.
         false
@@ -116,6 +119,16 @@ pub(super) fn scan_window(
     loop {
         timed.set(false);
         fresh.set(false);
+        saw_old.set(false);
+        if mutant!("M30", true, false) {
+            *joiner.borrow_mut() = Joiner::new(check);
+        }
+        if mutant!("M28", after_pass(Pass { bytes: 0 }).is_break(), false) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "the caller stopped the scan",
+            ));
+        }
         let limits = Limits {
             matches: usize::MAX,
             bytes: COUNT_PASS_BYTES.min(byte_cap.saturating_sub(scanned)),
@@ -131,17 +144,22 @@ pub(super) fn scan_window(
             look,
             &mut keep,
         )?;
-        restarted_mid_read(cursor.as_ref(), &page)?;
+        if mutant!("M22", false, true) {
+            restarted_mid_read(cursor.as_ref(), &page)?;
+        }
         carried = page.above_end;
         scanned += page.bytes_examined;
         let pass = Pass {
             bytes: page.bytes_examined,
         };
-        if after_pass(pass).is_break() {
+        if mutant!("M24", false, after_pass(pass).is_break()) {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "the caller stopped the scan",
             ));
+        }
+        if mutant!("M20", saw_old.get(), false) {
+            return Ok(ScanEnd::WindowPassed);
         }
         let Some(next) = page.next else {
             return Ok(ScanEnd::End);
@@ -149,9 +167,9 @@ pub(super) fn scan_window(
         old_passes = if timed.get() && !fresh.get() {
             old_passes + 1
         } else {
-            0
+            mutant!("M31", old_passes, 0)
         };
-        if old_passes == 2 {
+        if mutant!("M19", false, old_passes == mutant!("M27", 1, 2)) {
             return Ok(ScanEnd::WindowPassed);
         }
         if scanned >= byte_cap {
@@ -213,6 +231,11 @@ impl RuleHits {
     /// answer's `complete` says so.
     pub(in crate::gateway::ui) fn counts(&self, id: Option<&str>) -> Option<(u64, u64)> {
         match self.stop {
+            Some(Stopped::Rotated) if mutant!("M26", true, false) => Some(
+                id.and_then(|id| self.per_rule.get(id))
+                    .copied()
+                    .unwrap_or_default(),
+            ),
             None | Some(Stopped::Rotated) => None,
             Some(_) => Some(
                 id.and_then(|id| self.per_rule.get(id))
@@ -283,7 +306,7 @@ pub(in crate::gateway::ui) fn count_rule_hits(
                 return;
             };
             let slot = per_rule.entry(rule).or_default();
-            if at >= days.split {
+            if mutant!("M17", at > days.split, at >= days.split) {
                 slot.0 += 1;
             } else {
                 slot.1 += 1;
@@ -295,7 +318,7 @@ pub(in crate::gateway::ui) fn count_rule_hits(
         Ok(ScanEnd::End) => Stopped::End,
         Ok(ScanEnd::WindowPassed) => Stopped::WindowPassed,
         Ok(ScanEnd::Cap) => Stopped::Cap,
-        Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+        Err(e) if e.kind() == io::ErrorKind::Interrupted && mutant!("M25", false, true) => {
             // Records may have been read twice: none of it is a count.
             per_rule.clear();
             Stopped::Rotated
