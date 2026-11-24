@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Importing capabilities from an `OpenAPI` document.
 
+use std::path::Path;
+
+use mcp_gateway::capability::OpenApiConverter;
+use mcp_gateway::gateway::test_helpers::name_taken;
+
 use super::*;
 
 // ── OpenAPI import tests ──────────────────────────────────────────────────────
@@ -289,4 +294,307 @@ async fn a_spec_over_its_budget_is_a_502_naming_the_budget() {
             "{route} names the budget: {shown}"
         );
     }
+}
+
+// ── An import never replaces a capability file ───────────────────────────────
+
+/// Two read operations: `listUsers` (file `listusers.yaml`) and `getUser`.
+const USERS_SPEC: &str = r#"
+openapi: "3.0.0"
+info:
+  title: Users
+  version: "1.0"
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        "200":
+          description: ok
+  /users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+"#;
+
+/// An operator's own `listusers.yaml`, which no import may touch.
+const KEPT: &[u8] = b"# the operator's own capability\nname: listusers\n";
+
+/// A capability directory holding [`KEPT`] as `listusers.yaml`.
+fn dir_with_listusers() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("listusers.yaml"), KEPT).unwrap();
+    dir
+}
+
+/// The file names in `dir`, sorted.
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A router whose capability directories are `dirs`, in that order, and the
+/// task store it holds.
+async fn router_over(dirs: &[&Path]) -> (Router, TempDir) {
+    let (mut state, store) = make_app_state(None, None).await;
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .capability_dirs = dirs
+        .iter()
+        .map(|dir| dir.to_str().expect("utf-8 tempdir").to_string())
+        .collect();
+    (create_router(state), store)
+}
+
+async fn import(router: &Router, body: Value) -> (StatusCode, Value) {
+    send_json(router, Method::POST, "/ui/api/import/openapi", Some(body)).await
+}
+
+/// The `errors` entry for a tool refused because its file is there.
+fn refused(name: &str) -> Value {
+    json!(format!("{name}: {}", name_taken(name)))
+}
+
+/// `listusers.yaml` is still the operator's own.
+fn assert_kept(dir: &Path) {
+    let now = std::fs::read(dir.join("listusers.yaml")).unwrap();
+    assert_eq!(now, KEPT, "the existing listusers.yaml was changed");
+}
+
+/// IMPOW.1, the UI route: the clashing tool is refused and named, its file
+/// keeps its bytes, and the other tool is still written.
+#[tokio::test]
+async fn impow1_an_import_keeps_an_existing_file_and_writes_the_rest() {
+    let dir = dir_with_listusers();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let (status, body) = import(&router, json!({ "spec": USERS_SPEC })).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"], json!(["getuser.yaml"]), "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    assert_kept(dir.path());
+    assert_eq!(names_in(dir.path()), ["getuser.yaml", "listusers.yaml"]);
+}
+
+/// IMPOW.1: every selected tool refused is a conflict, not a server failure.
+/// The selection names the file name the converter gives, `listusers`.
+#[tokio::test]
+async fn impow1_an_import_whose_every_tool_is_taken_is_a_409() {
+    let dir = dir_with_listusers();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let body = json!({ "spec": USERS_SPEC, "selected_tools": ["listusers"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["imported"], json!([]), "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    assert_kept(dir.path());
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
+}
+
+/// IMPOW.1, status edge: nothing selected is 200 and writes nothing, as
+/// before, even beside an existing file.
+#[tokio::test]
+async fn impow1_an_import_with_no_tool_selected_is_200_and_writes_nothing() {
+    let dir = dir_with_listusers();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let body = json!({ "spec": USERS_SPEC, "selected_tools": [] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"], json!([]), "{body}");
+    assert_eq!(body["errors"], json!([]), "{body}");
+    assert_kept(dir.path());
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
+}
+
+/// IMPOW.1, status edge: a refusal beside a write the file system fails is
+/// still a 500, as any failed write is. The failing write is a file name no
+/// file system takes (256 letters), so nothing is pre-created for it.
+#[tokio::test]
+async fn impow1_a_taken_name_beside_a_failed_write_is_a_500() {
+    let dir = dir_with_listusers();
+    let (router, _store) = router_over(&[dir.path()]).await;
+    let long = "a".repeat(256);
+    let spec = format!(
+        "{USERS_SPEC}  /long:\n    get:\n      operationId: {long}\n      responses:\n        \"200\":\n          description: ok\n"
+    );
+
+    let body = json!({ "spec": spec, "selected_tools": ["listusers", long] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body["imported"], json!([]), "{body}");
+    let errors = body["errors"].as_array().expect("errors");
+    assert_eq!(errors.len(), 2, "{body}");
+    assert!(errors.contains(&refused("listusers")), "{body}");
+    assert_kept(dir.path());
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
+}
+
+/// IMPOW.1: the gateway loads every capability directory, so a name taken in
+/// the second one is refused too, and nothing lands in the first.
+#[tokio::test]
+async fn impow1_a_name_taken_in_a_second_directory_is_refused() {
+    let first = TempDir::new().unwrap();
+    let second = dir_with_listusers();
+    let (router, _store) = router_over(&[first.path(), second.path()]).await;
+
+    let body = json!({ "spec": USERS_SPEC, "selected_tools": ["listusers"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    assert!(names_in(first.path()).is_empty(), "{body}");
+    assert_kept(second.path());
+}
+
+/// IMPOW.1, `cap import`: the clashing file keeps its bytes, the refusal is
+/// on stderr, the other tool is written, and the command exits 1; into a
+/// fresh directory it exits 0.
+#[test]
+fn impow1_cap_import_keeps_an_existing_file_and_exits_1() {
+    let work = TempDir::new().unwrap();
+    let spec = work.path().join("users.yaml");
+    std::fs::write(&spec, USERS_SPEC).unwrap();
+    let run = |out: &Path| {
+        crate::gateway_bin::run_cli(
+            &[
+                "cap",
+                "import",
+                spec.to_str().expect("utf-8 path"),
+                "--output",
+                out.to_str().expect("utf-8 path"),
+            ],
+            &[],
+            None,
+        )
+    };
+
+    let dir = dir_with_listusers();
+    let out = run(dir.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(&name_taken("listusers")), "{stderr}");
+    // The summary counts what was written, not what was generated.
+    assert!(stdout.contains("Imported 1 tools"), "{stdout}");
+    assert!(stderr.contains("1 tools could not be written"), "{stderr}");
+    assert_kept(dir.path());
+    assert_eq!(names_in(dir.path()), ["getuser.yaml", "listusers.yaml"]);
+
+    let fresh = TempDir::new().unwrap();
+    let out = run(fresh.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stdout.contains("Imported 2 tools"), "{stdout}");
+    assert!(!stderr.contains("could not be written"), "{stderr}");
+    assert_eq!(names_in(fresh.path()), ["getuser.yaml", "listusers.yaml"]);
+}
+
+/// IMPOW.2: two operations of one document whose names format the same
+/// (`listUsers`, `ListUsers`): one is written, the other refused, the name
+/// listed once, and the file is exactly one operation's conversion.
+#[tokio::test]
+async fn impow2_two_operations_with_one_file_name_write_one_of_them() {
+    const SPEC: &str = r#"
+openapi: "3.0.0"
+info:
+  title: Users
+  version: "1.0"
+paths:
+  /b:
+    get:
+      operationId: listUsers
+      responses:
+        "200":
+          description: ok
+  /a:
+    get:
+      operationId: ListUsers
+      responses:
+        "200":
+          description: ok
+"#;
+    let candidates: Vec<String> = OpenApiConverter::new()
+        .convert_string(SPEC)
+        .expect("the document converts")
+        .into_iter()
+        .filter(|cap| cap.name == "listusers")
+        .map(|cap| cap.yaml)
+        .collect();
+    assert_eq!(candidates.len(), 2, "both operations convert to listusers");
+    assert_ne!(candidates[0], candidates[1], "the two conversions differ");
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let (status, body) = import(&router, json!({ "spec": SPEC })).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["imported"], json!(["listusers.yaml"]), "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    let written = std::fs::read_to_string(dir.path().join("listusers.yaml")).unwrap();
+    assert!(candidates.contains(&written), "a mix: {written}");
+}
+
+/// IMPOW.3: with no clash, an import answers and writes as before.
+#[tokio::test]
+async fn impow3_an_import_with_no_clash_answers_as_before() {
+    let dir = TempDir::new().unwrap();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let (status, body) = import(&router, json!({ "spec": USERS_SPEC })).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "imported": ["getuser.yaml", "listusers.yaml"],
+            "skipped": [],
+            "errors": [],
+        })
+    );
+    for cap in OpenApiConverter::new().convert_string(USERS_SPEC).unwrap() {
+        let written = std::fs::read_to_string(dir.path().join(format!("{}.yaml", cap.name)));
+        assert_eq!(written.unwrap(), cap.yaml, "{}", cap.name);
+    }
+}
+
+/// IMPOW.1, the writer's own refusal through the UI: a dangling link at the
+/// name passes the directory check (it follows links) but the exclusive
+/// create refuses it, and that refusal is a taken name (409), not a failure.
+#[cfg(unix)]
+#[tokio::test]
+async fn impow1_a_name_held_by_a_dangling_link_is_taken_not_a_failure() {
+    let dir = TempDir::new().unwrap();
+    let link = dir.path().join("listusers.yaml");
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+    let (router, _store) = router_over(&[dir.path()]).await;
+
+    let body = json!({ "spec": USERS_SPEC, "selected_tools": ["listusers"] });
+    let (status, body) = import(&router, body).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["errors"], json!([refused("listusers")]), "{body}");
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        dir.path().join("nowhere")
+    );
+    assert_eq!(names_in(dir.path()), ["listusers.yaml"]);
 }
