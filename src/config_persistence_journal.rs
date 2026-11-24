@@ -37,9 +37,10 @@ const VERSION: u32 = 1;
 /// `open_locked` repairs it under the config lock, and `finish_start` then has
 /// `drain_locked` deliver its records to the serving audit log), or refuses
 /// with the startup gate's own reason. A command it names is written in
-/// backticks and must resolve in the CLI's command tree
-/// (`config_persistence_journal_remedy_tests.rs`).
-pub(super) const SETTLEMENT_PENDING: &str = "A config write is waiting for its audit record. Start or restart the gateway with `mcp-gateway serve`, with the audit log that write was bound to configured and reachable: its startup settles the write or says why it cannot. Once it has started, run this again.";
+/// backticks and must parse with the CLI's own parser
+/// (`config_persistence_journal_remedy_tests.rs`). The journal sits beside the
+/// config it belongs to, so only a start on that same file settles it.
+pub(super) const SETTLEMENT_PENDING: &str = "A config write is waiting for its audit record. Start or restart the gateway with `mcp-gateway serve` on this same config file, with the audit log that write was bound to configured and reachable: its startup settles the write or says why it cannot. Once it has started, run this again.";
 
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;
