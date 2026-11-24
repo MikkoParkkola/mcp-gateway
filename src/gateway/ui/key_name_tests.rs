@@ -100,26 +100,40 @@ fn serve(fx: &Fixture) -> (SocketAddr, Seen) {
     (addr, seen)
 }
 
+/// What one DELETE did: every path the router received for it, and its
+/// answer.
+struct Deleted {
+    paths: Vec<String>,
+    status: u16,
+    answer: Value,
+}
+
 /// DELETE the key at `written` (the address as typed after
-/// `/ui/api/keys/`), the URL parsed the standard way; returns the path the
-/// router received.
-fn delete_at(fx: &Fixture, addr: SocketAddr, seen: &Seen, written: &str) -> String {
+/// `/ui/api/keys/`), the URL parsed the standard way. Redirects are not
+/// followed, so `paths` holds exactly what this one request reached.
+fn delete_at(fx: &Fixture, addr: SocketAddr, seen: &Seen, written: &str) -> Deleted {
     let url = format!("http://{addr}/ui/api/keys/{written}");
     let body = json!({"revision": fx.revision()}).to_string();
-    fx.rt.block_on(async {
-        reqwest::Client::new()
+    let from = seen.lock().expect("seen").len();
+    let (status, text) = fx.rt.block_on(async {
+        let reply = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client")
             .delete(&url)
             .header("content-type", "application/json")
             .body(body)
             .send()
             .await
-            .expect("an answer")
+            .expect("an answer");
+        let status = reply.status().as_u16();
+        (status, reply.text().await.unwrap_or_default())
     });
-    seen.lock()
-        .expect("seen")
-        .last()
-        .cloned()
-        .expect("the router received the request")
+    Deleted {
+        paths: seen.lock().expect("seen")[from..].to_vec(),
+        status,
+        answer: serde_json::from_str(&text).unwrap_or(Value::Null),
+    }
 }
 
 /// POST a create for `name` with a secret of its own: the fixture's fixed
@@ -163,7 +177,8 @@ fn keyname1_a_dot_name_cannot_be_revoked_by_its_address() {
         ),
     ] {
         for written in spellings {
-            assert_eq!(delete_at(&fx, addr, &seen, written), received, "{written}");
+            let sent = delete_at(&fx, addr, &seen, written);
+            assert_eq!(sent.paths, [received], "{written}");
             assert!(
                 listed(&fx.get(), name).is_some(),
                 "{written} revoked {name}"
@@ -176,8 +191,13 @@ fn keyname1_a_dot_name_cannot_be_revoked_by_its_address() {
         ("a#b", "a%23b"),
         (BEL, "a%07b"),
     ] {
-        let path = delete_at(&fx, addr, &seen, written);
-        assert_eq!(path, format!("/ui/api/keys/{written}"));
+        // This request, and only it, reached the key's own address and
+        // revoked that key: not a collapsed path that removed another one.
+        let sent = delete_at(&fx, addr, &seen, written);
+        assert_eq!(sent.paths, [format!("/ui/api/keys/{written}")]);
+        assert_eq!(sent.status, 200, "{written}: {}", sent.answer);
+        assert_eq!(sent.answer["revoked"], true, "{written}: {}", sent.answer);
+        assert_eq!(sent.answer["name"], name, "{written}: {}", sent.answer);
         assert!(
             listed(&fx.get(), name).is_none(),
             "{written} did not revoke"
@@ -206,11 +226,10 @@ fn keyname2_the_create_route_refuses_an_unaddressable_name() {
         assert_eq!(body["error"], "name_not_addressable", "{name:?}: {body}");
         let message = crate::config::name_refusal("API key name", name).expect("refused");
         assert_eq!(body["message"], message, "{name:?}");
-        assert!(
-            !sent.body.contains('\u{7}'),
-            "a raw control byte: {}",
-            sent.body
-        );
+        // Decoded: JSON escapes a raw control byte on the wire, so only the
+        // parsed message can show one.
+        let shown = body["message"].as_str().unwrap_or_default();
+        assert!(!shown.contains('\u{7}'), "a raw control byte: {shown:?}");
         assert_eq!(fx.bytes(), before, "{name:?}: gateway.yaml changed");
     }
     for name in ["a/b", "a?b", "a#b"] {

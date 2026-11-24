@@ -6,7 +6,9 @@
 //! The route checks, in order: admin, a config file, reload and a loadable
 //! file, a free name, a current revision, then the values themselves. Every
 //! refusal is fixed text that names a field at most, never the body or a
-//! value. The secret is generated here and nowhere else (see `write`).
+//! value. One refusal quotes a name: a name its own routes cannot address
+//! gets the shared name rule's message, the name escaped (a key's name is
+//! no secret). The secret is generated here and nowhere else (see `write`).
 
 use std::sync::{Arc, Mutex};
 

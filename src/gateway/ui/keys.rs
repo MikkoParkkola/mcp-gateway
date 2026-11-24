@@ -72,9 +72,11 @@ fn with_cli_host(host: Option<&str>, mut entry: Value) -> Value {
     entry
 }
 
-/// Whether the key's own routes can address `name`: false for a name the
-/// shared rule refuses (`.`, `..`, a control character), which only a hand
-/// edit of gateway.yaml can remove.
+/// Whether `name` passes the shared name rule, the one the create route
+/// applies: false for `.`, `..` and a name holding a control character. A
+/// `.` or `..` key cannot be revoked by its address (a client drops that
+/// path segment), so only a hand edit of gateway.yaml removes it; a
+/// control-character key can still be revoked with its encoded address.
 fn addressable(name: &str) -> bool {
     crate::config::name_refusal("API key name", name).is_none()
 }
