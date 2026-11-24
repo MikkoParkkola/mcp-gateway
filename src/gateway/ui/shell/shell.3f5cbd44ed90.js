@@ -218,8 +218,7 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-/** The words for a server whose config entry turns it off. */
-export const OFF_WORD = 'Off';
+/** The banner and next step for a server whose config entry turns it off; its word comes from the glossary. */
 export const OFF_BANNER = (name) => `${name} is turned off in its gateway.yaml entry. The gateway leaves it stopped, and its tools are out of reach for every key.`;
 export const OFF_NEXT = 'Turn it back on from its Settings tab.';
 
@@ -238,10 +237,14 @@ export const GLOSSARY = {
     refused: 'Refused',
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
-    off: OFF_WORD,
+    // Not Off: that word is also a value the HTML autocomplete attribute takes.
+    off: 'Disabled',
   },
   stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
+
+/** The word for a server whose config entry turns it off, read from the glossary. */
+export const OFF_WORD = GLOSSARY.server.off;
 
 const unlistedStates = new Set();
 
