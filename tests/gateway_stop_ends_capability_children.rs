@@ -292,10 +292,11 @@ async fn sigterm_ends_an_idle_capability_child_by_closing_its_stdin() {
 
 /// Initialize the stdio gateway, invoke the capability once, and return the
 /// answer to that call (other lines, the initialize answer among them, are
-/// skipped).
+/// skipped). Both pipes are borrowed: the row keeps its read end open until
+/// the gateway exits, so the end of the gateway's stdin is the only stop.
 async fn call_over_stdio(
     stdin: &mut tokio::process::ChildStdin,
-    mut stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stdout: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     root: &Path,
 ) -> String {
     let messages = [
@@ -378,8 +379,8 @@ async fn closing_stdin_ends_an_idle_capability_child_by_closing_its_stdin() {
             .expect("the gateway binary starts"),
     );
     let mut stdin = gateway.child_mut().stdin.take().expect("its stdin");
-    let stdout = BufReader::new(gateway.child_mut().stdout.take().expect("its stdout")).lines();
-    let answer = call_over_stdio(&mut stdin, stdout, &root).await;
+    let mut stdout = BufReader::new(gateway.child_mut().stdout.take().expect("its stdout")).lines();
+    let answer = call_over_stdio(&mut stdin, &mut stdout, &root).await;
     let pid = pid_in(&answer)
         .unwrap_or_else(|| panic!("the call named no child pid: {answer}\n{}", logs(&root)));
     let group = foreign_group(pid);
