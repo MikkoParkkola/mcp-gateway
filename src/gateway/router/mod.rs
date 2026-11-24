@@ -531,6 +531,10 @@ mod session_capacity_degrade_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod session_capacity_tests;
+/// A settings save's outcome and intent id on its one admin record.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod settings_save_audit_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod slot_quota_direct_tests;

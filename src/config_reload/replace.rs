@@ -19,7 +19,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::config::UnreadConfig;
@@ -149,41 +149,6 @@ pub(crate) struct ReplaceOutcome {
     pub(crate) intent_id: Option<IntentId>,
 }
 
-/// What a write got to, filled by its task as it goes and read by
-/// [`spawn_locked`] after the join, so a task that panicked or was aborted
-/// after its append still yields the intent id.
-#[derive(Debug, Default)]
-pub(crate) struct WriteTrace {
-    intent_id: std::sync::OnceLock<IntentId>,
-    /// Set immediately before the new bytes are written.
-    written: AtomicBool,
-    /// Set when the original was put back after `written`.
-    restored: AtomicBool,
-}
-
-impl WriteTrace {
-    /// The intent this write appended; a write appends one at most.
-    fn keep_intent(&self, id: IntentId) {
-        let _ = self.intent_id.set(id);
-    }
-
-    fn snapshot(&self) -> Trace {
-        Trace {
-            intent_id: self.intent_id.get().cloned(),
-            written: self.written.load(Ordering::SeqCst),
-            restored: self.restored.load(Ordering::SeqCst),
-        }
-    }
-}
-
-/// The plain copy of a [`WriteTrace`] a caller gets beside a refused write.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Trace {
-    pub(crate) intent_id: Option<IntentId>,
-    pub(crate) written: bool,
-    pub(crate) restored: bool,
-}
-
 /// Why nothing was applied. Every kind but `RollbackFailed` and
 /// `Unconfirmed` leaves the old file on disk and running; those two leave a
 /// journal that the next holder of the config lock recovers.
@@ -294,6 +259,8 @@ pub(crate) mod order;
 mod audit;
 #[path = "replace_receipt.rs"]
 mod receipt;
+#[path = "replace_trace.rs"]
+mod trace;
 pub(crate) use audit::IntentId;
 #[cfg(feature = "webui")]
 pub(crate) use audit::replace_audited_revoke;
@@ -307,6 +274,7 @@ pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
 pub(crate) use audit::{IntentKind, replace_audited, replace_traced};
 #[cfg(feature = "webui")]
 pub(crate) use receipt::RevokeCheck;
+pub(crate) use trace::{Trace, WriteTrace};
 
 #[path = "replace_entries.rs"]
 mod entries;
@@ -698,11 +666,21 @@ impl ReloadContext {
         entries.renamed = true;
         // From here the new bytes may be on disk.
         entries.trace.written.store(true, Ordering::SeqCst);
-        // Test seam: a hook here can make the write below fail.
+        // Test seam: an armed `FailWrite` fails the write before it starts,
+        // so the rollback after it has the original to put back.
         #[cfg(test)]
-        order::record(target, "write");
+        let injected =
+            journal::fault::fires(target, |f| matches!(f, journal::fault::Fault::FailWrite))
+                .is_some();
+        #[cfg(not(test))]
+        let injected = false;
         // gateway.yaml is owner-only, as every config write leaves it.
-        if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
+        let written = if injected {
+            Err(std::io::Error::other("injected: the write fails"))
+        } else {
+            write_atomic(target, new, FileMode::Private, Symlink::Replace)
+        };
+        if let Err(e) = written {
             unkeep();
             return Err(Self::roll_back(
                 target,
