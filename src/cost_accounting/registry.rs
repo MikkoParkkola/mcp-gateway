@@ -70,6 +70,7 @@ impl CostRegistry {
     /// The lowest price a priced call can cost: the cheapest registered price
     /// above zero, and the default price when it is above zero, since any
     /// tool not registered costs that. `None` when no call is priced.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     #[must_use]
     pub(crate) fn cheapest_price(&self) -> Option<f64> {
         self.costs

@@ -17,7 +17,9 @@ pub(crate) struct KeyRefusal {
     pub(crate) limit: f64,
 }
 
-/// One key's figures, read in one short step.
+/// One key's figures, read in one short step. The Costs page reads this and
+/// the methods below it, so a build without the web UI has no caller.
+#[cfg_attr(not(feature = "webui"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct KeyStandingInputs {
     /// The key's own limit in `governance`; `None` without one.
@@ -58,6 +60,7 @@ impl BudgetEnforcer {
 
     /// `key`'s standing figures at `now` under `governance`: the same row,
     /// reload charge and in-flight holds the check judges a call by.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     pub(crate) fn key_standing_inputs(
         &self,
         governance: &CostGovernanceConfig,
@@ -87,6 +90,7 @@ impl BudgetEnforcer {
     }
 
     /// The price of the cheapest priced call, as a check converts it.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     pub(crate) fn cheapest_price(&self) -> Option<f64> {
         self.registry
             .cheapest_price()
@@ -95,6 +99,7 @@ impl BudgetEnforcer {
 
     /// When daily limits next reset after `now`: the next local midnight, or
     /// the next UTC midnight while a legacy UTC day is still open.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     pub(crate) fn resets_at(&self, now: u64) -> u64 {
         crate::local_day::next_reset(
             &crate::local_day::host_zone(),

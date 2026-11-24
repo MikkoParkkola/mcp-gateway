@@ -246,6 +246,7 @@ impl KeyCost {
     /// in USD per hour. The hour holding `now` is left out; an hour with no
     /// spend counts as zero.
     #[cfg(any(test, feature = "cost-governance"))]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     #[must_use]
     pub(crate) fn rate_3h(&self, now: u64) -> f64 {
         let hour = now / 3600;
@@ -557,6 +558,7 @@ impl CostTracker {
     /// `key_name`'s spend rate over the last three complete hours before
     /// `now`, USD per hour; `None` for a key with no entry.
     #[cfg(feature = "cost-governance")]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     #[must_use]
     pub(crate) fn key_rate_3h(&self, key_name: &str, now: u64) -> Option<f64> {
         self.per_key.get(key_name).map(|key| key.rate_3h(now))
