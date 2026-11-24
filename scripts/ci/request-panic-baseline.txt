@@ -11,7 +11,6 @@ src/capability/executor/client.rs	.expect("capabilities.egress_proxy validated a
 src/capability/executor/client.rs	unreachable!("send_with_retry exhausted attempts without returning")	1
 src/capability/executor/graphql.rs	.expect("static content-type is valid"),	1
 src/capability/executor/jsonrpc.rs	.expect("static content-type is valid"),	1
-src/capability/executor/mcp.rs	let child = map.get_mut(&key).expect("present: inserted above");	1
 src/config/secret_ref.rs	Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").expect("constant template pattern")	1
 src/config/secret_ref.rs	let whole = caps.get(0).expect("group 0 always matches");	1
 src/context_integrity/kernel.rs	.expect("destructive action patterns must compile")	1
