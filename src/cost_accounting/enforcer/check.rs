@@ -82,7 +82,16 @@ impl BudgetEnforcer {
                         ));
                     }
                     AlertAction::Block => {
-                        blocked = true;
+                        blocked = mutant!(
+                            "s5-clr",
+                            {
+                                if let Some(key) = api_key_name {
+                                    self.key_refused.remove(key);
+                                }
+                                true
+                            },
+                            true
+                        );
                         block_reason = Some(format!(
                             "Tool '{tool_name}' daily budget exceeded: ${projected:.4} >= ${limit:.2}"
                         ));
