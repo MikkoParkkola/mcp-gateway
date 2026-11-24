@@ -17,13 +17,6 @@ pub(crate) enum RefusalClass {
     },
     /// The key list is refused for a reason with its own fixed sentence
     /// (the first-key question's), which a route shows as its message.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shape: the writer produces it once the routes answer it"
-        )
-    )]
     KeyList(crate::config_reload::first_key::KeyListRefusal),
 }
 

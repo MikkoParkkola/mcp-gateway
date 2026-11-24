@@ -210,6 +210,17 @@ pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::respon
             class: RefusalClass::RestartPending { waiting },
             ..
         } => restart_pending(waiting.names()),
+        // A key list refused with the first-key question's own sentence,
+        // which names no value: a 422 that shows it.
+        ReplaceError::ReloadRefused {
+            class: RefusalClass::KeyList(refusal),
+            ..
+        } => structured_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            refusal.sentence(),
+        )
+        .into_response(),
         ReplaceError::ReloadRefused { .. } => unwritten(route, "reload_refused"),
         ReplaceError::Unsupported(_) => unwritten(route, "unsupported"),
         ReplaceError::Stage(_) => unwritten(route, "stage"),

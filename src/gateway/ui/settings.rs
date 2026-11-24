@@ -495,9 +495,15 @@ fn answer(refusal: UiRefused) -> Response {
                 "posture_refused",
                 "the change was refused by the gateway's network posture",
             ),
-            RefusalClass::Invalid | RefusalClass::KeyList(_) => {
+            RefusalClass::Invalid => {
                 error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
             }
+            // The first-key question's own sentence names no value: shown.
+            RefusalClass::KeyList(refusal) => error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid",
+                refusal.sentence(),
+            ),
             RefusalClass::ShuttingDown => error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "shutting_down",

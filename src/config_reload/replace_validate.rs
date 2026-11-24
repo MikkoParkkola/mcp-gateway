@@ -16,8 +16,18 @@ use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
 use crate::config_reload::first_key::{
-    Decision, Waiting, pending_reason, restart_pending_decision, waiting_first_key, waiting_names,
+    Decision, FaultCause, KeyListRefusal, Waiting, pending_reason, restart_pending_decision,
+    waiting_first_key, waiting_names,
 };
+
+/// A key list refused for one of the first-key question's own reasons: the
+/// class carries which, and the reason is its fixed sentence.
+fn key_list(refusal: KeyListRefusal) -> ReplaceError {
+    ReplaceError::ReloadRefused {
+        class: RefusalClass::KeyList(refusal),
+        reason: refusal.sentence().to_owned(),
+    }
+}
 use crate::config_reload::reload_context::EvaluatedReload;
 use crate::config_reload::reload_context::refusals::BeforeApplyKind;
 
@@ -131,12 +141,18 @@ impl ReloadContext {
                         class: RefusalClass::RestartPending { waiting },
                     });
                 }
-                Decision::Invalid(refusal) => return Err(invalid(refusal.sentence().to_owned())),
+                Decision::Invalid(refusal) => return Err(key_list(refusal)),
                 Decision::Continue => {}
             }
         }
-        if let Waiting::Faulty { reason, .. } = waiting {
-            return Err(invalid(reason));
+        match waiting {
+            // A removal only: the question's own sentence, typed for the routes.
+            Waiting::Faulty {
+                cause: FaultCause::RemovalOnly,
+                ..
+            } => return Err(key_list(KeyListRefusal::RemovalOnly)),
+            Waiting::Faulty { reason, .. } => return Err(invalid(reason)),
+            Waiting::No | Waiting::Yes { .. } => {}
         }
         if evaluated.patch.is_empty() {
             return Ok(());

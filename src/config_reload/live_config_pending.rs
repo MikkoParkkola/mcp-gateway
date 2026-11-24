@@ -28,6 +28,16 @@ impl LiveConfig {
     #[cfg(any(test, feature = "webui"))]
     #[must_use]
     pub(crate) fn pending_restart(&self) -> Vec<&'static str> {
+        self.restart_view().0
+    }
+
+    /// The Gateway page's restart block in one view: the fields above and the
+    /// first-key wait, from a single read of the wait, so a read during a
+    /// reload never lists `auth.api_keys` without the wait or the reverse.
+    #[cfg(any(test, feature = "webui"))]
+    #[must_use]
+    pub(crate) fn restart_view(&self) -> (Vec<&'static str>, Option<FirstKeyWait>) {
+        let wait = self.first_key.read().clone();
         // One read, so a publish cannot land between taking the stored set and
         // the generation it was computed for.
         let (applied, generation) = {
@@ -41,10 +51,10 @@ impl LiveConfig {
             None => pending_restart_fields(&self.running, generation.config()),
         };
         // A waiting first key is in the file and not in the published config.
-        if self.first_key.read().is_some() && !fields.contains(&"auth.api_keys") {
+        if wait.is_some() && !fields.contains(&"auth.api_keys") {
             fields.push("auth.api_keys");
         }
-        fields
+        (fields, wait)
     }
 
     /// The keys a first-key file waits on for a restart: the verdict of the
@@ -55,11 +65,9 @@ impl LiveConfig {
     }
 
     /// The whole wait: the keys and whether a start from the file would be
-    /// refused, as the most recent reload that read the file judged them.
-    #[cfg_attr(
-        not(any(test, feature = "webui")),
-        expect(dead_code, reason = "served by the web UI's gateway read")
-    )]
+    /// refused, as the most recent reload that read the file judged them. The
+    /// Gateway page reads it with the fields, through `restart_view`.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn first_key_wait(&self) -> Option<FirstKeyWait> {
         self.first_key.read().clone()
