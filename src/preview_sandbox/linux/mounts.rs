@@ -19,7 +19,9 @@ use rustix::mount::{
     MountFlags, UnmountFlags, mount, mount_bind, mount_bind_recursive, mount_remount, unmount,
 };
 
+use super::helper::{SetupFailure, step_call};
 use super::plan::{self, Plan};
+use crate::preview_sandbox::control_msg::SetupStep;
 
 /// The new root is staged on a tmpfs mounted over `/tmp`, which hides the
 /// host's `/tmp` from this mount namespace only. The launcher refuses any
@@ -35,11 +37,27 @@ const DEVICES: [(&str, bool); 3] = [
     ("/dev/urandom", false),
 ];
 
-type Step = Result<(), String>;
+/// A setup step: every failure names the step the gateway is told.
+type Step = Result<(), SetupFailure>;
+
+/// A failure in words alone: a pure check's, mapped to its step by its
+/// caller, or the fetch teardown's own.
+type Words = Result<(), String>;
 
 fn at(step: &str, path: &Path) -> impl FnOnce(io::Error) -> String {
     let what = format!("{step} {}", path.display());
     move |e| format!("{what} ({e})")
+}
+
+/// One fallible call of `step` on `path`, its failure "`verb` `path`
+/// (error)"; in a debug build the plan's fault may fail it first.
+fn call<T>(
+    step: SetupStep,
+    verb: &str,
+    path: &Path,
+    op: impl FnOnce() -> io::Result<T>,
+) -> Result<T, SetupFailure> {
+    step_call(step, || format!("{verb} {}", path.display()), op)
 }
 
 fn staged(path: &str) -> PathBuf {
@@ -62,16 +80,19 @@ pub(super) fn build_root(
     proxy: Option<&rustix::fd::OwnedFd>,
 ) -> Step {
     let root = Path::new(STAGE);
-    mount(
-        "tmpfs",
+    call(
+        SetupStep::Mounting,
+        "mounting the root tmpfs on",
         root,
-        "tmpfs",
-        MountFlags::NOSUID | MountFlags::NODEV,
-        plan::ROOT_SIZE,
-    )
-    .map_err(io::Error::from)
-    .map_err(at("mounting the root tmpfs on", root))?;
-    fs::write(root.join(EMPTY_FILE), b"").map_err(at("creating", &root.join(EMPTY_FILE)))?;
+        || {
+            let flags = MountFlags::NOSUID | MountFlags::NODEV;
+            Ok(mount("tmpfs", root, "tmpfs", flags, plan::ROOT_SIZE)?)
+        },
+    )?;
+    let empty = root.join(EMPTY_FILE);
+    call(SetupStep::Mounting, "creating", &empty, || {
+        fs::write(&empty, b"")
+    })?;
 
     for path in &plan.read_only {
         bind_read_only(Path::new(path))?;
@@ -89,19 +110,18 @@ pub(super) fn build_root(
     }
     for (path, size) in [(plan::HOME, plan::HOME_SIZE), ("/tmp", plan::TMP_SIZE)] {
         let target = staged(path);
-        fs::create_dir_all(&target).map_err(at("creating", &target))?;
-        mount(
-            "tmpfs",
-            &target,
-            "tmpfs",
-            MountFlags::NOSUID | MountFlags::NODEV,
-            size,
-        )
-        .map_err(io::Error::from)
-        .map_err(at("mounting a tmpfs on", &target))?;
+        call(SetupStep::Mounting, "creating", &target, || {
+            fs::create_dir_all(&target)
+        })?;
+        call(SetupStep::Mounting, "mounting a tmpfs on", &target, || {
+            let flags = MountFlags::NOSUID | MountFlags::NODEV;
+            Ok(mount("tmpfs", &target, "tmpfs", flags, size)?)
+        })?;
     }
     let proc = staged("/proc");
-    fs::create_dir_all(&proc).map_err(at("creating", &proc))?;
+    call(SetupStep::Mounting, "creating", &proc, || {
+        fs::create_dir_all(&proc)
+    })?;
     // The PID namespace's own /proc (`--mount-proc` made one fully visible, so
     // the kernel lets a user namespace mount another). `hidepid=2` hides every
     // process the viewer cannot ptrace: the target runs as the namespace's
@@ -110,15 +130,15 @@ pub(super) fn build_root(
     // group 0 is, and a user namespace cannot drop a supplementary group).
     let proc_flags = MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC;
     let proc_options = c"hidepid=2,gid=1";
-    mount("proc", &proc, "proc", proc_flags, proc_options)
-        .map_err(io::Error::from)
-        .map_err(at("mounting proc on", &proc))?;
+    call(SetupStep::Mounting, "mounting proc on", &proc, || {
+        Ok(mount("proc", &proc, "proc", proc_flags, proc_options)?)
+    })?;
     // Before Linux 5.8 the options live on the PID namespace's one proc
     // superblock, which `--mount-proc` created without them and the mount
     // above reused; a remount applies them there too.
-    mount_remount(&proc, proc_flags, proc_options)
-        .map_err(io::Error::from)
-        .map_err(at("remounting proc on", &proc))?;
+    call(SetupStep::Remounting, "remounting proc on", &proc, || {
+        Ok(mount_remount(&proc, proc_flags, proc_options)?)
+    })?;
     // After the masks and hidden binds, so nothing covers it.
     if let Some(ca) = ca {
         preview_config(ca)?;
@@ -135,11 +155,13 @@ pub(super) fn build_root(
 /// empty ones empty and of their type (npm refuses one file as both configs); `ca.pem` the snapshot itself, by the device and inode the
 /// helper read from the descriptor it bound.
 pub(super) fn check_preview_config(snapshot: (u64, u64)) -> Step {
+    // The mounts are not as planned: never a denial.
     check_config_dir(&staged(PREVIEW_CONFIG), snapshot)
+        .map_err(|detail| SetupFailure::new(SetupStep::Mounting, detail))
 }
 
 /// [`check_preview_config`] over any directory, so rows can build one.
-fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
+fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Words {
     use std::os::unix::fs::MetadataExt as _;
     let fail = |why: &str| Err(format!("checking {} ({why})", dir.display()));
     let mut names = Vec::new();
@@ -189,11 +211,16 @@ fn check_config_dir(dir: &Path, snapshot: (u64, u64)) -> Step {
 fn proxy_socket(proxy: &rustix::fd::OwnedFd) -> Step {
     use std::os::fd::AsRawFd as _;
     let target = staged(PROXY_SOCKET);
-    fs::write(&target, b"").map_err(at("creating", &target))?;
+    call(SetupStep::Binding, "creating", &target, || {
+        fs::write(&target, b"")
+    })?;
     let source = PathBuf::from(format!("/proc/self/fd/{}", proxy.as_raw_fd()));
-    mount_bind(&source, &target)
-        .map_err(io::Error::from)
-        .map_err(at("binding the proxy socket on", &target))?;
+    call(
+        SetupStep::Binding,
+        "binding the proxy socket on",
+        &target,
+        || Ok(mount_bind(&source, &target)?),
+    )?;
     remount(
         &target,
         MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
@@ -205,19 +232,21 @@ fn proxy_socket(proxy: &rustix::fd::OwnedFd) -> Step {
 pub(super) fn check_proxy_socket(socket: (u64, u64)) -> Step {
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
     let target = staged(PROXY_SOCKET);
-    let meta = fs::symlink_metadata(&target).map_err(at("reading", &target))?;
+    // The mounts are not as planned: never a denial.
+    let wrong = |detail: String| SetupFailure::new(SetupStep::Mounting, detail);
+    let meta = fs::symlink_metadata(&target).map_err(|e| wrong(at("reading", &target)(e)))?;
     if !meta.file_type().is_socket() || (meta.dev(), meta.ino()) != socket {
-        return Err(format!(
+        return Err(wrong(format!(
             "checking {} (not the proxy socket)",
             target.display()
-        ));
+        )));
     }
     Ok(())
 }
 
 /// After the fetch, in the new root: unmount the proxy socket and remove its
 /// file, so nothing of it reaches the run.
-pub(super) fn remove_proxy_socket() -> Step {
+pub(super) fn remove_proxy_socket() -> Words {
     let path = Path::new(PROXY_SOCKET);
     unmount(path, UnmountFlags::DETACH)
         .map_err(io::Error::from)
@@ -236,68 +265,86 @@ pub(super) fn remove_proxy_socket() -> Step {
 fn preview_config(ca: &rustix::fd::OwnedFd) -> Step {
     use std::os::fd::AsRawFd as _;
     let dir = staged(PREVIEW_CONFIG);
-    fs::create_dir_all(&dir).map_err(at("creating", &dir))?;
-    mount(
-        "tmpfs",
-        &dir,
-        "tmpfs",
-        MountFlags::NOSUID | MountFlags::NODEV,
-        plan::MASK_SIZE,
-    )
-    .map_err(io::Error::from)
-    .map_err(at("mounting a tmpfs on", &dir))?;
+    call(SetupStep::Mounting, "creating", &dir, || {
+        fs::create_dir_all(&dir)
+    })?;
+    call(SetupStep::Mounting, "mounting a tmpfs on", &dir, || {
+        let flags = MountFlags::NOSUID | MountFlags::NODEV;
+        Ok(mount("tmpfs", &dir, "tmpfs", flags, plan::MASK_SIZE)?)
+    })?;
     let ca_pem = dir.join("ca.pem");
-    fs::write(&ca_pem, b"").map_err(at("creating", &ca_pem))?;
+    call(SetupStep::Mounting, "creating", &ca_pem, || {
+        fs::write(&ca_pem, b"")
+    })?;
     let certs = dir.join("empty-certs");
-    fs::create_dir(&certs).map_err(at("creating", &certs))?;
+    call(SetupStep::Mounting, "creating", &certs, || {
+        fs::create_dir(&certs)
+    })?;
     for name in ["empty-global.npmrc", "empty-user.npmrc"] {
         let npmrc = dir.join(name);
-        fs::write(&npmrc, b"").map_err(at("creating", &npmrc))?;
+        call(SetupStep::Mounting, "creating", &npmrc, || {
+            fs::write(&npmrc, b"")
+        })?;
     }
     let source = PathBuf::from(format!("/proc/self/fd/{}", ca.as_raw_fd()));
-    mount_bind(&source, &ca_pem)
-        .map_err(io::Error::from)
-        .map_err(at("binding the CA snapshot on", &ca_pem))?;
+    call(
+        SetupStep::Binding,
+        "binding the CA snapshot on",
+        &ca_pem,
+        || Ok(mount_bind(&source, &ca_pem)?),
+    )?;
     remount(
         &ca_pem,
         MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
     )?;
     // A tmpfs remount (no bind flag) makes its superblock read-only, as for
     // the masks.
-    mount_remount(
-        &dir,
-        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
-        plan::MASK_SIZE,
-    )
-    .map_err(io::Error::from)
-    .map_err(at("making the preview config read-only at", &dir))
+    let verb = "making the preview config read-only at";
+    call(SetupStep::Remounting, verb, &dir, || {
+        let flags = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
+        Ok(mount_remount(&dir, flags, plan::MASK_SIZE)?)
+    })
 }
 
 /// Bind `path` at the same place in the new root, read-only with every
 /// submount, or recreate it as a symlink when the host's is one.
 fn bind_read_only(path: &Path) -> Step {
     let target = staged(&path.to_string_lossy());
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        // A runtime path this host does not have (`/etc/pki/tls` on Debian).
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(at("reading", path)(e)),
+    let Some(meta) = call(SetupStep::Binding, "reading", path, || {
+        fs::symlink_metadata(path)
+            .map(Some)
+            .or_else(|e| match e.kind() {
+                // A runtime path this host does not have (`/etc/pki/tls` on Debian).
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(e),
+            })
+    })?
+    else {
+        return Ok(());
     };
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(at("creating", parent))?;
+        call(SetupStep::Binding, "creating", parent, || {
+            fs::create_dir_all(parent)
+        })?;
     }
     if meta.file_type().is_symlink() {
-        let link = fs::read_link(path).map_err(at("reading the link", path))?;
-        return symlink(&link, &target).map_err(at("linking", &target));
+        let link = call(SetupStep::Binding, "reading the link", path, || {
+            fs::read_link(path)
+        })?;
+        return call(SetupStep::Binding, "linking", &target, || {
+            symlink(&link, &target)
+        });
     }
-    if meta.is_dir() {
-        fs::create_dir_all(&target).map_err(at("creating", &target))?;
-    } else {
-        fs::write(&target, b"").map_err(at("creating", &target))?;
-    }
-    mount_bind_recursive(path, &target)
-        .map_err(io::Error::from)
-        .map_err(at("binding", path))?;
+    call(SetupStep::Binding, "creating", &target, || {
+        if meta.is_dir() {
+            fs::create_dir_all(&target)
+        } else {
+            fs::write(&target, b"")
+        }
+    })?;
+    call(SetupStep::Binding, "binding", path, || {
+        Ok(mount_bind_recursive(path, &target)?)
+    })?;
     // An initial bind ignores the read-only flag and a remount reaches one
     // mount, so the bind and every submount under it is remounted.
     for mounted in mounts_under(&target)? {
@@ -322,57 +369,68 @@ enum BindBacks {
 
 fn mask(plan: &Plan, path: &Path, bind_backs: BindBacks) -> Step {
     let target = staged(&path.to_string_lossy());
-    match fs::symlink_metadata(&target) {
-        // Nothing to hide: the path is not inside any bind.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(at("reading", &target)(e)),
-        Ok(meta) if !meta.is_dir() => {
-            mount_bind(Path::new(STAGE).join(EMPTY_FILE), &target)
-                .map_err(io::Error::from)
-                .map_err(at("masking", path))?;
+    let meta = call(SetupStep::Masking, "reading", &target, || {
+        fs::symlink_metadata(&target)
+            .map(Some)
+            .or_else(|e| match e.kind() {
+                // Nothing to hide: the path is not inside any bind.
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(e),
+            })
+    })?;
+    match meta {
+        None => return Ok(()),
+        Some(meta) if !meta.is_dir() => {
+            call(SetupStep::Masking, "masking", path, || {
+                Ok(mount_bind(Path::new(STAGE).join(EMPTY_FILE), &target)?)
+            })?;
             return remount(
                 &target,
                 MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
             );
         }
-        Ok(_) => {}
+        Some(_) => {}
     }
-    mount(
-        "tmpfs",
-        &target,
-        "tmpfs",
-        MountFlags::NOSUID | MountFlags::NODEV,
-        plan::MASK_SIZE,
-    )
-    .map_err(io::Error::from)
-    .map_err(at("masking", path))?;
+    call(SetupStep::Masking, "masking", path, || {
+        let flags = MountFlags::NOSUID | MountFlags::NODEV;
+        Ok(mount("tmpfs", &target, "tmpfs", flags, plan::MASK_SIZE)?)
+    })?;
     for back in plan
         .bound_back
         .iter()
         .map(Path::new)
         .filter(|b| bind_backs == BindBacks::Restore && b.starts_with(path))
     {
+        // A bind-back is bind_read_only's own call: its failures report as
+        // binding (and its remounts as remounting), not as this mask's
+        // masking, which covers only mask()'s own calls.
         bind_read_only(back)?;
     }
     // A tmpfs remount (no bind flag) makes the mask's superblock read-only.
-    mount_remount(
+    call(
+        SetupStep::Remounting,
+        "making the mask read-only at",
         &target,
-        MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
-        plan::MASK_SIZE,
+        || {
+            let flags = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
+            Ok(mount_remount(&target, flags, plan::MASK_SIZE)?)
+        },
     )
-    .map_err(io::Error::from)
-    .map_err(at("making the mask read-only at", &target))
 }
 
 fn bind_device(device: &Path, writable: bool) -> Step {
     let target = staged(&device.to_string_lossy());
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(at("creating", parent))?;
+        call(SetupStep::Binding, "creating", parent, || {
+            fs::create_dir_all(parent)
+        })?;
     }
-    fs::write(&target, b"").map_err(at("creating", &target))?;
-    mount_bind(device, &target)
-        .map_err(io::Error::from)
-        .map_err(at("binding", device))?;
+    call(SetupStep::Binding, "creating", &target, || {
+        fs::write(&target, b"")
+    })?;
+    call(SetupStep::Binding, "binding", device, || {
+        Ok(mount_bind(device, &target)?)
+    })?;
     let mut flags = MountFlags::NOSUID | MountFlags::NOEXEC;
     if !writable {
         flags |= MountFlags::RDONLY;
@@ -383,11 +441,16 @@ fn bind_device(device: &Path, writable: bool) -> Step {
 /// Remount one mount as a bind with `wanted`, keeping the flags it has.
 fn remount(target: &Path, wanted: MountFlags) -> Step {
     // The last row at a mount point is the topmost mount there.
-    let current = mountinfo()?
-        .into_iter()
-        .rev()
-        .find(|m| m.point == target)
-        .map_or(MountFlags::empty(), |m| m.flags);
+    let current = call(
+        SetupStep::Remounting,
+        "reading",
+        Path::new(MOUNTINFO),
+        mountinfo,
+    )?
+    .into_iter()
+    .rev()
+    .find(|m| m.point == target)
+    .map_or(MountFlags::empty(), |m| m.flags);
     let locked = current
         & (MountFlags::NOSUID
             | MountFlags::NODEV
@@ -396,9 +459,13 @@ fn remount(target: &Path, wanted: MountFlags) -> Step {
             | MountFlags::NODIRATIME
             | MountFlags::RELATIME
             | MountFlags::STRICTATIME);
-    mount_remount(target, MountFlags::BIND | wanted | locked, c"")
-        .map_err(io::Error::from)
-        .map_err(at("remounting", target))
+    call(SetupStep::Remounting, "remounting", target, || {
+        Ok(mount_remount(
+            target,
+            MountFlags::BIND | wanted | locked,
+            c"",
+        )?)
+    })
 }
 
 /// Read every mount in the new root back and refuse on any mismatch: all
@@ -409,13 +476,16 @@ fn remount(target: &Path, wanted: MountFlags) -> Step {
 /// host's own `/tmp` and anything mounted under it are covered by the root
 /// tmpfs but still listed at the same paths.
 fn verify(plan: &Plan) -> Step {
-    verify_rows(plan, &mountinfo()?)
+    // The mounts are not as planned: never a denial.
+    let wrong = |detail: String| SetupFailure::new(SetupStep::Mounting, detail);
+    let rows = mountinfo().map_err(|e| wrong(at("reading", Path::new(MOUNTINFO))(e)))?;
+    verify_rows(plan, &rows).map_err(wrong)
 }
 
 /// [`verify`] over mountinfo `rows`. With a fetch planned, the preview config
 /// must be exactly its read-only tmpfs and the read-only `ca.pem` bind (no
 /// mount nested under it, neither missing); with none planned, neither exists.
-fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
+fn verify_rows(plan: &Plan, rows: &[Mount]) -> Words {
     let root = Path::new(STAGE);
     let root_id = rows
         .iter()
@@ -514,19 +584,32 @@ fn verify_rows(plan: &Plan, rows: &[Mount]) -> Step {
 /// the new root itself read-only.
 pub(super) fn enter_root() -> Step {
     let old = Path::new(STAGE).join(OLD_ROOT);
-    fs::create_dir(&old).map_err(at("creating", &old))?;
-    rustix::process::pivot_root(STAGE, &old)
-        .map_err(io::Error::from)
-        .map_err(at("pivoting into", Path::new(STAGE)))?;
+    call(SetupStep::Pivoting, "creating", &old, || {
+        fs::create_dir(&old)
+    })?;
+    call(
+        SetupStep::Pivoting,
+        "pivoting into",
+        Path::new(STAGE),
+        || Ok(rustix::process::pivot_root(STAGE, &old)?),
+    )?;
     // At once: a working directory left in the old root survives a lazy unmount.
-    rustix::process::chdir("/")
-        .map_err(io::Error::from)
-        .map_err(at("changing directory to", Path::new("/")))?;
+    call(
+        SetupStep::Pivoting,
+        "changing directory to",
+        Path::new("/"),
+        || Ok(rustix::process::chdir("/")?),
+    )?;
     let old = Path::new("/").join(OLD_ROOT);
-    unmount(&old, UnmountFlags::DETACH)
-        .map_err(io::Error::from)
-        .map_err(at("detaching the old root at", &old))?;
-    fs::remove_dir(&old).map_err(at("removing", &old))?;
+    call(
+        SetupStep::Pivoting,
+        "detaching the old root at",
+        &old,
+        || Ok(unmount(&old, UnmountFlags::DETACH)?),
+    )?;
+    call(SetupStep::Pivoting, "removing", &old, || {
+        fs::remove_dir(&old)
+    })?;
     // Through the same helper as every bind, so the root keeps its locked
     // flags rather than failing the remount with an opaque EPERM.
     remount(
@@ -561,10 +644,11 @@ struct Mount {
     flags: MountFlags,
 }
 
-fn mountinfo() -> Result<Vec<Mount>, String> {
-    let text = fs::read_to_string("/proc/self/mountinfo")
-        .map_err(at("reading", Path::new("/proc/self/mountinfo")))?;
-    Ok(parse_mountinfo(&text))
+/// Where the kernel lists this namespace's mounts.
+const MOUNTINFO: &str = "/proc/self/mountinfo";
+
+fn mountinfo() -> io::Result<Vec<Mount>> {
+    Ok(parse_mountinfo(&fs::read_to_string(MOUNTINFO)?))
 }
 
 /// Fields 1 and 2 are the mount and parent ids, 5 the mount point
@@ -625,8 +709,14 @@ fn unescape(field: &str) -> PathBuf {
 }
 
 /// `target` and every mount below it.
-fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, String> {
-    Ok(mountinfo()?
+fn mounts_under(target: &Path) -> Result<Vec<PathBuf>, SetupFailure> {
+    let rows = call(
+        SetupStep::Remounting,
+        "reading",
+        Path::new(MOUNTINFO),
+        mountinfo,
+    )?;
+    Ok(rows
         .into_iter()
         .map(|m| m.point)
         .filter(|p| p.starts_with(target))
