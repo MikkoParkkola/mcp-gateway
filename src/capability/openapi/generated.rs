@@ -67,9 +67,10 @@ impl GeneratedCapability {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the file cannot
-    /// be written; a file of this name already in `directory` is refused with
-    /// an [`Error::Io`] of kind `AlreadyExists` (`is_name_taken` tells it
-    /// apart) and is left byte-identical.
+    /// be written. When `directory` already holds this name, as
+    /// `<name>.yaml` or as `<name>.yml` (the loader reads both), the write is
+    /// refused with an [`Error::Io`] of kind `AlreadyExists` (`is_name_taken`
+    /// tells it apart) and the existing file is left byte-identical.
     pub fn write_to_file(&self, directory: &str) -> Result<()> {
         let dir = Path::new(directory);
         if !dir.exists() {
@@ -86,7 +87,8 @@ impl GeneratedCapability {
         };
 
         // The loader reads `.yml` too, so a file (or link) of that name holds
-        // the name as well.
+        // the name as well. Best effort: unlike the `.yaml` create below, a
+        // `.yml` made by another process after this look is not seen.
         if fs::symlink_metadata(dir.join(format!("{}.yml", self.name))).is_ok() {
             return Err(taken());
         }
