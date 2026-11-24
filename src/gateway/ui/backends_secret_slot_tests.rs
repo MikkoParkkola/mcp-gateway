@@ -703,7 +703,7 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
 #[cfg(feature = "a2a")]
 #[tokio::test]
 async fn xport2_the_patch_route_refuses_an_own_card_path_on_another_origin() {
-    let text = "backends:\n  agent:\n    transport: a2a\n    a2a_url: \"https://agent.example\"\n    a2a_agent_card_path: /cards/agent.json\n";
+    let text = "backends:\n  agent:\n    a2a_url: \"https://agent.example\"\n    a2a_agent_card_path: /cards/agent.json\n";
     let panel = Panel::with(text, Reloads::Accept).await;
     let (status, body) = panel
         .update("agent", json!({"url": "https://other.example"}))
