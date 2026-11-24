@@ -183,6 +183,7 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "src/lib.rs",
     "src/main.rs",
     "src/cli/mod.rs",
+    "src/cli/command.rs",
     "Cargo.toml",
     "homebrew/mcp-gateway.rb",
     "npm/package.json",
