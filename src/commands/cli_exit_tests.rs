@@ -415,3 +415,96 @@ fn the_json_gate_scans_decoded_strings() {
     }
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
+
+// The three local exits (rows U1-U9). Every expected value is a literal.
+
+/// U1: every line break becomes one space, so content cannot split the two-line shape.
+#[test]
+fn one_line_writes_a_line_break_as_a_space() {
+    assert_eq!(one_line("a\nb"), "a b", "LF");
+    assert_eq!(one_line("a\r\nb"), "a b", "CR LF is one break");
+    assert_eq!(one_line("a\n\nb"), "a  b", "one space per break");
+    assert_eq!(one_line("a b"), "a b", "no break, no change");
+    assert_eq!(one_line(""), "", "empty stays empty");
+    assert_eq!(one_line("a\rb"), "a b", "a lone CR");
+}
+
+/// U2: the usage remedy names the command's own help; two commands, so a fixed sentence fails.
+#[test]
+fn the_usage_remedy_names_the_commands_help() {
+    assert_eq!(
+        usage_remedy("cap list"),
+        "Run 'mcp-gateway cap list --help' for usage."
+    );
+    assert_eq!(
+        usage_remedy("doctor"),
+        "Run 'mcp-gateway doctor --help' for usage."
+    );
+}
+
+/// U3: an empty remedy is a bug at the call site, caught before anything is written.
+#[test]
+#[should_panic(expected = "remedy")]
+fn fail_refuses_an_empty_remedy() {
+    let _ = fail(CliExit::LocalFailure, "m", "");
+}
+
+/// U4: the local codes are the literals 0, 1 and 2.
+#[test]
+fn the_local_codes_are_zero_one_and_two() {
+    assert_eq!(CliExit::Ok.code(), 0);
+    assert_eq!(CliExit::LocalFailure.code(), 1);
+    assert_eq!(CliExit::Usage.code(), 2);
+}
+
+/// U5: the remote commands' error text is not folded: `outcome` writes what it is given.
+#[test]
+fn the_remote_error_text_is_not_folded() {
+    let out = CliError::new(CliExit::Usage, "a\nb", "r").outcome(false, &[]);
+    assert_eq!(out.stderr(), "error: a\nb\nr\n");
+}
+
+/// U6: `fail`'s outcome folds both lines and keeps the kind it is given.
+#[test]
+fn fail_builds_the_two_line_outcome() {
+    let out = error_outcome(CliExit::LocalFailure, "m\nx", "r\ny");
+    assert_eq!(out.stderr(), "error: m x\nr y\n", "both fields folded");
+    assert!(out.stdout().is_empty(), "nothing on stdout");
+    assert_eq!(out.exit(), CliExit::LocalFailure);
+    let usage_kind = error_outcome(CliExit::Usage, "m", "r");
+    assert_eq!(usage_kind.exit(), CliExit::Usage, "the kind passes through");
+}
+
+/// U7: `usage`'s outcome is exit 2 with the help remedy.
+#[test]
+fn usage_builds_the_usage_outcome() {
+    let out = usage_outcome("tls issue-server", "bad");
+    assert_eq!(
+        out.stderr(),
+        "error: bad\nRun 'mcp-gateway tls issue-server --help' for usage.\n"
+    );
+    assert_eq!(out.exit(), CliExit::Usage);
+}
+
+/// U8: `verdict` returns the code it is given (compared as the repo does, by Debug text).
+#[test]
+fn verdict_returns_its_code() {
+    let code = |exit: std::process::ExitCode| format!("{exit:?}");
+    assert_eq!(code(verdict(3)), code(std::process::ExitCode::from(3)));
+    assert_eq!(code(verdict(1)), code(std::process::ExitCode::from(1)));
+    assert_ne!(code(verdict(1)), code(verdict(3)), "two codes stay apart");
+}
+
+/// U9: `fail` returns its kind's code: 2 for usage, 1 for a local failure.
+#[test]
+fn fail_returns_the_kinds_code() {
+    let code = |exit: std::process::ExitCode| format!("{exit:?}");
+    assert_eq!(
+        code(fail(CliExit::Usage, "m", "r")),
+        code(std::process::ExitCode::from(2))
+    );
+    assert_eq!(
+        code(fail(CliExit::LocalFailure, "m", "r")),
+        code(std::process::ExitCode::from(1))
+    );
+}

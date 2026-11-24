@@ -462,6 +462,75 @@ pub(crate) fn emit(outcome: &CliOutcome, json: bool, secrets: &[&str]) -> std::p
     )
 }
 
+// The three ways command code leaves with a non-zero code. Red-commit stubs: each returns the
+// wrong thing so the rows fail by assertion; the real bodies arrive with the conversion.
+
+/// `text` with each line break (LF, CR LF or a lone CR) written as one space, so a path or an OS error cannot split
+/// the two-line error shape.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+fn one_line(text: &str) -> String {
+    text.to_owned()
+}
+
+/// The remedy line of a usage error: the command's own `--help`.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+fn usage_remedy(_command: &str) -> String {
+    String::new()
+}
+
+/// The two-line outcome `fail` prints: `error: <message>` and the remedy, each on one line.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+fn error_outcome(kind: CliExit, message: &str, remedy: &str) -> CliOutcome {
+    CliError::new(kind, message, remedy).outcome(false, &[])
+}
+
+/// The outcome `usage` prints: exit 2, the remedy naming `command`'s help.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+fn usage_outcome(command: &str, message: &str) -> CliOutcome {
+    error_outcome(CliExit::Usage, message, &usage_remedy(command))
+}
+
+/// A local failure: prints `error: <message>` and the remedy on stderr and returns `kind`'s code. The remedy must
+/// not be empty.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+pub(crate) fn fail(kind: CliExit, message: &str, remedy: &str) -> std::process::ExitCode {
+    emit(&error_outcome(kind, message, remedy), false, &[])
+}
+
+/// A wrong invocation of `command` (its leaf path, e.g. `tls issue-server`): exit 2, the remedy its `--help`.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+pub(crate) fn usage(command: &str, message: &str) -> std::process::ExitCode {
+    emit(&usage_outcome(command, message), false, &[])
+}
+
+/// A command that ran and whose answer is negative (a check failed, a file has findings): prints nothing, returns
+/// `code`. The command has already printed its result.
+#[allow(
+    dead_code,
+    reason = "red-commit stub; callers arrive with the conversion"
+)]
+pub(crate) fn verdict(_code: u8) -> std::process::ExitCode {
+    std::process::ExitCode::SUCCESS
+}
+
 #[cfg(tp2)]
 #[cfg(test)]
 #[path = "cli_exit_tests.rs"]
