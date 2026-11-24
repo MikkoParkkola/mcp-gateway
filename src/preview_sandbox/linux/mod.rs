@@ -10,6 +10,7 @@ mod drop;
 mod fetch_step;
 mod fetch_uv;
 mod helper;
+mod launcher;
 mod mounts;
 pub(crate) mod plan;
 mod probe;
@@ -79,22 +80,88 @@ fn refuse(step: &str) -> ExitCode {
     ExitCode::from(REFUSED)
 }
 
-/// Start `target` inside a fresh namespace set and private root.
+/// Start `target` inside a fresh namespace set and private root, once its
+/// helper has reported its setup by `deadline`. A process not reaped in
+/// time after a refusal is dropped, which kills it.
 ///
 /// `protected` names the gateway's config paths beyond the ones the launcher
 /// resolves itself (the data dir and the OS config dir's `mcp-gateway`).
-pub(super) fn start(
+pub(super) async fn start(
     helper: &Path,
     target: &Target,
     protected: &[PathBuf],
+    deadline: tokio::time::Instant,
+    runtime_dir: Option<OsString>,
 ) -> Result<Started, Refusal> {
-    let unshare = find_unshare()?;
-    let plan = build_plan(target, protected, std::env::var_os("PATH").as_deref())?;
-    let child = launch(unshare, helper, &plan)?;
-    Ok(Started {
-        child,
-        isolation: super::Isolation::linux(&plan),
-    })
+    let ambient = Ambient {
+        ca_bundle: None,
+        runtime_dir,
+        path: std::env::var_os("PATH"),
+    };
+    let mut prepared = launcher::prepare(target, protected, ambient, launcher::Phase::Run)?;
+    launcher::launch_prepared(&mut prepared, helper, deadline)
+        .await
+        .map_err(|failed| failed.refusal)
+}
+
+/// Whether this host runs the sandbox: the real setup once with `/bin/true`.
+/// Here alone the sandbox's stderr is read, from the handle the launch hands
+/// back, when `unshare` ended before any status or the target failed after
+/// one: `/bin/true` runs no package, so the text is `unshare`'s and the
+/// helper's.
+pub(super) async fn probe(helper: &Path) -> Result<(), Refusal> {
+    let spawn = |unshare: &Path, plan: &plan::Plan| launch(unshare, helper, plan);
+    probe_with(spawn, &HostFacts::read()).await
+}
+
+/// [`probe`] with the spawn and the host's facts given, so a row can stand a
+/// fake launcher in for `unshare` and name the host.
+async fn probe_with(
+    spawn: impl FnOnce(&'static Path, &plan::Plan) -> Result<tokio::process::Child, Refusal>,
+    host: &HostFacts,
+) -> Result<(), Refusal> {
+    let target = Target {
+        program: PathBuf::from("/bin/true"),
+        args: Vec::new(),
+    };
+    let deadline = tokio::time::Instant::now() + super::PROBE_DEADLINE;
+    let ambient = Ambient {
+        ca_bundle: None,
+        runtime_dir: None,
+        path: std::env::var_os("PATH"),
+    };
+    let answer = async {
+        let mut prepared = launcher::prepare(&target, &[], ambient, launcher::Phase::Run)?;
+        let unshare = prepared.unshare;
+        let spawn = |plan: &plan::Plan| spawn(unshare, plan);
+        let bounds = super::control::CONTROL_BOUNDS;
+        let (launched, ending) =
+            launcher::launch_with(&mut prepared, spawn, deadline, bounds, launcher::reap_exit)
+                .await;
+        match (launched, ending) {
+            (Ok(Started { mut child, .. }), _) => {
+                drop(child.stdin.take());
+                let stderr = child.stderr.take();
+                match child.wait().await {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(_) => Err(classify_with(&super::probe_stderr(stderr).await, host)),
+                    Err(e) => Err(Refusal::Step(format!("waiting for the probe ({e})"))),
+                }
+            }
+            (
+                Err(_),
+                Some(launcher::Ending {
+                    how: launcher::How::EndedSilently,
+                    stderr,
+                }),
+            ) => Err(classify_with(&super::probe_stderr(stderr).await, host)),
+            (Err(failed), _) => Err(failed.refusal),
+        }
+    };
+    // Dropping the child at the deadline kills `unshare` and the namespace.
+    tokio::time::timeout_at(deadline, answer)
+        .await
+        .unwrap_or_else(|_| Err(super::probe_unanswered()))
 }
 
 fn find_unshare() -> Result<&'static Path, Refusal> {
@@ -193,107 +260,11 @@ async fn start_fetching_with(
     resolve: std::sync::Arc<dyn super::proxy::Resolve>,
     connect: std::sync::Arc<dyn super::proxy::Connect>,
 ) -> Result<Started, Refusal> {
-    use super::control::{CONTROL_BOUNDS, accept_helper, serve_session};
-    use super::proxy::{AllowlistProxy, System};
-    use std::sync::Arc;
-
-    let Ambient {
-        ca_bundle,
-        runtime_dir,
-        path,
-    } = ambient;
-    let begun = tokio::time::Instant::now();
-    let unshare = find_unshare()?;
-    let mut plan = build_plan(target, protected, path.as_deref())?;
-    let proxy = AllowlistProxy::bind(runtime_dir, resolve, connect, Arc::new(System))
-        .map_err(|e| Refusal::Step(format!("starting the fetch proxy ({e})")))?;
-    // Beside the proxy socket, in the proxy's owner-only directory, removed
-    // with it when the proxy drops.
-    let control = proxy.unix_path().with_file_name("control.sock");
-    let listener = tokio::net::UnixListener::bind(&control)
-        .map_err(|e| Refusal::Step(format!("binding the control socket ({e})")))?;
-    // The one CA bundle the fetch trusts, chosen here and snapshotted by its
-    // bytes beside the sockets, so it goes with the proxy's directory.
-    let bundle = ca_bundle::HostBundle::choose(ca_bundle.as_deref(), Path::new("/"))?;
-    let ca = bundle
-        .snapshot(proxy.unix_path().parent().unwrap_or(Path::new("/")))
-        .map_err(|e| {
-            Refusal::Step(format!(
-                "writing the CA snapshot of {} ({e})",
-                bundle.source.display()
-            ))
-        })?;
-    let (npm, uv) = uv_probe::package_fetch(target, &mut plan, path.as_deref(), proxy.unix_path())?;
-    plan.fetch = Some(plan::FetchPaths {
-        control: utf8(&control)?,
-        ca: utf8(&ca)?,
-        npm,
-        uv,
-    });
-    let mut child = launch(unshare, helper, &plan)?;
-    let outcome = match child.id() {
-        None => Err(Refusal::Step("unshare ended as it started".into())),
-        Some(unshare_pid) => {
-            let uid = rustix::process::getuid().as_raw();
-            let session = async {
-                let stream =
-                    accept_helper(listener, unshare_pid, uid, CONTROL_BOUNDS, deadline).await?;
-                serve_session(stream, &proxy, deadline, CONTROL_BOUNDS).await
-            };
-            let ended_first = tokio::select! {
-                served = session => Some(served),
-                _ = child.wait() => None,
-            };
-            match ended_first {
-                Some(served) => served,
-                None => Err(helper_ended(&mut child, proxy.fetches_begun() > 0).await),
-            }
-        }
-    };
-    match outcome {
-        Ok(()) => Ok(Started {
-            child,
-            isolation: super::Isolation::linux(&plan),
-        }),
-        Err(refusal) => {
-            // Ignored: unshare may already be gone. The reap is bounded by the
-            // lesser of a short bound and the deadline, so an unshare stuck in
-            // the kernel cannot hold the refusal; kill_on_drop and tokio's
-            // orphan reaping finish it.
-            let _ = child.start_kill();
-            let reap =
-                REAP_BOUND.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
-            let _ = tokio::time::timeout(reap, child.wait()).await;
-            Err(with_elapsed(refusal, begun))
-        }
-    }
-}
-
-/// How long a refused start waits for its killed `unshare` to be reaped.
-const REAP_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Why the sandbox ended before its fetch step finished. Once the credential
-/// is out its stderr may hold npm output, URLs or paths, so it is never read.
-async fn helper_ended(child: &mut tokio::process::Child, credential_issued: bool) -> Refusal {
-    use tokio::io::AsyncReadExt as _;
-    let mut text = String::new();
-    if let (false, Some(mut stderr)) = (credential_issued, child.stderr.take()) {
-        let read = stderr.read_to_string(&mut text);
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), read).await;
-    }
-    ended_refusal(credential_issued, &text)
-}
-
-/// The refusal for a sandbox that ended first: fixed words once the
-/// credential was out, else the helper's own refusal from its stderr.
-fn ended_refusal(credential_issued: bool, stderr: &str) -> Refusal {
-    if credential_issued {
-        Refusal::Step("the fetch (the sandbox ended before it finished)".into())
-    } else if stderr.trim().is_empty() {
-        Refusal::Step("the sandbox helper ended before its fetch step".into())
-    } else {
-        classify(stderr)
-    }
+    let phase = launcher::Phase::Fetch { resolve, connect };
+    let mut prepared = launcher::prepare(target, protected, ambient, phase)?;
+    launcher::launch_prepared(&mut prepared, helper, deadline)
+        .await
+        .map_err(|failed| failed.refusal)
 }
 
 /// The npm fetch a target needs, or `None` when it names no package (the
@@ -453,7 +424,11 @@ fn build_plan(
         env,
         program: utf8(&exec)?,
         target: argv,
+        // Set by `launcher::prepare` once its socket is bound.
+        control: String::new(),
         fetch: None,
+        #[cfg(debug_assertions)]
+        fault: None,
     })
 }
 
@@ -770,10 +745,19 @@ impl HostFacts {
                 || Path::new("/run/.containerenv").exists(),
         }
     }
+
+    /// Whether this host's `AppArmor` restricts unprivileged user namespaces,
+    /// the fact a reported mount denial is judged by.
+    fn restricts_userns(&self) -> bool {
+        self.apparmor_restricts_userns.as_deref() == Some("1")
+    }
 }
 
 /// Name why `unshare` or the helper failed, from what it printed and the
 /// host's own settings, so the refusal can say which one-time step fixes it.
+/// Production reads this through the probe, which passes its facts; the
+/// fetch rows name a helper's refusal with it.
+#[cfg(test)]
 pub(super) fn classify(stderr: &str) -> Refusal {
     classify_with(stderr, &HostFacts::read())
 }
@@ -826,6 +810,9 @@ mod fetch_uv_real_fixture;
 mod fetch_uv_real_rows;
 #[cfg(test)]
 mod fetch_uv_rows;
+// The rows plant the plan's fault, which only a debug build has.
+#[cfg(all(test, debug_assertions))]
+mod status_rows;
 #[cfg(tp4)]
 #[cfg(test)]
 mod tests;

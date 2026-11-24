@@ -216,6 +216,82 @@ fn test_format_name() {
     assert_eq!(converter.format_name("GET /users/{id}"), "get_users_id");
 }
 
+/// The shared writer itself refuses a taken name: an `AlreadyExists` I/O
+/// error carrying the sentence, the file left byte-identical; a free name is
+/// written. The web UI checks names first, so only this row and the CLI's
+/// reach the writer's own refusal.
+#[test]
+fn the_writer_refuses_a_taken_name_and_keeps_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = |yaml: &str| GeneratedCapability {
+        name: "listusers".into(),
+        yaml: yaml.into(),
+    };
+    let at = dir.path().to_str().unwrap();
+    cap("first")
+        .write_to_file(at)
+        .expect("a free name is written");
+
+    let refused = cap("second").write_to_file(at).expect_err("a taken name");
+
+    let crate::Error::Io(e) = &refused else {
+        panic!("not an I/O refusal: {refused}");
+    };
+    assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists, "{refused}");
+    assert_eq!(e.to_string(), name_taken("listusers"));
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yaml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
+/// The loader reads `<name>.yml` as well, so the writer refuses the name when
+/// only that file exists and adds no `.yaml` beside it.
+#[test]
+fn the_writer_refuses_a_name_held_by_a_yml_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("listusers.yml"), "first").unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let refused = cap
+        .write_to_file(dir.path().to_str().unwrap())
+        .expect_err("a name held by a .yml file");
+
+    assert_eq!(
+        refused.to_string(),
+        format!("IO error: {}", name_taken("listusers"))
+    );
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
+/// A dangling link as `<name>.yml` holds the name too: the look does not
+/// follow links, so a check that did (as `exists` does) would miss it.
+#[cfg(unix)]
+#[test]
+fn the_writer_refuses_a_name_held_by_a_dangling_yml_link() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("listusers.yml"))
+        .unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let outcome = cap.write_to_file(dir.path().to_str().unwrap());
+
+    assert!(outcome.is_err(), "a name held by a dangling .yml link");
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+}
+
 // ── petstore fixture ─────────────────────────────────────────────────────
 
 fn petstore_caps() -> Vec<GeneratedCapability> {
