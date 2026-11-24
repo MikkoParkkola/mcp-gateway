@@ -218,3 +218,28 @@ async fn a_switched_off_server_is_listed_off_with_null_live_figures() {
     );
     assert_eq!(counts["server_count"], 1, "{counts}");
 }
+
+/// A server the config now holds switched off while the registry still runs
+/// it (a reload not yet applied) is listed once, as the running row.
+#[tokio::test]
+async fn a_switched_off_entry_still_running_is_listed_once() {
+    let _clock = test_clock::at_secs(NOW);
+    let (state, _dir) = gateway().await;
+    state.live_config.edit(|c| {
+        c.backends.insert(LIVE.to_owned(), server(false, false));
+    });
+    let body = status(&state, ADMIN_KEY).await;
+    let names: Vec<&str> = body["servers"]
+        .as_array()
+        .unwrap_or_else(|| panic!("premise: the full view: {body}"))
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert_eq!(names, [LIVE, OFF], "{body}");
+    assert_ne!(
+        body["servers"][0]["state"], "off",
+        "the registry's row: {body}"
+    );
+    assert_eq!(body["servers"][0]["circuit_state"], "closed", "{body}");
+    assert_eq!(body["server_count"], 2, "{body}");
+}

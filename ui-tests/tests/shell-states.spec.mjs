@@ -264,6 +264,11 @@ test('T11 a server turned off in the config has the glossary word, its banner an
   expect(got.next).toBe(got.offNext);
   expect(got.glyph).toBe('ⓘ');
   expect(got.tone).toBe('neutral');
+  // The words carry their meaning, not only agree with themselves: where it is
+  // turned off, that its tools are out of reach, and where to turn it on.
+  expect(got.offBanner).toContain('gateway.yaml');
+  expect(got.offBanner).toContain('tools');
+  expect(got.offNext).toContain('Settings');
 });
 
 test('T9 the half-open breaker value the paused copy reads is the gateway\'s own wire value', () => {
