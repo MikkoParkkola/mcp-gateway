@@ -315,11 +315,11 @@ impl Gateway {
         if let Some(context) = signing_context.as_mut() {
             context
                 .restore(request)
-                .map_err(|error| refuse(None, &error))?;
+                .map_err(|error| Unprepared::SigningRefused(AnswerId::Absent, error))?;
         }
         if let Some(context) = signing_context.as_ref() {
             let early = context.refuse_malformed_nonce_early();
-            early.map_err(|error| Unprepared::MalformedNonce(AnswerId::of(request), error))?;
+            early.map_err(|error| Unprepared::SigningRefused(AnswerId::of(request), error))?;
         }
         Ok((signing_context, chain_nonce))
     }
