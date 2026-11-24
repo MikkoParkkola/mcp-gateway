@@ -31,8 +31,9 @@ pub(crate) fn install(history: Arc<HealthHistory>) {
     let _ = INSTALLED.set(history);
 }
 
-/// The history this process records into, if one was installed.
-#[cfg(any(test, feature = "webui"))]
+/// The history this process records into, if one was installed. Read by the
+/// web UI's health route only.
+#[cfg(feature = "webui")]
 pub(crate) fn installed() -> Option<Arc<HealthHistory>> {
     INSTALLED.get().cloned()
 }

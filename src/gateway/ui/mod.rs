@@ -169,6 +169,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
         .route(
+            routes::UI_GATEWAY_HEALTH,
+            get(gateway_health::gateway_health),
+        )
+        .route(
             routes::UI_KEYS,
             get(keys::keys).post(keys_create::create_key),
         )

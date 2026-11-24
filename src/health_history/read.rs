@@ -123,13 +123,19 @@ impl HealthHistory {
         self.0.lock().incomplete
     }
 
-    /// A copy of the whole history, taken under one lock.
+    /// A copy of the whole history, taken under one lock, so an answer read
+    /// from it is of one instant: a restart counted in a block is also in the
+    /// restart list, whatever the recorders do meanwhile.
+    // The web UI's health read is its only caller; the store's own rows
+    // never take a copy.
+    #[cfg(feature = "webui")]
     pub(crate) fn frozen(&self) -> Self {
-        Self::start(None, super::Restores::Counted(0), 1_800_014_400).0
+        Self(parking_lot::Mutex::new(self.0.lock().clone()))
     }
 
     /// The first second this history covers.
+    #[cfg(feature = "webui")]
     pub(crate) fn observed_since(&self) -> u64 {
-        0
+        self.0.lock().observed_since
     }
 }
