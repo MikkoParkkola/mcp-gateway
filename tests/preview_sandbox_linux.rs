@@ -40,7 +40,13 @@ async fn sandboxed_raw(program: &str, args: &[&str], protected: &[PathBuf]) -> O
         program: PathBuf::from(program),
         args: args.iter().map(Into::into).collect(),
     };
-    let started = start_with_helper(Path::new(gateway_bin::path()), &target, protected);
+    let started = start_with_helper(
+        Path::new(gateway_bin::path()),
+        &target,
+        protected,
+        deadline(),
+    )
+    .await;
     let Started { mut child, .. } = match started {
         Ok(started) => started,
         Err(refusal) => return skip_or_fail(&refusal),
@@ -72,6 +78,12 @@ async fn sandboxed_raw(program: &str, args: &[&str], protected: &[PathBuf]) -> O
         stdout,
         stderr,
     })
+}
+
+/// The deadline each start here gets: the helper's whole setup fits well
+/// inside it on a working host.
+fn deadline() -> tokio::time::Instant {
+    tokio::time::Instant::now() + Duration::from_secs(60)
 }
 
 /// As [`sandboxed_raw`], where the helper refusing any step is a test failure:
@@ -329,23 +341,27 @@ async fn a_gateway_path_covers_an_interpreter_bind_back() {
         return;
     };
     let tool = tool.to_str().unwrap();
-    let Some(open) = sandboxed_raw(tool, &["--version"], &[]).await else {
+    // Started through its bind-back: no refusal.
+    if sandboxed_raw(tool, &["--version"], &[]).await.is_none() {
         return;
+    }
+    // Hidden: the helper finds no program to start and reports it before
+    // the target, so the start itself refuses.
+    let target = Target {
+        program: PathBuf::from(tool),
+        args: vec!["--version".into()],
     };
-    assert!(
-        !open.stderr.contains("refused at starting"),
-        "{}",
-        open.stderr
-    );
-    let Some(covered) =
-        sandboxed_raw(tool, &["--version"], &[PathBuf::from("/usr/local/bin")]).await
-    else {
-        return;
-    };
-    assert!(
-        covered.stderr.contains("refused at starting"),
-        "{tool}: {}",
-        covered.stderr
+    let covered = start_with_helper(
+        Path::new(gateway_bin::path()),
+        &target,
+        &[PathBuf::from("/usr/local/bin")],
+        deadline(),
+    )
+    .await;
+    assert_eq!(
+        covered.err(),
+        Some(Refusal::Step("target_missing".into())),
+        "{tool}"
     );
 }
 
@@ -470,7 +486,9 @@ fn the_helper_refuses_outside_fresh_namespaces() {
         "host": {"user": inode("user"), "mnt": inode("mnt"), "pid": inode("pid"), "net": inode("net"), "ipc": inode("ipc"), "uts": inode("uts")},
         "read_only": [], "masked": [], "hidden": [], "bound_back": [],
         "limits": {"address_space": 1, "file_size": 1, "open_files": 1, "processes": 1},
-        "env": [], "program": "/bin/true", "target": ["/bin/true"]
+        "env": [], "program": "/bin/true", "target": ["/bin/true"],
+        // Never reached: the namespace check comes before the connection.
+        "control": "/nonexistent/control.sock"
     });
     let home = tempfile::tempdir().unwrap();
     let out = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing)
@@ -498,13 +516,14 @@ async fn started_sleeper(marker: &str) -> Option<Started> {
 /// Start `target` and wait until the host runs `sleep <marker>`, or `None`
 /// when the host refuses the sandbox.
 async fn started_until(target: &Target, marker: &str) -> Option<Started> {
-    let started = match start_with_helper(Path::new(gateway_bin::path()), target, &[]) {
-        Ok(started) => started,
-        Err(refusal) => {
-            skip_or_fail(&refusal);
-            return None;
-        }
-    };
+    let started =
+        match start_with_helper(Path::new(gateway_bin::path()), target, &[], deadline()).await {
+            Ok(started) => started,
+            Err(refusal) => {
+                skip_or_fail(&refusal);
+                return None;
+            }
+        };
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !host_has(marker) {
         if std::time::Instant::now() > deadline {

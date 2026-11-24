@@ -249,3 +249,76 @@ fn rf5_a_refused_fetch_reports_its_step_and_waits_for_nothing() {
     assert_eq!(line, "{\"fetch_done\":true,\"refused\":\"npm-ci\"}\n");
     assert_eq!(returned, Ok(()));
 }
+
+/// R45, kills m-no-wait-for-close and m-no-half-close: for `setup_done`, a
+/// `setup_refused` and a refused `fetch_done`, the gateway's side reads the
+/// one line and then the end of file; the helper's side is still waiting
+/// 200 ms later while the gateway keeps its side open, and returns once the
+/// gateway drops it.
+#[test]
+fn r45_the_helper_reports_then_waits_for_the_gateways_close() {
+    use super::report_and_leave;
+    use crate::preview_sandbox::control_msg::{SetupStatus, SetupStep};
+    let refused = SetupStatus::Refused {
+        step: SetupStep::Binding,
+        denied: false,
+    };
+    let cases: [(&str, Option<SetupStatus>, bool, &str); 3] = [
+        (
+            "setup_done",
+            Some(SetupStatus::Done),
+            false,
+            "{\"setup_done\":true}\n",
+        ),
+        (
+            "setup_refused",
+            Some(refused),
+            false,
+            "{\"setup_refused\":true,\"step\":\"binding\",\"denied\":false}\n",
+        ),
+        (
+            "a refused fetch_done",
+            None,
+            true,
+            "{\"fetch_done\":true,\"refused\":\"npm-ci\"}\n",
+        ),
+    ];
+    for (name, status, refused_fetch, want) in cases {
+        let (mut helper, gateway) = UnixStream::pair().expect("pair");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let reported = if refused_fetch {
+                finish_fetch(&mut helper, HELPER_BOUNDS, Some(FetchStep::NpmCi))
+                    .and_then(|()| report_and_leave(&mut helper, None, HELPER_BOUNDS.write, || {}))
+            } else {
+                report_and_leave(&mut helper, status, HELPER_BOUNDS.write, || {})
+            };
+            let _ = tx.send(reported);
+        });
+        let mut reader = BufReader::new(&gateway);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the line");
+        assert_eq!(line, want, "{name}");
+        let mut rest = String::new();
+        let read = within_guard({
+            let gateway = gateway.try_clone().expect("clone");
+            move || std::io::Read::read_to_string(&mut &gateway, &mut rest).map(|n| (n, rest))
+        });
+        assert_eq!(
+            read.expect("read to the end").0,
+            0,
+            "{name}: the write half was shut"
+        );
+        assert!(
+            // limit-under-test (fires-only): the row asserts only that this wait times out while the gateway is open
+            rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "{name}: returned while the gateway was still open"
+        );
+        drop(reader);
+        drop(gateway);
+        let returned = rx
+            .recv_timeout(GUARD)
+            .expect("returned once the gateway closed");
+        assert_eq!(returned, Ok(()), "{name}");
+    }
+}
