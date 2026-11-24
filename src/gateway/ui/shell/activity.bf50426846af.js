@@ -75,7 +75,7 @@ function rowLink(row) {
  */
 function changeText(row) {
   const named = (v) => typeof v === 'string' && v !== '';
-  if (row.surface !== 'capability_editor' && !named(row.action)) {
+  if (row.surface !== 'capability_editor') {
     if (named(row.tool)) return row.tool;
     if (named(row.method) && named(row.route)) return `${row.method} ${row.route}`;
     return text(row.surface);
@@ -573,6 +573,7 @@ const SHOWN = {
   },
   admin_action: {
     ...BASE, surface: true, route: true, method: true, http_status: true, tool: true, outcome: true,
+    action: true, capability: true, pin: true, who: { account: true },
   },
 };
 
