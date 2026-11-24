@@ -86,7 +86,8 @@ impl GeneratedCapability {
         };
 
         // The loader reads `.yml` too, so a file (or link) of that name holds
-        // the name as well.
+        // the name as well. Best effort: unlike the `.yaml` create below, a
+        // `.yml` made by another process after this look is not seen.
         if fs::symlink_metadata(dir.join(format!("{}.yml", self.name))).is_ok() {
             return Err(taken());
         }
