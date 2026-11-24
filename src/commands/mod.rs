@@ -170,7 +170,7 @@ pub fn run_init_command(
             print_init_success(output, profile, !sample_files.is_empty(), &reference);
             ExitCode::SUCCESS
         }
-        Err(e) => fail(CliExit::LocalFailure, &e.to_string(), &writable()),
+        Err(e) => fail(CliExit::LocalFailure, &e, &writable()),
     }
 }
 

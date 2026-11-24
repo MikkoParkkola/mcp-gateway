@@ -131,10 +131,10 @@ impl Scan {
             };
             match (first.to_string().as_str(), second.as_str(), args) {
                 ("ExitCode", "FAILURE", _) => {
-                    self.hit(line_of(first.span()), "ExitCode::FAILURE in a macro")
+                    self.hit(line_of(first.span()), "ExitCode::FAILURE in a macro");
                 }
                 ("ExitCode", "from", Some(_)) => {
-                    self.hit(line_of(first.span()), "ExitCode::from in a macro")
+                    self.hit(line_of(first.span()), "ExitCode::from in a macro");
                 }
                 ("process", "exit", Some(inside)) if inside.to_string() != "0" => {
                     self.hit(line_of(first.span()), "process::exit in a macro");
@@ -222,13 +222,13 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        if mac.path.is_ident("eprintln") {
-            if let Some(TokenTree::Literal(lit)) = mac.tokens.clone().into_iter().next() {
-                let text =
-                    syn::parse2::<syn::LitStr>(TokenTree::Literal(lit).into()).map(|s| s.value());
-                if text.is_ok_and(|t| t.starts_with("Error") || t.starts_with("error:")) {
-                    self.hit(line_of(mac.path.span()), "Error print");
-                }
+        if mac.path.is_ident("eprintln")
+            && let Some(TokenTree::Literal(lit)) = mac.tokens.clone().into_iter().next()
+        {
+            let text =
+                syn::parse2::<syn::LitStr>(TokenTree::Literal(lit).into()).map(|s| s.value());
+            if text.is_ok_and(|t| t.starts_with("Error") || t.starts_with("error:")) {
+                self.hit(line_of(mac.path.span()), "Error print");
             }
         }
         self.tokens(mac.tokens.clone());

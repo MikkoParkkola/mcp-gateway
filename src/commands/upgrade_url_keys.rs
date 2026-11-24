@@ -61,7 +61,7 @@ pub fn run_upgrade_with_config(
             Err(e) => {
                 return fail(
                     CliExit::LocalFailure,
-                    &e.to_string(),
+                    &e,
                     &format!(
                         "Check that {} exists and that you can write to it.",
                         path.display()
