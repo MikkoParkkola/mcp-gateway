@@ -17,7 +17,7 @@ use super::{
     counts::{COUNT_SCAN_BYTES, count_rule_hits},
     decision_fixtures::decision,
     reader::{Limits, read_page},
-    rows::{Filter, NOT_A_CALL, kind_of},
+    rows::{Filter, NOT_A_CALL, kind_of, row_id},
 };
 use crate::config_reload::LiveConfig;
 use crate::gateway::ui::policies::{Sources, read_model, read_model_with_hits};
@@ -181,8 +181,9 @@ fn p10_the_window_edges() {
     assert_eq!(listed(&path, &id, ago(48), older_end).len(), 1);
 }
 
-/// The stamps of the rows the Activity list's own filter gives for rule `id`
-/// over `[from, to]`.
+/// The stamps of the rows the Activity list gives for rule `id` over
+/// `[from, to]`: its own filter, then only lines it can show as a row (the
+/// list drops a line `row()` cannot project, and `row()` needs `row_id`).
 fn listed(
     path: &std::path::Path,
     id: &str,
@@ -205,6 +206,7 @@ fn listed(
     .expect("read");
     page.lines
         .iter()
+        .filter(|l| row_id(l).is_some())
         .map(|l| l.entry["timestamp"].as_str().unwrap_or_default().to_owned())
         .collect()
 }
