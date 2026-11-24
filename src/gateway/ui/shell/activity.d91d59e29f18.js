@@ -81,10 +81,10 @@ function changeText(row) {
     return text(row.surface);
   }
   // An older record names no capability: nothing to name, and no pin words.
-  if (!named(row.capability)) return 'Capability file changed';
+  if (!named(row.capability) && !['create', 'save', 'delete'].includes(row.action)) return 'Capability file changed';
   const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  const pin = row.pin ? ' · re-pinned' : '';
   return `${verb} capability ${row.capability}${pin}`;
 }
 
