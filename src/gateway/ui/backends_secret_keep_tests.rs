@@ -207,7 +207,10 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
                 let held = held_file();
                 let mut panel =
                     Panel::with(&holding("DATABASE_HOST", &held.reference), Reloads::Accept).await;
-                let journal = panel.dir.path().join("audit.jsonl");
+                // The log gets a registered folder of its own, handed to it,
+                // so the folder outlives the log and is cleared at exit.
+                let log_dir = crate::test_dir_keep::kept_tempdir();
+                let journal = log_dir.path().join("audit.jsonl");
                 let logger = crate::security::TransparencyLogger::open(Arc::new(
                     crate::security::transparency_log::TransparencyLogConfig {
                         enabled: true,
@@ -217,8 +220,7 @@ fn k4_no_answer_file_audit_or_log_carries_the_value() {
                     },
                 ))
                 .expect("an audit log");
-                // The log's folder lives as long as the log does.
-                logger.keep_test_dir(Arc::clone(&panel.dir));
+                logger.keep_test_dir(Arc::clone(&log_dir));
                 Arc::get_mut(&mut panel.state)
                     .expect("the panel's state is not shared yet")
                     .transparency_log = Some(Arc::new(logger));
