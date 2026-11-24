@@ -219,7 +219,7 @@ export function el(tag, attrs = {}, ...children) {
 }
 
 /** The banner and next step for a server whose config entry turns it off; its word comes from the glossary. */
-export const OFF_BANNER = (name) => `${name} is turned off in its gateway.yaml entry. The gateway leaves it stopped, and its tools are out of reach for every key.`;
+export const OFF_BANNER = (name) => `${name} is ${GLOSSARY.server.off.toLowerCase()} in its gateway.yaml entry. The gateway leaves it stopped, and its tools are out of reach for every key.`;
 export const OFF_NEXT = 'Turn it back on from its Settings tab.';
 
 /**

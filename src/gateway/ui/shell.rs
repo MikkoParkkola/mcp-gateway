@@ -29,8 +29,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
-        "activity.ee4fd9b093a9.js",
-        include_bytes!("shell/activity.ee4fd9b093a9.js"),
+        "activity.dbe3c8f57237.js",
+        include_bytes!("shell/activity.dbe3c8f57237.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -53,28 +53,28 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.03e9ffebd104.css"),
     ),
     (
-        "gateway.cf87b6f666d9.js",
-        include_bytes!("shell/gateway.cf87b6f666d9.js"),
+        "gateway.2c90b9840ae9.js",
+        include_bytes!("shell/gateway.2c90b9840ae9.js"),
     ),
     (
         "overview.29b312e37219.css",
         include_bytes!("shell/overview.29b312e37219.css"),
     ),
     (
-        "overview.5f6b294e0aa9.js",
-        include_bytes!("shell/overview.5f6b294e0aa9.js"),
+        "overview.7cd7f12d4c05.js",
+        include_bytes!("shell/overview.7cd7f12d4c05.js"),
     ),
     (
         "servers.a2711ee29891.css",
         include_bytes!("shell/servers.a2711ee29891.css"),
     ),
     (
-        "servers.d910df946a3b.js",
-        include_bytes!("shell/servers.d910df946a3b.js"),
+        "servers.b7e231942412.js",
+        include_bytes!("shell/servers.b7e231942412.js"),
     ),
     (
-        "shell.3f5cbd44ed90.js",
-        include_bytes!("shell/shell.3f5cbd44ed90.js"),
+        "shell.2885a89b422b.js",
+        include_bytes!("shell/shell.2885a89b422b.js"),
     ),
     (
         "shell.c460caebf770.css",
@@ -89,12 +89,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tips.e494b4eeb750.json"),
     ),
     (
-        "tools.1cb22ae23c7f.js",
-        include_bytes!("shell/tools.1cb22ae23c7f.js"),
-    ),
-    (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
+    ),
+    (
+        "tools.66779c13f5f4.js",
+        include_bytes!("shell/tools.66779c13f5f4.js"),
     ),
     (
         "tooltip.5251c22696fd.css",

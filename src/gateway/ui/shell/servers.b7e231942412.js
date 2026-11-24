@@ -9,7 +9,7 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES } from '/ui/assets/shell.3f5cbd44ed90.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.2885a89b422b.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -42,8 +42,8 @@ const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
 
 const QUIET_LINE = 'Could not check this machine for servers outside the gateway.';
 
-/** The heading over the servers whose config entry turns them off. */
-export const OFF_BLOCK_TITLE = 'Turned off';
+/** The heading over the servers whose config entry turns them off: the state's one word, from the glossary (UI1.24). */
+export const OFF_BLOCK_TITLE = GLOSSARY.server.off;
 
 /**
  * How long the registry and discovery reads may take before the page draws without
