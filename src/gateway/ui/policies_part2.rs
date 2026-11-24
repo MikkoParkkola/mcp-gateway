@@ -302,7 +302,7 @@ fn relay(file: &FirewallConfig, run: &FirewallConfig, view: &CollusionView) -> V
     let (rc, s) = (&run.collusion, |f: &str, a: Value, b: Value| {
         setting(&path(f), a, b)
     });
-    json!({
+    let mut relay = json!({
         "action": setting_pending(&path("action"), json!(c.action), json!(view.action()), wanted.action() != view.action()),
         "effect": effect,
         "sources": setting_pending(&path("sources"), json!(c.sources), json!(sources), want_sources != sources),
@@ -315,5 +315,9 @@ fn relay(file: &FirewallConfig, run: &FirewallConfig, view: &CollusionView) -> V
         ],
         "firewall": switch(&fw_path("enabled"), file.enabled, run.enabled),
         "inferred_classes": SENSITIVE_CLASSES,
-    })
+    });
+    if mutant!("M2", true, false) {
+        relay["read_only"] = json!(true);
+    }
+    relay
 }

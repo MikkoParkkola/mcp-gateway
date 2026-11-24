@@ -72,8 +72,14 @@ pub(super) fn setting_pending(path: &str, file: Value, enforced: Value, pending:
     s.insert("file".to_owned(), file);
     s.insert("enforced".to_owned(), enforced);
     s.insert("pending_restart".to_owned(), Value::Bool(pending));
-    let read_only = crate::config_reload::ui_fields::FieldId::of(path).is_none();
-    s.insert("read_only".to_owned(), Value::Bool(read_only));
+    let read_only = mutant!(
+        "M1",
+        crate::config_reload::ui_fields::FieldId::of(path).is_some(),
+        crate::config_reload::ui_fields::FieldId::of(path).is_none()
+    );
+    if mutant!("M12", false, true) && mutant!("M14", read_only, true) {
+        s.insert("read_only".to_owned(), Value::Bool(read_only));
+    }
     Value::Object(s)
 }
 
@@ -81,6 +87,9 @@ pub(super) fn setting_pending(path: &str, file: Value, enforced: Value, pending:
 pub(super) fn switch(path: &str, file: bool, enforced: bool) -> Value {
     let mut s = setting(path, json!(file), json!(enforced));
     s["on"] = json!(enforced);
+    if mutant!("M12", true, false) {
+        s["read_only"] = json!(crate::config_reload::ui_fields::FieldId::of(path).is_none());
+    }
     s
 }
 
@@ -91,7 +100,7 @@ pub(super) fn read_model(sources: &Sources<'_>) -> Value {
         "tool_policy": tool_policy(&config.security.tool_policy),
         "finding_rules": finding_rules(config),
         "tool_limits": tool_limits(),
-        "request_checks": request_checks(config),
+        "request_checks": request_checks(mutant!("M3", sources.running, config), sources.running),
     });
     for (section, value) in firewall_sections(sources) {
         model[section] = value;
@@ -121,23 +130,30 @@ fn firewall_sections(_sources: &Sources<'_>) -> [(&'static str, Value); 4] {
 /// file and the enforced value are one. Under the hardened posture SSRF
 /// protection is held on at load whatever the file says; the read says so and
 /// marks it read-only, since a save of it would not take effect.
-fn request_checks(config: &Config) -> Value {
+fn request_checks(config: &Config, running: &Config) -> Value {
     let security = &config.security;
     let mut ssrf = switch(
         "security.ssrf_protection",
-        security.ssrf_protection,
+        mutant!("M13", running.security.ssrf_protection, security.ssrf_protection),
         security.ssrf_protection,
     );
-    if security.posture == crate::security::posture::SecurityPosture::Hardened {
+    let hardened = security.posture == crate::security::posture::SecurityPosture::Hardened;
+    if mutant!("M4", false, mutant!("M7", true, hardened)) {
         ssrf["forced_by"] = json!("security.posture");
-        ssrf["read_only"] = json!(true);
+        if mutant!("M8", false, true) {
+            ssrf["read_only"] = json!(true);
+        }
+    }
+    let mut sanitize = switch(
+        "security.sanitize_input",
+        mutant!("M13", running.security.sanitize_input, security.sanitize_input),
+        security.sanitize_input,
+    );
+    if mutant!("M6", hardened, false) {
+        sanitize["forced_by"] = json!("security.posture");
     }
     json!({
-        "sanitize_input": switch(
-            "security.sanitize_input",
-            security.sanitize_input,
-            security.sanitize_input,
-        ),
+        "sanitize_input": sanitize,
         "ssrf_protection": ssrf,
     })
 }
@@ -233,16 +249,28 @@ fn tool_policy(policy: &ToolPolicyConfig) -> Value {
     // The three values the save can change, as setting objects with their
     // save paths; all apply live, so file and enforced come from one config.
     json!({
-        "enabled": switch("security.tool_policy.enabled", policy.enabled, policy.enabled),
-        "default_action": setting(
-            "security.tool_policy.default_action",
-            json!(policy.default_action),
-            json!(policy.default_action),
+        "enabled": mutant!(
+            "M5",
+            json!(policy.enabled),
+            switch("security.tool_policy.enabled", policy.enabled, policy.enabled)
         ),
-        "use_default_deny": switch(
-            "security.tool_policy.use_default_deny",
-            policy.use_default_deny,
-            policy.use_default_deny,
+        "default_action": mutant!(
+            "M5",
+            json!(policy.default_action),
+            setting(
+                "security.tool_policy.default_action",
+                json!(policy.default_action),
+                json!(policy.default_action),
+            )
+        ),
+        "use_default_deny": mutant!(
+            "M5",
+            json!(policy.use_default_deny),
+            switch(
+                "security.tool_policy.use_default_deny",
+                policy.use_default_deny,
+                policy.use_default_deny,
+            )
         ),
         "default_denies": default_denies,
         "allow": allow,
