@@ -452,11 +452,28 @@ fn the_usage_remedy_names_the_commands_help() {
     );
 }
 
-/// U3: an empty remedy is a bug at the call site, caught before anything is written.
+/// U3: an empty remedy is a bug at the call site, caught before anything is written. Caught with `catch_unwind`
+/// rather than `should_panic`, so a missing panic fails as an assertion the rows tooling can judge.
 #[test]
-#[should_panic(expected = "remedy")]
 fn fail_refuses_an_empty_remedy() {
-    let _ = fail(CliExit::LocalFailure, "m", "");
+    let caught = std::panic::catch_unwind(|| fail(CliExit::LocalFailure, "m", ""));
+    let message = caught.err().map(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+            })
+            .unwrap_or_default()
+    });
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|text| text.contains("remedy")),
+        "an empty remedy must panic, naming the remedy: {message:?}"
+    );
 }
 
 /// U4: the local codes are the literals 0, 1 and 2.
