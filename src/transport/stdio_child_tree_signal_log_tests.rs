@@ -17,9 +17,11 @@ const EARLY: Sent = Sent::SkipLate {
 };
 /// The threshold's two sides, as literals: the slack is 6 s - 5 s - 0.1 s.
 const JUST_OVER: Sent = Sent::SkipLate {
+    // limit-under-test (injected-clock): a recorded lateness handed straight to the pure judge
     late: Duration::from_millis(901),
 };
 const AT_THRESHOLD: Sent = Sent::SkipLate {
+    // limit-under-test (injected-clock): a recorded lateness handed straight to the pure judge
     late: Duration::from_millis(900),
 };
 
