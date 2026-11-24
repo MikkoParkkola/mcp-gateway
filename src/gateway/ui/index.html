@@ -2245,28 +2245,7 @@ function closeImportModal() {
   document.getElementById('import-msg').className = 'modal-msg';
   document.getElementById('import-btn').disabled = true;
   document.getElementById('import-select-row').style.display = 'none';
-  dropImportPreview();
 }
-
-// The last preview the page drew: the URL it fetched and the digest the
-// gateway answered for that text. Import sends exactly these, never a URL
-// read again from the field, so it writes only what the preview showed.
-let importKept = null;
-// Bumped by every preview and every URL edit: a preview answer whose number
-// is no longer the latest is dropped without drawing anything.
-let importPreviewSeq = 0;
-
-function dropImportPreview() {
-  importPreviewSeq++;
-  importKept = null;
-  const importBtn = document.getElementById('import-btn');
-  if (importBtn) importBtn.disabled = true;
-}
-
-// Editing the URL after a preview needs a new preview before Import.
-document.addEventListener('input', (e) => {
-  if (e.target && e.target.id === 'import-url') dropImportPreview();
-});
 
 // Close on backdrop click
 document.addEventListener('click', (e) => {
@@ -2291,10 +2270,9 @@ async function previewOpenAPI() {
 
   if (!url) { msgEl.textContent = 'Please enter a URL.'; msgEl.className = 'modal-msg err'; return; }
   msgEl.textContent = '';
-  dropImportPreview();
-  const seq = importPreviewSeq;
   btn.disabled = true;
   preview.innerHTML = '<span class="preview-hint">Loading...</span>';
+  importBtn.disabled = true;
   selectRow.style.display = 'none';
 
   try {
@@ -2304,10 +2282,7 @@ async function previewOpenAPI() {
       body: JSON.stringify({ url })
     });
     const data = await r.json();
-    // A newer preview or a URL edit came first: this answer is stale.
-    if (seq !== importPreviewSeq) return;
     if (!r.ok) { throw new Error(data.error || r.statusText); }
-    importKept = { url, digest: data.digest };
     const tools = data.tools || [];
     if (tools.length === 0) {
       preview.innerHTML = '<span class="preview-hint">No tools found in this spec.</span>';
@@ -2327,13 +2302,11 @@ async function previewOpenAPI() {
       );
     }
   } catch (e) {
-    if (seq !== importPreviewSeq) return;
     preview.innerHTML = '';
     msgEl.textContent = 'Preview failed: ' + e.message;
     msgEl.className = 'modal-msg err';
-  } finally {
-    btn.disabled = false;
   }
+  btn.disabled = false;
 }
 
 function updateImportCount() {
@@ -2348,12 +2321,11 @@ function setAllChecks(val) {
 }
 
 async function doImport() {
-  const kept = importKept;
+  const url = document.getElementById('import-url').value.trim();
   const checked = [...document.querySelectorAll('.import-check:checked')].map(cb => cb.value);
   const importBtn = document.getElementById('import-btn');
   const msgEl = document.getElementById('import-msg');
 
-  if (!kept) { msgEl.textContent = 'Preview the URL first.'; msgEl.className = 'modal-msg err'; return; }
   if (!checked.length) { msgEl.textContent = 'Select at least one tool.'; msgEl.className = 'modal-msg err'; return; }
   importBtn.disabled = true;
   msgEl.textContent = 'Importing...';
@@ -2363,15 +2335,10 @@ async function doImport() {
     const r = await uiFetch('/ui/api/import/openapi', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: kept.url, digest: kept.digest, selected_tools: checked })
+      body: JSON.stringify({ url, selected_tools: checked })
     });
     const data = await r.json();
-    if (!r.ok) {
-      // A 409 (the document changed, or no capability directory) needs a
-      // new preview before Import is offered again.
-      if (r.status === 409) dropImportPreview();
-      throw new Error(data.error || r.statusText);
-    }
+    if (!r.ok) throw new Error(data.error || r.statusText);
     closeImportModal();
     const statusEl = document.getElementById('cap-status');
     if (statusEl) {
@@ -2383,8 +2350,7 @@ async function doImport() {
   } catch (e) {
     msgEl.textContent = 'Import failed: ' + e.message;
     msgEl.className = 'modal-msg err';
-    // Offered again only while the preview it used is still the current one.
-    importBtn.disabled = importKept !== kept;
+    importBtn.disabled = false;
   }
 }
 
