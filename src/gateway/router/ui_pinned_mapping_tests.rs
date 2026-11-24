@@ -179,7 +179,8 @@ async fn the_snapshot_follows_the_pinned_mapping() {
 }
 
 /// Whether the status report opens `tab` of `page`, or `None` when the report
-/// does not list that tab.
+/// does not list that tab. A listed tab without a boolean `open` fails here,
+/// so a broken shape never reads as an absent tab.
 fn listed_tab(report: &str, page: &str, tab: &str) -> Option<bool> {
     let body: Value = serde_json::from_str(report).expect("status is JSON");
     body["access"]["pages"]
@@ -189,7 +190,11 @@ fn listed_tab(report: &str, page: &str, tab: &str) -> Option<bool> {
         .filter(|p| p["id"] == page)
         .flat_map(|p| p["tabs"].as_array().into_iter().flatten())
         .find(|t| t["id"] == tab)
-        .and_then(|t| t["open"].as_bool())
+        .map(|t| {
+            t["open"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{page}/{tab} has no boolean open: {t}"))
+        })
 }
 
 /// Whether the status report opens `tab` of `page`, which it must list.
