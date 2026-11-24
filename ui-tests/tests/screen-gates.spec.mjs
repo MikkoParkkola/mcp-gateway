@@ -245,6 +245,7 @@ for (const screen of SCREENS) {
 
 const tools = SCREENS.find((s) => s.id === 'tools');
 const plainState = tools.states.find((s) => s.name === 'most-called');
+const trapState = tools.states.find((s) => s.name === 'try-confirm');
 
 test('G0 plant: an entry with no frames is reported', () => {
   expect(tableProblems([{ ...tools, frames: [] }])).toEqual(['tools: no frames']);
@@ -281,6 +282,16 @@ test('G0 plant: a non-string deferral reason does not count', () => {
 test('G0 plant: a frame with an empty region list is refused', () => {
   const frames = [{ ...tools.frames[0], regions: [] }];
   expect(tableProblems([{ ...tools, frames }])).toEqual([`tools ${frames[0].file}: compares no region`]);
+});
+
+test('G0 plant: a modal state with its opener left unset is refused', () => {
+  const states = tools.states.map((s) => (s === trapState ? { ...s, opener: undefined } : s));
+  expect(tableProblems([{ ...tools, states }])).toEqual(['tools try-confirm: trap without opener']);
+});
+
+test('G0 plant: a modal state whose opener is a plain string is refused', () => {
+  const states = tools.states.map((s) => (s === trapState ? { ...s, opener: 'Run' } : s));
+  expect(tableProblems([{ ...tools, states }])).toEqual(['tools try-confirm: trap without opener']);
 });
 
 test('G0 plant: a frame drawn in a state the entry lacks is reported', () => {
@@ -350,6 +361,91 @@ test('G2b plant: a confirm that lets Tab out to the page behind is reported', as
   } });
   expect(missed).toHaveLength(1);
   expect(missed[0]).toMatch(/^press \d+ \((Tab|Shift\+Tab)\) moved focus out of the trap$/);
+});
+
+/** In the page: the one Run atlas.pin button behind the confirm (the confirm sits outside #content). */
+function theRunButton() {
+  const found = [...document.querySelectorAll('#content button')].filter((b) => b.textContent === 'Run atlas.pin');
+  if (found.length !== 1) throw new Error(`premise: ${found.length} Run atlas.pin buttons behind the confirm`);
+  return found[0];
+}
+
+test('G2b: Escape shuts the confirm and focus is back on Run atlas.pin', async ({ page }) => {
+  expect(await unreachedControls(page, trapState, { width: 1440 })).toEqual([]);
+  await expect(page.locator('dialog.confirm')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Run atlas.pin', exact: true })).toBeFocused();
+});
+
+test('G2b plant: focus left on the body once Escape shuts the confirm is reported', async ({ page }) => {
+  const faults = await unreachedControls(page, trapState, { width: 1440, plant: async (p) => {
+    // Neither the shell nor the tools screen can then hand focus back to Run.
+    await p.evaluate(`(${theRunButton})().focus = () => {}`);
+  } });
+  expect(faults).toEqual(['focus on body after Escape, expected the opener']);
+});
+
+/** A close listener on the confirm that moves focus to a new Elsewhere button in the page. */
+async function focusElsewhereOnClose(p) {
+  await p.evaluate(() => {
+    document.querySelector('dialog.confirm').addEventListener('close', () => {
+      const away = Object.assign(document.createElement('button'), { textContent: 'Elsewhere' });
+      document.getElementById('content').append(away);
+      away.focus();
+    });
+  });
+}
+
+test('G2b plant: focus moved to some other control once Escape shuts the confirm is reported', async ({ page }) => {
+  const faults = await unreachedControls(page, trapState, { width: 1440, plant: focusElsewhereOnClose });
+  expect(faults).toEqual(['focus on <button>Elsewhere</button> after Escape, expected the opener']);
+});
+
+test('G2b plant: the opener the step checks is the state\'s own', async ({ page }) => {
+  // The same fault, with a state whose opener is the control focus moved to: nothing to report.
+  const elsewhere = { ...trapState, opener: (p) => p.getByRole('button', { name: 'Elsewhere', exact: true }) };
+  expect(await unreachedControls(page, elsewhere, { width: 1440, plant: focusElsewhereOnClose })).toEqual([]);
+});
+
+test('G2b plant: a confirm that stays open on Escape is reported', async ({ page }) => {
+  const faults = await unreachedControls(page, trapState, { width: 1440, plant: async (p) => {
+    // Only the first Escape is eaten, so pressing twice would close it.
+    await p.evaluate(() => {
+      let eaten = false;
+      window.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && !eaten) {
+          eaten = true;
+          ev.preventDefault();
+        }
+      }, true);
+    });
+  } });
+  expect(faults).toEqual(['trap still visible after Escape']);
+  await expect(page.locator('dialog.confirm'), 'premise: the eaten Escape left it open').toHaveJSProperty('open', true);
+});
+
+test('G2b plant: focus that reaches the opener a little late still passes', async ({ page }) => {
+  const faults = await unreachedControls(page, trapState, { width: 1440, plant: async (p) => {
+    // Run takes no focus until 2 s after the confirm closes; a single read at once would see the body.
+    await p.evaluate(`(() => {
+      const run = (${theRunButton})();
+      const real = run.focus.bind(run);
+      run.focus = () => {};
+      document.querySelector('dialog.confirm').addEventListener('close', () => {
+        setTimeout(() => { run.focus = real; real(); }, 2000);
+      });
+    })()`);
+  } });
+  expect(faults).toEqual([]);
+});
+
+test('G2b plant: a confirm control out of Tab order is reported before Escape runs', async ({ page }) => {
+  const missed = await unreachedControls(page, trapState, { width: 1440, plant: async (p) => {
+    await p.evaluate(() => {
+      const b = Object.assign(document.createElement('button'), { textContent: 'Out of reach', tabIndex: -1 });
+      document.querySelector('dialog.confirm .acts').append(b);
+    });
+  } });
+  expect(missed).toEqual(['<button tabindex="-1">Out of reach</button>']);
 });
 
 test('G3 plant: a journey whose outcome text is wrong fails', async ({ page }) => {

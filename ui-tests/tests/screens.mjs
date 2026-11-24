@@ -7,11 +7,13 @@
 //
 // An entry:
 //   id        the sidebar page id
-//   states    [{ name, action, act?, trap?, step(page, data?) }]: step mocks the API and
+//   states    [{ name, action, act?, trap?, opener?, step(page, data?) }]: step mocks the API and
 //             drives the page until the state is settled; `action` names the
 //             state's main motion (G4) and `act`, when present, performs it after
 //             the step. `trap(page)`, for a state that opens a modal surface, is
-//             that surface's locator: the keyboard walk must stay inside it. A step
+//             that surface's locator: the keyboard walk must stay inside it, and
+//             `opener(page)`, required with it, is the control focus goes back to
+//             once Escape has closed the surface. A step
 //             takes its fixture (`data`) as an argument with a small default, so a
 //             frame can pass the data its picture was drawn with.
 //   journeys  [{ name, step(page) }]: starts at the sidebar, ends on an asserted outcome
@@ -289,6 +291,7 @@ export const SCREENS = [
         name: 'try-confirm',
         action: 'opening the confirm',
         trap: (page) => page.locator('dialog.confirm'),
+        opener: (page) => runButton(page, 'atlas.pin'),
         async step(page, data = { tools: TRY_TOOLS, pick: 'atlas.pin' }) {
           const { name } = await openTry(page, data);
           await runButton(page, name).click();
