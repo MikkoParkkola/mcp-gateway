@@ -429,7 +429,6 @@ callers.
 ```yaml
 accounts:
   # Unchanged from your existing accounts block:
-  schema_version: accounts.v1
   enabled: true
   deployment: single_process
   instance_id: gateway-a

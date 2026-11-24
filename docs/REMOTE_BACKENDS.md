@@ -235,7 +235,7 @@ distinct description, with the rule's findings and a digest.
 ```yaml
 backends:
   my-backend:
-    http_url: "https://mcp.example.com/mcp"
+    url: "https://mcp.example.com/mcp"
     allow_flagged_tools:
       # The digest the warning names.
       tool_name: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
@@ -250,7 +250,7 @@ A changed description gets a new digest and is withheld again. See UPGRADING-4.0
 ```yaml
 backends:
   my-backend:
-    http_url: "https://mcp.example.com/mcp"
+    url: "https://mcp.example.com/mcp"
     allowed_tools: [search, "get_*"]
 ```
 

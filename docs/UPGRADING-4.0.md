@@ -2438,7 +2438,7 @@ To serve a withheld tool you trust, pin its current description:
 ```yaml
 backends:
   my-backend:
-    http_url: "https://mcp.example.com/mcp"
+    url: "https://mcp.example.com/mcp"
     allow_flagged_tools:
       # The digest the warning names.
       tool_name: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
