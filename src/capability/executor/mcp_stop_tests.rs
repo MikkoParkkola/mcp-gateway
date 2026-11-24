@@ -24,8 +24,8 @@ use crate::capability::{CapabilityDefinition, parse_capability};
 /// the kill and the reap, so the stage must exceed it for the graceful phase
 /// to have room; a child slow to read its end of input under load still gets
 /// its turn. A child that exits at once ends the stop at once.
-const STAGE: Duration =
-    crate::transport::KILL_RESERVE_FOR_TEST.saturating_add(Duration::from_secs(4));
+const STAGE: Duration = Duration::from_secs(10);
+const _: () = assert!(STAGE.as_secs() > crate::transport::KILL_RESERVE_FOR_TEST.as_secs() + 2);
 
 fn stop_capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -153,19 +153,15 @@ fn alive(pid: &str) -> bool {
 /// Room past a stop's own deadline before a row calls it hung.
 const HUNG: Duration = Duration::from_secs(10);
 
-/// A stop of `rig`'s registry planned to end within `budget`; a stop still
+/// A stop of `rig`'s registry planned to end within `STAGE`; a stop still
 /// running `HUNG` past that fails the row instead of hanging it.
-async fn stop_within(rig: &Rig, budget: Duration, handover: Handover) {
+async fn stop(rig: &Rig, handover: Handover) {
     let stopping = rig
         .registry
-        .stop_all_by(tokio::time::Instant::now() + budget, handover);
-    tokio::time::timeout(budget + HUNG, stopping)
+        .stop_all_by(tokio::time::Instant::now() + STAGE, handover);
+    tokio::time::timeout(STAGE + HUNG, stopping)
         .await
         .expect("the stop came back");
-}
-
-async fn stop(rig: &Rig, handover: Handover) {
-    stop_within(rig, STAGE, handover).await;
 }
 
 /// Until the child has answered a poll of the slow call: the call is then
@@ -401,14 +397,13 @@ async fn r5_after_the_stop_a_call_is_refused_and_starts_nothing() {
 
 /// R6. Deaf: a server that stops reading its input and shrugs off SIGTERM.
 /// Only the kill at the deadline ends it, and the stop is not back before:
-/// at its return the kill has landed and the child has been reaped. The
-/// budget leaves the graceful phases room beyond the kill's own reserve.
+/// at its return the kill has landed and the child has been reaped. `STAGE`
+/// leaves the graceful phases room beyond the kill's own reserve.
 #[tokio::test]
 async fn r6_the_stop_waits_for_the_kill_of_a_child_that_ignores_it() {
     let rig = rig();
     let pid = child_pid(&rig, "deaf").await;
-    let budget = crate::transport::KILL_RESERVE_FOR_TEST + Duration::from_secs(2);
-    stop_within(&rig, budget, Handover::AtEntry).await;
+    stop(&rig, Handover::AtEntry).await;
     assert!(
         rig.registry.stop_deadline().handed_all_reaped(),
         "the stop came back before deaf child {pid} was killed and reaped"

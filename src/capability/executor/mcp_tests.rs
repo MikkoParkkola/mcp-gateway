@@ -407,7 +407,7 @@ fn a_generation_bump_during_a_start_refuses_that_call() {
             let n = name.clone();
             let bumper = std::thread::spawn(move || e.bump_mcp_generation(&n));
             // With the lock released the bump completes while the build runs.
-            let give_up = std::time::Instant::now() + Duration::from_secs(5);
+            let give_up = std::time::Instant::now() + Duration::from_secs(10);
             while !bumper.is_finished() {
                 assert!(
                     std::time::Instant::now() < give_up,

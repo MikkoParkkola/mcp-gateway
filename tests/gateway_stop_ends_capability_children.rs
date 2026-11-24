@@ -290,39 +290,14 @@ async fn sigterm_ends_an_idle_capability_child_by_closing_its_stdin() {
     gateway.stop().await;
 }
 
-/// The same child under the stdio gateway, stopped the way its client stops
-/// it: the gateway's own stdin ends, and it exits by itself.
-#[tokio::test]
-async fn closing_stdin_ends_an_idle_capability_child_by_closing_its_stdin() {
-    let dir = tempfile::tempdir().expect("a temp root");
-    let root = dir.path().to_path_buf();
-    let home = root.join("home");
-    std::fs::create_dir_all(&home).expect("a home dir");
-    let config = write_config(&root);
-    let mark = root.join("child-read-eof");
-    let log = std::fs::File::create(root.join("gateway.log")).expect("a log file");
-
-    let mut command = gateway_bin::command(&home, gateway_bin::Inherit::Environment);
-    command
-        .arg("--config")
-        .arg(&config)
-        .arg("serve")
-        .arg("--stdio")
-        .envs(gateway_bin::checked_env([(
-            "CAP_EXEC_TEST_EOF_MARK",
-            mark.as_os_str(),
-        )]))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(log);
-    let mut gateway = gateway_bin::Reaped::new(
-        tokio::process::Command::from(command)
-            .spawn()
-            .expect("the gateway binary starts"),
-    );
-    let mut stdin = gateway.child_mut().stdin.take().expect("its stdin");
-    let mut stdout = BufReader::new(gateway.child_mut().stdout.take().expect("its stdout")).lines();
-
+/// Initialize the stdio gateway, invoke the capability once, and return the
+/// answer to that call (other lines, the initialize answer among them, are
+/// skipped).
+async fn call_over_stdio(
+    stdin: &mut tokio::process::ChildStdin,
+    mut stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    root: &Path,
+) -> String {
     let messages = [
         json!({
             "jsonrpc": "2.0",
@@ -356,21 +331,55 @@ async fn closing_stdin_ends_an_idle_capability_child_by_closing_its_stdin() {
             .expect("the gateway reads its stdin");
     }
     stdin.flush().await.expect("stdin flushes");
-    // The answer to the call: skip the initialize answer and any other line.
-    let answer = tokio::time::timeout(READY_BOUND, async {
+    tokio::time::timeout(READY_BOUND, async {
         loop {
             let line = stdout
                 .next_line()
                 .await
                 .expect("stdout reads")
-                .unwrap_or_else(|| panic!("the gateway closed stdout\n{}", logs(&root)));
+                .unwrap_or_else(|| panic!("the gateway closed stdout\n{}", logs(root)));
             if serde_json::from_str::<Value>(&line).is_ok_and(|value| value["id"] == json!(2)) {
                 break line;
             }
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the call was never answered\n{}", logs(&root)));
+    .unwrap_or_else(|_| panic!("the call was never answered\n{}", logs(root)))
+}
+
+/// The same child under the stdio gateway, stopped the way its client stops
+/// it: the gateway's own stdin ends, and it exits by itself.
+#[tokio::test]
+async fn closing_stdin_ends_an_idle_capability_child_by_closing_its_stdin() {
+    let dir = tempfile::tempdir().expect("a temp root");
+    let root = dir.path().to_path_buf();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("a home dir");
+    let config = write_config(&root);
+    let mark = root.join("child-read-eof");
+    let log = std::fs::File::create(root.join("gateway.log")).expect("a log file");
+
+    let mut command = gateway_bin::command(&home, gateway_bin::Inherit::Environment);
+    command
+        .arg("--config")
+        .arg(&config)
+        .arg("serve")
+        .arg("--stdio")
+        .envs(gateway_bin::checked_env([(
+            "CAP_EXEC_TEST_EOF_MARK",
+            mark.as_os_str(),
+        )]))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(log);
+    let mut gateway = gateway_bin::Reaped::new(
+        tokio::process::Command::from(command)
+            .spawn()
+            .expect("the gateway binary starts"),
+    );
+    let mut stdin = gateway.child_mut().stdin.take().expect("its stdin");
+    let stdout = BufReader::new(gateway.child_mut().stdout.take().expect("its stdout")).lines();
+    let answer = call_over_stdio(&mut stdin, stdout, &root).await;
     let pid = pid_in(&answer)
         .unwrap_or_else(|| panic!("the call named no child pid: {answer}\n{}", logs(&root)));
     let group = foreign_group(pid);
