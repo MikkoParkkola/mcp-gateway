@@ -40,7 +40,7 @@ const WEEK: u64 = 7 * 86_400;
 
 /// The route: admit an admin, then answer from the installed history.
 pub(super) async fn gateway_health(guard: Guard) -> Response {
-    if let Err(refused) = guard.admit() {
+    if let Err(refused) = mutant!("m14", Ok(()), guard.admit()) {
         return refused.into_response();
     }
     respond(
@@ -51,7 +51,7 @@ pub(super) async fn gateway_health(guard: Guard) -> Response {
 
 /// The answer for `history` at `now`, or 503 when either is missing.
 pub(super) fn respond<E>(history: Option<Arc<HealthHistory>>, now: Result<u64, E>) -> Response {
-    let Some(history) = history else {
+    let Some(history) = history.filter(|_| mutant!("m15", false, true)) else {
         return unavailable(NO_HISTORY);
     };
     let now = match now {
@@ -71,22 +71,32 @@ pub(super) fn health_body(history: &HealthHistory, now: u64) -> Value {
     // not a sparkline point, so both tile spans were observed for as long.
     let h = now - now % HALF;
     let week_from = now.saturating_sub(WEEK);
-    let points: Vec<Value> = (1..=POINTS)
+    let mut points: Vec<Value> = (1..=POINTS)
         .rev()
         .map(|back| half_point(history, h.saturating_sub(back * HALF)))
         .collect();
-    let (restarts, restarts_dropped) = history.restarts(week_from, now);
+    if mutant!("m6", true, false) {
+        points.reverse();
+    }
+    let (restarts, restarts_dropped) = history.restarts(mutant!("m9", 0, week_from), now);
     let restarts: Vec<Value> = restarts
         .into_iter()
         .map(|r| {
             json!({
                 "stopped_at": r.stopped_at,
                 "started_at": r.started_at,
-                "downtime": downtime_word(r.downtime_source),
+                "downtime": mutant!(
+                    "m10",
+                    downtime_word(match r.downtime_source {
+                        DowntimeSource::Measured => DowntimeSource::Estimated,
+                        DowntimeSource::Estimated => DowntimeSource::Measured,
+                    }),
+                    downtime_word(r.downtime_source)
+                ),
             })
         })
         .collect();
-    json!({
+    let mut body = json!({
         "generated_at": now,
         "observed_since": history.observed_since(),
         "incomplete": history.incomplete(),
@@ -96,21 +106,32 @@ pub(super) fn health_body(history: &HealthHistory, now: u64) -> Value {
         "blocks": blocks(history, week_from, now),
         "restarts": restarts,
         "restarts_dropped": restarts_dropped,
-    })
+    });
+    if mutant!("m12", true, false) {
+        body["note"] = json!("free text");
+    }
+    body
 }
 
 /// The two rate tiles over the last complete hour against the hour before,
 /// and the two gauges as the highest samples in the half-hour in progress.
 fn tiles(history: &HealthHistory, h: u64) -> Value {
+    let h = mutant!("m4", h + HALF, h);
     let (last_from, before_from) = (h.saturating_sub(HOUR), h.saturating_sub(2 * HOUR));
-    let current = history.half(h);
+    let current = mutant!(
+        "m5",
+        (0..=16u64)
+            .filter_map(|k| history.half(h.saturating_sub(k * HALF)))
+            .find(|half| half.memory_max.is_some() || half.sessions_max.is_some()),
+        history.half(h)
+    );
     json!({
         "added_p95": {
-            "now": p95(history.p95(last_from, h)),
+            "now": p95(history.p95(last_from, mutant!("m3", h + HALF, h))),
             "before": p95(history.p95(before_from, last_from)),
         },
         "gateway_errors": {
-            "now": history.errors(last_from, h),
+            "now": history.errors(last_from, mutant!("m3", h + HALF, h)),
             "before": history.errors(before_from, last_from),
         },
         "memory_bytes": current.as_ref().and_then(|half| half.memory_max),
@@ -124,7 +145,11 @@ fn half_point(history: &HealthHistory, t: u64) -> Value {
     json!({
         "t": t,
         "added_p95": p95(history.p95(t, t + HALF)),
-        "gateway_errors": history.errors(t, t + HALF),
+        "gateway_errors": mutant!(
+            "m2",
+            Some(history.errors(t, t + HALF).unwrap_or(0)),
+            history.errors(t, t + HALF)
+        ),
         "memory_max": half.as_ref().and_then(|half| half.memory_max),
         "sessions_max": half.as_ref().and_then(|half| half.sessions_max),
     })
@@ -136,7 +161,11 @@ fn half_point(history: &HealthHistory, t: u64) -> Value {
 fn uptime(history: &HealthHistory, from: u64, now: u64) -> Value {
     let uptime = history.uptime(from, now);
     json!({
-        "percent": uptime.percent,
+        "percent": mutant!(
+            "m11",
+            Some(uptime.running_seconds as f64 / WEEK as f64 * 100.0),
+            uptime.percent
+        ),
         "running_seconds": uptime.running_seconds,
         "down_seconds": uptime.down_seconds,
         "covered_seconds": uptime.covered_seconds,
@@ -150,7 +179,14 @@ fn blocks(history: &HealthHistory, from: u64, now: u64) -> Vec<Value> {
     history
         .blocks()
         .into_iter()
-        .filter(|block| block.start + BLOCK > from && block.start <= now)
+        .filter(|block| {
+            mutant!(
+                "m8",
+                true,
+                mutant!("m7", block.start >= from, block.start + BLOCK > from)
+                    && block.start <= now
+            )
+        })
         .map(|block| {
             json!({
                 "t": block.start,
@@ -166,7 +202,7 @@ fn blocks(history: &HealthHistory, from: u64, now: u64) -> Vec<Value> {
 fn p95(value: P95) -> Value {
     match value {
         P95::Ms(ms) => json!({"ms": ms}),
-        P95::AboveMs(ms) => json!({"above_ms": ms}),
+        P95::AboveMs(ms) => mutant!("m1", json!({"ms": ms}), json!({"above_ms": ms})),
         P95::NoData => Value::Null,
     }
 }
