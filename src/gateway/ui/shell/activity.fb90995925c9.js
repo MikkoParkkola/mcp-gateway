@@ -61,7 +61,7 @@ function rowLink(row) {
   return h('a', { class: 'activity-row', href: `/ui/activity/${encodeURIComponent(row.id)}/status` },
     h('span', { class: 'activity-time' }, clock(row.timestamp)), ' ',
     h('span', {}, text(row.who?.account)), ' ',
-    h('span', {}, row.kind === 'admin_action' ? changeText(row) : text(row.tool)), ' ',
+    Object.assign(h('span', {}), { innerHTML: row.kind === 'admin_action' ? changeText(row) : text(row.tool) }), ' ',
     // The effect shares the outcome's cell: the grid has one column per cell and one for the chevron.
     h('span', { class: 'activity-outcome', 'data-outcome': outcome }, outcome, ...effectOf(row)));
 }
@@ -84,7 +84,7 @@ function changeText(row) {
   if (!named(row.capability)) return 'Capability file changed';
   const verb = new Map([['create', 'Created'], ['save', 'Saved'], ['delete', 'Deleted']]).get(row.action) ?? 'Changed';
   // Only a record that says so is re-pinned; kept, none or an unknown word says nothing.
-  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · pinned']]).get(row.pin) ?? '';
+  const pin = new Map([['updated', ' · re-pinned'], ['added', ' · re-pinned']]).get(row.pin) ?? '';
   return `${verb} capability ${row.capability}${pin}`;
 }
 
