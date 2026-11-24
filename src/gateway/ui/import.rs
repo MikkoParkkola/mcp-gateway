@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::router::AppState;
+use super::capabilities::find_capability_file;
 use super::errors::flat_error;
 use super::guard::Guard;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
@@ -31,6 +32,7 @@ use crate::security::validate_url_not_ssrf;
 
 /// Body accepted by both import endpoints.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImportRequest {
     /// URL of the `OpenAPI` spec to fetch. Mutually exclusive with `spec`.
     pub url: Option<String>,
@@ -140,8 +142,9 @@ async fn preview_handler(
 /// `POST /ui/api/import/openapi`
 ///
 /// Fetches and parses the spec, then writes the selected tools as YAML files
-/// into the first configured capability directory. Returns a summary of what
-/// was imported, skipped, and any errors.
+/// into the first configured capability directory. A tool whose file name is
+/// already taken in any capability directory is refused and its file kept.
+/// Returns a summary of what was imported, skipped, and any errors.
 async fn import_handler(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
@@ -176,6 +179,10 @@ async fn import_handler(
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
     let mut errors = Vec::new();
+    // How many of `errors` are names already taken, which the operator
+    // resolves, rather than writes that failed.
+    let mut taken = 0_usize;
+    let refusal = |name: &str| format!("{name}: {}", crate::capability::name_taken(name));
 
     for cap in &caps {
         // Filter by selected_tools when provided.
@@ -186,22 +193,32 @@ async fn import_handler(
             continue;
         }
 
+        // The gateway loads every directory, so a file of this name in any of
+        // them is taken; the writer itself refuses one in `output_dir`.
+        if find_capability_file(&state.capability_dirs, &cap.name).is_some() {
+            taken += 1;
+            errors.push(refusal(&cap.name));
+            continue;
+        }
         match cap.write_to_file(&output_dir) {
             Ok(()) => imported.push(format!("{}.yaml", cap.name)),
+            Err(e) if crate::capability::is_name_taken(&e) => {
+                taken += 1;
+                errors.push(refusal(&cap.name));
+            }
             Err(e) => errors.push(format!("{}: {e}", cap.name)),
         }
     }
 
-    let status = if imported.is_empty() && errors.is_empty() {
-        // Nothing to import (all filtered by selected_tools)
+    // Anything written, or nothing wrong: 200. Nothing written and every
+    // error a taken name: 409, the operator's to resolve. Otherwise a write
+    // failed: 500.
+    let status = if !imported.is_empty() || errors.is_empty() {
         StatusCode::OK
-    } else if errors.is_empty() {
-        StatusCode::OK
-    } else if imported.is_empty() {
-        StatusCode::INTERNAL_SERVER_ERROR
+    } else if taken == errors.len() {
+        StatusCode::CONFLICT
     } else {
-        // Partial success
-        StatusCode::OK
+        StatusCode::INTERNAL_SERVER_ERROR
     };
 
     let response = ImportResponse {

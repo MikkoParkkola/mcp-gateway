@@ -44,6 +44,11 @@ part_count() {
 }
 
 mode="${1:-}"
+if [ "$mode" = run ] && [ -z "${MCP_GATEWAY_TEST_HOME_DIR:-}" ]; then
+  # Tests that resolve the gateway home in-process refuse to run without a private one: run the whole suite once
+  # more inside a home of its own (the shards' implementation, removed afterwards). A home the caller set is kept.
+  exec python3 "$root/scripts/ci/shard_tests.py" with-home -- bash "$0" "$@"
+fi
 if [ "$mode" = run ]; then
   shift
   flags=()

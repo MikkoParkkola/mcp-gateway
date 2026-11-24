@@ -164,3 +164,151 @@ async fn explicit_streamable_true_still_reaches_a_legacy_sse_server() {
     let reply = invoke_ping(home.path()).await;
     assert!(reply.to_string().contains("pong-sse"), "reply: {reply}");
 }
+
+/// A gateway that exits before it is ready ends the first read's wait for its
+/// ready line: the read sees stdout end, where a wait that missed the exit
+/// would panic at its cap. `Ok(None)` (stdout ended) rather than an expired
+/// bound is also the premise: the config really stopped the start.
+#[tokio::test]
+async fn a_gateway_that_cannot_start_ends_the_wait_for_ready() {
+    let home = tempfile::tempdir().expect("home");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        home.path().join("gateway.yaml"),
+        "backends: [unclosed\n",
+    )
+    .expect("write gateway.yaml");
+    let mut session = StdioSession::spawn(home.path());
+    let ended = session.next_line(stdio_session::READ_TIMEOUT).await;
+    assert!(
+        matches!(ended, Ok(None)),
+        "a gateway that cannot start must end its stdout; got {ended:?}"
+    );
+}
+
+/// How long the slow launcher holds the gateway's start: past the read bound.
+#[cfg(unix)]
+const SLOW_START_SECS: u64 = 12;
+
+/// A start slower than the read bound still gets its answer, because the
+/// first read waits for the ready line before its own bound starts. A read
+/// bound that started at spawn timed out here (train 56a's Windows failure).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_start_slower_than_the_read_bound_still_gets_its_answer() {
+    assert!(
+        std::time::Duration::from_secs(SLOW_START_SECS) > stdio_session::READ_TIMEOUT,
+        "the premise: the launcher holds the start past the read bound"
+    );
+    let home = tempfile::tempdir().expect("home");
+    let launcher = format!("sleep {SLOW_START_SECS}; exec \"$0\" \"$@\"");
+    let mut session = StdioSession::spawn_through(&["sh", "-c", &launcher], home.path());
+    session
+        .send(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "add-url-autodetect", "version": "0"},
+            }}),
+        )
+        .await;
+    let (lines, init) = session.read_until_id(1).await;
+    session.shutdown().await;
+    assert!(
+        init.is_some(),
+        "the gateway never answered initialize; saw: {lines:?}"
+    );
+}
+
+/// A start that never finishes is reported as not ready, so every read
+/// fails "never became ready" at its cap rather than hanging. The launcher
+/// sleeps in the gateway's place, so no ready line ever comes; the 3 s window
+/// only has to pass without one, which no load can make fail.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_start_that_never_finishes_is_reported_not_ready() {
+    let home = tempfile::tempdir().expect("home");
+    let mut session = StdioSession::spawn_through(&["sh", "-c", "exec sleep 600"], home.path());
+    assert!(
+        !session
+            .wait_ready_for(std::time::Duration::from_secs(3))
+            .await,
+        "a launcher that never starts the gateway was reported ready"
+    );
+}
+
+/// A gateway that exits before it is ready ends the wait even while a process
+/// it started (a backend, say) still holds its stderr open, so the pipe never
+/// closes: the wait watches the child's exit, not only the pipe.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_exit_before_ready_ends_the_wait_while_a_grandchild_holds_stderr() {
+    let home = tempfile::tempdir().expect("home");
+    let mut session = StdioSession::spawn_through(&["sh", "-c", "sleep 30 & exit 3"], home.path());
+    assert!(
+        session.wait_ready_for(stdio_session::READ_TIMEOUT).await,
+        "the launcher exited at once, yet the wait for ready did not end"
+    );
+}
+
+/// A capture ends while a process the launcher left behind still holds the
+/// gateway's stderr open after the gateway is killed: `finish_capturing` joins the
+/// stderr drain for a bounded time and keeps what arrived. With that join
+/// unbounded the call would wait for the sleeper; the outer bound turns that
+/// into a failure. The sleeper's pid is written down and it is killed at the end.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_ends_while_a_grandchild_holds_stderr() {
+    let home = tempfile::tempdir().expect("home");
+    let pid_file = home.path().join("sleeper.pid");
+    let launcher = format!(
+        "sleep 120 & echo $! > '{}'; exec \"$0\" \"$@\"",
+        pid_file.display()
+    );
+    let (session, captured) =
+        StdioSession::spawn_capturing_through(&["sh", "-c", &launcher], home.path());
+    let lines = tokio::time::timeout(
+        std::time::Duration::from_secs(50),
+        session.finish_capturing(captured),
+    )
+    .await;
+    if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
+    let lines = lines.expect("finish_capturing waited on a grandchild holding stderr open");
+    assert!(
+        lines.iter().any(|l| l.contains(stdio_session::READY_LINE)),
+        "the capture lost the gateway's own lines: {lines:?}"
+    );
+}
+
+/// The line the session waits for is the one the gateway logs, at info, from
+/// the module whose target `gateway_bin` keeps visible: a changed wording or a
+/// moved module fails here by name, not as every stdio row's 120 s "never
+/// became ready".
+#[test]
+fn the_ready_line_is_the_one_the_gateway_logs() {
+    // One literal for both checks: `include_str!` takes no runtime string.
+    macro_rules! ready_source {
+        () => {
+            "src/gateway/server/stdio_loop.rs"
+        };
+    }
+    let source = include_str!(concat!("../", ready_source!()));
+    let logged = format!("info!(\"{}\")", stdio_session::READY_LINE);
+    assert!(
+        source.contains(&logged),
+        "{} no longer logs {logged}",
+        ready_source!()
+    );
+    // A plain `info!` logs under its module path.
+    let module = ready_source!()
+        .strip_prefix("src/")
+        .and_then(|path| path.strip_suffix(".rs"))
+        .expect("a src/*.rs path")
+        .replace('/', "::");
+    assert_eq!(
+        gateway_bin::STDIO_READY_TARGET,
+        format!("mcp_gateway::{module}"),
+        "gateway_bin keeps a target visible that does not log the ready line"
+    );
+}

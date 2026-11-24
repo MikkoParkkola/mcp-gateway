@@ -280,6 +280,7 @@ fn in_progress(
 
 /// The body of a confirm.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfirmBody {
     decision: ConfirmChoice,
     attempt_id: String,

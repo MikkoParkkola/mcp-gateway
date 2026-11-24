@@ -265,7 +265,7 @@ fn lines_naming(text: &str, path: &str, cause: &str) -> usize {
 
 /// Writer save, writer rolled-back outcome, one recovery intent for `token`, and that
 /// attempt's outcome.
-fn expect_staged_owed(records: &[Value], token: &str, row: &str) {
+pub(super) fn expect_staged_owed(records: &[Value], token: &str, row: &str) {
     owe(records, "writer-1", "config_save_intent", None, 1, row);
     owe(
         records,

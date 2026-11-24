@@ -41,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$init_in_image" == "1" ]]; then
-  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$work:/work" -w /work \
+  docker run -e DO_NOT_TRACK=1 --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$work:/work" -w /work \
     "$image" init --profile local --output gateway.yaml >/dev/null
 else
   (
@@ -110,7 +110,7 @@ fixture_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress
 # read it unless this user is 1001, so the container runs as this user, with a
 # writable HOME. (A deployment makes a 1001-owned copy instead; see
 # docs/DEPLOYMENT.md. A throwaway smoke has no sudo to do that.)
-docker run -d \
+docker run -e DO_NOT_TRACK=1 -d \
   --name "$container" \
   --network "$network" \
   --user "$(id -u):$(id -g)" \

@@ -12,6 +12,7 @@ use super::super::abandoned::{MAX_ABANDONED_BYTES, TornProof, encode_frame};
 use super::super::abandoned::{Placement, against_donor, frames_of, marked};
 use super::super::{JournalV2, ParkReason};
 use super::DrainSession;
+#[cfg(test)]
 use super::fault::{self, At};
 use crate::config_persistence::journal::v2::abandoned_path;
 use crate::config_persistence::sync_dir_of;
@@ -173,6 +174,7 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
     if placement == Placement::Foreign {
         return Err(HandoverError::Foreign);
     }
+    #[cfg(test)]
     let target = journal.target.clone();
     commit(
         journal,
@@ -183,10 +185,13 @@ pub(crate) fn hand_over(session: &mut DrainSession) -> Result<(), HandoverError>
         &frames,
     )?;
     super::finish(session).map_err(|_| HandoverError::Finish)?;
-    seam(&target, At::HandoverFinished)
+    #[cfg(test)]
+    seam(&target, At::HandoverFinished)?;
+    Ok(())
 }
 
 /// A crash-test boundary: only a fired fault does anything, and only in a test build.
+#[cfg(test)]
 fn seam(target: &Path, at: At) -> Result<(), HandoverError> {
     fault::hit(target, at).map_err(|_| HandoverError::Journal)
 }
@@ -207,6 +212,7 @@ fn commit(
     }
     journal.state = donor;
     journal.persist().map_err(|_| HandoverError::Journal)?;
+    #[cfg(test)]
     seam(&journal.target, At::HandoverFlagged)?;
     let mut file = match file {
         Some(file) => file,
@@ -231,12 +237,16 @@ fn commit(
     for frame in &frames[from..] {
         file.write_all(frame).map_err(|_| HandoverError::Write)?;
     }
+    #[cfg(test)]
     seam(&journal.target, At::AbandonFileAppended)?;
     file.sync_all().map_err(|_| HandoverError::Sync)?;
+    #[cfg(test)]
     crate::config_persistence::crash_fs::note_flushed(&journal.target, &mut file)
         .map_err(|_| HandoverError::Sync)?;
+    #[cfg(test)]
     seam(&journal.target, At::AbandonFileDataSynced)?;
     sync_dir_of(path).map_err(|_| HandoverError::Sync)?;
+    #[cfg(test)]
     seam(&journal.target, At::AbandonFileSynced)?;
     seal(&mut file, path, frames)
 }

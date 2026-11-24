@@ -32,7 +32,7 @@ async function toolsApi(page) {
 
 const toolRows = (page) => page.locator('#content table.t tbody tr.tool');
 
-test('R1 the first load of /ui/overview/status asks for no screen before its first paint', async ({ page }) => {
+test('R1 the first load of /ui/overview/status asks for no other screen before its first paint', async ({ page }) => {
   expect(SCREEN_ASSETS.length).toBeGreaterThan(0);
   await page.goto('/ui/overview/status');
   await shellReady(page);
@@ -41,9 +41,10 @@ test('R1 the first load of /ui/overview/status asks for no screen before its fir
     const fcp = performance.getEntriesByName('first-contentful-paint')[0].startTime;
     return performance.getEntriesByType('resource').filter((r) => r.startTime < fcp).map((r) => new URL(r.name).pathname);
   });
-  // The shell's own reads of /ui/api may start first; its assets are the shell's and the fonts.
+  // The shell's own reads of /ui/api may start first; its assets are the shell's, the fonts and the
+  // current route's own screen, which the shell loads before it renders it; every other screen waits.
   for (const name of early.filter((n) => n.startsWith('/ui/assets/'))) {
-    expect(name, `requested before first paint: ${early.join(', ')}`).toMatch(/^\/ui\/assets\/(shell\.[0-9a-f]{12}\.(js|css)|[\w-]+\.[0-9a-f]{12}\.woff2)$/);
+    expect(name, `requested before first paint: ${early.join(', ')}`).toMatch(/^\/ui\/assets\/((shell|overview)\.[0-9a-f]{12}\.(js|css)|[\w-]+\.[0-9a-f]{12}\.woff2)$/);
   }
 });
 
@@ -177,15 +178,15 @@ test('R9 a screen that arrives after the user moved on draws nothing into the pa
   await page.route(`**${asset('tools', 'js')}`, async (r) => { await gate; return r.continue(); });
   await page.goto('/ui/tools/status');
   await expect(page.locator('.head .plate')).toHaveText('Tools');
-  await page.click('nav.route-nav a[data-page="overview"]');
-  await expect(page.locator('.head .plate')).toHaveText('Overview');
+  await page.click('nav.route-nav a[data-page="costs"]');
+  await expect(page.locator('.head .plate')).toHaveText('Costs');
   release();
   // The palette lists the screen once it has registered: the load has settled.
   await page.keyboard.press('Control+KeyK');
   await expect(page.locator('dialog.palette [role="option"]', { hasText: 'All tools' })).toHaveCount(1);
   await page.keyboard.press('Escape');
-  await expect(page).toHaveURL('/ui/overview');
-  await expect(page.locator('.head .plate')).toHaveText('Overview');
+  await expect(page).toHaveURL('/ui/costs');
+  await expect(page.locator('.head .plate')).toHaveText('Costs');
   await expect(page.locator('#content [data-state="not-built"]')).toBeVisible();
   await expect(page.locator('#content table.t')).toHaveCount(0);
 });

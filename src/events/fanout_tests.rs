@@ -296,7 +296,7 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
     let subs = dir.path().join("subs");
     std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o500)).expect("lock");
     if std::fs::File::create(subs.join("probe")).is_ok() {
-        eprintln!("skipped: the directory mode does not bind this user");
+        crate::test_wait::skip_or_fail("a user that a directory mode binds");
         return;
     }
 

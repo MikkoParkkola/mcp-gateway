@@ -330,8 +330,9 @@ pub(super) async fn start_window_saver(
         let drain_seam_path = seam_path.clone();
         #[cfg(test)]
         let counted = stall_seam::live(&seam_path);
-        let close: super::persistence::ShutdownSave = (
+        let close = super::persistence::ShutdownSave::new(
             "protocol-revision window seal",
+            Some(data_dir.clone()),
             Box::new(move || {
                 #[cfg(test)]
                 let _live = counted;
@@ -401,16 +402,10 @@ fn open_detached(
 /// The temp dirs a detached open must keep, taken when its thread is
 /// spawned, while the test that started the write still holds its share.
 /// Looked up on the thread instead, a late open would find the test's dir
-/// already gone and recreate it.
-#[cfg(test)]
+/// already gone and recreate it. Silent: the sink's own open reports an
+/// unkept dir, so a report here would print the line twice.
 fn kept_at_spawn(data_dir: &std::path::Path) -> Kept {
-    crate::test_dir_keep::kept_dirs_for(data_dir)
-}
-
-/// Nothing to keep in a release build.
-#[cfg(not(test))]
-fn kept_at_spawn(_data_dir: &std::path::Path) -> Kept {
-    Kept
+    crate::spawn_keep::kept_dirs_at_spawn(data_dir)
 }
 
 /// Open into `held` unless already open. `true` once a sink is held; never

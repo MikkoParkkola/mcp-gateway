@@ -1,0 +1,3 @@
+# file	function	kind	count	class	reason
+src/config_persistence_journal_v2.rs	persist	helper:write_atomic	1	helper	calls the crate's write_atomic (a served start's drain now persists its journal in production)
+src/config_persistence_journal_v2.rs	persist_abandoned	helper:write_atomic	1	helper	calls the crate's write_atomic (the drain's abandoned file, now written by a served start)

@@ -1,0 +1,2 @@
+# file	fn	needle	count (generated; see delivery_framing.rs)
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	4

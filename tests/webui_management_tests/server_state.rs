@@ -19,6 +19,7 @@ async fn with_reload() -> (axum::Router, std::path::PathBuf, TempDir) {
 
 #[tokio::test]
 async fn api4_5_and_api4_1_status_rows_keep_every_old_key_and_add_the_state() {
+    require_private_home!();
     let (state, _store) = make_app_state(None, None).await;
     register_http_backend(&state, "inventory");
     let router = create_router(state);
@@ -146,4 +147,13 @@ async fn api4_3_a_refused_reload_is_listed_and_an_applied_one_resolves_it() {
     assert!(status.is_success(), "{body}");
     let (_, body) = send_json(&router, Method::GET, "/ui/api/refusals", None).await;
     assert_eq!(body["refusals"][0]["active"], false, "{body}");
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    crate::private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

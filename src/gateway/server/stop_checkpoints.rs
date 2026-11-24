@@ -31,10 +31,18 @@ pub(super) const LAST_SAVE: Duration = Duration::from_millis(100);
 /// A save that reports whether it wrote its file.
 pub(super) type Save = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// What a pass's write reports as when its class's root is in a temp dir no
+/// test kept (`crate::spawn_keep::kept_at_spawn`).
+const CHECKPOINT_KIND: &str = "stop checkpoint";
+
 /// One class of state: its name in the log, the checkpoint save (skips while
 /// its file is being written) and the last pass's save (waits its turn).
 pub(super) struct Class {
     pub(super) name: &'static str,
+    /// The file or dir its saves write: the root a detached write keeps for a
+    /// test while it runs (`crate::spawn_keep`). None for a class that writes
+    /// no file.
+    pub(super) root: Option<PathBuf>,
     pub(super) checkpoint: Save,
     pub(super) last: Save,
 }
@@ -77,15 +85,15 @@ impl Checkpoints {
             .iter()
             .map(|class| {
                 let (name, save) = (class.name, Arc::clone(&class.last));
-                let write: ShutdownSave = (
+                ShutdownSave::new(
                     name,
+                    class.root.clone(),
                     Box::new(move || {
                         if save() {
                             info!("stop checkpoint saved class={name} pass=last");
                         }
                     }),
-                );
-                write
+                )
             })
             .collect();
         run_shutdown_saves(deadline, saves).await;
@@ -103,10 +111,17 @@ async fn passes(classes: Arc<[Class]>) {
         info!("stop checkpoint pass={pass} started");
         for class in classes.iter() {
             let (name, save) = (class.name, Arc::clone(&class.checkpoint));
+            // Taken here, before the thread exists, while a test still holds
+            // its share of the dir; the write's thread holds it to its end.
+            let kept = class
+                .root
+                .as_deref()
+                .map(|root| crate::spawn_keep::kept_at_spawn(CHECKPOINT_KIND, root))
+                .unwrap_or_default();
             let spawned = std::thread::Builder::new()
                 .name(format!("stop checkpoint: {name}"))
                 .spawn(move || {
-                    if save() {
+                    if crate::spawn_keep::holding(kept, save.as_ref()) {
                         info!("stop checkpoint saved class={name} pass={pass}");
                     }
                 });
@@ -154,6 +169,7 @@ fn usage(ranker: Arc<SearchRanker>, path: PathBuf) -> Class {
     let (last_ranker, last_path) = (Arc::clone(&ranker), path.clone());
     Class {
         name: "usage",
+        root: Some(path.clone()),
         checkpoint: Arc::new(move || landed("usage", ranker.save_unless_busy(&path))),
         last: Arc::new(move || landed("usage", Some(last_ranker.save(&last_path)))),
     }
@@ -164,6 +180,7 @@ fn transitions(tracker: Arc<TransitionTracker>, path: PathBuf) -> Class {
     let (last_tracker, last_path) = (Arc::clone(&tracker), path.clone());
     Class {
         name: "transitions",
+        root: Some(path.clone()),
         checkpoint: Arc::new(move || landed("transitions", tracker.save_unless_busy(&path))),
         last: Arc::new(move || landed("transitions", Some(last_tracker.save(&last_path)))),
     }
@@ -171,13 +188,15 @@ fn transitions(tracker: Arc<TransitionTracker>, path: PathBuf) -> Class {
 
 /// Today's spend's class.
 #[cfg(feature = "cost-governance")]
-fn cost((enforcer, data_dir): CostShutdown) -> Class {
+fn cost((enforcer, costs, data_dir): CostShutdown) -> Class {
     use super::persistence::{save_costs, save_costs_unless_busy};
     let (last_enforcer, last_dir) = (Arc::clone(&enforcer), data_dir.clone());
+    let last_costs = Arc::clone(&costs);
     Class {
         name: "cost",
-        checkpoint: Arc::new(move || save_costs_unless_busy(&enforcer, &data_dir)),
-        last: Arc::new(move || save_costs(&last_enforcer, &last_dir)),
+        root: Some(data_dir.clone()),
+        checkpoint: Arc::new(move || save_costs_unless_busy(&enforcer, &costs, &data_dir)),
+        last: Arc::new(move || save_costs(&last_enforcer, &last_costs, &last_dir)),
     }
 }
 

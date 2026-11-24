@@ -57,7 +57,7 @@ fn write_log(path: &Path, key: &str) {
 /// reference's literal text is a signature mismatch, not a load failure.
 #[test]
 fn audit_verify_uses_the_resolved_key_and_rejects_the_reference_text() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = config(dir.path(), true, &format!("{VAR}={KEY}\n"));
     let verify_config = Config::audit_verify_config(Some(&path)).expect("the config loads");
     assert_eq!(verify_config.shared_secret, KEY);

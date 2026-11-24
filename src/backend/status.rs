@@ -280,6 +280,9 @@ impl Backend {
             ever_started: entry.ever_started.load(Ordering::Relaxed),
             start_failed: entry.start_failed.load(Ordering::Relaxed),
             slow: entry.failsafe.health_tracker.slow(),
+            confirmations: plan
+                .map(|p| p.confirmations.iter().map(|c| c.id.clone()).collect())
+                .unwrap_or_default(),
         }
     }
 

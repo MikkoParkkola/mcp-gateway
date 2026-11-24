@@ -94,9 +94,11 @@ impl ShutdownBudget {
     /// the window would otherwise use up and leave the cancellation never run.
     /// A fifth of the window is held back for cancelling and closing the
     /// store; cancelling gets half of that and the expiry join and store close the
-    /// other half. HTTP passes `shutdown_timeout` as its window, so the three
-    /// phases take at most one timeout between them; stdio passes what is left
-    /// of its teardown deadline.
+    /// other half. HTTP passes its task window as both arguments: what is left
+    /// before the drains must end (`stop_checkpoints::drains_end`, just before
+    /// the stop budget's post-listener deadline), capped at `DRAIN_CAP` (10 s),
+    /// so the three phases fit inside that window; stdio passes what
+    /// is left of its teardown deadline, with `shutdown_timeout` capping the drain.
     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
         let reserve = remaining / 5;
         Self {

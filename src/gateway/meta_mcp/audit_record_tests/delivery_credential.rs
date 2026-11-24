@@ -67,6 +67,24 @@ async fn record_delivery_for(
     );
 }
 
+/// `who`'s allowed call, made as the router makes it: inside the scope of the
+/// exchanged token `jti`, when the call has one. No issuance row: these rows
+/// read the delivery's principal, never the receipt's reach.
+async fn invoke_as(meta: &MetaMcp, who: &Caller, jti: Option<String>) {
+    let token = jti.map(
+        |jti| crate::security::transparency_log::issuance::TokenOnCall {
+            jti,
+            issuance_row: None,
+        },
+    );
+    crate::security::decision_record::with_token(
+        token,
+        meta.invoke_tool(&args(), None, &context(&AllowAll, who)),
+    )
+    .await
+    .expect("allowed call");
+}
+
 /// The delivery record names `kind` and `principal`, equal to the invocation
 /// record's `who`.
 fn assert_delivery_matches_invocation(dir: &tempfile::TempDir, kind: &str, principal: &str) {
@@ -190,9 +208,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
             .await
             .expect("the exchanged token validates");
         let who = caller_of(&client, temp.identity);
-        meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
-            .await
-            .expect("allowed call");
+        invoke_as(&meta, &who, Some(temp.jti)).await;
         record_delivery_for(&meta, &who, &client).await;
         assert_delivery_matches_invocation(&dir, "key_server_token", &who.principal);
     }
@@ -244,9 +260,7 @@ async fn two_tokens_for_one_actor_name_different_principals() {
         let who = caller_of(&client, temp.identity);
         let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
-        meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
-            .await
-            .expect("allowed call");
+        invoke_as(&meta, &who, Some(temp.jti)).await;
         record_delivery_for(&meta, &who, &client).await;
         principals.push(only_delivery(&dir)["who"]["principal"].clone());
     }
@@ -282,24 +296,22 @@ async fn one_actors_token_refresh_and_bearer_name_one_caller_and_account() {
             .validate_token(&token)
             .await
             .expect("the exchanged token validates");
-        whos.push((caller_of(&client, temp.identity), client));
+        whos.push((caller_of(&client, temp.identity), client, Some(temp.jti)));
     }
     let (client, identity) = harness
         .ks
         .verify_bearer_identity(&id)
         .await
         .expect("the delegated Bearer [REDACTED]");
-    whos.push((caller_of(&client, identity), client));
+    whos.push((caller_of(&client, identity), client, None));
     let actor = whos[0].0.account.clone();
-    for (who, _) in &whos {
+    for (who, _, _) in &whos {
         assert_eq!(who.account, actor, "premise: one actor");
     }
-    for (who, client) in &whos {
+    for (who, client, jti) in &whos {
         let dir = crate::test_dir_keep::kept_tempdir();
         let meta = meta(Ok(ok_result()), &dir);
-        meta.invoke_tool(&args(), None, &context(&AllowAll, who))
-            .await
-            .expect("allowed call");
+        invoke_as(&meta, who, jti.clone()).await;
         record_delivery_for(&meta, who, client).await;
         let delivery = only_delivery(&dir);
         assert_eq!(delivery["caller"], json!(actor), "{delivery}");

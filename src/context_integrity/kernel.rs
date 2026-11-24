@@ -93,7 +93,7 @@ impl ContextIntegrityKernel {
     #[must_use]
     pub fn evaluate(&self, input: ContextIntegrityInput) -> ContextIntegrityEvaluation {
         let content_sha256 = canonical_json_sha256(&input.content);
-        let text = render_text_for_classification(&input.content);
+        let (text, whole) = classification_sample(&input.content);
         let classification = self.classify_text(&input, &text);
         let would_decision = self.resolve_decision(&input, &classification);
         let decision = if self.policy.effective_mode() == ContextIntegrityPolicyMode::MonitorOnly {
@@ -101,7 +101,12 @@ impl ContextIntegrityKernel {
         } else {
             would_decision
         };
-        let transformed = transform_content(decision, &input.content, &classification.findings);
+        let transformed = self.transform(
+            decision,
+            &input.content,
+            (&text, whole),
+            &classification.findings,
+        );
         let policy = policy_verdict(
             &self.policy,
             decision,
@@ -200,9 +205,11 @@ impl ContextIntegrityKernel {
             evaluation.audit.decision = decision;
             evaluation.audit.would_decision = would_decision;
             evaluation.audit.findings_count = evaluation.classification.findings.len();
-            evaluation.transformed = transform_content(
+            let (text, whole) = classification_sample(&original_content);
+            evaluation.transformed = self.transform(
                 decision,
                 &original_content,
+                (&text, whole),
                 &evaluation.classification.findings,
             );
         }
@@ -306,6 +313,71 @@ impl ContextIntegrityKernel {
             "data exfiltration pattern",
         );
         findings
+    }
+
+    /// What a decision delivers. Strip is the kernel's own (it needs the detectors); every other
+    /// decision is the plain transform.
+    fn transform(
+        &self,
+        decision: ContextIntegrityDecisionKind,
+        content: &Value,
+        classified: (&str, bool),
+        findings: &[ContextIntegrityFinding],
+    ) -> ContextIntegrityTransformedContent {
+        if decision == ContextIntegrityDecisionKind::Strip {
+            self.strip(content, classified, findings)
+        } else {
+            transform_content(decision, content, findings)
+        }
+    }
+
+    /// Strip delivers a stripped answer only when it can prove the delivered text clean;
+    /// otherwise it withholds, as Deny does. The proof: (a) the classification saw the whole
+    /// content, uncut by the sample bound; (b) every finding is one the text scan reproduces on
+    /// that text, so none came from somewhere a strip cannot reach; (c) a fresh scan of exactly
+    /// the text to deliver finds nothing; (d) no finding is guarded material, since the detectors
+    /// flag one line of a secret and its other lines carry nothing a scan could see. An answer
+    /// with nothing left is withheld too: it would read as an empty success.
+    fn strip(
+        &self,
+        content: &Value,
+        (classified, whole): (&str, bool),
+        findings: &[ContextIntegrityFinding],
+    ) -> ContextIntegrityTransformedContent {
+        let withhold = transform_content(ContextIntegrityDecisionKind::Deny, content, findings);
+        if !whole {
+            return withhold;
+        }
+        let reproduced = self
+            .text_findings
+            .get_or_compute(classified, || self.text_only_findings(classified));
+        if findings.iter().any(|finding| {
+            finding.classifier == ContextIntegrityClassifier::GuardedMaterial
+                || !reproduced.contains(finding)
+        }) {
+            return withhold;
+        }
+        let payload = payload_text(content);
+        let kept: Vec<&str> = payload
+            .lines()
+            .filter(|line| self.text_only_findings(line).is_empty())
+            .collect();
+        let delivered = kept.join("\n");
+        if delivered.trim().is_empty() || !self.text_only_findings(&delivered).is_empty() {
+            return withhold;
+        }
+        ContextIntegrityTransformedContent {
+            delivered: Some(Value::String(delivered)),
+            stripped: true,
+            summarized: false,
+            withheld: false,
+        }
+    }
+
+    /// Whether the text scan finds anything in `answer`, every string in it read as the
+    /// classification reads a result. The gateway asks it of an answer it is about to send.
+    pub(crate) fn scan_finds_anything(&self, answer: &Value) -> bool {
+        !self.text_only_findings(&render_text(answer)).is_empty()
     }
 
     fn classify_text(
@@ -522,14 +594,6 @@ fn transform_content(
             summarized: false,
             withheld: false,
         },
-        ContextIntegrityDecisionKind::Strip => ContextIntegrityTransformedContent {
-            delivered: Some(Value::String(strip_instruction_lines(&render_text(
-                content,
-            )))),
-            stripped: true,
-            summarized: false,
-            withheld: false,
-        },
         ContextIntegrityDecisionKind::Summarize => {
             let summary = format!(
                 "ContextIntegrityKernel withheld raw content and summarized {} finding(s).",
@@ -542,7 +606,10 @@ fn transform_content(
                 withheld: false,
             }
         }
-        ContextIntegrityDecisionKind::Quarantine
+        // A proved Strip comes from `ContextIntegrityKernel::strip`, which has the detectors.
+        // This function has none, so for it a Strip withholds.
+        ContextIntegrityDecisionKind::Strip
+        | ContextIntegrityDecisionKind::Quarantine
         | ContextIntegrityDecisionKind::Confirm
         | ContextIntegrityDecisionKind::Deny => ContextIntegrityTransformedContent {
             delivered: None,
@@ -551,19 +618,6 @@ fn transform_content(
             withheld: true,
         },
     }
-}
-
-fn strip_instruction_lines(text: &str) -> String {
-    text.lines()
-        .filter(|line| {
-            let lowered = line.to_ascii_lowercase();
-            !lowered.contains("ignore previous")
-                && !lowered.contains("system prompt")
-                && !lowered.contains("grant")
-                && !lowered.contains("call")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn render_text(value: &Value) -> String {
@@ -577,10 +631,33 @@ fn render_text(value: &Value) -> String {
     }
 }
 
+/// The text a stripped answer is made from: for an MCP tool result (a value with a `content`
+/// array), the `text` of each text item, so no envelope field (a type tag, `isError`) becomes a
+/// line the model reads; for any other value, every string in it.
+fn payload_text(content: &Value) -> String {
+    match content.get("content").and_then(Value::as_array) {
+        Some(items) => items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => render_text(content),
+    }
+}
+
+#[cfg(test)]
 fn render_text_for_classification(value: &Value) -> String {
-    let mut sample = TextSample::default();
-    collect_text_sample(value, &mut sample);
-    sample.into_text()
+    classification_sample(value).0
+}
+
+/// The classification text of `value`, and whether it is whole: false once the head-and-tail
+/// sample has cut out its middle, which then was never classified.
+fn classification_sample(value: &Value) -> (String, bool) {
+    let mut collected = TextSample::default();
+    collect_text_sample(value, &mut collected);
+    let whole = collected.total_bytes <= MAX_CLASSIFICATION_TEXT_BYTES;
+    (collected.into_text(), whole)
 }
 
 #[derive(Default)]
@@ -692,6 +769,16 @@ fn suffix_fragment(text: &str, limit: usize) -> &str {
 #[cfg(test)]
 #[path = "kernel_tests.rs"]
 mod tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "strip_lines_tests.rs"]
+mod strip_lines_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "strip_withhold_tests.rs"]
+mod strip_withhold_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]

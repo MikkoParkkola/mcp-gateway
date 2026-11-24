@@ -327,8 +327,8 @@ fn startup_warn_matches_unhardened_table() {
 #[test]
 fn gateway_startup_logs_posture_once() {
     let (_, mut unhardened, _) = auth_shapes().swap_remove(1);
-    // Auth on requires the audit log; give it a writable home.
-    let dir = tempfile::tempdir().unwrap();
+    // Auth on requires the audit log; give it a writable home, kept while the log lives.
+    let dir = crate::test_dir_keep::kept_tempdir();
     unhardened.security.transparency_log.enabled = Some(true);
     unhardened.security.transparency_log.path = dir.path().join("audit.log").display().to_string();
     // The same multi-user shape: only the posture tells the two apart.

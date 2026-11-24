@@ -15,15 +15,24 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
+import required_mode  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PROCEDURE = ROOT / "docs" / "release" / "v4.0.0-gate-day-procedure.md"
 START = 'W="$W" FREEZE_SHA='
 CHECK_MARK = "# VERIFY.8: the frozen worktree is unchanged"
 
+
+# A test that skips for a missing tool proves nothing: where required mode is on (CI) the file refuses to load.
+NEEDS_TOOLS = bool(shutil.which("git") and shutil.which("bash"))
+if not NEEDS_TOOLS and required_mode.required():
+    raise SystemExit("required here but unavailable: git and bash")
 
 def block_lines() -> list[str]:
     """The block, from its `W="$W" FREEZE_SHA=` line to `VERIFY`, as the sheet extracts it."""
@@ -88,7 +97,7 @@ def git(repo: Path, *args: str) -> str:
                           text=True, env=env).stdout.strip()
 
 
-@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
+@unittest.skipUnless(NEEDS_TOOLS, "needs git and bash")
 class Build1TreeCheckTests(unittest.TestCase):
     def setUp(self) -> None:
         self.w = Path(tempfile.mkdtemp())
@@ -149,7 +158,7 @@ def gates_check() -> str:
     return "\n".join(lines[add + 1 : end])
 
 
-@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
+@unittest.skipUnless(NEEDS_TOOLS, "needs git and bash")
 class ReleaseGatesTreeCheckTests(Build1TreeCheckTests):
     """The release gates' worktree check stops on a dirty tree instead of only printing it."""
 

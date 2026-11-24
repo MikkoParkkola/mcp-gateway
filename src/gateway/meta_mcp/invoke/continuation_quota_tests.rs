@@ -57,6 +57,7 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
         ks.store.as_ref(),
         ks.config.token_ttl_secs,
         crate::key_server::TemporaryToken {
+            issuance_row: None,
             jti: "jti-mik-8659".to_owned(),
             token: "mcpgw_mik_8659_token".to_owned(),
             identity: crate::key_server::oidc::VerifiedIdentity::for_test(

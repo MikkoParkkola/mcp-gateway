@@ -87,6 +87,7 @@ fn identity(subject: &str) -> VerifiedIdentity {
 
 fn stored(bearer: &str, subject: &str) -> TemporaryToken {
     TemporaryToken {
+        issuance_row: None,
         jti: format!("jti-{bearer}"),
         token: bearer.to_owned(),
         identity: identity(subject),

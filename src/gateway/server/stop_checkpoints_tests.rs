@@ -19,8 +19,10 @@ use crate::test_wait::wait_real_time;
 
 /// Real time a save thread's call may take to show.
 const SHOW: Duration = Duration::from_secs(5);
-/// Real time given to a call that must not happen.
-const QUIET: Duration = Duration::from_millis(200);
+/// Real time given to a call that must not happen. An absence window: a stall
+/// can only hide a wrong call, never fail the row. A deterministic signal from
+/// the save path would remove the wait.
+const QUIET: Duration = Duration::from_secs(1);
 
 /// A class whose saves count their calls and report a write.
 fn counting(name: &'static str) -> (Class, Arc<AtomicUsize>, Arc<AtomicUsize>) {
@@ -28,6 +30,7 @@ fn counting(name: &'static str) -> (Class, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let (c, l) = (Arc::clone(&checkpoints), Arc::clone(&lasts));
     let class = Class {
         name,
+        root: None,
         checkpoint: Arc::new(move || {
             c.fetch_add(1, SeqCst);
             true
@@ -101,6 +104,7 @@ async fn l_interval_a_pass_runs_every_second() {
         tokio::time::advance(Duration::from_secs(1)).await;
         reaches(&calls, n, "a pass one second after the last").await;
     }
+    // limit-under-test (paused-clock): moves the paused clock to mid-second, between two passes
     tokio::time::advance(Duration::from_millis(500)).await;
     quiet().await;
     assert_eq!(calls.load(SeqCst), 4, "a pass ran between the seconds");
@@ -113,6 +117,7 @@ async fn l_stall_a_stalled_write_holds_back_no_other_class() {
     let stall = Stall::new();
     let stalled = Class {
         name: "stalled",
+        root: None,
         checkpoint: stall.save(),
         last: Arc::new(|| true),
     };
@@ -163,6 +168,7 @@ async fn l_stall_last_the_last_pass_ends_at_its_deadline() {
     let stall = Stall::new();
     let stuck = Class {
         name: "stuck",
+        root: None,
         checkpoint: Arc::new(|| true),
         last: stall.save(),
     };
@@ -222,7 +228,7 @@ async fn l_budget_the_drains_leave_the_last_pass_its_slice() {
 #[tokio::test]
 async fn l_classes_the_real_pass_set() {
     use crate::health_history::{DowntimeSource, HealthHistory, Restores};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path();
     let now = crate::clock::unix_secs().unwrap();
     let ranker = Arc::new(crate::ranking::SearchRanker::new());
@@ -242,7 +248,10 @@ async fn l_classes_the_real_pass_set() {
     let all = classes(
         (ranker, data.join("usage.json")),
         (tracker, data.join("transitions.json")),
-        enforcer.map(|enforcer| (enforcer, data.to_path_buf())),
+        enforcer.map(|enforcer| {
+            let costs = Arc::new(crate::cost_accounting::CostTracker::new());
+            (enforcer, costs, data.to_path_buf())
+        }),
         &counters,
         &health,
     );
@@ -250,6 +259,19 @@ async fn l_classes_the_real_pass_set() {
     assert_eq!(
         names,
         ["usage", "transitions", "cost", "counters", "health"]
+    );
+    // Each class keeps the file or dir it writes (K10, `crate::spawn_keep`).
+    let roots: Vec<Option<std::path::PathBuf>> =
+        all.iter().map(|class| class.root.clone()).collect();
+    assert_eq!(
+        roots,
+        [
+            Some(data.join("usage.json")),
+            Some(data.join("transitions.json")),
+            Some(data.to_path_buf()),
+            Some(data.join("counters.json")),
+            Some(data.join("health.json")),
+        ]
     );
     // Retried: the cost lock is process-wide, so another row's save can make
     // one checkpoint skip.
@@ -277,7 +299,7 @@ async fn l_classes_the_real_pass_set() {
         "a checkpoint recorded a clean stop"
     );
     // Both sides: the shutdown's own save records one.
-    (health.shutdown_save().1)();
+    health.shutdown_save().run_now();
     assert_eq!(
         downtime(),
         DowntimeSource::Measured,

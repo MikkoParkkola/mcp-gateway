@@ -9,7 +9,6 @@ mod gateway_bin;
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
-use std::process::Stdio;
 
 use serde_json::{Value, json};
 
@@ -43,16 +42,11 @@ fn stand_in(status: u16, body: String) -> String {
 
 /// The binary with `args` in a fresh home, `token` as `MCP_GATEWAY_TOKEN` when given.
 fn run(args: &[&str], token: Option<&str>) -> Out {
-    let home = tempfile::tempdir().expect("home");
-    let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
-    command
-        .args(args)
-        .env("MCP_GATEWAY_CONFIG_DIR", home.path())
-        .stdin(Stdio::null());
-    if let Some(token) = token {
-        command.env("MCP_GATEWAY_TOKEN", token);
-    }
-    let out = command.output().expect("run mcp-gateway");
+    let env: Vec<(&str, &str)> = token
+        .map(|t| ("MCP_GATEWAY_TOKEN", t))
+        .into_iter()
+        .collect();
+    let out = gateway_bin::run_cli(args, &env, None);
     Out {
         code: out.status.code(),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

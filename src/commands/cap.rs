@@ -255,12 +255,26 @@ async fn cap_list(
     }
 }
 
+/// What `cap import --auth-key` says for a value that is not a credential
+/// reference: every form the resolver reads, and never the value.
+const AUTH_KEY_REFUSAL: &str = "--auth-key takes a credential reference: env:NAME, keychain:NAME, \
+oauth:PROVIDER, file:PATH, {env.NAME} or a variable NAME";
+
 async fn cap_import(
     spec: std::path::PathBuf,
     output: std::path::PathBuf,
     prefix: Option<String>,
     auth_key: Option<String>,
 ) -> ExitCode {
+    // Read through the resolver's own parser, so this accepts exactly the
+    // forms a capability's auth key can use, and never echoes a value.
+    if auth_key
+        .as_deref()
+        .is_some_and(|key| crate::capability::credential_form(key).is_err())
+    {
+        eprintln!("Error: {AUTH_KEY_REFUSAL}");
+        return ExitCode::from(2);
+    }
     let mut converter = OpenApiConverter::new();
     if let Some(p) = prefix {
         converter = converter.with_prefix(&p);
@@ -283,18 +297,26 @@ async fn cap_import(
     match result {
         Ok(caps) => {
             let out_path = output.to_string_lossy();
-            let count = caps.len();
-            println!(
-                "Imported {count} tools from {spec_ref}. Review {out_path}/ before loading.\n"
-            );
-            for cap in caps {
+            let mut failed = 0_usize;
+            for cap in &caps {
                 if let Err(e) = cap.write_to_file(&out_path) {
+                    failed += 1;
                     eprintln!("❌ Failed to write {}: {e}", cap.name);
                 } else {
                     println!("  ✅ {}.yaml", cap.name);
                 }
             }
-            println!("\nCapabilities written to {out_path}/");
+            // Counted after the writes, so the summary says what happened.
+            let written = caps.len() - failed;
+            println!(
+                "\nImported {written} tools from {spec_ref} into {out_path}/. Review them before loading."
+            );
+            if failed > 0 {
+                // A tool not written, an existing name included, is a failed
+                // import: a script must not read it as done.
+                eprintln!("{failed} tools could not be written.");
+                return ExitCode::FAILURE;
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

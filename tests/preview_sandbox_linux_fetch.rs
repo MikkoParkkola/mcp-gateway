@@ -11,6 +11,9 @@
 mod gateway_bin;
 #[path = "common/preview_sandbox.rs"]
 mod preview_sandbox_common;
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -88,6 +91,7 @@ async fn finish(mut child: tokio::process::Child) -> Output {
 /// preview's target runs, and only once `start_fetching` has returned.
 #[tokio::test]
 async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
+    require_private_home!();
     let Some(Started { mut child, .. }) = fetching("echo ran").await else {
         return;
     };
@@ -101,6 +105,7 @@ async fn r1_a_fetching_preview_runs_its_target_after_the_handshake() {
 /// waiting forever": a "helper" that exits at once is refused, not awaited.
 #[tokio::test]
 async fn r6b_a_helper_that_never_connects_is_refused() {
+    require_private_home!();
     let started = tokio::time::timeout(
         FETCH_GUARD,
         start_fetching_with_helper(
@@ -117,6 +122,40 @@ async fn r6b_a_helper_that_never_connects_is_refused() {
     assert!(started.is_err());
 }
 
+/// `ESRCH`: reading an exiting task's `/proc` file fails with this.
+const ESRCH: i32 = 3;
+
+/// True when a failed `/proc/<pid>/stat` read tells us nothing about the
+/// process: any error but a missing file or ESRCH (gone, or exiting).
+fn says_nothing(e: &std::io::Error) -> bool {
+    e.kind() != std::io::ErrorKind::NotFound && e.raw_os_error() != Some(ESRCH)
+}
+
+/// True when a `/proc/<pid>/stat` state field means the process is dead:
+/// zombie (`Z`) or dead (`X`, or `x` on older kernels).
+fn dead_state(state: Option<&str>) -> bool {
+    matches!(state, Some("Z" | "X" | "x"))
+}
+
+/// The scan's read rule as a table: out of descriptors keeps a marked process
+/// live, a missing file or ESRCH counts it gone; each dead state counts it
+/// gone. Runs on any Linux host.
+#[test]
+fn a_failed_stat_read_keeps_a_marked_process_live_unless_it_is_missing_or_exiting() {
+    use std::io::{Error, ErrorKind};
+    assert!(says_nothing(&Error::from_raw_os_error(24)), "EMFILE");
+    assert!(says_nothing(&Error::from_raw_os_error(5)), "EIO");
+    assert!(!says_nothing(&Error::from_raw_os_error(2)), "ENOENT");
+    assert!(!says_nothing(&Error::from(ErrorKind::NotFound)), "NotFound");
+    assert!(!says_nothing(&Error::from_raw_os_error(ESRCH)), "ESRCH");
+    for state in ["Z", "X", "x"] {
+        assert!(dead_state(Some(state)), "state {state} reads as dead");
+    }
+    for state in ["R", "S", "D"] {
+        assert!(!dead_state(Some(state)), "state {state} reads as live");
+    }
+}
+
 /// The pids of this process's live `unshare` children whose command line
 /// holds `marker` (a zombie is not live; rows run in parallel threads).
 fn live_unshare_children(marker: &str) -> Vec<u32> {
@@ -126,8 +165,19 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            // Only a missing file or ESRCH (an exiting task) means gone. A
+            // stat that fails for another reason says nothing, so a process
+            // carrying the marker counts as live and the caller's wait goes on.
+            Err(e) if says_nothing(&e) => {
+                let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                if String::from_utf8_lossy(&cmdline).contains(marker) {
+                    found.push(pid);
+                }
+                continue;
+            }
+            Err(_) => continue,
         };
         let Some((name, rest)) = stat.split_once(" (").and_then(|(_, r)| r.rsplit_once(") "))
         else {
@@ -140,7 +190,7 @@ fn live_unshare_children(marker: &str) -> Vec<u32> {
         );
         let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let tagged = String::from_utf8_lossy(&cmdline).contains(marker);
-        if name == "unshare" && parent == Some(me) && tagged && !matches!(state, Some("Z" | "X")) {
+        if name == "unshare" && parent == Some(me) && tagged && !dead_state(state) {
             found.push(pid);
         }
     }
@@ -155,6 +205,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
     use std::future::Future as _;
     use std::task::Poll;
     const MARKER: &str = "r6b-dropped-start";
+    require_private_home!();
     let target = shell(&format!("sleep 30 # {MARKER}"));
     let mut start = Box::pin(start_fetching_with_helper(
         Path::new(gateway_bin::path()),
@@ -183,6 +234,7 @@ async fn r6b_a_dropped_start_leaves_no_sandbox_running() {
 #[tokio::test]
 async fn f2_t1_the_unshares_only_child_is_the_helper() {
     use tokio::io::AsyncBufReadExt as _;
+    require_private_home!();
     let Some(Started { mut child, .. }) =
         fetching("(sleep 30 &); (sleep 30 &); echo up; sleep 30").await
     else {
@@ -206,6 +258,7 @@ async fn f2_t1_the_unshares_only_child_is_the_helper() {
 /// nothing the target can list is a socket.
 #[tokio::test]
 async fn f2_t2_the_run_child_holds_no_control_connection() {
+    require_private_home!();
     let Some(Started { mut child, .. }) =
         fetching("ls -l /proc/self/fd/; ls -l /proc/1/fd/ 2>&1; true").await
     else {
@@ -223,6 +276,7 @@ async fn f2_t2_the_run_child_holds_no_control_connection() {
 /// empty, and nothing can be added beside them.
 #[tokio::test]
 async fn ca_files_are_read_only_from_the_run_child() {
+    require_private_home!();
     let script = "d=/etc/mcp-gateway-preview
         test -f $d/ca.pem && echo ca-present
         (echo x > $d/ca.pem) 2>/dev/null && echo ca-writable
@@ -259,6 +313,7 @@ async fn ca_files_are_read_only_from_the_run_child() {
 /// staging" fails; this fails loudly if the temp dir is not `/tmp`.
 #[tokio::test]
 async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
+    require_private_home!();
     let Some(Started { mut child, .. }) = fetching("sleep 30").await else {
         return;
     };
@@ -267,4 +322,13 @@ async fn the_ca_snapshot_sits_under_tmp_on_this_host() {
     let text = String::from_utf8_lossy(&cmdline).into_owned();
     let _ = child.kill().await;
     assert!(text.contains("\"ca\":\"/tmp/"), "{text}");
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

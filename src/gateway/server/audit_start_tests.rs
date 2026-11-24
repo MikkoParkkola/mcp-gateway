@@ -2,21 +2,25 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! D1-T3 — with auth on, an audit log that cannot open stops the gateway.
 //!
-//! Drives `build_meta_mcp`, the step both `run` and `run_stdio` take before
-//! they bind or read anything.
+//! Drives the gateway's construction, which opens the serving log once (WIRE.4) before either
+//! serve path binds or reads anything.
 
 use super::Gateway;
 use crate::config::Config;
 
 /// Auth on, and the log path's parent is a regular file, so the open fails
 /// for every user including root.
-async fn gateway(auth: bool, dir: &tempfile::TempDir) -> Gateway {
+async fn gateway(auth: bool, dir: &tempfile::TempDir) -> crate::Result<Gateway> {
     gateway_with(auth, Some(true), dir).await
 }
 
 /// [`gateway`] with the audit switch as given, so the unset row (MIK-8044
 /// P2c2) shares the blocked-path fixture with the explicit one.
-async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &tempfile::TempDir) -> Gateway {
+async fn gateway_with(
+    auth: bool,
+    enabled: Option<bool>,
+    dir: &tempfile::TempDir,
+) -> crate::Result<Gateway> {
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("blocker file");
     let mut config = Config::default();
@@ -25,17 +29,14 @@ async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &tempfile::TempDir
     config.security.transparency_log.enabled = enabled;
     config.security.transparency_log.path =
         blocker.join("audit.jsonl").to_string_lossy().into_owned();
-    Gateway::new(config)
-        .await
-        .expect("the config itself is valid")
+    Gateway::new(config).await
 }
 
 #[tokio::test]
 async fn audit_log_open_failure_refuses_serve_with_auth() {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let gateway = gateway(true, &dir).await;
     assert!(
-        gateway.build_meta_mcp().await.is_err(),
+        gateway(true, &dir).await.is_err(),
         "auth is on and the audit log cannot open, so the gateway must not start"
     );
 }
@@ -46,8 +47,7 @@ async fn audit_log_open_failure_refuses_serve_with_auth() {
 #[tokio::test]
 async fn an_unset_audit_switch_opens_the_log_with_auth() {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let gateway = gateway_with(true, None, &dir).await;
-    let err = match gateway.build_meta_mcp().await {
+    let err = match gateway_with(true, None, &dir).await {
         Ok(_) => panic!("auth is on and the switch unset, so the log must open (and fail here)"),
         Err(e) => e.to_string(),
     };
@@ -61,7 +61,7 @@ async fn an_unset_audit_switch_opens_the_log_with_auth() {
 #[tokio::test]
 async fn audit_log_open_failure_with_auth_off_still_starts() {
     let dir = crate::test_dir_keep::kept_tempdir();
-    let gateway = gateway(false, &dir).await;
+    let gateway = gateway(false, &dir).await.expect("auth off: it is built");
     assert!(gateway.build_meta_mcp().await.is_ok());
 }
 
@@ -89,8 +89,7 @@ async fn refused_while_leased_unboxed(auth: bool) {
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
     config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = path.to_string_lossy().into_owned();
-    let gateway = Gateway::new(config).await.expect("the config is valid");
-    let err = match gateway.build_meta_mcp().await {
+    let err = match Gateway::new(config).await {
         Ok(_) => panic!("auth={auth}: started beside another writer of the log"),
         Err(e) => e.to_string(),
     };

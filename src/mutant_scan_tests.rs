@@ -94,8 +94,13 @@ fn s9_the_walk_reaches_every_source_root() {
     // The unpacked published crate (the post-merge packaged suite) ships no
     // nested crates and no git metadata; the same test as
     // boundary_pins::packaged::packaged_crate_at.
-    if root.join("Cargo.toml.orig").exists() && !root.join(".git").exists() {
-        eprintln!("skipped: the packaged crate is not the repository");
+    // The detector's own answer, not a literal: a dropped guard fails in required mode instead of skipping.
+    let packaged = root.join("Cargo.toml.orig").exists() && !root.join(".git").exists();
+    if packaged {
+        crate::test_wait::skip_unshipped(
+            packaged,
+            "the nested crates and git metadata of a checkout",
+        );
         return;
     }
     let files = tracked_rs_files(root).expect("git ls-files");

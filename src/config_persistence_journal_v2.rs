@@ -4,17 +4,14 @@
 
 #[cfg(test)]
 use std::io::Write as _;
-#[cfg(test)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::Journal;
-#[cfg(test)]
 use crate::config_persistence::commit::CommitToken;
 use crate::config_persistence::commit::{Action, FileRevision};
 use crate::config_persistence::lock::Locked;
-#[cfg(test)]
 use crate::config_persistence::{FileMode, Symlink, sync_dir_of, write_atomic};
 use crate::security::transparency_log::identity::LogId;
 use crate::security::transparency_log::settle::{Attribution, Reason, Role};
@@ -138,11 +135,8 @@ pub(crate) enum JournalError {
     Unreadable,
     InvalidState,
     UnsupportedVersion,
-    #[cfg(test)]
     ChangedDecision,
-    #[cfg(test)]
     Persist,
-    #[cfg(test)]
     Finish,
 }
 
@@ -202,7 +196,6 @@ pub(crate) fn create_intended(
 
 /// Which file a session's state lives in. The delivery core is shared; only `persist` and
 /// `finish` look at this.
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backing {
     /// The config's write journal.
@@ -211,7 +204,6 @@ pub(crate) enum Backing {
     Abandoned,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct JournalSession {
     target: PathBuf,
@@ -219,7 +211,6 @@ pub(crate) struct JournalSession {
     backing: Backing,
 }
 
-#[cfg(test)]
 impl JournalSession {
     /// The abandoned file's persist: the whole state rewritten atomically, then its directory
     /// synced, never above the file cap and never at the journal's path.
@@ -237,6 +228,7 @@ impl JournalSession {
         let path = abandoned_path(&self.target);
         write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)
             .map_err(|_| JournalError::Persist)?;
+        #[cfg(test)]
         drain::fault::file_rewritten(&self.target)?;
         sync_dir_of(&path).map_err(|_| JournalError::Persist)
     }
@@ -400,7 +392,6 @@ impl JournalV2 {
         codec::decode(bytes)
     }
 
-    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         self.validate()?;
         codec::encode(self)
@@ -408,7 +399,6 @@ impl JournalV2 {
 
     /// Whether `finish` would accept this journal: the one check, so a caller that must know
     /// beforehand cannot drift from it.
-    #[cfg(test)]
     pub(crate) fn finish_ready(&self) -> Result<(), JournalError> {
         self.validate()?;
         if self.pending.is_some()
@@ -528,7 +518,6 @@ impl JournalDecision {
     }
 }
 
-#[cfg(test)]
 impl TokenState {
     /// Done for its journal: never while parked; a handed-over token is the file's to settle.
     fn finished(&self, attempts: &[TokenState]) -> bool {
@@ -600,6 +589,10 @@ mod codec_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_fixtures_tests.rs"]
 mod fixtures;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_gating_tests.rs"]
+mod gating_tests;
 #[cfg(test)]
 #[path = "config_persistence_journal_v2_observe_tests.rs"]
 mod observe;
@@ -611,13 +604,6 @@ mod state_tests;
 /// `<config>.abandoned`: the sidecar an abandoned journal's handover writes, beside the
 /// resolved config in the journal's own directory. The drain's handover, the restart
 /// checkpoint and the Settings unsettled check all name it through this one function.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "the restart coordinator wiring, a later slice, reaches it through the config floor"
-    )
-)]
 pub(crate) fn abandoned_path(target: &std::path::Path) -> std::path::PathBuf {
     let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
     name.push(".abandoned");
@@ -625,17 +611,15 @@ pub(crate) fn abandoned_path(target: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// `<config>.abandoned.retired`: the manifest of retired abandoned outcomes, beside the resolved
-/// config. Startup without the lock refuses while one is present, since nothing reads it there.
-#[cfg(test)]
+/// config. Startup without the lock refuses while one is present, since nothing reads it there,
+/// and a reload skips while one is present.
 pub(crate) fn retired_path(target: &std::path::Path) -> std::path::PathBuf {
     let mut name = std::ffi::OsString::from(target.file_name().unwrap_or_default());
     name.push(".abandoned.retired");
     target.with_file_name(name)
 }
 
-#[cfg(test)]
 #[path = "config_persistence_journal_v2_abandoned.rs"]
 pub(crate) mod abandoned;
-#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain.rs"]
 pub(crate) mod drain;

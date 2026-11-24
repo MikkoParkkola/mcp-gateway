@@ -58,7 +58,6 @@ src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config lo
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
 src/config_persistence.rs	render	refuse_authored	1	no-record	a config write that adds or changes a firewall rule the load refuses, refused before writing
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
-src/config_persistence_keyedit.rs	edit_in_place	refusal	1	no-record	a config write: an API key revocation the in-place editor cannot prove, answered with hand instructions by the admin UI
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
 src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	config reload: a key edit that would flip the running multi-user status is refused before it applies
@@ -259,7 +258,6 @@ src/gateway/router/backend_handlers/key_check.rs	withheld_refusal	key_refusal	1	
 src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	not-delivered	an audit writer; the 403 it accompanies on the direct route is recorded Denied
 src/gateway/router/backend_handlers/relay.rs	catalogue_refusal	relay_refusal	1	feeds	builds the catalogue relay refusal
 src/gateway/router/direct_guards.rs	after_dispatch	refusal	1	recorded	direct outlet: records a sealed refusal; the whole withhold raises in this fn
-src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	Refused::of	1	not-a-decision	client-protocol rejection: a keyed call with no execution principal
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	refuse_malformed_nonce_early	1	not-a-decision	client-protocol rejection: a malformed signing nonce
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	request_check_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	intake_refusal	1	not-a-decision	a keyed call with no execution principal
@@ -308,7 +306,6 @@ src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_body	1	no-record	admin 
 src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
-src/gateway/ui/backends/write.rs	refused_write	config_refusal	1	no-record	admin UI backend routes: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
@@ -318,8 +315,6 @@ src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI dis
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/keys_create.rs	check_expiry	refuse_with	1	no-record	admin UI key create: refuses an expiry past the clock read under the config lock, fixed text, no call delivery
-src/gateway/ui/keys_create.rs	check_flip	refuse_multi_user_flip	1	no-record	admin UI key create: refuses a key that would flip the running multi-user status, no call delivery
-src/gateway/ui/keys_create.rs	check_flip	refuse_with	1	no-record	admin UI key create: records the flip refusal the route answers as restart_required, fixed text, no call delivery
 src/gateway/ui/keys_create.rs	compute	refuse_with	1	no-record	admin UI key create: records the in-place edit refusal the route answers as not_written, fixed text, no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/policies_rules.rs	refused	first_refusal	1	not-delivered	the Policies read model's flag on a rule; nothing is refused

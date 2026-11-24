@@ -15,6 +15,7 @@ src/capability/watcher.rs	spawn_reload	spawn	1	outside-calls	capability hot-relo
 src/capability/watcher.rs	spawn_reload_task_tuned	spawn	1	outside-calls	capability directory watcher loop (debounce, fingerprint walks, reloads)
 src/capability/watcher.rs	start_walk	spawn-blocking	1	no-refusal-inside	fingerprint walk of the watched capability directories on the blocking pool
 src/commands/cap.rs	cap_pin	spawn-blocking	1	outside-calls	CLI cap pin command: pins a capability file under its directory lock
+src/config_persistence_journal_v2_drain.rs	run	spawn-blocking	1	outside-calls	the config-write journal drain at startup: one blocking worker owns the locked session through repair, delivery and cleanup; a cancelled waiter drops only the join handle
 src/config_reload/history_save.rs	save_bounded	spawn-blocking	1	no-refusal-inside	one config-history save (read, merge, atomic write) on the blocking pool under the save deadline; a failure keeps the record in memory and warns
 src/config_reload/history_task.rs	spawn	spawn	1	no-refusal-inside	the record task writing one reload's config-history entry after its swap; the next reload waits for it, and nothing it runs refuses a call
 src/config_reload/override_audit.rs	start	spawn	1	no-refusal-inside	override-audit worker that drains a queue into the audit log
@@ -75,6 +76,8 @@ src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads 
 src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
 src/gateway/ui/backends/signin_flow.rs	start	spawn	1	outside-calls	runs a web UI backend sign-in; it serves the sign-in page, not a tool call
 src/gateway/ui/backends/slotting.rs	read_expecting	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a backend write stores a secret; a read failure returns as the config refusal
+src/gateway/ui/config_history.rs	history	spawn-blocking	1	no-refusal-inside	reads the config history file off the async workers for the history answer; a read error returns as the fixed 503
+src/gateway/ui/config_history.rs	restore	spawn-blocking	1	no-refusal-inside	reads the config history file off the async workers before a restore; a read error returns as the fixed 503 and nothing is written
 src/gateway/ui/decisions.rs	replay_ui_decisions_until_ready	spawn-blocking	1	outside-calls	reads the governance audit's UI decision records into the decision set at start-up, retrying until the store answers
 src/gateway/ui/decisions.rs	replay_until_ready	spawn-blocking	1	outside-calls	replays the decision log into the web UI's decision source at start-up
 src/gateway/ui/decisions.rs	start_discovery	spawn	1	outside-calls	keeps the web UI's client-file discovery cache current in the background
@@ -93,6 +96,7 @@ src/gateway/ui/settings_unused.rs	list_unused	spawn-blocking	1	no-refusal-inside
 src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
 src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
 src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal
+src/heartbeat.rs	start	spawn	1	outside-calls	the heartbeat task: a check at start, then hourly, until shutdown; neither startup nor a request awaits it
 src/idempotency/guard.rs	spawn_cleanup_task	spawn	1	outside-calls	idempotency cache cleanup timer
 src/identity_grants.rs	write_identity_grants_file	spawn-blocking	1	no-refusal-inside	atomic write of the identity grants file
 src/identity_grants/journal.rs	acquire_lock	spawn-blocking	1	outside-calls	takes the grant journal lock for a CLI identity grant change
@@ -112,6 +116,7 @@ src/preview_sandbox/proxy.rs	bind	spawn	1	outside-calls	the preview proxy's acce
 src/preview_sandbox/proxy.rs	serve_connection	spawn	1	outside-calls	serves one connection to the preview sandbox's allowlist proxy (the fetch's npm/uv traffic); its 407/403 answers go to the sandbox, not to a tool call
 src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
 src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed
+src/skills/installer.rs	kept_blocking	spawn-blocking	1	raised-at-join	a single blocking install-path file operation that holds a clone of the regen loop keep while it runs; an io error comes back with the join, which maps it
 src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes
 src/transport/http/listen.rs	open_listen_as	spawn	1	no-refusal-inside	reads a backend's listen response into a channel of unsolicited notifications
 src/transport/http/listen.rs	open_session_stream_as	spawn	1	no-refusal-inside	reads a backend's session SSE stream into a channel of admitted notifications

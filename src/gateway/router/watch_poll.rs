@@ -110,6 +110,7 @@ pub(crate) async fn poll_capability(
         None,
         None,
         None,
+        None,
     )
     .with_caller_key(Some(identity));
     let live = owned.host().upgrade().ok_or(PollRefused::Dispatch)?;

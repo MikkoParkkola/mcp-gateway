@@ -4,10 +4,12 @@
 """Tests for changelog_fragments.py: assembly output and the PR check."""
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -374,6 +376,198 @@ class Cli(unittest.TestCase):
             self.assertEqual(cf.main(["assemble"]), 1)
         self.assertIn("empty fragment", err.getvalue())
         self.assertEqual((self.root / "CHANGELOG.md").read_text(encoding="utf-8"), CHANGELOG)
+
+
+# A tracker id, built at run time so this file holds none (the public hygiene rule refuses them).
+T = "MIK" + "-"
+
+BASE = """# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- existing fix (#2)
+
+## [1.0.0] - 2026-01-01
+
+### Fixed
+
+- old (#0)
+"""
+
+
+def unreleased_fixed(text: str) -> list[str]:
+    """The lines of the Unreleased section's `### Fixed` subsection, blank lines dropped."""
+    section = text.split("## [Unreleased]", 1)[1].split("\n## ", 1)[0]
+    return [x for x in section.split("### Fixed", 1)[1].split("\n") if x.strip()]
+
+
+def hygiene_ids(text: str) -> list[str]:
+    """Bare tracker ids in `text` by the hygiene rule's own patterns (scripts/dev/public-hygiene-patterns.sh):
+    acceptance ids (`ac_id_regex`) set aside first, as the checks' bare() does, then `ticket_id_regex`."""
+    src = pathlib.Path(__file__).resolve().parents[2] / "scripts/dev/public-hygiene-patterns.sh"
+    defs = dict(x.split("=", 1) for x in src.read_text(encoding="utf-8").splitlines()
+                if x.startswith(("ticket_id_regex=", "ac_id_regex=")))
+    ticket, ac = (defs[k].strip("'").replace("[:alnum:]", "A-Za-z0-9") for k in ("ticket_id_regex", "ac_id_regex"))
+    return [m.group(0) for m in re.finditer(ticket, re.sub(ac, "", text))]
+
+
+class DropIds(unittest.TestCase):
+    """The fold drops bare tracker ids from what it renders (the lead's fix, 2026-11-15)."""
+
+    def test_each_parenthetical_shape_renders_without_its_ids(self):
+        shapes = [
+            ("only an id", f"- a ({T}1).", "- a."),
+            ("an id beside a PR number", f"- b (#12, {T}2).", "- b (#12)."),
+            ("an id with a label", f"- c ({T}3 I2).", "- c."),
+            ("an id with a dotted label", f"- c2 ({T}31 MIN.2).", "- c2."),
+            ("an id beside words on one line", f"- w (not a config key, {T}32).", "- w (not a config key)."),
+            ("an id beside a blank part", f"- x ({T}36, ).", "- x."),
+            ("a kept part beside an id and a blank part", f"- y (#12, {T}37, ).", "- y (#12)."),
+            ("ids split across a line break", f"- d ({T}4,\n  {T}5).", "- d."),
+            ("a kept part across a line break", f"- e (F13, {T}6,\n  #14).", "- e (F13, #14)."),
+            ("a PR number and an id split by a semicolon", f"- s (#40; {T}41).", "- s (#40)."),
+            ("two ids split by a semicolon", f"- s2 ({T}42; {T}43).", "- s2."),
+            ("kept parts keep their semicolon", f"- c3 (#53; {T}54; #55).", "- c3 (#53; #55)."),
+            ("text after a parenthetical that spans a line break", f"- e2 (F13, {T}56,\n  #57). Then a note follows.", "- e2 (F13, #57). Then a note follows."),
+            ("code on the line outside the parenthetical", f"- r `cmd a,b` fixed (#72, {T}73).", "- r `cmd a,b` fixed (#72)."),
+            ("an unclosed backtick in another bullet", f"- p (`open.\n- q (#70, {T}71).", "- p (`open.\n- q (#70)."),
+        ]
+        for name, fragment, rendered in shapes:
+            with self.subTest(name):
+                out = cf.assemble(BASE, {"20.fixed.md": fragment + "\n"})
+                self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", *rendered.split("\n")])
+                self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
+
+    def test_acceptance_ids_and_pr_numbers_stay(self):
+        out = cf.assemble(BASE, {"21.fixed.md": f"- f ({T}7.AREA.1, #15, {T}8).\n- g {T}9.AREA.2 holds.\n"})
+        self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", f"- f ({T}7.AREA.1, #15).", f"- g {T}9.AREA.2 holds."])
+        # What the fold keeps must pass the hygiene rule the release gate runs.
+        self.assertEqual(hygiene_ids(out.split("## [1.0.0]")[0]), [])
+
+    def test_an_id_alone_on_its_lines_takes_those_lines_with_it(self):
+        # A line left holding only spaces would read as a blank line and split the
+        # bullet; a blank line the fragment itself has stays.
+        for src, out in ((f"- n one\n  ({T}74)\n  two.\n\n  Kept.\n", "- n one\n  two.\n\n  Kept.\n"),
+                         (f"- n2 one\n  ({T}75,\n  {T}76)\n  two.\n", "- n2 one\n  two.\n"),
+                         (f"- n3 one\n  ({T}77,\n\n  {T}78)\n  two.\n", "- n3 one\n\n  two.\n"),
+                         (f"- n4 one\n  ({T}79,\n  \t\n\n  {T}80)\n  two.\n", "- n4 one\n  \t\n\n  two.\n"),
+                         (f"- n5 one\n  ({T}81)", "- n5 one")):
+            with self.subTest(src=src):
+                self.assertEqual(cf.drop_ids(src), (out, []))
+
+    def test_assemble_itself_refuses_an_id_it_cannot_drop(self):
+        HOLDS_CODE = "a tracker id in a parenthetical that holds code"
+        ODD_BACKTICK = "a tracker id in a bullet with an escaped or unclosed backtick"
+        SPAN_CHANGED = "dropping the tracker id would change a code span; reword the line"
+        BLOCK = "a tracker id in a bullet holding a code block; move the id out of the bullet, or reword"
+        cases = ((f"- s found by {T}33.\n", 1, "a tracker id in prose"),
+                 (f"- t (#34)\n- u (follow-up {T}35).\n", 2, "a tracker id among other words"),
+                 (f"- v (`run {T}60`, {T}61).\n", 1, HOLDS_CODE),
+                 (f"- w ``see {T}62`` here.\n", 1, "a tracker id in prose"),
+                 (f"- x (`open, {T}63).\n", 1, HOLDS_CODE),
+                 (f"- c (`echo ready; exit 0`, {T}50).\n", 1,
+                  HOLDS_CODE + "; move the id out of the parenthetical that holds code, or reword"),
+                 (f"- c4 (``printf a,b``, {T}58).\n", 1, HOLDS_CODE),
+                 (f"- c6 (\\`lit, `printf a,b`, \\`lit, {T}64).\n", 1, HOLDS_CODE),
+                 (f"- c7 (`open ({T}65), #2).\n", 1, HOLDS_CODE),
+                 (f"- c5 ``a ` f({T}59)`` here.\n", 1, "a tracker id in prose"),
+                 (f"- e \\`x (#1, {T}66) here.\n", 1, ODD_BACKTICK),
+                 (f"- m `f(\n{T}67)`.\n", 2, ODD_BACKTICK),
+                 (f"- m2 `f(\n{T}68,\nx)`.\n", 2, ODD_BACKTICK),
+                 (f"- m3 `a\n  f({T}69)\n  b`.\n", 2, ODD_BACKTICK),
+                 # The drop itself would join two spans, or escape the backtick after it.
+                 (f"- j `printf a,b` ({T}82)`exit 0`.\n", 1, SPAN_CHANGED),
+                 (f"- j2 a\\ ({T}83)`x`.\n", 1, SPAN_CHANGED),
+                 # Block code the span reader cannot see.
+                 (f"- k run:\n  ~~~\n  printf \"({T}84)\"\n  ~~~\n", 3, BLOCK),
+                 (f"- k2 run:\n  ```\n  printf \"({T}85)\"\n  ```\n", 3, BLOCK),
+                 (f"- k3 run:\n\n      printf \"({T}86)\"\n", 3, BLOCK))
+        for fragment, line, why in cases:
+            with self.subTest(fragment=fragment):
+                with self.assertRaises(ValueError) as caught:
+                    cf.assemble(BASE, {"25.fixed.md": fragment})
+                self.assertIn(f"changelog.d/25.fixed.md:{line}: {why}", str(caught.exception))
+
+    def test_an_id_in_the_unreleased_section_is_dropped_and_a_released_one_stays(self):
+        changelog = BASE.replace("- existing fix (#2)", f"- existing fix (#2, {T}14)").replace("- old (#0)", f"- old (#0, {T}13)")
+        out = cf.assemble(changelog, {"22.fixed.md": "- h (#22)\n"})
+        self.assertEqual(unreleased_fixed(out), ["- existing fix (#2)", "- h (#22)"])
+        self.assertIn(f"- old (#0, {T}13)", out.split("## [1.0.0]")[1])
+
+    def test_a_second_fold_adds_only_its_own_line(self):
+        first = cf.assemble(BASE, {"23.fixed.md": f"- k ({T}15).\n"})
+        second = cf.assemble(first, {"24.fixed.md": "- m (#24)\n"})
+        self.assertEqual(unreleased_fixed(second), ["- existing fix (#2)", "- k.", "- m (#24)"])
+
+    def test_folding_its_own_output_with_no_fragments_changes_nothing(self):
+        first = cf.assemble(BASE, {"26.fixed.md": f"- z (#26, {T}18).\n"})
+        self.assertEqual(cf.assemble(first, {}), first)
+
+
+class DropIdsCli(unittest.TestCase):
+    """A tracker id that cannot be dropped stops the fold, which then writes and deletes nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.tmp.name)
+        (self.root / "changelog.d").mkdir()
+        (self.root / "changelog.d/.gitkeep").write_text("", encoding="utf-8")
+        (self.root / "CHANGELOG.md").write_text(BASE, encoding="utf-8")
+        self.saved = cf.ROOT
+        cf.ROOT = self.root
+
+    def tearDown(self):
+        cf.ROOT = self.saved
+        self.tmp.cleanup()
+
+    def files(self) -> dict[str, str]:
+        return {p.relative_to(self.root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in sorted(self.root.rglob("*")) if p.is_file()}
+
+    def refused(self, where: str):
+        before = self.files()
+        for argv in (["assemble", "--dry-run"], ["assemble"]):
+            with self.subTest(argv=argv):
+                with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(cf.main(argv), 1)
+                self.assertIn(where, err.getvalue())
+                self.assertEqual(out.getvalue(), "")
+                self.assertEqual(self.files(), before)
+
+    def test_an_id_in_prose_is_refused_naming_the_fragment_and_line(self):
+        (self.root / "changelog.d/30.fixed.md").write_text(f"- Found by {T}10's review.\n", encoding="utf-8")
+        self.refused("changelog.d/30.fixed.md:1: ")
+
+    def test_an_id_among_words_in_a_parenthetical_is_refused(self):
+        (self.root / "changelog.d/31.fixed.md").write_text(f"- n (#31)\n- h (follow-up {T}11).\n", encoding="utf-8")
+        self.refused("changelog.d/31.fixed.md:2: ")
+
+    def test_an_id_in_prose_in_the_unreleased_section_is_refused_naming_its_line(self):
+        (self.root / "CHANGELOG.md").write_text(BASE.replace("- existing fix (#2)", f"- i {T}12 holds (#2)"), encoding="utf-8")
+        (self.root / "changelog.d/32.fixed.md").write_text("- p (#32)\n", encoding="utf-8")
+        self.refused("CHANGELOG.md:7: ")
+
+    def test_one_refused_fragment_keeps_every_fragment_including_a_clean_one(self):
+        (self.root / "changelog.d/35.fixed.md").write_text("- clean (#35)\n", encoding="utf-8")
+        (self.root / "changelog.d/36.fixed.md").write_text(f"- Seen in {T}19 first.\n", encoding="utf-8")
+        self.refused("changelog.d/36.fixed.md:1: ")
+
+    def test_a_dry_run_leaves_every_fragment_byte_for_byte(self):
+        (self.root / "changelog.d/33.fixed.md").write_text(f"- q ({T}16, #33)\n", encoding="utf-8")
+        before = self.files()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cf.main(["assemble", "--dry-run"]), 0)
+        self.assertEqual(self.files(), before)
+        self.assertIn("- q (#33)\n", out.getvalue())
+
+    def test_the_fold_deletes_exactly_the_fragments_it_folded(self):
+        (self.root / "changelog.d/34.fixed.md").write_text(f"- r ({T}17)\n", encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cf.main(["assemble"]), 0)
+        self.assertEqual(sorted(p.name for p in (self.root / "changelog.d").iterdir()), [".gitkeep"])
+        self.assertEqual(unreleased_fixed((self.root / "CHANGELOG.md").read_text(encoding="utf-8")), ["- existing fix (#2)", "- r"])
 
 
 if __name__ == "__main__":

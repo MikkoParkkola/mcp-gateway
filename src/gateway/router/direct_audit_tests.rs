@@ -35,10 +35,13 @@ mod composite_refusals;
 mod counting;
 #[cfg(tp1)]
 mod delivery;
+// A response gate's block is recorded as denied on both routes.
 #[cfg(tp1)]
 mod delivery_who;
 #[cfg(tp1)]
 mod empty_grant;
+#[cfg(tp1)]
+mod gate_outcomes;
 #[cfg(tp1)]
 mod late_refusals;
 #[cfg(tp1)]
@@ -55,6 +58,8 @@ mod one_record;
 mod one_record_meta;
 #[cfg(tp1)]
 mod one_record_replay;
+#[cfg(tp1)]
+mod token_reach;
 // A call to a backend that does not exist records not_found.
 #[cfg(tp1)]
 mod not_found;
@@ -73,6 +78,12 @@ mod sealed_refusal;
 #[cfg(tp1)]
 #[cfg(feature = "firewall")]
 mod session_less;
+// Signing refusals and the chain check, as their records name them.
+#[cfg(tp1)]
+mod signing_records;
+// A refused nonce under each audit configuration: counted, 503 or not.
+#[cfg(tp1)]
+mod signing_records_log;
 #[cfg(feature = "firewall")]
 mod slot_release;
 #[cfg(feature = "firewall")]
@@ -96,6 +107,8 @@ struct Scripted {
     reply: Option<Value>,
     /// Every notification is refused for want of a caller slot (a 429).
     notify_refused: bool,
+    /// Under [`Extra::GateCall`]: a counted call waits here for its answer.
+    gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -123,6 +136,9 @@ impl Transport for Scripted {
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            gate.notified().await;
+        }
         if self.extras.contains(&Extra::Hang) || self.extras.contains(&Extra::HangCall) {
             std::future::pending::<()>().await;
         }
@@ -163,6 +179,9 @@ struct Fixture {
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
+    /// Opens the held answers under [`Extra::GateCall`] (one per call).
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    gate: Option<Arc<tokio::sync::Notify>>,
     _dirs: (
         Arc<tempfile::TempDir>,
         crate::gateway::router::tests::FixtureDir,
@@ -199,6 +218,8 @@ async fn post_modern_as(
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
+    /// A key server whose issuance rows go to the same log.
+    key_server: Exchange,
     /// T21: whether either route has a transparency log.
     log: Log,
     fail_closed: bool,
@@ -240,6 +261,15 @@ struct Setup {
     sanitize: Sanitize,
 }
 
+/// Whether the gateway runs a key server that exchanges tokens (only with
+/// `auth` set).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Exchange {
+    #[default]
+    Off,
+    On,
+}
+
 /// Whether both routes sanitize input (`security.sanitize_input`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Sanitize {
@@ -279,6 +309,10 @@ enum MetaMode {
     InvokeHidden,
     /// A fail-closed response contract with none declared refuses every answer.
     ContractRefuses,
+    /// A daily spend limit below what one call of `t` costs, so the spend
+    /// budget refuses every call before it is sent.
+    #[cfg(feature = "cost-governance")]
+    SpendCapped,
 }
 
 impl MetaMode {
@@ -286,6 +320,8 @@ impl MetaMode {
     fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
         match self {
             Self::Plain => {}
+            #[cfg(feature = "cost-governance")]
+            Self::SpendCapped => return meta.with_spend_refusing_for_test("t"),
             #[cfg(feature = "firewall")]
             Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
             Self::Idempotent => meta.enable_idempotency(
@@ -335,11 +371,24 @@ fn sanitizing(state: &super::AppState, on: bool) {
 async fn fixture(setup: Setup) -> Fixture {
     let (audit, path, log) = audit_log(setup.fail_closed);
     let (mut state, store) = match &setup.auth {
+        Some(auth) if setup.key_server == Exchange::On => {
+            let ks = Arc::new(
+                crate::key_server::KeyServer::new(
+                    crate::config::KeyServerConfig::default(),
+                    crate::key_server::email_hash::EmailHashKey::for_test(),
+                )
+                .with_issuance_log(Arc::clone(&log)),
+            );
+            super::tests::test_router_app_state_with_auth_and_key_server(auth, Some(ks)).await
+        }
         Some(auth) => super::tests::test_router_app_state_with_auth(auth).await,
         None => super::tests::test_router_app_state().await,
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let lists = Arc::new(AtomicUsize::new(0));
+    let gate = setup
+        .has(Extra::GateCall)
+        .then(|| Arc::new(tokio::sync::Notify::new()));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     if setup.has(Extra::Hardened) {
         harden(state_mut);
@@ -359,11 +408,10 @@ async fn fixture(setup: Setup) -> Fixture {
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
             notify_refused: setup.notify_refused,
+            gate: gate.clone(),
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
-    // Copied out before `agent_identity` is moved from `setup` below.
-    let extras = setup.extras;
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
@@ -386,7 +434,7 @@ async fn fixture(setup: Setup) -> Fixture {
     if setup.log == Log::On {
         meta.enable_transparency_log(Arc::clone(&log));
     }
-    meta = arm_extras(meta, extras);
+    meta = arm_extras(meta, setup.extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
@@ -416,6 +464,7 @@ async fn fixture(setup: Setup) -> Fixture {
         path,
         calls,
         lists,
+        gate,
         _dirs: (audit, store),
     }
 }
@@ -518,6 +567,33 @@ async fn post_to_raw(
     body: &str,
     caller: &Caller,
 ) -> (StatusCode, axum::body::Bytes) {
+    post_to_raw_named(fx, uri, body, caller, None).await
+}
+
+/// [`post_to`] with the modern `mcp-name` header set to `name` rather than
+/// the body's tool name: for a body name the sanitizer rewrites, which a
+/// header cannot carry (a control character).
+async fn post_to_named(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+    name: &str,
+) -> (StatusCode, Value) {
+    let (status, bytes) = post_to_raw_named(fx, uri, body, caller, Some(name)).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+async fn post_to_raw_named(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+    name: Option<&str>,
+) -> (StatusCode, axum::body::Bytes) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -541,7 +617,10 @@ async fn post_to_raw(
                 crate::protocol::meta::MODERN_VERSIONS[0],
             )
             .header("mcp-method", parsed["method"].as_str().unwrap())
-            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
+            .header(
+                "mcp-name",
+                name.unwrap_or_else(|| parsed["params"]["name"].as_str().unwrap()),
+            );
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))

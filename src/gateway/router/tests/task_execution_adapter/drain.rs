@@ -112,6 +112,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             None,
             None,
             None,
+            None,
         ),
         request: task_admission_request(
             OWNER.to_owned(),
@@ -400,6 +401,7 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
         crate::security::audit::CredentialKind::None,
         crate::gateway::authz::AdminStanding::None,
         Declared::NONE,
+        None,
         None,
         None,
         None,

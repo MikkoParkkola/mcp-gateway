@@ -14,10 +14,14 @@ use std::{
     time::Duration,
 };
 use tokio::{io::AsyncWriteExt as _, time::Instant};
+#[path = "nested_stop_budget/fixtures.rs"]
+mod fixtures;
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "common/pids.rs"]
 mod pids;
+#[path = "nested_stop_budget/stdio_chain.rs"]
+mod stdio_chain;
 #[path = "common/yaml.rs"]
 mod yaml;
 const PROTOCOL_VERSION: &str = "2025-11-25";
@@ -25,6 +29,10 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
 /// poll interval and a loaded host's scheduling, not a second stop.
 const BUDGET_SLACK: Duration = Duration::from_secs(2);
+/// When a supervisor kills a gateway still running past its stop total. The
+/// kill reaches only the gateway's own process, so the backend tree must be
+/// gone by then.
+const EXTERNAL_KILL_AFTER: Duration = Duration::from_secs(1);
 /// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
 const STOP_BOUND: Duration = Duration::from_secs(45);
 /// The smallest `server.shutdown_timeout` an HTTP gateway accepts. A start below it
@@ -35,37 +43,6 @@ const HTTP_MINIMUM: Duration = Duration::from_secs(13);
 /// stdin reader keeps the runtime waiting until that bound), 50 s in all, plus slack for a loaded
 /// host. A 45 s bound sat on the typical path (30 s drain, about 5 s teardown, 10 s runtime).
 const STDIO_SIGTERM_EXIT_BOUND: Duration = Duration::from_secs(75);
-const LEAF_SCRIPT: &str = r#"import json, os, signal, subprocess, sys, time
-name = sys.argv[1]
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-with open("leaf-" + name + ".pid", "w") as f:
-    f.write(str(os.getpid()))
-# A descendant in the leaf's process group. It inherits the ignored SIGTERM,
-# so only the gateway's kill of the whole group ends it.
-grandchild = subprocess.Popen(["sleep", "600"])
-with open("leaf-" + name + ".grandchild.pid", "w") as f:
-    f.write(str(grandchild.pid))
-for line in sys.stdin:
-    msg = json.loads(line)
-    if "id" not in msg:
-        continue
-    method = msg.get("method")
-    if method == "initialize":
-        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
-                  "serverInfo": {"name": name, "version": "1"}}
-    elif method == "tools/list":
-        result = {"tools": [{"name": "hold", "inputSchema": {"type": "object"},
-                             "annotations": {"readOnlyHint": True}}]}
-    elif method == "tools/call" and msg["params"]["name"] == "hold":
-        open("called-" + name, "w").close()
-        time.sleep(600)
-        continue
-    else:
-        result = {}
-    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
-time.sleep(600)
-"#;
-
 fn base_config(root: &Path, name: &str) -> Config {
     let mut config = Config::default();
     config.auth.enabled = false;
@@ -96,7 +73,7 @@ fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     path
 }
 fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> PathBuf {
-    std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("leaf script");
+    std::fs::write(root.join("leaf.py"), fixtures::LEAF_SCRIPT).expect("leaf script");
     let mut config = base_config(root, "inner");
     config.server.shutdown_timeout = inner_stop;
     for name in leaves {
@@ -107,13 +84,20 @@ fn write_inner_config(root: &Path, leaves: &[&str], inner_stop: Duration) -> Pat
     }
     save(root, "inner.yaml", &config)
 }
-fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
+/// A stall row's outer runs no backend health probe: a probe already running or due could
+/// count the frozen inner as failed and start a recovery, and the row would then test that
+/// recovery's cleanup instead of the stop's. Every other row keeps the default probes.
+fn probe_backends(config: &mut Config, during: During) {
+    config.failsafe.health_check.enabled = !matches!(during, During::Freeze);
+}
+fn write_outer_config(root: &Path, inner: &Path, total: Duration, during: During) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
     std::fs::write(root.join("inner.py"), "import os, sys\nwith open('inner.pid', 'w') as f: f.write(str(os.getpid()))\nos.dup2(os.open('inner.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)\nos.execv(sys.argv[1], sys.argv[1:])\n").expect("launcher");
     let mut config = base_config(root, "outer");
     config.server.host = "127.0.0.1".into();
     config.server.port = gateway_bin::ANY_PORT;
     config.server.shutdown_timeout = total;
+    probe_backends(&mut config, during);
     let mut inner_backend = backend(
         root,
         format!(
@@ -129,16 +113,25 @@ fn write_outer_config(root: &Path, inner: &Path, total: Duration) -> PathBuf {
     config.backends.insert("inner".into(), inner_backend);
     save(root, "gateway.yaml", &config)
 }
-fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path) -> PathBuf {
+/// The stop total of a chain parent (the stdio outer and the three-level chain's middle).
+const CHAIN_PARENT_STOP: Duration = Duration::from_secs(30);
+fn write_chain_parent(
+    root: &Path,
+    name: &str,
+    child: &str,
+    child_config: &Path,
+    during: During,
+) -> PathBuf {
     std::fs::write(
         root.join(format!("{child}.py")),
         format!(
-            "import os, sys\nwith open('{child}.pid', 'w') as f: f.write(str(os.getpid()))\nos.execv(sys.argv[1], sys.argv[1:])\n"
+            "import os, sys\nwith open('{child}.pid', 'w') as f: f.write(str(os.getpid()))\nlog = os.open('{child}.log', os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)\nos.dup2(log, 2)\nos.execv(sys.argv[1], sys.argv[1:])\n"
         ),
     )
     .expect("chain launcher");
     let mut config = base_config(root, name);
-    config.server.shutdown_timeout = Duration::from_secs(30);
+    config.server.shutdown_timeout = CHAIN_PARENT_STOP;
+    probe_backends(&mut config, during);
     config.backends.insert(
         child.into(),
         backend(
@@ -152,13 +145,14 @@ fn write_chain_parent(root: &Path, name: &str, child: &str, child_config: &Path)
     );
     save(root, &format!("{name}.yaml"), &config)
 }
-/// The outer gateway's log, then the inner gateway's own (its stderr goes to `inner.log`),
-/// so a red row prints both stops.
+/// The outer gateway's log, then each nested gateway's own (a launcher sends its stderr to
+/// `<name>.log`), so a red row prints every stop.
 fn logs(root: &Path) -> String {
     let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap_or_default();
     format!(
-        "{}\n--- inner.log ---\n{}",
+        "{}\n--- middle.log ---\n{}\n--- inner.log ---\n{}",
         read("gateway.log"),
+        read("middle.log"),
         read("inner.log")
     )
 }
@@ -275,6 +269,182 @@ fn sigterm(pid: u32) {
     );
 }
 
+/// What a row does to the inner gateway while the outer one stops.
+#[derive(Clone, Copy)]
+enum During {
+    Nothing,
+    /// Freeze the inner (SIGSTOP) before the outer's stop starts and never let
+    /// it run again: it can end nothing, so only the outer's sweep ends its leaves.
+    Freeze,
+    /// Record the stop's timeline for the margin measurement (Linux only): each
+    /// role's exit as it happens and the SIGTERM's instant, on one monotonic clock.
+    #[cfg(target_os = "linux")]
+    Watch,
+}
+
+/// An inner stop total longer than the parent's whole plan. With a short one
+/// (8 s) the inner ends its leaf by itself about 2 s after its stdin closes,
+/// before the parent's SIGTERM is due, and the nested need is never in play.
+const INNER_OUTLASTS_THE_PLAN: Duration = Duration::from_secs(30);
+
+/// Prints "<pid> <`CLOCK_MONOTONIC` ns>" the moment each given pid exits, through
+/// a pidfd each (Linux), so a stop's timeline is read without polling. A pid
+/// already gone when the watcher starts prints "<pid> gone-before".
+#[cfg(target_os = "linux")]
+const EXIT_WATCHER: &str = r#"import os, select, sys, time
+watching = {}
+poller = select.poll()
+for arg in sys.argv[1:]:
+    try:
+        fd = os.pidfd_open(int(arg))
+    except ProcessLookupError:
+        print(arg, "gone-before", flush=True)
+        continue
+    watching[fd] = arg
+    poller.register(fd, select.POLLIN)
+give_up = time.monotonic() + 120
+while watching and time.monotonic() < give_up:
+    for fd, _ in poller.poll(1000):
+        print(watching.pop(fd), time.monotonic_ns(), flush=True)
+        poller.unregister(fd)
+        os.close(fd)
+"#;
+
+/// The inner gateway, each leaf and its grandchild, by role (`inner`, `leaf:<name>`,
+/// `grandchild:<name>`), from the pid files the chain writes. The grandchild is gone
+/// only if a gateway killed the leaf's whole process group.
+fn chain_roles(root: &Path, leaves: &[&str]) -> Vec<(String, u32)> {
+    let mut roles = vec![("inner".to_owned(), read_pid(root, "inner.pid"))];
+    for name in leaves {
+        roles.push((
+            format!("leaf:{name}"),
+            read_pid(root, &format!("leaf-{name}.pid")),
+        ));
+        roles.push((
+            format!("grandchild:{name}"),
+            read_pid(root, &format!("leaf-{name}.grandchild.pid")),
+        ));
+    }
+    roles
+}
+
+/// One measured stop's timeline for the margin harness (Linux: pidfd, `CLOCK_MONOTONIC`).
+#[cfg(target_os = "linux")]
+mod measure {
+    use super::{Duration, EXIT_WATCHER, STOP_BOUND, Stdio, json};
+
+    /// Which stop the run measured: the analyser applies its own kill instant to each.
+    #[derive(Clone, Copy)]
+    pub(super) enum Path {
+        /// The HTTP outer's planned stop.
+        Normal,
+        /// The stdio outer hurried by a second signal.
+        Hurried,
+    }
+
+    /// The exit watcher of one run, started on every role's pid before the stop.
+    pub(super) struct Watch {
+        watcher: tokio::process::Child,
+        roles: Vec<(String, u32)>,
+    }
+
+    impl Watch {
+        pub(super) fn start(roles: &[(String, u32)]) -> Self {
+            let watcher = tokio::process::Command::new("python3")
+                .args(["-I", "-c", EXIT_WATCHER])
+                .args(roles.iter().map(|(_, pid)| pid.to_string()))
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn() // spawn-check: not the gateway: the pidfd exit watcher of the margin measurement
+                .expect("the exit watcher");
+            Self {
+                watcher,
+                roles: roles.to_vec(),
+            }
+        }
+
+        /// Waits for every exit, then prints the run's one MEASURE line: `signalled_mono_ns` (the
+        /// instant taken just before the SIGTERM), the stop `total_ms`, the `path`, and `exits` as
+        /// `[role, stamp]` pairs in the order seen (a stamp is `CLOCK_MONOTONIC` ns or "gone-before").
+        /// Nothing here is asserted; the analyser refuses a run with a missing or repeated role.
+        pub(super) async fn report(self, path: Path, total: Duration, signalled_mono_ns: u128) {
+            let out = tokio::time::timeout(STOP_BOUND, self.watcher.wait_with_output())
+                .await
+                .expect("the exit watcher ended")
+                .expect("the exit watcher's output");
+            let exits: Vec<(String, String)> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| line.split_once(' '))
+                .map(|(pid, stamp)| {
+                    let role = pid
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(|seen| self.roles.iter().find(|(_, known)| *known == seen))
+                        .map_or_else(|| format!("unknown:{pid}"), |(role, _)| role.clone());
+                    (role, stamp.to_owned())
+                })
+                .collect();
+            let path = match path {
+                Path::Normal => "normal",
+                Path::Hurried => "hurried",
+            };
+            eprintln!(
+                "MEASURE {}",
+                json!({
+                    "signalled_mono_ns": signalled_mono_ns.to_string(),
+                    "total_ms": total.as_millis().to_string(),
+                    "path": path,
+                    "exits": exits,
+                })
+            );
+        }
+    }
+
+    /// `CLOCK_MONOTONIC` now, in ns: the clock the watcher's `time.monotonic_ns()` reads and the
+    /// stop's own deadlines run on.
+    pub(super) fn now_ns() -> u128 {
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        u128::try_from(now.tv_sec).expect("a monotonic clock past zero") * 1_000_000_000
+            + u128::try_from(now.tv_nsec).expect("nanoseconds in range")
+    }
+}
+
+/// `kill -<sig> <pid>`, best effort: a pid that has already gone is the
+/// row's own business to judge.
+fn send(pid: u32, sig: &str) {
+    let _ = std::process::Command::new("kill")
+        .args([format!("-{sig}"), pid.to_string()])
+        .status();
+}
+
+/// Freezes `inner` before the outer's stop starts, so it has sent nothing when that stop
+/// begins: SIGSTOP, then its state read until stopped (within 10 s), then every one of its
+/// `descendants` checked still alive. It is never continued; if the row fails, `KillGroup`
+/// kills it (SIGKILL reaches a stopped process).
+async fn freeze_before_the_stop(root: &Path, inner: u32, descendants: &[u32]) {
+    send(inner, "STOP");
+    // A bound for a failure only: a stopped process reads `T` at once.
+    let stopped_by = Instant::now() + Duration::from_secs(10);
+    while !pids::stopped(inner) {
+        assert!(
+            Instant::now() < stopped_by,
+            "the inner never stopped\n{}",
+            logs(root)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let gone: Vec<u32> = descendants
+        .iter()
+        .copied()
+        .filter(|pid| !pids::alive(*pid))
+        .collect();
+    assert!(
+        gone.is_empty(),
+        "the inner's descendants {gone:?} were gone before the outer's stop began\n{}",
+        logs(root)
+    );
+}
+
 fn alive_pids(pids: &[u32]) -> Vec<u32> {
     pids.iter()
         .copied()
@@ -312,11 +482,24 @@ struct Stopped {
 }
 
 async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped {
+    run_with(total, inner_stop, leaves, During::Nothing).await
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one chain's start, stop and checks, with the freeze and the watch at their places in it"
+)]
+async fn run_with(
+    total: Duration,
+    inner_stop: Duration,
+    leaves: &[&str],
+    during: During,
+) -> Stopped {
     let temp = tempfile::tempdir().expect("temp root");
     let root = temp.path().to_path_buf();
     let root = root.as_path();
     let inner = write_inner_config(root, leaves, inner_stop);
-    let config = write_outer_config(root, &inner, total);
+    let config = write_outer_config(root, &inner, total, during);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut command = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
@@ -374,24 +557,30 @@ async fn run(total: Duration, inner_stop: Duration, leaves: &[&str]) -> Stopped 
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // The inner gateway, each leaf and its grandchild: the grandchild is gone
-    // only if the gateway killed the leaf's whole process group.
-    let leaves: Vec<u32> = std::iter::once("inner.pid".to_owned())
-        .chain(leaves.iter().flat_map(|name| {
-            [
-                format!("leaf-{name}.pid"),
-                format!("leaf-{name}.grandchild.pid"),
-            ]
-        }))
-        .map(|file| read_pid(root, &file))
-        .collect();
+    let roles = chain_roles(root, leaves);
+    let leaves: Vec<u32> = roles.iter().map(|(_, pid)| *pid).collect();
     assert!(calls.try_join_next().is_none(), "hold returned before stop");
     assert!(
         leaves.iter().all(|pid| pids::alive(*pid)),
         "inner and leaves must be live at stop"
     );
+    if matches!(during, During::Freeze) {
+        // The pid list starts with the inner gateway's (inner.pid, above).
+        freeze_before_the_stop(root, leaves[0], &leaves[1..]).await;
+    }
     let deadline = Instant::now() + STOP_BOUND;
+    #[cfg(target_os = "linux")]
+    let watch = matches!(during, During::Watch).then(|| measure::Watch::start(&roles));
+    // On the watcher's clock, taken just before the SIGTERM.
+    #[cfg(target_os = "linux")]
+    let signalled_mono_ns = measure::now_ns();
     let (sent, gone_at) = stop_and_wait_chain_gone(root, pid, &leaves).await;
+    #[cfg(target_os = "linux")]
+    if let Some(watch) = watch {
+        watch
+            .report(measure::Path::Normal, total, signalled_mono_ns)
+            .await;
+    }
     let logs_then = logs(root);
     tokio::time::timeout_at(deadline, reaped.child_mut().wait())
         .await
@@ -417,13 +606,24 @@ const PARENT_30S: Duration = Duration::from_secs(30);
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
 async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
+    // The row runs at the floor the binary states; a constant keeps the windows
+    // below readable to the timing check, and this pin keeps it from going stale.
+    assert_eq!(
+        fixtures::http_floor_from_binary().await,
+        HTTP_MINIMUM,
+        "the binary's HTTP stop floor moved: HTTP_MINIMUM must follow it"
+    );
     let stop = run(HTTP_MINIMUM, Duration::from_secs(8), &["leaf"]).await;
     let gone = stop.gone_at.duration_since(stop.sent);
-    // timing-oracle: vs SHUTDOWN_TIMEOUT (why: the chain must be gone inside the stop total so the sweep adds no second stop)
+    // Every recorded pid of the tree (inner, leaf, the leaf's own child) must
+    // be gone before a supervisor's kill one second past the total, which
+    // would end the outer gateway alone and orphan the rest. The poll can
+    // only see the end late, so a pass is never early.
+    // timing-oracle: vs EXTERNAL_KILL_AFTER (why: the kill a supervisor sends past the total reaches the outer gateway only)
     assert!(
-        gone <= HTTP_MINIMUM + BUDGET_SLACK,
-        "the chain outlived the stop budget: {gone:?} against {:?}\n{}",
-        HTTP_MINIMUM + BUDGET_SLACK,
+        gone <= HTTP_MINIMUM + EXTERNAL_KILL_AFTER,
+        "the chain outlived an external kill at the total plus {EXTERNAL_KILL_AFTER:?}: \
+         {gone:?} against a {HTTP_MINIMUM:?} total\n{}",
         stop.logs
     );
     // P4 (RETIRE.4): a full-budget stop, measured to the outer process's exit, ends inside
@@ -436,6 +636,41 @@ async fn a_busy_nested_gateway_stops_its_leaf_before_the_outer_kills_it() {
         stop.logs
     );
 }
+/// One measured stop of the chain at the floor, for sizing the nested margin:
+/// its timeline goes out as a MEASURE line (each role's exit from a pidfd
+/// watcher and the SIGTERM's instant, both `CLOCK_MONOTONIC`; the stop total; the
+/// path). It asserts no timing; the margin harness runs it many times under load
+/// and reads the lines.
+#[cfg(target_os = "linux")]
+#[ignore = "a measurement for the margin harness, not a CI row"]
+#[tokio::test]
+async fn measure_one_nested_stop_for_the_margin() {
+    run_with(
+        HTTP_MINIMUM,
+        INNER_OUTLASTS_THE_PLAN,
+        &["leaf"],
+        During::Watch,
+    )
+    .await;
+}
+
+/// A nested gateway frozen before its parent's stop and for all of it (so past
+/// its nested need) ends nothing by itself: SIGTERM waits on a stopped process,
+/// only the parent's SIGKILL reaches it. The parent's descendant sweep then has
+/// to end the leaf and the leaf's child: once the stop is over, no process of
+/// the tree is left.
+/// Red if the sweep stops killing what a killed backend leaves behind.
+#[tokio::test]
+async fn a_nested_gateway_frozen_past_its_need_still_leaves_no_leaf() {
+    run_with(
+        HTTP_MINIMUM,
+        INNER_OUTLASTS_THE_PLAN,
+        &["leaf"],
+        During::Freeze,
+    )
+    .await;
+}
+
 /// The same ownership claim holds with a 30 s parent budget.
 /// Red if the inner or its leaf group outlives the outer's stop (removing the group kill fails it).
 #[tokio::test]
@@ -478,312 +713,4 @@ async fn a_nested_gateway_whose_own_stop_outlasts_its_parents_plan_leaves_no_lea
         HTTP_MINIMUM + BUDGET_SLACK,
         stop.logs
     );
-}
-
-/// Each nested hurry must fit its parent's remaining kill window, rather than
-/// restarting 300 ms after SIGTERM and losing its reaper to its parent's kill.
-/// Every pid of a three-level chain, asserted live before the stop begins.
-fn live_chain(root: &Path, outer: u32, leaves: &[&str]) -> Vec<u32> {
-    let mut tree = vec![
-        outer,
-        read_pid(root, "middle.pid"),
-        read_pid(root, "inner.pid"),
-    ];
-    for name in leaves {
-        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
-        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
-    }
-    assert_eq!(
-        alive_pids(&tree),
-        tree,
-        "every chain level must be live before stop"
-    );
-    tree
-}
-
-#[tokio::test]
-async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
-    let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path();
-    let leaves = ["leaf_a", "leaf_b"];
-    let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let middle = write_chain_parent(root, "middle", "inner", &inner);
-    let outer = write_chain_parent(root, "outer", "middle", &middle);
-    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-    let mut reaped = gateway_bin::Reaped::new(
-        tokio::process::Command::from(gateway_bin::command(
-            &root.join("home"),
-            gateway_bin::Inherit::Environment,
-        ))
-        .env("RUST_LOG", "mcp_gateway=info")
-        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-        .current_dir(root)
-        .arg("--config")
-        .arg(outer)
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(log.try_clone().expect("log handle")))
-        .stderr(Stdio::from(log))
-        .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-        .expect("outer gateway"),
-    );
-    let pid = reaped.child_mut().id().expect("outer pid");
-    let cleanup = KillGroup {
-        pid,
-        root: root.into(),
-    };
-    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
-    let mut messages = vec![
-        initialize(),
-        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
-    ];
-    for (id, name) in leaves.iter().enumerate() {
-        let mut message = invoke(name, id + 1);
-        let inner_call = message["params"]["arguments"].take();
-        message["params"]["arguments"] =
-            json!({"server":"middle", "tool":"gateway_invoke", "arguments":inner_call});
-        messages.push(message);
-    }
-    for message in messages {
-        stdin
-            .write_all(format!("{message}\n").as_bytes())
-            .await
-            .expect("stdio");
-    }
-    let ready_by = Instant::now() + READY_BOUND;
-    while leaves
-        .iter()
-        .any(|name| !root.join(format!("called-{name}")).exists())
-    {
-        assert!(
-            Instant::now() < ready_by,
-            "holds never started\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let tree = live_chain(root, pid, &leaves);
-    // EOF installs the hurry listener before logging this message. The busy
-    // calls keep teardown pending until the subsequent SIGTERM cuts it short.
-    drop(stdin);
-    let eof_by = Instant::now() + READY_BOUND;
-    while !logs(root).contains("stdio: EOF reached, shutting down") {
-        assert!(
-            Instant::now() < eof_by,
-            "outer never saw EOF\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let hurried_at = Instant::now();
-    sigterm(pid);
-    // Observation time, not a watchdog: the outer kills at ~300 ms; allow
-    // another 2 s for scheduling and exit, not the 6 s reap reserve.
-    tokio::time::sleep_until(hurried_at + Duration::from_millis(2300)).await;
-    assert!(
-        logs(root).contains("shutdown hurried by a signal"),
-        "outer did not hurry\n{}",
-        logs(root)
-    );
-    let alive = alive_pids(&tree);
-    assert!(
-        alive.is_empty(),
-        "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
-        logs(root)
-    );
-    tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
-        .await
-        .expect("outer exit deadline")
-        .expect("outer exit");
-    reaped.reap().await;
-    std::mem::forget(cleanup);
-}
-
-/// A hurried stop (EOF then a second signal) of an outer gateway whose backend is a
-/// gateway with two leaves of its own: the outer's group kill lands before the
-/// inner's own hurried path has killed the leaves, which have their own process
-/// groups, so every pid of the tree must still be dead afterwards.
-/// Red if a gateway-child's leaves outlive the stop (the sweep before the kill is missing).
-#[tokio::test]
-async fn a_two_level_hurried_stop_leaves_no_leaf() {
-    let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path();
-    let leaves = ["leaf_a", "leaf_b"];
-    let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let outer = write_chain_parent(root, "outer", "inner", &inner);
-    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-    let mut reaped = gateway_bin::Reaped::new(
-        tokio::process::Command::from(gateway_bin::command(
-            &root.join("home"),
-            gateway_bin::Inherit::Environment,
-        ))
-        .env("RUST_LOG", "mcp_gateway=info")
-        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-        .current_dir(root)
-        .arg("--config")
-        .arg(outer)
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(log.try_clone().expect("log handle")))
-        .stderr(Stdio::from(log))
-        .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-        .expect("outer gateway"),
-    );
-    let pid = reaped.child_mut().id().expect("outer pid");
-    let cleanup = KillGroup {
-        pid,
-        root: root.into(),
-    };
-    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
-    let mut messages = vec![
-        initialize(),
-        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
-    ];
-    for (id, name) in leaves.iter().enumerate() {
-        let message = invoke(name, id + 1);
-        messages.push(message);
-    }
-    for message in messages {
-        stdin
-            .write_all(format!("{message}\n").as_bytes())
-            .await
-            .expect("stdio");
-    }
-    let ready_by = Instant::now() + READY_BOUND;
-    while leaves
-        .iter()
-        .any(|name| !root.join(format!("called-{name}")).exists())
-    {
-        assert!(
-            Instant::now() < ready_by,
-            "holds never started\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let mut tree = vec![pid, read_pid(root, "inner.pid")];
-    for name in leaves {
-        tree.push(read_pid(root, &format!("leaf-{name}.pid")));
-        tree.push(read_pid(root, &format!("leaf-{name}.grandchild.pid")));
-    }
-    // EOF installs the hurry listener before logging this message. The busy
-    // calls keep teardown pending until the subsequent SIGTERM cuts it short.
-    drop(stdin);
-    let eof_by = Instant::now() + READY_BOUND;
-    while !logs(root).contains("stdio: EOF reached, shutting down") {
-        assert!(
-            Instant::now() < eof_by,
-            "outer never saw EOF\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let hurried_at = Instant::now();
-    sigterm(pid);
-    // Observation time, not a watchdog: the outer kills at ~300 ms; allow
-    // another 2 s for scheduling and exit, not the 6 s reap reserve.
-    tokio::time::sleep_until(hurried_at + Duration::from_millis(2300)).await;
-    assert!(
-        logs(root).contains("shutdown hurried by a signal"),
-        "outer did not hurry\n{}",
-        logs(root)
-    );
-    let alive = alive_pids(&tree);
-    assert!(
-        alive.is_empty(),
-        "chain processes survived the outer's hurry kill window: {alive:?}; all pids: {tree:?}\n{}",
-        logs(root)
-    );
-    tokio::time::timeout(Duration::from_secs(10), reaped.child_mut().wait())
-        .await
-        .expect("outer exit deadline")
-        .expect("outer exit");
-    reaped.reap().await;
-    std::mem::forget(cleanup);
-}
-
-/// A SIGTERM to a stdio-mode gateway (what systemd or docker stop sends) leaves no
-/// backend running once the gateway has exited, even a backend that ignores EOF
-/// and SIGTERM and has a call in flight. Red if the gateway's teardown stops killing
-/// what its backends' graceful stop left.
-#[tokio::test]
-async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
-    let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path().to_path_buf();
-    let root = root.as_path();
-    let config = write_inner_config(root, &["leaf"], Duration::from_secs(8));
-    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-    let child = tokio::process::Command::from(gateway_bin::command(
-        &root.join("home"),
-        gateway_bin::Inherit::Environment,
-    ))
-    .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-    .current_dir(root)
-    .arg("--config")
-    .arg(config)
-    .args(["serve", "--stdio"])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::from(log.try_clone().expect("log handle")))
-    .stderr(Stdio::from(log))
-    .process_group(0)
-    .kill_on_drop(true)
-    .spawn() // spawn-check: waits for exit: the SIGTERM under test, then a bounded child wait; Reaped reaps after; KillGroup covers panic
-    .expect("gateway");
-    let mut reaped = gateway_bin::Reaped::new(child);
-    let pid = reaped.child_mut().id().expect("pid");
-    let cleanup = KillGroup {
-        pid,
-        root: root.into(),
-    };
-    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
-    for message in [
-        initialize(),
-        json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
-        json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{
-            "name":"gateway_invoke", "arguments":{"server":"leaf", "tool":"hold", "arguments":{}}
-        }}),
-    ] {
-        stdin
-            .write_all(format!("{message}\n").as_bytes())
-            .await
-            .expect("write stdio");
-    }
-    let ready_by = Instant::now() + READY_BOUND;
-    while !root.join("called-leaf").exists() {
-        assert!(
-            Instant::now() < ready_by,
-            "hold never started\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let leaf = read_pid(root, "leaf-leaf.pid");
-    let grandchild = read_pid(root, "leaf-leaf.grandchild.pid");
-    assert!(
-        pids::alive(leaf) && pids::alive(grandchild),
-        "leaf and its grandchild must be live at stop\n{}",
-        logs(root)
-    );
-    let deadline = Instant::now() + STDIO_SIGTERM_EXIT_BOUND;
-    sigterm(pid);
-    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
-        .await
-        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
-        .expect("gateway exit");
-    while pids::alive(leaf) || pids::alive(grandchild) {
-        assert!(
-            Instant::now() < deadline,
-            "leaf {leaf} or its grandchild {grandchild} still running after gateway exited\n{}",
-            logs(root)
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    // Safety net only: the gateway has already exited, so this sends no signal.
-    reaped.reap().await;
-    std::mem::forget(cleanup);
-    drop(stdin);
 }

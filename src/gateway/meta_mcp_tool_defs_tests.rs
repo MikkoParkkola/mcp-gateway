@@ -368,6 +368,19 @@ fn stats_tool_has_read_only_annotations() {
     assert_eq!(ann.idempotent_hint, Some(true));
 }
 
+/// The stats total keeps a number while some backend's tools are not yet known (a registry backend never asked, or
+/// the capability scan still running); the description is where a caller learns that number is a lower bound.
+#[test]
+fn stats_tool_says_its_total_is_a_floor_until_known() {
+    let description = build_stats_tool()
+        .description
+        .expect("the stats tool has a description");
+    assert!(
+        description.contains("tools_available is a floor while tools_known is false"),
+        "the description states what tools_available means before every backend is known: {description}"
+    );
+}
+
 #[test]
 fn cost_report_tool_has_read_only_annotations() {
     let ann = build_cost_report_tool()

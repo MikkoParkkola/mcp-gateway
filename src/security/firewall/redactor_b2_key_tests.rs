@@ -207,11 +207,10 @@ fn key_cases() -> Vec<String> {
 /// P1, the MIK-8772 invariant over generated documents: every credential
 /// match whose leftmost start lies inside a key redacts that key, and no
 /// output key holds the start of one.
-#[test]
-fn p1_every_key_a_match_starts_in_is_redacted() {
+fn p1_share(share: usize) -> usize {
     let greedy = serde_json::to_string(&pg_url()).expect("encodes");
     let mut checked = 0;
-    for key in key_cases() {
+    for key in p1_keys(share) {
         let quoted = serde_json::to_string(&key).expect("encodes");
         for lead in [None, Some(&greedy)] {
             for before in [0, 250, 255, 256, 257, 300] {
@@ -260,7 +259,100 @@ fn p1_every_key_a_match_starts_in_is_redacted() {
             }
         }
     }
-    assert!(checked > 5000, "P1 ran {checked} cases");
+    checked
+}
+
+/// How many rows P1's keys are dealt across, so its cases run on several test
+/// threads instead of one (on one thread they took about 19 minutes in CI).
+/// Every key's cases run whole inside a single share.
+const P1_SHARES: usize = 8;
+
+/// Cases per key: two leads, six lengths before the key and six after it.
+const P1_CASES_PER_KEY: usize = 72;
+
+/// The keys share `share` runs: every `P1_SHARES`-th key from that index on.
+/// The share rows and the coverage row deal through this one function, so the
+/// coverage row checks the dealing the shares really use.
+fn p1_keys(share: usize) -> Vec<String> {
+    key_cases()
+        .into_iter()
+        .skip(share)
+        .step_by(P1_SHARES)
+        .collect()
+}
+
+/// Runs one share and holds it to every case its keys own, so a case the loop
+/// stops reaching fails here rather than passing quietly.
+fn assert_p1_share(share: usize) {
+    let keys = p1_keys(share).len();
+    let ran = p1_share(share);
+    eprintln!("P1 share {share}: {ran} cases over {keys} keys");
+    assert_eq!(
+        ran,
+        keys * P1_CASES_PER_KEY,
+        "P1 share {share} ran {ran} cases"
+    );
+}
+
+#[test]
+fn p1_share_0() {
+    assert_p1_share(0);
+}
+
+#[test]
+fn p1_share_1() {
+    assert_p1_share(1);
+}
+
+#[test]
+fn p1_share_2() {
+    assert_p1_share(2);
+}
+
+#[test]
+fn p1_share_3() {
+    assert_p1_share(3);
+}
+
+#[test]
+fn p1_share_4() {
+    assert_p1_share(4);
+}
+
+#[test]
+fn p1_share_5() {
+    assert_p1_share(5);
+}
+
+#[test]
+fn p1_share_6() {
+    assert_p1_share(6);
+}
+
+#[test]
+fn p1_share_7() {
+    assert_p1_share(7);
+}
+
+/// The shares together are all of P1: each key lands in exactly one, and the
+/// total case count is what the single row used to run. Which cases print
+/// pretty depends on the case's position within its key only while the
+/// per-key count is a multiple of four, so that is held too.
+#[test]
+fn p1_every_key_a_match_starts_in_is_redacted() {
+    let all = key_cases();
+    let mut dealt: Vec<String> = (0..P1_SHARES).flat_map(p1_keys).collect();
+    let mut expected = all.clone();
+    dealt.sort();
+    expected.sort();
+    assert_eq!(dealt, expected, "the shares drop or repeat a key");
+    assert_eq!(P1_CASES_PER_KEY % 4, 0, "pretty-printed cases would move");
+    let total = all.len() * P1_CASES_PER_KEY;
+    eprintln!(
+        "P1: {total} cases over {} keys in {P1_SHARES} shares",
+        all.len()
+    );
+    assert!(total > 5000, "P1 runs {total} cases");
 }
 
 /// P2, the precondition `match_starts_in` rests on, pinned two ways. A scan

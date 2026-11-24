@@ -171,9 +171,9 @@ pub(crate) fn chain_digest(chain: &[Value]) -> String {
 /// the backend-input domain: the client learns it cannot redeem, never which
 /// binding told us so.
 fn refused(reason: &ContinuationError) -> Error {
-    // As `invoke::continuation::rejected_continuation`: no kind names it yet.
+    // As `invoke::continuation::rejected_continuation`: a refused single-use token.
     super::invoke::audit::note_refused_by(
-        crate::security::decision_record::DecisionKind::Unrecorded,
+        crate::security::decision_record::DecisionKind::ReplayGuard,
         None,
     );
     Error::json_rpc(INVALID_PARAMS, reason.client_message())

@@ -118,7 +118,7 @@ async fn abandoned_threads_are_capped_until_they_return() {
     for _ in 0..MAX_ABANDONED {
         let (release, wait) = std::sync::mpsc::channel::<()>();
         stuck.push(release);
-        let call = off_runtime_in(&MINE, move || wait.recv().is_ok());
+        let call = off_runtime_in(&MINE, None, move || wait.recv().is_ok());
         tokio::pin!(call);
         // Polled once, which starts the thread, then dropped: the caller
         // leaves, the thread stays.
@@ -130,7 +130,7 @@ async fn abandoned_threads_are_capped_until_they_return() {
     }
     assert_eq!(MINE.0.load(SeqCst), MAX_ABANDONED);
     assert_eq!(
-        off_runtime_in(&MINE, || ()).await,
+        off_runtime_in(&MINE, None, || ()).await,
         Err(NoResult::Stalled),
         "refused past the cap"
     );
@@ -142,7 +142,7 @@ async fn abandoned_threads_are_capped_until_they_return() {
         spins += 1;
     }
     assert_eq!(MINE.0.load(SeqCst), 0, "returned threads are uncounted");
-    assert_eq!(off_runtime_in(&MINE, || 7).await, Ok(7));
+    assert_eq!(off_runtime_in(&MINE, None, || 7).await, Ok(7));
 }
 
 /// A result its caller never received (a held lock) is dropped while
@@ -165,7 +165,7 @@ async fn an_undelivered_result_is_dropped_before_the_thread_is_uncounted() {
     let (closing, closed) = mpsc::channel();
     let (release, wait) = mpsc::channel::<()>();
     let (start, begin) = mpsc::channel::<()>();
-    let mut call = Box::pin(off_runtime_in(&MINE, move || {
+    let mut call = Box::pin(off_runtime_in(&MINE, None, move || {
         let _ = begin.recv();
         SlowClose(closing, wait)
     }));

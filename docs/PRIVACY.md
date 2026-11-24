@@ -2,10 +2,13 @@
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 # Privacy
 
-mcp-gateway runs on your machine and sends nothing to its author or to any
-analytics, telemetry, crash-reporting or update service. Its outbound
+mcp-gateway runs on your machine. Its author receives one thing from it: a
+small daily heartbeat from a released server, described under
+[Daily heartbeat](#daily-heartbeat), which `DO_NOT_TRACK=1` turns off. It sends
+nothing to any analytics, crash-reporting or update service. Its outbound
 connections go only to the destinations in the table below. Those are:
 
+- the heartbeat receiver, once a day at most;
 - addresses you configured;
 - a URL you type in a command, enter in the web UI, or write into a capability file;
 - a URL a capability builds from values the calling MCP client passes: a capability's
@@ -42,11 +45,11 @@ browser makes. Those are reviewed by hand against this page.
 
 ## What it does not do
 
-- **No telemetry, analytics, crash reports or update checks.** No dependency
-  provides one (`Cargo.toml`: the only metrics crates are `metrics`,
-  imported as `telemetry_metrics` for local counters, and
-  `metrics-exporter-prometheus`), and no place in the table below sends to such
-  a service.
+- **No analytics, crash reports or update checks, and no telemetry beyond the
+  daily heartbeat.** No dependency provides one (`Cargo.toml`: the only metrics
+  crates are `metrics`, imported as `telemetry_metrics` for local counters, and
+  `metrics-exporter-prometheus`), and the heartbeat row is the only place in the
+  table below that sends to the author.
 - **Metrics stay local.** Prometheus metrics are served at the gateway's own
   `/metrics` endpoint for you to scrape (`src/gateway/routes.rs`); nothing
   pushes them anywhere.
@@ -70,10 +73,61 @@ browser makes. Those are reviewed by hand against this page.
   WebSocket, event streams) are held to the gateway's own origin by the policy
   itself, not by that test.
 
+## Daily heartbeat
+
+A released mcp-gateway server (from 4.0.0, and from 3.5.3 on the 3.5 line)
+sends at most one POST per UTC day for each data directory that persists to
+`https://telemetry.revaluator.ai/v1/heartbeat`.
+On the 3.5 line, builds for Windows send no daily heartbeat. "Released" means any build
+without debug assertions, which the release profile is, including one you build
+yourself with `cargo install` or `cargo build --release`; only builds with debug
+assertions are skipped as development builds. The JSON has five fields and no
+others: `project`, always `mcp-gateway`; `event`, always `heartbeat`; the
+mcp-gateway version; the operating system and processor architecture, such as
+`linux/x86_64`; and `install_id`, a random value stored in
+`heartbeat/install-id` under the gateway's data directory (by default
+`~/.mcp-gateway/heartbeat/install-id`, or under `MCP_GATEWAY_CONFIG_DIR` when
+you set it).
+
+It contains no hostname, no username, no configuration, no backend or tool
+name, and nothing a client sent. Cloudflare terminates the connection, so
+Cloudflare sees the connecting address and the ordinary connection and request
+details any HTTPS server sees. The receiver does not write the address into the
+heartbeat record; what Cloudflare itself logs about connections is governed by
+Cloudflare's own policies. From that address, Cloudflare's geolocation supplies
+a city name and a country code, and the record stores those two values together
+with the five fields and the time the heartbeat arrived. They are approximate:
+a VPN, relay or mobile network can place the city at the network exit, and some
+connections have no city. The install id stays the same until you delete
+`heartbeat/` from the data directory, so one install's heartbeats, their times
+and their cities can be linked into a series. Deleting it starts a new id; it
+does not remove records already stored. The id is random and contains nothing
+about you. Beside it the gateway keeps one empty file per day it claimed for a heartbeat,
+named by the date and kept whether or not a send followed: a local record of
+those days that never leaves your machine. Records
+are kept for three months (the receiver's own statement: trvl's PRIVACY.md,
+"Daily heartbeat").
+
+A deployment whose data directory does not survive a restart, such as a
+container without a volume or the Helm chart's default `state` volume, gets a
+new id at each fresh start and can send once per start.
+
+Only the server sends it (`mcp-gateway serve` and the stdio server): it checks
+at start and then hourly for the day's slot. Command-line tools such as
+`doctor` never send it. The request times out after 3 seconds and a failure is
+ignored. It never sends from a development build, `security.posture: hardened`,
+a run where a CI variable such as `CI` or `GITHUB_ACTIONS` reaches the gateway
+set to anything other than empty, `0` or `false`, or an environment where
+`HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` is set to a non-empty value. Only
+those proxy variables are read: a proxy set only in your system settings is not
+detected. Set `DO_NOT_TRACK=1` to turn it off; `NO_TELEMETRY=1` is honoured
+too.
+
 ## Where it connects
 
 | Call site | When | Where to |
 |---|---|---|
+| `src/heartbeat.rs` | a released server starts, then hourly; at most one send a UTC day, off with `DO_NOT_TRACK=1` (see [Daily heartbeat](#daily-heartbeat)) | `telemetry.revaluator.ai` |
 | `src/transport/http/client.rs` | the gateway talks to an HTTP backend | the backends you configured (A2A included) |
 | `src/transport/websocket_pinned.rs` | the gateway talks to a WebSocket backend | the backends you configured |
 | `src/oauth/client/destination.rs` | a backend needs OAuth | the discovery and token endpoints of the servers you configured, and the client-registration endpoint their metadata advertises (`src/oauth/client/registration.rs`) |

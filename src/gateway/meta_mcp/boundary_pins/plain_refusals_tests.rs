@@ -83,7 +83,9 @@ fn pinned(text: &str, columns: usize) -> Vec<String> {
 }
 
 const REGENERATE: &str = "regenerate: cargo test --lib plain_refusals -- --nocapture, copy the \
-                          printed table into the .tsv, and have the diff reviewed";
+                          printed table into the .tsv, and have the diff reviewed (BOUNDARY_PINS_BLESS \
+                          does not cover this table: it is one base table read whole, with no \
+                          fragments to write into)";
 
 fn names(list: &[&str]) -> BTreeSet<String> {
     list.iter().map(ToString::to_string).collect()

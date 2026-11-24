@@ -645,16 +645,12 @@ fn the_not_ready_body_is_byte_identical_to_the_shipped_one() {
     use super::restart_confirm::Reason;
     use super::status::StatusView;
     #[cfg(not(windows))]
-    let (reason, recovery) = (
-        "restart_not_available",
-        "This process cannot tell which supervisor runs it; use your supervisor's restart command, \
-         for example systemctl restart, brew services restart, or docker restart.",
-    );
+    let reason = "restart_not_available";
     #[cfg(windows)]
-    let (reason, recovery) = (
-        "windows_manual_restart",
-        "Restart the service or process through its service or process manager.",
-    );
+    let reason = "windows_manual_restart";
+    // Read, not restated: the Unix line was reworded, and restart_advice_tests.rs
+    // (A8b) allows each guidance sentence one copy under src/.
+    let recovery = Reason::PLATFORM.recovery();
     let off = Readiness::Unavailable(Reason::PLATFORM);
     let shown = WriteSample {
         count: 7,

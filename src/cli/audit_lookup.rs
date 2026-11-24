@@ -5,7 +5,7 @@
 //! only: an argument would land in shell history and in every process
 //! listing on the machine.
 
-use super::dashboard_link::DashboardLinkTls;
+use super::dashboard_link::{DashboardLinkTls, GatewayArg};
 
 /// Arguments of `mcp-gateway audit lookup-email`.
 ///
@@ -37,9 +37,9 @@ pub struct LookupEmailArgs {
     /// sensitive until its token is spent or has expired.
     #[arg(long, conflicts_with_all = ["email_stdin", "from", "to"])]
     pub cursor_stdin: bool,
-    /// Gateway base URL (default as for `dashboard-link`).
-    #[arg(short, long)]
-    pub url: Option<String>,
+    /// Where to send the request.
+    #[command(flatten)]
+    pub gateway: GatewayArg,
     /// Rows per page (1 to 200; the gateway's default is 50).
     #[arg(hide = true, long, value_parser = clap::value_parser!(u32).range(1..=200))]
     pub limit: Option<u32>,

@@ -62,7 +62,10 @@ async fn a_result_context_integrity_rebuilds_records_rewritten() {
 /// A malformed round enforcement meets is refused outright.
 #[tokio::test]
 async fn a_malformed_round_context_integrity_refuses_records_refused() {
-    let reply = json!({"content": [{"type": "text", "text": INJECTED}], "resultType": 5});
+    // A clean line beside the flagged one, as above: with nothing left after the strip the
+    // answer is withheld before its round is ever judged malformed.
+    let reply = json!({"content": [{"type": "text",
+        "text": format!("the orchard opens at nine\n{INJECTED}")}], "resultType": 5});
     for (uri, body, event) in on_both_routes(&reply, &[Extra::ContextIntegrityStrips]).await {
         assert!(
             body.to_string().contains("malformed result"),

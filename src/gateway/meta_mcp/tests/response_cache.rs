@@ -424,7 +424,7 @@ async fn an_idempotency_hit_states_no_effect() {
 /// nothing, so it records no latency sample.
 #[tokio::test]
 async fn a_response_cache_hit_records_no_latency() {
-    use crate::counters::{CounterStore, Filter, Metric, Query, Window};
+    use crate::counters::{CounterStore, Filter, Metric, Window};
     use crate::gateway::send_timer_seam as seam;
     let registry = Arc::new(BackendRegistry::new());
     let (docs, calls) = counting_backend("docs", "BODY");
@@ -455,16 +455,7 @@ async fn a_response_cache_hit_records_no_latency() {
         1,
         "the second was a hit"
     );
-    let counted: u64 = store
-        .series(
-            &Query::new(Metric::Calls, Window::Day, Filter::All),
-            now,
-            &chrono::Local,
-        )
-        .points
-        .iter()
-        .map(|p| p.v)
-        .sum();
+    let counted = crate::counters::test_totals::count(&store, Metric::Calls, Filter::All);
     assert_eq!(counted, 2, "both calls counted");
     let latency = store.latency_series(Some("docs"), Window::Day, false, now, &chrono::Local);
     let samples: u32 = latency.points.iter().map(|p| p.calls).sum();

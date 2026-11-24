@@ -1,0 +1,6 @@
+src/gateway/router/meta_refusal_audit.rs	call_name_and_arguments	1	Reads the called name and arguments off an unparsed tools/call for the refusal record; decides nothing, the refusal is already made.
+src/gateway/router/meta_refusal_audit.rs	request_target	1	Spells the target a pre-dispatch refusal records as the request names it; decides nothing, the refusal is already made.
+src/gateway/router/meta_refusal_audit.rs	frame_id	1	Picks the id an answer frame carries (none when absent or unreadable); decides nothing.
+src/gateway/router/meta_refusal_audit.rs	kind	1	Says where a signing refusal's decision kind comes from, by the site that refused it; labels the record, decides nothing.
+src/gateway/router/meta_refusal_audit.rs	traced_for_grant	1	Gives a signing refusal its trace and puts the same trace on its call's untraced grant notes, so Activity lists the call once; decides nothing, the refusal is already made.
+src/gateway/server/mod.rs	from	1	Wraps an early stop's ready answer as answered-as-it-stands; a conversion, decides nothing.

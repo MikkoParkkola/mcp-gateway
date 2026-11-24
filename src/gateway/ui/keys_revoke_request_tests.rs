@@ -164,6 +164,9 @@ fn if_match_does_not_replace_the_body_revision() {
     );
 }
 
+#[path = "keys_revoke_frame_tests.rs"]
+mod keys_revoke_frame_tests;
+
 #[path = "keys_revoke_target_tests.rs"]
 mod keys_revoke_target_tests;
 
@@ -172,3 +175,6 @@ mod keys_revoke_writer_tests;
 
 #[path = "keys_revoke_outcome_tests.rs"]
 mod keys_revoke_outcome_tests;
+
+#[path = "keys_revoke_instructions_tests.rs"]
+mod keys_revoke_instructions_tests;

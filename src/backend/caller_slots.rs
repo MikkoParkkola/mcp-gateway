@@ -43,7 +43,19 @@ pub(crate) enum CallerSlot {
         /// (failed, or cut short) keeps `until` as the retry backoff, but no
         /// listing waits on it: nothing will store before it ends.
         running: bool,
+        /// A lender's refusal of this claim's fill, kept by the settle that
+        /// ends the attempt; read back by a stored read until `until`.
+        refusal: Option<LendRefusal>,
     },
+}
+
+/// A per-user lender's refusal as a stored read repeats it: code, status
+/// and the caller-safe message, and no part of any credential.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LendRefusal {
+    pub(crate) code: i32,
+    pub(crate) status: u16,
+    pub(crate) message: String,
 }
 
 /// Lease generations. One counter for the process: unique per backend too,
@@ -239,17 +251,24 @@ impl Backend {
     /// publish: its lease stays as the retry backoff, and the listings
     /// waiting on it are woken. Only the claim's own lease: a newer claim, or
     /// a view stored meanwhile, is left as it is.
-    pub(crate) fn settle_cold_attempt(&self, principal_id: &str, generation: u64) {
+    pub(crate) fn settle_cold_attempt(
+        &self,
+        principal_id: &str,
+        generation: u64,
+        refused: Option<LendRefusal>,
+    ) {
         if let Some(mut slot) = self.caller_slots.get_mut(principal_id)
             && let CallerSlot::ColdTried {
                 generation: own,
                 running,
+                refusal,
                 ..
             } = &mut *slot
             && *own == generation
             && *running
         {
             *running = false;
+            *refusal = refused;
             drop(slot);
             self.caller_slot_stored.notify_waiters();
         }
@@ -295,6 +314,21 @@ impl Backend {
         }
     }
 
+    /// The lender's refusal `principal_id`'s settled cold attempt recorded,
+    /// while that attempt's lease has not run out; `None` once it has, or
+    /// when the attempt ended any other way.
+    pub(crate) fn cold_refusal(&self, principal_id: &str) -> Option<LendRefusal> {
+        let now = tokio::time::Instant::now();
+        match &*self.caller_slots.get(principal_id)? {
+            CallerSlot::ColdTried {
+                until,
+                refusal: Some(refused),
+                ..
+            } if now < *until => Some(refused.clone()),
+            _ => None,
+        }
+    }
+
     /// How long `principal_id`'s cold lease still has while its lookup or
     /// fill runs: what a listing may wait on. A settled attempt has nothing
     /// left to store.
@@ -327,6 +361,7 @@ impl Backend {
             until: now + lease,
             generation,
             running: true,
+            refusal: None,
         };
         match self.caller_slots.entry(principal_id.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(vacant) => {

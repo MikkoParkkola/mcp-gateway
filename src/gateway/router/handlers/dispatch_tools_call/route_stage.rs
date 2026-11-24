@@ -193,7 +193,7 @@ impl<'a> RouteStage<'a> {
         &self,
         refused: Refused<'a>,
         caller_key: &str,
-    ) -> Result<(), Box<axum::response::Response>> {
+    ) -> Result<Refused<'a>, Box<axum::response::Response>> {
         let (state, intake, session_id) = (self.state, self.intake, &self.intake.session_id);
         let client = &intake.client;
         for (index, target) in self.targets.iter().enumerate() {
@@ -270,7 +270,8 @@ impl<'a> RouteStage<'a> {
                 }
             }
         }
-        Ok(())
+        // Handed back: a later refusal before admission still records.
+        Ok(refused)
     }
 }
 

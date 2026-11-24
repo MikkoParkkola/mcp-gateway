@@ -440,3 +440,150 @@ async fn a_markup_client_name_reaches_the_api_verbatim() {
         "served un-escaped at the API layer: {raw}"
     );
 }
+
+/// A read's `pending_restart`, which every answer carries.
+fn pending(body: &Value) -> &Value {
+    body.get("pending_restart")
+        .expect("pending_restart is always present")
+}
+
+/// The field ids `pending_restart` lists; none when it is null.
+fn pending_fields(body: &Value) -> Vec<String> {
+    pending(body)["fields"]
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Rewrite the attached context's file: the fixture's keys plus `edit`.
+fn rewrite_config(dir: &tempfile::TempDir, edit: impl FnOnce(&mut Config)) {
+    let mut config = Config {
+        auth: auth_on(),
+        ..Config::default()
+    };
+    edit(&mut config);
+    crate::gateway::test_helpers::write_owner_only(
+        dir.path().join("gateway.yaml"),
+        crate::yaml::to_string(&config).expect("yaml"),
+    )
+    .expect("config written owner-only");
+}
+
+fn budget(config: &mut Config) {
+    config.error_budget.threshold = Some(0.25);
+}
+
+#[tokio::test]
+async fn pending_restart_is_present_and_null_when_nothing_waits() {
+    let (state, _dir) = fixture().await;
+    let body = read(&state).await;
+    assert_eq!(pending(&body), &Value::Null, "{body}");
+}
+
+#[tokio::test]
+async fn a_restart_only_edit_is_served_through_a_no_change_reload() {
+    let (state, dir) = fixture().await;
+    let context = attach_reload_context(&state, &dir);
+    context.reload_outcome().await.expect("applied");
+    let before = pending_fields(&read(&state).await);
+    assert!(
+        !before.iter().any(|id| id == "error_budget"),
+        "fixture: {before:?}"
+    );
+
+    rewrite_config(&dir, budget);
+    context.reload_outcome().await.expect("applied");
+    let edited = read(&state).await;
+    assert!(
+        pending_fields(&edited)
+            .iter()
+            .any(|id| id == "error_budget"),
+        "{edited}"
+    );
+
+    context
+        .reload_outcome()
+        .await
+        .expect("a no-change reload applies");
+    let again = read(&state).await;
+    assert_eq!(pending(&again), pending(&edited), "{again}");
+}
+
+#[tokio::test]
+async fn a_file_put_back_drops_what_it_asked_for() {
+    let (state, dir) = fixture().await;
+    let context = attach_reload_context(&state, &dir);
+    context.reload_outcome().await.expect("applied");
+    let baseline = pending(&read(&state).await).clone();
+
+    rewrite_config(&dir, budget);
+    context.reload_outcome().await.expect("applied");
+    let edited = read(&state).await;
+    assert!(
+        pending_fields(&edited)
+            .iter()
+            .any(|id| id == "error_budget"),
+        "{edited}"
+    );
+
+    rewrite_config(&dir, |_| {});
+    context.reload_outcome().await.expect("applied");
+    let reverted = read(&state).await;
+    assert_eq!(pending(&reverted), &baseline, "{reverted}");
+}
+
+/// The refusal nearest a publish: the patch is applied, a new backend is
+/// refused because shutdown has begun, and the reload returns before it
+/// publishes. The refused file asks for one more restart-only section, so a
+/// publish there would show in the field.
+#[tokio::test]
+async fn a_reload_refused_at_shutdown_changes_nothing_served() {
+    use crate::config::{BackendConfig, TransportConfig};
+
+    let (state, dir) = fixture().await;
+    let context = attach_reload_context(&state, &dir);
+    rewrite_config(&dir, budget);
+    context.reload_outcome().await.expect("applied");
+    let before = read(&state).await;
+    assert!(
+        pending_fields(&before)
+            .iter()
+            .any(|id| id == "error_budget"),
+        "fixture: {before}"
+    );
+    assert!(
+        !pending_fields(&before).iter().any(|id| id == "cache"),
+        "fixture: {before}"
+    );
+
+    state.backends.stop_all().await;
+    rewrite_config(&dir, |config| {
+        budget(config);
+        config.cache.max_entries += 1;
+        config.backends.insert(
+            "arrives-at-shutdown".to_owned(),
+            BackendConfig {
+                transport: TransportConfig::Stdio {
+                    command: "/nonexistent-mcp-binary".to_string(),
+                    cwd: None,
+                    protocol_version: None,
+                },
+                ..BackendConfig::default()
+            },
+        );
+    });
+    let refusal = context
+        .reload_outcome()
+        .await
+        .expect_err("the registry refuses a backend once shutdown has begun");
+    let refusal = format!("{refusal:?}");
+    // The refusal after the patch applied, not the stop before it.
+    assert!(refusal.contains("refused to register"), "{refusal}");
+
+    let after = read(&state).await;
+    assert_eq!(pending(&after), pending(&before), "{after}");
+}

@@ -13,7 +13,7 @@ use crate::{
     trust::run_provenance_command,
     validator::ValidateConfig,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[path = "main_runtime.rs"]
 mod runtime;
@@ -93,9 +93,9 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             verify.as_deref(),
             crate::cli::output::Render::from_json_flag(json),
         ),
-        Some(Command::Stats { url, json }) => {
+        Some(Command::Stats { gateway, json }) => {
             let effective_url = resolve_stats_url(
-                url,
+                gateway.url,
                 config_path.as_deref(),
                 port_override,
                 host_override.as_deref(),
@@ -431,7 +431,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Resolve the base URL the `stats` command should query when `--url` was
+/// Resolve the base URL the `stats` command should query when `--gateway` was
 /// not given explicitly.
 ///
 /// `stats` used to hardcode `http://127.0.0.1:39400` as its `--url` default,
@@ -443,7 +443,7 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
 /// `server.host`/`server.port` (plus `--port`/`--host` overrides) that
 /// `serve` binds to, so `stats` targets the gateway `--config` describes.
 ///
-/// An explicit `url` (the `--url` flag) always wins and is returned as-is.
+/// An explicit `url` (`--gateway`, or `MCP_GATEWAY_URL`) always wins and is returned as-is.
 fn resolve_stats_url(
     url: Option<String>,
     config_path: Option<&Path>,
@@ -523,8 +523,9 @@ fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
 fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
     match cli.config.as_deref() {
         Some(p) if !p.exists() => {
-            eprintln!(
-                "Warning: config file {} not found; continuing over stdio without it \
+            warn!(
+                target: "mcp_gateway",
+                "config file {} not found; continuing over stdio without it \
                  (fallback locations, env vars, then defaults)",
                 p.display()
             );
@@ -534,9 +535,21 @@ fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
     }
 }
 
+/// A fatal start or run error of `serve`. It is logged like every gateway error; when the log's filter drops that
+/// event (`--log-level off`, `RUST_LOG=off`, or a directive that leaves the gateway's errors out) it is also printed
+/// straight to stderr, escaped by the log's own rule, so a failed start is never silent and text quoted from
+/// gateway.yaml never starts a line of its own. The probe names the same target, level and field as the event, so a
+/// field-keyed directive answers it exactly as it answers the event.
+fn fatal(message: &str) {
+    error!(target: "mcp_gateway", "{message}");
+    if !tracing::event_enabled!(target: "mcp_gateway", tracing::Level::ERROR, message) {
+        eprintln!("{}", crate::log_escape::escaped(message));
+    }
+}
+
 async fn run_stdio_server(cli: Cli) -> ExitCode {
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
-        eprintln!("Warning: upgrade check failed: {e}");
+        warn!(target: "mcp_gateway", "upgrade check failed: {e}");
     }
 
     let config_path = serve_config_path(&cli);
@@ -544,19 +557,19 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // `load_evaluated`, not `load`: an env file is read into an overlay the
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
-                eprintln!("Failed to apply configuration overrides: {e}");
+                fatal(&format!("Failed to apply configuration overrides: {e}"));
                 return ExitCode::FAILURE;
             }
             (config, env)
         }
         Err(e) => {
-            eprintln!("Failed to load configuration: {e}");
+            fatal(&format!("Failed to load configuration: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -569,7 +582,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
-            eprintln!("Failed to create gateway: {e}");
+            fatal(&format!("Failed to create gateway: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -578,7 +591,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // gained the identity-propagation field; boxing keeps it off the
     // stack and satisfies clippy::large_futures.
     if let Err(e) = Box::pin(gateway.run_stdio()).await {
-        eprintln!("stdio gateway error: {e}");
+        fatal(&format!("stdio gateway error: {e}"));
         return ExitCode::FAILURE;
     }
 
@@ -594,7 +607,7 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // Run post-upgrade migrations before anything else.  Non-fatal: a stamp
     // write failure must not prevent the gateway from starting.
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
-        eprintln!("Warning: upgrade check failed: {e}");
+        warn!(target: "mcp_gateway", "upgrade check failed: {e}");
     }
 
     // HTTP serve stays fail-loud: an explicit --config that cannot be loaded
@@ -603,19 +616,19 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
-    let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
+    let (config, env) = match commands::load_for_serve(load_path.as_deref()).await {
         Ok(mut evaluated) => {
             let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
-                error!(target: "mcp_gateway", "Failed to apply configuration overrides: {e}");
+                fatal(&format!("Failed to apply configuration overrides: {e}"));
                 return ExitCode::FAILURE;
             }
             (config, env)
         }
         Err(e) => {
-            error!(target: "mcp_gateway", "Failed to load configuration: {e}");
+            fatal(&format!("Failed to load configuration: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -635,14 +648,14 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     let mut gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
-            error!(target: "mcp_gateway", "Failed to create gateway: {e}");
+            fatal(&format!("Failed to create gateway: {e}"));
             return ExitCode::FAILURE;
         }
     };
     gateway.set_retire_cell(plan);
 
     if let Err(e) = gateway.run().await {
-        error!(target: "mcp_gateway", "Gateway error: {e}");
+        fatal(&format!("Gateway error: {e}"));
         return ExitCode::FAILURE;
     }
 

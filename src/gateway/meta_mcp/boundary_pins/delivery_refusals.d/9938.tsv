@@ -1,0 +1,4 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/meta_mcp/invoke/audit/settlement.rs	settled_outcome	has_refusal	1	not-delivered	a predicate on the gate notes choosing the settlement record's outcome class; the settled answer is unchanged
+src/security/decision_record.rs	refused_outcome	Error::ResponseFirewallRefused	1	not-delivered	only the error's code is read, as the invocation record's error_code for an answer withheld as a tool result; nothing is answered
+src/security/decision_record.rs	refused_outcome	has_refusal	2	not-delivered	predicates on the gate notes choosing the invocation record's outcome class (R1, R6); the wire answer is unchanged

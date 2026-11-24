@@ -209,10 +209,10 @@ impl OutboundRetry {
 pub(super) fn rejected_continuation(
     reason: &crate::protocol::continuation::ContinuationError,
 ) -> Error {
-    // A spent, forged or expired handle: no kind names redemption yet
-    // (MIK-8914.API2A.17), and `syntax` would call it malformed.
+    // A spent, forged or expired handle is a single-use token the replay
+    // guard turned away; `syntax` would call it malformed.
     super::audit::note_refused_by(
-        crate::security::decision_record::DecisionKind::Unrecorded,
+        crate::security::decision_record::DecisionKind::ReplayGuard,
         None,
     );
     Error::JsonRpc {

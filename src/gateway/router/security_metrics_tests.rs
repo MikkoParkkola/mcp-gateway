@@ -13,51 +13,7 @@
 )]
 use super::*;
 
-/// Run `f` with a recorder scoped to this thread; return its output and the
-/// Prometheus text. A per-test recorder: the global one is shared across
-/// parallel tests and would make every delta flake.
-fn scrape<F: std::future::Future>(f: F) -> (F::Output, String) {
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    let out = telemetry_metrics::with_local_recorder(&recorder, || {
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
-    });
-    (out, handle.render())
-}
-
-/// Sample lines of `name`: `# HELP`/`# TYPE` lines never start with it.
-fn samples<'a>(rendered: &'a str, name: &str) -> impl Iterator<Item = &'a str> {
-    let prefix = format!("{name}{{");
-    rendered.lines().filter(move |l| l.starts_with(&prefix))
-}
-
-/// A sample's value. The exposition format writes numbers as floats.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn value(line: &str) -> u64 {
-    let v: f64 = line
-        .rsplit(' ')
-        .next()
-        .unwrap_or_default()
-        .parse()
-        .expect("sample value");
-    v as u64
-}
-
-/// The value of the `name` series carrying every `k="v"` pair in `labels`
-/// (comma separated, in any order), 0 when absent.
-fn series(rendered: &str, name: &str, labels: &str) -> u64 {
-    samples(rendered, name)
-        .find(|l| labels.split(',').all(|pair| l.contains(pair)))
-        .map_or(0, value)
-}
-
-/// Sum of every `name` sample whose line contains `needle`.
-fn sum_where(rendered: &str, name: &str, needle: &str) -> u64 {
-    samples(rendered, name)
-        .filter(|l| l.contains(needle))
-        .map(value)
-        .sum()
-}
+use crate::security::metrics_scrape::{samples, scrape, series, sum_where};
 
 const AUTH: &str = "mcp_auth_failures_total";
 const DENY: &str = "mcp_authz_denials_total";

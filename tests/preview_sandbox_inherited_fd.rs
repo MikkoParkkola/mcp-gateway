@@ -4,8 +4,13 @@
 //! refuse instead of leaking into it (ADR-027, Linux step 1).
 //!
 //! Its own test binary: the leaked descriptor would reach every process any
-//! concurrent test in the same binary starts.
+//! concurrent test in the same binary starts. The one other test, the
+//! home-routing row, holds the same lock ([`ALONE`]), so the two never overlap.
 #![cfg(target_os = "linux")]
+
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -16,8 +21,15 @@ use std::path::{Path, PathBuf};
 use mcp_gateway::preview_sandbox::{Target, start_with_helper};
 use tokio::io::AsyncReadExt as _;
 
+/// The two tests here never overlap: the descriptor the preview row leaks on
+/// purpose would reach the child the routing row starts. Each holds this lock
+/// for its whole run; tokio's, as the preview row holds it across awaits.
+static ALONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn an_inherited_descriptor_makes_the_preview_refuse() {
+    require_private_home!();
+    let _alone = ALONE.lock().await;
     let file = tempfile::tempfile().unwrap();
     rustix::io::fcntl_setfd(file.as_fd(), rustix::io::FdFlags::empty()).unwrap();
     let target = Target {
@@ -57,4 +69,14 @@ async fn an_inherited_descriptor_makes_the_preview_refuse() {
         "{stderr}"
     );
     drop(file);
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    let _alone = ALONE.blocking_lock();
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

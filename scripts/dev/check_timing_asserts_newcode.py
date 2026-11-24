@@ -24,6 +24,7 @@ from check_timing_asserts_core import (
     block_end,
     call_args,
     calls,
+    candidates,
     imports_of,
     paused_clock,
     resolve,
@@ -31,6 +32,7 @@ from check_timing_asserts_core import (
     scan_timeouts,
     split_top,
     test_lines,
+    tree_consts,
 )
 from check_timing_asserts_source import _signature_body
 
@@ -49,6 +51,308 @@ TIMER = "short product timer slept against on the real clock"
 SETTER = "short timeout set through a timeout-named builder or call"
 FIELD = "short timeout field"
 IS_OK = "timeout whose result is asserted is_ok, under the 10 s floor"
+# Label that starts every finding of the product-timer rule (#3826): a test
+# bound derived from a timer the product itself runs, so a slow host that
+# uses the timer up also fails the test.
+PRODUCT_BUDGET = "product budget:"
+ADVICE = "wait for the event itself; a hang guard sits far above any product timer the work may use"
+ONE_DURATION = re.compile(r"(?:std::time::|tokio::time::)?Duration::from_(?:secs|millis)\(\s*[\d_]+\s*\)")
+WITHIN = re.compile(r"\b(\w+_within)\s*\(")
+NEVER_A_NAME = frozenset("mut ref move async await let as self Self crate super true false in".split())
+
+
+class Budgets(NamedTuple):
+    """Product timers. `consts`: name -> (path, line, seconds) of each
+    `const NAME: Duration` written as one from_secs/from_millis outside test
+    code (HANG_BOUND excluded). `within`: names of product fns ending `_within`."""
+
+    consts: dict[str, list[tuple[str, int, float]]]
+    within: frozenset[str]
+
+
+def budgets_of(texts: dict[str, str], consts=None) -> Budgets:
+    """`consts`: the tree's consts when the caller has read them already."""
+    timers: dict[str, list[tuple[str, int, float]]] = {}
+    for name, defs in (consts if consts is not None else tree_consts(texts)).items():
+        if name == "HANG_BOUND":
+            continue
+        for where in sorted({p for p, _ in defs}):
+            # Every definition of the name in this file must be the same one
+            # duration, as `resolve` would accept it; else it names nothing.
+            forms = {expr for p, expr in defs if p == where}
+            if len(forms) != 1 or not ONE_DURATION.fullmatch(form := forms.pop()):
+                continue
+            seconds = resolve(form, Scope(where, {}, {}, {}, {}))[0]
+            code, tested = blank_strings_and_comments(texts[where]), test_lines(where, texts[where])
+            for spot in re.finditer(rf"\bconst\s+{name}\s*:", code):
+                if (line := code.count("\n", 0, spot.start()) + 1) not in tested:
+                    timers.setdefault(name, []).append((where, line, seconds))
+    product_fns = set()
+    for path, text in texts.items():
+        if "_within" not in text:
+            continue
+        code = blank_strings_and_comments(text)
+        named = [m for m in FN.finditer(code) if m.group(1).endswith("_within")]
+        if named:
+            tested = test_lines(path, text)
+            product_fns |= {m.group(1) for m in named if code.count("\n", 0, m.start()) + 1 not in tested}
+    return Budgets(timers, frozenset(product_fns))
+
+
+@functools.lru_cache(maxsize=64)
+def _brace_pairs(code: str) -> tuple[tuple[int, int], ...]:
+    """(open, close) offsets of every matched brace pair in `code`."""
+    pairs, open_stack = [], []
+    for brace in re.finditer(r"[{}]", code):
+        if brace.group() == "{":
+            open_stack.append(brace.start())
+        elif open_stack:
+            pairs.append((open_stack.pop(), brace.start()))
+    return tuple(sorted(pairs))
+
+
+def _scopes_around(code: str, at: int) -> list[tuple[int, int]]:
+    """The brace pairs holding `at`, nearest first, then the whole file."""
+    holding = [pair for pair in _brace_pairs(code) if pair[0] < at < pair[1]]
+    return sorted(holding, reverse=True) + [(-1, len(code))]
+
+
+def _home(code: str, pos: int) -> int:
+    """The `{` of the nearest brace pair holding `pos`; -1 at file level."""
+    return _scopes_around(code, pos)[0][0]
+
+
+def statement_close(code: str, start: int) -> int:
+    """Offset where the statement at `start` ends: the first `;` outside any
+    brackets it opens, or the `}` of its own block if that comes first."""
+    i = start
+    while i < len(code):
+        if code[i] == "(":
+            i = call_args(code, i)[1]
+        elif code[i] == "{":
+            i = block_end(code, i)
+        elif code[i] in ";}":
+            return i
+        else:
+            i += 1
+    return len(code)
+
+
+def visible_binding(code: str, name: str, at: int) -> int | None:
+    """Offset of the `let` or `const` that `name` refers to at `at`, or None.
+
+    Scopes are tried from the nearest outward, the file last. In a scope, a
+    const item sitting right in it wins wherever it is placed; failing that,
+    the latest let sitting right in it whose `;` is behind `at`. Rust starts a
+    let's scope after its statement, so `let a = a * 2` reads the earlier
+    `a`. Pattern, parameter and macro bindings are not seen: accepted miss.
+    """
+    if name in NEVER_A_NAME:
+        return None
+    lets = re.compile(rf"\blet\s+(?:mut\s+)?{re.escape(name)}\b")
+    items = re.compile(rf"\bconst\s+{re.escape(name)}\s*:")
+    for opening, closing in _scopes_around(code, at):
+        here = [m.start() for m in items.finditer(code, opening + 1, closing) if _home(code, m.start()) == opening]
+        if here:
+            return here[0]
+        earlier = [
+            m.start()
+            for m in lets.finditer(code, opening + 1, at)
+            if _home(code, m.start()) == opening and statement_close(code, m.start()) < at
+        ]
+        if earlier:
+            return earlier[-1]
+    return None
+
+
+def right_side(code: str, binding: int) -> tuple[str, int] | None:
+    """(text, offset) of what the let or const at `binding` is set to."""
+    head = re.compile(r"(?:let\s+(?:mut\s+)?\w+|const\s+\w+)\s*(?::[^=;]+)?=\s*").match(code, binding)
+    return None if head is None else (code[head.end() : statement_close(code, binding)], head.end())
+
+
+class Named(NamedTuple):
+    name: str
+    path: str
+    line: int
+    seconds: float
+
+
+def _timer(budgets: Budgets, name: str, path: str, line: int | None = None) -> Named | None:
+    return next((Named(name, p, n, s) for p, n, s in budgets.consts.get(name, []) if p == path and line in (None, n)), None)
+
+
+def named_budgets(expr: str, at: int, code: str, scope: Scope, budgets: Budgets, depth: int = 0):
+    """(timers `expr` is derived from, lines of the local bindings it went
+    through). A name bound locally is followed into its right-hand side, read
+    from where that is written, unless it is a product const of this file;
+    `resolve`'s depth limit applies. A path (`super::X`) is looked up only
+    through modules. HANG_BOUND is never a timer."""
+    timers: list[Named] = []
+    passed: set[int] = set()
+    if depth > 4:
+        return timers, passed
+    for token in re.finditer(r"(?<![\w.:])((?:\w+::)*)([A-Za-z_]\w*)\b(?!\s*[(!:])", expr):
+        path_part, name = token.group(1).rstrip(":"), token.group(2)
+        if name in NEVER_A_NAME or name == "HANG_BOUND":
+            continue
+        if not path_part:
+            local = visible_binding(code, name, at)
+            if local is not None:
+                line = code.count("\n", 0, local) + 1
+                passed.add(line)
+                if own := _timer(budgets, name, scope.path, line):
+                    timers.append(own)
+                elif rhs := right_side(code, local):
+                    deeper, through = named_budgets(rhs[0], rhs[1], code, scope, budgets, depth + 1)
+                    timers += deeper
+                    passed |= through
+                continue
+            path_part = scope.imports.get(name, "")
+        if name[:1].isupper():
+            defs = candidates(name, path_part, scope)
+            if len({p for p, _ in defs}) == 1 and (other := _timer(budgets, name, defs[0][0])):
+                timers.append(other)
+    return timers, passed
+
+
+CARRIED_CALL = re.compile(r"(?:(?:\w+::)*\w+\s*\.\s*)*(?:\w+::)*(\w+_within)\s*\(")
+
+
+def carriers(code: str, start: int, end: int, budgets: Budgets, own_future: bool = True):
+    """([(fn, argument text, offset of its `(`)], lines) for the product
+    `*_within` calls that awaiting the future `code[start:end]` runs: the call
+    itself (any path or receiver before it), the calls in the body of an
+    `async` block, or those of a spawn whose argument is one of these two.
+    Only the timeout's own future may be a plain name; its visible let is
+    read, and that let's lines are returned so an edit inside it counts as
+    new. A bare `{ .. }` block runs before any future is built: never a carrier."""
+    lead = re.compile(r"\s*(?:&\s*(?:mut\s+)?)?").match(code, start, end).end()
+    tail = end - (len(code[lead:end]) - len(code[lead:end].rstrip()))
+    if call := CARRIED_CALL.match(code, lead, tail):
+        args, past = call_args(code, call.end() - 1)
+        whole = past >= tail and call.group(1) in budgets.within
+        return ([(call.group(1), args, call.end() - 1)] if whole else []), set()
+    if block := re.compile(r"async\s+(?:move\s+)?\{").match(code, lead, tail):
+        close = block_end(code, block.end() - 1)
+        inside = [c for c in WITHIN.finditer(code, block.end(), close) if c.group(1) in budgets.within]
+        return [(c.group(1), call_args(code, c.end() - 1)[0], c.end() - 1) for c in inside], set()
+    if spawn := re.compile(r"(?:\w+::)*spawn\s*\(").match(code, lead, tail):
+        past = call_args(code, spawn.end() - 1)[1]
+        return carriers(code, spawn.end(), past - 1, budgets, own_future=False)[0], set()
+    name = re.compile(r"\w+").fullmatch(code, lead, tail)
+    if own_future and name and (local := visible_binding(code, name.group(), start)) is not None:
+        if rhs := right_side(code, local):
+            calls, _ = carriers(code, rhs[1], rhs[1] + len(rhs[0]), budgets, own_future=False)
+            first, last = code.count("\n", 0, local) + 1, code.count("\n", 0, rhs[1] + len(rhs[0])) + 1
+            return calls, set(range(first, last + 1))
+    return [], set()
+
+
+def line_offset(code: str, line: int) -> int:
+    """Offset of the first non-blank character of 1-based `line`."""
+    begin = sum(len(row) + 1 for row in code.split("\n")[: line - 1])
+    return begin + len(code[begin:]) - len(code[begin:].lstrip(" \t"))
+
+
+def _written_at(code: str, at: int, window: str) -> int:
+    """Where to read an assert's window: at the `Instant::now() + W` of the
+    deadline let it compares against, when it comes from one; else the assert."""
+    # Only the condition, and only the name it holds against the clock: a
+    # message argument naming some other deadline must not move the reading.
+    condition = split_top(call_args(code, code.index("(", at))[0], (",",))[0][1]
+    compared = re.search(rf"{NOW}\s*<=?\s*(\w+)\b|\b(\w+)\s*>=?\s*{NOW}", condition)
+    name = compared and (compared.group(1) or compared.group(2))
+    local = visible_binding(code, name, at) if name else None
+    rhs = right_side(code, local) if local is not None else None
+    plus = re.match(rf"\s*{NOW}\s*\+\s*", rhs[0]) if rhs else None
+    if plus and rhs[0][plus.end() :].strip() == window:
+        return rhs[1] + plus.end()
+    return at
+
+
+@functools.lru_cache(maxsize=64)
+def _file_level(code: str) -> tuple[dict[str, str], dict[str, str]]:
+    """(the file's own consts, its `use` imports), read once per file."""
+    return dict((c[2], c[3]) for c in CONST.finditer(code)), imports_of(code)
+
+
+def _scope_at(path: str, code: str, at: int, consts) -> Scope:
+    body = next((s for _, _, s, e in fn_spans(code) if s < at < e), 0)
+    own, imported = _file_level(code)
+    return Scope(path, bindings(code[body:at])[0], own, consts, imported)
+
+
+def _argument_value(path: str, code: str, arg: str, paren: int, consts):
+    """`resolve` of one call argument, a bare name read through the binding
+    visible at the call (so a let inside an enclosing block is seen)."""
+    if re.fullmatch(r"\w+", arg) and (local := visible_binding(code, arg, paren)) is not None:
+        if (rhs := right_side(code, local)) is not None:
+            return resolve(rhs[0], _scope_at(path, code, rhs[1], consts))
+    return resolve(arg, _scope_at(path, code, paren, consts))
+
+
+def budget_sites(path: str, text: str, consts, includers, budgets: Budgets):
+    """(finding, offset, rule, chain lines, list text) per test-code window a
+    product timer decides. Refused in new code (rule set): a window derived
+    from a named timer, or at most an explicit budget that the timed future
+    itself passes to `*_within`. Listed only (rule ""): a literal under the
+    floor equal to a timer the file can reach."""
+    code, tested = blank_strings_and_comments(text), test_lines(path, text)
+    sites: list = []
+    scan_timeouts(path, text, consts, includers, float("inf"), sites=sites)
+    asserts: list = []
+    scan_text(path, text, consts, float("inf"), sites=asserts)
+    windows = []
+    for f, at, args in sites:
+        opened = TIMEOUT.match(code, at).end()
+        parts = split_top(args, (",",))
+        future = (opened + len(parts[0][1]) + 1, opened + len(parts[0][1]) + 1 + len(parts[1][1])) if len(parts) > 1 else None
+        windows.append((f, at, at, parts[0][1].strip(), future))
+    windows += [(f, at, _written_at(code, at, expr.strip()), expr.strip(), None) for f, at, expr in asserts if f.line in tested]
+    out = []
+    for f, at, read_at, window, future in windows:
+        if HANG_BOUND.fullmatch(window):
+            continue
+        scope = _scope_at(path, code, read_at, consts)
+        timers, chain = named_budgets(window, read_at, code, scope, budgets)
+        if timers:
+            t = timers[0]
+            source = f"{t.name} (def {t.path}:{t.line}, {t.seconds:g} s)"
+            out.append((f, at, f"{PRODUCT_BUDGET} the bound is written from {source}: {ADVICE}", chain, f"named {source}"))
+            continue
+        bound = resolve(window, scope)
+        calls, held_lines = carriers(code, *future, budgets) if future else ([], set())
+        # Every Duration handed to every carried call counts; each is resolved
+        # where its call is written.
+        given = [
+            (v[0], fn)
+            for fn, args, paren in calls
+            for _, a in split_top(args, (",",))
+            if not HANG_BOUND.search(a) and (v := _argument_value(path, code, a.strip(), paren, consts)) and v[1]
+        ]
+        if bound is not None and given and bound[0] <= max(given)[0]:
+            longest, fn = max(given)
+            rule = f"{PRODUCT_BUDGET} the bound is at most the explicit budget {longest:g} s passed to {fn} at :{f.line}: {ADVICE}"
+            out.append((f, at, rule, held_lines, f"<= explicit budget passed to {fn} at :{f.line} ({longest:g} s)"))
+            continue
+        if bound is None or not ONE_DURATION.fullmatch(window) or bound[0] >= FLOOR_S:
+            continue
+        imported = imports_of(code)
+        for name, defs in sorted(budgets.consts.items()):
+            reach = {p for p, _ in candidates(name, imported.get(name, ""), scope)} | {path}
+            same = next((Named(name, p, n, s) for p, n, s in defs if s == bound[0] and p in reach), None)
+            if same:
+                out.append((f, at, "", set(), f"equals {same.name} in scope (def {same.path}:{same.line}, {same.seconds:g} s)"))
+                break
+    return out
+
+
+def budget_list(path, text, consts, includers, budgets) -> list[str]:
+    """The whole-tree audit lines: every site of each shape, old or new."""
+    return [f"BUDGET LIST {f.path}:{f.line} ({f.fn}): {what}" for f, _, _, _, what in budget_sites(path, text, consts, includers, budgets)]
+
+
 # MIK-8360 R3a: `.with_x_timeout(D)` / `.set_x_timeout(D)`, and any other
 # call named for a timeout given a literal Duration (not `timeout(` itself,
 # which the floor already judges, nor `timeout_at`).
@@ -77,15 +381,13 @@ def comment_on(lines: list[str], line: int, pattern: re.Pattern) -> re.Match | N
     return None
 
 
-def binding_lines(code: str, expr: str) -> list[int]:
-    """Lines binding each plain name in `expr`: a `let` or a `const` in `code`."""
+def binding_lines(code: str, expr: str, at: int) -> list[int]:
+    """Lines of the `let` or `const` each plain name in `expr` refers to at
+    offset `at` (the binding visible there, not the file's last of the name)."""
     found = []
     for name in set(re.findall(r"\b[A-Za-z_]\w*\b", expr)):
-        last = None
-        for last in re.finditer(rf"\b(?:let\s+(?:mut\s+)?|const\s+){name}\b", code):
-            pass
-        if last:
-            found.append(code.count("\n", 0, last.start()) + 1)
+        if (spot := visible_binding(code, name, at)) is not None:
+            found.append(code.count("\n", 0, spot) + 1)
     return found
 
 
@@ -93,19 +395,16 @@ def oracle_covers(text: str, line: int, expr: str) -> bool:
     """A well-formed `timing-oracle:` at the window's line or at the binding of
     a name its window expression uses (C: "at its constant or call")."""
     raw, code = text.splitlines(), blank_strings_and_comments(text)
-    for n in [line, *binding_lines(code, expr)]:
+    for n in [line, *binding_lines(code, expr, line_offset(code, line))]:
         if (m := comment_on(raw, n, ORACLE_LINE)) and not oracle_malformed(m):
             return True
     return False
 
 
 def statement_end(code: str, line: int) -> int:
-    """The line of the `;` that ends the statement starting on `line`."""
-    at = 0
-    for _ in range(line - 1):
-        at = code.index("\n", at) + 1
-    end = code.find(";", at)
-    return code.count("\n", 0, end if end >= 0 else len(code)) + 1
+    """The line where the statement starting on `line` ends (`statement_close`:
+    its own `;`, past any block or call it opens)."""
+    return code.count("\n", 0, statement_close(code, line_offset(code, line))) + 1
 
 
 def oracle_malformed(m: re.Match) -> bool:
@@ -190,6 +489,7 @@ def scan_new(
     includers: dict[str, str],
     added: set[int],
     carried=frozenset(),
+    budgets: Budgets | None = None,
 ) -> list[Finding]:
     """PR-C's rules on the spans of `text` that touch an `added` line."""
     code = blank_strings_and_comments(text)
@@ -246,9 +546,16 @@ def scan_new(
         # New when any line of the statement changed, or the binding of a name
         # its window uses (#3746 review).
         span = range(f.line, statement_end(code, f.line) + 1)
-        new = any(n in added for n in span) or any(n in added for n in binding_lines(code, f.assertion))
+        new = any(n in added for n in span) or any(n in added for n in binding_lines(code, f.assertion, line_offset(code, f.line)))
         if new and (f.path, f.fn, f.assertion) not in carried and not HANG_BOUND.search(f.assertion) and not oracle_ok(f.line, f.assertion):
             found.append(f._replace(rule=FLOOR))
+    # The product-timer rule, on the same notion of new (and along the chain
+    # of bindings its window was derived through).
+    for f, at, rule, chain, _ in budget_sites(path, text, consts, includers, budgets) if budgets else ():
+        span = range(f.line, statement_end(code, f.line) + 1)
+        reads = set(binding_lines(code, f.assertion, at)) | chain
+        if rule and (added & set(span) or added & reads) and (f.path, f.fn, f.assertion) not in carried and not oracle_ok(f.line, f.assertion):
+            found.append(f._replace(rule=rule))
     return found + scan_new_shapes(path, code, raw, tested, added, Scope(path, {}, file_consts, consts, imports), oracle_ok, tag_ok)
 
 
@@ -305,7 +612,7 @@ def scan_new_shapes(path, code, raw, tested, added, scope, oracle_ok, tag_ok) ->
             if not later:
                 continue
             last = line_of(max(later))
-            span_new = touches(min(line, line_of(min(later))), last) or (def_line_in(code, expr, line_of) in added)
+            span_new = touches(min(line, line_of(min(later))), last) or (def_line_in(code, expr, line_of, at) in added)
             if span_new and not exempt(line, expr):
                 found.append(Finding(path, fn, f"sleep({expr})", line, value, SLEEP))
 
@@ -357,7 +664,7 @@ def timeout_shapes(path, fn, code, span, touches, seconds, exempt) -> list[Findi
 
     def changed(start: int, end: int, expr: str) -> bool:
         """Any line from `start` to `end` changed, or the line binding `expr`."""
-        bound = def_line_in(code, expr, line_of)
+        bound = def_line_in(code, expr, line_of, start)
         return touches(line_of(start), line_of(end)) or (bound is not None and touches(bound, bound))
 
     for m in SETTER_CALL.finditer(code, body_open, body_end):
@@ -411,12 +718,10 @@ def innermost_fn(code: str, at: int) -> int | None:
     return max(inside) if inside else None
 
 
-def def_line_in(code: str, expr: str, line_of) -> int | None:
-    """The line binding `expr` when it is a plain name: a `let` or a `const`."""
+def def_line_in(code: str, expr: str, line_of, at: int) -> int | None:
+    """The line of the `let` or `const` a plain-name `expr` refers to at `at`."""
     name = expr.strip()
     if not re.fullmatch(r"\w+", name):
         return None
-    m = None
-    for m in re.finditer(rf"\b(?:let\s+(?:mut\s+)?|const\s+){name}\b", code):
-        pass
-    return line_of(m.start()) if m else None
+    spot = visible_binding(code, name, at)
+    return None if spot is None else line_of(spot)

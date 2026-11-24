@@ -20,7 +20,11 @@ impl DispatchNotes {
     /// same holds for a bare `-32602`, which `from_result` reads as `invalid`.
     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (self.outcome(outcome), self.refusal) {
-            (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None) => {
+            // A gate's noted refusal is not a bare code: it keeps the class
+            // `outcome` gave it, as the live record does.
+            (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None)
+                if !self.decision.has_refusal() =>
+            {
                 AuditOutcome::Error(code)
             }
             // A refusal keeps the committed code, which may be a peer's

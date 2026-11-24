@@ -381,10 +381,11 @@ async fn lock_with(
     preflight: Preflight,
     recovery: Recovery,
 ) -> crate::Result<Result<Locked, NotLocked>> {
+    let root = config;
     let config = config.to_path_buf();
     let waiting = Arc::new(AtomicBool::new(true));
     let _cancel = StopWaiting(Arc::clone(&waiting));
-    off_runtime(move || {
+    off_runtime(Some(root), move || {
         if matches!(preflight, Preflight::Loads) && !super::journal::exists(&config) {
             super::load_existing_or_default(&config)?;
         }
@@ -410,6 +411,21 @@ impl Drop for StopWaiting {
     fn drop(&mut self) {
         self.0.store(false, SeqCst);
     }
+}
+
+/// Recover a pending replace journal under a lock already held: what [`lock_config`] does while
+/// it acquires, and what a reader does once its own checks have passed. Blocks; call it off the
+/// async workers.
+fn recover_held(locked: &mut Locked) -> Result<(), NotLocked> {
+    refuse_pending_v2(locked)?;
+    locked.recovered = super::journal::recover(&locked.target).map_err(|error| match error {
+        super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
+        super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
+    })?;
+    locked.journal_pending = false;
+    // Recorded after recovery, which may restore the target.
+    locked.existed = std::fs::symlink_metadata(&locked.target).is_ok();
+    Ok(())
 }
 
 /// The wait itself, on a thread that may block. Gives up as at the deadline
@@ -443,14 +459,7 @@ fn acquire(
                 existed: false,
             };
             match recovery {
-                Recovery::OnAcquire => {
-                    refuse_pending_v2(&locked)?;
-                    locked.recovered =
-                        super::journal::recover(&locked.target).map_err(|error| match error {
-                            super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
-                            super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
-                        })?;
-                }
+                Recovery::OnAcquire => recover_held(&mut locked)?,
                 Recovery::Deferred => {
                     locked.journal_pending = super::journal::exists(&locked.target);
                 }
@@ -504,15 +513,19 @@ const LEFT: u8 = 2;
 /// NFS or FUSE mount never holds the runtime's shutdown (as the reload's own
 /// load does, #1808). Whatever `work` owns (a held lock) stays with it until
 /// it finishes, even if the awaiting caller is dropped. Crate-visible for the startup gate,
-/// whose repair, probes and drains run here like the lock itself.
+/// whose repair, probes and drains run here like the lock itself. `root` is the config
+/// path the work touches: a test's temp dir holding it is kept while the
+/// thread runs (`crate::spawn_keep`); none for work that writes nothing.
 pub(crate) async fn off_runtime<T: Send + 'static>(
+    root: Option<&Path>,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, NoResult> {
-    off_runtime_in(&ABANDONED, work).await
+    off_runtime_in(&ABANDONED, root, work).await
 }
 
 async fn off_runtime_in<T: Send + 'static>(
     abandoned: &'static Abandoned,
+    root: Option<&Path>,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, NoResult> {
     if abandoned.0.load(SeqCst) >= MAX_ABANDONED {
@@ -531,27 +544,59 @@ async fn off_runtime_in<T: Send + 'static>(
         state: Arc::clone(&state),
         abandoned,
     };
+    #[cfg(test)]
+    let held = root.map(Path::to_path_buf);
+    // Taken before the thread exists, while the caller (a test) still holds
+    // its share of the dir; the thread holds it to its end, past a caller
+    // that left. Silent here: an awaited caller outlives its thread, so only a
+    // caller that leaves first is reported, by its guard (`Left`).
+    let kept = root
+        .map(crate::spawn_keep::kept_dirs_at_spawn)
+        .unwrap_or_default();
+    #[cfg(test)]
+    let unkept_root = root.filter(|_| kept.is_empty()).map(Path::to_path_buf);
     std::thread::Builder::new()
         .name("config-lock".into())
         .spawn(move || {
-            let out = work();
-            // A result nobody received (a held lock) is dropped before the
-            // thread counts as returned: closing it can stall on the same
-            // mount. A panic marks it returned too, as the guard drops.
-            if let Err(out) = done.send(out) {
-                drop(out);
+            #[cfg(test)]
+            if let Some(held) = &held {
+                crate::spawn_keep::pause_if_held(held);
             }
-            drop(ended);
+            crate::spawn_keep::holding(kept, || {
+                let out = work();
+                // A result nobody received (a held lock) is dropped before the
+                // thread counts as returned: closing it can stall on the same
+                // mount. A panic marks it returned too, as the guard drops.
+                if let Err(out) = done.send(out) {
+                    drop(out);
+                }
+                drop(ended);
+            });
+            // After the whole run, past a caller that left: a row waits here
+            // before its plain dir drops (keyed apart from the first hold).
+            #[cfg(test)]
+            if let Some(held) = &held {
+                crate::spawn_keep::pause_if_held(&crate::spawn_keep::after_work(held));
+            }
         })
         .map_err(|_| NoResult::Lost)?;
     let mut caller = Left {
         state,
         abandoned,
         armed: true,
+        #[cfg(test)]
+        unkept_root,
     };
     let out = result.await;
     // Received: the thread's send succeeded and it is returning.
     caller.armed = out.is_err();
+    // The caller stayed to the end, so it is not the cancel the report is for,
+    // even when the thread died without sending (its unwind may not have
+    // marked it returned yet).
+    #[cfg(test)]
+    {
+        caller.unkept_root = None;
+    }
     out.map_err(|_| NoResult::Lost)
 }
 
@@ -578,6 +623,11 @@ struct Left {
     abandoned: &'static Abandoned,
     /// Cleared once the result is received.
     armed: bool,
+    /// The config path whose temp dir no test kept at spawn: reported if this
+    /// caller leaves while the thread still runs, the one case whose writes
+    /// can outlive the test (`crate::spawn_keep`).
+    #[cfg(test)]
+    unkept_root: Option<std::path::PathBuf>,
 }
 
 impl Drop for Left {
@@ -586,12 +636,16 @@ impl Drop for Left {
             return;
         }
         self.abandoned.0.fetch_add(1, SeqCst);
-        if self
+        let left = self
             .state
             .compare_exchange(RUNNING, LEFT, SeqCst, SeqCst)
-            .is_err()
-        {
+            .is_ok();
+        if !left {
             self.abandoned.0.fetch_sub(1, SeqCst);
+        }
+        #[cfg(test)]
+        if left && let Some(root) = &self.unkept_root {
+            crate::test_dir_keep::report_unkept(crate::spawn_keep::CONFIG_LOCK, root);
         }
     }
 }
@@ -630,11 +684,11 @@ pub(crate) fn lock_config_blocking_deferred(
 mod reader;
 #[cfg(test)]
 use reader::creation_blocked;
-// The startup gate, compiled for tests only until the serve paths take it, proves absence here.
-#[cfg(test)]
+// The startup gate proves absence here.
 pub(crate) use reader::absent;
 pub(crate) use reader::{
-    ReaderLock, journal_pending, no_writer_possible, reader_lock, reader_lock_deferred,
+    MANIFEST_UNREAD, ReaderLock, journal_pending, no_writer_possible, reader_lock,
+    reader_lock_deferred,
 };
 
 /// The vault lock's blocking wait: one attempt per `POLL` until `deadline`,
@@ -686,6 +740,16 @@ pub(crate) fn lock_file_blocking(
 #[cfg(test)]
 #[path = "config_persistence_lock_tests.rs"]
 mod tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_lock_reader_gate_tests.rs"]
+mod reader_gate_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_lock_keep_tests.rs"]
+mod keep_tests;
 
 /// Dispatch an already held lock without recursively acquiring it.
 pub(crate) fn dispatch_journal(

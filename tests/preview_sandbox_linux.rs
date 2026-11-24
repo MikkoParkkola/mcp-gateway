@@ -9,6 +9,10 @@
 //! passing green.
 #![cfg(target_os = "linux")]
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "common/preview_sandbox.rs"]
@@ -107,6 +111,7 @@ async fn sh(script: &str) -> Option<Output> {
 
 #[tokio::test]
 async fn the_run_phase_starts_in_its_own_home() {
+    require_private_home!();
     let Some(out) = sh("echo \"$HOME\"; pwd; touch \"$HOME/x\" && echo writable").await else {
         return;
     };
@@ -118,6 +123,7 @@ async fn the_run_phase_starts_in_its_own_home() {
 /// real file and keeps the name it was asked for as `$0`.
 #[tokio::test]
 async fn a_symlinked_program_runs_under_its_requested_name() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let alias = dir.path().join("alias-sh");
     std::os::unix::fs::symlink(std::fs::canonicalize("/bin/sh").unwrap(), &alias).unwrap();
@@ -133,6 +139,7 @@ async fn a_symlinked_program_runs_under_its_requested_name() {
 /// readable outside (positive control).
 #[tokio::test]
 async fn canaries_outside_the_binds_are_unreadable() {
+    require_private_home!();
     let dir = Path::new("/var/tmp").join(format!("sbx-canary-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let canary = dir.join("canary");
@@ -153,6 +160,7 @@ async fn canaries_outside_the_binds_are_unreadable() {
 /// A runtime file is readable inside (positive control for the canaries).
 #[tokio::test]
 async fn a_runtime_file_is_readable() {
+    require_private_home!();
     let Some(out) = sh("test -r /usr/bin/env && test -d /etc/ssl && echo ok").await else {
         return;
     };
@@ -163,6 +171,7 @@ async fn a_runtime_file_is_readable() {
 /// the test reaches that listener itself (positive control).
 #[tokio::test]
 async fn the_run_phase_cannot_connect_anywhere() {
+    require_private_home!();
     if !has_tool("/bin/bash") {
         return;
     }
@@ -191,6 +200,7 @@ async fn the_run_phase_cannot_connect_anywhere() {
 /// host before teardown and gone after it.
 #[tokio::test]
 async fn a_setsid_descendant_is_gone_after_teardown() {
+    require_private_home!();
     let marker = format!("{}.{}0", 3600, std::process::id());
     // The escapee double-forks into its own session; the target then waits on
     // stdin, which the test holds open, so teardown is what ends it.
@@ -226,6 +236,7 @@ fn host_has(marker: &str) -> bool {
 /// the working directory inside the new root; /proc/self/status readable.
 #[tokio::test]
 async fn the_host_root_is_unreachable() {
+    require_private_home!();
     let script = "test -e /.old-root && echo old; test -e /proc/self/root/home && echo host; \
                   readlink /proc/self/cwd; cat /proc/self/status >/dev/null && echo status";
     let Some(out) = sh(script).await else { return };
@@ -237,6 +248,7 @@ async fn the_host_root_is_unreachable() {
 /// own and their children's (positive controls).
 #[tokio::test]
 async fn the_helper_cannot_be_read_from_inside() {
+    require_private_home!();
     let script = "cat /proc/1/environ >/dev/null 2>&1 && echo environ; \
                   ls /proc/1/fd >/dev/null 2>&1 && echo fd; \
                   test -e /proc/1 && echo listed; \
@@ -250,6 +262,7 @@ async fn the_helper_cannot_be_read_from_inside() {
 /// `/etc/ssl/certs` stays (positive control).
 #[tokio::test]
 async fn masked_system_paths_are_empty() {
+    require_private_home!();
     let script = "ls -A /usr/local; ls -A /etc/ssl/private 2>/dev/null; \
                   test -e /etc/ssl/certs && echo certs";
     let Some(out) = sh(script).await else { return };
@@ -266,6 +279,7 @@ async fn masked_system_paths_are_empty() {
 /// placed under `/usr`. The directory is listed outside (positive control).
 #[tokio::test]
 async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
+    require_private_home!();
     let real = Path::new("/usr/share/doc");
     let listed = std::fs::read_dir(real).map_or(0, Iterator::count);
     if listed == 0 {
@@ -294,6 +308,7 @@ async fn a_symlinked_gateway_path_is_masked_where_it_really_is() {
 #[tokio::test]
 async fn a_gateway_path_covers_an_interpreter_bind_back() {
     use std::os::unix::fs::PermissionsExt as _;
+    require_private_home!();
     let tool = std::fs::read_dir("/usr/local/bin")
         .ok()
         .and_then(|entries| {
@@ -339,6 +354,7 @@ async fn a_gateway_path_covers_an_interpreter_bind_back() {
 /// canary is readable outside (positive control).
 #[tokio::test]
 async fn a_program_beside_a_secret_binds_as_its_file_alone() {
+    require_private_home!();
     let dir = Path::new("/var/tmp").join(format!("sbx-home-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let program = dir.join("sh");
@@ -362,6 +378,7 @@ async fn a_program_beside_a_secret_binds_as_its_file_alone() {
 /// Bounds: `/tmp` stops at 256 MiB.
 #[tokio::test]
 async fn tmp_is_bounded() {
+    require_private_home!();
     let script = "head -c 300M /dev/zero > /tmp/big 2>/dev/null && echo fit; echo done";
     let Some(out) = sh(script).await else { return };
     assert_eq!(out.stdout, "done\n", "{}", out.stderr);
@@ -371,6 +388,7 @@ async fn tmp_is_bounded() {
 /// size limit, so the tmpfs is what refuses).
 #[tokio::test]
 async fn the_home_is_bounded() {
+    require_private_home!();
     let script = "for i in 1 2 3; do head -c 400M /dev/zero > \"$HOME/$i\" 2>/dev/null || \
                   echo \"full at $i\"; done";
     let Some(out) = sh(script).await else { return };
@@ -382,6 +400,7 @@ async fn the_home_is_bounded() {
 /// the child with `SIGSYS`.
 #[tokio::test]
 async fn the_filter_refuses_keyrings_and_ptrace() {
+    require_private_home!();
     if !has_tool("/usr/bin/python3") {
         return;
     }
@@ -422,6 +441,7 @@ async fn the_filter_refuses_keyrings_and_ptrace() {
 /// network namespace, is refused; a Unix socket opens (positive control).
 #[tokio::test]
 async fn the_filter_refuses_vsock() {
+    require_private_home!();
     if !has_tool("/usr/bin/python3") {
         return;
     }
@@ -512,6 +532,7 @@ fn assert_gone_soon(marker: &str) {
 /// `--kill-child` kills the helper and the whole namespace with it.
 #[tokio::test]
 async fn a_dropped_preview_kills_its_namespace() {
+    require_private_home!();
     let marker = format!("{}.{}1", 3600, std::process::id());
     let Some(started) = started_sleeper(&marker).await else {
         return;
@@ -524,6 +545,7 @@ async fn a_dropped_preview_kills_its_namespace() {
 /// dropped after its runtime is gone still ends.
 #[test]
 fn a_preview_dropped_after_its_runtime_still_ends() {
+    require_private_home!();
     let marker = format!("{}.{}2", 3600, std::process::id());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -534,4 +556,13 @@ fn a_preview_dropped_after_its_runtime_still_ends() {
     let Some(started) = started else { return };
     drop(started);
     assert_gone_soon(&marker);
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

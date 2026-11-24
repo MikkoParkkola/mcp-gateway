@@ -549,6 +549,8 @@ tr:hover td { background: var(--bg3); }
       <div style="margin-bottom:1rem">
         <button class="btn" id="reload-btn" onclick="doReload()">Hot Reload</button>
         <span id="reload-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--fg2)"></span>
+        <div id="reload-advice" hidden style="margin-top:0.5rem;font-size:0.85rem;color:var(--fg2)"></div>
+        <code id="reload-command" hidden></code>
       </div>
       <div class="config-block" id="config-content" tabindex="0" role="region" aria-label="Current configuration">Loading...</div>
     </div>
@@ -963,6 +965,8 @@ function fmtUptime(secs) {
 }
 
 function cbBadge(state) {
+  // A server switched off in the config has no breaker: null, drawn as missing.
+  if (state == null) return '-';
   const s = (state || '').toLowerCase();
   if (s === 'closed') return '<span class="badge badge-closed">Closed</span>';
   if (s === 'open') return '<span class="badge badge-open">Open</span>';
@@ -976,6 +980,8 @@ function statusBadge(running) {
 }
 
 function fmtMs(v) { return v != null ? v + 'ms' : '-'; }
+
+function fmtCount(v) { return v != null ? String(v) : '-'; }
 
 function truncate(s, n) {
   if (!s) return '';
@@ -1247,9 +1253,9 @@ function refreshServersTable(servers) {
     <td>${esc(s.transport)}</td>
     <td>${statusBadge(s.running)}</td>
     <td>${cbBadge(s.circuit_state)}</td>
-    <td>${s.request_count}</td>
-    <td>${s.success_count}</td>
-    <td>${s.failure_count}</td>
+    <td>${fmtCount(s.request_count)}</td>
+    <td>${fmtCount(s.success_count)}</td>
+    <td>${fmtCount(s.failure_count)}</td>
     <td>${fmtMs(s.latency_p50_ms)}</td>
     <td>${fmtMs(s.latency_p95_ms)}</td>
     <td><button class="btn btn-sm btn-danger" data-action="remove-server" data-value="${esc(s.name)}">Remove</button></td>
@@ -1887,11 +1893,32 @@ async function refreshConfig() {
 async function doReload() {
   const btn = document.getElementById('reload-btn');
   const status = document.getElementById('reload-status');
+  const advice = document.getElementById('reload-advice');
+  const command = document.getElementById('reload-command');
+  // Each answer replaces both lines, so no earlier guidance or command stays.
+  for (const line of [advice, command]) {
+    line.textContent = '';
+    line.hidden = true;
+  }
   btn.disabled = true;
   try {
     const result = await apiFetch('/ui/api/reload', { method: 'POST' });
     const stamp = new Date().toLocaleTimeString();
-    if (result.restart_required) {
+    if (result.start_refusal) {
+      // A restart would not start: the refusal alone, with no "restart
+      // required" summary and no command to run.
+      status.textContent = result.start_refusal;
+      status.style.color = 'var(--yellow)';
+    } else if (result.restart_advice) {
+      status.textContent = `${result.changes} at ${stamp}`;
+      status.style.color = 'var(--yellow)';
+      advice.textContent = result.restart_advice;
+      advice.hidden = false;
+      if (result.start_command) {
+        command.textContent = result.start_command;
+        command.hidden = false;
+      }
+    } else if (result.restart_required) {
       const reason = result.restart_reason ? ` (${result.restart_reason})` : '';
       status.textContent = `${result.changes} — restart required${reason} at ${stamp}`;
       status.style.color = 'var(--yellow)';
@@ -2086,38 +2113,46 @@ async function deleteCap(name) {
   }
 }
 
-const CAP_TEMPLATE = `# Capability definition
-# See https://github.com/modelcontextprotocol/mcp-gateway for schema
-tools:
-  - name: example_tool
-    description: An example tool
-    input_schema:
-      type: object
-      properties:
-        input:
-          type: string
-          description: Input value
-      required:
-        - input
-`;
-
+// CAP-CREATE BEGIN
+// + New Capability. A lib row runs this block under node against the real
+// route (capability_create_page_tests.rs), so keep it self-contained.
+// The route's own template is the only one: a POST with no body and no
+// Content-Type answers it. Success is the route's 201 alone.
 async function newCapability() {
-  const rawName = prompt('Enter capability file name (e.g. "my-tools"):');
+  const rawName = prompt('Enter capability file name (e.g. "my_tools"):');
   if (rawName === null) return;
-  const name = rawName.trim().replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
-  if (!name) { alert('Invalid name.'); return; }
+  // One name for the file and the capability, in the only characters a
+  // capability name may hold (CAP-001): lowercase letters, digits, '_'.
+  const name = rawName.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  if (!/[a-z0-9]/.test(name)) {
+    alert('Invalid name: use letters or digits (spaces and other characters become "_").');
+    return;
+  }
+  // The route takes names of up to 128 characters (capabilities.rs
+  // is_safe_name); which characters a capability name may hold is CAP-001's.
+  if (name.length > 128) {
+    alert('Invalid name: use at most 128 characters.');
+    return;
+  }
 
-  const msg_id = 'cap-new-msg';
+  // The route's words for an answer that is not the one wanted.
+  const why = async (answer) => {
+    const said = await answer.json().catch(() => ({}));
+    return said.message || said.error || answer.statusText || `HTTP ${answer.status}`;
+  };
   try {
+    const t = await uiFetch('/ui/api/capabilities', { method: 'POST', headers: authHeaders() });
+    if (t.status !== 200) throw new Error(await why(t));
+    const template = await t.text();
+    const nameLine = /^name:.*$/m;
+    if (!nameLine.test(template)) throw new Error('the template has no name line to set');
+    const yaml = template.replace(nameLine, `name: ${name}`);
     const r = await uiFetch('/ui/api/capabilities', {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, content: CAP_TEMPLATE }),
+      body: JSON.stringify({ name, yaml }),
     });
-    if (!r.ok) {
-      const errData = await r.json().catch(() => ({ error: r.statusText }));
-      throw new Error(errData.error || r.statusText);
-    }
+    if (r.status !== 201) throw new Error(await why(r));
     await refreshCapabilities();
     // Auto-open the newly created capability
     const body = document.getElementById('cap-body-' + name);
@@ -2126,6 +2161,7 @@ async function newCapability() {
     alert('Failed to create capability: ' + e.message);
   }
 }
+// CAP-CREATE END
 
 function capTabIndent(e) {
   if (e.key !== 'Tab') return;

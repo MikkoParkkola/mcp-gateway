@@ -139,7 +139,7 @@ async fn an_ipv4_callback_host_is_advertised_as_configured() {
 #[tokio::test]
 async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
     if !ipv6_loopback_available() {
-        eprintln!("no IPv6 loopback on this host; skipped");
+        crate::test_wait::skip_or_fail("an IPv6 loopback address on this host");
         return;
     }
     served_where_advertised("::1", "[::1]").await;

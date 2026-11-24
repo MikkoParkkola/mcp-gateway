@@ -508,11 +508,17 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && self.admits_backend(&cap.name, scope, session_id)
         {
-            let admitted = cap
-                .get_tools()
-                .iter()
-                .filter(|t| self.shows_tool(&cap.name, t, scope, session_id))
-                .count();
+            // HTTP startup scans the directories after the listener binds: until that scan
+            // completes the catalogue may be partial, so its count is not known (null, as for a
+            // registry backend not yet enumerated). The flag is read before the catalogue, so a
+            // true flag always pairs with the full catalogue (the scan publishes it after loading).
+            let known = cap.initial_scan_complete();
+            let admitted = known.then(|| {
+                cap.get_tools()
+                    .iter()
+                    .filter(|t| self.shows_tool(&cap.name, t, scope, session_id))
+                    .count()
+            });
             let status = cap.status();
             let killed = self.kill_switch.is_killed(&status.name);
             servers.push(json!({
@@ -520,7 +526,7 @@ impl MetaMcp {
                 "running": true,
                 "transport": "capability",
                 "tools_count": admitted,
-                "tools_known": true,
+                "tools_known": known,
                 "circuit_breaker": "closed",
                 "status": if killed { "disabled" } else { "active" }
             }));

@@ -353,3 +353,7 @@ fn tasks_get_and_a_keyed_repeat_serve_an_unvouched_row_withheld() {
         }
     }
 }
+
+/// What a row that withholds its outcome may serve or receipt.
+#[path = "record_withhold_tests.rs"]
+mod withhold;

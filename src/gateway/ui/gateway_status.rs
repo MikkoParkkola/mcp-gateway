@@ -89,6 +89,32 @@ fn tls_block(state: &AppState) -> Value {
     })
 }
 
+/// What only a restart would apply: null while nothing waits, else the field
+/// ids in stored order. A changed startup value shows as one "environment"
+/// id; no variable is named.
+fn pending_restart_block(state: &AppState) -> Value {
+    let (fields, wait) = state.live_config.restart_view();
+    if fields.is_empty() {
+        return Value::Null;
+    }
+    let mut block = serde_json::Map::new();
+    block.insert("fields".into(), json!(fields));
+    // Keys waiting in gateway.yaml freeze it: name them, and add what the
+    // shared wrapper says for the file's own start verdict (guidance plus
+    // start command if a start would succeed, else only its refusal).
+    if let Some(wait) = wait {
+        block.insert("frozen".into(), true.into());
+        block.insert("waiting_keys".into(), json!(wait.keys));
+        let restart = super::restart_confirm::restart_advice(
+            true,
+            wait.start_refusal.as_deref(),
+            state.config_path.as_deref(),
+        );
+        block.extend(restart.unwrap_or_default());
+    }
+    Value::Object(block)
+}
+
 /// The handler.
 pub(super) async fn gateway_status(
     State(state): State<Arc<AppState>>,
@@ -112,6 +138,7 @@ pub(super) async fn gateway_status(
         "upgrade": upgrade_block(state.process.upgrade()),
         "clients": state.multiplexer.client_roster(),
         "refused_at_start": state.process.refused_at_start(),
+        "pending_restart": pending_restart_block(&state),
     }))
     .into_response()
 }

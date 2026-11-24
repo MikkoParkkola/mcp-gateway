@@ -14,7 +14,7 @@ use crate::config::KeyServerConfig;
 use crate::key_server::email_hash::EmailHashKey;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::key_server::store::{
-    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError,
+    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError, Reserved,
     TemporaryToken, TokenScopes, TokenStore,
 };
 use crate::security::audit::AuditFailurePolicy;
@@ -61,6 +61,36 @@ pub(crate) async fn mint(ks: &crate::key_server::KeyServer) -> axum::response::R
         ISS,
     );
     issue(ks, identity, TokenScopes::default(), None).await
+}
+
+pub(crate) async fn mint_for(
+    ks: &crate::key_server::KeyServer,
+    backends: &[&str],
+) -> (String, String) {
+    let identity = VerifiedIdentity::for_test(
+        "sub",
+        EMAIL,
+        Some("Planted Person".to_owned()),
+        vec!["g".into()],
+        ISS,
+    );
+    let scopes = TokenScopes {
+        backends: backends
+            .iter()
+            .map(|backend| (*backend).to_owned())
+            .collect(),
+        ..TokenScopes::default()
+    };
+    let response = issue(ks, identity, scopes, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    (
+        body["access_token"].as_str().expect("a bearer").to_owned(),
+        body["jti"].as_str().expect("a token id").to_owned(),
+    )
 }
 
 fn has_row(dir: &tempfile::TempDir, jti: Option<&str>) -> bool {
@@ -217,11 +247,7 @@ struct RowFirst {
 
 #[async_trait::async_trait]
 impl TokenStore for RowFirst {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.inner.reserve(request, now)
     }
     fn activate(
@@ -310,11 +336,7 @@ struct Revoking(Arc<InMemoryTokenStore>);
 
 #[async_trait::async_trait]
 impl TokenStore for Revoking {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.0.reserve(request, now)
     }
     fn activate(

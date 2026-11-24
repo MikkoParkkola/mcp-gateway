@@ -155,6 +155,7 @@ pub(super) fn principal_token(subject: &str) -> TemporaryToken {
     use crate::key_server::InMemoryTokenStore;
     let now = crate::clock::unix_secs().expect("clock after 1970");
     TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: VerifiedIdentity::for_test(

@@ -143,6 +143,20 @@ impl StopDeadline {
         self.handed.lock().len()
     }
 
+    /// Whether every tracked handover's tree has been reaped with an exit
+    /// status: after [`Self::wait_handed`] up to a deadline, the kill landed
+    /// and the leader was collected before it. An unreaped give-up
+    /// (`Done(None)`) does not count, and neither does an empty list: no
+    /// handover is no evidence of a reap.
+    #[cfg(all(test, unix))]
+    pub(crate) fn handed_all_reaped(&self) -> bool {
+        let handed = self.handed.lock();
+        !handed.is_empty()
+            && handed
+                .iter()
+                .all(|receiver| matches!(*receiver.borrow(), Reaped::Done(Some(_))))
+    }
+
     /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
     /// an earlier close handed over may still be in its waits, and its kill
     /// must land before the gateway returns.
@@ -721,6 +735,61 @@ mod start_tests {
         });
         assert!(started.is_ok(), "the next start tries again");
         assert!(cell.get().is_some());
+    }
+}
+
+/// The test-only reap check the nested handover row reads for "reaped
+/// before Db". That row always has one handover, so it cannot see the empty
+/// case or an any-for-all slip; this row pins no handover, an unreaped
+/// give-up, a reap with an exit status, and every handover rather than any.
+#[cfg(tp5)]
+#[cfg(all(test, unix))]
+mod handed_reap_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// A fresh deadline tracking one handover already in `state`.
+    fn tracking(state: Reaped) -> (StopDeadline, watch::Sender<Reaped>) {
+        let deadline = StopDeadline::default();
+        let (sender, receiver) = watch::channel(state);
+        deadline.track(receiver);
+        (deadline, sender)
+    }
+
+    #[test]
+    fn only_a_handover_reaped_with_a_status_counts_as_reaped() {
+        assert!(
+            !StopDeadline::default().handed_all_reaped(),
+            "no handover is no evidence of a reap"
+        );
+        let (gave_up, _sender) = tracking(Reaped::Done(None));
+        assert!(
+            !gave_up.handed_all_reaped(),
+            "an unreaped give-up counted as a reap"
+        );
+        let status = std::process::ExitStatus::from_raw(9);
+        let (reaped, _sender) = tracking(Reaped::Done(Some(status)));
+        assert!(
+            reaped.handed_all_reaped(),
+            "a reap with an exit status did not count"
+        );
+        // Every handed tree, not any: one still pending beside one reaped is
+        // not all reaped, until it is reaped too. (`track` keeps only pending
+        // receivers when it adds one, so the pending one goes in first.)
+        let (both, pending) = tracking(Reaped::Pending);
+        let (_reaped_sender, reaped_receiver) = watch::channel(Reaped::Done(Some(status)));
+        both.track(reaped_receiver);
+        assert!(
+            !both.handed_all_reaped(),
+            "one reaped handover beside a pending one counted as all reaped"
+        );
+        pending
+            .send(Reaped::Done(Some(status)))
+            .expect("the deadline holds the receiver");
+        assert!(
+            both.handed_all_reaped(),
+            "two reaped handovers did not count"
+        );
     }
 }
 

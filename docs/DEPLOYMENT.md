@@ -339,6 +339,7 @@ never refused.
 | Rate-limit buckets, idempotency admission | One process | Degrades: limits and de-duplication apply per replica |
 | Record key (MIK-8697) | Each pod's `<data dir>/record-principal.key`, created on first start | Degrades: one credential's records carry a different `who.principal` and `credential:rp:` value on each pod. Set `security.record_principal_key` from one shared secret only if you need them to match. Event subscription handles derive from the key; the events store records it in `record-key.id` and, if it changes, adopts the new key at startup with one warning (every handle changes). Back the key up with the data directory |
 | Cost-governance spend | Each process's `costs.json` in its data directory, saved every 5 minutes and on graceful shutdown (for stdio, when the client closes stdin), reloaded at start | Degrades: each replica counts its own spend, so a daily budget applies per replica |
+| Spend history | Each process's `spend-history.json`, written in the same save as its `costs.json` and read back at start | Degrades: a replica's cost charts show only what that replica served |
 
 While any of the three is on, the modern protocol included, the chart renders the
 Deployment with `strategy: Recreate`, because a rolling update runs the old and new
@@ -1038,7 +1039,7 @@ configuration and is not covered by the shipped rules or their tests.
 ### Live Statistics / Web Dashboard
 
 ```bash
-mcp-gateway stats --url http://127.0.0.1:39400
+mcp-gateway stats --gateway http://127.0.0.1:39400
 ```
 
 Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools), which is admin-only — see [Opening the dashboard](#opening-the-dashboard). Auto-refresh every 5s.

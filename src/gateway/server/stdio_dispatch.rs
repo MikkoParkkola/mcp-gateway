@@ -3,6 +3,7 @@
 //! Stdio request dispatch: the relay, tools/call, signing, parsing and the caller context (moved from `server/mod.rs`, MIK-8144).
 
 use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
+use crate::gateway::router::{AnswerId, SigningSite};
 use std::sync::Arc;
 
 use tracing::debug;
@@ -12,8 +13,8 @@ use super::StdioNonce;
 use super::first_list_wait;
 use super::stdio_route_stage::RouteStage;
 use super::{
-    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
-    stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
+    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, Unprepared, answer_unprepared, stdio_catalogue,
+    stdio_delivery, stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
 use crate::gateway::meta_mcp::refund_witness::RefundWitness;
@@ -55,7 +56,10 @@ impl Gateway {
         let prepared = Self::prepare_signing(meta_mcp, &mut request, (client.sanitize, view));
         let (mut signing_context, chain_nonce) = match prepared {
             Ok(prepared) => prepared,
-            Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
+            Err(stop) => {
+                let answered = answer_unprepared(meta_mcp, &request, session_id, stop);
+                return Some(stdio_delivery::StdioAnswer::Built(Box::pin(answered).await));
+            }
         };
 
         let parsed = Self::parse_and_observe(&request, (session_id, client.serving));
@@ -265,7 +269,7 @@ impl Gateway {
             Option<super::super::meta_mcp::signing::SigningInvocationContext>,
             Option<String>,
         ),
-        serde_json::Value,
+        Unprepared,
     > {
         use super::super::meta_mcp::signing::wire_error_message;
         use crate::protocol::JsonRpcResponse;
@@ -311,12 +315,11 @@ impl Gateway {
         if let Some(context) = signing_context.as_mut() {
             context
                 .restore(request)
-                .map_err(|error| refuse(None, &error))?;
+                .map_err(|error| Unprepared::SigningRefused(AnswerId::Absent, error))?;
         }
         if let Some(context) = signing_context.as_ref() {
-            context
-                .refuse_malformed_nonce_early()
-                .map_err(|error| refuse(raw_id, &error))?;
+            let early = context.refuse_malformed_nonce_early();
+            early.map_err(|error| Unprepared::SigningRefused(AnswerId::of(request), error))?;
         }
         Ok((signing_context, chain_nonce))
     }
@@ -460,10 +463,7 @@ impl Gateway {
             protocol_revision,
             credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
             // The stdio constant, keyed like any principal (MIK-8697 §16.11).
-            record_principal: crate::gateway::record_principal::InternalPrincipal::new(
-                STDIO_CREDENTIAL_PRINCIPAL.to_owned(),
-            )
-            .record_form(record_key),
+            record_principal: super::stdio_record_principal(record_key),
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             credential_kind: crate::security::audit::CredentialKind::LocalTransport,
             authorizer: stdio_authorizer,
@@ -644,11 +644,14 @@ impl Gateway {
                 )
             {
                 crate::gateway::delivery_facts::outlet(&error);
-                break 'tool_call JsonRpcResponse::gateway_error(
-                    Some(id),
-                    error.to_rpc_code(),
-                    super::super::meta_mcp::signing::wire_error_message(&error),
+                // Recorded before it is answered, as on `/mcp`.
+                let request = (arguments.as_ref(), tool_name.as_str(), session_id);
+                let who = crate::security::audit::AuditWho::from_caller(&caller);
+                let site = (AnswerId::Present(id), SigningSite::Check);
+                let answer = crate::gateway::router::answer_stdio_signing_refusal(
+                    meta_mcp, who, request, site, error,
                 );
+                break 'tool_call Box::pin(answer).await;
             }
             caller.signing = signing_context.as_ref();
             // Nothing has acted yet (MIK-8353): the witness every later step

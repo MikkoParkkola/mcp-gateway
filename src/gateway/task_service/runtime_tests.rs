@@ -254,13 +254,9 @@ async fn task_store_under_readonly_home_is_fatal() {
         && fs::create_dir(home.join("probe-dir")).is_err();
     if !premise_holds {
         make_writable(&home);
-        // A skip in CI would make this pin pass without testing anything, so
-        // CI must run it unprivileged; only a local root shell may skip.
-        assert!(
-            std::env::var_os("CI").is_none(),
-            "CI runs this test as a uid that ignores directory modes, so it proves nothing"
-        );
-        eprintln!("skipped: running with a uid that ignores directory modes");
+        // A skip in CI would make this pin pass without testing anything: the helper fails
+        // there (`TESTS_REQUIRE_ALL`), so only a local root shell may skip.
+        crate::test_wait::skip_or_fail("a user that a directory mode binds (this one ignores it)");
         return;
     }
 

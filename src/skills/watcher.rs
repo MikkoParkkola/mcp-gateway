@@ -42,7 +42,8 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use parking_lot::Mutex;
 use tracing::{debug, error, info, warn};
 
-use super::regenerate_for_capability;
+use super::installer::InstallKeep;
+use super::regenerate_for_capability_kept;
 use crate::Result;
 use crate::capability::parse_capability_file;
 
@@ -102,6 +103,24 @@ struct ChangeSource {
     /// looks for changes that arrived during it (tests only).
     #[cfg(test)]
     after_pass: crate::test_pause::Slot,
+    /// Holds inside the install path's writes (tests only; rows K4-K4w).
+    #[cfg(test)]
+    seams: Option<Arc<super::installer::Seams>>,
+    /// Signals when the regen task's future, which owns this source, is
+    /// dropped (tests only; row K4b).
+    #[cfg(test)]
+    on_drop: Option<DropSignal>,
+}
+
+/// Sends once when dropped.
+#[cfg(test)]
+struct DropSignal(std::sync::mpsc::Sender<()>);
+
+#[cfg(test)]
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
 }
 
 /// Both sides of the shared set: one for the file watcher, one for the regen task.
@@ -115,6 +134,10 @@ fn change_set() -> (Arc<ChangeSet>, ChangeSource) {
             changes,
             #[cfg(test)]
             after_pass: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            seams: None,
+            #[cfg(test)]
+            on_drop: None,
         },
     )
 }
@@ -197,15 +220,27 @@ impl SkillsWatcher {
         Ok(watcher)
     }
 
-    /// Spawn the debounced regeneration task.
+    /// Spawn the debounced regeneration task. Production drops the handle,
+    /// which detaches the task; a row aborts it.
     fn spawn_regen_task(
         source: ChangeSource,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         out_dir: PathBuf,
         agent_paths: Vec<PathBuf>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
+        // Taken here, while the caller (a test) still holds its share; the
+        // loop holds it for its life and each write holds a clone.
+        #[allow(unused_mut)]
+        let mut keep = InstallKeep::at_spawn(&out_dir, &agent_paths);
+        #[cfg(test)]
+        {
+            keep.seams.clone_from(&source.seams);
+        }
         tokio::spawn(async move {
             const DEBOUNCE_MS: u64 = 500;
+            // Move all of `source` into the task, not only the fields read below:
+            // its test-only drop signal must end with this future, not earlier.
+            let source = source;
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
             loop {
@@ -215,7 +250,7 @@ impl SkillsWatcher {
                             .changes
                             .take_if_quiet(Duration::from_millis(DEBOUNCE_MS));
                         if !paths.is_empty() {
-                            regenerate_changed_files(&paths, &out_dir, &agent_paths).await;
+                            regenerate_changed_files(&paths, &out_dir, &agent_paths, &keep).await;
                             #[cfg(test)]
                             source.after_pass.pause().await;
                             let deferred = source.changes.pending_count();
@@ -233,12 +268,17 @@ impl SkillsWatcher {
                     }
                 }
             }
-        });
+        })
     }
 }
 
 /// Parse and regenerate skills for each changed file path.
-async fn regenerate_changed_files(paths: &[PathBuf], out_dir: &Path, agent_paths: &[PathBuf]) {
+async fn regenerate_changed_files(
+    paths: &[PathBuf],
+    out_dir: &Path,
+    agent_paths: &[PathBuf],
+    keep: &InstallKeep,
+) {
     for path in paths {
         match parse_capability_file(path).await {
             Ok(cap) => {
@@ -247,7 +287,9 @@ async fn regenerate_changed_files(paths: &[PathBuf], out_dir: &Path, agent_paths
                     path = %path.display(),
                     "Skills watcher: regenerating bundle"
                 );
-                if let Err(e) = regenerate_for_capability(&cap, out_dir, agent_paths).await {
+                if let Err(e) =
+                    regenerate_for_capability_kept(&cap, out_dir, agent_paths, keep).await
+                {
                     error!(
                         capability = %cap.name,
                         error = %e,
@@ -283,7 +325,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let bad_path = PathBuf::from("/nonexistent/cap.yaml");
         // WHEN: called with a bad path (should not panic)
-        regenerate_changed_files(&[bad_path], tmp.path(), &[]).await;
+        regenerate_changed_files(&[bad_path], tmp.path(), &[], &InstallKeep::default()).await;
         // THEN: no panic (error is logged and swallowed)
     }
 
@@ -306,7 +348,7 @@ metadata:
         tokio::fs::write(&yaml_path, cap_yaml).await.unwrap();
         let out_dir = tmp.path().join("skills");
         // WHEN
-        regenerate_changed_files(&[yaml_path], &out_dir, &[]).await;
+        regenerate_changed_files(&[yaml_path], &out_dir, &[], &InstallKeep::default()).await;
         // THEN: skill bundle created
         assert!(
             out_dir
@@ -321,3 +363,8 @@ metadata:
 #[cfg(test)]
 #[path = "watcher_burst_tests.rs"]
 mod burst_tests;
+
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "watcher_keep_tests.rs"]
+mod keep_tests;

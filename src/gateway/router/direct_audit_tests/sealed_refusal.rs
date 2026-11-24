@@ -57,8 +57,8 @@ async fn a_killed_direct_call_keeps_its_wire_answer() {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
     let records = invocations(&fx);
     assert!(
-        records.iter().all(|r| r["outcome"] == "error"),
-        "outcome class unchanged: {records:?}"
+        records.iter().all(|r| r["outcome"] == "denied"),
+        "a refusal the kill switch noted records denied: {records:?}"
     );
 }
 

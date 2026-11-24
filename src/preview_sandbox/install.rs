@@ -36,7 +36,7 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
         let linked = entry.get("link").and_then(Value::as_bool) == Some(true);
         // The root need not have a tarball, but cannot redirect the install.
         if linked || !(registry || ((key.is_empty() || bundled) && resolved.is_none())) {
-            return Err(not_registry(key));
+            return Err(not_registry(quoted_key(key)));
         }
         // A peer is installed by npm 7 or later like any dependency, so its
         // spec must be a registry range too. Reachability is not checked: an
@@ -48,7 +48,11 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
             .flatten()
         {
             if !range.as_str().is_some_and(registry_range) {
-                return Err(not_registry(&format!("{peer} of {}", shown(key))));
+                return Err(not_registry(&format!(
+                    "{} of {}",
+                    quoted_dep(peer),
+                    quoted_key(key)
+                )));
             }
         }
         for field in ["dependencies", "optionalDependencies"] {
@@ -57,12 +61,17 @@ pub(crate) fn check_lock(lock: &Value) -> Result<(), Refusal> {
             };
             for (dep, range) in deps {
                 if !range.as_str().is_some_and(registry_range) {
-                    return Err(not_registry(&format!("{dep} of {}", shown(key))));
+                    return Err(not_registry(&format!(
+                        "{} of {}",
+                        quoted_dep(dep),
+                        quoted_key(key)
+                    )));
                 }
                 if !reaches(packages, key, dep) {
                     return Err(refuse(&format!(
-                        "{dep}, needed by {}, has no entry in the lock",
-                        shown(key)
+                        "{}, needed by {}, has no entry in the lock",
+                        quoted_dep(dep),
+                        quoted_key(key)
                     )));
                 }
             }
@@ -140,8 +149,44 @@ fn reaches(packages: &serde_json::Map<String, Value>, key: &str, dep: &str) -> b
     }
 }
 
-fn shown(key: &str) -> &str {
-    if key.is_empty() { "the package" } else { key }
+/// A lock entry's key as a refusal may show it: the root and any key whose
+/// package names are not all registry names read "the package".
+fn quoted_key(key: &str) -> &str {
+    let names_ok = key
+        .split("node_modules/")
+        .map(|part| part.trim_end_matches('/'))
+        .filter(|part| !part.is_empty())
+        .all(npm_name_ok);
+    if key.is_empty() || !names_ok {
+        "the package"
+    } else {
+        key
+    }
+}
+
+/// A dependency's name as a refusal may show it.
+fn quoted_dep(name: &str) -> &str {
+    if npm_name_ok(name) {
+        name
+    } else {
+        "a dependency"
+    }
+}
+
+/// Whether `name` is an npm registry name: at most 214 characters of
+/// `a-z 0-9 - . _ ~`, with one optional `@scope/` of the same characters.
+/// Only such names are quoted in a refusal: a package chooses its own and
+/// its dependencies' names, and a refusal reaches the operator.
+pub(crate) fn npm_name_ok(name: &str) -> bool {
+    if name.len() > 214 {
+        return false;
+    }
+    match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, rest)| name_part(scope) && name_part(rest)),
+        None => name_part(name),
+    }
 }
 
 fn refuse(reason: &str) -> Refusal {

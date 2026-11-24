@@ -240,6 +240,8 @@ pub(in crate::gateway::router::handlers) async fn intake(
     );
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    // The same id as the refusal writer states it: present, absent or unreadable.
+    let answer_id = crate::gateway::router::AnswerId::of(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // MIK-8382 intake: judged on the request as sent, before signing capture
@@ -285,7 +287,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
             state,
             &request,
             (client.as_ref(), grant_subject.as_ref()),
-            (raw_id, &session_id),
+            (answer_id, &session_id),
             &error,
         )
         .await);
@@ -356,25 +358,31 @@ pub(in crate::gateway::router::handlers) async fn intake(
     if let Some(context) = signing_context.as_mut()
         && let Err(error) = context.restore(&mut request)
     {
-        return Err(build_error_response(
-            None,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        ));
+        // An envelope the context cannot restore (an unusable id, an origin
+        // changed after capture) is a refusal of the request's form like the
+        // malformed nonce below, and is recorded the same way. It is answered
+        // with no id, as before: the id was not accepted, or the origin it
+        // came with is not the one the request now has.
+        let who = (client.as_ref(), grant_subject.as_ref());
+        let (refused, called, _) = intake_refused(state, &request, who, &session_id);
+        let site = crate::gateway::router::meta_refusal_audit::SigningSite::Intake;
+        let no_id = crate::gateway::router::AnswerId::Absent;
+        return Err(refused
+            .answer_signing(state, called, (no_id, site), error)
+            .await);
     }
     if let Some(error) = signing_context
         .as_ref()
         .and_then(|context| context.refuse_malformed_nonce_early().err())
     {
-        return Err(build_error_response(
-            raw_id,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        ));
+        // Recorded before it is answered, by the one router writer; it keeps
+        // its early place, ahead of every gate.
+        let who = (client.as_ref(), grant_subject.as_ref());
+        let (refused, called, _) = intake_refused(state, &request, who, &session_id);
+        let site = crate::gateway::router::meta_refusal_audit::SigningSite::Intake;
+        return Err(refused
+            .answer_signing(state, called, (answer_id, site), error)
+            .await);
     }
 
     // MIK-8499: carry the client's `params._meta` into a meta tool's own
@@ -754,39 +762,38 @@ async fn answer_intake(
         Option<&AuthenticatedClient>,
         Option<&crate::identity_grants::GrantSubject>,
     ),
-    (id, session_id): (Option<crate::protocol::RequestId>, &str),
+    (id, session_id): (crate::gateway::router::AnswerId, &str),
     error: &crate::Error,
 ) -> axum::response::Response {
-    let empty = Value::Object(serde_json::Map::new());
-    let params = request.get("params");
-    let name = params
-        .and_then(|params| params.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let arguments = params
-        .and_then(|params| params.get("arguments"))
-        .unwrap_or(&empty);
-    // ponytail: the target as the request spells it, `gateway_invoke`'s
-    // server and tool else the called name; a surfaced name is recorded
-    // unmapped, since mapping is the backend-touching step this precedes.
-    let field = |key: &str| {
-        arguments
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    };
-    let target = if name == "gateway_invoke" {
-        (field("server"), field("tool"))
-    } else {
-        ("", name)
-    };
-    crate::gateway::router::meta_refusal_audit::Refused::of(
+    let (refused, name, arguments) =
+        intake_refused(state, request, (client, grant_subject), session_id);
+    let target = crate::gateway::router::meta_refusal_audit::request_target(arguments, name);
+    refused.answer_intake(state, target, id, error).await
+}
+
+/// The refusal an intake answer records, built from the request as sent
+/// (it is not parsed yet), with the called name and its arguments.
+fn intake_refused<'r>(
+    state: &AppState,
+    request: &'r Value,
+    (client, grant_subject): (
+        Option<&'r AuthenticatedClient>,
+        Option<&'r crate::identity_grants::GrantSubject>,
+    ),
+    session_id: &'r str,
+) -> (
+    crate::gateway::router::meta_refusal_audit::Refused<'r>,
+    &'r str,
+    &'r Value,
+) {
+    let (name, arguments) =
+        crate::gateway::router::meta_refusal_audit::call_name_and_arguments(request);
+    let refused = crate::gateway::router::meta_refusal_audit::Refused::of(
         arguments,
         client,
         grant_subject,
         session_id,
         state.live_config.generation().auth().record_key(),
-    )
-    .answer_intake(state, target, id, error)
-    .await
+    );
+    (refused, name, arguments)
 }

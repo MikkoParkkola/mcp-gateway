@@ -88,13 +88,89 @@ where
     }
 }
 
+/// Whether a test that cannot run on this host must fail instead of skipping, from `TESTS_REQUIRE_ALL`: unset or
+/// `0` skips (`0` is the local opt-out), `1` requires, and any other value is an error naming it, so a typo cannot
+/// silently turn required mode off. CI sets `1` in every test shard (`scripts/ci/shard_tests.py`), the packaged-crate
+/// suite's included (it runs through `shard_tests.py with-home`); a file the package leaves out is skipped there
+/// through [`skip_unshipped`]. The Python rule is `scripts/ci/required_mode.py`.
+pub(crate) fn required_mode(value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!(
+            "TESTS_REQUIRE_ALL must be 0 or 1 when set, got {other:?}"
+        )),
+    }
+}
+
+/// `TESTS_REQUIRE_ALL` as this process sees it.
+fn require_all_value() -> Option<String> {
+    match std::env::var("TESTS_REQUIRE_ALL") {
+        Ok(v) => Some(v),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("TESTS_REQUIRE_ALL is not valid unicode"),
+    }
+}
+
+/// The one way a test skips because this host lacks something it needs (a user right, a loopback family, a file a
+/// checkout should have): prints `skipped: <requirement>`, or panics where required mode is on, so a feature's only
+/// check cannot pass by not running. A file the package leaves out on purpose goes through [`skip_unshipped`]
+/// instead. The caller returns right after it (`scripts/ci/check_rust_skips.py` checks that).
+///
+/// # Panics
+///
+/// In required mode, and on a `TESTS_REQUIRE_ALL` value that is not `0` or `1`.
+pub(crate) fn skip_or_fail(requirement: &str) {
+    match required_mode(require_all_value().as_deref()) {
+        Ok(true) => panic!("required here but unavailable on this host: {requirement}"),
+        Ok(false) => eprintln!("skipped: {requirement}"),
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// [`skip_unshipped`]'s rule, apart so its rows can state every case. In the unpacked published crate a file the
+/// package leaves out is missing by design, a property of the crate and not of the host, so the test skips in every
+/// mode. Anywhere else the missing file is [`skip_or_fail`]'s missing requirement: it fails in required mode. A
+/// `TESTS_REQUIRE_ALL` value that is not `0` or `1` is an error either way.
+pub(crate) fn unshipped_verdict(
+    packaged: bool,
+    value: Option<&str>,
+    what: &str,
+) -> Result<(), String> {
+    if required_mode(value)? && !packaged {
+        return Err(format!(
+            "required here but unavailable on this host: {what}"
+        ));
+    }
+    Ok(())
+}
+
+/// The one way a test skips because the crate under test is the unpacked published crate and the repository file it
+/// needs is one the package leaves out on purpose (Cargo.toml `include`). `packaged` is the caller's own check of the
+/// crate it reads (`Cargo.toml.orig` and no `.git`: `boundary_pins::packaged`). In a packaged crate it prints
+/// `skipped (not shipped in the packaged crate): <what>` in every mode; in a checkout it is [`skip_or_fail`]. The
+/// caller returns right after it (`scripts/ci/check_rust_skips.py` checks that).
+///
+/// # Panics
+///
+/// In a checkout under required mode, and on a `TESTS_REQUIRE_ALL` value that is not `0` or `1`.
+pub(crate) fn skip_unshipped(packaged: bool, what: &str) {
+    match unshipped_verdict(packaged, require_all_value().as_deref(), what) {
+        Ok(()) if packaged => eprintln!("skipped (not shipped in the packaged crate): {what}"),
+        Ok(()) => eprintln!("skipped: {what}"),
+        Err(message) => panic!("{message}"),
+    }
+}
+
 #[cfg(tp3)]
 #[cfg(test)]
 mod tests {
     use std::ops::ControlFlow;
     use std::time::Duration;
 
-    use super::{wait_real_time, wait_until};
+    use std::process::Output;
+
+    use super::{required_mode, unshipped_verdict, wait_real_time, wait_until};
 
     /// A wait whose condition never holds gives up at its bound, with the
     /// last observation, and not later.
@@ -160,5 +236,162 @@ mod tests {
             Duration::ZERO,
             "the paused clock moved while waiting: a later interval could explain the file"
         );
+    }
+
+    const PLANTED: &str = "the planted requirement";
+
+    /// A1: unset and `0` skip (the local opt-out).
+    #[test]
+    fn a1_unset_and_zero_skip() {
+        assert_eq!(required_mode(None), Ok(false));
+        assert_eq!(required_mode(Some("0")), Ok(false));
+    }
+
+    /// A2: exactly `1` requires; every other value, empty included, is an error naming it.
+    #[test]
+    fn a2_one_requires_and_any_other_value_is_an_error() {
+        assert_eq!(required_mode(Some("1")), Ok(true));
+        for bad in ["", "yes", " 1", "true"] {
+            let err = required_mode(Some(bad)).unwrap_err();
+            assert!(err.contains(&format!("{bad:?}")), "{err}");
+        }
+    }
+
+    /// U1: in the unpacked published crate, a file the package leaves out skips in every mode, required mode
+    /// included: its absence is a property of the crate, not of the host.
+    #[test]
+    fn u1_an_unshipped_file_skips_in_a_packaged_crate_in_every_mode() {
+        for value in [None, Some("0"), Some("1")] {
+            assert_eq!(unshipped_verdict(true, value, PLANTED), Ok(()), "{value:?}");
+        }
+    }
+
+    /// U2: in a checkout the same missing file is a missing requirement: it fails in required mode, naming it,
+    /// and skips otherwise.
+    #[test]
+    fn u2_an_unshipped_file_in_a_checkout_fails_in_required_mode() {
+        assert_eq!(
+            unshipped_verdict(false, Some("1"), PLANTED),
+            Err(format!(
+                "required here but unavailable on this host: {PLANTED}"
+            ))
+        );
+        assert_eq!(unshipped_verdict(false, None, PLANTED), Ok(()));
+        assert_eq!(unshipped_verdict(false, Some("0"), PLANTED), Ok(()));
+    }
+
+    /// U3: a value that is not `0` or `1` is an error in a packaged crate too.
+    #[test]
+    fn u3_a_bad_value_is_an_error_in_a_packaged_crate_too() {
+        let err = unshipped_verdict(true, Some("yes"), PLANTED).unwrap_err();
+        assert!(err.contains("\"yes\""), "{err}");
+    }
+
+    fn child(value: Option<&str>) -> Output {
+        child_running("test_wait::tests::skip_child", value)
+    }
+
+    /// The test binary running only the ignored row `test`, with `TESTS_REQUIRE_ALL` set to `value` or removed.
+    fn child_running(test: &str, value: Option<&str>) -> Output {
+        let mut cmd = crate::test_home::test_binary();
+        cmd.args(["--ignored", "--exact", test, "--nocapture"]);
+        cmd.env_remove("TESTS_REQUIRE_ALL");
+        if let Some(v) = value {
+            cmd.env("TESTS_REQUIRE_ALL", v);
+        }
+        cmd.output().expect("the child runs")
+    }
+
+    /// Run only by U4, in a child: the real helper in a packaged crate.
+    #[test]
+    #[ignore = "run by u4, in a child with its own environment"]
+    fn unshipped_packaged_child() {
+        super::skip_unshipped(true, PLANTED);
+    }
+
+    /// Run only by U4, in a child: the real helper in a checkout.
+    #[test]
+    #[ignore = "run by u4, in a child with its own environment"]
+    fn unshipped_checkout_child() {
+        super::skip_unshipped(false, PLANTED);
+    }
+
+    /// U4: the real helper reads the variable. In a packaged crate, unset, `0` and `1` all print the unshipped
+    /// skip line and pass; in a checkout, unset and `0` print the plain skip line and `1` fails naming the file,
+    /// as `skip_or_fail` does; a value that is not `0` or `1` fails naming it in both.
+    #[test]
+    fn u4_the_real_unshipped_helper_reads_the_variable() {
+        const PACKAGED: &str = "test_wait::tests::unshipped_packaged_child";
+        const CHECKOUT: &str = "test_wait::tests::unshipped_checkout_child";
+        for value in [None, Some("0"), Some("1")] {
+            let out = child_running(PACKAGED, value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!(
+                    "skipped (not shipped in the packaged crate): {PLANTED}"
+                )),
+                "{value:?}: {err}"
+            );
+        }
+        for value in [None, Some("0")] {
+            let out = child_running(CHECKOUT, value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!("skipped: {PLANTED}")),
+                "{value:?}: {err}"
+            );
+        }
+        let out = child_running(CHECKOUT, Some("1"));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{err}");
+        assert!(
+            err.contains(&format!(
+                "required here but unavailable on this host: {PLANTED}"
+            )),
+            "{err}"
+        );
+        for child in [PACKAGED, CHECKOUT] {
+            let out = child_running(child, Some("yes"));
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{child}: {err}");
+            assert!(err.contains("\"yes\""), "{child}: {err}");
+        }
+    }
+
+    /// Run only by A4, in a child with its own environment.
+    #[test]
+    #[ignore = "run by a4, in a child with its own environment"]
+    fn skip_child() {
+        super::skip_or_fail(PLANTED);
+    }
+
+    /// A4: the real helper reads the variable: unset and `0` print the skip line and pass; `1` fails naming the
+    /// requirement; any other value panics naming the value.
+    #[test]
+    fn a4_the_real_helper_reads_the_variable() {
+        for value in [None, Some("0")] {
+            let out = child(value);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{value:?}: {err}");
+            assert!(
+                err.contains(&format!("skipped: {PLANTED}")),
+                "{value:?}: {err}"
+            );
+        }
+        let out = child(Some("1"));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{err}");
+        assert!(
+            err.contains(&format!(
+                "required here but unavailable on this host: {PLANTED}"
+            )),
+            "{err}"
+        );
+        let out = child(Some("yes"));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{err}");
+        assert!(err.contains("\"yes\""), "{err}");
     }
 }

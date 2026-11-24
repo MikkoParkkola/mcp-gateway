@@ -361,6 +361,32 @@ async fn prepare_locks_a_writable_config() {
     );
 }
 
+/// GATE.1, the writable side: a retired manifest beside a config this start can lock is evidence
+/// this build cannot read, so the start refuses it before any recovery. A crashed write waits
+/// beside it, so a recovery run first would restore the config and remove the journal: the whole
+/// folder must keep its entries and bytes, and the lock is free again.
+#[tokio::test]
+async fn prepare_refuses_a_retired_manifest_it_can_lock() {
+    const LEFT: &[u8] = b"written by an older gateway";
+    let row = "prepare_refuses_a_retired_manifest_it_can_lock";
+    let (dir, config) = fresh_config();
+    let manifest = dir.path().join("gateway.yaml.abandoned.retired");
+    write_owner_only(&manifest, LEFT).expect("manifest");
+    crashed_after_rename(&config, START, NEXT);
+    let sidecar = crate::config_persistence::lock::lock_path(
+        &crate::identity_grants::journal::resolved(&config),
+    );
+    let before = tree_with_sidecar(dir.path(), &sidecar);
+    assert!(
+        matches!(snap(&journal_file(dir.path())), Snap::File(_)),
+        "{row}: premise: a journal waits to be recovered"
+    );
+    let outcome = prepare_start(&config).await;
+    want_session(row, "manifest", outcome, StartError::ManifestUnread);
+    same_tree(row, "manifest beside a crashed write", dir.path(), &before);
+    assert_lock_free(&config, row).await;
+}
+
 /// GATE.4: with nothing pending under the lock, finishing accepts and releases the lock.
 #[tokio::test]
 async fn finish_accepts_a_clean_start() {
@@ -697,83 +723,12 @@ async fn prepare_refuses_unclassifiable_journal() {
     }
 }
 
-/// GATE.2, GATE.4: each `StartError` displays its one fixed sentence.
-#[test]
-fn start_error_texts() {
-    for error in [
-        StartError::Busy,
-        StartError::RepairPending,
-        StartError::JournalPending,
-        StartError::AbandonedPending,
-        StartError::InvalidAuditPayload,
-        StartError::ArtifactCheckFailed,
-    ] {
-        let sentence = match error {
-            StartError::Busy => {
-                "Another gateway or command holds the config lock past the 30-second wait. Start again when it has finished."
-            }
-            StartError::RepairPending => {
-                "A config write that crashed left the config in a state its journal could neither confirm nor restore. Compare the config with the revisions the journal records before changing anything, then start again."
-            }
-            StartError::JournalPending => {
-                "A config write's journal beside the config still owes audit records to the log it was bound to. Start with that audit log configured and reachable."
-            }
-            StartError::AbandonedPending => {
-                "The abandoned config-write file beside the config holds audit records this gateway cannot deliver. Configure the log it names, or move the file aside by hand to keep it as evidence."
-            }
-            StartError::InvalidAuditPayload => {
-                "The audit log refused a pending config-write record as invalid. The record is parked and kept as evidence, and it needs an operator's decision before this gateway can start."
-            }
-            StartError::ArtifactCheckFailed => {
-                "This gateway could not confirm that no config write is pending beside the config. Fix access to the config directory, then start again."
-            }
-        };
-        assert_eq!(
-            error.to_string(),
-            sentence,
-            "start_error_texts: {error:?} displays its sentence"
-        );
-    }
-}
-
-/// GATE.4: every `DrainError` variant maps to that stage's literal result.
-#[test]
-fn stage_maps_every_drain_error() {
-    let pending = Err(StartError::JournalPending);
-    let abandoned = Err(StartError::AbandonedPending);
-    let repair = Err(StartError::RepairPending);
-    let invalid = Err(StartError::InvalidAuditPayload);
-    for error in [
-        DrainError::Journal,
-        DrainError::RepairPending,
-        DrainError::NoLogger,
-        DrainError::OtherLog,
-        DrainError::Refused,
-        DrainError::Unconfirmed,
-        DrainError::Parked,
-        DrainError::Finish,
-        DrainError::FileRefused,
-    ] {
-        let (journal, file) = match error {
-            DrainError::NoLogger => (pending, Ok(())),
-            DrainError::RepairPending => (repair, abandoned),
-            DrainError::Parked => (invalid, invalid),
-            DrainError::Journal
-            | DrainError::OtherLog
-            | DrainError::Refused
-            | DrainError::Unconfirmed
-            | DrainError::Finish
-            | DrainError::FileRefused => (pending, abandoned),
-        };
-        let row = "stage_maps_every_drain_error";
-        assert_eq!(journal_stage(error), journal, "{row}: journal {error:?}");
-        assert_eq!(file_stage(error), file, "{row}: file {error:?}");
-    }
-}
-
 /// The tree with the lock sidecar created first, by a lock taken and freed:
 /// Windows refuses to read a file this process holds locked.
 fn tree_with_sidecar(dir: &Path, lock: &Path) -> Vec<(OsString, Snap)> {
     drop(ExclusiveFileLock::try_acquire(lock).expect("the sidecar exists"));
     tree(dir)
 }
+
+#[path = "startup_settle_texts_tests.rs"]
+mod texts;

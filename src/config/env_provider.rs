@@ -57,6 +57,7 @@ pub(crate) const CLI_OWNED_ENV: &[&str] = &[
     "MCP_GATEWAY_PORT",
     "MCP_GATEWAY_PROTOCOL_REVISION_WINDOW",
     "MCP_GATEWAY_SKILLS_REGISTRY",
+    "MCP_GATEWAY_URL",
 ];
 
 impl<'a> OverlayEnv<'a> {

@@ -1,6 +1,6 @@
 # ADR-019: Restarting the gateway from the UI
 
-- **Status**: Proposed, 2026-10-25
+- **Status**: Proposed, 2026-10-25; amended 2026-11-22 (no in-process restart in 4.0.0, see the amendment at the end)
 - **Ticket**: MIK-8839 (ADR.3); unblocks U14 (MIK-8867, restart with progress, version and uptime) and UI10 (MIK-8884)
 - **Base**: `docs/ranking-1-release-line` at `d13b042cb`
 
@@ -42,3 +42,10 @@ Option 2 on Unix, Option 3 where 2 cannot run.
 - A few seconds of refused connections during the restart, the "3 s down" in the frames.
 - Runtime shutdown is bounded: blocking work still running when the timeout ends is abandoned with the process image, which is why every save is checked before exec rather than after.
 - Two cases leave a bare-shell gateway down: an exec that fails after its own check passed, and a new process that execs fine but then fails to start (a config error, a port taken). Both are logged with the command to recover; under a supervisor the second is handled by its restart policy.
+
+## Amendment, 2026-11-22: 4.0.0 ships no in-process restart
+
+- **Status**: Accepted for 4.0.0.
+- **Decision**: on 2026-11-16 the operator decided that 4.0.0 does not restart itself. The re-execute design in the Decision above (refuse first, stop under one deadline, check every save, re-execute once the runtime is gone) moves to a later 4.0 release, where its own tickets carry it.
+- **What 4.0.0 does instead** (Option 3 on every platform): the restart routes keep their shape and refuse with an audited 409. When a reload or a settings save leaves settings that only a restart applies, that answer carries one guidance line, the same text the restart preview answers as its recovery, and on Unix a start command for the running binary and its config file, quoted for a POSIX shell. When the config a restart would boot is refused at startup, the answer carries that refusal alone and no command, so an operator is never told to restart into a gateway that would not start. That start command names the running file (`current_exe`); the later re-execute design keeps its own source, the invocation recorded at start, and the two are not mixed.
+- **Consequences**: no button restarts the gateway in 4.0.0; the operator restarts it through the service manager that runs it, or by hand with the shown command. The stop-budget work this ADR needed (one deadline for the whole stop) ships in 4.0.0 regardless, since a supervisor's stop uses it too.

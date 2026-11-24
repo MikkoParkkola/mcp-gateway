@@ -493,6 +493,15 @@ impl Gateway {
             true,
         ));
 
+        // The daily heartbeat (docs/PRIVACY.md, "Daily heartbeat"): after the
+        // bind, so a refused start sends nothing; never awaited, and ended by
+        // the shutdown signal.
+        let _heartbeat = crate::heartbeat::start(
+            self.config.security.posture,
+            data_dir.clone(),
+            shutdown_tx.subscribe(),
+        );
+
         // After boot warm-start is scheduled, so no reload precedes it
         // (`MIK-8054`). Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the
@@ -533,6 +542,7 @@ impl Gateway {
             .map(|enforcer| {
                 persistence::spawn_cost_saver(
                     Arc::clone(enforcer),
+                    meta_mcp_for_shutdown.cost_tracker(),
                     data_dir.clone(),
                     persistence::COST_SAVE_INTERVAL,
                     Some(shutdown_tx.subscribe()),
@@ -574,7 +584,13 @@ impl Gateway {
         let cost_state = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, data_dir.clone()));
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
         #[cfg(not(feature = "cost-governance"))]
         let cost_state = None;
         let checkpoints = Arc::new(stop_checkpoints::Checkpoints::new(
@@ -630,7 +646,13 @@ impl Gateway {
         let cost = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, data_dir.clone()));
+            .map(|enforcer| {
+                (
+                    enforcer,
+                    meta_mcp_for_shutdown.cost_tracker(),
+                    data_dir.clone(),
+                )
+            });
         // It ends on the shutdown broadcast; a write in flight finishes or
         // is abandoned on its own thread.
         #[cfg(feature = "cost-governance")]

@@ -42,6 +42,7 @@ fn make_token(subject: &str, email: &str, exp_offset_secs: i64) -> TemporaryToke
     };
 
     TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: make_identity(subject, email),
@@ -256,6 +257,7 @@ fn is_expired_returns_true_for_past_exp() {
         .unwrap()
         .as_secs();
     let token = TemporaryToken {
+        issuance_row: None,
         jti: "test".to_string(),
         token: "mcpgw_test".to_string(),
         identity: make_identity("sub", "test@example.com"),
@@ -277,6 +279,7 @@ fn is_expired_returns_false_for_future_exp() {
         .unwrap()
         .as_secs();
     let token = TemporaryToken {
+        issuance_row: None,
         jti: "test".to_string(),
         token: "mcpgw_test".to_string(),
         identity: make_identity("sub", "test@example.com"),

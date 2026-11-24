@@ -144,7 +144,7 @@ impl TransparencyLogger {
         fields.insert("type".into(), AUDIT_PROBE_TYPE.into());
         crate::clock::stamp_audit_row(&mut fields);
         self.append_core(fields, &AuditEnvelope::gateway(), false)
-            .map(|_| ())
+            .map(|(_, _)| ())
     }
 
     /// Append one `admin_action` record (E1-d, E1-f) for `surface`, with the

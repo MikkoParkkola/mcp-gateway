@@ -99,6 +99,7 @@ impl MetaMcp {
             crate::security::decision_record::Decided::Replayed,
             crate::security::decision_record::Refused::No,
             self.live_config().as_deref(),
+            caller.credential_kind,
         ));
         match self
             .write_invocation(

@@ -168,8 +168,8 @@ fn t4_old_versions_age_out_unless_running() {
     );
 
     assert_eq!(revision_names(&history), expect(&["r2"]));
-    assert!(matches!(history.lookup("r1"), Lookup::NoLongerKept));
-    assert!(matches!(history.lookup("zz"), Lookup::Unknown));
+    assert!(matches!(history.lookup("r1"), Ok(Lookup::NoLongerKept)));
+    assert!(matches!(history.lookup("zz"), Ok(Lookup::Unknown)));
 }
 
 #[cfg(unix)]
@@ -264,7 +264,7 @@ fn t7_a_rotated_key_gives_a_new_id_and_keeps_the_old() {
     assert_eq!(names.get(1).cloned(), k2);
     assert_eq!(names.len(), 2);
     let kept = match k1.as_deref().map(|revision| fresh.lookup(revision)) {
-        Some(Lookup::Kept(snapshot)) => Some(gateway(&snapshot).to_vec()),
+        Some(Ok(Lookup::Kept(snapshot))) => Some(gateway(&snapshot).to_vec()),
         _ => None,
     };
     assert_eq!(kept.as_deref(), Some(V1));

@@ -34,6 +34,9 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's own cache helps no other PR and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the docs with broken links denied
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links

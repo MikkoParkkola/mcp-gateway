@@ -209,14 +209,23 @@ pub(super) async fn backend_handler(
     // The request's scope for what intake judges (MIK-8154 F2: the exempt
     // instance the send compares), boxed so the scope wraps a pointer.
     // The minted-receipt scope rides outside the memo.
-    crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-        // The caller's hiding judgment, filled once the caller is resolved.
-        crate::gateway::meta_mcp::hiding::with_caller_slot(
-            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-                direct_audit::audited_call(Arc::clone(&state), name, request),
-            )),
-        ),
-    ))
+    // The exchanged token this call was made with, for its decision; taken
+    // before the request moves into the call.
+    let token = request
+        .extensions()
+        .get::<crate::gateway::auth::live::CredentialFacts>()
+        .and_then(crate::gateway::auth::live::CredentialFacts::token_on_call);
+    crate::security::decision_record::with_token(
+        token,
+        crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
+            // The caller's hiding judgment, filled once the caller is resolved.
+            crate::gateway::meta_mcp::hiding::with_caller_slot(
+                crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                    direct_audit::audited_call(Arc::clone(&state), name, request),
+                )),
+            ),
+        )),
+    )
     .await
 }
 

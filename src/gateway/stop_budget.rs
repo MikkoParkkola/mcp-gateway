@@ -21,6 +21,9 @@ const POST_RESERVE: Duration = Duration::from_millis(250);
 /// backend stage after the listener has used its grace group-kills a busy nested
 /// gateway first, and the leaf, which has its own process group, is orphaned.
 const BACKEND_RESERVE: Duration = Duration::from_millis(10_400);
+/// The backend stage's share at the floor, for boundary rows in other modules.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) const BACKEND_RESERVE_FOR_TEST: Duration = BACKEND_RESERVE;
 /// Reserved for retirement: runtime and main-stack coordination, then the logger.
 const TERMINAL_RESERVE: Duration = Duration::from_millis(2_250);
 /// The logger's share of the terminal reserve: the runtime wait ends this long

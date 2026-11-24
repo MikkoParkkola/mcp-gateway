@@ -257,11 +257,41 @@ def heavy_jobs_skip_throwaway(rc: list) -> None:
                 rc.append(f"{workflow}: {job_id} skips a throwaway head naming {opt_in!r}")
 
 
+def cargo_after_suites_problems(name: str, steps: list) -> list[str]:
+    """Problems in one throwaway test job: a red Python suite must fail the job but never skip what follows it
+    (from 11-13 to 11-20 it skipped `Run the tests` on every throwaway PR), and the suites need the gate env's
+    tree-sitter versions installed before them."""
+    names = [s.get("name", "") for s in steps]
+    if "Release tooling Python suites" not in names:
+        return [f"{name}: no 'Release tooling Python suites' step"]
+    at = names.index("Release tooling Python suites")
+    out = [f"{name}: step {i} ({s.get('name') or s.get('uses')}) after the Python suites lacks if: !cancelled()"
+           for i, s in enumerate(steps[at + 1:], at + 1) if "!cancelled()" not in str(s.get("if", ""))]
+    if not any("scripts/gate-env/pyproject.toml" in str(s.get("run", "")) for s in steps[:at]):
+        out.append(f"{name}: nothing before the Python suites installs the gate env's tree-sitter versions")
+    return out
+
+
+def throwaway_cargo_survives_a_suite_red(rc: list) -> None:
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    found = [j for j in jobs.values() if j.get("name") == "Tests (throwaway)"]
+    if len(found) != 2:
+        rc.append(f"expected 2 'Tests (throwaway)' jobs, found {len(found)}")
+    for job in found:
+        rc.extend(cargo_after_suites_problems(str(job.get("runs-on")), job.get("steps", [])))
+    # The rule itself must fail on each half: a cargo step without the condition, and no install before the suites.
+    bare = [{"name": "Release tooling Python suites"}, {"name": "Run the tests"}]
+    found = " ".join(cargo_after_suites_problems("self-check", bare))
+    if "lacks if: !cancelled()" not in found or "installs the gate env" not in found:
+        rc.append(f"the cargo-after-suites rule missed half of its self-check: {found!r}")
+
+
 def main() -> int:
     rc: list[str] = []
     check("ci.yml", "Tests (throwaway)", rc)
     only_throwaway_tests(rc)
     heavy_jobs_skip_throwaway(rc)
+    throwaway_cargo_survives_a_suite_red(rc)
     check("mutants.yml", "Mutants (linux)", rc)
     for line in rc:
         print(f"routing: {line}", file=sys.stderr)

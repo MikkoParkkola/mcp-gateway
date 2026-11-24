@@ -8,8 +8,8 @@ a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
 - the library is split by a libtest filter and the matching `--skip` (Windows
-  splits the skipped part again by module filters, so it has three lib
-  shards), or run whole in one shard (macOS). Filters match substrings of
+  cuts it by module filters into four lib legs, each skipping the filters of
+  the legs before it), or run whole in one shard (macOS). Filters match substrings of
   the test path, so a module filter also takes its nested paths;
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
@@ -25,6 +25,10 @@ were deleted is lowered in the same diff, where review sees it.
                                      run a SHARED_BUILD shard from that binary
   shard_tests.py run-prebuilt-parts <os> <leg> --build <dir>
                                      build and run a PARTS leg's lib test parts one at a time
+  shard_tests.py with-home -- <cmd>...
+                                     run <cmd> in a private gateway home, removed afterwards
+  shard_tests.py export-home <file>  make a private gateway home for the rest of a CI job and
+                                     append its variables to <file> ($GITHUB_ENV)
   shard_tests.py --self-test         check the counter against fixed logs
 """
 from __future__ import annotations
@@ -65,12 +69,16 @@ BASE = ["test", "--all-features", "--no-fail-fast"]
 #  libtest args before the OS skips, floor of selected tests)
 _LIB_A = ("suite", ["--lib"], [LIB_SPLIT])
 _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
-# Windows splits lib-b again: its tests ran about 23 min after a 22-min build (run 42493724287),
-# the longest job on a lane pull request. These top-level modules move to lib-c (4,727 of 9,251
-# tests then); lib-b skips them, so each library test still runs in exactly one shard.
-LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
-_WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
-_WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
+# Windows runs its library from one shared exe in four legs, so a leg costs setup only, not a
+# compile. gateway:: is cut in two (router and server first, then the rest of it), security::
+# runs on its own, and lib-b takes whatever is left. Each leg skips the filters of the legs
+# before it (the cascade test_os_shards.py checks), so every library test runs in exactly one.
+_WIN_FIRST = ["gateway::router::", "gateway::server::"]
+_WIN_SKIP_FIRST = [x for f in _WIN_FIRST for x in ("--skip", f)]
+_WIN_LIB_A = ("suite", ["--lib"], list(_WIN_FIRST))
+_WIN_LIB_D = ("suite", ["--lib"], [LIB_SPLIT, *_WIN_SKIP_FIRST])
+_WIN_LIB_C = ("suite", ["--lib"], ["security::", *_WIN_SKIP_FIRST, "--skip", LIB_SPLIT])
+_WIN_LIB_B = ("suite", ["--lib"], [*_WIN_SKIP_FIRST, "--skip", LIB_SPLIT, "--skip", "security::"])
 # The binary's own unit tests (599 of them) moved into the library behind `cli::run`: the
 # `--bins` selection of every int shard dropped by 597 (the binary keeps 2), and the library
 # shards gained them. Linux int-a measured 1063 before (run 42963873558), so 466 after, at the
@@ -86,10 +94,12 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-b": [("suite", ["--test", GLOB_B], [], 1371), ("doc", ["--doc"], [], 55)],
     },
     "windows": {
-        "lib-a": [(*_LIB_A, 5335)],
-        # The former lib-b floor (6747), divided in the measured proportion.
-        "lib-b": [(*_WIN_LIB_B, 3299)],
-        "lib-c": [(*_WIN_LIB_C, 3448)],
+        # Floors: 0.575 of each leg's count replayed over run 45007740526's 20,327 names
+        # (the lowest selected-to-floor proportion among the former legs).
+        "lib-a": [(*_WIN_LIB_A, 2528)],
+        "lib-d": [(*_WIN_LIB_D, 2861)],
+        "lib-c": [(*_WIN_LIB_C, 1086)],
+        "lib-b": [(*_WIN_LIB_B, 5211)],
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 295)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
@@ -125,7 +135,7 @@ for _leg, _parts in PARTS["macos"].items():
     SHARDS["macos"][_leg] = [("parts", ["--lib"], [], sum(MACOS_PART_COUNTS[k] for k in _parts) * 98 // 100)]
 # Shards that are matrix legs of their own but compile nothing: they run from the lib test binary one job
 # of the run builds and shares (ci.yml's linux-lib-build, `export-lib`), under the same guards as `run`.
-SHARED_BUILD = {"linux": ("lib-a", "lib-b")}
+SHARED_BUILD = {"linux": ("lib-a", "lib-b"), "windows": ("lib-a", "lib-b", "lib-c", "lib-d")}
 # The lib test binary's folder under BY_BINARY, as the cargo runner names it (`mcp_gateway-<hash>`, hash dropped).
 LIB_TARGET = "mcp_gateway"
 # Built, not run: the default `cargo test` target set compiles examples, and
@@ -155,6 +165,19 @@ HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNING = re.compile(r"^running (\d+) tests?$")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored")
+# test_dir_keep.rs report_unkept: "<kind> at <path> is in a temp dir no test kept; created by <test>",
+# on raw stderr, so it can start mid-line. The kind is read, never listed: a new writer's kind fails too.
+# The path runs to the report's fixed suffix, so a path with spaces is read whole.
+# The kind is one or two lowercase words (every writer's kind is), and the path holds no " at ", so lowercase
+# words or an earlier " at " that raw stderr put before the report on the same line are not read into either.
+UNKEPT = re.compile(r"\b([a-z]+(?: [a-z]+)?) at ((?:(?! at ).)+?) is in a temp dir no test kept; created by (\S+)")
+
+
+def unkept(lines: list[str]) -> list[str]:
+    """One failure per distinct unkept-dir report in a step's output, whatever its kind."""
+    return list(dict.fromkeys(
+        f"unkept temp dir: {m.group(1)} at {m.group(2)}; created by {m.group(3)}"
+        for line in lines for m in UNKEPT.finditer(line)))
 
 
 def selected(lines: list[str]) -> int:
@@ -290,24 +313,35 @@ def contents(path: str, most: int | None = 3) -> str:
     return shown + (f", +{len(found) - most} more" if len(found) > most else "")
 
 
+def make_home(parent: str) -> dict[str, str]:
+    """A fresh, empty gateway home made in `parent`, given as the three variables that send test binaries to it:
+    the override itself, and the config and data dirs the library resolves beneath it."""
+    home = os.path.join(parent, f"shard-home-{secrets.token_hex(8)}")
+    # Only the owner may enter it on POSIX. Windows gets a plain mkdir that inherits the account's temp-dir ACL:
+    # the 0o700 form (the one mkdtemp uses) writes a protected DACL with an OWNER RIGHTS entry, and the gateway
+    # rejects a lock dir writable by any SID beyond the user, SYSTEM and Administrators, so auth-on starts broke.
+    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    return {
+        "MCP_GATEWAY_TEST_HOME_DIR": home,
+        "XDG_CONFIG_HOME": os.path.join(home, ".config"),
+        "MCP_GATEWAY_CONFIG_DIR": os.path.join(home, ".mcp-gateway"),
+    }
+
+
 @contextlib.contextmanager
 def private_home(base: dict[str, str] | None, tmp: str | None):
     """A gateway home of the shard's own for its test binaries, on every OS: without one, every
     shard on a host shares the account's vault lock and data dir. Made beside the shard's TMPDIR
     (not inside it, so the leftover check never reads it) and removed after the shard, also when a
     step fails. The config and data dirs the lib resolves are set beneath it."""
-    home = os.path.join(
-        os.path.dirname(tmp) if tmp else tempfile.gettempdir(), f"shard-home-{secrets.token_hex(8)}"
-    )
-    # Owner-only on POSIX. Not on Windows: there a 0o700 mkdir (what mkdtemp does) writes a
-    # protected DACL that also grants OWNER RIGHTS (S-1-3-4), and the gateway refuses a lock dir
-    # that any SID but the user, SYSTEM and Administrators may write, so every auth-on start under
-    # this home failed. A plain mkdir inherits the account's own temp-dir ACL instead.
-    os.mkdir(home, 0o777 if os.name == "nt" else 0o700)
+    values = make_home(os.path.dirname(tmp) if tmp else tempfile.gettempdir())
+    home = values["MCP_GATEWAY_TEST_HOME_DIR"]
     env = dict(os.environ if base is None else base)
-    env["MCP_GATEWAY_TEST_HOME_DIR"] = home
-    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
-    env["MCP_GATEWAY_CONFIG_DIR"] = os.path.join(home, ".mcp-gateway")
+    env.update(values)
+    # A test that skips for a missing tool or right fails here: a feature's only check must not pass by not running.
+    # Every shard runs through this home, the packaged-crate suite's included (lib-parts.sh re-runs itself under
+    # `with-home`); a file the package leaves out on purpose skips there through test_wait::skip_unshipped.
+    env.setdefault("TESTS_REQUIRE_ALL", "1")
     try:
         yield env
     finally:
@@ -323,6 +357,23 @@ def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
+
+
+def with_home(cmd: list[str]) -> int:
+    """Run a test command outside the shards (a workflow step, lib-parts.sh run) in a private
+    gateway home of its own, the same as a shard's, and hand back its exit code."""
+    with private_home(None, None) as env:
+        return subprocess.run(cmd, env=env).returncode
+
+
+def export_home(env_file: str) -> int:
+    """For a CI step whose command stays as written: make a gateway home for the rest of the job in RUNNER_TEMP
+    (which the runner empties at the start and end of every job) and append its variables to `env_file`
+    ($GITHUB_ENV), so the job's later steps run their tests in it."""
+    values = make_home(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
+    with open(env_file, "a", encoding="utf-8") as f:
+        f.writelines(f"{key}={value}\n" for key, value in values.items())
+    return 0
 
 
 RUNNER_NAME = ".shard-runner.sh"
@@ -378,6 +429,8 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
                 failed.append(f"{step}: cargo exited {rc}")
             if n < floor:
                 failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
+            # One failure per distinct report, even when two steps print the same one.
+            failed += [u for u in unkept(lines) if u not in failed]
         if EXAMPLES.get(os_kind) == shard:
             rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
             if rc != 0:
@@ -469,6 +522,10 @@ def self_test() -> int:
         "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
         "if os.environ.get('PLANT_LEAK'):\n"
         "    open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()\n"
+        "if os.environ.get('PLANT_UNKEPT'):\n"
+        "    import sys\n"
+        "    sys.stderr.write('shutdown save at /tmp/.tmpZz9Yy8/s.json is in a temp dir no test kept;'\n"
+        "                     ' created by a::b::row\\n')\n"
     ))
     os.environ["PLANT_LEAK"] = "1"
     try:
@@ -489,6 +546,15 @@ def self_test() -> int:
         assert contents(leftover, None).endswith(
             f"{os.path.join('tasks', 'task-d.json')} 2B"), contents(leftover, None)
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
+    # K6 on a cargo shard's run path: a report a test printed (raw stderr, merged into the step's
+    # output) fails the shard once, by its test, beside the control run above that stays green.
+    os.environ["PLANT_UNKEPT"] = "1"
+    try:
+        reported = run_steps("linux", "lib-a", fake)
+    finally:
+        del os.environ["PLANT_UNKEPT"]
+    assert reported == ["unkept temp dir: shutdown save at /tmp/.tmpZz9Yy8/s.json; created by a::b::row"], \
+        f"a cargo shard whose test printed an unkept report did not fail on it: {reported}"
     assert unexpected({"a": ["x"], "b": ["x"]}, [("[ab]", "x", 1, "one allowed")]) == ["b"], \
         "the count bounds a source"
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
@@ -604,6 +670,7 @@ def self_test() -> int:
         assert unexpected(found, synthetic) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     prebuilt_rows()
+    unkept_rows()
     built_parts_rows()
     built_parts_root_rows()
     # H1: every shard, on every OS, gives cargo and a prebuilt lib
@@ -612,7 +679,7 @@ def self_test() -> int:
     # for cargo and writes down what it was given.
     record_dir = tempfile.mkdtemp(prefix="shard-record-")
     record = os.path.join(record_dir, "env.json")
-    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR")
+    keys = ("MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR", "TMPDIR", "TESTS_REQUIRE_ALL")
     recorder_src = (
         "import json, os, sys\n"
         f"keys = {keys!r}\n"
@@ -628,12 +695,13 @@ def self_test() -> int:
     )
     recorder = (sys.executable, "-c", recorder_src)
 
-    def home_given(os_kind: str) -> str:
+    def home_given(os_kind: str, expect_required: str = "1") -> str:
         seen = json.load(open(record, encoding="utf-8"))
         home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
         assert home and os.path.basename(home).startswith("shard-home-"), (os_kind, seen)
         assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), (os_kind, seen)
         assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), (os_kind, seen)
+        assert seen["TESTS_REQUIRE_ALL"] == expect_required, ("a skip for a missing tool or right fails in a shard", os_kind, seen)
         if os.name != "nt":
             assert seen["mode"] == 0o700, ("the home is owner-only", os_kind, oct(seen["mode"]))
         if os_kind in TMP_GUARDED:
@@ -658,10 +726,19 @@ def self_test() -> int:
             del os.environ["RECORD_RC"]
         assert any("cargo exited 1" in f for f in failed), failed
         assert not os.path.exists(home_given("linux")), "a failed shard removes its home too"
+        # C2: an ambient TESTS_REQUIRE_ALL=0 survives, so a developer can opt out locally; the shard only fills in an unset one.
+        os.environ["TESTS_REQUIRE_ALL"] = "0"
+        try:
+            assert run_steps("linux", "lib-a", recorder) == [], "the opt-out run"
+        finally:
+            del os.environ["TESTS_REQUIRE_ALL"]
+        assert json.load(open(record, encoding="utf-8"))["TESTS_REQUIRE_ALL"] == "0", "an ambient 0 survives"
         if os.name == "posix":
             binary = os.path.join(record_dir, "fake-lib")
             with open(binary, "w", encoding="utf-8") as f:
                 f.write(f"#!{sys.executable}\n{recorder_src}")
+            with open(binary + ".root", "w", encoding="utf-8") as f:  # as export-lib leaves it
+                f.write(ROOT + "\n")
             single = next(name for name, steps in SHARDS["linux"].items() if len(steps) == 1)
             assert run_prebuilt("linux", single, binary) == 0, "the prebuilt control run"
             assert not os.path.exists(home_given("linux")), "a prebuilt shard removes its home"
@@ -687,8 +764,155 @@ def self_test() -> int:
     assert len(forgot) == 1 and forgot[0].startswith("left in TMPDIR: mcp-gateway-test-home-"), forgot
     assert run_steps("linux", "lib-a", forgetful) == [], "given the shard's home, no fallback is built"
     parts_rows()
+    with_home_rows()
+    export_home_rows()
+    home_copies_rows()
+    windows_shared_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def unkept_rows() -> None:
+    """K6: every unkept-dir report fails the shard naming its test, whatever its kind, wherever it
+    starts on the line (raw stderr lands mid-line after a `test x ... ` prefix); a clean log passes."""
+    audit = ("test gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and"
+             "_the_stop_is_clean ... audit log at /tmp/.tmpmFJ46f/audit.jsonl is in a temp dir no test kept;"
+             " created by gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_ser"
+             "ving_and_the_stop_is_clean")
+    assert unkept([audit]) == [
+        "unkept temp dir: audit log at /tmp/.tmpmFJ46f/audit.jsonl; created by gateway::server::test_seams::"
+        "health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean"], unkept([audit])
+    # A kind no writer uses today fails the same way: the check reads the report, not a list of kinds.
+    novel = "frobnicator spool at /tmp/.tmpQx12Ab/spool.bin is in a temp dir no test kept; created by a::b::row"
+    assert unkept(["", novel, "test a::b::row ... ok"]) == [
+        "unkept temp dir: frobnicator spool at /tmp/.tmpQx12Ab/spool.bin; created by a::b::row"], unkept([novel])
+    # The same report printed twice by one test is one failure; two tests are two.
+    other = novel.replace("a::b::row", "a::b::other")
+    assert len(unkept([novel, novel, other])) == 2, unkept([novel, novel, other])
+    clean = ["running 2 tests", "test a::b::row ... ok", "test a::b::other ... ok",
+             "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
+    assert unkept(clean) == [], unkept(clean)
+    # One raw line per kind the writers emit, from the full-lib sizing run (only the Spark mirror prefix of each
+    # path is replaced by /tmp), and the worker-thread creator a multi-thread runtime gives.
+    sized = [
+        ("package cache", "/tmp/.tmpOpr9CV/pkg-cache",
+         "backend::package_cache::retry_tests::a_backend_that_dies_for_an_unrelated_reason_is_not_retried"),
+        ("config lock", "/tmp/.tmpTQ6JVm/capabilities",
+         "capability::file_writer::tests::create_race_has_one_winner"),
+        ("shutdown save", "/tmp/.tmpBsItVX/ranker.json",
+         "gateway::server::persistence::shutdown_deadline_tests::the_state_saves_end_at_the_deadline_they_are_given"),
+        ("periodic save", "/tmp/.tmpnwcyRg", "gateway::server::persistence::tests::cost_saver_stops_on_shutdown"),
+        ("skill bundle", "/tmp/.tmp6oTLRb/skills",
+         "skills::watcher::burst_tests::a_pass_that_leaves_changes_behind_warns_once"),
+        ("config lock", "/tmp/.tmpzYfy13/gateway.yaml", "tokio-rt-worker"),
+    ]
+    for kind, path, creator in sized:
+        line = f"{kind} at {path} is in a temp dir no test kept; created by {creator}"
+        assert unkept([line]) == [f"unkept temp dir: {kind} at {path}; created by {creator}"], line
+    # A path with a space is read whole: the report's fixed suffix ends it, so a spaced temp dir and a Windows
+    # user name with a space both fail the shard with the whole path.
+    for path in ("/tmp/with space/.tmpAb12Cd/audit.jsonl", r"C:\Users\Jane Doe\AppData\Local\Temp\.tmpAb12Cd\skills"):
+        line = f"test a::b::row ... audit log at {path} is in a temp dir no test kept; created by a::b::row"
+        assert unkept([line]) == [f"unkept temp dir: audit log at {path}; created by a::b::row"], unkept([line])
+    # Raw stderr ahead of the report on one line: lowercase words, and a panic message with its own " at ",
+    # are read into neither the kind nor the path.
+    tail = "audit log at /tmp/.tmpZz9Yy8/a.jsonl is in a temp dir no test kept; created by a::b::row"
+    want = ["unkept temp dir: audit log at /tmp/.tmpZz9Yy8/a.jsonl; created by a::b::row"]
+    for noise in ("warning some text ", "thread 'x' panicked at src/a.rs:1:2: oops "):
+        assert unkept([noise + tail]) == want, unkept([noise + tail])
+
+
+def with_home_rows() -> None:
+    """S1: `with-home -- CMD` runs CMD in a private gateway home, hands back its exit code, and
+    removes the home afterwards, also when CMD fails."""
+    probe = (
+        "import json, os, sys\n"
+        "keys = ('MCP_GATEWAY_TEST_HOME_DIR', 'XDG_CONFIG_HOME', 'MCP_GATEWAY_CONFIG_DIR')\n"
+        "seen = {k: os.environ.get(k) for k in keys}\n"
+        "home = seen['MCP_GATEWAY_TEST_HOME_DIR'] or ''\n"
+        "seen['mode'] = os.stat(home).st_mode & 0o777 if os.path.isdir(home) else None\n"
+        "json.dump(seen, open(sys.argv[1], 'w'))\n"
+        "sys.exit(int(sys.argv[2]))\n"
+    )
+    with tempfile.TemporaryDirectory() as scratch:
+        record = os.path.join(scratch, "seen.json")
+        for rc in (0, 3):
+            got = main(["shard_tests.py", "with-home", "--", sys.executable, "-c", probe, record, str(rc)])
+            assert got == rc, f"with-home returned {got} for a command that exited {rc}"
+            seen = json.load(open(record, encoding="utf-8"))
+            home = seen["MCP_GATEWAY_TEST_HOME_DIR"]
+            assert home and seen["mode"] is not None, f"the command saw no existing home: {seen}"
+            assert seen["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), seen
+            assert seen["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), seen
+            if os.name != "nt":
+                assert seen["mode"] == 0o700, f"the home is not owner-only: {oct(seen['mode'])}"
+            assert not os.path.exists(home), f"exit {rc}: the home {home} was left behind"
+
+
+def export_home_rows() -> None:
+    """S2: `export-home FILE` makes a gateway home in RUNNER_TEMP for the rest of a CI job and appends its three
+    variables to FILE ($GITHUB_ENV) after what is already there; the home stays for the job's later steps."""
+    keys = ["MCP_GATEWAY_TEST_HOME_DIR", "XDG_CONFIG_HOME", "MCP_GATEWAY_CONFIG_DIR"]
+    with tempfile.TemporaryDirectory() as runner_temp:
+        env_file = os.path.join(runner_temp, "github_env")
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write("EARLIER=kept\n")
+        saved = os.environ.get("RUNNER_TEMP")
+        os.environ["RUNNER_TEMP"] = runner_temp
+        try:
+            rc = main(["shard_tests.py", "export-home", env_file])
+        finally:
+            if saved is None:
+                del os.environ["RUNNER_TEMP"]
+            else:
+                os.environ["RUNNER_TEMP"] = saved
+        assert rc == 0, f"export-home returned {rc}"
+        lines = open(env_file, encoding="utf-8").read().splitlines()
+        assert lines[0] == "EARLIER=kept", f"export-home rewrote what was there: {lines}"
+        got = dict(line.split("=", 1) for line in lines[1:])
+        assert sorted(got) == sorted(keys), f"exported {sorted(got)}, expected {sorted(keys)}"
+        home = got["MCP_GATEWAY_TEST_HOME_DIR"]
+        assert os.path.dirname(home) == runner_temp, f"the home {home} is not in RUNNER_TEMP"
+        assert os.path.isdir(home), "the exported home does not exist after the step"
+        assert got["XDG_CONFIG_HOME"] == os.path.join(home, ".config"), got
+        assert got["MCP_GATEWAY_CONFIG_DIR"] == os.path.join(home, ".mcp-gateway"), got
+        if os.name != "nt":
+            assert os.stat(home).st_mode & 0o777 == 0o700, "the exported home is not owner-only"
+
+
+def home_copies_rows() -> None:
+    """S3: the mutant runner keeps its own copy of make_home, because it is fetched alone from the release line and
+    must not import from the tree it tests. The two copies must make the same home: the same three variables, each
+    at the same place under the home, and the same mode. A deliberately drifted copy must read as different."""
+    import importlib.util
+    import inspect
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mutants", "run_mutants.py")
+    spec = importlib.util.spec_from_file_location("run_mutants_for_s3", path)
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+
+    def shape(values: dict[str, str]) -> dict:
+        home = values["MCP_GATEWAY_TEST_HOME_DIR"]
+        return {"keys": sorted(values), "mode": os.stat(home).st_mode & 0o777 if os.name != "nt" else None,
+                **{key: os.path.relpath(value, home) for key, value in values.items() if value != home}}
+
+    with tempfile.TemporaryDirectory() as parent:
+        ours = shape(make_home(parent))
+    with runner.gateway_home({}) as child:
+        theirs = shape(child)
+        drifted = shape({**child, "XDG_CONFIG_HOME": os.path.join(child["MCP_GATEWAY_TEST_HOME_DIR"], "config")})
+    assert drifted != theirs, "control: the shape comparison cannot see a moved config dir"
+    assert ours == theirs, f"the mutant runner's home drifted from make_home: {theirs} vs {ours}"
+    # The mode above is only this OS's branch: compare the mkdir lines too, so a drift in the Windows branch
+    # shows on a POSIX runner as well.
+    def mkdir_line(function) -> str:
+        return next(line.strip() for line in inspect.getsource(function).splitlines()
+                    if line.strip().startswith("os.mkdir("))
+
+    assert mkdir_line(make_home) == mkdir_line(runner.gateway_home), (
+        f"the two copies make the home differently: {mkdir_line(runner.gateway_home)!r}")
 
 
 def built_parts_rows() -> None:
@@ -712,6 +936,8 @@ def built_parts_rows() -> None:
                     'echo "test m$k::a ... ok"\ncase "\\$b" in short) ;; panic) echo "test m$k::b - should panic ... ok" ;;'
                     ' child) echo "test m$k::child_process ... test m$k::b ... ok" ;;'
                     ' diag) echo "diagnostic: test m$k::b ... ok" ;;'
+                    ' unkept) echo "test m$k::b ... ok"; echo "skill bundle at /tmp/.tmpQq1Ww2/skills is in a temp dir'
+                    ' no test kept; created by m$k::b" >&2 ;;'
                     ' *) echo "test m$k::b ... ok" ;; esac\n'
                     '[ "\\$b" = extra ] && echo "test m$k::z ... ok"\n[ "\\$b" = red ] && exit 101\nexit 0\nEOF\n'
                     '[ "$(eval echo \\${FAIL_LIST_$k:-})" = 1 ] && { rm "$d/p$k/list.txt"; exit 6; }\nexit 0\n')
@@ -757,6 +983,9 @@ def built_parts_rows() -> None:
             # A result-shaped phrase inside other output is not a result: b never ran, so the leg fails.
             assert leg_run("lib-b", 8, BEHAVE_2="diag")[0] == 1, "a diagnostic's text counted as a run test"
             assert leg_run("lib-b", 9)[0] == 1, "a leg under its floor passed"
+            # K6 on the built-parts path: a part whose tests all ran and passed still fails the leg when one
+            # printed an unkept report.
+            assert leg_run("lib-b", 8, BEHAVE_2="unkept")[0] == 1, "a part whose test printed an unkept report passed"
             # R5: the solo lane's lib-b builds every part.
             rc, steps = leg_run("lib-b", 10, MACOS_LIB_SOLO="true")
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
@@ -895,6 +1124,8 @@ def prebuilt_rows() -> None:
                         '  for t in $n; do echo "$t: test"; done; exit 0; fi\n'
                         f"{body}\n")
             os.chmod(fake, 0o644)  # run_prebuilt restores the exec bit an artifact drops
+            with open(fake + ".root", "w") as f:  # export-lib's record of where it built
+                f.write(ROOT + "\n")
         # Linux: a shared-build leg runs under the TMPDIR guard a cargo shard has. The binary sees its own
         # BY_BINARY folder as TMPDIR, and a test that leaves a file there fails the leg.
         lfloor = max(SHARDS["linux"][leg][0][3] for leg in SHARED_BUILD["linux"])
@@ -911,6 +1142,17 @@ def prebuilt_rows() -> None:
         said = out.buffer.getvalue().decode()
         assert rc == 1 and f"::error::linux lib-a left in TMPDIR: {LIB_TARGET}/stray-file" in said, \
             f"a Linux leg that left a temp file did not fail as `run` does: rc {rc}"
+        # K6 on the prebuilt path: a report the binary's test printed on stderr fails the leg by its test, as
+        # it does a cargo shard, even when nothing is left in TMPDIR.
+        binary(lok + '; echo "shutdown save at /tmp/.tmpPb4Qr5/s.json is in a temp dir no test kept;'
+               ' created by gateway::a" >&2')
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with contextlib.redirect_stdout(out):
+            rc = run_prebuilt("linux", "lib-a", fake)
+        out.flush()
+        said = out.buffer.getvalue().decode()
+        want = "::error::linux lib-a unkept temp dir: shutdown save at /tmp/.tmpPb4Qr5/s.json; created by gateway::a"
+        assert rc == 1 and want in said, f"a prebuilt leg whose test printed an unkept report passed: rc {rc}"
         # Only the shared-build legs run from the binary on Linux: an integration shard compiles its own.
         assert main(["shard_tests.py", "run-prebuilt", "linux", "int-a", fake]) == 2, "int-a ran prebuilt"
         # export-lib copies the executable cargo names, and fails when cargo names none.
@@ -929,6 +1171,71 @@ def prebuilt_rows() -> None:
             f.write("#!/bin/sh\necho '   Compiling x'\n")
         os.chmod(cargo_none, 0o755)
         assert export_lib(os.path.join(root, "out2"), (cargo_none,)) == 1
+
+
+def windows_shared_rows() -> None:
+    """Windows lib legs run from one exported exe: the four-leg table, the run-prebuilt route, the .exe name and
+    its recorded build root, a pairwise overlap check, and no test run once the partition check has failed."""
+    # The four legs and the filters each one runs (cascade form: each skips the filters before it).
+    want = {
+        "lib-a": ["gateway::router::", "gateway::server::"],
+        "lib-d": ["gateway::", "--skip", "gateway::router::", "--skip", "gateway::server::"],
+        "lib-c": ["security::", "--skip", "gateway::router::", "--skip", "gateway::server::", "--skip", "gateway::"],
+        "lib-b": ["--skip", "gateway::router::", "--skip", "gateway::server::", "--skip", "gateway::",
+                  "--skip", "security::"],
+    }
+    libs = {leg: steps[0][2] for leg, steps in SHARDS["windows"].items() if steps[0][1] == ["--lib"]}
+    assert libs == want, f"Windows lib legs are not the four-leg cut: {sorted(libs)}"
+    assert set(SHARED_BUILD.get("windows", ())) == set(want), "every Windows lib leg runs from the shared exe"
+    # Overlap is pairwise: a name two of three legs list is caught even though no name is in all three.
+    saved_listed = globals()["listed"]
+    picks = {(): {"t1", "t2", "t3"}}
+    try:
+        def fake_listed(_binary, args, _os_kind):
+            return picks.get(tuple(args), set())
+        globals()["listed"] = fake_listed
+        saved_win = SHARDS["windows"]
+        SHARDS["windows"] = {"x": [("suite", ["--lib"], ["x"], 1)], "y": [("suite", ["--lib"], ["y"], 1)],
+                             "z": [("suite", ["--lib"], ["z"], 1)]}
+        picks.update({("x",): {"t1"}, ("y",): {"t1", "t2"}, ("z",): {"t3"}})
+        found = union_problems("fake", "windows")
+        assert found and "both" in found[0] and "t1" in found[0], f"a test in two of three legs passed: {found}"
+    finally:
+        globals()["listed"] = saved_listed
+        SHARDS["windows"] = saved_win
+    with tempfile.TemporaryDirectory() as root:
+        art = {"reason": "compiler-artifact", "target": {"kind": ["lib"], "name": "mcp_gateway"},
+               "profile": {"test": True}, "executable": os.path.join(root, "built.exe")}
+        with open(art["executable"], "w") as f:
+            f.write("exe")
+        cargo = os.path.join(root, "cargo")
+        with open(cargo, "w") as f:
+            f.write(f"#!/bin/sh\necho '{json.dumps(art)}'\n")
+        os.chmod(cargo, 0o755)
+        dest = os.path.join(root, "out")
+        assert export_lib(dest, (cargo,), os_name="nt") == 0
+        exe = os.path.join(dest, LIB_BINARY + ".exe")
+        assert open(exe).read() == "exe", "export-lib on Windows did not write lib-tests.exe"
+        assert open(exe + ".root").read().strip() == ROOT, "export-lib did not record the root it built in"
+        # A leg runs only from an exe built in its own checkout: a missing or different root is refused
+        # before the exe runs (it would exit 9 if run).
+        fake = os.path.join(root, "leg-exe")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\nexit 9\n")
+        os.chmod(fake, 0o755)
+        assert run_prebuilt("windows", "lib-a", fake) == 1, "an exe with no recorded root ran"
+        with open(fake + ".root", "w") as f:
+            f.write("/somewhere/else\n")
+        assert run_prebuilt("windows", "lib-a", fake) == 1, "an exe built under another root ran"
+        # A failed partition check stops the leg before any test runs (the exe marks a run).
+        ran = os.path.join(root, "ran")
+        with open(fake, "w") as f:
+            f.write(f'#!/bin/sh\nif [ "$1" = --list ]; then echo "only::one: test"; exit 0; fi\ntouch {ran}\n')
+        with open(fake + ".root", "w") as f:
+            f.write(ROOT + "\n")
+        assert run_prebuilt("windows", "lib-a", fake) == 1 and not os.path.exists(ran), \
+            "a leg ran its tests after the partition check failed"
+    assert main(["shard_tests.py", "run-prebuilt", "windows", "int-a", "x"]) == 2, "a Windows int leg ran prebuilt"
 
 
 def parts_rows() -> None:
@@ -1132,7 +1439,7 @@ def lib_test_binary(lines: list[str]) -> str | None:
     return None
 
 
-def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
+def export_lib(dest: str, program: tuple[str, ...] = ("cargo",), os_name: str = os.name) -> int:
     """Build the `--lib` test binary (the same build `cargo test --all-features --lib` reuses) and
     copy it to `dest` as LIB_BINARY, for the SHARED_BUILD legs on other runners."""
     rc, lines = cargo([*BASE, "--lib", "--no-run", "--message-format=json-render-diagnostics"], program)
@@ -1141,8 +1448,12 @@ def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
         print(f"::error::export-lib: no lib test executable (cargo exited {rc})")
         return 1
     os.makedirs(dest, exist_ok=True)
-    out = os.path.join(dest, LIB_BINARY)
+    # Windows runs only a file named .exe; beside the copy, `.root` names the checkout it was built in,
+    # since the exe's compile-time paths point there.
+    out = os.path.join(dest, LIB_BINARY + (".exe" if os_name == "nt" else ""))
     shutil.copy2(path, out)
+    with open(out + ".root", "w") as f:
+        f.write(ROOT + "\n")
     os.chmod(out, 0o755)
     print(f"::notice::export-lib: {path} -> {out} ({os.path.getsize(out)} bytes)")
     return 0
@@ -1169,12 +1480,17 @@ def union_problems(binary: str, os_kind: str) -> list[str]:
     except RuntimeError as error:
         return [f"lib union: {error}"]
     names = sorted(sets)
-    both = set.intersection(*sets.values()) if len(sets) > 1 else set()
-    missing = whole - set().union(*sets.values())
+    # Pairwise: with three legs or more, a test two of them pick is in no all-legs intersection.
+    seen: set[str] = set()
+    both: set[str] = set()
+    for chosen in sets.values():
+        both |= seen & chosen
+        seen |= chosen
+    missing = whole - seen
     print(f"::notice::{os_kind} lib union: whole {len(whole)}, "
           + ", ".join(f"{n} {len(sets[n])}" for n in names) + f", overlap {len(both)}, missing {len(missing)}")
-    out = [f"lib union: {len(both)} test(s) in both halves, e.g. {sorted(both)[:3]}"] * bool(both)
-    out += [f"lib union: {len(missing)} test(s) in neither half, e.g. {sorted(missing)[:3]}"] * bool(missing)
+    out = [f"lib union: {len(both)} test(s) that two legs both select, e.g. {sorted(both)[:3]}"] * bool(both)
+    out += [f"lib union: {len(missing)} test(s) no leg selects, e.g. {sorted(missing)[:3]}"] * bool(missing)
     return out
 
 
@@ -1187,6 +1503,9 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
     # The coverage guard: the halves' selections on this binary partition its whole list.
     union = union_problems(binary, os_kind)
+    if union:
+        # The legs do not partition this binary, so no count it gives could be trusted: run nothing.
+        return 0, union
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
     if tmp:
@@ -1207,6 +1526,7 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
     n = selected(["     Running unittests src/lib.rs (prebuilt)", *lines])
     failed = [f"{step}: test binary {os.path.basename(binary)} exited {rc}"] * (rc != 0)
     failed += union
+    failed += unkept(lines)
     if tmp:
         failed += tmp_problems(os_kind, shard, tmp)
     return n, failed
@@ -1215,6 +1535,15 @@ def _run_binary(os_kind: str, shard: str, binary: str) -> tuple[int, list[str]]:
 def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     """Run a SHARED_BUILD shard from one exported lib test binary. Same floor and report."""
     ((step, _args, _test_args, floor),) = SHARDS[os_kind][shard]
+    # Its compile-time paths point at the checkout export-lib recorded; refuse an exe from any other.
+    try:
+        built_in = open(binary + ".root").read().strip()
+    except OSError:
+        built_in = None
+    if built_in != ROOT:
+        print(f"::error::{os_kind} {shard} {step}: {os.path.basename(binary)} was built in "
+              f"{built_in or 'a checkout it did not record'}, not {ROOT}")
+        return 1
     n, failed = _run_binary(os_kind, shard, binary)
     print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor})")
     failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
@@ -1337,11 +1666,19 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
             listed_names = {x[: -len(": test")] for x in open(recorded).read().splitlines() if x.endswith(": test")}
             want = {n for n in listed_names if not any(p in n for p in patterns)}
             os.chmod(binary, 0o755)
+            reported: dict[str, str] = {}
+            part_lines: list[str] = []
             with private_home(env, None) as home_env:
                 p = subprocess.Popen([binary, *SKIPS[os_kind]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=home_env, cwd=ROOT)
-                # A name reported more than once keeps its last result, as before.
-                reported = {name: results[-1] for name, results in _echo_results(p).items()}
+                assert p.stdout is not None
+                for raw in p.stdout:
+                    sys.stdout.buffer.write(raw)
+                    sys.stdout.buffer.flush()
+                    part_lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
+                    m = RESULT_LINE.match(part_lines[-1])
+                    if m:
+                        reported[m.group(1)] = m.group(2)
                 prc = p.wait()
             # The writer's root rows, which the run above reports as ignored: once more as root, from this binary
             # before it goes. Only a part whose own list holds them; no other part calls the prefix.
@@ -1357,6 +1694,7 @@ def run_built_parts(os_kind: str, leg: str, directory: str, script: tuple[str, .
         print(f"::notice::{os_kind} {leg} part {k}: ran {len(reported)}, its list less the skips {len(want)}")
         if prc != 0:
             failed.append(f"part {k}: test binary exited {prc}")
+        failed += [f"part {k}: {u}" for u in unkept(part_lines)]
         if set(reported) != want:
             failed.append(f"part {k}: ran {len(reported)} tests, its list less the skips is {len(want)} "
                           f"(missing e.g. {sorted(want - set(reported))[:3]}, extra e.g. {sorted(set(reported) - want)[:3]})")
@@ -1434,6 +1772,10 @@ def main(argv: list[str]) -> int:
         return run_one(argv[2], argv[3], argv[4], extra)
     if len(argv) == 5 and argv[1] == "run-prebuilt" and argv[3] in SHARED_BUILD.get(argv[2], ()):
         return run_prebuilt(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == "with-home" and argv[2] == "--":
+        return with_home(argv[3:])
+    if len(argv) == 3 and argv[1] == "export-home":
+        return export_home(argv[2])
     print(__doc__, file=sys.stderr)
     return 2
 

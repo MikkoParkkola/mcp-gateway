@@ -149,6 +149,11 @@ impl Session {
         );
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
         let config = Config::load(Some(&path)).expect("config loads");
+        // Construction resolves the record key, so the folder must be set before the build for
+        // `record_key` below to find it there.
+        let _in_dir = crate::gateway::server::test_seams::data_dir_for_constructions(
+            dir.path().to_path_buf(),
+        );
         let gateway = Gateway::new(config)
             .await
             .expect("gateway boots")

@@ -24,6 +24,10 @@
 
 // `webui_management_tests/backend_mutation.rs` and `internal_routes_served.rs`
 // name `crate::yaml`, so this crate declares the module once, here.
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/record_key.rs"]
 mod record_key;
 
@@ -36,6 +40,10 @@ mod windows_paths;
 
 #[path = "common/yaml.rs"]
 mod yaml;
+
+// The over-budget preview row takes a widened era probe cap from exec only.
+#[path = "common/era_probe_cap.rs"]
+mod era_probe_cap;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,6 +91,8 @@ mod internal_routes;
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]
 mod registry;
+#[path = "webui_management_tests/secret_reference_records.rs"]
+mod secret_reference_records;
 #[path = "webui_management_tests/secret_slot_surfaces.rs"]
 mod secret_slot_surfaces;
 #[path = "webui_management_tests/server_state.rs"]
@@ -467,4 +477,32 @@ async fn mcp_tools_fixture_handler(Json(body): Json<Value>) -> Json<Value> {
     };
 
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// No module of this binary writes the environment, so the widened probe cap
+/// reaches only the row that re-runs itself with it.
+#[test]
+fn the_probe_cap_reaches_this_binary_from_exec_only() {
+    era_probe_cap::assert_no_env_writes(file!());
+}
+
+/// The over-budget preview row still passes when a 1 ms probe cap is set from
+/// outside: it re-runs itself with the helper's own cap, so an inherited value
+/// never decides which clock answers first.
+#[test]
+fn the_budget_row_passes_under_an_outer_one_ms_probe_cap() {
+    const ROW: &str = "backend_preview::an_over_budget_discovery_answer_is_a_502";
+    let out = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([ROW, "--exact", "--test-threads=1"])
+        .env("MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS", "1")
+        .output()
+        .expect("the child run of the budget row started");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success()
+            && stdout.contains(&format!("test {ROW} ... ok"))
+            && stdout.contains("test result: ok. 1 passed"),
+        "the budget row failed under an outer 1 ms cap:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

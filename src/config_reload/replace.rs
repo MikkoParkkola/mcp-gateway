@@ -25,8 +25,9 @@ use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
+use crate::config_reload::ConfigWriteError;
+pub(crate) use crate::config_reload::first_key::{ReplaceReload, StatusChange};
 use crate::config_reload::history::Source;
-use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
 };
@@ -62,7 +63,7 @@ pub(crate) enum Expected {
 /// What happens to the bytes a successful write replaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -118,12 +119,14 @@ pub(crate) struct Replace {
     pub(crate) compute: Compute,
     pub(crate) replaced: Replaced,
     pub(crate) secrets: Option<SecretStep>,
+    /// What a candidate that changes the single-user status gets.
+    pub(crate) status_change: StatusChange,
 }
 
 /// A replacement that was written and accepted.
 #[derive(Debug)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -134,8 +137,8 @@ pub(crate) struct ReplaceOutcome {
     pub(crate) revision: Option<FileRevision>,
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
-    /// The reload that accepted it.
-    pub(crate) reload: ReloadOutcome,
+    /// The reload it ended with.
+    pub(crate) reload: ReplaceReload,
     /// Each stored secret's field and the reference the written file holds for
     /// it, in the secret step's order; empty without one. Read from this write
     /// itself, never from the file afterwards (another writer may follow).
@@ -463,7 +466,7 @@ impl ReloadContext {
         let fields = step_fields(step.as_ref());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
-        self.validate_template(&target, &template, step.as_ref())
+        self.validate_template(&target, &template, step.as_ref(), replace.status_change)
             .await?;
         // gateway.yaml deleted while the bytes were computed or checked: the
         // missing file, before any intent or entry exists.
@@ -489,7 +492,7 @@ impl ReloadContext {
                     &locked,
                     &target,
                     &current,
-                    (new, replace.replaced),
+                    (new, replace.replaced, replace.status_change),
                     &mut entries,
                     source,
                 )
@@ -528,7 +531,7 @@ impl ReloadContext {
         locked: &Locked,
         target: &std::path::Path,
         current: &[u8],
-        (new, replaced): (Vec<u8>, Replaced),
+        (new, replaced, status_change): (Vec<u8>, Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -570,12 +573,19 @@ impl ReloadContext {
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
-                reload,
+                reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
             });
         }
-        self.commit(target, current, &new, replaced, entries, source)
-            .await
+        self.commit(
+            target,
+            current,
+            &new,
+            (replaced, status_change),
+            entries,
+            source,
+        )
+        .await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
@@ -584,7 +594,7 @@ impl ReloadContext {
         target: &std::path::Path,
         current: &[u8],
         new: &[u8],
-        replaced: Replaced,
+        (replaced, status_change): (Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -647,39 +657,54 @@ impl ReloadContext {
                 )),
             ));
         }
-        match reloaded {
+        let reload = match reloaded {
             Ok(reload) => {
                 #[cfg(test)]
                 self.record_write_reload();
-                if let Err(e) = journal::mark_all_renamed(target) {
-                    return Err(ReplaceError::Unconfirmed {
-                        journal: journal::journal_path(target),
-                        error: e.to_string(),
-                    });
+                ReplaceReload::Applied(reload)
+            }
+            // The operator's option B1 (ADR-024, amended): a first key the
+            // question held is refused by the reload for its status change
+            // alone, and its bytes stay for the next start, which accepts
+            // them. No other caller passes `HoldForRestart`, and no other
+            // refusal reaches this arm.
+            Err(refusal)
+                if status_change == StatusChange::HoldForRestart
+                    && refusal.kind == super::lock_api::ReloadRefusalKind::StatusChange =>
+            {
+                ReplaceReload::HeldForRestart {
+                    refusal: refusal.text,
+                    keys: refusal.waiting,
                 }
-                if let Err(e) = journal::finish(target) {
-                    // The new bytes stand and were accepted; the journal says
-                    // `all_renamed`, so the next lock holder only cleans up.
-                    tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
-                }
-                Ok(ReplaceOutcome {
-                    revision: Some(FileRevision::of(new)),
-                    kept_beside,
-                    reload,
-                    secrets: Vec::new(),
-                })
             }
             Err(refusal) => {
                 unkeep();
-                Err(Self::roll_back(
+                return Err(Self::roll_back(
                     target,
                     ReplaceError::ReloadRefused {
                         class: post_write_class(&refusal),
                         reason: refusal.text,
                     },
-                ))
+                ));
             }
+        };
+        if let Err(e) = journal::mark_all_renamed(target) {
+            return Err(ReplaceError::Unconfirmed {
+                journal: journal::journal_path(target),
+                error: e.to_string(),
+            });
         }
+        if let Err(e) = journal::finish(target) {
+            // The new bytes stand; the journal says `all_renamed`, so the
+            // next lock holder only cleans up.
+            tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
+        }
+        Ok(ReplaceOutcome {
+            revision: Some(FileRevision::of(new)),
+            kept_beside,
+            reload,
+            secrets: Vec::new(),
+        })
     }
 
     /// The locked target's bytes, once it is still the file this gateway
@@ -719,6 +744,9 @@ impl ReloadContext {
     /// (the same recovery the next lock holder would run), and report
     /// `error`; or `RollbackFailed` when that fails too.
     fn roll_back(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+        // Test-only: a write that is undone still leaves its mark in the trace.
+        #[cfg(test)]
+        order::record(target, "rollback");
         match journal::recover(target) {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {

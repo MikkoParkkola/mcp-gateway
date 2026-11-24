@@ -110,6 +110,7 @@ impl Gateway {
                 "protocol telemetry save",
                 telemetry_save_every,
                 None,
+                Some(data_dir.clone()),
                 move || Self::save_stdio_protocol_telemetry_unless_busy(&sink),
             ))
         };
@@ -149,6 +150,9 @@ impl Gateway {
         // then the final telemetry save. Without this a signal killed stdio
         // outright and the counts since the last save were lost.
         let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        // The heartbeat ends on the signal, or when the sender drops with
+        // this function (end of input).
+        let heartbeat_stop = signal_tx.subscribe();
         #[cfg(test)]
         let stop_signal = super::test_seams::shutdown_signal_or_trigger(
             signal_tx,
@@ -193,6 +197,14 @@ impl Gateway {
             false,
         ));
 
+        // The daily heartbeat (docs/PRIVACY.md, "Daily heartbeat"): never
+        // awaited; stdout stays the protocol's alone (it logs at debug only).
+        let _heartbeat = crate::heartbeat::start(
+            self.config.security.posture,
+            data_dir.clone(),
+            heartbeat_stop,
+        );
+
         // Reap what warm-start and lazy starts spawn, and probe backends so a
         // dead one recovers. Both were HTTP-only or EOF-only before: stdio has
         // no broadcast shutdown channel, so these guards own the tasks and abort
@@ -208,6 +220,7 @@ impl Gateway {
         let cost_saver = meta_mcp.budget_enforcer.as_ref().map(|enforcer| {
             AbortOnDrop::new(persistence::spawn_cost_saver(
                 Arc::clone(enforcer),
+                meta_mcp.cost_tracker(),
                 data_dir.clone(),
                 persistence::COST_SAVE_INTERVAL,
                 None,
@@ -745,9 +758,12 @@ impl Gateway {
                     .await;
                 #[cfg(feature = "cost-governance")]
                 if let Some(enforcer) = &meta_mcp.budget_enforcer {
-                    let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
-                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir)
-                        .await;
+                    let cost = (
+                        Arc::clone(enforcer),
+                        meta_mcp.cost_tracker(),
+                        data_dir.clone(),
+                    );
+                    stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, cost).await;
                 }
             }
             // Every sender gone, then the writer joined: the task drains its queue

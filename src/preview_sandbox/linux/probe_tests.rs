@@ -2,15 +2,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for the npm fetch's probe (T9, D7 floor, R-ip).
 
-use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use super::{check_npm, find_ip, npm_beside};
 
 /// An executable shell script at `path`.
 fn script(path: &Path, body: &str) {
-    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("script");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    crate::test_stub::write_executable(path, &format!("#!/bin/sh\n{body}\n"));
 }
 
 /// An NVM-only node: npx, npm and node in one `bin` directory, npx and npm

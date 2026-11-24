@@ -128,6 +128,7 @@ impl Fx {
     fn plant(&self, subject: &str, email: &str, key: &EmailHashKey) {
         let identity = VerifiedIdentity::for_test(subject, email, None, Vec::new(), ISS);
         let token = TemporaryToken {
+            issuance_row: None,
             jti: format!("jti-{subject}"),
             token: format!("mcpgw_{subject}"),
             identity,

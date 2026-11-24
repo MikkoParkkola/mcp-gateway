@@ -4,8 +4,9 @@
 //! extent, and nothing after it is lost.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::test_source_files::rust_files;
 use crate::test_source_text::{production_text, sanitize};
 
 /// `(source, kept, blanked)`: after blanking, every `kept` text remains and
@@ -305,20 +306,6 @@ fn a_doc_comment_in_a_macro_body_is_not_counted_but_a_doc_name_is() {
     syn::visit::Visit::visit_file(&mut parsed, &file);
     assert_eq!(parsed.counts.get("doc"), Some(&1));
     assert_eq!(parsed.counts.get("note"), None);
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Identifier counts in code: runs of word characters that do not start

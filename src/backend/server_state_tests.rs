@@ -13,7 +13,7 @@ fn now() -> SystemTime {
 }
 
 /// A backend that never started and has nothing wrong with it.
-fn fresh() -> StateInputs {
+pub(super) fn fresh() -> StateInputs {
     StateInputs {
         denied: false,
         denial_reasons: Vec::new(),
@@ -27,6 +27,7 @@ fn fresh() -> StateInputs {
         ever_started: false,
         start_failed: false,
         slow: None,
+        confirmations: Vec::new(),
     }
 }
 

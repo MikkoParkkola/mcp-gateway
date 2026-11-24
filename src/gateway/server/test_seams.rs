@@ -8,6 +8,40 @@ use std::path::PathBuf;
 
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+thread_local! {
+    /// The data directory constructions on this thread start with, set by
+    /// [`data_dir_for_constructions`].
+    static CONSTRUCTION_DATA_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While the returned guard lives, every gateway built on this thread starts
+/// with `dir` as its data directory. Construction resolves the record key
+/// there, so a test that reads the key back from its own folder sets this
+/// before building; `with_data_dir` after the build comes too late for it.
+#[cfg(test)]
+#[must_use = "the folder applies only while the guard lives; bind it with let"]
+pub(super) fn data_dir_for_constructions(dir: PathBuf) -> ConstructionDataDir {
+    let previous = CONSTRUCTION_DATA_DIR.with(|slot| slot.borrow_mut().replace(dir));
+    ConstructionDataDir { previous }
+}
+
+/// Puts back the construction data directory that was set before it, so guards nest and a
+/// later test on the same thread starts from what it found.
+#[cfg(test)]
+pub(super) struct ConstructionDataDir {
+    previous: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl Drop for ConstructionDataDir {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        CONSTRUCTION_DATA_DIR.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
 #[derive(Default)]
 pub(super) struct TestSeams {
     /// The test's tempdir (`with_data_dir`); `None` is the standard one.
@@ -95,6 +129,7 @@ impl TestSeams {
         #[cfg(test)]
         {
             seams.spawner = std::thread::current().name().map(str::to_owned);
+            seams.data_dir = CONSTRUCTION_DATA_DIR.with(|dir| dir.borrow().clone());
         }
         seams
     }
@@ -309,6 +344,11 @@ mod shutdown_order_tests;
 #[cfg(test)]
 #[path = "counter_restart_tests.rs"]
 mod counter_restart_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "heartbeat_start_tests.rs"]
+mod heartbeat_start_tests;
 
 #[cfg(tp4)]
 #[cfg(all(test, feature = "webui"))]

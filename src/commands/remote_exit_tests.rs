@@ -343,11 +343,11 @@ async fn token_faults_exit_by_the_table_and_send_nothing() {
     finish();
 }
 
-/// T5-T7, resolution: a config that cannot load, with no --url, is a usage error (2).
+/// T5-T7, resolution: a config that cannot load, with no --gateway, is a usage error (2).
 #[tokio::test]
 async fn an_unloadable_config_is_a_usage_error() {
     let broken = || -> Result<mcp_gateway::config::Config, String> { Err("planted".to_string()) };
-    let what = "could not load the config (planted); pass --url";
+    let what = "could not load the config (planted); pass --gateway";
     let Command::DashboardLink(args) = parse(&["dashboard-link"]) else {
         panic!()
     };

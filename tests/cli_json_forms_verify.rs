@@ -6,6 +6,9 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -191,6 +194,7 @@ fn verify_args<'a>(config: &'a str, log: &'a str, extra: &[&'a str]) -> Vec<&'a 
 
 #[test]
 fn audit_verify_passing_logs_print_their_verdict() {
+    require_private_home!();
     let dir = tempfile::tempdir().expect("dir");
     let log = dir.path().join("transparency.jsonl");
     small_log(&log, None);
@@ -254,6 +258,7 @@ fn audit_verify_passing_logs_print_their_verdict() {
 
 #[test]
 fn audit_verify_failed_verdicts_print_their_document_with_exit_1() {
+    require_private_home!();
     // A chain failure: the last record edited after hashing.
     let dir = tempfile::tempdir().expect("dir");
     let log = dir.path().join("transparency.jsonl");
@@ -329,6 +334,7 @@ fn audit_verify_failed_verdicts_print_their_document_with_exit_1() {
 
 #[test]
 fn audit_verify_warnings_and_notes_are_in_the_document() {
+    require_private_home!();
     // An interrupted intent: a warning on a passing chain.
     let dir = tempfile::tempdir().expect("dir");
     let log = dir.path().join("transparency.jsonl");
@@ -406,6 +412,7 @@ fn audit_verify_warnings_and_notes_are_in_the_document() {
 /// stdout under `--json`; stderr and exit are the text form's.
 #[test]
 fn audit_verify_errors_before_a_verdict_print_no_document() {
+    require_private_home!();
     let dir = tempfile::tempdir().expect("dir");
     let config = verify_config(dir.path(), None);
     let missing = dir.path().join("missing.jsonl");

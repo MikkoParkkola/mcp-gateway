@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::{MintReservation, issue};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::key_server::store::{
-    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError,
+    ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError, Reserved,
     TemporaryToken, TokenScopes, TokenStore,
 };
 
@@ -37,6 +37,7 @@ fn request(issuer: &str, jti: &str) -> ReservationRequest {
 /// The token a reservation for `jti` activates into at `now`.
 fn token(issuer: &str, jti: &str, now: u64) -> TemporaryToken {
     TemporaryToken {
+        issuance_row: None,
         jti: jti.to_string(),
         token: format!("mcpgw_{jti}"),
         identity: identity(issuer, SUB),
@@ -56,7 +57,7 @@ fn store(cap: usize) -> Arc<InMemoryTokenStore> {
 fn has_room(store: &InMemoryTokenStore, issuer: &str, now: u64) -> bool {
     match store.reserve(request(issuer, "probe"), now) {
         Ok(id) => {
-            store.abort(&id);
+            store.abort(&id.id);
             true
         }
         Err(ReserveError::CapReached) => false,
@@ -74,10 +75,10 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
     // Bearer lookup reads the clock: hold it at the tokens' own time.
     let _clock = crate::clock::test_clock::at_secs(T0);
     let s = store(CAP);
-    let first = s.reserve(request(ISS, "j1"), T0).expect("first slot");
+    let first = s.reserve(request(ISS, "j1"), T0).expect("first slot").id;
     s.activate(&first, token(ISS, "j1", T0), T0)
         .expect("activates");
-    let pending = s.reserve(request(ISS, "j2"), T0).expect("second slot");
+    let pending = s.reserve(request(ISS, "j2"), T0).expect("second slot").id;
     for extra in ["j3", "j4", "j5"] {
         assert_eq!(
             s.reserve(request(ISS, extra), T0),
@@ -96,7 +97,8 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
     assert!(!s.live_jti("j2", T0).await, "a pending JTI is not live");
     let other = s
         .reserve(request(OTHER_ISS, "k1"), T0)
-        .expect("another issuer's own cap");
+        .expect("another issuer's own cap")
+        .id;
     s.abort(&other);
     s.abort(&pending);
     assert!(has_room(&s, ISS, T0), "the aborted slot came back");
@@ -108,14 +110,15 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
 #[tokio::test]
 async fn an_expired_pending_slot_is_reclaimed_by_the_cap_check() {
     let s = store(1);
-    let stale = s.reserve(request(ISS, "j1"), T0).expect("slot");
+    let stale = s.reserve(request(ISS, "j1"), T0).expect("slot").id;
     assert!(
         !has_room(&s, ISS, T0 + WINDOW - 1),
         "still pending inside the window"
     );
     let fresh = s
         .reserve(request(ISS, "j2"), T0 + WINDOW)
-        .expect("the expired slot was reclaimed");
+        .expect("the expired slot was reclaimed")
+        .id;
     assert_eq!(
         s.activate(&stale, token(ISS, "j1", T0 + WINDOW), T0 + WINDOW),
         Err(ActivateError::Expired)
@@ -131,13 +134,13 @@ async fn an_expired_pending_slot_is_reclaimed_by_the_cap_check() {
 #[tokio::test]
 async fn reserve_and_activate_hold_the_store_contract() {
     let s = store(1);
-    let id = s.reserve(request(ISS, "j1"), T0).expect("slot");
+    let id = s.reserve(request(ISS, "j1"), T0).expect("slot").id;
     assert_eq!(
         s.activate(&id, token(ISS, "j1", T0 + WINDOW), T0 + WINDOW),
         Err(ActivateError::Expired),
         "the deadline is now + {WINDOW} s"
     );
-    let id = s.reserve(request(ISS, "j2"), T0).expect("slot");
+    let id = s.reserve(request(ISS, "j2"), T0).expect("slot").id;
     s.activate(&id, token(ISS, "j2", T0 + WINDOW - 1), T0 + WINDOW - 1)
         .expect("activates one second before the deadline");
     assert!(s.revoke_by_jti("j2").await);
@@ -154,7 +157,7 @@ async fn reserve_and_activate_hold_the_store_contract() {
             "jti" => bad.jti = "other".to_string(),
             _ => {}
         }
-        let id = s.reserve(request(ISS, "j3"), T0).expect("slot");
+        let id = s.reserve(request(ISS, "j3"), T0).expect("slot").id;
         let refusal = s.activate(&id, bad, T0).expect_err(label);
         assert!(
             matches!(refusal, ActivateError::Timestamps | ActivateError::Mismatch),
@@ -196,7 +199,7 @@ async fn the_mint_guard_releases_only_an_unactivated_slot() {
 
     // The store contract under the guard: an abort after activation, by the
     // id's own owner, leaves the active token.
-    let id = s.reserve(request(OTHER_ISS, "k1"), T0).expect("slot");
+    let id = s.reserve(request(OTHER_ISS, "k1"), T0).expect("slot").id;
     s.activate(&id, token(OTHER_ISS, "k1", T0), T0)
         .expect("activates");
     s.abort(&id);
@@ -214,11 +217,7 @@ struct Watched {
 
 #[async_trait::async_trait]
 impl TokenStore for Watched {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         let id = self.inner.reserve(request, now);
         self.reserved
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -327,17 +326,17 @@ fn a_mint_cancelled_right_after_reserve_leaks_no_slot() {
 #[tokio::test]
 async fn revocation_reaches_pending_reservations() {
     let s = store(3);
-    let _pending = s.reserve(request(ISS, "j1"), T0).expect("slot");
+    let _pending = s.reserve(request(ISS, "j1"), T0).expect("slot").id;
     assert!(s.revoke_by_jti("j1").await, "a pending JTI is revoked");
     assert!(
         !s.revoke_by_jti("j1").await,
         "a second revoke finds nothing"
     );
 
-    let active = s.reserve(request(ISS, "j2"), T0).expect("slot");
+    let active = s.reserve(request(ISS, "j2"), T0).expect("slot").id;
     s.activate(&active, token(ISS, "j2", T0), T0)
         .expect("activates");
-    let pending = s.reserve(request(ISS, "j3"), T0).expect("slot");
+    let pending = s.reserve(request(ISS, "j3"), T0).expect("slot").id;
     assert_eq!(
         s.revoke_by_subject(ISS, SUB).await,
         2,
@@ -371,11 +370,7 @@ struct Meddling {
 
 #[async_trait::async_trait]
 impl TokenStore for Meddling {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         let now = match self.meddle {
             Meddle::Stale => now - WINDOW,
             _ => now,
@@ -536,17 +531,29 @@ async fn revoking_pending_mints_over_the_routes_signals_once() {
     )]
     let now = crate::clock::unix_secs().expect("a readable clock");
 
-    let _pending = h.ks.store.reserve(request(ISS_A, "j1"), now).expect("slot");
+    let _pending =
+        h.ks.store
+            .reserve(request(ISS_A, "j1"), now)
+            .expect("slot")
+            .id;
     assert_eq!(h.revoke_jti("j1").await, 204);
     assert_eq!(signals(), 1, "one signal for the pending JTI");
     assert_eq!(h.revoke_jti("j1").await, 404);
     assert_eq!(signals(), 1, "no signal for a JTI already gone");
 
-    let active = h.ks.store.reserve(request(ISS_A, "j2"), now).expect("slot");
+    let active =
+        h.ks.store
+            .reserve(request(ISS_A, "j2"), now)
+            .expect("slot")
+            .id;
     h.ks.store
         .activate(&active, token(ISS_A, "j2", now), now)
         .expect("activates");
-    let _pending = h.ks.store.reserve(request(ISS_A, "j3"), now).expect("slot");
+    let _pending =
+        h.ks.store
+            .reserve(request(ISS_A, "j3"), now)
+            .expect("slot")
+            .id;
     let issuer: String = url::form_urlencoded::byte_serialize(ISS_A.as_bytes()).collect();
     let query = format!("issuer={issuer}&subject={SUB}");
     let (status, body) = h.revoke(&query).await;
@@ -618,10 +625,10 @@ async fn reserve_refuses_cap_zero_duplicates_and_an_overflowing_deadline() {
     );
 
     let s = store(3);
-    let active = s.reserve(request(ISS, "j1"), T0).expect("slot");
+    let active = s.reserve(request(ISS, "j1"), T0).expect("slot").id;
     s.activate(&active, token(ISS, "j1", T0), T0)
         .expect("activates");
-    let _pending = s.reserve(request(ISS, "j2"), T0).expect("slot");
+    let _pending = s.reserve(request(ISS, "j2"), T0).expect("slot").id;
     for jti in ["j1", "j2"] {
         assert_eq!(
             s.reserve(request(OTHER_ISS, jti), T0),
@@ -650,8 +657,8 @@ async fn reserve_refuses_cap_zero_duplicates_and_an_overflowing_deadline() {
 #[tokio::test]
 async fn a_reservation_id_claims_nothing_in_another_store() {
     let (a, b) = (store(1), store(1));
-    let from_a = a.reserve(request(ISS, "j1"), T0).expect("slot in a");
-    let from_b = b.reserve(request(ISS, "j1"), T0).expect("slot in b");
+    let from_a = a.reserve(request(ISS, "j1"), T0).expect("slot in a").id;
+    let from_b = b.reserve(request(ISS, "j1"), T0).expect("slot in b").id;
     assert_eq!(
         b.activate(&from_a, token(ISS, "j1", T0), T0),
         Err(ActivateError::Missing),
@@ -672,11 +679,7 @@ struct PanicsInActivate {
 
 #[async_trait::async_trait]
 impl TokenStore for PanicsInActivate {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         self.inner.reserve(request, now)
     }
     fn activate(

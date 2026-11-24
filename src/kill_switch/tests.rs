@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::KillSwitch;
 use super::budget::{BudgetWindow, CapabilityErrorBudgetConfig, ErrorBudgetConfig};
@@ -307,22 +307,37 @@ fn window_counts_returns_successes_and_failures() {
 fn window_failure_count_survives_size_and_age_eviction() {
     // The window keeps its failure count incrementally, so a miscounted
     // eviction would silently skew every error rate. Both eviction paths run
-    // here, and the counts are checked against the entries themselves.
-    let mut w = BudgetWindow::new(3, Duration::from_millis(40));
-    w.record(false);
-    w.record(false);
-    w.record(true);
-    w.record(false); // evicts the oldest failure on the size cap
-    assert_eq!(w.counts(), (1, 2), "size eviction must drop one failure");
+    // here, and the counts are checked against the entries themselves. Every
+    // instant is passed in, so a stalled runner cannot age an entry early.
+    let max_age = Duration::from_secs(60);
+    let base = Instant::now();
+    let mut w = BudgetWindow::new(3, max_age);
+    w.record_at(false, base);
+    w.record_at(false, base);
+    w.record_at(true, base);
+    w.record_at(false, base); // evicts the oldest failure on the size cap
+    assert_eq!(
+        w.counts_at(base),
+        (1, 2),
+        "size eviction must drop one failure"
+    );
 
-    std::thread::sleep(Duration::from_millis(60));
-    w.record(true); // every earlier entry is now older than max_age
-    assert_eq!(w.counts(), (1, 0), "age eviction must drop both failures");
-    assert!((w.error_rate() - 0.0).abs() < f64::EPSILON);
+    let later = base + 2 * max_age;
+    w.record_at(true, later); // every earlier entry is now older than max_age
+    assert_eq!(
+        w.counts_at(later),
+        (1, 0),
+        "age eviction must drop both failures"
+    );
+    assert!((w.error_rate_at(later) - 0.0).abs() < f64::EPSILON);
 
-    w.record(false);
+    w.record_at(false, later);
     w.reset();
-    assert_eq!(w.counts(), (0, 0), "reset must clear the failure count");
+    assert_eq!(
+        w.counts_at(later),
+        (0, 0),
+        "reset must clear the failure count"
+    );
 }
 
 // ── BudgetWindow ─────────────────────────────────────────────────────────
@@ -341,13 +356,15 @@ fn budget_window_evicts_when_full() {
 
 #[test]
 fn budget_window_evicts_expired_entries() {
-    // GIVEN: window with 1ms max_age
-    let mut w = BudgetWindow::new(100, Duration::from_millis(1));
-    w.record(false);
-    // Wait for entry to expire
-    std::thread::sleep(Duration::from_millis(5));
-    w.record(true); // triggers eviction of the expired failure
-    let (s, f) = w.counts();
+    // GIVEN: a failure recorded two max_ages before the next call, with the
+    // instants passed in so no real waiting decides the outcome
+    let max_age = Duration::from_secs(60);
+    let base = Instant::now();
+    let mut w = BudgetWindow::new(100, max_age);
+    w.record_at(false, base);
+    let later = base + 2 * max_age;
+    w.record_at(true, later); // triggers eviction of the expired failure
+    let (s, f) = w.counts_at(later);
     assert_eq!(f, 0, "expired failure must be evicted");
     assert_eq!(s, 1);
 }
@@ -552,6 +569,7 @@ fn capability_min_samples_allows_disable_once_reached() {
 fn capability_auto_recovers_after_cooldown() {
     // GIVEN: a disabled capability with a 10ms cooldown
     let ks = KillSwitch::new();
+    // limit-under-test (fires-only): the row asserts only that the cooldown has run out
     let cfg = cap_cfg_no_min(2, Duration::from_secs(300), 0.5, Duration::from_millis(10));
 
     let triggered = ks.record_capability_failure("fulcrum", "tool_f", &cfg);
@@ -670,6 +688,7 @@ fn disabled_capabilities_lists_disabled_entries() {
 fn disabled_capabilities_purges_expired_entries_on_list() {
     // GIVEN: two disabled capabilities with a 10ms cooldown
     let ks = KillSwitch::new();
+    // limit-under-test (fires-only): the short cooldown is only asserted to have expired
     let cfg = cap_cfg_no_min(2, Duration::from_secs(300), 0.5, Duration::from_millis(10));
 
     ks.record_capability_failure("fulcrum", "tool_l", &cfg);

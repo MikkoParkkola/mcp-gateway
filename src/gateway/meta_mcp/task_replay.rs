@@ -462,12 +462,17 @@ impl MetaMcp {
         tracing::error!(server, "stored read without the account pre-pass");
     }
 
-    /// What is left of `caller`'s running cold lease on `server`, if one runs.
-    fn cold_lease_remaining(
+    /// `caller`'s cold slot on `server`: what is left of its lease, if one
+    /// runs, and the lender's refusal its settled attempt recorded, if any.
+    /// `None` when the server or the caller's principal cannot be resolved.
+    fn cold_state(
         &self,
         server: &str,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Option<std::time::Duration> {
+    ) -> Option<(
+        Option<std::time::Duration>,
+        Option<crate::backend::LendRefusal>,
+    )> {
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
             .scoped_get(server)?;
@@ -476,7 +481,8 @@ impl MetaMcp {
             caller.provenance(),
         );
         let principal = self.principal_for(&backend, proof)?;
-        backend.cold_lease_remaining(&principal.stable_actor_id())
+        let id = principal.stable_actor_id();
+        Some((backend.cold_lease_remaining(&id), backend.cold_refusal(&id)))
     }
 }
 
@@ -495,11 +501,16 @@ enum StoredRead {
     RepeatedCall,
 }
 
-/// A stored read's visibility verdict that is answered later: the first cold
-/// view's remaining lease (retry), and the first refusal by the caller's own
+/// A stored read's visibility verdict that is answered later: for its cold
+/// targets, the first one's remaining lease (retry) beside the first
+/// recorded lender refusal among them, answered in the retry's place; and
+/// the first refusal by the caller's own
 /// per-user catalogue (answered after the account judgement).
 type StoredVisibility = (
-    Option<Option<std::time::Duration>>,
+    Option<(
+        Option<std::time::Duration>,
+        Option<crate::backend::LendRefusal>,
+    )>,
     Option<(visible::Visibility, String)>,
 );
 

@@ -1,0 +1,5 @@
+# file	fn	needle	count (generated; see delivery_framing.rs)
+src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response	3
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	gateway_error	2
+src/gateway/router/meta_refusal_audit.rs	record	build_error_response	3
+src/gateway/server/mod.rs	answer_unprepared	to_value_lossy	1

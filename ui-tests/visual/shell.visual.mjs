@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../tests/base.mjs';
 import { withFixturePages, tooltipModuleUrl } from '../tests/shell.mjs';
+import { SCREENS } from '../tests/screens.mjs';
 
 const FRAMES = process.env.FRAMES_DIR;
 
@@ -45,13 +46,7 @@ const CASES = [
     ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
   ['32-sign-in-390.png', 390, 800, 'dark', [
     ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
-  // Frame 48q exists only at 1440 px, dark. The Tools screen is served with
-  // the frame's own six rows, padded with filler tools that sort after them
-  // to the frame's totals (1,284 tools, 28 servers), with filesystem.list_dir
-  // open, as drawn.
-  ['48q-tools-status-search-results.png', 1440, 900, 'dark', [
-    ['toolbar', 256, 200, 760, 52, 0.15, 'the server choice is a native select, not a drawn button; no ⌘K hint in a page search (the palette owns ⌘K)'],
-    ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page and the tool's class beside \"Input schema\" in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
+  // Frame 48q moved to the screen table (tests/screens.mjs), drawn through its catalogue state.
   // Frame 36 draws its tooltips as a sheet. The tooltip module's own tip()
   // draws the "Calls today" one with the frame's copy, its box placed on the frame's.
   ['36-tooltip-sheet.png', 1440, 1000, 'dark', [
@@ -67,29 +62,11 @@ const FRAME_COPY = {
     ['Compared', '↘ 48% against yesterday by the same time.']] },
 };
 
-/** The tools frame 48q draws, then filler to its totals. */
-function frameTools() {
-  const drawn = [
-    ['aws.describe_instances', 'aws', 'List EC2 instances with state and tags'],
-    ['aws.get_object', 'aws', 'Read an object from an S3 bucket'],
-    ['context7.get_docs', 'context7', 'Fetch current documentation for a library'],
-    ['docker.list_containers', 'docker', 'List containers and their state'],
-    ['filesystem.list_dir', 'filesystem', 'List a folder inside the allowed paths'],
-    ['filesystem.read_file', 'filesystem', 'Read a text file inside the allowed paths'],
-  ].map(([name, server, description]) => ({ name, server, description, class: 'read', class_source: 'declared',
-    schema: name === 'filesystem.list_dir'
-      ? { type: 'object', properties: { path: { type: 'string', description: 'Folder to list' }, depth: { type: 'integer', default: 1 } }, required: ['path'] }
-      : { type: 'object' } }));
-  const filler = Array.from({ length: 1284 - drawn.length }, (_, i) => ({
-    name: `zz_filler_${i}`, server: `zz_server_${i % 24}`, description: 'Filler', class: 'read', class_source: 'declared', schema: {},
-  }));
-  return [...drawn, ...filler];
-}
-
 test.describe('frames', () => {
   test('FRAMES_DIR points at the r6 frames', () => {
     expect(FRAMES, 'set FRAMES_DIR to the r6 PNG directory').toBeTruthy();
-    for (const [file] of CASES) expect(existsSync(join(FRAMES, file)), file).toBe(true);
+    const files = [...CASES.map(([file]) => file), ...SCREENS.flatMap((s) => s.frames.map((f) => f.file))];
+    for (const file of files) expect(existsSync(join(FRAMES, file)), file).toBe(true);
   });
 
   for (const [file, width, height, scheme, regions, act] of CASES) {
@@ -101,19 +78,10 @@ test.describe('frames', () => {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
       }
       if (act === 'tooltip') await page.route('**/ui/assets/tips.*.json', (r) => r.fulfill({ json: FRAME_COPY }));
-      if (act === 'tools') {
-        await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
-        await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: frameTools() } }));
-        // Frame 48q is the catalogue, which lives at ?view=all (its own address bar).
-        await page.goto('/ui/tools/status?view=all');
-        await page.getByRole('button', { name: 'filesystem.list_dir', exact: true }).click();
-      } else {
-        // The fixture pages give Overview its subtitle, as a real screen will.
-        await withFixturePages(page);
-        await page.goto('/ui/overview/status');
-      }
+      // The fixture pages give Overview its subtitle, as a real screen will.
+      await withFixturePages(page);
+      await page.goto('/ui/overview/status');
       await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
-      if (act === 'tools') await page.evaluate(() => document.activeElement?.blur());
       if (act === 'tooltip') {
         await page.evaluate(async (url) => {
           const tips = await import(url);
@@ -133,54 +101,89 @@ test.describe('frames', () => {
       }
       // Focus is state, not look: the frames draw the controls unfocused.
       if (act === 'signin') await page.evaluate(() => document.activeElement?.blur());
-      await page.evaluate(() => document.fonts.ready);
-      const shot = (await page.screenshot()).toString('base64');
-      const frame = readFileSync(join(FRAMES, file)).toString('base64');
-      const ratios = await page.evaluate(async ({ shot, frame, regions }) => {
-        const load = async (b64) => {
-          const img = new Image();
-          img.src = `data:image/png;base64,${b64}`;
-          await img.decode();
-          return img;
-        };
-        const [a, b] = await Promise.all([load(shot), load(frame)]);
-        const pixels = (img, [x, y, w, h]) => {
-          const c = new OffscreenCanvas(w, h);
-          const g = c.getContext('2d');
-          g.drawImage(img, x, y, w, h, 0, 0, w, h);
-          return g.getImageData(0, 0, w, h).data;
-        };
-        const crop = (img, [x, y, w, h]) => {
-          const c = document.createElement('canvas');
-          c.width = w;
-          c.height = h;
-          c.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
-          return c.toDataURL('image/png').split(',')[1];
-        };
-        return regions.map(([name, x, y, w, h, , , fx = x, fy = y]) => {
-          const box = [x, y, w, h];
-          const frameBox = [fx, fy, w, h];
-          const p = pixels(a, box);
-          const q = pixels(b, frameBox);
-          let diff = 0;
-          for (let i = 0; i < p.length; i += 4) {
-            if (Math.abs(p[i] - q[i]) + Math.abs(p[i + 1] - q[i + 1]) + Math.abs(p[i + 2] - q[i + 2]) > 96) diff++;
-          }
-          return [name, diff / (p.length / 4), crop(a, box), crop(b, frameBox)];
-        });
-      }, { shot, frame, regions });
-      // The two crops of each region, side by side in the test output, for the PR.
-      for (const [name, , shotCrop, frameCrop] of ratios) {
-        const slug = `${file.replace('.png', '')}-${name.replace(' ', '-')}`;
-        writeFileSync(test.info().outputPath(`${slug}-shell.png`), Buffer.from(shotCrop, 'base64'));
-        writeFileSync(test.info().outputPath(`${slug}-frame.png`), Buffer.from(frameCrop, 'base64'));
-      }
-      for (const [i, [name, ratio]] of ratios.entries()) {
-        const [, , , , , ceiling = LIMIT, cause = ''] = regions[i];
-        expect(ratio, `${file} ${name}${cause ? ` (${cause})` : ''}`).toBeLessThanOrEqual(ceiling);
-      }
-      for (const [name, ratio] of ratios) console.log(`visual: ${file} ${name} ${(ratio * 100).toFixed(2)}% differs`);
-      test.info().annotations.push(...ratios.map(([name, ratio]) => ({ type: 'diff', description: `${file} ${name} ${(ratio * 100).toFixed(2)}%` })));
+      await compareWithFrame(page, file, regions);
     });
   }
+
+  // The screen table's frames, each drawn through the same state step the CI gates use.
+  for (const screen of SCREENS) {
+    for (const f of screen.frames) {
+      test(`${screen.id} frame ${f.file}`, async ({ page }) => {
+        expect(FRAMES).toBeTruthy();
+        await page.setViewportSize({ width: f.width, height: f.height });
+        await page.emulateMedia({ colorScheme: f.scheme });
+        await screen.states.find((s) => s.name === f.state).step(page, f.data);
+        // The frames draw no focus ring; let a fading ring (any finite animation) finish first.
+        await page.evaluate(async () => {
+          document.activeElement?.blur();
+          const ending = document.getAnimations().filter((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+          await Promise.all(ending.map((a) => a.finished.catch(() => {})));
+        });
+        await compareWithFrame(page, f.file, f.regions, f.masks);
+      });
+    }
+  }
 });
+
+/**
+ * Screenshot the page and compare each region with the same box of the frame (or the
+ * frame box given at index 7-8). A pixel differs when its three channels differ by more
+ * than 96 in sum. Mask boxes are filled one colour on both images and their pixels are
+ * not counted, so live numbers neither pass nor fail a region. Both crops of every region
+ * go to the test output for the PR; each region is then held to its ceiling.
+ */
+async function compareWithFrame(page, file, regions, masks = []) {
+  await page.evaluate(() => document.fonts.ready);
+  const shot = (await page.screenshot()).toString('base64');
+  const frame = readFileSync(join(FRAMES, file)).toString('base64');
+  const found = await page.evaluate(async ({ shot, frame, regions, masks }) => {
+    const paint = async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = new OffscreenCanvas(img.width, img.height);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      g.fillStyle = '#ff00ff';
+      for (const [x, y, w, h] of masks) g.fillRect(x, y, w, h);
+      return g;
+    };
+    const [mine, theirs] = await Promise.all([paint(shot), paint(frame)]);
+    const hidden = (px, py) => masks.some(([x, y, w, h]) => px >= x && px < x + w && py >= y && py < y + h);
+    const asPng = async (g, x, y, w, h) => {
+      const out = new OffscreenCanvas(w, h);
+      out.getContext('2d').drawImage(g.canvas, x, y, w, h, 0, 0, w, h);
+      const blob = await out.convertToBlob({ type: 'image/png' });
+      return new Promise((ok) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(',')[1]);
+        r.readAsDataURL(blob);
+      });
+    };
+    return Promise.all(regions.map(async ([name, x, y, w, h, , , fx = x, fy = y]) => {
+      const p = mine.getImageData(x, y, w, h).data;
+      const q = theirs.getImageData(fx, fy, w, h).data;
+      let counted = 0;
+      let differ = 0;
+      for (let i = 0; i < w * h; i += 1) {
+        if (hidden(x + (i % w), y + Math.floor(i / w))) continue;
+        counted += 1;
+        const k = i * 4;
+        if (Math.abs(p[k] - q[k]) + Math.abs(p[k + 1] - q[k + 1]) + Math.abs(p[k + 2] - q[k + 2]) > 96) differ += 1;
+      }
+      return { name, ratio: counted ? differ / counted : 1, ours: await asPng(mine, x, y, w, h), frame: await asPng(theirs, fx, fy, w, h) };
+    }));
+  }, { shot, frame, regions, masks });
+  const pct = (r) => `${(r * 100).toFixed(2)}%`;
+  for (const r of found) {
+    const slug = `${file.replace('.png', '')}-${r.name.replace(' ', '-')}`;
+    writeFileSync(test.info().outputPath(`${slug}-shell.png`), Buffer.from(r.ours, 'base64'));
+    writeFileSync(test.info().outputPath(`${slug}-frame.png`), Buffer.from(r.frame, 'base64'));
+    console.log(`visual: ${file} ${r.name} ${pct(r.ratio)} differs`);
+    test.info().annotations.push({ type: 'diff', description: `${file} ${r.name} ${pct(r.ratio)}` });
+  }
+  for (const [i, r] of found.entries()) {
+    const [, , , , , ceiling = LIMIT, cause = ''] = regions[i];
+    expect(r.ratio, `${file} ${r.name}${cause ? ` (${cause})` : ''}`).toBeLessThanOrEqual(ceiling);
+  }
+}

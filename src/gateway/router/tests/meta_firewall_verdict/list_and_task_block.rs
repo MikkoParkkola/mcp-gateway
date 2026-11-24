@@ -417,6 +417,7 @@ async fn a_task_mode_discovery_settles_with_one_inspection() {
             None,
             None,
             None,
+            None,
         ),
         request: crate::gateway::meta_mcp::task_admission_request(
             OWNER.to_owned(),

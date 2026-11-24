@@ -1,0 +1,6 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/router/handlers/dispatch_intake_run.rs	intake_refused	Refused::of	1	feeds	the intake's and the early signing site's refusal, which answer_intake and answer_signing record and answer
+src/gateway/router/meta_refusal_audit.rs	answer_signing	signing_refusal	1	recorded	a /mcp signing refusal, recorded by record() through settle, then framed under its context's id
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	signing_refusal	1	recorded	a stdio signing refusal, recorded through settle and returned as the frame stdio delivers
+src/gateway/server/mod.rs	answer_unprepared	answer_stdio_signing_refusal	1	recorded	the early stdio malformed nonce: the callee records it, and this site returns its frame
+src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	answer_stdio_signing_refusal	1	recorded	the late stdio signing check: the callee records it, and this site delivers its frame

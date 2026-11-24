@@ -54,8 +54,12 @@ impl DrainSession {
 
 pub(crate) struct JournalDrain;
 
+// The report's contents are read only by the repair rows: the one product caller (startup)
+// needs the repair's effect on disk, not this summary. A runtime repair's caller would read it.
 pub(crate) struct RepairReport {
+    #[cfg(test)]
     recovered: Recovered,
+    #[cfg(test)]
     reload_owed: bool,
 }
 
@@ -68,6 +72,11 @@ impl DrainFailure {
     /// Why the drain stopped.
     pub(crate) fn error(&self) -> DrainError {
         self.error
+    }
+
+    /// The config whose journal the failed drain held, still locked until this is dropped.
+    pub(crate) fn target(&self) -> &std::path::Path {
+        self.session.target()
     }
 }
 
@@ -143,7 +152,7 @@ impl JournalDrain {
         at_start: bool,
     ) -> Result<RepairReport, DrainError> {
         let Some(journal) = &session.journal else {
-            return Ok(report(Recovered::Nothing, at_start));
+            return Ok(report(&session.locked.target, Recovered::Nothing, at_start));
         };
         if journal
             .state
@@ -179,7 +188,7 @@ impl JournalDrain {
             _ => Recovered::Nothing,
         };
         decide_missing(journal)?;
-        Ok(report(recovered, at_start))
+        Ok(report(&session.locked.target, recovered, at_start))
     }
 
     pub(crate) async fn run(
@@ -351,9 +360,20 @@ impl JournalDrain {
     }
 }
 
-fn report(recovered: Recovered, at_start: bool) -> RepairReport {
+// A recovery is the one moment the config on disk changes without a writer: say so.
+fn report(target: &std::path::Path, recovered: Recovered, at_start: bool) -> RepairReport {
+    if recovered != Recovered::Nothing {
+        tracing::info!(
+            journal = %crate::config_persistence::journal::journal_path(target).display(),
+            ?recovered,
+            at_start,
+            "recovered a config write a crashed writer left"
+        );
+    }
     RepairReport {
+        #[cfg(test)]
         recovered,
+        #[cfg(test)]
         reload_owed: !at_start && recovered == Recovered::RolledBack,
     }
 }
@@ -433,53 +453,67 @@ fn restore(
 }
 
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_tests.rs"]
 mod crash_tests;
 #[path = "config_persistence_journal_v2_drain_decide.rs"]
 mod decide;
 #[path = "config_persistence_journal_v2_drain_deliver.rs"]
 mod deliver;
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_fault_tests.rs"]
 pub(crate) mod fault;
 #[path = "config_persistence_journal_v2_drain_file.rs"]
 pub(crate) mod file;
-#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_fixtures_tests.rs"]
 mod fixtures;
 #[path = "config_persistence_journal_v2_drain_handover.rs"]
 pub(crate) mod handover;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_repair_tests.rs"]
 mod repair_tests;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_root_tests.rs"]
 mod root_tests;
 // Unix only: the abandoned-file fixtures come from a handover, and off Unix `hand_over` refuses
 // the donor as foreign before the startup gate is reached.
 #[cfg(tp3)]
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 #[path = "config_persistence_journal_v2_drain_startup_tests.rs"]
 mod startup_tests;
 #[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_drain_tests.rs"]
 mod tests;
-
 #[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_journal_v2_drain_sessionless_tests.rs"]
+mod unsessioned_build_tests;
+// Unix only: crash_s1 kills a child process at the repair step.
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+#[path = "config_persistence_journal_v2_drain_serve_crash_tests.rs"]
+mod serve_crash_tests;
+
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_fixtures_tests.rs"]
 mod crash_fixtures;
 
-#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_torn_tests.rs"]
 mod torn_cases;
 
-#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_assertions_tests.rs"]
 mod crash_assertions;
 
-#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_delivery_cases_tests.rs"]
 mod delivery_cases;
 
-#[cfg(tp3)]
+#[cfg(test)]
 #[path = "config_persistence_journal_v2_crash_cases_tests.rs"]
 mod crash_cases;

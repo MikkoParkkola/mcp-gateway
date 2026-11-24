@@ -108,6 +108,7 @@ pub(crate) use execution_context::{
 };
 pub use executor::CapabilityExecutor;
 pub(crate) use executor::ProcessNote;
+pub(crate) use executor::credential_form;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
 #[cfg(target_os = "linux")]
@@ -118,6 +119,9 @@ pub use loader::CapabilityLoader;
 #[cfg(feature = "webui")]
 pub(crate) use loader::unloadable_issues;
 pub(crate) use loader::{IssueLog, refuse_unloadable};
+#[cfg(feature = "webui")]
+pub(crate) use openapi::is_name_taken;
+pub(crate) use openapi::name_taken;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub(crate) use parser::validate_cli_templates;
 pub use parser::{parse_capability, parse_capability_file, validate_capability};

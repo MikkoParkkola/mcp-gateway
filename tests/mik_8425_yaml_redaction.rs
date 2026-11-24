@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 B3, gate G2: no YAML error from the adapter prints the value that caused it (CWE-532).
 
+#[path = "../src/test_source_files.rs"]
+mod test_source_files;
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -359,19 +361,6 @@ fn a_too_long_duration_write_does_not_print_its_seconds() {
     assert_eq!(tree.get("d").and_then(yaml::Value::as_str), Some("30s"));
 }
 
-fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let entries = std::fs::read_dir(dir).expect("test reads src");
-    for entry in entries {
-        let entry = entry.expect("test reads a dir entry");
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rs(&path, out);
-        } else if path.extension().is_some_and(|x| x == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// Whether `text` holds a format placeholder: a `{` not doubled as `{{`.
 fn has_placeholder(text: &str) -> bool {
     let bytes = text.as_bytes();
@@ -516,7 +505,7 @@ fn value_formatting_custom_calls(file: &syn::File) -> Vec<usize> {
 fn custom_errors_never_format_a_value() {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    collect_rs(&manifest.join("src"), &mut files);
+    test_source_files::rust_files(&manifest.join("src"), &mut files);
     let mut hits = Vec::new();
     for path in &files {
         let text = match std::fs::read_to_string(path) {

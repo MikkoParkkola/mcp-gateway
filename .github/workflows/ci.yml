@@ -133,6 +133,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -195,11 +196,26 @@ jobs:
         run: |
           python3 scripts/ci/test_coverage_probe_concurrency.py --self-test
           python3 scripts/ci/test_coverage_probe_concurrency.py
+      # The affected-tests map: its builder's rules (weight split, trace, unit record, age guard) and its workflow.
+      # strace: the real-trace row runs the builder's exact trace command, and fails here if strace is missing.
+      - name: The affected-tests map builder and workflow
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          command -v strace >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends strace; }
+          python3 scripts/ci/test_affected_map.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
           python3 scripts/ci/check-pipefail-grep-q.py
           python3 scripts/dev/test_pipefail_quiet_grep.py
+      # A Python test skip that is not listed with its reason reads as a pass where the tool or right is missing.
+      - name: Every test skip is listed or goes through the required-mode helper
+        run: |
+          python3 scripts/ci/test_required_mode.py
+          python3 scripts/ci/check_python_skips.py --self-test
+          python3 scripts/ci/check_python_skips.py
+          python3 scripts/ci/check_rust_skips.py --self-test
+          python3 scripts/ci/check_rust_skips.py
       # Two clippy lints a lane only learned of after a Spark lint round (a fn body over 100 lines, push_str(&format!(..))).
       - name: Two clippy lints are found by text before a lint run
         run: |
@@ -301,6 +317,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
       # Here because this job already has the pinned compiler and is cheap:
@@ -323,6 +341,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Validate first-use smoke scripts
         # One file per `bash -n`: it checks only its first argument.
         run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
@@ -363,6 +383,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
       # would read as a missing downgrade warning, not as a missing tool.
       - name: Install and check the script's tools
@@ -578,12 +600,12 @@ jobs:
       # restores only caches saved on its base branch (or its own ref), and this job's cache was
       # saved on pull-request refs alone, so every lane run rebuilt the ~350 dependencies for each
       # of the job's eight cargo steps from cold (all of 3 runs sampled logged "No cache found").
-      # Restore on every run, save only on a push: a save on each PR ref wrote a 310 MB cache nothing
+      # Restore on every run, save only on a release-line push: a save on each PR ref wrote a 310 MB cache nothing
       # else can read (33 such caches held the repository at its 10 GB limit, where eviction can push
       # out the line's own cache).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # The wall clock is read only in src/clock.rs (MIK-8202 AC.9). Clippy
       # ignores a disallowed path it cannot resolve, so each clippy.toml clock
@@ -663,20 +685,24 @@ jobs:
   # runner slots is the exception.
   windows-shards:
     name: Windows shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    # Anchored: windows-lib-build runs under exactly this guard (*windows-pr-guard).
+    if: &windows-pr-guard ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        # Selections and floors: scripts/ci/shard_tests.py.
-        shard: [lib-a, lib-b, lib-c, int-a, int-b]
+        # Selections and floors: scripts/ci/shard_tests.py. The lib legs run from one shared
+        # build in windows-lib-shards; these two compile the integration targets they run.
+        shard: [int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       # Every shard: the W-T6 rows can land in any of them.
@@ -685,9 +711,9 @@ jobs:
         run: >-
           New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
           -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
-      # Together the shards are every test target: library, binary and the
-      # integration targets under tests/ (`--tests`), and the examples build.
-      # Each shard compiles the targets it runs, so a unix-only API slipping
+      # These two run the binary, the integration targets under tests/
+      # (`--tests`) and the examples build; the library runs in windows-lib-shards.
+      # Each compiles the targets it runs, so a unix-only API slipping
       # into any target still fails here. The store suites are included: both
       # stores run on Windows with owner-only DACLs (ADR-016). Windows-only
       # limits are `cfg(unix)` gates.
@@ -721,50 +747,6 @@ jobs:
           rc=$?
           echo "hash-key on an empty key exited $rc"
           [[ $rc -eq 2 ]]
-      # Owner-only rows that need real Windows state: a second, non-admin
-      # account (the runner is an administrator, whose rights bypass DACLs), a
-      # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
-      # even when it failed, so no evidence hides behind an earlier failure.
-      # lib-a: the rows are library tests, and that shard has the lib built.
-      - name: Privileged owner-only rows
-        id: privileged
-        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
-          $free = 68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "${_}:\") }
-          # Second user: Users only, never Administrators.
-          $pass = 'Mg1!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-          $account = New-LocalUser -Name mgw-probe -Password (ConvertTo-SecureString $pass -AsPlainText -Force) -AccountNeverExpires
-          if ((Get-LocalGroupMember Administrators).Name -match 'mgw-probe') { throw 'mgw-probe is an administrator' }
-          $sid = $account.SID.Value
-          secedit /export /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
-          (Get-Content "$env:RUNNER_TEMP\sec.inf") -replace '^(SeInteractiveLogonRight = .*)$', "`$1,*$sid" | Set-Content "$env:RUNNER_TEMP\sec.inf"
-          secedit /configure /db "$env:RUNNER_TEMP\sec.sdb" /cfg "$env:RUNNER_TEMP\sec.inf" /areas USER_RIGHTS | Out-Null
-          Set-Service seclogon -StartupType Manual; Start-Service seclogon
-          # Mapped network drive.
-          $net = $free[0]
-          net use "${net}:" \\localhost\C$
-          if ($LASTEXITCODE -ne 0) { throw 'net use failed' }
-          New-Item -ItemType Directory -Force "${net}:\mgw-net-root" | Out-Null
-          # FAT32 and exFAT volumes.
-          $vols = @(@{ fs = 'FAT32'; letter = $free[1] }, @{ fs = 'exFAT'; letter = $free[2] })
-          foreach ($v in $vols) {
-            $vhd = "$env:RUNNER_TEMP\mgw-$($v.fs).vhdx"
-            @("create vdisk file=`"$vhd`" maximum=64 type=expandable", "select vdisk file=`"$vhd`"",
-              'attach vdisk', 'create partition primary', "format fs=$($v.fs) quick",
-              "assign letter=$($v.letter)") | Set-Content "$env:RUNNER_TEMP\dp.txt"
-            diskpart /s "$env:RUNNER_TEMP\dp.txt"
-            if ($LASTEXITCODE -ne 0) { throw "diskpart $($v.fs) failed" }
-          }
-          $env:MGW_PROBE_USER = 'mgw-probe'
-          $env:MGW_PROBE_PASS = $pass
-          $env:MGW_NET_ROOT = "${net}:\mgw-net-root"
-          $env:MGW_FAT32_ROOT = "$($free[1]):\"
-          $env:MGW_EXFAT_ROOT = "$($free[2]):\"
-          cargo test --all-features --lib -- --ignored --show-output win_privileged::
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Moved out of the Windows suite so the lint does not sit on its critical
   # path (MIK-8482). The Windows-only modules (`win_acl`, the one module
@@ -784,6 +766,8 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
       # `cfg(windows)` production code is linted like the Linux job's; only
@@ -816,7 +800,7 @@ jobs:
   # it on the train.
   windows-check:
     name: Windows check
-    needs: [windows-shards, windows-clippy]
+    needs: [windows-shards, windows-clippy, windows-lib-shards, windows-lib-build]
     if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     steps:
@@ -826,7 +810,7 @@ jobs:
       - name: Every Windows shard and the clippy job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ROLLUP_EXPECTS: windows-shards windows-clippy
+          ROLLUP_EXPECTS: windows-shards windows-clippy windows-lib-shards windows-lib-build
         run: |
           # shellcheck disable=SC2086 # ROLLUP_EXPECTS is a space-separated id list on purpose
           python3 scripts/ci/check_needs.py $ROLLUP_EXPECTS
@@ -846,7 +830,7 @@ jobs:
   # scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
+    needs: [scope, windows-shards, windows-lib-build, windows-lib-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -863,7 +847,7 @@ jobs:
           DOCS_ONLY: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only == 'true' }}
           # Data, not shell text: merge-train reads both from the base copy of this file.
           DOCS_ONLY_SKIPPABLE: task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal,feature-combos-pr
-          ROLLUP_EXPECTS: scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
+          ROLLUP_EXPECTS: scope windows-shards windows-lib-build windows-lib-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
         run: |
           if [ "$TRAIN" != true ]; then
             echo "Heavy checks are judged on the merge train; on this pull request each heavy job's own check decides." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -917,6 +901,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
       # locks and paths behave differently on a Mac. The two skips are the
@@ -1055,6 +1041,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -1176,6 +1163,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Shard suite
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos int
@@ -1205,6 +1194,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the shared lib test binary
         # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
         # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
@@ -1237,7 +1228,8 @@ jobs:
   linux-lib-union:
     name: Linux lib test binary
     needs: [linux-lib-build]
-    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    # Anchored: windows-lib-shards runs under exactly this guard (*pr-guard-after-build).
+    if: &pr-guard-after-build ${{ !cancelled() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1250,6 +1242,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -1264,6 +1257,93 @@ jobs:
         run: |
           scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"
           python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lib-bin" "$RUNNER_TEMP/expected"
+
+  # Windows compiles the library's test exe once, here, and its four lib legs (windows-lib-shards) only run it: each
+  # leg used to compile the same exe for itself. The export writes lib-tests.exe and a .root file naming the checkout
+  # it was built in; the legs refuse an exe from another root. scripts/ci/check_shared_lib.py pins the wiring.
+  windows-lib-build:
+    name: Windows lib test exe
+    if: *windows-pr-guard
+    runs-on: windows-2025
+    # The build step's own 50 min plus the 10 min reserve the step-limit rule keeps.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes or calls the API.
+        with:
+          persist-credentials: false
+      # The compiler rust-toolchain.toml names (check_toolchain_pin.py).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      # Saved on the release line only, restored everywhere.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        # Keyed by job, compiler and lock file (the action's default).
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+      # pwsh, as the legs: the same shell builds and runs the exe.
+      - name: Build the shared lib test exe
+        shell: pwsh
+        timeout-minutes: 50
+        run: python scripts/ci/shard_tests.py export-lib "$env:RUNNER_TEMP\lib-bin"
+      - name: Hand the exe to the lib legs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # One name per run: a rerun of a single leg finds this attempt's exe.
+          name: windows-lib-tests
+          retention-days: 1
+          path: ${{ runner.temp }}/lib-bin
+          if-no-files-found: error
+          overwrite: true
+
+  # The Windows lib legs, from the shared exe: no compile here. `!cancelled()` runs them when the build failed too,
+  # so they end red, never skipped. Same check names as windows-shards.
+  windows-lib-shards:
+    name: Windows shard ${{ matrix.shard }}
+    needs: [windows-lib-build]
+    if: *pr-guard-after-build
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Selections and floors: scripts/ci/shard_tests.py (SHARED_BUILD).
+        shard: [lib-a, lib-b, lib-c, lib-d]
+    steps:
+      - name: The shared lib test exe was built
+        shell: bash
+        run: '[ "$BUILD" = success ] || { echo "::error::windows-lib-build $BUILD"; exit 1; }'
+        env:
+          BUILD: ${{ needs.windows-lib-build.result }}
+      # The checkout is the root the exe was built in (shard_tests.py checks its .root file).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The no-follow rows (W-T6) need symlinks, which Developer Mode lets an unelevated token create; any lib leg
+      # can hold them.
+      - name: Developer Mode, for the symlink rows
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+          -Name AllowDevelopmentWithoutDevLicense -PropertyType DWORD -Value 1 -Force
+      - name: Fetch the shared lib test exe
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-lib-tests
+          path: ${{ runner.temp }}/lib-bin
+      # pwsh for the reason windows-shards gives: Git Bash's MSYS2 writes through a DACL deny.
+      - name: Shard suite from the shared exe
+        shell: pwsh
+        env:
+          LIB_EXE: ${{ runner.temp }}\lib-bin\lib-tests.exe
+        run: python scripts/ci/shard_tests.py run-prebuilt windows ${{ matrix.shard }} "$env:LIB_EXE"
+      # The owner-only rows that need a second account, a mapped drive and FAT32/exFAT volumes, from the same exe.
+      # One leg is enough; it runs when the suite failed too, so these rows still report.
+      - name: Privileged owner-only rows
+        id: privileged
+        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
+        shell: pwsh
+        env:
+          LIB_EXE: ${{ runner.temp }}\lib-bin\lib-tests.exe
+        run: scripts/ci/windows-privileged-rows.ps1 "$env:LIB_EXE"
 
   # The preview sandbox's fetch rows run in the lib's own tests (their fake resolver and dialer are cfg(test), so no
   # shipped build carries a seam) and launch the real gateway binary as the helper. The lib shards run only prebuilt
@@ -1283,6 +1363,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the gateway binary for the lib shards' sandbox rows
         timeout-minutes: 15
         run: |
@@ -1317,6 +1399,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
@@ -1337,6 +1421,14 @@ jobs:
         # Memory every 30 s while it builds (scripts/ci/with-memory-log.sh). No step limit yet: a healthy lib-b run
         # took 52 min on 2026-11-13, so it logs only until its tail is measured (check_swap_jobs.py LOG_ONLY).
         run: scripts/ci/with-memory-log.sh python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
+      # The #[ignore] rows of tests/integration_tests.rs need a live gateway and an admin caller. int-a built both
+      # binaries just above, so this starts that gateway with a per-run admin key, waits for /readyz, and runs the
+      # rows in required mode (a row that cannot reach the gateway fails instead of skipping). The live-API caching
+      # row stays opt-in; the script says why.
+      - name: Ignored integration rows against a live gateway
+        if: matrix.shard == 'int-a'
+        timeout-minutes: 10
+        run: scripts/ci/ignored-integration-rows.sh
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects
@@ -1536,6 +1628,12 @@ jobs:
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+      # The inventory suite parses Rust with tree-sitter, at the versions the gate env lists: read from that list,
+      # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
+      # cargo steps below still run.
+      - name: Install the gate env's tree-sitter versions
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -1546,19 +1644,27 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: ${{ !cancelled() }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
       - name: Run the tests
+        if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
         run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
@@ -1592,6 +1698,12 @@ jobs:
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+      # The inventory suite parses Rust with tree-sitter, at the versions the gate env lists: read from that list,
+      # so the two never drift (pinned by version here, by hash in the gate env). A red here fails the job, and the
+      # cargo steps below still run.
+      - name: Install the gate env's tree-sitter versions
+        # pip gets the list from python itself, so no shell splitting touches a requirement.
+        run: python3 -c 'import subprocess, sys, tomllib; deps = tomllib.load(open("scripts/gate-env/pyproject.toml", "rb"))["project"]["dependencies"]; sys.exit(subprocess.call([sys.executable, "-m", "pip", "install", "--user", "--quiet", *deps]))'
       - name: Release tooling Python suites
         run: |
           set -uo pipefail
@@ -1602,19 +1714,27 @@ jobs:
             echo "::endgroup::"
           done
           exit "$fail"
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
       # Restore only: saving from throwaway runs would evict the entries the
       # merge-evidence jobs rely on from the shared 10 GB repository cache.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: ${{ !cancelled() }}
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/shard_tests.py export-home "$GITHUB_ENV"
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
       - name: Run the tests
+        if: ${{ !cancelled() }}
         # Log-only (check_swap_jobs.py LOG_ONLY): no measured duration yet for a step limit.
         run: scripts/ci/with-memory-log.sh cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
@@ -1665,6 +1785,8 @@ jobs:
   # reads an entry stored by `secret-tool` byte-exact; the writer creates,
   # reads back, refuses a taken name and deletes; each is refused once the
   # collection is locked. The shards run both against stub programs only.
+  # The job also runs the Docker runtime provider's two #[ignore] rows against the runner's own Docker daemon
+  # (start, inspect, logs, restart, rm, and the restart policy); a missing daemon fails it, never skips.
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: [scope, linux-lib-build]
@@ -1687,6 +1809,7 @@ jobs:
           pattern: linux-lib-tests-p*
           path: ${{ runner.temp }}/lib-bin
           merge-multiple: false
+        id: lib_parts
       - name: Install gnome-keyring, secret-tool and gdbus
         run: |
           sudo apt-get update
@@ -1721,6 +1844,14 @@ jobs:
             "$LIB_TEST_BIN" --ignored --exact config::keychain_linux::writer_tests::b18_the_real_secret_service_round_trips_then_refuses_locked 2>&1 | tee "$RUNNER_TEMP/b18.log"
             grep -Eq "^test result: ok\. 1 passed" "$RUNNER_TEMP/b18.log"
           '
+      # Runs after a red keychain step too, so one cannot hide the other; skipped only when the part binaries never
+      # arrived, and then the shared-build gate above has already failed the job.
+      - name: "Docker runtime provider: both rows pass against the runner's daemon"
+        if: ${{ !cancelled() && steps.lib_parts.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          CARGO_MANIFEST_DIR: ${{ github.workspace }}
+        run: scripts/dev/runtime-provider-docker-smoke.sh --prebuilt "$RUNNER_TEMP/lib-bin"
 
   # Runs one SDK journey test that reads no documentation file, so a docs-only
   # pull request skips it; a failed scope decision runs it (fail-open).
@@ -1772,6 +1903,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
       - name: Install cosign
@@ -1899,6 +2032,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Build the tests from the packaged crate
         # The lib test binary part by part, then the other test targets (scripts/ci/packaged-tests.sh). The whole
         # binary in one rustc lost this runner about 50 min in, four times on 2026-11-17. By part it took 20.1 and
@@ -1940,6 +2075,8 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-audit
         env:
           RUSTFLAGS: ""
@@ -2038,6 +2175,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment (the inventory check reads Rust with tree-sitter)
         env:
           UV_MALWARE_CHECK: "1"
@@ -2154,6 +2292,8 @@ jobs:
           toolchain: 1.99.1
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
       - name: Build the shipped binary
         if: needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true'
@@ -2312,6 +2452,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2333,6 +2474,17 @@ jobs:
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
         run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}" --compare merge-base
+      # A sub-second limit in test code names why a stall cannot flip its row,
+      # and the per-file count of unmarked ones only goes down.
+      - name: Sub-second test limits carry a marker
+        run: |
+          python3 scripts/dev/check_test_wallclock.py --self-test
+          python3 scripts/dev/check_test_wallclock.py
+      - name: The unmarked-limit ceilings do not rise against the base
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          python3 scripts/dev/check_test_wallclock.py --base "$base"
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -2351,6 +2503,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2425,6 +2578,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -2608,7 +2762,9 @@ jobs:
           # Scoped per arch: an unscoped scope has both legs writing one cache
           # entry, so each run thrashes the other's layers.
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          # Written only on the release line or main, the refs every PR can restore; a PR or tag entry
+          # would be restored by nothing and only push the line's entries toward eviction.
+          cache-to: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-{0}', matrix.arch) || '' }}
 
       - name: Pull the pushed digest
         env:
@@ -2636,6 +2792,9 @@ jobs:
 
       - name: Build and push the full variant by digest (no tag)
         id: build_full
+        env:
+          # Empty off the release line and main: the expansion below then adds no --cache-to.
+          CACHE_TO: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-full-{0}', matrix.arch) || '' }}
         run: |
           set -euo pipefail
           META="${RUNNER_TEMP}/full-build-meta.json"
@@ -2647,7 +2806,7 @@ jobs:
             --build-arg "APT_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}" \
             --cache-from "type=gha,scope=docker-${{ matrix.arch }}" \
             --cache-from "type=gha,scope=docker-full-${{ matrix.arch }}" \
-            --cache-to "type=gha,mode=max,scope=docker-full-${{ matrix.arch }}" \
+            ${CACHE_TO:+--cache-to "$CACHE_TO"} \
             --output "type=image,name=ghcr.io/mikkoparkkola/mcp-gateway,push-by-digest=true,name-canonical=true,push=true" \
             .
           DIGEST="$(jq -r '."containerimage.digest"' "${META}")"

@@ -314,12 +314,11 @@ impl super::super::MetaMcp {
     }
 }
 
-/// The upstream signature chain refused the reply. No kind names that check
-/// yet (MIK-8914.API2A.15): not `response_gate`, which judges the payload, and not
-/// `attestation`, which is the caller's evidence.
+/// The upstream signature chain refused the reply: its own kind, neither the
+/// payload's gate nor the caller's evidence.
 fn note_chain_refused() {
     crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-        crate::security::decision_record::DecisionKind::Unrecorded,
+        crate::security::decision_record::DecisionKind::SignatureChain,
         None,
     );
 }

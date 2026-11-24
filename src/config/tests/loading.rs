@@ -23,7 +23,7 @@ fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing
     // environment this fixture cannot exercise PermissionDenied, so say why
     // the test is skipped instead of reporting a misleading pass or failure.
     if std::fs::File::open(&path).is_ok() {
-        eprintln!("skipping unreadable-config regression: effective user can read mode 000");
+        crate::test_wait::skip_or_fail("a user that cannot read a mode 000 file (this one can)");
         return;
     }
 

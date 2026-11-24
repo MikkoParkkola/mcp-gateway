@@ -26,6 +26,7 @@ pub(super) fn scripted(
         fail: None,
         reply: None,
         notify_refused: false,
+        gate: None,
     }));
     backend
 }

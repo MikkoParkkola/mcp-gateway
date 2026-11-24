@@ -804,20 +804,26 @@ wait() {
         fixture = self.fixture(empty_after=None)
         fixture.set_wait("MEM_KILL_WAIT_S", "0.1")
         fixture.set_wait("MEM_POLL_S", "20")
+        # The row owns the gate's clock. On the real clock, a loaded runner reached the
+        # first drain check after the 0.1 s deadline, the loop stopped without sleeping, and the row had nothing to
+        # read (train 69b). Unset, EPOCHREALTIME is an ordinary variable; the gate reads the clock only through it, so
+        # time here moves only when the gate sleeps, and the recorded sleep does not wait. The clock starts at 0 so
+        # the gate's arithmetic is exact: one check with 0.1 s left, one capped sleep, one check with none left.
         self.shell_hook(fixture, r'''
+unset EPOCHREALTIME
+EPOCHREALTIME=0
 sleep() {
   printf '%s\n' "$1" >> "$CG_FIXTURE/sleeps"
-  command sleep "$@"
+  EPOCHREALTIME=$(awk -v now="$EPOCHREALTIME" -v by="$1" 'BEGIN { printf "%.6f", now + by }')
 }
 ''')
+        # An empty record: a gate that never sleeps then fails the equality below, not a file read.
+        (fixture.base / "sleeps").write_text("")
         fixture.start()
         done = fixture.finish()
-        self.assertFalse(fixture.timed_out, "poll sleep exceeded the remaining drain deadline")
+        self.assertFalse(fixture.timed_out, "the gate did not finish under the row's clock")
         sleeps = [float(value) for value in (fixture.base / "sleeps").read_text().splitlines()]
-        self.assertTrue(sleeps)
-        self.assertTrue(all(0 < value <= 0.1 for value in sleeps),
-                        "; ".join(f"sleep took {value:.2f}s, lower bound {0:.2f}s (exclusive), "
-                                  f"bound {0.1:.2f}s (inclusive)" for value in sleeps))
+        self.assertEqual(sleeps, [0.1], "the one poll sleep must be the 0.1 s left of the deadline, not the 20 s poll")
         self.assertEqual(self.record(fixture, done)["verdict"], "cgroup_drain")
 
     def test_R12_failed_kill_write_is_reported(self):

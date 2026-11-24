@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/gateway/ui/config_history.rs	restore	persist:write_audited	1	no-backend-values	config restore writes a kept version's stored gateway.yaml back unchanged; the request names only a revision, so no value it is given reaches the file

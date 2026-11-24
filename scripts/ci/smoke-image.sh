@@ -100,7 +100,7 @@ if ! grep -q '39400' <<<"${PROBE}"; then
 fi
 
 # Leg 1 -- the image starts and its own HEALTHCHECK agrees.
-docker run -d --name "${NAME}" --pull never \
+docker run -e DO_NOT_TRACK=1 -d --name "${NAME}" --pull never \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 
@@ -135,7 +135,7 @@ docker rm -f "${NAME}" > /dev/null
 # Leg 2 -- the clause the HEALTHCHECK cannot speak to: an MCP request crossing
 # the container boundary. A loopback-bound gateway passes leg 1 and fails here,
 # which is the whole point of running it.
-docker run -d --name "${EXTERNAL}" --pull never \
+docker run -e DO_NOT_TRACK=1 -d --name "${EXTERNAL}" --pull never \
   -p "127.0.0.1::39400" \
   -v "${WORKDIR}/smoke-external.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
@@ -192,7 +192,7 @@ docker rm -f "${EXTERNAL}" > /dev/null
 # Leg 3 -- the default invocation. No mount, no arguments: whatever the
 # Dockerfile's ENTRYPOINT and CMD do on their own.
 DEFAULT_LOG="${WORKDIR}/smoke-default.log"
-if docker run --name "${DEFAULTS}" --pull never "${IMAGE}" > "${DEFAULT_LOG}" 2>&1; then
+if docker run -e DO_NOT_TRACK=1 --name "${DEFAULTS}" --pull never "${IMAGE}" > "${DEFAULT_LOG}" 2>&1; then
   echo "::error::${IMAGE} exited 0 with no config; an operator gets no gateway and no diagnostic"
   cat "${DEFAULT_LOG}"
   exit 1

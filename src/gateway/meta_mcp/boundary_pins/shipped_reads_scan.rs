@@ -121,10 +121,13 @@ impl<'ast> Visit<'ast> for Literals {
             }
         } else if name == Some("concat")
             && let Ok(args) = mac.parse_body_with(
-                syn::punctuated::Punctuated::<syn::LitStr, syn::Token![,]>::parse_terminated,
+                syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
             )
         {
-            self.all.push(args.iter().map(syn::LitStr::value).collect());
+            // The string parts, joined in order. A part that is not a string
+            // (the `env!("CARGO_MANIFEST_DIR")` rooting a path) is left out, so
+            // `concat!(env!(..), "/docs/x.md")` still names `/docs/x.md`.
+            self.all.push(args.iter().filter_map(as_lit_str).collect());
         }
         syn::visit::visit_macro(self, mac);
     }

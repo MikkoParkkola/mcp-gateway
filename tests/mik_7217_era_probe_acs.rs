@@ -54,7 +54,7 @@ struct Fixture {
 
 #[path = "common/era_probe_cap.rs"]
 mod era_probe_cap;
-use era_probe_cap::widen_probe_cap;
+use era_probe_cap::{in_child_with_cap, widen_probe_cap};
 
 impl Fixture {
     /// `discover` and `tools` are the JSON-RPC payload that follows the echoed `id` — either
@@ -161,6 +161,9 @@ const EMPTY_TOOLS: &str = r#""result":{"tools":[]}"#;
 /// `Backend` does not have.
 #[tokio::test]
 async fn discover_4_era_probe_is_sent_even_when_the_handshake_names_a_modern_version() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new("2026-07-28", MODERN_DISCOVER, EMPTY_TOOLS);
     let backend = fixture.backend("modern-handshake");
 
@@ -181,6 +184,9 @@ async fn discover_4_era_probe_is_sent_even_when_the_handshake_names_a_modern_ver
 /// vacuously today, when no probe is sent at all.
 #[tokio::test]
 async fn discover_5_the_era_is_probed_once_and_reused_across_requests() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new("2025-11-25", MODERN_DISCOVER, EMPTY_TOOLS);
     let backend = fixture.backend("cached-era");
 
@@ -217,6 +223,9 @@ async fn discover_5_the_era_is_probed_once_and_reused_across_requests() {
 /// bounded deadline rather than reading the log once.
 #[tokio::test]
 async fn discover_5_a_contradicted_era_is_re_probed() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new(
         "2025-11-25",
         LEGACY_DISCOVER,
@@ -261,6 +270,9 @@ async fn discover_5_a_contradicted_era_is_re_probed() {
 /// cached Modern era does not exist yet, so a test behind it could never go green.
 #[tokio::test]
 async fn discover_5_only_a_2026_code_re_probes_an_ordinary_error_does_not() {
+    if in_child_with_cap() {
+        return;
+    }
     let contradicted = Fixture::new(
         "2025-11-25",
         LEGACY_DISCOVER,
@@ -324,6 +336,9 @@ async fn discover_5_only_a_2026_code_re_probes_an_ordinary_error_does_not() {
 /// here, so this assertion cannot be satisfied by doing nothing.
 #[tokio::test]
 async fn discover_4_a_peer_that_rejects_the_probe_is_classified_legacy() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new("2025-11-25", LEGACY_DISCOVER, EMPTY_TOOLS);
     let backend = fixture.backend("rejects-probe");
 
@@ -352,6 +367,9 @@ async fn discover_4_a_peer_that_rejects_the_probe_is_classified_legacy() {
 /// the pair falsifiable in both directions.
 #[tokio::test]
 async fn discover_4_a_probe_that_is_never_answered_caches_nothing() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::silently_ignoring_discover("2025-11-25", EMPTY_TOOLS);
     let backend = fixture.backend("never-answers-probe");
 
@@ -384,6 +402,9 @@ async fn discover_4_a_probe_that_is_never_answered_caches_nothing() {
 /// that never re-probes at all.
 #[tokio::test]
 async fn discover_5_a_restart_discards_the_cached_era() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new("2025-11-25", MODERN_DISCOVER, EMPTY_TOOLS);
     let backend = fixture.backend("restarted-era");
 
@@ -439,6 +460,9 @@ fn modern_then_method_not_found_arm() -> String {
 /// the re-probe this test exists to prove is 3.
 #[tokio::test]
 async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::with_discover_arm(
         "2026-07-28",
         &modern_then_method_not_found_arm(),
@@ -489,6 +513,9 @@ async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
 /// is not modern would discard a correct verdict on every unimplemented call.
 #[tokio::test]
 async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() {
+    if in_child_with_cap() {
+        return;
+    }
     let fixture = Fixture::new(
         "2026-07-28",
         MODERN_DISCOVER,
@@ -527,6 +554,9 @@ async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() 
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn discover_4_a_slow_but_answering_peer_is_classified() {
+    if in_child_with_cap() {
+        return;
+    }
     let arm = format!(r#"sleep 3; printf '{{"jsonrpc":"2.0","id":%s,{LEGACY_DISCOVER}}}\n' "$id""#);
     let fixture = Fixture::with_discover_arm("2025-11-25", &arm, EMPTY_TOOLS);
     let backend = fixture.backend("slow-answer");
@@ -540,4 +570,11 @@ async fn discover_4_a_slow_but_answering_peer_is_classified() {
          were:\n{}",
         fixture.frames()
     );
+}
+
+/// The era probe cap reaches the gateway from exec only (each test's child
+/// run): no test in this binary, and not its cap helper, sets it in process.
+#[test]
+fn the_probe_cap_is_never_set_in_process() {
+    era_probe_cap::assert_no_env_writes(file!());
 }

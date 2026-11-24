@@ -19,13 +19,17 @@
 //! Limits: bindings match by name with no scope analysis (a shadowed binding
 //! resolves to the first one); only `include_str!`, `include_bytes!` and
 //! `concat!` macro bodies are seen; `include_*!` paths resolve against the
-//! source file's directory.
+//! source file's directory. A `concat!` joins only its direct string
+//! arguments, in order: a macro inside it (`env!`, a nested `concat!`) is left
+//! out, not expanded. An `include_*!` whose path is built that way is not seen
+//! here; the packaged build on every pull request fails on it instead.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::visit::Visit;
 
 use super::packaged::{crate_root, is_packaged_crate};
+use crate::test_source_files::rust_files;
 
 #[path = "shipped_reads_scan.rs"]
 mod scan_impl;
@@ -254,7 +258,11 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
         .iter()
         .map(|lit| lit.replace('\\', "/"))
         .collect();
-    let norm = |l: &str| l.trim_end_matches('/').to_owned();
+    // A literal is read from the crate root with its leading `/` dropped: the
+    // tail of `concat!(env!("CARGO_MANIFEST_DIR"), "/docs/x.md")` starts with
+    // one. A path outside the crate (`/etc/hosts`) then names
+    // nothing under the root and stays out.
+    let norm = |l: &str| l.trim_start_matches('/').trim_end_matches('/').to_owned();
     let direct = |lit: &str| {
         let used = all.iter().filter(|l| norm(l) == lit).count();
         let through_helper = covered.iter().filter(|l| norm(l) == lit).count();
@@ -264,12 +272,11 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
         .iter()
         .filter(|lit| {
             lit.len() >= 3
-                && !lit.starts_with('/')
                 && lit
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
         })
-        .map(|lit| lit.trim_end_matches('/').to_owned())
+        .map(|lit| norm(lit))
         .filter(|lit| !NOT_REPO.contains(&lit.split('/').next().unwrap_or("")))
         .filter(|lit| {
             let path = root.join(lit);
@@ -284,26 +291,15 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     found
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 /// PACKED.2 on the real tree. Checkout-only: the unpacked crate has the
 /// sources but not the repo files whose existence the rule asks about.
 #[test]
 fn packed_2_no_test_reads_an_unshipped_repo_file_directly() {
-    if is_packaged_crate() {
-        eprintln!("skipped: the rule needs the repository files");
+    // The detector's own answer, not a literal: if this guard is ever dropped, a checkout takes skip_or_fail's
+    // path and fails in required mode instead of skipping.
+    let packaged = is_packaged_crate();
+    if packaged {
+        crate::test_wait::skip_unshipped(packaged, "the repository files the rule asks about");
         return;
     }
     let root = crate_root();
@@ -744,5 +740,47 @@ fn drift3_a_hash_inside_quotes_is_kept() {
             "[package]\ninclude = [ # open\n    \"a#b\", # one\n    \"c\" # two\n] # close\n"
         ),
         ["a#b", "c"]
+    );
+}
+
+/// MIK-9921.GUARD.1 (red first): the tail of a `concat!` after
+/// `CARGO_MANIFEST_DIR` starts with `/`, yet names a path from the crate root.
+/// `docs/CLI.md` reached the release line this way unshipped, and the
+/// packaged suite went red on it.
+#[test]
+fn guard1_a_slash_led_concat_tail_names_a_crate_path() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/b.md")); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["docs/b.md".to_owned()]
+    );
+}
+
+/// MIK-9921.GUARD.1 control: a slash-led literal naming a shipped file, or a
+/// path the crate root does not hold, stays unflagged.
+#[test]
+fn guard1_a_slash_led_literal_off_the_list_or_off_the_tree_is_not_flagged() {
+    let (root, patterns) = scratch();
+    for tail in ["/docs/a.md", "/etc/hosts", "/no/such/file.txt"] {
+        let source =
+            format!("fn f() {{ let _ = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"{tail}\"); }}");
+        assert!(
+            offenders(root.path(), &patterns, FILE, &source).is_empty(),
+            "{tail}"
+        );
+    }
+}
+
+/// MIK-9921.GUARD.1: a rooted `concat!` split across string pieces names the
+/// path they spell together, in order: keeping only the first piece (`/docs/`)
+/// or only the last (`b.md`) names nothing unshipped, so either loses the read.
+#[test]
+fn guard1_a_rooted_concat_joins_its_string_pieces_in_order() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/", "b.md"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["docs/b.md".to_owned()]
     );
 }

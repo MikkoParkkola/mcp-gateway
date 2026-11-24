@@ -191,7 +191,7 @@ fn a_backend_registers_only_at_startup_or_in_apply_patch() {
         [
             "src/config_reload/apply.rs apply_patch",
             "src/config_reload/apply.rs apply_patch",
-            "src/gateway/server/construct.rs new_with_env",
+            "src/gateway/server/construct.rs construct",
         ],
         "a new production registration must set its load's record first"
     );

@@ -13,7 +13,7 @@ use super::support::*;
 pub(super) const STATE_1: &str = "backend-state-1";
 
 /// One elicitation question under `key`, with the backend's own `state`.
-pub(super) fn ask(key: &str, state: &str) -> Value {
+pub(crate) fn ask(key: &str, state: &str) -> Value {
     ask_many(&[key], state)
 }
 
@@ -52,7 +52,7 @@ pub(super) fn done() -> Value {
     value
 }
 
-pub(super) fn answer() -> Value {
+pub(crate) fn answer() -> Value {
     json!({ "action": "accept", "content": {} })
 }
 

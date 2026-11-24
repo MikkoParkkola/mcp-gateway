@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::gateway::meta_mcp::visible::memo::{denial_code, take_gate_absent};
+use crate::security::audit::AuditOutcome;
 use crate::security::decision_record::DecisionKind;
 
 /// The dispatch's miss for `server`: the plain `BackendNotFound` the caller
@@ -24,32 +25,45 @@ pub(super) fn backend_miss(server: &str, tool: &str) -> crate::Error {
     crate::Error::BackendNotFound(server.to_string())
 }
 
-/// The meta denial count for `result`, and the one record per call:
+/// Detection only ([`count_meta_denial`] counts), the one record per call:
 /// the answer to a requested target the route stage or the gate refused is
 /// counted once and recorded `denied` with the refusal's own code (the
 /// returned outcome), whatever it reads as to the caller (the missing name's
 /// answer). The log is the operator's, so the real reason there tells the
 /// caller nothing. `None` for every other call, classed by its result.
-pub(super) fn count_meta_denial(
-    args: &Value,
-    result: &Result<Value>,
-    not_found: bool,
-) -> Option<crate::security::audit::AuditOutcome> {
-    use crate::security::security_metrics::{DenialRoute, denied, meta_denial, meta_refused};
+pub(super) fn withheld(args: &Value, not_found: bool) -> Option<AuditOutcome> {
     let code = args
         .get("server")
         .and_then(Value::as_str)
         .zip(args.get("tool").and_then(Value::as_str))
         .and_then(|(server, tool)| denial_code(server, tool));
     // A code a gate kept first stands; else this call's own missing backend.
-    if let Some(code) = code.or(not_found.then_some(-32001)) {
-        meta_refused(code);
-        return Some(crate::security::audit::AuditOutcome::Denied(code));
+    code.or(not_found.then_some(-32001))
+        .map(AuditOutcome::Denied)
+}
+
+/// D4: count a call whose record says `denied`, from `class`, the outcome the
+/// record carries, so the metric and the record agree.
+/// `withheld`: the class came from [`withheld`].
+pub(super) fn count_meta_denial(
+    withheld: bool,
+    class: Option<AuditOutcome>,
+    result: &Result<Value>,
+) {
+    use crate::security::security_metrics::{
+        DenialReason, DenialRoute, denied, meta_denial, meta_refused,
+    };
+    match class {
+        Some(AuditOutcome::Denied(code)) if withheld => meta_refused(code),
+        // A gate's refusal the result alone reads as an error: its code is
+        // not one the reason table knows (a spend refusal's -32003 would read
+        // as `backend_scope`), so it is `other`; the record names the check.
+        Some(AuditOutcome::Denied(_)) => denied(
+            DenialRoute::Meta,
+            meta_denial(result).unwrap_or(DenialReason::Other),
+        ),
+        _ => {}
     }
-    if let Some(reason) = meta_denial(result) {
-        denied(DenialRoute::Meta, reason);
-    }
-    None
 }
 
 #[cfg(tp4)]
@@ -82,12 +96,11 @@ mod tests {
     async fn the_call_s_own_miss_is_its_denial() {
         with_visibility_memo(async {
             let args = serde_json::json!({"server": "gone", "tool": "t"});
-            let missed: Result<Value> = Err(crate::Error::BackendNotFound("gone".into()));
             assert_eq!(
-                count_meta_denial(&args, &missed, true),
+                withheld(&args, true),
                 Some(crate::security::audit::AuditOutcome::Denied(-32001))
             );
-            assert_eq!(count_meta_denial(&args, &missed, false), None);
+            assert_eq!(withheld(&args, false), None);
             assert_eq!(denial_code("gone", "t"), None, "nothing request-wide");
         })
         .await;
@@ -99,9 +112,8 @@ mod tests {
         with_visibility_memo(async {
             crate::gateway::meta_mcp::visible::memo::note_denial_code("gone", "t", -32003, None);
             let args = serde_json::json!({"server": "gone", "tool": "t"});
-            let missed: Result<Value> = Err(crate::Error::BackendNotFound("gone".into()));
             assert_eq!(
-                count_meta_denial(&args, &missed, true),
+                withheld(&args, true),
                 Some(crate::security::audit::AuditOutcome::Denied(-32003))
             );
         })

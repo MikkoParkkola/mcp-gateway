@@ -93,7 +93,11 @@ python3 scripts/release/upgrading_fragments.py assemble   # writes the guide and
 ```
 
 For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
-section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
+section, so that the release leaves exactly one `[4.0.0]` heading. The untagged
+`[4.0.0-beta.4]` section is already gone: the version bump deleted it
+(`docs/release/v4.0.0-gate-day-procedure.md`, Order on freeze day, step 1). If
+v4.0.0-beta.4 was tagged before the bump, the section stays as history, like the other
+betas. Before the fold,
 every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
 or its mention removed from the draft.
 
@@ -107,7 +111,8 @@ or its mention removed from the draft.
 2. Move every bullet of `## [4.0.0] - Unreleased`, and its upgrading and performance-numbers
    notes, into the matching subsection of the new heading. Copy (don't move) into the new heading every
    bullet that appears only in `[4.0.0-beta.1]` or `[4.0.0-beta.2]` (beta.3's entries are already in
-   `[Unreleased]` and the fragments, so nothing is copied from `[4.0.0-beta.3]`). The beta sections keep their bullets as
+   `[Unreleased]` and the fragments, so nothing is copied from `[4.0.0-beta.3]`, nor from a
+   `[4.0.0-beta.4]` kept because its tag landed). The beta sections keep their bullets as
    history. Create a missing subsection in the order Added, Changed, Removed, Fixed, Security.
 3. Delete the old heading and its "Not tagged yet" note.
 4. Reword the beta prefaces (beta.1, beta.2 and beta.3) so each one says what that beta was, in the past tense, and points to

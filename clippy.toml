@@ -25,7 +25,7 @@ disallowed-methods = [
     # one place, src/ids.rs, whose callers are pinned (random_secret_tests).
     { path = "uuid::Uuid::new_v4", reason = "an identifier: crate::ids::new_v4; a secret: crate::random_secret" },
     # Randomness: every draw from rand, ring or rcgen goes through a reviewed statement-level allow that names its
-    # class (id, jitter, record key, nonce, temp name, HMAC key, sample, key; credential only in random_secret.rs).
+    # class (id, jitter, record key, nonce, temp name, HMAC key, sample, key, user code; credential only in random_secret.rs).
     # The list is the crates' whole entropy API in this build; an unreachable path would fail -D warnings.
     { path = "rand::rng", reason = "a random draw: an id comes from crate::ids, a secret from crate::random_secret; anything else needs a reviewed allow naming its class" },
     { path = "rand::random", reason = "a random draw: an id comes from crate::ids, a secret from crate::random_secret; anything else needs a reviewed allow naming its class" },

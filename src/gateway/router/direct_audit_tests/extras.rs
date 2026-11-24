@@ -40,6 +40,8 @@ pub(super) enum Extra {
     /// Message signing on, scoped by the posture (`gateway_invoke` only,
     /// every `tools/call` under [`Extra::Hardened`]).
     Signing,
+    /// With [`Extra::Signing`]: a call carrying no nonce is refused.
+    NonceRequired,
     /// Tool `t` declares one argument, `q`, and no other.
     DeclaredKeys,
     /// Tool `t` is listed with an input schema that is not an object, so the
@@ -55,6 +57,9 @@ pub(super) enum Extra {
     /// Context integrity enforces and strips every finding, so an answer
     /// carrying an injected instruction is rebuilt without it.
     ContextIntegrityStrips,
+    /// Every `tools/call` is counted, then held until the cell opens
+    /// `Fixture::gate`, so a row can look between the send and the answer.
+    GateCall,
 }
 
 impl Setup {
@@ -108,8 +113,14 @@ fn attested(meta: MetaMcp) -> MetaMcp {
     meta.with_attestation(validator, crate::attestation::AttestationMode::Enforce)
 }
 
-/// Turn message signing on in `meta`, scoped as `posture` scopes it.
-fn signed(meta: &mut MetaMcp, posture: crate::security::SecurityPosture) {
+/// Turn message signing on in `meta`, scoped by the posture `extras`
+/// selects and requiring a nonce under [`Extra::NonceRequired`].
+fn signed(meta: &mut MetaMcp, extras: &[Extra]) {
+    let posture = if extras.contains(&Extra::Hardened) {
+        crate::security::SecurityPosture::Hardened
+    } else {
+        crate::security::SecurityPosture::Standard
+    };
     meta.enable_message_signing(
         crate::security::message_signing::MessageSigner::new(
             b"mik-8382-signing-secret-32-bytes".to_vec(),
@@ -117,7 +128,7 @@ fn signed(meta: &mut MetaMcp, posture: crate::security::SecurityPosture) {
             "anon".to_owned(),
         ),
         Duration::from_secs(300),
-        false,
+        extras.contains(&Extra::NonceRequired),
     );
     meta.set_signing_scope(crate::gateway::meta_mcp::signing::SigningScope::of(posture));
 }
@@ -139,12 +150,7 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
         ));
     }
     if extras.contains(&Extra::Signing) {
-        let posture = if extras.contains(&Extra::Hardened) {
-            crate::security::SecurityPosture::Hardened
-        } else {
-            crate::security::SecurityPosture::Standard
-        };
-        signed(&mut meta, posture);
+        signed(&mut meta, extras);
     }
     #[cfg(feature = "firewall")]
     if extras.contains(&Extra::MetaRequestFirewall) {

@@ -163,15 +163,8 @@ impl Gateway {
         #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
-        let record_key = Arc::new(crate::gateway::record_principal::resolve_key(
-            self.config
-                .security
-                .record_principal_key
-                .as_ref()
-                .map(crate::config::RecordPrincipalKeyRef::as_str),
-            &self.env.get(),
-            &data_dir,
-        )?);
+        // Resolved once, while the gateway was built (WIRE.4).
+        let record_key = Arc::clone(&self.serving_audit.record_key);
         // Built under the record key, so each rule carries the id a refusal
         // records. mTLS and the key are both restart-only: compiled once.
         let mtls_policy = Arc::new(MtlsPolicy::from_config_keyed(
@@ -252,6 +245,22 @@ impl Gateway {
         #[cfg(feature = "cost-governance")]
         if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
+        }
+        // Its own step, whatever governance says: the history comes back even
+        // when this run charges nothing. Only API keys are charged per key,
+        // so with auth off no saved key row has a key to attach to.
+        #[cfg(feature = "cost-governance")]
+        {
+            let auth = &self.config.auth;
+            let names: Vec<String> = auth
+                .api_keys
+                .iter()
+                .filter(|_| auth.enabled)
+                .map(|key| key.name.clone())
+                .collect();
+            let tracker = meta_mcp_builder.cost_tracker();
+            let now = crate::clock::unix_secs().ok();
+            crate::cost_accounting::spend_history::restore(&tracker, &data_dir, &names, now);
         }
 
         meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
@@ -347,45 +356,12 @@ impl Gateway {
         // `MetaMcp`) so `AppState` can hold a second clone — the direct
         // backend route writes identity-propagation audit events straight
         // into this chain without going through `MetaMcp` (MIK-6740).
-        let mut transparency_log: Option<Arc<crate::security::TransparencyLogger>> = None;
-        if let Some(tl_cfg) = self.config.audit_log() {
-            let tl_cfg = Arc::new(tl_cfg);
-            // Auth on: the log is required (D1-a) and a failed append
-            // withholds the call's result (D1-f).
-            let auth_on = self.config.auth.enabled;
-            let policy = if auth_on {
-                crate::security::audit::AuditFailurePolicy::FailClosed
-            } else {
-                crate::security::audit::AuditFailurePolicy::BestEffort
-            };
-            match crate::security::TransparencyLogger::open(tl_cfg) {
-                Ok(logger) => {
-                    let logger = Arc::new(
-                        logger
-                            .with_failure_policy(policy)
-                            .with_record_key(Arc::clone(&record_key)),
-                    );
-                    Arc::get_mut(&mut meta_mcp)
-                        .expect("no other Arc references at this point")
-                        .enable_transparency_log(Arc::clone(&logger));
-                    transparency_log = Some(logger);
-                    info!("Transparency log enabled");
-                }
-                // Two writers of one log fork its chain, so this refuses
-                // whatever the auth setting.
-                Err(e) if crate::security::transparency_log::is_lease_held(&e) => {
-                    return Err(Error::Config(format!("refusing to start: {e}")));
-                }
-                Err(e) if auth_on => {
-                    return Err(Error::Config(format!(
-                        "auth is enabled, so the audit log (security.transparency_log) must \
-                         open: {e}"
-                    )));
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to open transparency log — continuing without it");
-                }
-            }
+        // Opened once, while the gateway was built (WIRE.4); a `None` stays `None`.
+        let transparency_log = self.serving_audit.log.clone();
+        if let Some(logger) = &transparency_log {
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .enable_transparency_log(Arc::clone(logger));
         }
 
         // ── Runtime provenance stamping (MIK-6905) ────────────────────────────

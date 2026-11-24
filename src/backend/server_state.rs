@@ -42,6 +42,10 @@ pub enum ServerState {
         )
     )]
     Unmanaged,
+    /// Written in the config with `enabled: false`: the gateway does not start
+    /// it. Only the status route's rows for such servers carry it; this read
+    /// model never produces it.
+    Off,
 }
 
 /// The signals [`decide`] reads. Flags and counts only.
@@ -72,6 +76,9 @@ pub(crate) struct StateInputs {
     /// Its recent p95 and its usual (baseline) p95 in ms, when the recent
     /// one is far over the usual; `None` while the baseline is still warming.
     pub slow: Option<crate::failsafe::Slow>,
+    /// The ids of the runtime plan's confirmations. A live start refuses a
+    /// plan that has any, and nothing in the product can grant one.
+    pub confirmations: Vec<String>,
 }
 
 /// [`decide`]'s answer.
@@ -84,7 +91,7 @@ pub(crate) struct StateView {
 
 /// First match wins, worst first, so a real failure is never shown as a
 /// gentler state.
-pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
+fn decide_by_signals(inputs: &StateInputs, now: SystemTime) -> StateView {
     let view = |state, reason: String, next_retry_at| StateView {
         state,
         reason,
@@ -187,7 +194,52 @@ pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
     )
 }
 
+/// The state for `inputs`. A plan the runtime policy denies keeps that answer.
+/// Next, ahead of every other signal, a plan that needs a confirmation is
+/// refused: a live start turns it away and nothing can grant one, so the
+/// server stays down until its settings change, with no retry promised.
+pub(crate) fn decide(inputs: &StateInputs, now: SystemTime) -> StateView {
+    if inputs.denied || inputs.confirmations.is_empty() {
+        return decide_by_signals(inputs, now);
+    }
+    StateView {
+        state: ServerState::Refused,
+        reason: held_reason(&inputs.confirmations),
+        next_retry_at: None,
+    }
+}
+
+/// The settings a held server's runtime plan asks for, each named once in
+/// plain words (an id this list does not know is shown as itself), in the
+/// sentence its state gives.
+fn held_reason(ids: &[String]) -> String {
+    let mut named: Vec<&str> = Vec::new();
+    for id in ids {
+        let words = match id.as_str() {
+            "filesystem.host_mount" => "a host mount",
+            "network.full_egress" => "full network access",
+            "runtime.privileged" => "privileged mode",
+            "environment.guarded_names" => "guarded environment names",
+            other => other,
+        };
+        if !named.contains(&words) {
+            named.push(words);
+        }
+    }
+    let list = match named.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    format!("Its runtime settings ask for {list}; it will not start until those settings change.")
+}
+
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "server_state_tests.rs"]
 mod tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "server_state_confirm_tests.rs"]
+mod confirm_tests;

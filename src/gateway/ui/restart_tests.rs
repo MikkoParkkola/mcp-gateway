@@ -111,12 +111,14 @@ fn refusal(body: &Value, available: bool) {
     #[cfg(not(windows))]
     {
         for phrase in [
-            "process",
-            "cannot tell which supervisor runs it",
+            "service manager",
             "example",
             "systemctl",
             "brew services",
             "docker restart",
+            "start command",
+            // A gateway started by hand is told to stop it before starting again.
+            "stop",
         ] {
             assert!(recovery.contains(phrase), "{body}");
         }

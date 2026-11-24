@@ -188,7 +188,7 @@ counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/decisions/{id}/resolve`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/gateway/restart`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/keys/{name}`; `/ui/api/key-server/audit/lookup-email`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/settings`; `/ui/api/settings/diff`; `/ui/api/settings/secrets/unused`; `/ui/api/settings/secrets/unused/{name}`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
+| `/ui` | 3 |  |  | `/ui/api/activity`; `/ui/api/activity/export`; `/ui/api/activity/{id}`; `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/backends/{name}/signin`; `/ui/api/backends/{name}/signin/confirm`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/capabilities/{name}/validate`; `/ui/api/config`; `/ui/api/config/history`; `/ui/api/config/restore`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/decisions`; `/ui/api/decisions/count`; `/ui/api/decisions/{id}/resolve`; `/ui/api/discovery`; `/ui/api/discovery/adopt`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/events/leases`; `/ui/api/gateway`; `/ui/api/gateway/restart`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/keys`; `/ui/api/keys/{name}`; `/ui/api/key-server/audit/lookup-email`; `/ui/api/markers`; `/ui/api/metrics/series`; `/ui/api/overview`; `/ui/api/policies`; `/ui/api/previews`; `/ui/api/refusals`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/settings`; `/ui/api/settings/diff`; `/ui/api/settings/secrets/unused`; `/ui/api/settings/secrets/unused/{name}`; `/ui/api/status`; `/ui/api/stream`; `/ui/api/tools`; `/ui/api/tools/call`; `/ui/assets/{file}` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 Response-code changes from backend secret references (ADR-028). Only the new condition changes; every other answer of these routes is unchanged:
@@ -208,6 +208,9 @@ Two items are `pub` beyond the module items above, both for backend secret refer
 - `mcp_gateway::config::BackendConfig::check_secret_references`, the pre-write reference check. It is `pub` only for the binary's two writers of `backends`, `discover --write` and the setup import, and it returns to `pub(crate)` once no binary-side writer of `backends` remains.
 - `mcp_gateway::config::secret_slot(&str) -> String`, the display projection: a reference as written, an empty value as `<empty>`, anything else as `<set>`. It is pure. `mcp-gateway get`, `doctor` and the web UI's config read use it. Configuration history is to use it too, in a separate change.
 
+One item is `pub` for integration tests only, under the `#[doc(hidden)]` `gateway::test_helpers` module, and is INTERNAL:
+- `mcp_gateway::gateway::test_helpers::config_dir() -> Option<PathBuf>` (not on macOS), exactly what the crate's own config-directory lookup returns. The discovery test uses it to prove the lookup routes to a private home before it scans anything there. No stability promise; no logic of its own.
+
 
 ## Findings filed on the way (0-bug rule)
 
@@ -223,6 +226,7 @@ Two items are `pub` beyond the module items above, both for backend secret refer
 | A2A | Operator decision 2026-10-07: the outbound A2A bridge is finished for 4.0 (MIK-8063). `backends.<name>.a2a_url` is KEEP; `a2a_agent_card_path` is a hidden key defaulting to the spec's well-known path; the `a2a` module and default feature stay. Inbound A2A is out of scope. |
 | A2A card path default | Done in MIK-8063 PR1 (#3401): A2A 1.0 is pinned, and the card is read from `/.well-known/agent-card.json` unless `a2a_agent_card_path` is set. |
 | `meta_mcp.cache_tools` | REMOVE (MIK-8064). |
+| `cap import --auth-key` bare NAME form | Breaking-removal candidate for the operator's removal pass (decided 2026-11-20); not classed REMOVE, which this table reserves for a form with no effect, since the resolver still reads it. An all-caps value is read as an environment variable name, so a real secret typed in capitals is written into the capability YAML as a "name"; `env:NAME` says the same without the ambiguity. Shipped in v3.5.2, so removing it breaks working scripts. |
 | `error_budget` and its sub-keys | Amended 2026-10-11 (lead ruling, MIK-8044.SURF.2 P4): INTERNAL to KEEP. GH #475 asked for these tuning options in YAML, and the public close-out of #475 says the `error_budget:` section ships in 4.0.0, documented in docs/DEPLOYMENT.md. Hiding them would withdraw a documented, user-requested feature. If MIK-8385 adds a tier column, they are ADVANCED. |
 | Capability `trawl_extract` and the `cisco_scanner` operation `scan_mcp_server` | Held until 4.1 (MIK-7788): the gateway cannot confine where these tools connect. Capability files are outside the five surfaces, so they have no table row. Class INTERNAL: the definitions stay in the tree, refuse to run and are not offered to clients; they leave the user docs until 4.1. |
 
@@ -874,8 +878,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway api --if-match` | INTERNAL | scripting detail; default suffices | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/api.rs:55 |
 | `mcp-gateway api --json` | KEEP | structured errors on stderr; successful responses retain native JSON or raw bytes | - | src/cli/api.rs:59 |
 | `mcp-gateway api --limit` | KEEP | print this many events from the event stream, then close it and exit | - | src/cli/api.rs:60 |
-| `mcp-gateway api --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:55 |
-| `mcp-gateway api -u` | KEEP | short alias of `--url` | - | src/cli/api.rs:55 |
+| `mcp-gateway api --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway api --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway api -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway api <METHOD>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:45 |
 | `mcp-gateway api <PATH>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:49 |
 | `mcp-gateway audit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:587 |
@@ -893,8 +898,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway audit lookup-email --from` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:48 |
 | `mcp-gateway audit lookup-email --limit` | INTERNAL | paging size; fixed default | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/audit_lookup.rs:45 |
 | `mcp-gateway audit lookup-email --to` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:51 |
-| `mcp-gateway audit lookup-email --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/audit_lookup.rs:42 |
-| `mcp-gateway audit lookup-email -u` | KEEP | short alias of `--url` | - | src/cli/audit_lookup.rs:42 |
+| `mcp-gateway audit lookup-email --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway audit lookup-email --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway audit lookup-email -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway audit show` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:723 |
 | `mcp-gateway audit show -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:723 |
@@ -987,8 +993,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway dashboard-link --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
 | `mcp-gateway dashboard-link --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
 | `mcp-gateway dashboard-link --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
-| `mcp-gateway dashboard-link --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/dashboard_link.rs:12 |
-| `mcp-gateway dashboard-link -u` | KEEP | short alias of `--url` | - | src/cli/dashboard_link.rs:12 |
+| `mcp-gateway dashboard-link --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway dashboard-link --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway dashboard-link -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway doctor` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:500 |
@@ -1015,8 +1022,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway events dead-letters --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
 | `mcp-gateway events dead-letters --reason` | INTERNAL | filters beyond list/replay/discard need | `#[arg(hide = true)]`: still accepted, gone from `--help`; UPGRADING names it | src/cli/events.rs:48 |
 | `mcp-gateway events dead-letters --subscription` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:45 |
-| `mcp-gateway events dead-letters --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:51 |
-| `mcp-gateway events dead-letters -u` | KEEP | short alias of `--url` | - | src/cli/events.rs:51 |
+| `mcp-gateway events dead-letters --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway events dead-letters --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway events dead-letters -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway events dead-letters <ACTION>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:37 |
 | `mcp-gateway events dead-letters <ID>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:39 |
 | `mcp-gateway get` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:467 |
@@ -1258,8 +1266,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway stats` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:309 |
 | `mcp-gateway stats --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:309 |
 | `mcp-gateway stats -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:309 |
-| `mcp-gateway stats --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:309 |
-| `mcp-gateway stats -u` | KEEP | short alias of `--url` | - | src/cli/mod.rs:309 |
+| `mcp-gateway stats --gateway` | KEEP | where the request goes: a running gateway's base URL (env MCP_GATEWAY_URL; order: flag, variable, the address in --config) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway stats --url` | KEEP | hidden alias of `--gateway` (the old spelling, kept so scripts keep working; not in help) | - | src/cli/dashboard_link.rs:10 |
+| `mcp-gateway stats -u` | KEEP | short alias of `--gateway` (hidden) | - | src/cli/dashboard_link.rs:10 |
 | `mcp-gateway tls` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:262 |
 | `mcp-gateway tls --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:262 |
 | `mcp-gateway tls -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:262 |
@@ -1456,6 +1465,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/gateway/task_service/execution/pause_hook.rs:16 |
 | `MCP_GATEWAY_TEST_TRUST_CA` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries. Adds test CA roots beside the platform's so macOS test children trust a temporary CA (MIK-8188). Forcing debug assertions on in a release build brings it back; whoever controls build flags and the process env already controls trust (Linux honours `SSL_CERT_FILE`) | test-only | src/debug_trust_roots.rs:22 |
 | `MCP_GATEWAY_TOKEN` | KEEP | credentials for `api`, `dashboard-link`, `events dead-letters` and `audit lookup-email` against a remote gateway | - | src/commands/cli_exit.rs:373 |
+| `MCP_GATEWAY_URL` | KEEP | the variable of `--gateway`: where `api`, `dashboard-link`, `events dead-letters`, `audit lookup-email` and `stats` send their request | - | src/cli/dashboard_link.rs:20 |
 
 ## Surface: routes
 
@@ -1499,6 +1509,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/capabilities/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CAPABILITY |
 | `/ui/api/capabilities/{name}/validate` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CAPABILITY_VALIDATE |
 | `/ui/api/config` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; each `servers[]` entry carries `owner` (`backends.<name>.owner`, trimmed, or `null`), read from the published config; `owner` is never on `/ui/api/status` | src/gateway/routes.rs:UI_CONFIG |
+| `/ui/api/config/history` | INTERNAL | private JSON API of the bundled web UI | admin only; the kept config versions and reload events, newest first, with the version the gateway serves marked; never a stored byte or diff; a history that cannot be read answers 503 `history_unreadable` | src/gateway/routes.rs:UI_CONFIG_HISTORY |
+| `/ui/api/config/restore` | INTERNAL | private JSON API of the bundled web UI | admin only, never a CLI key or a session it minted; writes one kept version's gateway.yaml back byte for byte through the audited writer, keeps the replaced file beside it as `gateway.yaml.<time>.rejected`, and lists the env files and grants it did not write; a 4xx answer wrote nothing, a 5xx answer leaves the result unconfirmed | src/gateway/routes.rs:UI_CONFIG_RESTORE |
 | `/ui/api/control-plane` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE |
 | `/ui/api/control-plane/decisions` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_DECISIONS |
 | `/ui/api/control-plane/export-status` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_CONTROL_PLANE_EXPORT_STATUS |
@@ -1517,7 +1529,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:UI_EVENTS_HELD |
 | `/ui/api/events/leases` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token | src/gateway/routes.rs:UI_EVENTS_LEASES |
 | `/ui/api/gateway` | INTERNAL | private JSON API of the bundled web UI | admin only; the Gateway page's facts: version, uptime, environment, reload counts, TLS state, upgrade, clients by the name they reported, and what was refused at start | src/gateway/routes.rs:UI_GATEWAY |
-| `/ui/api/gateway/restart` | INTERNAL | private JSON API of the bundled web UI | admin only; GET reports available=false with platform-specific recovery guidance and no token; POST requires strict JSON {confirm: string}, answers 422 for an invalid body and an attributed, audited 409 for a well-formed body; the call is refused and the process does not restart | src/gateway/routes.rs:UI_GATEWAY_RESTART |
+| `/ui/api/gateway/restart` | INTERNAL | private JSON API of the bundled web UI | admin only; GET reports available=false with platform-specific recovery guidance and no token; POST requires strict JSON {confirm: string}, answers 422 for an invalid body and an attributed, audited 409 for a well-formed body; the call is refused and the process does not restart. 4.0.0 has no in-process restart: a reload or settings save that leaves restart-only settings pending says how to restart instead (`restart_advice`, plus `start_command` on Unix, or `start_refusal` alone; beside `start_refusal` the answer's `changes` still says a restart is required, so a UI shows the refusal in its place) | src/gateway/routes.rs:UI_GATEWAY_RESTART |
 | `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_IMPORT |
 | `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:UI_IMPORT_PREVIEW |
 | `/ui/api/keys` | INTERNAL | private JSON API of the bundled web UI | admin only, like the config view; GET answers the file's revision and its API keys in file order (name, backends, tool lists, admin, expiry, rate limit, last use, whether live), never a secret, digest or principal; POST write: creates one key, its secret generated by the gateway and returned once, only its digest written to gateway.yaml; the body names a revision and never a secret or digest | src/gateway/routes.rs:UI_KEYS |

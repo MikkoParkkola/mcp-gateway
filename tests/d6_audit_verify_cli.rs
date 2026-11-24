@@ -4,6 +4,10 @@
 //! the CLI wiring the library tests cannot: the early exit when the active
 //! file is missing, the `--archive` flag, and `--anchor` (MIK-7713).
 
+#[path = "common/private_home.rs"]
+#[macro_use]
+mod private_home;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -79,6 +83,7 @@ fn verify_with(dir: &Path, log: &Path, archive: bool, anchor: Option<&Path>) -> 
 
 #[test]
 fn audit_verify_spans_segments_as_a_process() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
     write_log(&log);
@@ -89,6 +94,7 @@ fn audit_verify_spans_segments_as_a_process() {
 
 #[test]
 fn audit_verify_reads_sealed_segments_when_the_active_file_is_gone() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
     write_log(&log);
@@ -101,6 +107,7 @@ fn audit_verify_reads_sealed_segments_when_the_active_file_is_gone() {
 
 #[test]
 fn audit_verify_archive_accepts_a_copy_without_hwm() {
+    require_private_home!();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
     write_log(&log);
@@ -116,6 +123,7 @@ fn audit_verify_archive_accepts_a_copy_without_hwm() {
 /// passes; a missing or malformed one, or a wiped log, exits 1 naming why.
 #[test]
 fn audit_verify_checks_the_log_against_an_anchor() {
+    require_private_home!();
     for archive in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("transparency.jsonl");
@@ -182,6 +190,7 @@ fn log_with_deleted_active(path: &Path) {
 
 #[test]
 fn audit_verify_prints_its_warnings_when_the_chain_fails() {
+    require_private_home!();
     // GIVEN: a log whose active file was deleted with its mark kept
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
@@ -224,6 +233,7 @@ fn shown_escaped(text: &str) {
 
 #[test]
 fn audit_verify_escapes_a_predecessor_id_in_its_warning() {
+    require_private_home!();
     // GIVEN: a failing log whose predecessor evidence names a hostile id
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
@@ -246,6 +256,7 @@ fn audit_verify_escapes_a_predecessor_id_in_its_warning() {
 
 #[test]
 fn audit_verify_escapes_log_text_in_its_failure_line() {
+    require_private_home!();
     // GIVEN: a log one of whose records names a hostile previous hash
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("transparency.jsonl");
@@ -262,6 +273,7 @@ fn audit_verify_escapes_log_text_in_its_failure_line() {
 
 #[test]
 fn audit_verify_escapes_bidi_and_zero_width_characters() {
+    require_private_home!();
     // GIVEN: a failing log whose predecessor evidence names an id carrying a
     // right-to-left override and a zero-width space
     let dir = tempfile::tempdir().unwrap();
@@ -287,6 +299,7 @@ fn audit_verify_escapes_bidi_and_zero_width_characters() {
 
 #[test]
 fn audit_verify_prints_a_verified_predecessor_warning_on_a_passing_log() {
+    require_private_home!();
     // GIVEN: a live logger whose active file and mark were deleted: its next
     // write starts a new genesis naming the id it held, and the chain is whole
     let dir = tempfile::tempdir().unwrap();
@@ -320,6 +333,7 @@ fn audit_verify_prints_a_verified_predecessor_warning_on_a_passing_log() {
 
 #[test]
 fn audit_verify_tells_literal_escape_text_from_a_real_bidi_character() {
+    require_private_home!();
     // GIVEN: a failing log whose predecessor id spells `\u{202e}` out, then
     // carries a real U+202E
     let dir = tempfile::tempdir().unwrap();
@@ -338,4 +352,13 @@ fn audit_verify_tells_literal_escape_text_from_a_real_bidi_character() {
     assert!(!ok, "{text}");
     assert!(!text.contains('\u{202e}'), "{text:?}");
     assert!(text.contains(r"lit\\u{202e}|real\u{202e}"), "{text}");
+}
+
+/// T3-T5: this binary's gateway home routes to the test-home override.
+#[test]
+fn private_home_routes_to_the_override() {
+    private_home::assert_routes_to_the_override(
+        module_path!(),
+        "private_home_routes_to_the_override",
+    );
 }

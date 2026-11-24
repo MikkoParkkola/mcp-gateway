@@ -22,16 +22,20 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod cli_login;
 /// Every web UI change has a CLI form; CLI commands and config writes are
 /// classified for remote use.
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+mod config_history;
 /// Every UI API answer type is classified for the api command.
 #[cfg(tp3)]
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;
+#[cfg(feature = "cost-governance")]
+mod costs_standing;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
@@ -180,6 +184,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(decisions::decisions_router())
         .merge(policies::policies_router())
         .merge(history::history_router())
+        .merge(config_history::config_history_router())
         .merge(restart::restart_router())
         .merge(stream::stream_router());
 
@@ -621,20 +626,26 @@ async fn config(
         .collect();
 
     // Each backend secret slot that holds a reference, as written, read from
-    // the literal file: never a resolved value (ADR-028).
-    let secret_references = match state.config_path.clone() {
+    // the literal file: never a resolved value (ADR-028). The flat map and the
+    // records come from one load; either way out, both are empty, never absent.
+    let (secret_references, secret_reference_records) = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path)).map_or_else(
                 |e| {
                     tracing::warn!(error = %e, "secret references hidden: config did not load");
-                    std::collections::BTreeMap::new()
+                    Default::default()
                 },
-                |literal| crate::config::display::backend_secret_references(&literal),
+                |literal| {
+                    (
+                        crate::config::display::backend_secret_references(&literal),
+                        crate::config::display::backend_secret_reference_records(&literal),
+                    )
+                },
             )
         })
         .await
         .unwrap_or_default(),
-        None => std::collections::BTreeMap::new(),
+        None => Default::default(),
     };
 
     Json(json!({
@@ -646,6 +657,7 @@ async fn config(
         "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
+        "secret_reference_records": secret_reference_records,
     }))
     .into_response()
 }
@@ -671,16 +683,28 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
         })
         .await
     {
-        Ok(outcome) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(outcome) => {
+            let pending = outcome.restart_required;
+            let mut body = json!({
                 "status": "ok",
                 "changes": outcome.changes,
-                "restart_required": outcome.restart_required,
+                "restart_required": pending,
                 "restart_reason": outcome.restart_reason,
-            })),
-        )
-            .into_response(),
+            });
+            // What a restart would boot is the published config.
+            let refusal = pending
+                .then(|| crate::gateway::next_start_refusal(&reload_context.live_config.get()))
+                .flatten();
+            if let Some(keys) = restart_confirm::restart_advice(
+                pending,
+                refusal.as_deref(),
+                Some(&reload_context.config_path),
+            ) && let Some(answer) = body.as_object_mut()
+            {
+                answer.extend(keys);
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(error) => {
             // Whose fault, not just that it failed (MIK-8058): a file the
             // network posture refuses is the operator's config, a shutdown is
@@ -702,21 +726,33 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
 /// `GET /ui/api/costs` — aggregate cost data for the web UI (admin only).
 ///
 /// Returns aggregate totals, per-API-key breakdown, and per-session breakdown.
+/// Each key row also says where the key stands against its own daily limit,
+/// read under this request's generation, and the body when limits reset.
 /// Requires admin access (returns 401 for unauthenticated public requests).
 #[cfg(feature = "cost-governance")]
-async fn costs(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoResponse {
+async fn costs(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
+) -> impl IntoResponse {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
     let tracker = state.meta_mcp.cost_tracker();
-    Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
         "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
         // The zone daily budgets count days in (ADR-026).
         "day_zone": state.meta_mcp.day_zone(),
-    }))
-    .into_response()
+    });
+    let read = state
+        .meta_mcp
+        .budget_enforcer
+        .as_deref()
+        .map(|enforcer| (enforcer, enforcer.governance(Some(&generation))));
+    costs_standing::add_members(&mut body, &tracker, read, crate::clock::unix_secs().ok());
+    Json(body).into_response()
 }
 
 // ── Private helpers ──────────────────────────────────────────────────
@@ -844,6 +880,11 @@ mod keys_create_cli_tests;
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_first_key_tests.rs"]
+mod keys_first_key_tests;
 
 #[cfg(tp3)]
 #[cfg(test)]

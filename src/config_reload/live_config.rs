@@ -30,6 +30,17 @@ struct Published {
     /// The first capability publish has written `running_revision` from the
     /// baseline. Later publishes do not.
     capability_running_set: bool,
+    /// The served version's id in the config history: the revision of the
+    /// newest version a full publish stored (`records_a_version`). An
+    /// unchanged full publish and the part-only publishes (grants,
+    /// capabilities) leave it, so it always names a version the history was
+    /// handed, while `applied` may name a revision it never stored.
+    recorded_revision: Option<String>,
+}
+
+/// `applied`'s revision, for [`super::history::recorded_after`].
+fn revision_of(applied: Option<&Applied>) -> Option<&str> {
+    applied.map(|applied| applied.revision.as_str())
 }
 
 /// The keyed digests a published config was built from, its revision, and
@@ -91,6 +102,9 @@ pub struct LiveConfig {
     published: crate::observer::Observer<Arc<Generation>>,
     /// The configuration history each applied publish is recorded into.
     history: Option<Arc<crate::config_reload::history::HistoryHook>>,
+    /// A first-key file's wait: the most recent file-reading reload's
+    /// verdict, set and cleared by the reload alone.
+    first_key: RwLock<Option<FirstKeyWait>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -99,6 +113,10 @@ pub struct LiveConfig {
     #[cfg(test)]
     record_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 }
+
+#[path = "live_config_pending.rs"]
+mod pending;
+pub(crate) use pending::FirstKeyWait;
 
 impl LiveConfig {
     /// A `LiveConfig` for `config` whose key table is resolved with no env
@@ -135,6 +153,7 @@ impl LiveConfig {
                 running_revision: None,
                 startup_inputs: None,
                 capability_running_set: false,
+                recorded_revision: None,
             }),
             revision_key: None,
             running,
@@ -142,6 +161,7 @@ impl LiveConfig {
             admission: RwLock::new(()),
             published: crate::observer::Observer::default(),
             history: None,
+            first_key: RwLock::new(None),
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
@@ -178,6 +198,7 @@ impl LiveConfig {
         raw: Option<RawInputs>,
         previous: Option<&str>,
         published: Option<Arc<Applied>>,
+        recorded: Option<String>,
         source: Source,
     ) -> Option<crate::config_reload::history::PendingRecord> {
         let (Some(_), Some(raw), Some(applied)) = (self.history.as_ref(), raw, published) else {
@@ -188,6 +209,9 @@ impl LiveConfig {
             revision: applied.revision.clone(),
             pending_restart: applied.pending_restart.clone(),
             previous: previous.map(str::to_string),
+            // Read under the write lock that published `applied`; set
+            // whenever a revision is, so the fallback never runs in practice.
+            pin: recorded.unwrap_or_else(|| applied.revision.clone()),
             source,
         })
     }
@@ -250,10 +274,9 @@ impl LiveConfig {
         self.history.as_ref()?;
         #[cfg(test)]
         self.observe(crate::config_reload::history::seams::Observed::Refusal);
-        let served = self
-            .applied_now()
-            .published
-            .map(|applied| applied.revision.clone());
+        // The version still served, as the history names it: after a
+        // part-only publish the published revision names none.
+        let served = self.served_revision();
         Some(crate::config_reload::history::PendingRecord::Refused {
             source,
             served,
@@ -341,6 +364,10 @@ impl LiveConfig {
         inner.running_revision = applied.as_ref().map(|a| a.revision.clone());
         inner.startup_inputs = inputs.map(Arc::new);
         inner.capability_running_set = false;
+        // The startup revision: its record stores that version, or finds it
+        // already the newest kept (a restart on the same files).
+        inner.recorded_revision =
+            super::history::recorded_after(None, revision_of(applied.as_deref()), None);
         inner.applied = applied;
         self
     }
@@ -364,7 +391,13 @@ impl LiveConfig {
                 // deadline, before the holder is shared (design D-1, gpt G1).
                 if let (Some(hook), Some(pending)) = (
                     live.history.clone(),
-                    live.pending_publish(recorded, None, published, Source::Start),
+                    live.pending_publish(
+                        recorded,
+                        None,
+                        published,
+                        live.served_revision(),
+                        Source::Start,
+                    ),
                 ) {
                     #[cfg(test)]
                     if let Some(pause) = &live.record_pause {
@@ -388,6 +421,16 @@ impl LiveConfig {
     #[must_use]
     pub(crate) fn running_revision(&self) -> Option<String> {
         self.inner.read().running_revision.clone()
+    }
+
+    /// The served version's id in the config history (`recorded_revision`):
+    /// what the history pins, marks running and restores compare against.
+    /// Not the published revision, which a grants or capability publish
+    /// moves with no version stored, and not `running_revision`, the startup
+    /// one, which a reload never moves.
+    #[must_use]
+    pub(crate) fn served_revision(&self) -> Option<String> {
+        self.inner.read().recorded_revision.clone()
     }
 
     fn applied(
@@ -445,7 +488,7 @@ impl LiveConfig {
         let mut observed = self.history.as_ref().map(|hook| hook.observed_files(&raw));
         // Both read inside the swap, under its write lock.
         let mut swapped = (None, None);
-        self.publish_with(generation, |current, pending| {
+        let served = self.publish_with(generation, |current, pending| {
             let applied = self
                 .digest_over(raw, current)
                 .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)));
@@ -460,7 +503,7 @@ impl LiveConfig {
             applied
         });
         let (previous, published) = swapped;
-        self.pending_publish(recorded, previous.as_deref(), published, source)
+        self.pending_publish(recorded, previous.as_deref(), published, served, source)
     }
 
     /// The env files changed under an unchanged config file: same config,
@@ -483,7 +526,7 @@ impl LiveConfig {
         let recorded = self.history.as_ref().map(|_| raw.clone());
         #[cfg(test)]
         let observed = self.history.as_ref().map(|hook| hook.observed_files(&raw));
-        let (previous, published) = {
+        let (previous, published, served) = {
             let _gate = self.admission.write();
             let mut inner = self.inner.write();
             let current = inner.applied.as_deref();
@@ -494,6 +537,11 @@ impl LiveConfig {
             let inputs = self.digest_over(raw, current);
             let pending = with_env_restart(pending, env_restart);
             inner.applied = inputs.and_then(|inputs| self.applied(inputs, pending));
+            inner.recorded_revision = super::history::recorded_after(
+                previous.as_deref(),
+                revision_of(inner.applied.as_deref()),
+                inner.recorded_revision.as_deref(),
+            );
             #[cfg(test)]
             if let (Some(files), Some(applied)) = (observed, inner.applied.as_ref()) {
                 self.observe(crate::config_reload::history::seams::Observed::Swap {
@@ -501,9 +549,13 @@ impl LiveConfig {
                     files,
                 });
             }
-            (previous, inner.applied.clone())
+            (
+                previous,
+                inner.applied.clone(),
+                inner.recorded_revision.clone(),
+            )
         };
-        self.pending_publish(recorded, previous.as_deref(), published, source)
+        self.pending_publish(recorded, previous.as_deref(), published, served, source)
     }
 
     /// New grants over the published config: only the grants part changes,
@@ -652,17 +704,23 @@ impl LiveConfig {
         &self,
         generation: Arc<Generation>,
         applied: impl FnOnce(Option<&Applied>, Vec<&'static str>) -> Option<Arc<Applied>>,
-    ) {
+    ) -> Option<String> {
         self.published.call(Arc::clone(&generation));
         let gate = self.admission.write();
-        let old = {
+        let (old, served) = {
             let mut inner = self.inner.write();
             let pending = pending_restart_fields(&self.running, generation.config());
             let applied = applied(inner.applied.as_deref(), pending);
             let running_revision = inner.running_revision.clone();
             let startup_inputs = inner.startup_inputs.clone();
             let capability_running_set = inner.capability_running_set;
-            std::mem::replace(
+            let recorded_revision = super::history::recorded_after(
+                revision_of(inner.applied.as_deref()),
+                revision_of(applied.as_deref()),
+                inner.recorded_revision.as_deref(),
+            );
+            let served = recorded_revision.clone();
+            let replaced = std::mem::replace(
                 &mut *inner,
                 Published {
                     generation,
@@ -670,8 +728,10 @@ impl LiveConfig {
                     running_revision,
                     startup_inputs,
                     capability_running_set,
+                    recorded_revision,
                 },
-            )
+            );
+            (replaced, served)
         };
         #[cfg(test)]
         self.publishes.fetch_add(1, Ordering::SeqCst);
@@ -688,6 +748,7 @@ impl LiveConfig {
         // A large config is freed after the gate opens, never while a send
         // waits on it.
         drop(old);
+        served
     }
 
     /// G5: generations published since construction.

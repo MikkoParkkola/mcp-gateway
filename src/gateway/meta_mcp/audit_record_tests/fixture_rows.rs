@@ -60,6 +60,16 @@ pub(super) fn table_meta(
     config: BackendConfig,
 ) -> (MetaMcp, Arc<AtomicUsize>) {
     let sent = Arc::new(AtomicUsize::new(0));
+    let meta = table_meta_over(dir, config, Arc::new(Counted(Arc::clone(&sent))));
+    (meta, sent)
+}
+
+/// [`table_meta`] whose `alpha` answers through `transport`.
+pub(super) fn table_meta_over(
+    dir: &Arc<tempfile::TempDir>,
+    config: BackendConfig,
+    transport: Arc<dyn crate::transport::Transport>,
+) -> MetaMcp {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -67,7 +77,7 @@ pub(super) fn table_meta(
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(Counted(Arc::clone(&sent))));
+    backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
     let logger = crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
@@ -84,7 +94,7 @@ pub(super) fn table_meta(
     logger.keep_test_dir(Arc::clone(dir));
     let mut meta = MetaMcp::new(registry);
     meta.enable_transparency_log(Arc::new(logger));
-    (meta, sent)
+    meta
 }
 
 /// How a refused call is answered to its caller.
@@ -111,10 +121,20 @@ struct Refusal {
 /// refused as `want` says: its answer's form and its record's outcome and
 /// code. Returns the call's one decision.
 async fn refused(meta: &MetaMcp, dir: &tempfile::TempDir, server: &str, want: Refusal) -> Value {
+    let read = json!({"server": server, "tool": "read", "arguments": {}});
+    refused_args(meta, dir, &read, want).await
+}
+
+/// [`refused`] for any `gateway_invoke` arguments: the syntax rows send malformed ones.
+async fn refused_args(
+    meta: &MetaMcp,
+    dir: &tempfile::TempDir,
+    args: &Value,
+    want: Refusal,
+) -> Value {
     let who = api_key_caller();
-    let args = json!({"server": server, "tool": "read", "arguments": {}});
     let answer =
-        with_visibility_memo(meta.invoke_tool(&args, None, &context(&AllowAll, &who))).await;
+        with_visibility_memo(meta.invoke_tool(args, None, &context(&AllowAll, &who))).await;
     let (form, answer) = match answer {
         Ok(result) => {
             assert_eq!(
@@ -175,12 +195,13 @@ async fn t1_meta_allowed_tools() {
     };
     let (meta, sent) = table_meta(&dir, config);
     // The gate answers a withheld tool as an absent one, an `isError` result
-    // (`gate.rs:300`); a tool result reads as `tool_error`, with no code
-    // (`audit.rs:68-70`).
+    // (`gate.rs:300`). The gate noted the refusal, so the record says `denied`
+    // with the code a gate-withheld tool result records, -32600
+    // (`Noted::refused_outcome`).
     let withheld = Refusal {
         form: Form::IsErrorResult,
-        outcome: "tool_error",
-        code: None,
+        outcome: "denied",
+        code: Some(-32600),
     };
     let decision = refused(&meta, &dir, "alpha", withheld).await;
     assert_eq!(
@@ -208,11 +229,12 @@ async fn c1_meta_capability_disabled() {
         meta.kill_switch.is_capability_disabled("alpha", "read"),
         "premise: the capability is disabled"
     );
-    // `Error::gateway_refused(-32000, ..)` (`dispatch_guards.rs:308`), an
-    // error that reads as `error` with its own code (`audit.rs:94`).
+    // `Error::gateway_refused(-32000, ..)` (`dispatch_guards.rs:308`); the gate
+    // noted it, so the record says `denied` with that code
+    // (`Noted::refused_outcome`).
     let disabled = Refusal {
         form: Form::RpcError,
-        outcome: "error",
+        outcome: "denied",
         code: Some(-32000),
     };
     let decision = refused(&meta, &dir, "alpha", disabled).await;
@@ -333,8 +355,12 @@ async fn p4_admission_routing_profile() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("p4_admission_routing_profile", "routing_profile"),
@@ -377,8 +403,12 @@ async fn t4_policy_allowed_tools() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("t4_policy_allowed_tools", "allowed_tools"),
@@ -421,8 +451,12 @@ async fn t5_policy_allowed_tools_from_the_memo() {
     );
     let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
         .expect("an outcome for a refusal");
-    let decision =
-        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    let decision = serde_json::to_value(notes.decided(
+        &meta,
+        outcome,
+        crate::security::audit::CredentialKind::None,
+    ))
+    .expect("a decision serialises");
     assert_row(
         &decision,
         &refusal("t5_policy_allowed_tools_from_the_memo", "allowed_tools"),
@@ -466,3 +500,7 @@ async fn n3_chain_step_not_found() {
     };
     assert_row(&record["decision"], &row);
 }
+
+// Part 3b-1's syntax rows on the in-process meta route.
+#[path = "fixture_syntax_rows.rs"]
+mod syntax;

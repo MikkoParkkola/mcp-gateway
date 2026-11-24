@@ -37,7 +37,11 @@ version="$(cargo metadata --format-version 1 --no-deps --locked \
 crate="$target/package/mcp-gateway-$version.crate"
 test -s "$crate"
 
-unpacked="$(mktemp -d)"
+# Unpacked under the runner's own temp directory, never /tmp: the preview
+# sandbox refuses to bind a program that sits under /tmp (a security rule), and
+# its rows place their tools inside the crate directory. Off a runner, the
+# caller's TMPDIR as before.
+unpacked="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/packaged.XXXXXX")"
 trap 'rm -rf -- "$unpacked"' EXIT
 tar -xzf "$crate" -C "$unpacked"
 cd "$unpacked/mcp-gateway-$version"

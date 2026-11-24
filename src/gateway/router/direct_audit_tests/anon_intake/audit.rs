@@ -56,6 +56,30 @@ async fn assert_one_attributed_record(route: &str) {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{route}: dispatched");
 }
 
+/// A guard on the one site that stays best-effort: an intake refusal of a
+/// request whose `id` member is no JSON-RPC id (intake judges only calls
+/// that carry one), under a fail-closed log whose append fails, is still
+/// answered as the intake refusal (no id, -32003, 400), never 503: the
+/// writer's caller states that policy, and only intake states it.
+#[tokio::test]
+async fn mcp_intake_refusal_with_an_unreadable_id_stays_best_effort() {
+    let fx = fixture(Setup {
+        fail_closed: true,
+        ..idempotent()
+    })
+    .await;
+    fx.log.set_append_failure_for_test(true);
+    let mut sent: Value =
+        serde_json::from_str(&keyed_invoke("alpha", "t")).expect("the call parses");
+    sent["id"] = json!(true);
+    let (status, answer) = post_to(&fx, "/mcp", &sent.to_string(), &Caller::Session).await;
+    assert_eq!(
+        (status, refusal(&answer), answer["id"].is_null()),
+        (StatusCode::BAD_REQUEST, (Some(-32003), NO_PRINCIPAL), true),
+        "{answer}"
+    );
+}
+
 /// CONTROL (UNIFY.1a′, audit), direct route: the refusal is one attributed
 /// `invalid` record. Green at the base (admission's refusal is recorded);
 /// stays green only if the intake check sits below D2-a capture.

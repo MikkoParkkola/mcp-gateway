@@ -362,13 +362,25 @@ pub(super) async fn record(
     {
         notes.refused_by_memo(refusal);
     }
+    // The meta writer's refusal rule, before either count, so
+    // the counters, the metric and the record take one class.
+    let answered = outcome;
+    let outcome = notes.outcome(outcome);
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")
         .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
     if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
     {
-        use crate::security::security_metrics::{DenialRoute, denied};
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        // A refusal the rule reclassified answered a code the reason table
+        // does not read as a refusal, so it is `other`; the record names the
+        // check.
+        let reason = if matches!(answered, AuditOutcome::Denied(_)) {
+            reason
+        } else {
+            DenialReason::Other
+        };
         denied(DenialRoute::Direct, reason);
     }
     // The web UI's counters move here too, once per call.
@@ -386,7 +398,11 @@ pub(super) async fn record(
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
-    let decision = Box::new(notes.decided(&state.meta_mcp, outcome));
+    let kind = call
+        .who
+        .credential_kind
+        .unwrap_or(crate::security::audit::CredentialKind::None);
+    let decision = Box::new(notes.decided(&state.meta_mcp, outcome, kind));
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     let trace_id = trace_id.to_owned();
     let envelope = AuditEnvelope {

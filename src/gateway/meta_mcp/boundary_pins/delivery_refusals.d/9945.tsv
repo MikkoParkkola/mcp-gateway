@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_persistence_journal_v2_drain.rs	restore	refuse_attempt	1	no-record	a config write: a startup repair whose restore the commit primitive refused records that as a not-written decision on the journal's open attempt; no call delivery

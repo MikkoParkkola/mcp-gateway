@@ -211,8 +211,11 @@ test('L5c a new identity\'s first count is not announced', async ({ page }) => {
   count = 7;
   await page.locator('.top .signout').click();
   await expect(page.locator('#signin')).toBeVisible();
+  // The logout answer can land after the sign-in view shows: wait until it has been handled
+  // and "Signed out." is queued, then let the queue drain. When it lands within the
+  // announcer's pause it shares one entry with "Ending the session…", so match inside entries.
+  await expect.poll(async () => (await announced(page)).some((t) => t.includes('Signed out.'))).toBe(true);
   await drained(page);
-  expect(await announced(page)).toContain('Signed out.');
   await signIn(page);
   await expect(page.locator('nav.route-nav .count')).toHaveText('7');
   await drained(page);

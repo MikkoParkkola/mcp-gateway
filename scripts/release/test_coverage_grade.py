@@ -139,7 +139,7 @@ class CoverageGrade(unittest.TestCase):
             if in_ci:
                 detail = fetched.stderr.strip() if fetched else ""
                 self.fail(f"pinned SELF_REV {SELF_REV} is absent in CI and could not be fetched: {detail}")
-            self.skipTest(f"pinned SELF_REV {SELF_REV} is absent from local history; no fetch attempted")
+            self.skipTest("pinned SELF_REV is absent from local history; no fetch attempted")
 
     def isolated_probe(self):
         self.checkout = self.directory / "checkout"

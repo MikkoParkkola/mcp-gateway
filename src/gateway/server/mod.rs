@@ -77,9 +77,16 @@ mod capability_publish_tests;
 #[cfg(all(test, unix))]
 mod capability_snapshot_tests;
 mod run_wiring;
+mod serving_audit;
+#[cfg(tp4)]
+#[cfg(test)]
+mod serving_log_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
+#[cfg(tp4)]
+#[cfg(test)]
+mod signing_writer_tests;
 mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
@@ -255,6 +262,9 @@ pub struct Gateway {
     /// its plan here once it fixes its budget. `None` for a gateway built in
     /// memory, whose stop then leaves the process exit to its caller.
     retire: Option<crate::retire::RetireCell>,
+    /// The record key and the serving log, opened once at construction and shared by every
+    /// metadata build (WIRE.4).
+    serving_audit: serving_audit::ServingAudit,
     /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
     test_seams: test_seams::TestSeams,
@@ -354,6 +364,72 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 /// authorization decision — reaching the gateway over stdio already grants
 /// full tool access. If the ledger ever gains shared storage, revisit it.
 pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
+
+/// Why `prepare_signing` stopped a request before it was parsed.
+pub(super) enum Unprepared {
+    /// Answered as it stands: nothing to record.
+    Answered(serde_json::Value),
+    /// A signing refusal of the request's form, under the every-call scope
+    /// and ahead of every gate: an envelope that cannot be restored (answered
+    /// with no id) or a malformed nonce (with the request's id). Recorded
+    /// before it is answered.
+    SigningRefused(crate::gateway::router::AnswerId, crate::Error),
+}
+
+/// Every other early stop is answered as it stands.
+impl From<serde_json::Value> for Unprepared {
+    fn from(answer: serde_json::Value) -> Self {
+        Self::Answered(answer)
+    }
+}
+
+/// The stdio caller's record principal: the stdio constant, keyed like any
+/// principal. One place, so every stdio record names it alike.
+pub(super) fn stdio_record_principal(
+    record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+) -> crate::gateway::record_principal::RecordPrincipal {
+    crate::gateway::record_principal::InternalPrincipal::new(STDIO_CREDENTIAL_PRINCIPAL.to_owned())
+        .record_form(record_key)
+}
+
+/// The `who` of a stdio record made before the caller context exists (an
+/// early refusal): the parts `AuditWho::from_caller` reads off that context,
+/// which on stdio are constant (`build_stdio_caller_context`).
+pub(super) fn stdio_audit_who(
+    record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+) -> crate::security::audit::AuditWho {
+    crate::security::audit::AuditWho::from_parts(
+        crate::security::audit::CredentialKind::LocalTransport,
+        stdio_record_principal(record_key),
+        None,
+        None,
+    )
+}
+
+/// The answer to a request [`Unprepared`] stopped: as it stands, or, for a
+/// signing refusal, recorded first by the writer `/mcp` uses, keeping its
+/// early place ahead of every gate.
+pub(super) async fn answer_unprepared(
+    meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
+    request: &serde_json::Value,
+    session_id: &str,
+    stop: Unprepared,
+) -> serde_json::Value {
+    let (id, error) = match stop {
+        Unprepared::Answered(answer) => return answer,
+        Unprepared::SigningRefused(id, error) => (id, error),
+    };
+    let (called, arguments) = crate::gateway::router::call_name_and_arguments(request);
+    crate::gateway::router::answer_stdio_signing_refusal(
+        meta_mcp,
+        stdio_audit_who(meta_mcp.record_key()),
+        (arguments, called, session_id),
+        (id, crate::gateway::router::SigningSite::Intake),
+        error,
+    )
+    .await
+    .to_value_lossy()
+}
 
 #[cfg(tp4)]
 #[cfg(test)]

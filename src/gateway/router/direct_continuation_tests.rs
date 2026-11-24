@@ -548,6 +548,56 @@ async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_meta_route() {
     }
 }
 
+/// A3k: A3's spent continuation, redeemed again through the audited meta
+/// path: answered with the one client sentence, and its invocation record
+/// names the replay guard as the check that refused it.
+#[cfg(tp1)]
+#[tokio::test]
+async fn a3k_a_spent_continuation_records_replay_guard() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let logger = std::sync::Arc::new(
+        crate::security::TransparencyLogger::open(std::sync::Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log.path().to_string_lossy().into_owned(),
+                key_id: "a3k".to_owned(),
+                ..Default::default()
+            },
+        ))
+        .expect("the row's log opens"),
+    );
+    let fx = fixture(Answer::AskOnce, |meta| meta.enable_transparency_log(logger)).await;
+    let asked = meta_call(&fx, "k-std", "alpha", json!({})).await;
+    let resume = json!({"requestState": state_of(&asked), "inputResponses": answers()});
+    let done = meta_call(&fx, "k-std", "alpha", resume.clone()).await;
+    assert!(done.get("error").is_none(), "premise: resumed once: {done}");
+    let spent = meta_call(&fx, "k-std", "alpha", resume).await;
+    assert_eq!(
+        (code(&spent), spent["error"]["message"].as_str()),
+        (
+            Some(-32602),
+            Some("JSON-RPC error -32602: continuation rejected")
+        ),
+        "{spent}"
+    );
+    let text = std::fs::read_to_string(log.path()).unwrap_or_default();
+    let invocations: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("request_hash").is_some())
+        .collect();
+    let guarded = invocations
+        .iter()
+        .filter(|entry| entry["decision"]["kind"] == "replay_guard")
+        .count();
+    let last = invocations.last().expect("the spent redeem left a record");
+    assert_eq!(
+        (guarded, last["decision"]["kind"].as_str()),
+        (1, Some("replay_guard")),
+        "{invocations:?}"
+    );
+}
+
 /// A4: callers the idempotency guard tells apart behind one shared key (here
 /// by their grant subject) are told apart by the continuation too: one cannot
 /// redeem the other's round. Mutant: the binding built from the key alone.

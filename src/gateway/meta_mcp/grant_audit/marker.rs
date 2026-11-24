@@ -42,6 +42,54 @@ impl Landing {
     }
 }
 
+/// Gives a signing refusal's trace to its call's grant decisions. The refusal
+/// ends the call before the dispatch mints a trace, so the open slot holds only
+/// this call's notes, all untraced; with the refusal's trace on them, the
+/// decisions and the invocation record name one call, and the landed record
+/// marks them recorded. Matched by slot, not by target: the record names the
+/// target as the request spells it (no server for a surfaced name), a note
+/// the backend it resolved to.
+pub(crate) fn stamp_refused(trace_id: &str) {
+    let _ = super::GRANT_SLOT.try_with(|slot| {
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
+        stamp_written_untraced(&mut slot.notes.lock().expect("grant slot lock"), trace_id);
+    });
+}
+
+/// Puts `trace_id` on each untraced note the slot's selection will write,
+/// found by address: after the stamp the same selection picks the same notes,
+/// now traced, so no decision is added or dropped.
+pub(in crate::gateway::meta_mcp) fn stamp_written_untraced(
+    notes: &mut [super::GrantNote],
+    trace_id: &str,
+) {
+    let written: Vec<*const super::GrantNote> = super::record::select_records(notes)
+        .into_iter()
+        .filter(|note| note.trace_id.is_none())
+        .map(std::ptr::from_ref)
+        .collect();
+    for note in notes.iter_mut() {
+        if written.contains(&std::ptr::from_ref::<super::GrantNote>(note)) {
+            note.trace_id = Some(trace_id.to_owned());
+        }
+    }
+}
+
+/// Puts `trace` on the open slot's last untraced note for `(server, tool)`.
+pub(super) fn stamp_untraced(server: &str, tool: &str, trace: String) {
+    let _ = super::GRANT_SLOT.try_with(|slot| {
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
+        let mut notes = slot.notes.lock().expect("grant slot lock");
+        if let Some(note) = notes
+            .iter_mut()
+            .rev()
+            .find(|n| n.trace_id.is_none() && n.server == server && n.tool == tool)
+        {
+            note.trace_id = Some(trace);
+        }
+    });
+}
+
 /// The retry cell of the enclosing [`with_retry_trace`], if any.
 pub(super) fn current_retry() -> Option<RetryCell> {
     RETRY_TRACE.try_with(Clone::clone).ok()

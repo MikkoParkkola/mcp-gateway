@@ -78,6 +78,7 @@ fn finish_gate_cases() -> Vec<(&'static str, JournalV2, Result<(), JournalError>
     ]
 }
 
+#[cfg(tp3)]
 #[test]
 fn finish_ready_refuses_what_finish_refuses() {
     const ROW: &str = "finish_ready_refuses_what_finish_refuses";
@@ -121,6 +122,7 @@ fn finish_ready_refuses_what_finish_refuses() {
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
+#[cfg(tp3)]
 #[test]
 fn marked_flags_every_token_and_leaves_the_donor_alone() {
     const ROW: &str = "marked_flags_every_token_and_leaves_the_donor_alone";
@@ -148,6 +150,7 @@ fn marked_flags_every_token_and_leaves_the_donor_alone() {
     );
 }
 
+#[cfg(tp3)]
 #[test]
 fn placement_exact_cases() {
     const ROW: &str = "placement_exact_cases";
@@ -210,6 +213,7 @@ fn placement_exact_cases() {
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
+#[cfg(tp3)]
 #[test]
 fn placement_clean_foreign_refused() {
     const ROW: &str = "placement_clean_foreign_refused";
@@ -289,6 +293,7 @@ fn placement_clean_foreign_refused() {
     assert!(failures.is_empty(), "{ROW}:\n{}", failures.join("\n"));
 }
 
+#[cfg(tp3)]
 #[test]
 fn placement_empty_donor_and_post_flag_bytes() {
     const ROW: &str = "placement_empty_donor_and_post_flag_bytes";
@@ -356,6 +361,7 @@ fn frame_list(donor: &JournalV2) -> Vec<Vec<u8>> {
         .collect()
 }
 
+#[cfg(tp3)]
 #[test]
 fn placement_two_tokens_and_trailing_garbage() {
     const ROW: &str = "placement_two_tokens_and_trailing_garbage";

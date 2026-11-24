@@ -93,6 +93,8 @@ pub use fs_lock::lock_directory_finding;
 #[doc(hidden)]
 pub mod gateway;
 mod hashing;
+// The daily anonymous heartbeat (docs/PRIVACY.md, "Daily heartbeat").
+mod heartbeat;
 pub(crate) mod home_dir;
 #[doc(hidden)]
 pub mod honest_task_tokens;
@@ -135,6 +137,9 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+#[cfg(tp3)]
+#[cfg(test)]
+mod print_sites_tests;
 
 // The preview sandbox's test seams must never ship: a release build with them
 // fails here, and CI proves it with a build that must fail.
@@ -190,6 +195,8 @@ pub mod semantic_search;
 pub mod simhash;
 #[doc(hidden)]
 pub mod skills;
+// What a detached writer holds so a test's temp dir outlives its writes; nothing in a release build.
+pub(crate) mod spawn_keep;
 #[doc(hidden)]
 pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
@@ -211,10 +218,23 @@ mod test_pause;
 #[cfg(test)]
 mod test_ports;
 #[cfg(test)]
+#[allow(dead_code, reason = "parts without a scan never call it")]
+pub(crate) mod test_source_files;
+#[cfg(tp3)]
+#[cfg(test)]
+mod test_source_files_tests;
+#[cfg(test)]
 pub(crate) mod test_source_text;
 #[cfg(tp3)]
 #[cfg(test)]
 mod test_source_text_tests;
+#[cfg(all(test, unix))]
+pub(crate) mod test_stub;
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+mod test_stub_tests;
+#[cfg(test)]
+mod test_tls;
 #[cfg(test)]
 mod test_wait;
 #[cfg(feature = "tool-profiles")]

@@ -355,7 +355,7 @@ jobs:
           # and sharing ci.yml's `docker-` scope reproduces that thrash across
           # the two workflows on a tag that fires both.
           cache-from: type=gha,scope=docker-yml-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=docker-yml-${{ matrix.arch }}
+          cache-to: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-yml-{0}', matrix.arch) || '' }}
 
       - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -426,6 +426,9 @@ jobs:
         run: scripts/dev/helm-kind-real-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
       - name: Build the full variant for its smoke test
+        env:
+          # Empty off the release line and main: the expansion below then adds no --cache-to.
+          CACHE_TO: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && format('type=gha,mode=max,scope=docker-yml-full-{0}', matrix.arch) || '' }}
         run: |
           set -euo pipefail
           docker buildx build \
@@ -435,7 +438,7 @@ jobs:
             --build-arg "APT_CACHE_BUST=${APT_CACHE_BUST}" \
             --cache-from "type=gha,scope=docker-yml-${{ matrix.arch }}" \
             --cache-from "type=gha,scope=docker-yml-full-${{ matrix.arch }}" \
-            --cache-to "type=gha,mode=max,scope=docker-yml-full-${{ matrix.arch }}" \
+            ${CACHE_TO:+--cache-to "$CACHE_TO"} \
             --output "type=docker" \
             .
 

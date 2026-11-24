@@ -26,6 +26,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(super) struct Counters {
     pub(super) store: Arc<CounterStore>,
     file: Arc<CounterFile>,
+    /// Where `file` saves (`<data_dir>/counters.json`): the root a detached
+    /// save keeps for a test while it writes (`crate::spawn_keep`).
+    path: std::path::PathBuf,
     /// The version change this start's restore marked, kept as a value for
     /// `GET /ui/api/gateway` rather than read back from marker history.
     pub(super) upgrade: Option<VersionChange>,
@@ -40,14 +43,22 @@ pub(super) fn start(
 ) -> (Counters, tokio::task::JoinHandle<()>) {
     let counters = restore(data_dir);
     meta_mcp.set_counters(Arc::clone(&counters.store));
-    let saver = spawn_periodic_save("counter save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
-        let (store, file) = (Arc::clone(&counters.store), Arc::clone(&counters.file));
-        move || {
-            if let Ok(now) = crate::clock::unix_secs() {
-                file.save_unless_busy(&store, VERSION, now);
+    // The saver's root is the file it writes, so a test's kept dir covers it between ticks.
+    let root = Some(data_dir.join("counters.json"));
+    let saver = spawn_periodic_save(
+        "counter save",
+        COUNTER_SAVE_INTERVAL,
+        Some(shutdown),
+        root,
+        {
+            let (store, file) = (Arc::clone(&counters.store), Arc::clone(&counters.file));
+            move || {
+                if let Ok(now) = crate::clock::unix_secs() {
+                    file.save_unless_busy(&store, VERSION, now);
+                }
             }
-        }
-    });
+        },
+    );
     (counters, saver)
 }
 
@@ -57,20 +68,17 @@ pub(super) fn restore(data_dir: &Path) -> Counters {
     // An unreadable clock starts coverage at the epoch; nothing is counted
     // until the clock reads again (every recorder skips on `Err`).
     let now = crate::clock::unix_secs().unwrap_or_default();
+    let path = data_dir.join("counters.json");
     let Restored {
         store,
         file,
         upgrade,
         ..
-    } = CounterFile::restore(
-        data_dir.join("counters.json"),
-        now,
-        VERSION,
-        &crate::local_day::host_zone(),
-    );
+    } = CounterFile::restore(path.clone(), now, VERSION, &crate::local_day::host_zone());
     Counters {
         store: Arc::new(store),
         file: Arc::new(file),
+        path,
         upgrade,
     }
 }
@@ -90,6 +98,7 @@ impl Counters {
         let (last_store, last_file) = (Arc::clone(&self.store), Arc::clone(&self.file));
         super::stop_checkpoints::Class {
             name: "counters",
+            root: Some(self.path.clone()),
             checkpoint: Arc::new(move || {
                 crate::clock::unix_secs()
                     .is_ok_and(|now| file.save_unless_busy(&store, VERSION, now))
@@ -103,8 +112,9 @@ impl Counters {
     /// The shutdown step that writes `counters.json`.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (store, file) = (Arc::clone(&self.store), Arc::clone(&self.file));
-        (
+        ShutdownSave::new(
             "counter save (counters.json)",
+            Some(self.path.clone()),
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     file.save(&store, VERSION, now);

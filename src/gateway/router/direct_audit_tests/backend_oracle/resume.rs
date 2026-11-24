@@ -29,6 +29,7 @@ fn asking_ghost(calls: &Arc<AtomicUsize>) -> Arc<Backend> {
             "requestState": "backend-state-1"
         })),
         notify_refused: false,
+        gate: None,
     }));
     backend
 }

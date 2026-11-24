@@ -47,6 +47,191 @@ SOURCE = re.compile(
     r"^(src/|crates/[^/]+/src/|Dockerfile[^/]*$|\.github/workflows/docker[^/]*\.ya?ml$"
     r"|capabilities/|server\.json$|npm/)"
 )
+# A bare tracker id and an acceptance id (<id>.<AREA>.<n>), read from the public
+# hygiene rule's own patterns, so the fold drops exactly what the checks refuse
+# and keeps what they set aside. A missing pattern raises: it is never guessed.
+_PATTERNS = pathlib.Path(__file__).resolve().parents[2] / "scripts/dev/public-hygiene-patterns.sh"
+
+
+def _hygiene_pattern(name: str) -> str:
+    for line in _PATTERNS.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"{name}="):
+            return line.split("=", 1)[1].strip("'").replace("[:alnum:]", "A-Za-z0-9")
+    raise RuntimeError(f"{_PATTERNS}: no {name}")
+
+
+TRACKER_ID = re.compile(_hygiene_pattern("ticket_id_regex"))
+ACCEPTANCE_ID = re.compile(_hygiene_pattern("ac_id_regex"))
+# One parenthetical part that is only an id, or an id and its label (`I2`, `MIN.2`).
+# The id itself is the rule's pattern after its leading boundary group `(^|[^...])`.
+ID_PART = re.compile(TRACKER_ID.pattern.split(")", 1)[1] + r"(?: [A-Z][A-Z0-9.]*[0-9])?")
+
+
+def _enclosing(masked: str, at: int) -> tuple[int, int] | None:
+    """(open, close) of the innermost parenthetical around `at`, or None."""
+    depth = 0
+    for o in range(at - 1, -1, -1):
+        if masked[o] == ")":
+            depth += 1
+        elif masked[o] == "(":
+            if depth == 0:
+                break
+            depth -= 1
+    else:
+        return None
+    depth = 0
+    for c in range(at, len(masked)):
+        if masked[c] == "(":
+            depth += 1
+        elif masked[c] == ")":
+            if depth == 0:
+                return o, c
+            depth -= 1
+    return None
+
+
+def _parts(masked: str, o: int, c: int) -> list[tuple[int, int]]:
+    """Spans of the `,`/`;`-separated parts inside (o, c), split at the top level only."""
+    spans, start, depth = [], o + 1, 0
+    for i in range(o + 1, c):
+        ch = masked[i]
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch in ",;" and depth == 0:
+            spans.append((start, i))
+            start = i + 1
+    return spans + [(start, c)]
+
+
+def _code_blind(masked: str) -> tuple[str, list[int], list[tuple[int, int]]]:
+    """(`masked` with the inside of each one-line code span replaced by `x`,
+    the offsets of backtick runs that close nothing, and where each span starts and ends).
+
+    A code span is read as CommonMark reads it: a run of N backticks opens
+    it, and the next run of exactly N on the same line closes it, so no `(`,
+    `)`, `,` or `;` written in code splits a parenthetical. A run with no
+    closing run is left as text and reported, so the caller can refuse it."""
+    runs = list(re.finditer(r"`+", masked))
+    out, unclosed, spans, i = list(masked), [], [], 0
+    while i < len(runs):
+        opening = runs[i]
+        width = len(opening.group())
+        closing = next(
+            (j for j in range(i + 1, len(runs))
+             if len(runs[j].group()) == width and "\n" not in masked[opening.end():runs[j].start()]),
+            None,
+        )
+        if closing is None:
+            unclosed.append(opening.start())
+            i += 1
+            continue
+        out[opening.end():runs[closing].start()] = "x" * (runs[closing].start() - opening.end())
+        spans.append((opening.start(), runs[closing].end()))
+        i = closing + 1
+    return "".join(out), unclosed, spans
+
+
+def _code_seen(t: str) -> tuple[list[str], int]:
+    """Each code span of `t` as `_code_blind` pairs it, and the count of escaped
+    backticks: a drop that changes either has changed what a reader sees as code."""
+    return [t[a:b] for a, b in _code_blind(t)[2]], t.count("\\`")
+
+
+def _kept_text(piece: str) -> str:
+    """A kept part as written, trimmed; only a run of whitespace holding a line
+    break becomes one space, so a rejoined parenthetical sits on one line and
+    the spaces inside a code span stay as they are."""
+    return re.sub(r"[ \t]*\n\s*", " ", piece.strip())
+
+
+def drop_ids(text: str) -> tuple[str, list[str]]:
+    """`text` without its bare tracker ids, and the ids that cannot be dropped.
+
+    An id is dropped when it is a whole part of a parenthetical, alone or with its
+    label; a parenthetical left empty goes with the space before it. An id in
+    prose, or among other words in a part, would leave a broken sentence: it is
+    returned as `<line>: <why>` for the fragment to be reworded, and the text is
+    returned unchanged. An id beside code is refused the same way, so the fold
+    never rewrites a code span.
+    """
+
+    def scan(t: str):
+        masked = ACCEPTANCE_ID.sub(lambda m: "\0" * len(m.group(0)), t)
+        blind, unclosed, _ = _code_blind(masked)
+        spans, problems = [], []
+        for m in TRACKER_ID.finditer(masked):
+            at = m.end(1)  # the id, past the boundary character the pattern consumes
+            line = t.count("\n", 0, at) + 1
+            # Its bullet ends at a blank line or at the next bullet; no code span crosses those.
+            start = max(t.rfind("\n- ", 0, at), t.rfind("\n\n", 0, at)) + 1
+            end = min((e for e in (t.find("\n- ", at), t.find("\n\n", at)) if e >= 0), default=len(t))
+            # Fenced or indented block code is invisible to the span reader, so refuse outright.
+            if re.search(r"(?m)^[ \t]*(```|~~~)|^ {6,}\S", t[start:end]):
+                problems.append(f"{line}: a tracker id in a bullet holding a code block; "
+                                "move the id out of the bullet, or reword")
+                continue
+            span = _enclosing(blind, at)
+            if span is None:
+                problems.append(f"{line}: a tracker id in prose; reword the line without it")
+                continue
+            # The fold never rewrites a parenthetical that holds code, at any depth
+            # around the id: it refuses, so no reading of the backticks can change a command.
+            around = span
+            while around is not None and "`" not in t[around[0]:around[1]]:
+                around = _enclosing(blind, around[0])
+            if around is not None:
+                problems.append(f"{line}: a tracker id in a parenthetical that holds code; "
+                                "move the id out of the parenthetical that holds code, or reword")
+                continue
+            # An escaped backtick, or a run that closes nothing on its own line,
+            # anywhere in the id's bullet leaves where code starts or ends in doubt,
+            # as a code span may run across line breaks.
+            if "\\`" in t[start:end] or any(start <= u < end for u in unclosed):
+                problems.append(f"{line}: a tracker id in a bullet with an escaped or unclosed backtick; "
+                                "close the span or reword the line")
+                continue
+            part = next(p for p in _parts(blind, *span) if p[0] <= at < p[1])
+            if not ID_PART.fullmatch(" ".join(masked[part[0]:part[1]].split())):
+                problems.append(f"{line}: a tracker id among other words; reword the line without it")
+                continue
+            if span not in spans:
+                spans.append(span)
+        return masked, blind, spans, problems
+
+    masked, blind, spans, problems = scan(text)
+    if problems:
+        return text, problems
+    source = text
+    while spans:
+        # The last parenthetical first, then scan again: a rewrite moves every later offset.
+        o, c = max(spans)
+        before = text
+        # Each kept part keeps its own text and the separator written before it
+        # (`,` or `;`); the first kept part needs none.
+        kept = [(text[a - 1] if a > o + 1 else "", _kept_text(text[a:b]))
+                for a, b in _parts(blind, o, c)
+                if text[a:b].strip() and not TRACKER_ID.search(masked[a:b])]
+        if kept:
+            inner = kept[0][1] + "".join(f"{sep} {piece}" for sep, piece in kept[1:])
+            text = f"{text[:o]}({inner}){text[c + 1:]}"
+        else:
+            start, end = text.rfind("\n", 0, o) + 1, text.find("\n", c)
+            end = len(text) if end < 0 else end
+            if not text[start:o].strip() and not text[c + 1:end].strip():
+                # Alone on its lines: they go too, as a line of spaces reads as a blank
+                # line; a blank line the source has inside it stays, as written.
+                blanks = "".join(f"{blank}\n" for blank in text[start:end].split("\n") if not blank.strip())
+                if end == len(text) and start and not blanks:
+                    start -= 1  # the text ends on those lines: their line break goes too
+                text = text[:start] + blanks + text[end + 1:]
+            else:
+                text = text[: o - 1 if o and text[o - 1] == " " else o] + text[c + 1:]
+        # The invariant behind every code rule above: a drop leaves each code span as it was.
+        if _code_seen(text) != _code_seen(before):
+            line = before.count("\n", 0, o) + 1
+            return source, [f"{line}: dropping the tracker id would change a code span; reword the line"]
+        masked, blind, spans, _ = scan(text)
+    return text, []
 
 
 def _stem(name: str) -> str:
@@ -132,7 +317,12 @@ def check(
 
 
 def assemble(changelog: str, fragments: dict[str, str]) -> str:
-    """Fold `fragments` ({file name: text}) into the Unreleased section."""
+    """Fold `fragments` ({file name: text}) into the Unreleased section, without bare tracker ids.
+
+    Raises ValueError naming each file and line holding an id the fold cannot drop
+    (in prose, or among words in a parenthetical): it is reworded at source, never
+    written. Released sections are history and keep their text.
+    """
     if not fragments:
         return changelog
     lines = changelog.split("\n")
@@ -145,11 +335,17 @@ def assemble(changelog: str, fragments: dict[str, str]) -> str:
         (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
         len(lines),
     )
-    section = lines[start:end]
+    clean = {n: drop_ids(text) for n, text in fragments.items()}
+    section, left = drop_ids("\n".join(lines[start:end]))
+    problems = [f"{FRAGMENT_DIR}/{n}:{p}" for n in sorted(clean, key=_order) for p in clean[n][1]]
+    problems += [f"CHANGELOG.md:{start + int(p.split(':', 1)[0])}:{p.split(':', 1)[1]}" for p in left]
+    if problems:
+        raise ValueError("\n".join(problems))
+    section = section.split("\n")
     ordered = sorted(fragments, key=lambda n: (*_order(n), n))
     for kind in TYPES:
         body = [
-            fragments[n].strip("\n") for n in ordered if FRAGMENT.match(n)[2] == kind
+            clean[n][0].strip("\n") for n in ordered if FRAGMENT.match(n)[2] == kind
         ]
         if not body:
             continue
@@ -241,7 +437,13 @@ def main(argv: list[str]) -> int:
         n: (frag_dir / n).read_text(encoding="utf-8") for n in names if FRAGMENT.match(n)
     }
     changelog_path = ROOT / "CHANGELOG.md"
-    result = assemble(changelog_path.read_text(encoding="utf-8"), fragments)
+    try:
+        result = assemble(changelog_path.read_text(encoding="utf-8"), fragments)
+    except ValueError as refused:
+        # An id the fold cannot drop: nothing is written or deleted.
+        for e in str(refused).splitlines():
+            print(f"error: {e}", file=sys.stderr)
+        return 1
     if args.dry_run:
         sys.stdout.write(result)
         return 0

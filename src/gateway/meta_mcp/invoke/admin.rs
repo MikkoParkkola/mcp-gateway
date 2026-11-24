@@ -152,6 +152,9 @@ impl MetaMcp {
             total_tools += tools.len();
         }
         if let Some(cap) = self.get_capabilities() {
+            // Mid-scan the capability catalogue is partial: its tools join the floor and the
+            // total is not final. The flag is read first, so a true flag pairs with the full catalogue.
+            tools_known &= cap.initial_scan_complete();
             total_tools += cap.get_tools().len();
         }
 

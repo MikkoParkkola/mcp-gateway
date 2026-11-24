@@ -224,13 +224,14 @@ async fn t2_direct_allowed_tools() {
     let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
     // On a shared backend a withheld name takes the catalogue's absent answer
     // (`key_check.rs:147-170`, text from `input_keys.rs:101`): an `isError`
-    // result on a 200. No denial code is noted for it, so the record reads the
-    // answer: `tool_error`, with no code (`direct_audit.rs:97-99`).
+    // result on a 200. The preflight noted the refusal, so the record says
+    // `denied` with the code a gate-withheld tool result records, -32600
+    // (`Noted::refused_outcome`).
     let withheld = Refusal {
         status: StatusCode::OK,
         form: Form::IsErrorResult,
-        outcome: "tool_error",
-        code: None,
+        outcome: "denied",
+        code: Some(-32600),
     };
     let decision = refused(&fx, &dir, answer, (before, 0), withheld);
     assert_eq!(
@@ -270,12 +271,13 @@ async fn c2_direct_capability_disabled() {
     );
     let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
     // The refusal is answered with its own code, -32000 (`dispatch_guards.rs:308`),
-    // as a JSON-RPC error on a 200 (`direct_dispatch.rs:265-270`), read as
-    // `error` with that code (`direct_audit.rs:94-96`).
+    // as a JSON-RPC error on a 200 (`direct_dispatch.rs:265-270`). The gate
+    // noted the refusal, so the record says `denied`, keeping that code
+    // (`Noted::refused_outcome`).
     let disabled = Refusal {
         status: StatusCode::OK,
         form: Form::RpcError,
-        outcome: "error",
+        outcome: "denied",
         code: Some(-32000),
     };
     let decision = refused(&fx, &dir, answer, before, disabled);
@@ -414,8 +416,9 @@ async fn t2c_direct_allowed_tools_per_user_optional() {
     .await;
 }
 
-/// T2b and T2c. No denial code is noted, so the record reads the answer:
-/// `error` with its code (`direct_audit.rs:94-96`), whichever site built it.
+/// T2b and T2c. The allowed-tools gate noted the refusal, so the record says
+/// `denied` with the answer's own code (`Noted::refused_outcome`), whichever
+/// site built the answer.
 async fn allowed_tools_per_user(row: &'static str, propagation: Propagation) {
     let dir = crate::test_dir_keep::kept_tempdir();
     let fx = table(&dir).await;
@@ -438,7 +441,7 @@ async fn allowed_tools_per_user(row: &'static str, propagation: Propagation) {
     let withheld = Refusal {
         status,
         form,
-        outcome: "error",
+        outcome: "denied",
         code: Some(code),
     };
     // The code the caller is answered with, checked on its own: `absent_name`'s
@@ -648,15 +651,15 @@ async fn a3_grant_match() {
     let mut all = records(&dir);
     let new = all.split_off(before);
     // The grant check writes its own record beside the invocation's
-    // (`GrantNote::project`, `grant_audit.rs:127-163`): kind
-    // `identity_grant_decision` (`:45`, `:129`), the matched `grant_id` (`:143-145`),
-    // and no decision object among its fields.
+    // (`GrantNote::project`, `grant_audit/record.rs:51-92`): kind
+    // `identity_grant_decision` (`grant_audit.rs:57`, set at `record.rs:53`), the
+    // matched `grant_id` (`record.rs:68-70`), and no decision object among its fields.
     let granted: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_none()).collect();
     assert!(
         matches!(granted.as_slice(), [grant]
             if grant["grant_id"] == "g-direct-probe"
                 && grant["kind"] == "identity_grant_decision"
-                // An allowed grant's record is `ok` (`grant_audit.rs:185-186`).
+                // An allowed grant's record is `ok` (`grant_audit/record.rs:129-130`).
                 && grant["outcome"] == "ok"),
         "premise: one grant record naming the matched grant: {new:?}"
     );
@@ -713,3 +716,8 @@ async fn a3_grant_match() {
 #[cfg(tp1)]
 #[path = "decision_fixture_mtls_rows.rs"]
 mod mtls;
+
+// Part 3b-1's syntax rows on the meta route over HTTP.
+#[cfg(tp1)]
+#[path = "decision_fixture_syntax_rows.rs"]
+mod syntax;

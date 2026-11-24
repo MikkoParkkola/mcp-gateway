@@ -437,10 +437,19 @@ fn test_path(name: &str) -> String {
 /// writes its delivery record. Measured 87,369 B at both 1 and 3 MiB, so the
 /// cost stays fixed. The record write alone is 28,631 B across 237 calls,
 /// none of 2 KiB or more (serializing and hashing the answer is 1,531 B of
-/// it): many small allocations, no one buffer to shrink. Trimming that path
-/// back under 64 KiB is tracked for 4.0.1. Margin: about 11 KB (98,304 B cap over 87,369 B measured); a
-/// further raise needs its own breakdown.
-const OVER_PARSE: u64 = 96 * 1024;
+/// it): many small allocations, no one buffer to shrink.
+///
+/// Raised to 128 KiB (lead ruling 2026-11-22): a signing refusal is now
+/// recorded before it is answered, so this refused call writes a second
+/// record, its own invocation record, of the same many-small-allocations
+/// shape. Measured 116,739 B at 1 MiB: the 87,369 B above (the 28,631 B
+/// delivery record included) plus 29,370 B for the signing refusal's record.
+/// The largest single allocation is 64 KiB, and the growth assert below
+/// still holds the excess to 1 KiB from 1 to 3 MiB, so the cost stays fixed.
+/// Trimming the record path a refused call pays for is tracked for 4.0.1.
+/// Margin: about 14 KB (131,072 B cap over 116,739 B measured); a further
+/// raise needs its own breakdown.
+const OVER_PARSE: u64 = 128 * 1024;
 /// How much that excess may grow from 1 to 3 MiB: no payload term (measured
 /// 0 B).
 const OVER_PARSE_GROWTH: u64 = 1024;

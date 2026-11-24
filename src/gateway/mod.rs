@@ -103,6 +103,9 @@ mod restart_status;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;
+/// The bind-host classifiers `setup export` shares with the router.
+#[cfg(feature = "config-export")]
+pub(crate) use router::{is_wildcard_bind, strip_brackets};
 pub(crate) mod routes;
 #[cfg(tp4)]
 #[cfg(test)]
@@ -120,6 +123,8 @@ mod stop_budget;
 /// (the reload loop) is what gives it a production caller.
 #[cfg(test)]
 pub(crate) use router::grant_subject_from_verified_identity;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use stop_budget::BACKEND_RESERVE_FOR_TEST;
 pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside
@@ -240,6 +245,25 @@ pub mod test_helpers {
         config.security.sanitize_input = false;
         config.security.ssrf_protection = false;
         config
+    }
+
+    /// What an import says for `name` when its capability file is already
+    /// there, so rows in `tests/` assert the sentence itself. For `tests/`
+    /// only, not a stable API.
+    #[must_use]
+    pub fn name_taken(name: &str) -> String {
+        crate::capability::name_taken(name)
+    }
+
+    /// The OS config directory the gateway resolves, exactly what the crate's
+    /// own lookup returns, so an integration test can prove it routes to a
+    /// private home before scanning anything under it. For `tests/` only, with
+    /// no stability promise. macOS has no such lookup (the gateway uses the
+    /// home there), so neither does this.
+    #[cfg(not(target_os = "macos"))]
+    #[must_use]
+    pub fn config_dir() -> Option<std::path::PathBuf> {
+        crate::home_dir::config_dir()
     }
 
     /// A live config for a fixture whose auth (`auth`) differs from

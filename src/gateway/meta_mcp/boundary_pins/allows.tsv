@@ -38,8 +38,8 @@ src/gateway/meta_mcp/scoped_backends.rs	scoped_get	statement	Visibility	getx1
 src/gateway/meta_mcp/scoped_backends.rs	statuses_for	statement	Lifecycle	statusesx1
 src/gateway/meta_mcp/scoped_backends.rs	subscribe_started_for	statement	Lifecycle	subscribe_startedx1
 src/gateway/server/background.rs	spawn_idle_reaper	statement	Background	allx1
-src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	enforce_destinationsx1
-src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	registerx1
+src/gateway/server/construct.rs	construct	statement	Lifecycle	enforce_destinationsx1
+src/gateway/server/construct.rs	construct	statement	Lifecycle	registerx1
 src/gateway/server/events_wiring.rs	install	statement	Lifecycle	allx1
 src/gateway/server/run.rs	run	statement	Lifecycle	set_change_feedx1
 src/gateway/server/run_steps.rs	managed_recovery_adapters	statement	Lifecycle	getx1

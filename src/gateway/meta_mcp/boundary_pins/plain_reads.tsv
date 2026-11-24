@@ -6,6 +6,7 @@ src/capability/executor/save_file.rs	create_new	.open	1	write-only	creates a fet
 src/capability/file_writer.rs	read_current	.open	1	not-config	reads a capability YAML under the directory lock; public definitions
 src/capability/loader.rs	load_capability_file	fs::read	1	not-config	capability YAML, read once; the same bytes are parsed and digested; public definitions
 src/capability/openapi/convert.rs	convert_file	fs::read_to_string	1	not-config	OpenAPI spec input; public
+src/capability/openapi/generated.rs	write_to_file	.open	1	write-only	creates a generated capability YAML only if absent (create_new); reads nothing
 src/capability/parser.rs	parse_capability_file	fs::read_to_string	1	not-config	capability YAML; public definitions
 src/capability/pin_file.rs	pin_file_until	fs::read_to_string	1	not-config	capability YAML under the directory lock; public definitions
 src/chains/checkpoint.rs	append	.open	1	write-only	appends a chain checkpoint; reads nothing
@@ -44,6 +45,8 @@ src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: ope
 src/config_persistence.rs	sync_dir_for	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config_persistence_commit.rs	open_target	.open	1	read-only	Windows: the commit primitive's read-back handle on gateway.yaml, opened read-write without write or delete sharing so the file flushed is the file hashed; reads to hash, writes nothing
 src/config_persistence_commit.rs	open_target	open_nonblocking	1	read-only	hashes gateway.yaml's bytes just written by the commit primitive, or the revision the replace journal records, and compares the digest; never parsed, writes nothing; only a regular file is hashed
+src/config_persistence_journal_v2_drain_handover.rs	open_guarded	.open	2	not-config	the abandoned config-write file beside the config (audit frames, not gateway.yaml): the handover opens it without following a link, to check, extend and re-read it
+src/config_persistence_journal_v2_drain_handover.rs	seal	open_nonblocking	1	no-content	opens the abandoned file's path only to compare its identity with the handle just written; never read
 src/config_persistence_lock.rs	keep_private	.open	1	no-content	opens the config lock sidecar to hold the lock; its bytes are never read
 src/config_persistence_scratch.rs	create_new_private	.open	1	write-only	creates an owner-only file (create_new); reads nothing
 src/config_persistence_scratch.rs	create_private_replacing	.open	1	write-only	creates an owner-only file over an old one; reads nothing
@@ -55,6 +58,7 @@ src/control_plane/export.rs	drop_torn_tail	File::open	1	not-config	reads the las
 src/control_plane/export.rs	open	fs::read	1	not-config	the control-plane export cursor
 src/control_plane/store/file_io.rs	write_atomic	File::open	1	no-content	opens a directory only to fsync it
 src/cost_accounting/persistence.rs	load	fs::read_to_string	1	not-config	cost history JSON
+src/cost_accounting/spend_history.rs	read_capped	File::open	1	not-config	saved spend series JSON
 src/counters/persist.rs	restore	fs::read	1	not-config	persisted counters
 src/debug_trust_roots.rs	with_roots_from	fs::read	1	not-config	test-only trust roots PEM
 src/discovery/config_scanner.rs	parse_claude_config	fs::read_to_string	1	not-config	a third-party MCP client config, never gateway.yaml
@@ -88,6 +92,7 @@ src/gateway/ui/capabilities.rs	list_capabilities	fs::read_to_string	1	not-config
 src/gateway/ui/capabilities.rs	validate_only	fs::read_to_string	1	not-config	capability YAML; public
 src/gateway/ui/preview.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/health_history/file.rs	read	fs::read	1	not-config	persisted health history
+src/heartbeat.rs	read_install_id	fs::read_to_string	1	not-config	the heartbeat's own random install id in its state dir; never gateway.yaml
 src/identity_grants/journal.rs	append_line	.open	1	not-config	the grant-change journal, opened to append and to check its tail; judged by its own integrity rule
 src/identity_grants/journal.rs	open_journal_windows	.open	1	not-config	Windows: the grant-change journal, judged by its own integrity rule before an append
 src/identity_grants/journal.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read

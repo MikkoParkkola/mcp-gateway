@@ -18,6 +18,8 @@ mod ci_wiring;
 #[cfg(tp2)]
 mod creation_sites;
 #[cfg(tp2)]
+mod decision_builders;
+#[cfg(tp2)]
 mod delivery_framing;
 #[cfg(tp2)]
 mod discarded_sends;
@@ -33,6 +35,8 @@ mod fold_sites;
 mod fragments;
 #[cfg(tp2)]
 mod guard_tests;
+#[cfg(tp2)]
+mod heartbeat_scans;
 #[cfg(tp2)]
 mod identity_evidence;
 #[cfg(tp2)]

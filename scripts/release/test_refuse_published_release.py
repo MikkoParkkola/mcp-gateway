@@ -13,8 +13,12 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "ci"))
+import required_mode  # noqa: E402
 
 SCRIPT = pathlib.Path(__file__).with_name("refuse-published-release.sh")
 TAG = "v4.0.0"
@@ -29,7 +33,11 @@ sys.stdout.write(os.environ["STUB_GH_RELEASES"])
 
 
 # CI must run this, never skip it: a skipped fail-closed check reads as a passed one.
-@unittest.skipUnless(shutil.which("jq") or os.environ.get("CI"), "jq is required")
+if not shutil.which("jq") and required_mode.required():
+    raise SystemExit("required here but unavailable on this host: jq")
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
 class RefusePublishedRelease(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

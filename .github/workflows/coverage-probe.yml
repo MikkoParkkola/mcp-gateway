@@ -112,6 +112,9 @@ jobs:
           toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Pinned task SDK and Redis
@@ -151,14 +154,17 @@ jobs:
         part: ${{ fromJSON(needs.linux-plan.outputs.parts) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The library parts only: the integration parts peak at 6.5 GB.
-      - if: startsWith(matrix.part, 'lib-')
-        uses: ./.github/actions/add-swap
+      # Every part, the integration ones too (they peak at 6.5 GB): the memory tripwire at the end fails closed when
+      # no swap is active, and some runner images ship none (train 64a, part int-a).
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Run the part
@@ -240,6 +246,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"
+          save-cache: ${{ (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') }}
       - name: The gates' pinned environment
         env:
           UV_MALWARE_CHECK: "1"
@@ -295,6 +302,9 @@ jobs:
           toolchain: 1.99.1
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only the release line saves: a PR's or a throwaway's own cache helps nobody else and evicts the line's.
+          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version ${{ env.COVERAGE_LLVM_COV }}
       - name: Allow symlink creation
@@ -302,6 +312,11 @@ jobs:
         run: >-
           New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
           -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # Tests that resolve the gateway home in-process refuse to run without a private one: put a
+      # fresh home in this job's env for the test step (scripts/ci/shard_tests.py export-home).
+      - name: Private gateway home
+        shell: pwsh
+        run: python scripts/ci/shard_tests.py export-home $env:GITHUB_ENV
       # A failed test on Windows drops that process's profile (MIK-7780), so this step
       # must end with no failure; there is no --ignore-run-fail.
       - name: Every test target

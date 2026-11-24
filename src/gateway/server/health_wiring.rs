@@ -96,6 +96,7 @@ pub(super) fn start_history(
         "health save",
         COUNTER_SAVE_INTERVAL,
         Some(shutdown),
+        path.clone(),
         saver_closure(
             Arc::clone(&gate),
             Arc::clone(&history),
@@ -201,6 +202,8 @@ impl Health {
             "health sample",
             SAMPLE_INTERVAL,
             Some(shutdown),
+            // Samples into memory only: no file, nothing to keep.
+            None,
             sampler_closure(
                 Arc::clone(&self.gate),
                 Arc::clone(&self.history),
@@ -243,6 +246,7 @@ impl Health {
         };
         super::stop_checkpoints::Class {
             name: "health",
+            root: self.path.clone(),
             checkpoint: save(file::Wait::SkipIfBusy),
             last: save(file::Wait::Block),
         }
@@ -251,8 +255,9 @@ impl Health {
     /// The shutdown step: a clean stop, then the save.
     pub(super) fn shutdown_save(&self) -> ShutdownSave {
         let (history, path) = (Arc::clone(&self.history), self.path.clone());
-        (
+        ShutdownSave::new(
             "health save (health.json)",
+            path.clone(),
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     history.stop(now);

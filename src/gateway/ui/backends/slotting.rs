@@ -9,11 +9,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use super::super::errors::flat_error;
+use super::super::errors::{STORE_UNAVAILABLE, flat_error};
 #[cfg(test)]
 use super::super::secret_slots::Store;
 use super::super::secret_slots::{self, Unopened};
-use super::write::{STORE_UNAVAILABLE, Slotted};
+use super::write::Slotted;
 use crate::config::Config;
 use crate::config::secret_values::Syntax;
 use crate::gateway::ui::backend_ops::{ValueClass, classify, literal_refusals};

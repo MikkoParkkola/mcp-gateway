@@ -64,7 +64,7 @@ fn save_with_logging_runs_callback() {
 }
 
 #[cfg(feature = "cost-governance")]
-fn enforcer_with_spend(usd: f64) -> Arc<BudgetEnforcer> {
+pub(super) fn enforcer_with_spend(usd: f64) -> Arc<BudgetEnforcer> {
     let cfg = CostGovernanceConfig {
         enabled: true,
         ..CostGovernanceConfig::default()
@@ -91,7 +91,7 @@ fn restored_global(dir: &Path) -> f64 {
 fn save_costs_writes_what_the_next_boot_restores() {
     let global = crate::test_day::same_utc_day(|| {
         let dir = tempfile::tempdir().unwrap();
-        save_costs(&enforcer_with_spend(0.25), dir.path());
+        save_costs(&enforcer_with_spend(0.25), &CostTracker::new(), dir.path());
         restored_global(dir.path())
     });
     assert!((global - 0.25).abs() < 1e-9, "the next boot reads {global}");
@@ -105,12 +105,12 @@ fn a_clock_before_the_epoch_keeps_the_last_valid_snapshot() {
     let (control, global) = crate::test_day::same_utc_day(|| {
         let dir = tempfile::tempdir().unwrap();
         let enforcer = enforcer_with_spend(0.25);
-        save_costs(&enforcer, dir.path());
+        save_costs(&enforcer, &CostTracker::new(), dir.path());
         let control = restored_global(dir.path());
         enforcer.record_spend("tool", Some("key"), 0.15);
         {
             let _clock = crate::clock::test_clock::before_epoch();
-            save_costs(&enforcer, dir.path());
+            save_costs(&enforcer, &CostTracker::new(), dir.path());
         }
         (control, restored_global(dir.path()))
     });
@@ -136,7 +136,7 @@ fn a_save_skipped_while_a_write_holds_the_lock_is_caught_up_later() {
         let enforcer = enforcer_with_spend(0.25);
         {
             let _writing = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-            save_costs_unless_busy(&enforcer, dir.path());
+            save_costs_unless_busy(&enforcer, &CostTracker::new(), dir.path());
         }
         let written_while_held = costs.exists();
         enforcer.record_spend("tool", Some("key"), 0.15);
@@ -145,7 +145,7 @@ fn a_save_skipped_while_a_write_holds_the_lock_is_caught_up_later() {
         // holder to let go, so the count bounds lost races, not anyone's speed.
         for _ in 0..100 {
             drop(COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner));
-            save_costs_unless_busy(&enforcer, dir.path());
+            save_costs_unless_busy(&enforcer, &CostTracker::new(), dir.path());
             if costs.exists() {
                 break;
             }
@@ -185,7 +185,7 @@ async fn the_catch_up_helper_recovers_a_tick_skipped_under_a_held_lock() {
         "this row's ordering relies on a current-thread runtime"
     );
     let (holder_joined, landed, global) = crate::test_day::same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         let enforcer = enforcer_with_spend(0.25);
         let (held_tx, held_rx) = std::sync::mpsc::channel();
@@ -214,6 +214,7 @@ async fn the_catch_up_helper_recovers_a_tick_skipped_under_a_held_lock() {
         held_rx.recv().expect("the holder took the lock");
         let saver = spawn_cost_saver(
             Arc::clone(&enforcer),
+            Arc::new(CostTracker::new()),
             dir.path().to_path_buf(),
             COST_SAVE_INTERVAL,
             None,
@@ -247,12 +248,13 @@ async fn cost_saver_stops_on_shutdown() {
     // Per phase: the spend expected on disk, whether it landed in time,
     // and what the next boot read. Then: shutdown sent, and the task's end.
     let (phases, listening, stopped) = crate::test_day::same_utc_day_async(|| async {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         let costs = dir.path().join("costs.json");
         let (tx, rx) = tokio::sync::broadcast::channel(1);
         let enforcer = enforcer_with_spend(0.2);
         let task = spawn_cost_saver(
             Arc::clone(&enforcer),
+            Arc::new(CostTracker::new()),
             dir.path().to_path_buf(),
             std::time::Duration::from_millis(50),
             Some(rx),
@@ -311,7 +313,7 @@ fn a_save_and_restore_across_midnight_keep_each_day_apart() {
     };
     {
         let _clock = at_secs(early);
-        save_costs(&enforcer, dir.path());
+        save_costs(&enforcer, &CostTracker::new(), dir.path());
     }
     let saved_after_midnight = {
         let _clock = at_secs(early);
@@ -326,7 +328,7 @@ fn a_save_and_restore_across_midnight_keep_each_day_apart() {
     let dir = tempfile::tempdir().unwrap();
     {
         let _clock = at_secs(late);
-        save_costs(&enforcer_with_spend(0.25), dir.path());
+        save_costs(&enforcer_with_spend(0.25), &CostTracker::new(), dir.path());
     }
     let same_day = {
         let _clock = at_secs(late);

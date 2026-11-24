@@ -19,9 +19,10 @@ use super::cli_exit::{
     unsafe_target,
 };
 use super::dashboard_link::{
-    AdminCallError, AdminResponse, LinkTls, TOKEN_ENV, admin_call_url, check_target,
+    AdminBody, AdminCallError, AdminResponse, LinkTls, TOKEN_ENV, admin_call_url, check_target,
     dashboard_link_base, gateway_reason, read_token,
 };
+use crate::gateway::routes;
 
 const BODY_LIMIT: u64 = 16 * 1024 * 1024;
 
@@ -34,7 +35,7 @@ pub(crate) struct ApiRequest {
     pub(crate) url: reqwest::Url,
     pub(crate) token: String,
     pub(crate) tls: LinkTls,
-    pub(crate) body: Option<Value>,
+    pub(crate) body: Option<AdminBody>,
     pub(crate) if_match: Option<reqwest::header::HeaderValue>,
 }
 
@@ -52,7 +53,7 @@ pub async fn run_api_command(
         error.outcome(args.json, &[redaction])
     } else {
         match dashboard_link_base(
-            args.url.clone(),
+            args.gateway.url.clone(),
             args.tls.clone(),
             load,
             port_override,
@@ -147,14 +148,16 @@ where
             return CliError::new(
                 CliExit::Usage,
                 "If-Match value is not a valid header value.",
-                "Pass the ETag exactly as the gateway returned it.",
+                "Pass the revision api GET printed.",
             )
             .outcome(args.json, &[token.as_str()]);
         }
         Some(Some(value)) => Some(value),
         None => None,
     };
-    let body = match read_data(args.data.as_deref(), stdin) {
+    let body = match read_data(args.data.as_deref(), stdin)
+        .and_then(|data| data.map(|data| body_of(&method, &url, data)).transpose())
+    {
         Ok(body) => body,
         Err(error) => return error.outcome(args.json, &[token.as_str()]),
     };
@@ -164,7 +167,7 @@ where
         Request::Mutation
     };
     match send(ApiRequest {
-        method,
+        method: method.clone(),
         url,
         token: token.clone(),
         tls: tls.clone(),
@@ -173,11 +176,49 @@ where
     })
     .await
     {
-        Ok(response) => render_response(&response, &token, args.json, &origin, &args.path, request),
+        Ok(response) => render_response(
+            &response,
+            &token,
+            args.json,
+            &origin,
+            (&args.path, &method),
+            request,
+        ),
         Err(error) => {
             transport_failure(error, request, &token).outcome(args.json, &[token.as_str()])
         }
     }
+}
+
+/// The api command on its production send, for rows outside `commands` that
+/// drive it against a real gateway router (the router's own tests).
+#[cfg(test)]
+pub(crate) async fn run_api_for_tests(
+    args: &ApiArgs,
+    base: &str,
+    bearer: &str,
+    stdin: Vec<u8>,
+) -> CliOutcome {
+    let lookup = |name: &str| (name == TOKEN_ENV).then(|| bearer.to_owned());
+    run_api_with(
+        args,
+        base,
+        &LinkTls::default(),
+        lookup,
+        move || Ok(stdin),
+        |sent| async move {
+            let ApiRequest {
+                method,
+                url,
+                token,
+                tls,
+                body,
+                if_match,
+            } = sent;
+            admin_call_url(method, url, &token, &tls, body.as_ref(), if_match.as_ref()).await
+        },
+    )
+    .await
 }
 
 fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, CliError> {
@@ -233,10 +274,61 @@ fn api_url(base: &str, path: &str) -> Result<reqwest::Url, CliError> {
     Ok(url)
 }
 
+/// Whether the router runs a capability save (PUT on one capability, its
+/// `?validate` query included) or a validate (POST on its validate route) for
+/// `url`: the two routes that take raw YAML. Matched segment by segment against
+/// the router's own patterns; a `{name}` segment is one non-empty segment.
+fn takes_yaml(method: &reqwest::Method, url: &reqwest::Url) -> bool {
+    let route = match *method {
+        reqwest::Method::PUT => routes::UI_CAPABILITY,
+        reqwest::Method::POST => routes::UI_CAPABILITY_VALIDATE,
+        _ => return false,
+    };
+    matches_route(route, url.path())
+}
+
+/// Whether `path` (no query) is one route pattern: as many segments, literal
+/// segments equal, a `{name}` segment one non-empty segment.
+fn matches_route(route: &str, path: &str) -> bool {
+    let want: Vec<&str> = route.split('/').collect();
+    let got: Vec<&str> = path.split('/').collect();
+    want.len() == got.len()
+        && want.iter().zip(&got).all(|(want, got)| {
+            if want.starts_with('{') {
+                !got.is_empty()
+            } else {
+                want == got
+            }
+        })
+}
+
+/// The body `data` is sent as: its bytes unchanged on a YAML route, parsed
+/// JSON everywhere else.
+fn body_of(
+    method: &reqwest::Method,
+    url: &reqwest::Url,
+    data: Vec<u8>,
+) -> Result<AdminBody, CliError> {
+    if takes_yaml(method, url) {
+        return Ok(AdminBody::Yaml(data));
+    }
+    serde_json::from_slice(&data)
+        .map(AdminBody::Json)
+        .map_err(|_| {
+            CliError::new(
+                CliExit::Usage,
+                "Request body is not valid JSON.",
+                "Send JSON: only the capability save and validate routes take YAML.",
+            )
+        })
+}
+
+/// The `--data` bytes from stdin (`-`), a file (`@path`) or the argument
+/// itself, refused above 16 MiB.
 fn read_data(
     data: Option<&str>,
     stdin: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<Option<Value>, CliError> {
+) -> Result<Option<Vec<u8>>, CliError> {
     let Some(data) = data else { return Ok(None) };
     let data = if data == "-" {
         stdin().map_err(|_| {
@@ -270,13 +362,7 @@ fn read_data(
             "Send a smaller body.",
         ));
     }
-    serde_json::from_slice(&data).map(Some).map_err(|_| {
-        CliError::new(
-            CliExit::Usage,
-            "Request body is not valid JSON.",
-            "Correct the JSON or select the body's actual Content-Type.",
-        )
-    })
+    Ok(Some(data))
 }
 
 fn response_request_id(body: &Value, response: &AdminResponse, token: &str) -> Option<String> {
@@ -313,7 +399,7 @@ fn gateway_failure(
     body: &Value,
     token: &str,
     origin: &str,
-    path: &str,
+    (path, method): (&str, &reqwest::Method),
     request: Request,
 ) -> Option<CliError> {
     let status = response.status;
@@ -358,8 +444,15 @@ fn gateway_failure(
             "Resolve the gateway error, then retry.",
         )
     } else {
-        let (fallback, remedy) =
-            http_refusal(response, code.as_deref(), origin, path, token, not_run);
+        let (fallback, remedy) = http_refusal(
+            response,
+            code.as_deref(),
+            origin,
+            path,
+            method,
+            token,
+            not_run,
+        );
         CliError::new(kind, reason.as_deref().unwrap_or(fallback), remedy)
     };
     if !ambiguous
@@ -400,6 +493,7 @@ fn http_refusal(
     code: Option<&str>,
     origin: &str,
     path: &str,
+    method: &reqwest::Method,
     token: &str,
     not_run: bool,
 ) -> (&'static str, String) {
@@ -421,22 +515,18 @@ fn http_refusal(
             "Choose an unused key name, then retry.".to_string(),
         ),
         reqwest::StatusCode::CONFLICT if code == Some("stale") => {
-            let name = path
-                .strip_prefix("/ui/api/capabilities/")
-                .and_then(|rest| rest.split(['/', '?']).next())
-                .unwrap_or("x");
-            let name = redact::text(name, &[token.to_string()]);
-            (
-                PROTOCOL_MESSAGE,
-                format!(
-                    "Read capability {name:?} again and reapply the edit using its current revision."
-                ),
-            )
+            // A stale delete retries the delete on a fresh load; any other
+            // stale write redoes its change on the fresh text.
+            let remedy = if *method == reqwest::Method::DELETE {
+                precondition_remedy(method, path, token)
+            } else {
+                reload_and_save(path, token)
+            };
+            (PROTOCOL_MESSAGE, remedy)
         }
-        reqwest::StatusCode::PRECONDITION_REQUIRED => (
-            PROTOCOL_MESSAGE,
-            "Send the request with If-Match set to the current revision.".to_string(),
-        ),
+        reqwest::StatusCode::PRECONDITION_REQUIRED => {
+            (PROTOCOL_MESSAGE, precondition_remedy(method, path, token))
+        }
         reqwest::StatusCode::UNPROCESSABLE_ENTITY => (
             PROTOCOL_MESSAGE,
             "Correct the request body using the gateway's validation details.".to_string(),
@@ -461,12 +551,51 @@ fn http_refusal(
     }
 }
 
+/// Any 428 the recipes below do not fit.
+const GENERIC_PRECONDITION: &str = "Send the request with If-Match set to the current revision.";
+
+/// The request's path without its query, redacted: a remedy quotes it back.
+fn quoted_path(path: &str, token: &str) -> String {
+    redact::text(path.split('?').next().unwrap_or(path), &[token.to_string()])
+}
+
+/// Recovery from a stale or missing revision: a fresh load, the change made
+/// again on its text, and that load's revision, so a write someone else made
+/// in between survives instead of being overwritten.
+fn reload_and_save(path: &str, token: &str) -> String {
+    let path = quoted_path(path, token);
+    format!(
+        "Run api GET {path} again, apply your change to the text it returns, and save that with --if-match set to the revision it printed."
+    )
+}
+
+/// A 428's remedy: a capability save or delete names the load that prints
+/// the revision; every other request keeps the generic sentence.
+fn precondition_remedy(method: &reqwest::Method, path: &str, token: &str) -> String {
+    if !matches_route(
+        routes::UI_CAPABILITY,
+        path.split('?').next().unwrap_or(path),
+    ) {
+        return GENERIC_PRECONDITION.to_owned();
+    }
+    match *method {
+        reqwest::Method::PUT => reload_and_save(path, token),
+        reqwest::Method::DELETE => {
+            let path = quoted_path(path, token);
+            format!(
+                "Run api GET {path}, confirm it is the version you mean to remove, and delete with --if-match set to the revision it printed."
+            )
+        }
+        _ => GENERIC_PRECONDITION.to_owned(),
+    }
+}
+
 fn render_response(
     response: &AdminResponse,
     token: &str,
     json_output: bool,
     origin: &str,
-    path: &str,
+    target: (&str, &reqwest::Method),
     request: Request,
 ) -> CliOutcome {
     let mut json = serde_json::from_slice::<Value>(&response.body).ok();
@@ -475,12 +604,12 @@ fn render_response(
         json.as_ref().unwrap_or(&Value::Null),
         token,
         origin,
-        path,
+        target,
         request,
     ) {
         return error.outcome(json_output, &[token]);
     }
-    let (stdout, note) = if let Some(body) = &mut json {
+    let (stdout, mut note) = if let Some(body) = &mut json {
         if !super::dashboard_link::redact_body(body, token) {
             return CliError::new(
                 CliExit::LocalFailure,
@@ -515,6 +644,18 @@ fn render_response(
         )
     };
     // api's body already passed its entry-loss check above; the note is redacted and gated by `success`.
+    // The CLI prints no headers, so the revision a conditional write needs is
+    // shown here, as the gateway sent it.
+    if let Some(revision) = response
+        .headers
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+    {
+        let _ = writeln!(
+            note,
+            "api: revision {revision}; to change this resource, send it with --if-match."
+        );
+    }
     CliOutcome::success(
         stdout,
         &note,

@@ -123,8 +123,21 @@ impl MetaMcp {
             let error = visible::absent::absent_name(&tool);
             return Some(stored_withheld(id, &error, judged));
         }
-        if let Some(after) = cold {
-            return Some(unrecorded(retry_later(id, after)));
+        // A lender refusal recorded in the lease is answered as the live
+        // routes answer it, never as a retry; unrecorded, like the retry
+        // it takes the place of.
+        if let Some((after, refused)) = cold {
+            return Some(unrecorded(match refused {
+                Some(refusal) => error_response_preserving_status(
+                    id.clone(),
+                    &crate::Error::Forbidden {
+                        code: refusal.code,
+                        status: refusal.status,
+                        message: refusal.message,
+                    },
+                ),
+                None => retry_later(id, after),
+            }));
         }
         // The error-rate cooldown of a per-user tool is met last,
         // as on the live call (it waits for the credential step): a caller
@@ -158,13 +171,20 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
     ) -> std::result::Result<StoredVisibility, (Error, visible::Visibility)> {
         let scope = caller.scope();
-        let mut cold: Option<Option<std::time::Duration>> = None;
+        let mut cold: Option<(
+            Option<std::time::Duration>,
+            Option<crate::backend::LendRefusal>,
+        )> = None;
         let mut caller_catalogue: Option<(visible::Visibility, String)> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
-                if cold.is_none() {
-                    cold = Some(self.cold_lease_remaining(server, caller));
+                // Every cold target is looked at: the first one's lease is
+                // kept, and the first recorded refusal of any of them.
+                let (lease, refused) = self.cold_state(server, caller).unwrap_or_default();
+                let first = cold.get_or_insert((lease, None));
+                if first.1.is_none() {
+                    first.1 = refused;
                 }
                 continue;
             };

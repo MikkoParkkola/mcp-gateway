@@ -36,12 +36,15 @@ src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	OAu
 src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	nonce refusal; gateway-origin frame
 src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	1	refusal code of a gateway routing-profile refusal for the caller verdict; no backend origin
 src/gateway/router/direct_guards.rs	refusal	2	every caller passes a gate's own error; gateway-origin frame
-src/gateway/router/handlers/dispatch_intake_run.rs	intake	4	signing, nonce and sanitize refusals; gateway-origin frame
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	5	admission, kill-switch and audit refusals; gateway-origin frame
+src/gateway/router/handlers/dispatch_intake_run.rs	intake	2	chain nonce and sanitize refusals; gateway-origin frame
+src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	4	admission, kill-switch and audit refusals; gateway-origin frame
 src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	1	a withheld target's refusal code (moved from tools_call); gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	answer_intake	1	audit-unavailable refusal; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	answer_signing	1	a signing refusal's own code, for its answer and its record; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	2	the stdio signing refusal's code, and the log's unavailability code when it fails closed; gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	record	1	audit outcome code; no frame
-src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	3	admission refusals; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	signing_refusal	1	the record's outcome code when the error maps to no outcome; no frame
+src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	2	admission refusals; gateway-origin frame
 src/gateway/server/stdio_dispatch.rs	prepare_signing	2	signing refusal; gateway-origin frame
 src/gateway/server/stdio_route_stage.rs	authorize_targets	1	denial note; no frame
 src/gateway/task_service/execution/worker_inspect.rs	dispatch_refusal_code	1	audit code; no frame
@@ -50,3 +53,4 @@ src/gateway/task_service/host.rs	readmit	1	audit-unavailable or gateway-wrapped 
 src/personal_accounts/refusal.rs	mark_rejection	1	builds an Error::JsonRpc code; no frame
 src/protocol/messages.rs	of_error_text	1	the constructor that records the origin
 src/security/audit.rs	from_result	3	audit outcome; no frame
+src/security/decision_record.rs	refused_outcome	1	audit outcome: the error_code an invocation record carries for an answer a gate withheld as a tool result; no frame

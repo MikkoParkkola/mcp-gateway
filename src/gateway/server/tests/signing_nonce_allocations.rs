@@ -63,15 +63,21 @@ use super::signing_nonce_allocations_support::{
 ///   (`Box::pin(Self::dispatch_tools_call(..))` in `stdio_dispatch.rs`, inside
 ///   `slot_rpc`), inside which a missing, malformed or replayed nonce is
 ///   refused at signing admission (`prepare_signing_for_call`), after the
-///   invocation policy and before the route stage. The serve loop's own box of the whole dispatch holds only a
+///   invocation policy and before the route stage. A third holds the refusal's
+///   own writer: the refusal is recorded before it is answered, through the
+///   boxed `answer_stdio_signing_refusal` future (`Box::pin(answered)` and
+///   `Box::pin(answer)` in `stdio_dispatch.rs`, the early and the late site).
+///   Its size is the writer's, not the payload's, which
+///   `stdio_refusal_large_allocations_do_not_grow_with_the_payload` pins
+///   across 1 MiB and 3 MiB. The serve loop's own box of the whole dispatch holds only a
 ///   pointer to the first, so it is small. At most [`LARGE_ALLOCATIONS`] large
 ///   allocations and [`LARGE_BUDGET`] bytes in all: another boxed dispatch or
 ///   a growing dispatch state breaks it. No lint bounds them:
 ///   `clippy::large_futures` does not see a future behind `Box::pin`, and
 ///   `dispatch_single_staged` allows it.
 const SMALL_BUDGET: u64 = 8 * 1024;
-const LARGE_ALLOCATIONS: u64 = 2;
-const LARGE_BUDGET: u64 = 12 * 1024;
+const LARGE_ALLOCATIONS: u64 = 3;
+const LARGE_BUDGET: u64 = 16 * 1024;
 
 /// The three refusal errors are settled production controls, pinned exactly.
 /// `wire_error_message` preserves each text.
@@ -380,6 +386,44 @@ fn stdio_replayed_nonce_refusal_3mib_stays_under_budget() {
         return;
     }
     replay_under_budget(THREE_MIB);
+}
+
+/// A refusal's cost does not grow with what it refuses: a missing nonce refused
+/// on a fresh fixture at 1 MiB and at 3 MiB stores the same large allocations,
+/// count and bytes alike (the dispatch boxes and the boxed refusal writer).
+#[test]
+fn stdio_refusal_large_allocations_do_not_grow_with_the_payload() {
+    if isolate(&test_path(
+        "stdio_refusal_large_allocations_do_not_grow_with_the_payload",
+    )) {
+        return;
+    }
+    let [one, three] = [ONE_MIB, THREE_MIB].map(cold_missing_nonce);
+    // Not vacuous: the boxed dispatch futures are large allocations, so a
+    // meter that saw none would be measuring nothing.
+    assert!(
+        one.large > 0 && one.large_bytes > 0,
+        "no large allocation seen: {one}"
+    );
+    assert_eq!(
+        (one.large, one.large_bytes),
+        (three.large, three.large_bytes),
+        "1 MiB: {one}; 3 MiB: {three}"
+    );
+}
+
+/// What one cold missing-nonce refusal of `payload_bytes` allocates.
+fn cold_missing_nonce(payload_bytes: usize) -> Measured {
+    runtime().block_on(async move {
+        let fixture = Fixture::start(true).await;
+        let refused = invoke("cold", None, nested_arguments(payload_bytes));
+        let (reads, params) = served_inputs(&fixture, &refused);
+        let (answer, measured) =
+            measure_async(|| dispatch_as_served(&fixture, (&reads, params.as_ref()), refused))
+                .await;
+        assert_refusal("cold", &answer, MISSING_NONCE);
+        measured
+    })
 }
 
 // ── Controls on the meter itself ─────────────────────────────────────────────

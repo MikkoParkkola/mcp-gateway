@@ -217,6 +217,7 @@ mod tests {
             .unwrap_or(Duration::ZERO)
             .as_secs();
         TemporaryToken {
+            issuance_row: None,
             jti: InMemoryTokenStore::generate_jti(),
             token: InMemoryTokenStore::generate_bearer(),
             identity: make_identity(),

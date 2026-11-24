@@ -85,6 +85,7 @@ fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
         .unwrap()
         .as_secs();
     crate::key_server::TemporaryToken {
+        issuance_row: None,
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
         identity: VerifiedIdentity::for_test(

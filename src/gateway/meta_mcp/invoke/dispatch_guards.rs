@@ -360,30 +360,27 @@ impl MetaMcp {
         }
         // token_count 0: a backend tool call runs no model inference. A call
         // with no session still counts: `record` keeps "" out of any session.
+        // One price per call: the cost views record what the enforcer settles
+        // below. With no enforcer nothing is priced, so the call counts at 0.
+        #[cfg(feature = "cost-governance")]
+        let cost = self
+            .budget_enforcer
+            .as_ref()
+            .map_or(0.0, |enforcer| enforcer.registry.cost_for(call.tool));
+        #[cfg(not(feature = "cost-governance"))]
+        let cost = 0.0;
         let session = call.session_id.unwrap_or_default();
-        self.cost_tracker.record(
-            session,
-            call.cost_key,
-            call.server,
-            call.tool,
-            0,
-            crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-        );
+        let rec = crate::cost_accounting::CostRecord::charged(call.server, call.tool, 0, cost);
         // Only session-less spend needs this: a session's report covers its own.
         if session.is_empty()
             && let Some(key) = call.caller_key.filter(|key| !key.is_empty())
         {
-            self.cost_tracker.record_caller(
-                key,
-                call.server,
-                call.tool,
-                0,
-                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-            );
+            self.cost_tracker.record_caller_charged(key, &rec);
         }
+        self.cost_tracker
+            .record_charged(session, call.cost_key, &rec);
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
-            let cost = enforcer.registry.cost_for(call.tool);
             self.judged_by(enforcer, call.generation, |governance| {
                 enforcer.settle_under(
                     governance,

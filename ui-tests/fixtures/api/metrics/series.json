@@ -1,0 +1,1 @@
+{"metric":"calls","window":"24h","bucket_secs":1800,"day_basis":null,"zone":"UTC","since":1763560800,"folded":false,"points":[{"t":1763560800,"v":40},{"t":1763562600,"v":60},{"t":1763564400,"v":20}],"previous":[{"t":1763560800,"v":30},{"t":1763562600,"v":50},{"t":1763564400,"v":20}],"previous_complete":true}

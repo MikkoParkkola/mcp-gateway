@@ -53,6 +53,7 @@ use super::oidc::VerifiedIdentity;
 /// }
 /// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
@@ -68,6 +69,8 @@ pub struct TemporaryToken {
     pub exp: u64,
     /// Client IP at issuance (for audit).
     pub client_ip: Option<IpAddr>,
+    /// The token's issuance row in the transparency log, when recorded.
+    pub(crate) issuance_row: Option<crate::security::transparency_log::issuance::IssuanceRow>,
 }
 
 // Manual `Debug` redacts the opaque bearer value (CWE-532, mirrors MIK-6733).
@@ -83,6 +86,7 @@ impl std::fmt::Debug for TemporaryToken {
             .field("iat", &self.iat)
             .field("exp", &self.exp)
             .field("client_ip", &self.client_ip)
+            .field("issuance_row", &self.issuance_row)
             .finish()
     }
 }
@@ -152,6 +156,28 @@ impl ReservationId {
 impl Default for ReservationId {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A reserved slot and its pending deadline.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Reserved {
+    /// The unique claim on the pending slot.
+    pub id: ReservationId,
+    /// The pending deadline in Unix seconds, the instant after which activation is refused.
+    /// Activation dates the token from its own clock read, before this instant, and adds the
+    /// store's ttl to that same read, so deadline + ttl bounds every expiry.
+    pub deadline: u64,
+}
+
+impl Reserved {
+    /// What a store's `reserve` returns: the slot's id and the moment after
+    /// which activating it is refused. Outside this crate the struct can only
+    /// be built here, so a field added later breaks no store.
+    #[must_use]
+    pub fn new(id: ReservationId, deadline: u64) -> Self {
+        Self { id, deadline }
     }
 }
 
@@ -225,8 +251,7 @@ pub trait TokenStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`ReserveError`] naming why no slot was reserved.
-    fn reserve(&self, request: ReservationRequest, now: u64)
-    -> Result<ReservationId, ReserveError>;
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError>;
 
     /// Turn the reservation `id` into the active `token`, at `now`: the
     /// identity and JTI must match the reservation, its deadline must not
@@ -394,11 +419,7 @@ impl InMemoryTokenStore {
 
 #[async_trait::async_trait]
 impl TokenStore for InMemoryTokenStore {
-    fn reserve(
-        &self,
-        request: ReservationRequest,
-        now: u64,
-    ) -> Result<ReservationId, ReserveError> {
+    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<Reserved, ReserveError> {
         let mut pending = self.pending();
         pending.remove_where(ActivateError::Expired, |slot| slot.deadline <= now);
         let same =
@@ -437,7 +458,7 @@ impl TokenStore for InMemoryTokenStore {
                 deadline,
             },
         );
-        Ok(id)
+        Ok(Reserved { id, deadline })
     }
 
     fn activate(
@@ -592,7 +613,10 @@ pub(crate) fn activate_for_test(store: &dyn TokenStore, ttl: u64, mut token: Tem
         subject: token.identity.subject().to_string(),
         jti: token.jti.clone(),
     };
-    let id = store.reserve(request, now).expect("a slot under the cap");
+    let id = store
+        .reserve(request, now)
+        .expect("a slot under the cap")
+        .id;
     token.iat = now;
     token.exp = now + ttl;
     store

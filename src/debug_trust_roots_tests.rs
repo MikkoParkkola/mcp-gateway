@@ -9,43 +9,12 @@
 
 use super::with_roots_from;
 
-/// A loopback HTTPS server under a fresh CA: its URL and the CA's PEM.
+/// A loopback HTTPS server under a fresh CA (`crate::test_tls`): its URL and
+/// the CA's PEM.
 async fn server() -> (String, String) {
-    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let ca_key = KeyPair::generate().expect("CA key");
-    let mut ca_params = CertificateParams::new(Vec::new()).expect("CA params");
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    // A subject of its own: a leaf named like its issuer reads as self-issued
-    // to the Windows chain engine.
-    ca_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "test-trust CA");
-    let ca = ca_params.clone().self_signed(&ca_key).expect("CA");
-    let issuer = Issuer::new(ca_params, ca_key);
-    let leaf_key = KeyPair::generate().expect("leaf key");
-    let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()]).expect("leaf");
-    leaf_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "localhost");
-    let leaf = leaf_params.signed_by(&leaf_key, &issuer).expect("signed");
-    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
-        leaf.pem().into_bytes(),
-        leaf_key.serialize_pem().into_bytes(),
-    )
-    .await
-    .expect("tls");
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("non-blocking");
-    let port = listener.local_addr().expect("addr").port();
     let app = axum::Router::new().route("/", axum::routing::get(|| async { "ok" }));
-    tokio::spawn(async move {
-        let _ = axum_server::from_tcp_rustls(listener, tls)
-            .expect("listener")
-            .serve(app.into_make_service())
-            .await;
-    });
-    (format!("https://localhost:{port}/"), ca.pem())
+    let (base, ca) = crate::test_tls::https_server(app).await;
+    (format!("{base}/"), ca)
 }
 
 /// The status of one GET through `builder`, or the error's text.

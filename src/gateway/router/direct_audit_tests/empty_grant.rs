@@ -299,6 +299,7 @@ async fn sanitized_passthrough() -> Fixture {
         fail: None,
         reply: None,
         notify_refused: false,
+        gate: None,
     }));
     assert!(fx.state.backends.register(beta), "beta re-registers");
     fx.state
@@ -397,6 +398,7 @@ async fn an_unscoped_caller_is_untouched_by_the_empty_grant_arms() {
         fail: None,
         reply: None,
         notify_refused: false,
+        gate: None,
     }));
     assert!(fx.state.backends.register(beta), "beta re-registers");
     let nul = json!({"q": "a\u{0}b"});

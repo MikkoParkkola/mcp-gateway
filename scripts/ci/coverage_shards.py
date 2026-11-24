@@ -48,7 +48,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib_union  # noqa: E402
-from shard_tests import GLOB_A, GLOB_ALL, GLOB_B, HEADER, LIB_SPLIT, RESULT, SDK, cargo  # noqa: E402
+from shard_tests import GLOB_A, GLOB_ALL, GLOB_B, HEADER, LIB_SPLIT, RESULT, SDK, cargo, private_home  # noqa: E402
 
 # Every plan also runs the SDK journey's binary as its own part, as the single
 # job runs it alone before the rest.
@@ -165,7 +165,10 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     if rc or rc2:
         print(f"::error::coverage {n}/{shard}: listing the tests failed ({rc}, {rc2})")
         return rc or rc2
-    rc, lines = cargo(select, program)
+    # A home of the part's own, as the test shards get: tests that resolve the gateway home
+    # in-process refuse to run without one.
+    with private_home(None, None) as env:
+        rc, lines = cargo(select, program, env)
     listed, skipped = listing(every), listing(ignored)
     problems = reconcile(listed, skipped, results(lines))
     for p in problems:
@@ -722,13 +725,43 @@ def coverage_parts_self_test() -> int:
             after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
             assert after == before, "lists wrote files before rejecting a nonempty output directory"
 
+    def p10() -> None:
+        # Integration tests that resolve the gateway home refuse to run without a private one,
+        # so the part's test run must get a fresh home, removed again once the part ends.
+        header = "     Running unittests src/lib.rs (target/debug/deps/mcp_gateway-fixture)"
+        for shard in ("int-a", SDK_PART):
+            calls: list[tuple[list[str], dict[str, str] | None, bool]] = []
+
+            def fake(args, program=("cargo",), env=None):
+                home = (env or {}).get("MCP_GATEWAY_TEST_HOME_DIR", "")
+                calls.append((args, env, bool(home) and os.path.isdir(home)))
+                if "--list" not in args:
+                    return 0, [header, "test result: ok. 1 passed; 0 failed; 0 ignored"]
+                return 0, [header] if "--ignored" in args else [header, "sample: test"]
+
+            with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                with patch(__name__ + ".cargo", side_effect=fake):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        rc = run(4, shard)
+            assert rc == 0, f"{shard}: run returned {rc}"
+            test_run = [c for c in calls if "--list" not in c[0]]
+            assert len(test_run) == 1, f"{shard}: {len(test_run)} test runs"
+            _args, env, existed = test_run[0]
+            assert env is not None and existed, f"{shard}: the test run had no existing private home"
+            home = env["MCP_GATEWAY_TEST_HOME_DIR"]
+            assert env.get("XDG_CONFIG_HOME") == os.path.join(home, ".config"), f"{shard}: config dir outside the home"
+            assert env.get("MCP_GATEWAY_CONFIG_DIR") == os.path.join(home, ".mcp-gateway"), \
+                f"{shard}: data dir outside the home"
+            assert not os.path.exists(home), f"{shard}: the private home {home} was left behind"
+
     rows = [("P1 fixture N=5", p1), ("P2 shared reader N=2", p2), ("P3 literal cargo argv", p3)]
     rows += [(f"P4 {case}", lambda case=case: p4(case)) for case in
              ("complete", "missing lib-3", "extra lib-6", "duplicate lib-2", "filtered lib-2")]
     rows += [(f"P5 {case}", lambda case=case: p5(case)) for case in
              ("mixed binaries", "empty tsv", "missing tsv")]
     rows += [("P6 plan registry unchanged", p6), ("P7 plan argument lists isolated", p7),
-             ("P8 nonempty lists output refused", p8), ("P9 whole-lib plan 2", p9)]
+             ("P8 nonempty lists output refused", p8), ("P9 whole-lib plan 2", p9),
+             ("P10 test run in a private home", p10)]
     wrong = 0
     for label, test in rows:
         try:

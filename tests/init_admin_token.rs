@@ -5,6 +5,8 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "../src/test_stub.rs"]
+mod test_stub;
 
 use mcp_gateway::config::{Config, secret_slot};
 use mcp_gateway::gateway::{ResolvedAuthConfig, test_helpers::write_owner_only};
@@ -230,7 +232,6 @@ fn admintok_2_doctor_does_not_read_a_config_the_mode_check_refuses() {
 /// (`auto`) does reach the fake, so the row proves the pin and not an idle fake.
 #[test]
 fn admintok_1_the_harness_pin_keeps_init_off_the_os_keychain() {
-    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().expect("isolated init");
     std::fs::create_dir(root.path().join("home")).expect("home");
     let bin = root.path().join("fake-bin");
@@ -238,13 +239,11 @@ fn admintok_1_the_harness_pin_keeps_init_off_the_os_keychain() {
     let mark = root.path().join("keychain-touched");
     for tool in ["gdbus", "secret-tool"] {
         let path = bin.join(tool);
-        std::fs::write(
+        test_stub::write_executable(
             &path,
             // A shell redirect, not `touch`: the shim's PATH holds only this directory.
-            format!("#!/bin/sh\n: > '{}'\nexit 1\n", mark.display()),
-        )
-        .expect("shim");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+            &format!("#!/bin/sh\n: > '{}'\nexit 1\n", mark.display()),
+        );
     }
     let run = |name: &str, pinned: bool| {
         let out_dir = root.path().join(name);

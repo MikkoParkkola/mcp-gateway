@@ -3,10 +3,12 @@
 //! Transport implementations for MCP backends
 
 mod command_split;
+mod handshake;
 mod http;
 mod lender;
 pub(crate) mod notification_sink;
 pub(crate) mod notify_ingress;
+mod preview_pipe;
 mod stdio;
 pub(crate) mod submit_mark;
 pub(crate) mod upstream_tap;
@@ -35,6 +37,8 @@ pub(crate) use self::lender::count_refusal;
 pub(crate) use self::stdio::HURRY_WINDOW;
 #[cfg(all(test, unix))]
 pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
+#[cfg(all(test, unix))]
+pub(crate) use self::stdio::NESTED_TERM_MARGIN_FOR_TEST;
 #[cfg(all(test, unix))]
 pub(crate) use self::stdio::NESTED_TERM_NEED_FOR_TEST;
 #[cfg(test)]

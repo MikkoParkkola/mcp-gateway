@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/config_persistence_journal_v2_drain_handover.rs	open_guarded	open-create	2	no-secret	the abandoned config-write file, created new (never over an existing name); on Unix owner-only with no link follow, and the handover refuses off Unix before it creates; it holds audit records whose producer keeps paths, values and secrets out

@@ -304,6 +304,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             None,
             None,
             None,
+            None,
         ),
         request: task_admission_request(owner, key.to_owned(), "gateway_invoke", arguments),
         options: options(),

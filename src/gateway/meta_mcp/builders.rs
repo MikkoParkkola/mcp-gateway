@@ -608,6 +608,24 @@ impl MetaMcp {
         self
     }
 
+    /// Spend governance that refuses every call of `tool`: one call costs
+    /// more than the whole daily limit. For rows that need the spend budget
+    /// to be the check that refuses.
+    #[cfg(all(test, feature = "cost-governance"))]
+    #[must_use]
+    pub(crate) fn with_spend_refusing_for_test(self, tool: &str) -> Self {
+        use crate::cost_accounting::config::CostGovernanceConfig;
+        let mut governance = CostGovernanceConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        governance.tool_costs.insert(tool.to_owned(), 2.0);
+        governance.budgets.daily = Some(1.0);
+        let ledger = Arc::new(CostRegistry::new(&governance));
+        let gate = Arc::new(BudgetEnforcer::new(governance, Arc::clone(&ledger)));
+        self.with_cost_governance(gate, ledger)
+    }
+
     /// Expose the kill switch for external introspection or testing.
     #[allow(dead_code)]
     pub fn kill_switch(&self) -> Arc<KillSwitch> {

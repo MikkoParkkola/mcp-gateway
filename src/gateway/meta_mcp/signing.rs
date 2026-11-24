@@ -360,7 +360,7 @@ impl SigningInvocationContext {
         }
         self.nonce_value()
             .map(drop)
-            .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))
+            .inspect_err(|_| invalid_nonce_refused())
     }
 
     /// How the response is delivered: a malformed nonce cannot deliver, and
@@ -375,6 +375,17 @@ impl SigningInvocationContext {
         }
         Ok(SigningDelivery::Signed { nonce })
     }
+}
+
+/// A captured nonce that was never a usable string (not a string, too long,
+/// or a second nonce on one call) is refused as the request's own shape:
+/// counted, and noted `syntax` so the call's record names its check.
+fn invalid_nonce_refused() {
+    record_nonce_rejection(NONCE_REASON_INVALID);
+    super::invoke::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::Syntax,
+        None,
+    );
 }
 
 /// Take the hardened nonce off `params._meta`, before sanitization can rewrite
@@ -613,7 +624,7 @@ impl super::MetaMcp {
         // again on a path that is not an admission decision at all.
         let nonce = context
             .nonce_value()
-            .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))?;
+            .inspect_err(|_| invalid_nonce_refused())?;
         // The same key the refund reads (`nonce_principal`), so the two
         // cannot drift apart.
         context.nonce_stamp = self.admit_signing_nonce_stamped(nonce, nonce_principal(caller))?;
@@ -672,14 +683,14 @@ impl super::MetaMcp {
                 .register_for_principal(nonce, principal)
                 .map(Some)
                 .inspect_err(|e| {
-                    // A malformed nonce is the request's shape; a replayed or
-                    // over-limit one has no kind naming it yet (MIK-8914.API2A.17),
-                    // and `syntax` would call a replay malformed.
+                    // A malformed nonce is the request's shape; a nonce seen
+                    // before or refused for capacity is a single-use token the
+                    // replay guard turned away, never a malformed request.
                     refused(
                         if e.to_rpc_code() == crate::error::rpc_codes::INVALID_PARAMS {
                             crate::security::decision_record::DecisionKind::Syntax
                         } else {
-                            crate::security::decision_record::DecisionKind::Unrecorded
+                            crate::security::decision_record::DecisionKind::ReplayGuard
                         },
                     );
                 }),

@@ -37,7 +37,7 @@ use tracing_subscriber::registry::Registry;
 // assumed, so a read that should hit the cache misses (MIK-7774).
 #[path = "common/era_probe_cap.rs"]
 mod era_probe_cap;
-use era_probe_cap::widen_probe_cap;
+use era_probe_cap::{in_child_with_cap, widen_probe_cap};
 
 // ---------------------------------------------------------------------------
 // Captured events — the second observability surface
@@ -348,6 +348,9 @@ fn assert_no_error_code(entry: &Value) {
 /// criterion does not describe.
 #[tokio::test]
 async fn never_probed_reads_as_an_assumed_legacy_era() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     let backends = Arc::new(BackendRegistry::new());
@@ -375,6 +378,9 @@ async fn never_probed_reads_as_an_assumed_legacy_era() {
 /// A discovery document naming a revision we can speak statelessly.
 #[tokio::test]
 async fn a_modern_discovery_document_reads_as_discover_modern() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     let entry = probe_and_read(&fixture, "modern-doc").await;
@@ -393,6 +399,9 @@ async fn a_modern_discovery_document_reads_as_discover_modern() {
 /// A discovery document that answers and names no speakable revision.
 #[tokio::test]
 async fn a_dual_era_discovery_document_reads_as_discover_not_modern() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(NOT_MODERN_DISCOVER);
     let entry = probe_and_read(&fixture, "not-modern-doc").await;
@@ -415,6 +424,9 @@ async fn a_dual_era_discovery_document_reads_as_discover_not_modern() {
 /// because two literals let the surfaces drift while both suites stay green.
 #[tokio::test]
 async fn a_modern_only_error_code_reads_as_modern_error_code() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(UNSUPPORTED_VERSION);
     let entry = probe_and_read(&fixture, "modern-error").await;
@@ -442,6 +454,9 @@ async fn a_modern_only_error_code_reads_as_modern_error_code() {
 /// `-32601` — the honest legacy answer to a method the peer does not implement.
 #[tokio::test]
 async fn method_not_found_reads_as_method_not_found() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(METHOD_NOT_FOUND);
     let entry = probe_and_read(&fixture, "method-not-found").await;
@@ -464,6 +479,9 @@ async fn method_not_found_reads_as_method_not_found() {
 /// An error carrying no era signal is not evidence of modernity.
 #[tokio::test]
 async fn an_unrelated_error_code_reads_as_other_error() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(OTHER_ERROR);
     let entry = probe_and_read(&fixture, "other-error").await;
@@ -490,6 +508,9 @@ async fn an_unrelated_error_code_reads_as_other_error() {
 /// passes every other row in this matrix and fails only here.
 #[tokio::test]
 async fn a_probe_that_gets_no_answer_stays_assumed_while_stamping_a_time() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::silent();
     let entry = probe_and_read(&fixture, "silent").await;
@@ -514,6 +535,9 @@ async fn a_probe_that_gets_no_answer_stays_assumed_while_stamping_a_time() {
 /// asserting it nowhere leaves the design's stated format unenforced.
 #[tokio::test]
 async fn the_probe_time_is_rfc_3339_utc_at_second_precision() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     let entry = probe_and_read(&fixture, "timestamp").await;
@@ -573,6 +597,9 @@ async fn await_reprobe(backends: &Arc<BackendRegistry>, name: &str) -> Value {
 /// across the window is the assertion; a single read is not.
 #[tokio::test]
 async fn an_uncontradicted_request_leaves_the_probe_trigger_and_time_alone() {
+    if in_child_with_cap() {
+        return;
+    }
     let _guard = capture_lock().await;
     let fixture = Fixture::new(METHOD_NOT_FOUND);
     let backends = Arc::new(BackendRegistry::new());
@@ -618,3 +645,10 @@ async fn an_uncontradicted_request_leaves_the_probe_trigger_and_time_alone() {
 
 #[path = "nfr_obs_3_era_observability/reprobe_and_records.rs"]
 mod reprobe_and_records;
+
+/// The era probe cap reaches the gateway from exec only (each test's child
+/// run): no test in this binary, and not its cap helper, sets it in process.
+#[test]
+fn the_probe_cap_is_never_set_in_process() {
+    era_probe_cap::assert_no_env_writes(file!());
+}

@@ -18,7 +18,9 @@ use crate::transition::TransitionTracker;
 
 /// How long a save behind a held turn is watched for a write it must not
 /// make. A save that ignores the turn writes a few-byte file in well under it.
-const HELD: Duration = Duration::from_millis(500);
+/// An absence window: a stall can only hide a wrong write, never fail the
+/// row. A deterministic signal from the save path would remove the wait.
+const HELD: Duration = Duration::from_secs(1);
 
 /// One state file as the rows drive it.
 struct Subject<T> {

@@ -23,6 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
+import cache_writers  # noqa: E402
 
 SKIPPED = {
     "check", "kani", "fmt", "audit",
@@ -38,7 +39,7 @@ SKIPPED = {
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
-PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "mingw-debs.yml", "packaged-suite.yml")
+PUSH_ONLY_WORKFLOWS = ("affected-map.yml", "codeql.yml", "feature-combos.yml", "mingw-debs.yml", "packaged-suite.yml")
 # Every job that runs tests stays on docs-only PRs, except task-sdk-recovery
 # and gws-dry-run (neither reads a docs file): tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
@@ -46,6 +47,8 @@ KEPT = {
     "scope", "public-repo-hygiene", "test", "windows-check",
     # Their shards (MIK-8482): the aggregates above only read these results.
     "test-shards", "windows-shards", "windows-clippy",
+    # Windows' one lib test exe build and the four lib legs that run from it.
+    "windows-lib-build", "windows-lib-shards",
     # The lib test binary in parts, the union check over them, the gateway binary the lib shards' sandbox rows
     # launch, and the lib shards that run them.
     "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
@@ -83,8 +86,8 @@ LANE_LABEL = {"os-int-label", "macos-int-lane"}
 # Each also runs on a lane pull request by its SKIPPED or KEPT rule above, so a
 # Windows, feature or release-tooling break fails the pull request that made it.
 HEAVY_JUDGED = {
-    "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
-    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
+    "windows-shards", "windows-lib-build", "windows-lib-shards", "windows-clippy", "windows-check",
+    "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
     "feature-combos-pr",
 }
 # Kani is not train-only: a lane pull request that is not docs-only runs it too, so code that
@@ -109,8 +112,8 @@ POST_MERGE_SKIPPED = {
     # Platform builds: scarce hosted runners; the tag workflow runs both.
     "windows-check", "macos-check",
     # The shards behind test, windows-check and macos-check (MIK-8482).
-    "test-shards", "windows-shards", "windows-clippy", "macos-shards", "macos-lib-union",
-    "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
+    "test-shards", "windows-shards", "windows-lib-build", "windows-lib-shards", "windows-clippy",
+    "macos-shards", "macos-lib-union", "linux-lib-build", "linux-lib-union", "linux-gateway-bin", "test-shards-lib",
     # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",
@@ -430,26 +433,6 @@ def concurrency_errors(block: dict) -> list[str]:
     return out
 
 
-def clippy_cache_errors(jobs: dict) -> list[str]:
-    """The pedantic clippy job restores its cache on every run but saves it only on a push.
-
-    A pull request restores only caches saved on its base branch or its own ref, so the release-line
-    push is the one run whose save helps anyone; a save on every PR ref wrote a 310 MB cache per run
-    that nothing else could read, which held the repository at its 10 GB cache limit and let eviction
-    push the line's own cache out."""
-    out = []
-    steps = [s for s in jobs["check"]["steps"] if str(s.get("uses", "")).startswith("Swatinem/rust-cache@")]
-    if len(steps) != 1:
-        return [f"clippy cache: the check job has {len(steps)} rust-cache steps, want exactly one"]
-    save_if = str((steps[0].get("with") or {}).get("save-if", ""))
-    for label, event, want in (("a pull request", "pull_request", False), ("a push", "push", True)):
-        got = evaluate(save_if, ctx(event, "success", "false")) if save_if else True
-        if bool(got) is not want:
-            out.append(f"clippy cache: {label} {'does not save' if want else 'saves'} the cache "
-                       f"(save-if: {save_if or 'default true'})")
-    return out
-
-
 def ui_tests_apt_errors() -> list[str]:
     """The UI tests job must not fail because an Ubuntu mirror is down.
 
@@ -538,7 +521,7 @@ def main() -> int:
     errors += macos_train_errors(jobs)
     errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
-    errors += clippy_cache_errors(jobs)
+    errors += cache_writers.errors() + cache_writers.self_test()
     errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.

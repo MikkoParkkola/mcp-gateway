@@ -1,0 +1,1 @@
+src/gateway/server/construct.rs	serving_data_dir	1	Picks the data directory the serving audit opens under (a test seam may point it elsewhere in tests); no allow or deny

@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-use tally::{HourBuckets, ToolTally};
+use tally::{Series, Slot, ToolTally};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +57,13 @@ impl CostRecord {
     pub fn new(backend: &str, tool: &str, token_count: u64, price_per_million: f64) -> Self {
         #[allow(clippy::cast_precision_loss)]
         let estimated_cost_usd = token_count as f64 * price_per_million / 1_000_000.0;
+        Self::charged(backend, tool, token_count, estimated_cost_usd)
+    }
+
+    /// A record priced by the caller: `cost_usd` is what the call was charged,
+    /// dated now as every record is.
+    pub(crate) fn charged(backend: &str, tool: &str, token_count: u64, cost_usd: f64) -> Self {
+        let estimated_cost_usd = cost_usd;
         Self {
             timestamp: crate::clock::unix_secs().ok(),
             backend: backend.to_string(),
@@ -69,8 +76,7 @@ impl CostRecord {
 
 // ── Report windows ────────────────────────────────────────────────────────────
 
-/// A rolling time window of the per-key cost report, and the idle-key sweep's
-/// horizon. Reporting only: no limit is enforced over these windows; the
+/// A rolling time window of the per-key cost report. Reporting only: no limit is enforced over these windows; the
 /// enforced caps are the budget enforcer's daily ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BudgetWindow {
@@ -186,9 +192,11 @@ pub struct SessionCostSnapshot {
 pub struct KeyCost {
     /// API key name.
     pub name: String,
-    /// Hourly spend for the windows and all-time per-tool sums (MIK-8000):
-    /// bounded by the clock and the catalog, never by the call count.
-    spend: parking_lot::Mutex<(HourBuckets, ToolTally)>,
+    /// The key's hour and day series plus its lifetime per-tool sums. Their
+    /// size follows the clock and the catalog, not how often the key calls
+    /// (MIK-8000). Both series sit under this one lock, so a copy taken for a
+    /// save holds each record in both or in neither.
+    spend: parking_lot::Mutex<(Series, ToolTally)>,
     /// Unix second of the latest spend, for the idle sweep. Stored as 0
     /// when undated (a key born, or spending only, on a clock before 1970);
     /// 0 is never read as a time (MIK-8202 P4b).
@@ -222,19 +230,46 @@ impl KeyCost {
         }
     }
 
-    /// True when the key has had no spend for the 30-day window: every window
-    /// it reports would read zero. A key with no dated spend is never idle
+    /// True once nothing the key holds is dated after its windows: its last
+    /// spend is out of the hour buckets and the local dates. A key with no dated spend is never idle
     /// (MIK-8202 P4b).
     fn idle(&self, now: u64) -> bool {
         let last = self.last_spend.load(Ordering::Relaxed);
-        last != 0 && last + BudgetWindow::Month.secs() < now
+        // Both cuts the series age by: with a 25-hour day in the month the
+        // dates outlast the hours, and the entry must outlast both.
+        last != 0
+            && (last / 3600).expired(now / 3600)
+            && tally::local_date(last).expired(tally::local_date(now))
+    }
+
+    /// The key's spend rate over the last three complete hours before `now`,
+    /// in USD per hour. The hour holding `now` is left out; an hour with no
+    /// spend counts as zero.
+    #[cfg(any(test, feature = "cost-governance"))]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn rate_3h(&self, now: u64) -> f64 {
+        let hour = now / 3600;
+        let first = hour.saturating_sub(3);
+        let micro = self
+            .spend
+            .lock()
+            .0
+            .hours
+            .rows()
+            .into_iter()
+            .filter(|(h, ..)| (first..hour).contains(h))
+            .fold(0u64, |sum, (.., micro)| sum.saturating_add(micro));
+        #[allow(clippy::cast_precision_loss)]
+        let usd = micro as f64 / 1_000_000.0;
+        usd / 3.0
     }
 
     /// Compute cost totals for a given rolling window, `None` when the clock
     /// cannot date the window (MIK-8202 P4b).
     fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
         let now = crate::clock::unix_secs().ok()?;
-        Some(self.spend.lock().0.totals(now, window_secs))
+        Some(self.spend.lock().0.hours.totals(now, window_secs))
     }
 
     /// Produce a serialisable snapshot with all three time windows.
@@ -283,8 +318,9 @@ pub struct WindowStats {
 pub struct KeyCostSnapshot {
     /// API key name.
     pub api_key_name: String,
-    /// Spend in the past 24 hours. Held in memory: the 24 h, 7 d and 30 d
-    /// windows start again at zero after a restart.
+    /// Spend in the past 24 hours. With cost governance built, the 24 h, 7 d
+    /// and 30 d windows survive a restart through `spend-history.json`; the
+    /// time the gateway was down stays a gap.
     pub window_24h: WindowStats,
     /// Spend in the past 7 days.
     pub window_7d: WindowStats,
@@ -298,7 +334,9 @@ pub struct KeyCostSnapshot {
     /// Always `"Ok"`, for the same reason as `hard_limit_usd`: it judges no
     /// limit. Read the budget enforcer for a key's real standing.
     pub budget_status: String,
-    /// All-time per-tool breakdown; tools past the row cap share `(other)`.
+    /// Per-tool breakdown since this process started (never saved, so it
+    /// starts at zero after a restart); tools past the row cap share
+    /// `(other)`.
     pub by_tool: Vec<ToolCost>,
 }
 
@@ -345,6 +383,23 @@ pub struct CostTracker {
     sessionless: [AtomicU64; 3],
     /// Session-less spend by caller key (MIK-7653), for the caller's own report.
     per_caller: caller::CallerCosts,
+    /// Spend that carries a date but no API key. A dated call adds to one
+    /// series only, this or its key's; the gateway-wide series is computed
+    /// from them when read.
+    keyless: parking_lot::Mutex<Series>,
+    /// Restored spend no key of this run holds: rows folded past the key cap
+    /// in an earlier run, and keys since removed or renamed. Set by the
+    /// restore and never by a save, so a fold is never counted twice.
+    #[cfg(feature = "cost-governance")]
+    carried: parking_lot::Mutex<Series>,
+    /// Set when a refused history file could not be set aside: this run then
+    /// never saves over it.
+    #[cfg(feature = "cost-governance")]
+    history_off: std::sync::atomic::AtomicBool,
+    /// Where the history was last written and the SHA-256 of what was
+    /// written, so a save of an unchanged state writes nothing.
+    #[cfg(feature = "cost-governance")]
+    history_last: parking_lot::Mutex<Option<(std::path::PathBuf, String)>>,
     /// When the next idle-key sweep may run (MIK-8000).
     next_key_sweep: AtomicU64,
 }
@@ -358,6 +413,13 @@ impl CostTracker {
             per_key: DashMap::new(),
             sessionless: <[AtomicU64; 3]>::default(),
             per_caller: caller::CallerCosts::default(),
+            keyless: parking_lot::Mutex::default(),
+            #[cfg(feature = "cost-governance")]
+            carried: parking_lot::Mutex::default(),
+            #[cfg(feature = "cost-governance")]
+            history_off: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "cost-governance")]
+            history_last: parking_lot::Mutex::new(None),
             next_key_sweep: AtomicU64::new(0),
         }
     }
@@ -381,7 +443,18 @@ impl CostTracker {
         price_per_million: f64,
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
+        self.record_charged(session_id, api_key_name, &rec);
+    }
 
+    /// [`Self::record`] for a record its caller priced: the dispatch passes
+    /// the USD the budget enforcer charged, so these totals and the limits
+    /// count one figure per call.
+    pub(crate) fn record_charged(
+        &self,
+        session_id: &str,
+        api_key_name: Option<&str>,
+        rec: &CostRecord,
+    ) {
         // Per-session. An empty id is no session (a 2026-07-28 request has
         // none): keying on it would pool every such caller into one bucket.
         if session_id.is_empty() {
@@ -395,7 +468,7 @@ impl CostTracker {
                 .or_insert_with(|| {
                     Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
                 })
-                .record(&rec);
+                .record(rec);
         }
 
         // Per-key (if we have a key name)
@@ -403,7 +476,7 @@ impl CostTracker {
             self.per_key
                 .entry(key_name.to_string())
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name)))
-                .record(&rec, rec.timestamp);
+                .record(rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
             // Housekeeping skips its pass when the record is undated (MIK-8202).
             if let Some(now) = rec.timestamp
@@ -411,6 +484,9 @@ impl CostTracker {
             {
                 self.per_key.retain(|_, key| !key.idle(now));
             }
+        } else if let Some(at) = rec.timestamp {
+            let micro = tally::micro(rec.estimated_cost_usd);
+            self.keyless.lock().add(at, at, rec.token_count, micro);
         }
     }
 
@@ -426,7 +502,12 @@ impl CostTracker {
         price_per_million: f64,
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
-        self.per_caller.record(caller_key, &rec, rec.timestamp);
+        self.record_caller_charged(caller_key, &rec);
+    }
+
+    /// [`Self::record_caller`] for a record its caller priced.
+    pub(crate) fn record_caller_charged(&self, caller_key: &str, rec: &CostRecord) {
+        self.per_caller.record(caller_key, rec, rec.timestamp);
     }
 
     /// `caller_key`'s session-less breakdown, `None` when it has none.
@@ -472,6 +553,15 @@ impl CostTracker {
     #[must_use]
     pub fn key_snapshot(&self, key_name: &str) -> Option<KeyCostSnapshot> {
         self.per_key.get(key_name).map(|kc| kc.snapshot())
+    }
+
+    /// `key_name`'s spend rate over the last three complete hours before
+    /// `now`, USD per hour; `None` for a key with no entry.
+    #[cfg(feature = "cost-governance")]
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn key_rate_3h(&self, key_name: &str, now: u64) -> Option<f64> {
+        self.per_key.get(key_name).map(|key| key.rate_3h(now))
     }
 
     /// Snapshot all API key accumulators.
@@ -548,8 +638,42 @@ impl CostTracker {
     pub(crate) fn key_retained(&self, key_name: &str) -> usize {
         self.per_key.get(key_name).map_or(0, |key| {
             let spend = key.spend.lock();
-            spend.0.len() + spend.1.len()
+            spend.0.hours.len() + spend.0.days.len() + spend.1.len()
         })
+    }
+
+    /// `key_name`'s series as held, `None` when the key has no entry.
+    pub(crate) fn key_series(&self, key_name: &str) -> Option<Series> {
+        self.per_key
+            .get(key_name)
+            .map(|key| key.spend.lock().0.clone())
+    }
+
+    /// The series of dated spend with no API key.
+    pub(crate) fn keyless_series(&self) -> Series {
+        self.keyless.lock().clone()
+    }
+
+    /// The gateway's series: the sum of the keyless one, every key's and,
+    /// with cost governance built, the carried overflow.
+    pub(crate) fn gateway_series(&self, now: u64) -> Series {
+        // Every input is settled at `now`, the caller's instant, before the
+        // sum: a merge ends its window at the newest slot either side holds,
+        // so one input holding a slot past another's window would age that
+        // one's rows out of the total. Taken as an argument, never read from
+        // the wall clock, so a fixture dated in the past stays inside it.
+        let (hour, date) = (now / 3600, tally::local_date(now));
+        let settled = |mut series: Series| {
+            series.settle(hour, date);
+            series
+        };
+        let mut total = settled(self.keyless_series());
+        for key in &self.per_key {
+            total.merge(&settled(key.spend.lock().0.clone()));
+        }
+        #[cfg(feature = "cost-governance")]
+        total.merge(&settled(self.carried.lock().clone()));
+        total
     }
 
     /// Entries `session_id` holds in memory.
@@ -574,6 +698,8 @@ pub mod persistence;
 #[cfg(feature = "cost-governance")]
 pub mod registry;
 #[cfg(feature = "cost-governance")]
+pub(crate) mod spend_history;
+#[cfg(feature = "cost-governance")]
 pub mod suggestions;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -590,3 +716,12 @@ mod tests;
 #[cfg(test)]
 #[path = "cost_clock_compile_red_tests.rs"]
 mod cost_clock_compile_red_tests;
+
+#[cfg(tp2)]
+#[cfg(test)]
+mod spend_history_tests;
+
+#[cfg(tp2)]
+#[cfg(test)]
+#[path = "key_rate_tests.rs"]
+mod key_rate_tests;

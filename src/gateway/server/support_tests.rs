@@ -132,7 +132,9 @@ mod mtls_listener {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let addr = listener.local_addr().expect("addr");
-        let grace = Duration::from_millis(100);
+        // One second: an early return could pass the lower bound below only
+        // after a stall at least that long.
+        let grace = Duration::from_secs(1);
         let mut config = crate::config::Config::default();
         config.mtls = pki.config(true);
         // Far longer than the row waits: only the explicit grace can stop it in time.
@@ -161,11 +163,19 @@ mod mtls_listener {
 
         // The request never ends, so only the shutdown deadline can return
         // the server: returning inside the hang guard is the oracle (MIK-8222).
+        let signalled = std::time::Instant::now();
         stop_tx.send(()).expect("server is running");
         let outcome = tokio::time::timeout(Duration::from_secs(5), server)
             .await
             .expect("the mTLS server did not return within 5 s while a request was open");
         outcome.expect("server task").expect("serve");
+        // Over TLS too, the open request keeps its whole grace.
+        let open_for = signalled.elapsed();
+        // timing: lower-bound
+        assert!(
+            open_for >= grace,
+            "TLS request dropped after {open_for:?}, grace was {grace:?}"
+        );
         request.abort();
     }
 

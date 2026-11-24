@@ -749,6 +749,7 @@ fn mismatched_records_warn_once_per_rotated_file_by_position() {
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let raw = |v: Value| {
         l.append_core(plain(&v), &AuditEnvelope::gateway(), false)
+            .map(|(_, hash)| hash)
             .unwrap();
     };
     raw(json!({"event": OUTCOME, "token": "w-1", "intent_counter": 3}));

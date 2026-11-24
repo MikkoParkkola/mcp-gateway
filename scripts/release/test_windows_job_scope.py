@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Windows coverage is counted only for what the Windows suite runs.
 
-The suite (the `windows-shards` job, scripts/ci/shard_tests.py, MIK-8482)
+The suite (the `windows-shards` and `windows-lib-shards` jobs, scripts/ci/shard_tests.py)
 runs every test target and skips one test by name: the MRTR.7b full
 burst (MIK-7644), which runs in full on Linux in `mrtr7b-full-burst`, while the
 194-call terminal-frame check stays on Windows. The ledger must not claim
@@ -18,10 +18,10 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
-def windows_job() -> str:
+def windows_job(name: str = "windows-shards") -> str:
     text = (ROOT / ".github/workflows/ci.yml").read_text()
-    m = re.search(r"^  windows-shards:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.S | re.M)
-    assert m, "windows-shards job not found"
+    m = re.search(rf"^  {name}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.S | re.M)
+    assert m, f"{name} job not found"
     return m.group(1)
 
 
@@ -33,22 +33,27 @@ def shard_table():
 
 
 def test_the_job_runs_every_test_target_skipping_only_the_full_burst():
-    # Since MIK-8482 the suite is sharded (five shards, three of them lib); together they are exactly
+    # The suite is sharded: two int shards that compile what they run, and four lib legs
+    # running one shared exe. Together they make up
     # `cargo test --all-features --tests --no-fail-fast -- --skip mik_7479_full_burst`.
-    job = windows_job()
+    job, lib_job = windows_job(), windows_job("windows-lib-shards")
     # Exact match on purpose: any change to the command must revisit this guard.
     assert "python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}" in job
-    assert "shard: [lib-a, lib-b, lib-c, int-a, int-b]" in job
-    assert "cargo test" not in job.split("Privileged owner-only rows")[0], "a suite command outside the runner"
+    assert "shard: [int-a, int-b]" in job
+    assert "shard_tests.py run-prebuilt windows ${{ matrix.shard }}" in lib_job
+    assert "shard: [lib-a, lib-b, lib-c, lib-d]" in lib_job
+    for text in (job, lib_job):
+        assert "cargo test" not in text, "a suite command outside the runner"
     st = shard_table()
     assert st.BASE == ["test", "--all-features", "--no-fail-fast"]
     shards = st.SHARDS["windows"]
-    assert sorted(shards) == ["int-a", "int-b", "lib-a", "lib-b", "lib-c"], sorted(shards)
+    assert sorted(shards) == ["int-a", "int-b", "lib-a", "lib-b", "lib-c", "lib-d"], sorted(shards)
     cmds = {name: [(a, t) for _, a, t, _ in steps] for name, steps in shards.items()}
     assert cmds == {
-        "lib-a": [(["--lib"], ["gateway::"])],
-        "lib-b": [(["--lib"], ["--skip", "gateway::", *(x for m in LIB_C for x in ("--skip", m))])],
-        "lib-c": [(["--lib"], [*LIB_C, "--skip", "gateway::"])],
+        "lib-a": [(["--lib"], ["gateway::router::", "gateway::server::"])],
+        "lib-d": [(["--lib"], ["gateway::", *FIRST])],
+        "lib-c": [(["--lib"], ["security::", *FIRST, "--skip", "gateway::"])],
+        "lib-b": [(["--lib"], [*FIRST, "--skip", "gateway::", "--skip", "security::"])],
         "int-a": [(["--bins", "--test", "[a-l]*"], [])],
         "int-b": [(["--test", "[!a-l]*"], [])],
     }, cmds
@@ -56,9 +61,33 @@ def test_the_job_runs_every_test_target_skipping_only_the_full_burst():
     assert st.SKIPS["windows"] == ["--skip", "mik_7479_full_burst"], st.SKIPS["windows"]
 
 
-# Windows lib-b ran about 23 min of tests after about 22 min of build (run 42493724287); these
-# top-level modules move to lib-c, about half its tests (4,727 of 9,251 in that run).
-LIB_C = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
+# lib-a's two gateway:: modules, which every later leg skips.
+FIRST = ["--skip", "gateway::router::", "--skip", "gateway::server::"]
+
+
+def test_the_privileged_rows_run_their_script_under_pwsh():
+    """The privileged rows moved from an inline step to scripts/ci/windows-privileged-rows.ps1: exactly one
+    workflow step runs it, in pwsh, on lib-a, and the script stops on the first failing cmdlet."""
+    text = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert text.count("windows-privileged-rows.ps1") == 1, "the script is run by more or fewer than one step"
+    step = re.search(r"^      - name: Privileged owner-only rows\n(.*?)(?=^      - |\Z)",
+                     windows_job("windows-lib-shards"), re.S | re.M)
+    assert step, "windows-lib-shards has no Privileged owner-only rows step"
+    body = step.group(1)
+    assert "        shell: pwsh\n" in body, body
+    assert "matrix.shard == 'lib-a'" in body, body
+    assert re.search(r"^        run: scripts/ci/windows-privileged-rows\.ps1 ", body, re.M), body
+    lines = (ROOT / "scripts/ci/windows-privileged-rows.ps1").read_text().splitlines()
+    code = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
+    assert code[0].startswith("param("), code[:2]
+    assert code[1] == "$ErrorActionPreference = 'Stop'", code[:2]
+    # The rows run from the checkout the exe was built for, and fewer than five passing is a failure; the count
+    # comes from the harness's last line-anchored summary, never a line a test printed.
+    assert any(l.startswith("$env:CARGO_MANIFEST_DIR = ") for l in code), "the manifest dir is not set"
+    floor = [l for l in code if "-lt 5" in l]
+    assert len(floor) == 1 and "exit 1" in floor[0], floor
+    assert any("(?m)^test result: ok" in l for l in code), "the count is not anchored to the harness summary"
+    assert any("$summaries.Count - 1" in l for l in code), "the count does not take the last summary"
 
 
 def libtest_selects(name, args):
@@ -75,7 +104,7 @@ def libtest_selects(name, args):
 def test_the_windows_lib_shards_split_the_library_exactly_once():
     st = shard_table()
     lib = {n: steps[0][2] for n, steps in st.SHARDS["windows"].items() if n.startswith("lib-")}
-    assert sorted(lib) == ["lib-a", "lib-b", "lib-c"], sorted(lib)
+    assert sorted(lib) == ["lib-a", "lib-b", "lib-c", "lib-d"], sorted(lib)
     names = [
         "gateway::server::tests::a", "gateway::security::x", "security::firewall::t", "capability::parser::t",
         "events::bus::t", "backend::http::t", "transport::stdio::t", "oauth::storage::t",
@@ -99,5 +128,6 @@ def test_no_met_criterion_cites_windows_execution_evidence():
 if __name__ == "__main__":
     test_the_job_runs_every_test_target_skipping_only_the_full_burst()
     test_the_windows_lib_shards_split_the_library_exactly_once()
+    test_the_privileged_rows_run_their_script_under_pwsh()
     test_no_met_criterion_cites_windows_execution_evidence()
     print("ok")

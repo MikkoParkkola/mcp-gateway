@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, Replaced, replace_detached,
 };
-#[cfg(unix)]
 use super::replace_test_support::context;
 use super::replace_test_support::{
     NEXT, START, WAIT, names, read, running_has_b, setup, setup_refusing_reload, to,
@@ -413,7 +412,13 @@ async fn a_cancelled_lock_stays_held_until_its_recovery_ends() {
         "a_cancelled_lock_stays_held_until_its_recovery_ends",
         async {
             use crate::config_persistence::journal::{self, fault};
-            let (_dir, path, _ctx) = setup();
+            // A kept dir, not setup()'s plain one: the lock caller is cancelled
+            // while its thread is still paused in recovery, so the thread can
+            // write after this row returns and must keep the dir until then.
+            let dir = crate::test_dir_keep::kept_tempdir();
+            let path = dir.path().join("gateway.yaml");
+            write_owner_only(&path, START).expect("write config");
+            let _ctx = context(&path);
             crashed_after_rename(&path, NEXT);
             let pause = Arc::new(fault::Pause::default());
             let armed = fault::set(&path, fault::Fault::Pause(Arc::clone(&pause)));

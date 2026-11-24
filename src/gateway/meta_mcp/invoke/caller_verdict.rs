@@ -596,6 +596,8 @@ pub(in crate::gateway::meta_mcp) struct ColdAttempt {
     /// What the publish gate reads the grant with, captured when the claim
     /// was won; `None` on a backend with no managed account.
     gate: Option<crate::gateway::meta_mcp::publish_gate::GateInputs>,
+    /// Set when the lender refused the fill: the settle on drop records it.
+    refused: Option<crate::backend::LendRefusal>,
 }
 
 impl ColdAttempt {
@@ -611,6 +613,7 @@ impl ColdAttempt {
             principal_id,
             generation,
             gate,
+            refused: None,
         }
     }
 
@@ -636,7 +639,7 @@ impl ColdAttempt {
 impl Drop for ColdAttempt {
     fn drop(&mut self) {
         self.backend
-            .settle_cold_attempt(&self.principal_id, self.generation);
+            .settle_cold_attempt(&self.principal_id, self.generation, self.refused.take());
     }
 }
 
@@ -662,7 +665,7 @@ impl ColdFill {
     /// to settle.
     pub(in crate::gateway::meta_mcp) async fn run(self) {
         let Self {
-            attempt,
+            mut attempt,
             binding,
             headers,
         } = self;
@@ -675,8 +678,26 @@ impl ColdFill {
         let filled = backend
             .tools_for_check(Some(&binding), headers, false)
             .await;
-        if filled.is_ok() && attempt.gate_allows(&binding).await {
-            backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
+        match filled {
+            Ok(_) => {
+                if attempt.gate_allows(&binding).await {
+                    backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
+                }
+            }
+            // The lender's refusal (`gate::is_authorization_refusal`): the
+            // settle on drop keeps it for the stored reads in this lease.
+            Err(crate::Error::Forbidden {
+                code,
+                status,
+                message,
+            }) => {
+                attempt.refused = Some(crate::backend::LendRefusal {
+                    code,
+                    status,
+                    message,
+                });
+            }
+            Err(_) => {}
         }
     }
 }

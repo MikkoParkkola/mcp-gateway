@@ -8,35 +8,12 @@
 // screens as window events. Rows ST1-ST7. The stream is the fixture server's
 // held route (server.mjs), driven per test through /__stream/<channel>/.
 import { test, expect } from './base.mjs';
-import { withFixturePages, shellReady } from './shell.mjs';
+import { withFixturePages, shellReady, heldStream, frame, trackTimers, advanceArmed } from './shell.mjs';
 
 const KEY = 'mcpg_fixture_key_0123456789';
 const INDICATOR = '.top .stream';
 const STALE = '#content [data-state="stale"]';
 
-/**
- * A held stream for this test. The fixture-stream cookie only names the
- * channel on the fixture server; it is test plumbing, not a session.
- */
-async function heldStream(page, request, testInfo, setup = {}) {
-  const name = testInfo.testId.replace(/[^\w-]/g, '-');
-  await request.post(`/__stream/${name}/setup`, { data: setup });
-  const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
-  await page.context().addCookies([{ name: 'fixture-stream', value: name, url }]);
-  const log = async () => (await request.get(`/__stream/${name}/log`)).json();
-  return {
-    log,
-    connects: async () => (await log()).length,
-    send: (text) => request.post(`/__stream/${name}/send`, { data: text, headers: { 'content-type': 'text/plain' } }),
-    end: () => request.post(`/__stream/${name}/end`),
-  };
-}
-
-/** One SSE frame as the gateway writes it (conn.rs); hello carries a retry hint and no id. */
-function frame(event, data, id = null) {
-  const head = event === 'hello' ? 'retry: 3000\n' : '';
-  return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
-}
 const HELLO = frame('hello', { kinds: ['status', 'reload'], head: 'b1.s1.r1' });
 
 /** Pause the page clock at 14:02 today, local time, before the page loads. */
@@ -44,6 +21,7 @@ async function pausedAt1402(page) {
   const at = new Date();
   at.setHours(14, 2, 0, 0);
   await page.clock.install({ time: at.getTime() - 60_000 });
+  await trackTimers(page);
   await page.clock.pauseAt(at.getTime());
 }
 
@@ -137,11 +115,11 @@ test('ST4 a 503 with Retry-After waits at least that long before the next attemp
   await page.goto('/ui/servers/status');
   await shellReady(page);
   await expect.poll(stream.connects).toBe(1);
-  await page.clock.runFor(8999);
+  await advanceArmed(page, 9000, 'connect', 8999);
   await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
   expect(asked.length).toBe(1);
   expect(await stream.connects()).toBe(1);
-  await page.clock.runFor(2);
+  await page.clock.runFor(1);
   await expect.poll(stream.connects).toBe(2);
 });
 
@@ -214,6 +192,9 @@ test('ST8 leaving the page closes the stream, a restore reopens it once, and cyc
 const UNAVAILABLE = 'Updates unavailable · reconnecting';
 
 test('ST9a a first connect that fails shows Updates unavailable on the page and in the top bar', async ({ page, request }, testInfo) => {
+  // The retry after the failed first connect waits on the paused fake clock, so the connect
+  // count cannot reach 2 before it is read, however slow the host.
+  await pausedAt1402(page);
   const stream = await heldStream(page, request, testInfo, { next: [{ status: 500 }] });
   await withFixturePages(page);
   await page.goto('/ui/servers/status');
@@ -255,10 +236,10 @@ test('ST9c a 404 first connect shows Updates unavailable and retries at the 30 s
   await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
   await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE);
   for (const n of [1, 2]) {
-    await page.clock.runFor(29_999);
+    await advanceArmed(page, 30_000, 'connect', 29_999);
     await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
     expect(asked.length).toBe(n);
-    await page.clock.runFor(2);
+    await page.clock.runFor(1);
     await expect.poll(stream.connects).toBe(n + 1);
   }
   await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE); // never told it is live
@@ -267,7 +248,10 @@ test('ST9c a 404 first connect shows Updates unavailable and retries at the 30 s
 /** Drop an open stream and wait for its stale state. */
 async function drop(page, stream) {
   await stream.end();
-  await expect(page.locator(STALE)).toHaveCount(1);
+  // The page learns of the end only when the response body closes, which a loaded host
+  // delivers late (one stress run drew the banner just past 5 s). This waits for an event,
+  // it does not time one, so the wait is long.
+  await expect(page.locator(STALE)).toHaveCount(1, { timeout: 15_000 });
 }
 
 test('ST10 a page opened while the stream is down shows the stale state, and the reconnect clears it', async ({ page, request }, testInfo) => {
@@ -466,10 +450,10 @@ test('ST20 several failed first connects keep the banner, and the waits grow', a
   await expect.poll(stream.connects).toBe(1);
   for (const [n, wait] of [[1, 1000], [2, 2000], [3, 4000]]) {
     await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
-    await page.clock.runFor(wait - 1);
+    await advanceArmed(page, wait, 'connect', wait - 1);
     await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
     expect(asked.length).toBe(n);
-    await page.clock.runFor(2);
+    await page.clock.runFor(1);
     await expect.poll(stream.connects).toBe(n + 1);
   }
   await expect(page.locator(STALE)).toHaveCount(1);
