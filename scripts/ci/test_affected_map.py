@@ -4,7 +4,7 @@
 """Rows for the per-test file map (scripts/ci/affected_map.py) and its workflow (.github/workflows/affected-map.yml).
 
 Pure rows run anywhere. RealTrace runs the builder's exact strace command on a small walker fixture and needs strace
-(Linux); elsewhere it reports itself skipped. The coverage row on a real gateway child (M1's function half), the
+(Linux; CI installs it): elsewhere it skips, and in required mode it fails. The coverage row on a real gateway child (M1's function half), the
 trace's cost (M5c) and the replay of the historical misses (M7) run on Spark against a built map.
 
     python3 scripts/ci/test_affected_map.py
@@ -345,11 +345,15 @@ class Mutants(unittest.TestCase):
                                 f"({len(outcome.errors)} errors)")
 
 
-@unittest.skipUnless(shutil.which("strace") and sys.platform.startswith("linux"), "needs strace (Linux; Spark)")
 class RealTrace(unittest.TestCase):
-    """M5 and M9 on a real trace: the builder's exact command over a walker fixture, children included."""
+    """M5 and M9 on a real trace: the builder's exact command over a walker fixture, children included. CI installs
+    strace for it; where it is missing the row skips, and fails instead in required mode (CI)."""
 
     def test_the_real_trace_credits_walked_files_listed_folders_and_probes(self) -> None:
+        if not (shutil.which("strace") and sys.platform.startswith("linux")):
+            sys.path.insert(0, str(HERE))
+            import required_mode  # noqa: E402
+            required_mode.skip_or_fail(self, "strace on Linux")
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
             deep = repo / "src" / "a_directory_name_well_past_thirty_two_bytes"

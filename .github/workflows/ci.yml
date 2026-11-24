@@ -197,9 +197,11 @@ jobs:
           python3 scripts/ci/test_coverage_probe_concurrency.py --self-test
           python3 scripts/ci/test_coverage_probe_concurrency.py
       # The affected-tests map: its builder's rules (weight split, trace, unit record, age guard) and its workflow.
+      # strace: the real-trace row runs the builder's exact trace command, and fails here if strace is missing.
       - name: The affected-tests map builder and workflow
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          command -v strace >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends strace; }
           python3 scripts/ci/test_affected_map.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
