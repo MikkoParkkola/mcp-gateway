@@ -492,6 +492,16 @@ fn cleartext_backend(error: &str) -> Option<String> {
     (plain && tail == crate::config::CLEARTEXT_REFUSAL).then(|| name.to_owned())
 }
 
+/// The refusal list's own cause and fix for a cleartext refusal of `name`,
+/// so the add route answers with these words and holds no copy of them.
+pub(crate) fn cleartext_words(name: &str) -> (String, &'static str) {
+    explain(
+        RefusalCode::CleartextCredentials,
+        RefusalKind::Add,
+        Some(name),
+    )
+}
+
 /// The cause and fix shown for a class: fixed words plus at most the name.
 fn explain(code: RefusalCode, kind: RefusalKind, backend: Option<&str>) -> (String, &'static str) {
     match code {
