@@ -1841,10 +1841,11 @@ function showWho(auth) {
   for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
   showEnvironment(auth);
   const admin = signedIn && auth.admin === true;
-  const became = admin && !restartAdmin;
-  restartAdmin = admin;
-  if (!admin) document.querySelector('[data-state="restart-pending"]')?.remove();
-  if (became) refreshRestart();
+  if (!admin) endRestart();
+  else if (!restartAdmin) {
+    restartAdmin = true;
+    refreshRestart();
+  }
 }
 
 /** The sign-in whose environment chip is drawn or on its way; null while there is none. */
@@ -1902,6 +1903,21 @@ let restartAdmin = false;
 /** Banner reads, numbered as sent, and the newest one drawn: an older answer arriving later is dropped. */
 let restartSent = 0;
 let restartDrawn = 0;
+/** Withdraws the banner's announcement if it is still queued (a no-op once said); null once the banner goes. */
+let restartSaid = null;
+
+/** The banner gone, with its announcement if still unsaid. */
+function clearRestart() {
+  restartSaid?.();
+  restartSaid = null;
+  document.querySelector('[data-state="restart-pending"]')?.remove();
+}
+
+/** Sign-out, a 401 or a key that is not admin: no banner, and no read until an admin signs in. */
+function endRestart() {
+  restartAdmin = false;
+  clearRestart();
+}
 
 /**
  * Read the gateway's restart block again and draw the banner from it: at an
@@ -1931,14 +1947,14 @@ const listed = (keys) => (keys.length === 1 ? keys[0] : `${keys.slice(0, -1).joi
  * The banner while gateway.yaml holds keys only a restart puts into use, one
  * region under the top bar on every page; none when nothing waits. The same
  * content again only moves its check time, so focus stays where it was.
- * Announced once, when it appears.
+ * Announced once when it appears, and again only when what it says changes.
  */
 function drawRestart(block, at) {
   const old = document.querySelector('[data-state="restart-pending"]');
   const keys = block?.frozen === true && Array.isArray(block.waiting_keys)
     ? block.waiting_keys.filter((k) => typeof k === 'string' && k !== '') : [];
   if (!keys.length) {
-    old?.remove();
+    clearRestart();
     return;
   }
   const node = restartBanner(block, keys, at);
@@ -1946,12 +1962,12 @@ function drawRestart(block, at) {
     old.lastElementChild.replaceWith(node.lastElementChild);
     return;
   }
-  if (old) {
-    old.replaceWith(node);
-    return;
-  }
-  document.querySelector('.top').after(node);
-  announce(node.querySelector('h2').textContent, { subject: 'restart' });
+  // Other keys or another form replace the old banner and are said in its place:
+  // an unsaid announcement of the old one is no longer true.
+  restartSaid?.();
+  if (old) old.replaceWith(node);
+  else document.querySelector('.top').after(node);
+  restartSaid = announce(node.querySelector('h2').textContent, { subject: 'restart' }) ?? null;
 }
 
 /**
@@ -2086,6 +2102,7 @@ async function signOut() {
  */
 function showSignIn() {
   accessResets++;
+  endRestart(); // before api() asks for a refresh after the 401 that brought us here
   // The count belongs to the identity that is leaving: the next one starts with none.
   const hadCount = DECISIONS.count !== null;
   DECISIONS.count = null;

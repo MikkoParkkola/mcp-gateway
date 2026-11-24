@@ -5,7 +5,7 @@
 // Filters live in the page URL. Every server-supplied string goes in with
 // textContent. The shell is imported by its exact hashed name, so this page
 // registers in the same module instance the document loaded.
-import { register, segmented } from '/ui/assets/shell.1b6bf8e49152.js';
+import { register, segmented } from '/ui/assets/shell.35401de8724f.js';
 import * as listCore from '/ui/assets/activity-list.3e4eec96100d.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */

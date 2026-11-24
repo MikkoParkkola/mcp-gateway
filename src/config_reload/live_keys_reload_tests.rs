@@ -100,18 +100,23 @@ impl Running {
     }
 }
 
+/// `err` shows neither `secret` nor its digest.
+fn hides(err: &str, secret: &str) {
+    let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+    let hex = digest.trim_start_matches("sha256:");
+    assert!(
+        !err.contains(secret) && !err.contains(hex),
+        "a secret shown: {err}"
+    );
+}
+
 /// A refusal names the key table and leaves the published generation as it
 /// was.
 fn assert_refused(err: &str, before: &Arc<crate::config_reload::Generation>, gw: &Running) {
     assert!(err.contains("auth.api_keys"), "{err}");
     // It may name keys, never show what authenticates them.
     for secret in [A, B] {
-        let digest = crate::config::api_key_digest_spec(secret.as_bytes());
-        let hex = digest.trim_start_matches("sha256:");
-        assert!(
-            !err.contains(secret) && !err.contains(hex),
-            "a secret shown: {err}"
-        );
+        hides(err, secret);
     }
     assert!(
         Arc::ptr_eq(before, &gw.live.generation()),
@@ -308,7 +313,7 @@ async fn k10_a_key_equal_to_the_generated_bearer_is_refused() {
         .await
         .expect_err("a key sharing the running bearer is refused");
     assert_refused(&err, &before, &gw);
-    assert!(!err.contains(&bearer), "the bearer shown: {err}");
+    hides(&err, &bearer);
 }
 
 /// K10: the edited bearer differs from the running one; the RUNNING bearer
@@ -330,5 +335,7 @@ async fn k10_the_running_bearer_decides_a_collision() {
         .await
         .expect_err("collides with the running bearer");
     assert_refused(&err, &before, &gw);
-    assert!(!err.contains("bearer-secret"), "a bearer shown: {err}");
+    for bearer in ["running-bearer-secret", "edited-bearer-secret"] {
+        hides(&err, bearer);
+    }
 }

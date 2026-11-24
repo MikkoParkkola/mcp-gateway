@@ -160,13 +160,16 @@ test('B5 the banner is announced once across three reads', async ({ page }) => {
       }).observe(document.getElementById('announcer'), { childList: true, subtree: true, characterData: true });
     });
   });
-  const state = await gatewayRoute(page, ONE);
+  await gatewayRoute(page, ONE);
   await open(page);
   await expect(banner(page)).toHaveCount(1);
-  const before = state.asked;
-  await go(page, '/ui/tools/status');
-  await go(page, '/ui/servers/status');
-  await expect.poll(() => state.asked).toBeGreaterThanOrEqual(before + 2);
+  // Two more reads, each answered and drawn before the count.
+  for (const path of ['/ui/tools/status', '/ui/servers/status']) {
+    const read = gatewayAnswer(page);
+    await go(page, path);
+    await read;
+    await settle(page);
+  }
   await page.evaluate(async (url) => (await import(url)).announcerIdle(), await shellModuleUrl(page));
   const said = await page.evaluate(() => window.__said.join(' '));
   expect(said.split(HEAD_ONE).length - 1, said).toBe(1);
@@ -203,8 +206,27 @@ test('B7 the copy button comes after the top bar in the tab order and confirms i
   const copy = banner(page).getByRole('button', { name: 'Copy' });
   await expect(copy).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(banner(page).getByRole('button')).toHaveText('Copied');
+  const button = banner(page).getByRole('button');
+  await expect(button).toHaveText('Copied');
   expect(await page.evaluate(() => window.__copied)).toEqual([COMMAND]);
+  // A read with the same content keeps the button, and the focus on it.
+  await keyRoutes(page);
+  const read = gatewayAnswer(page);
+  await write(page, 'POST', '/ui/api/keys');
+  await read;
+  await settle(page);
+  await expect(button).toBeFocused();
+});
+
+test('B7b where the clipboard refuses, the command is selected and the button says so', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) }, configurable: true });
+  });
+  await gatewayRoute(page, ONE);
+  await open(page);
+  await banner(page).getByRole('button', { name: 'Copy' }).click();
+  await expect(banner(page).getByRole('button')).toHaveText('Selected: copy it with your keyboard');
+  expect(await page.evaluate(() => getSelection().toString())).toBe(COMMAND);
 });
 
 test('B8 a member and an auditor see no banner and no error, and never ask for the read', async ({ page }) => {
@@ -217,7 +239,8 @@ test('B8 a member and an auditor see no banner and no error, and never ask for t
     await page.route('**/ui/api/status', (r) => r.fulfill({ json: status }));
     const state = await gatewayRoute(page, ONE);
     await open(page);
-    await go(page, '/ui/tools/status');
+    // A route change, to a page that needs no answer of its own (not built yet).
+    await go(page, '/ui/costs/status');
     await settle(page);
     await expect(page.locator('.top .who')).toHaveText('Signed in');
     await expect(banner(page)).toHaveCount(0);

@@ -80,7 +80,8 @@ work only after a restart:
   the start command where the platform has one while a start from the file
   would succeed, or the reason it would be refused. An admin sees the same as
   a banner under the top bar of every web UI page, with Copy for the command.
-  It is as of the page's last load or write, and shows when it was checked.
+  It is read again on every page you open and after every change you make,
+  and shows when it was last checked.
 - To cancel, revoke the key before restarting; the freeze ends at once.
 
 ## 1. Who is calling

@@ -7,7 +7,7 @@
 // page. It reads GET /ui/api/tools once per render. Every server-supplied
 // string goes in with textContent. The shell is imported by its exact hashed
 // name, so this page registers in the same module instance the document loaded.
-import { go, register, ApiError } from '/ui/assets/shell.1b6bf8e49152.js';
+import { go, register, ApiError } from '/ui/assets/shell.35401de8724f.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
