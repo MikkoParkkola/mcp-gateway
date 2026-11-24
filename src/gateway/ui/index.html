@@ -2384,8 +2384,9 @@ async function doImport() {
   } catch (e) {
     msgEl.textContent = 'Import failed: ' + e.message;
     msgEl.className = 'modal-msg err';
-    // Offered again only while the preview it used is still the current one.
-    importBtn.disabled = importKept !== kept;
+    // Offered again only while the preview it used is still the current one;
+    // a newer preview already set the button itself.
+    if (importKept === kept) importBtn.disabled = false;
   }
 }
 
