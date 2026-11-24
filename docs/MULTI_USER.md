@@ -76,8 +76,9 @@ work only after a restart:
 - `gateway.yaml` takes no other change that keeps the key: the UI routes answer
   409 `restart_pending` naming the key (a change with a fault of its own is
   refused for that fault instead), and a hand edit is refused at reload.
-  Every admin page shows a banner, with the start command while the file
-  would start and the time it was last checked.
+  The gateway status (`GET /ui/api/gateway`) lists the waiting keys, with
+  the start command while a start from the file would succeed, or the reason
+  it would be refused.
 - To cancel, revoke the key before restarting; the freeze ends at once.
 
 ## 1. Who is calling
