@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..bb995d25e6 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -106,7 +106,7 @@ const outLine = (kind, text) => h('p', { 'data-line': kind }, text);
+  * pending restart must come with a refusal or advice (restartAdvice draws it).
+  */
+ function answeredLines(a) {
+-  if (!a || typeof a.changes !== 'string' || typeof a.restart_required !== 'boolean') return null;
++  if (!a || typeof a.changes !== 'string') return null;
+   if (!a.restart_required) {
+     return NO_CHANGES.has(a.changes)
+       ? [outLine('head', 'Nothing changed: gateway.yaml matches what the gateway runs.')]
