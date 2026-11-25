@@ -1,0 +1,23 @@
+head_sha	ce97cf16c4077e0c0f3ff8f12bc78e44c4bd685e
+#mutant M12
+mcp_gateway	gateway::router::overview_decisions_tests::d1_open_decisions_are_one_row_with_count_and_revision	src/gateway/router/overview_decisions_tests.rs:116
+#mutant M13
+mcp_gateway	gateway::router::overview_decisions_tests::d2_an_unreadable_decision_source_is_degraded_never_zero	src/gateway/router/overview_decisions_tests.rs:129
+#mutant M14
+mcp_gateway	gateway::router::overview_decisions_tests::d2_an_unreadable_decision_source_is_degraded_never_zero	src/gateway/router/overview_decisions_tests.rs:130
+#mutant M15
+mcp_gateway	gateway::router::overview_decisions_tests::d3_no_decision_set_adds_nothing	src/gateway/router/overview_decisions_tests.rs:167
+#mutant M16
+mcp_gateway	gateway::ui::discovery_wiring_tests::d4_an_overview_request_runs_no_scan	src/gateway/ui/discovery_wiring_tests.rs:468
+#mutant M17
+mcp_gateway	gateway::router::overview_decisions_tests::d1_open_decisions_are_one_row_with_count_and_revision	src/gateway/router/overview_decisions_tests.rs:109
+#mutant M18
+mcp_gateway	gateway::router::overview_decisions_tests::d1_open_decisions_are_one_row_with_count_and_revision	src/gateway/router/overview_decisions_tests.rs:96
+#mutant M19
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:562
+#mutant M20
+mcp_gateway	gateway::router::overview_decisions_tests::d6_the_decisions_row_survives_a_full_list	src/gateway/router/overview_decisions_tests.rs:195
+#mutant M21
+mcp_gateway	gateway::router::overview_decisions_tests::d1_open_decisions_are_one_row_with_count_and_revision	src/gateway/router/overview_decisions_tests.rs:96
+#mutant M23
+mcp_gateway	gateway::router::overview_decisions_tests::d2_an_unreadable_decision_source_is_degraded_never_zero	src/gateway/router/overview_decisions_tests.rs:130
