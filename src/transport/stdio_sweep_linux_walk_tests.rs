@@ -275,9 +275,12 @@ fn first_child(pid: u32) -> u32 {
     panic!("no child of {pid} within 5 s");
 }
 
-fn send(pid: u32, sig: Signal) {
-    let pid = Pid::from_raw(i32::try_from(pid).expect("a pid fits")).expect("non-zero");
-    kill_process(pid, sig).expect("the signal is sent");
+/// A signal through the table's own held descriptor: the pidfd is opened and
+/// its start time checked first, so it can only reach `id` (no raw pid signal).
+fn send(table: &mut LinuxTable, id: Identity, sig: Sig) {
+    table
+        .signal(id, sig, true)
+        .expect("the signal reaches the process");
 }
 
 fn wait_for(table: &mut LinuxTable, id: Identity, want: ProcState) {
@@ -301,10 +304,10 @@ fn a_reading_is_settled_only_when_every_walked_parent_is_stopped() {
         !read(&mut table).settled,
         "running parent and child read as settled"
     );
-    send(parent.pid, Signal::STOP);
+    send(&mut table, parent, Sig::Stop);
     wait_for(&mut table, parent, ProcState::Stopped);
     assert!(!read(&mut table).settled, "a running child read as settled");
-    send(child.pid, Signal::STOP);
+    send(&mut table, child, Sig::Stop);
     wait_for(&mut table, child, ProcState::Stopped);
     let listing = read(&mut table);
     assert!(listing.settled, "a fully stopped tree read as not settled");
@@ -312,8 +315,8 @@ fn a_reading_is_settled_only_when_every_walked_parent_is_stopped() {
         listing.rows.iter().any(|(id, _)| *id == child),
         "the child is missing"
     );
-    send(child.pid, Signal::KILL);
-    send(parent.pid, Signal::KILL);
+    send(&mut table, child, Sig::Kill);
+    send(&mut table, parent, Sig::Kill);
     let _ = sh.wait();
 }
 
@@ -343,7 +346,7 @@ fn a_member_reparented_after_the_snapshot_is_still_killed() {
     };
     let mut sweep = super::super::Sweep::new(root, config);
     sweep.snapshot(&mut table);
-    send(inner.pid, Signal::KILL);
+    send(&mut table, inner, Sig::Kill);
     let report = sweep.run(&mut table, &super::super::PidfdBudget::new(64));
     assert!(
         report.killed.contains(&leaf),
@@ -376,7 +379,7 @@ fn a_child_forked_by_a_second_thread_is_found() {
             .map(|(id, _)| *id)
     });
     let child = found.expect("the thread's child was never listed");
-    send(child.pid, Signal::KILL);
+    send(&mut table, child, Sig::Kill);
     py.kill().expect("kill");
     let _ = py.wait();
 }
@@ -401,7 +404,7 @@ fn a_stopped_trees_walk_equals_the_scan_of_it() {
         })
         .expect("two children");
     for id in std::iter::once(parent).chain(kids.iter().copied()) {
-        send(id.pid, Signal::STOP);
+        send(&mut table, id, Sig::Stop);
         wait_for(&mut table, id, ProcState::Stopped);
     }
     let tree = |listing: Listing| {
@@ -428,7 +431,7 @@ fn a_stopped_trees_walk_equals_the_scan_of_it() {
         "the tree is the parent and its two children"
     );
     for id in std::iter::once(parent).chain(kids) {
-        send(id.pid, Signal::KILL);
+        send(&mut table, id, Sig::Kill);
     }
     let _ = sh.wait();
 }

@@ -122,8 +122,9 @@ impl ProcessTable for Walk {
         self.live(who).map_or(ProcState::Gone, |p| p.state)
     }
 
+    /// Records only what was delivered: a signal to a stale identity (its pid
+    /// now another process) is refused and reaches nobody.
     fn signal(&mut self, who: Identity, sig: Sig, _held: bool) -> Result<Handle, SignalError> {
-        self.sent.push((who.pid, sig));
         if sig == Sig::Stop && self.stop_fails_once == Some(who.pid) {
             self.stop_fails_once = None;
             return Err(SignalError::Failed);
@@ -134,6 +135,7 @@ impl ProcessTable for Walk {
             Sig::Cont => ProcState::Running,
             Sig::Kill => ProcState::Gone,
         };
+        self.sent.push((who.pid, sig));
         Ok(Handle::Held)
     }
 
