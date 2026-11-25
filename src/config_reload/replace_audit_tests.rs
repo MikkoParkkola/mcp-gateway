@@ -442,7 +442,9 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
     // transaction itself: the public entry would ask the gate again.
     let watcher = std::fs::read_to_string(src.join("config_reload/watcher.rs")).expect("read");
     assert!(
-        watcher.contains(".reload_outcome_from(") && !watcher.contains(".reload_outcome().await"),
+        watcher.contains(".reload_outcome_from(")
+            && !watcher.contains(".reload_outcome().await")
+            && !watcher.contains(".reload().await"),
         "config_reload/watcher.rs no longer reloads through reload_outcome_from"
     );
     for entry in ["gateway/ui/mod.rs", "gateway/meta_mcp/invoke/admin.rs"] {

@@ -399,7 +399,7 @@ impl ReloadContext {
 
     /// Reload the config file and return a structured outcome for callers/UI.
     /// Refused with the gate's text while a restart is being prepared: it is
-    /// [`Self::manual_reload_outcome`] from the file.
+    /// the gated manual reload, run from the file.
     ///
     /// # Errors
     ///

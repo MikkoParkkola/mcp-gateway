@@ -475,6 +475,75 @@ async fn a_public_reload_is_refused_while_the_gate_is_paused() {
     }
 }
 
+/// The two public write entries of the library.
+#[derive(Clone, Copy, Debug)]
+enum Write {
+    Replace,
+    Mutate,
+}
+
+/// One public write of `environment: written`, bounded like a reload.
+async fn public_write(booted: &Booted, entry: Write) -> Result<(), String> {
+    let (ctx, path) = (&booted.ctx, &booted.cfg.path);
+    let call = async {
+        let done = match entry {
+            Write::Replace => {
+                let mut config = crate::config::Config::load(Some(path.as_path())).expect("loads");
+                config.environment = Some("written".to_owned());
+                ctx.write_and_reload_outcome(path, &config).await.map(drop)
+            }
+            Write::Mutate => ctx
+                .mutate_and_reload_outcome(path, |config: &mut crate::config::Config| {
+                    config.environment = Some("written".to_owned());
+                    Ok::<(), ()>(())
+                })
+                .await
+                .map(drop),
+        };
+        done.map_err(|error| match error {
+            crate::config_reload::ConfigWriteError::Failed(text) => text,
+            busy @ crate::config_reload::ConfigWriteError::Busy => format!("{busy}"),
+        })
+    };
+    tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap_or_else(|_| panic!("never answered: {entry:?}"))
+}
+
+/// API.4, the write entries (sidecar 1): they ask the gate before any lock.
+/// Closed, each answers its fixed text with the file and the running config
+/// as they were; open, each writes and the written value is running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_write_is_refused_while_the_gate_is_closed() {
+    use crate::config_reload::{RELOAD_RESTARTING, RELOAD_STOPPING};
+    let closed = [
+        (Shut::Paused, "a restart is being prepared; retry"),
+        (Shut::Restarting, RELOAD_RESTARTING),
+        (Shut::Stopping, RELOAD_STOPPING),
+    ];
+    for entry in [Write::Replace, Write::Mutate] {
+        for (how, text) in closed {
+            let row = format!("write {entry:?} {how:?}");
+            let booted = Booted::new(BASE);
+            let _floor = shut(&booted, how).await;
+            let got = public_write(&booted, entry).await;
+            assert_eq!(got, Err(text.to_owned()), "{row}: the fixed text");
+            assert_eq!(booted.cfg.bytes(), BASE.as_bytes(), "{row}: file kept");
+            assert_eq!(booted.running_environment(), None, "{row}: running kept");
+        }
+        let row = format!("write {entry:?} open");
+        let booted = Booted::new(BASE);
+        let got = public_write(&booted, entry).await;
+        assert_eq!(got, Ok(()), "{row}: writes");
+        let running = booted.running_environment();
+        assert_eq!(
+            running.as_deref(),
+            Some("written"),
+            "{row}: the write is running"
+        );
+    }
+}
+
 /// The watcher reloads on its own admission. A pause that lands after that
 /// admission must not refuse its reload, as asking the gate a second time
 /// would; the tick finishes within 5 s and the edit is running.
