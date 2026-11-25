@@ -231,13 +231,15 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self) -> Listing {
+    fn read(&mut self, _seeds: &[Identity], _until: Duration) -> Listing {
         self.operate();
         if self.blind {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
                 unreadable: Vec::new(),
+                gone: Vec::new(),
+                settled: true,
             };
         }
         Listing {
@@ -249,6 +251,8 @@ impl ProcessTable for Fake {
                 .collect(),
             complete: true,
             unreadable: self.foreign.into_iter().collect(),
+            gone: Vec::new(),
+            settled: true,
         }
     }
 

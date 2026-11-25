@@ -170,18 +170,22 @@ impl LinuxTable {
 }
 
 impl ProcessTable for LinuxTable {
-    fn read(&mut self) -> Listing {
+    fn read(&mut self, _seeds: &[Identity], _until: Duration) -> Listing {
         let Ok(dir) = std::fs::read_dir("/proc") else {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
                 unreadable: Vec::new(),
+                gone: Vec::new(),
+                settled: true,
             };
         };
         let mut listing = Listing {
             rows: Vec::new(),
             complete: true,
             unreadable: Vec::new(),
+            gone: Vec::new(),
+            settled: true,
         };
         for entry in dir {
             let Ok(entry) = entry else {

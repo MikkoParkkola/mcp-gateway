@@ -78,6 +78,19 @@ pub(super) struct Listing {
     /// Pids that exist but could not be read (not ours, or an error): a member
     /// among them is not pruned for being absent from `rows`.
     pub(super) unreadable: Vec<u32>,
+    /// Seeds with their own evidence of death: gone, or a different start
+    /// time at their pid. The only identities a reading may prune.
+    pub(super) gone: Vec<Identity>,
+    /// Every pid whose children were read was stopped, a zombie or gone,
+    /// before and after that read. A full scan is always settled.
+    pub(super) settled: bool,
+}
+
+/// The full-scan tables' one pruning rule: the seeds a COMPLETE scan does not
+/// list, and could read, are gone; an incomplete scan names none.
+#[allow(dead_code)] // red-first stub: the walk commit wires it into every full-scan table
+pub(super) fn full_scan_gone(_seeds: &[Identity], _listing: &Listing) -> Vec<Identity> {
+    Vec::new()
 }
 
 /// What a rescue did for a member whose pid no longer names it.
@@ -115,7 +128,10 @@ fn rescue_stray(table: &mut dyn ProcessTable, member: Identity, report: &mut Swe
 
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
-    fn read(&mut self) -> Listing;
+    /// One reading. `seeds` names the processes the reading starts from (the
+    /// root, the members, the dropped); `until` is when it must stop, on this
+    /// table's own clock ([`Self::now`]).
+    fn read(&mut self, seeds: &[Identity], until: Duration) -> Listing;
     fn state(&mut self, id: Identity) -> ProcState;
     /// Signal `id` only if it is still that process. `held` says the sweep holds
     /// a budget slot for a handle (a pidfd) on this process; a table without
@@ -252,8 +268,17 @@ impl Sweep {
 
     /// Record the descendants now, before the first signal of the stop.
     pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
-        let listing = table.read();
+        let until = table.now() + SNAPSHOT_SLICE;
+        let listing = table.read(&self.seeds(), until);
         self.collect(&listing);
+    }
+
+    /// What a reading starts from: the root, every member, every dropped one.
+    fn seeds(&self) -> Vec<Identity> {
+        std::iter::once(self.root)
+            .chain(self.members.keys().copied())
+            .chain(self.dropped.iter().copied())
+            .collect()
     }
 
     /// Add every live descendant of the root and of every member, drop the dead,
@@ -309,7 +334,7 @@ impl Sweep {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let freeze_end = table.now() + self.cfg.freeze_slice;
-        let listing = table.read();
+        let listing = table.read(&self.seeds(), freeze_end);
         self.collect(&listing);
         let root_live = !listing.complete || listing.rows.iter().any(|(who, _)| *who == self.root);
         let mut frozen: Vec<Frozen> = Vec::new();
@@ -359,7 +384,7 @@ impl Sweep {
             if table.now() >= freeze_end {
                 break;
             }
-            let listing = table.read();
+            let listing = table.read(&self.seeds(), freeze_end);
             let added = self.collect(&listing);
             // Stable only on a COMPLETE listing that adds nothing: after a failed
             // reading, keep walking until the slice ends.
@@ -472,6 +497,9 @@ pub(super) type PlatformTable = MacTable;
 /// real children and pidfds), so a table at its cap is frozen before the kills
 /// begin and no unfrozen member can still fork while they go out.
 const FREEZE_SLICE: Duration = Duration::from_millis(700);
+/// How long the snapshot before a stop may read: the first-snapshot p99
+/// target. A reading cut short only seeds; it prunes nothing.
+const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
 /// The room the terminal kills are guaranteed after the freeze, checked at
 /// compile time against the reaper's kill reserve: five times the Linux kill
 /// phase measured at the cap (141 ms), as the margin for macOS, whose cost per
