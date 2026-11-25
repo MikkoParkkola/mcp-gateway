@@ -550,3 +550,7 @@ pub(super) fn process_budget() -> &'static PidfdBudget {
 #[cfg(test)]
 #[path = "stdio_sweep_tests.rs"]
 mod tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "stdio_sweep_walk_tests.rs"]
+mod walk_tests;
