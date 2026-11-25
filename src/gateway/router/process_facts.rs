@@ -98,8 +98,9 @@ pub(crate) const COUNT_READS: usize = 2;
 
 /// What a test sees after each pass of a counts read: the read's byte cap,
 /// the bytes the pass examined, and a reader of the request's drop flag, which
-/// it can read but never set. It returns
-/// nothing, so it cannot stop the read.
+/// it can read but never set. It returns nothing, so it cannot ask the read to
+/// stop; it runs on the read's thread, so a hook that blocks holds the read
+/// there (the route rows hold it on purpose).
 #[derive(Clone)]
 #[cfg_attr(
     not(feature = "webui"),
