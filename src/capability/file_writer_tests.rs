@@ -221,11 +221,11 @@ async fn create_race_has_one_winner() {
     assert_eq!(won[0].after.as_deref(), Some(sha(&on_disk).as_str()));
 }
 
-// ── T18c: a link swapped in after the base check is replaced, not followed ──
+// ── T18c: a link swapped in after the base check refuses the save, never followed ──
 
 #[cfg(unix)]
 #[tokio::test]
-async fn swapped_in_link_is_replaced_not_followed() {
+async fn a_swapped_in_link_is_refused_never_followed() {
     let (dir, file) = dir_with(TEXT);
     let other = dir.path().join("other.yaml");
     std::fs::write(&other, described(TEXT, "Other")).unwrap();
@@ -247,13 +247,15 @@ async fn swapped_in_link_is_replaced_not_followed() {
     )
     .await;
 
-    assert!(result.is_ok(), "{result:?}");
-    let meta = std::fs::symlink_metadata(&file).unwrap();
+    // The shared writer pins the file it read: a link put in its place is
+    // another writer's doing, so the save refuses; it never writes through
+    // the link, and the link stays as that writer left it.
     assert!(
-        meta.file_type().is_file(),
-        "kept.yaml is a regular file again"
+        matches!(&result, Err(Refused::Unwritable { error, .. }) if error.starts_with("target-changed:")),
+        "{result:?}"
     );
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), sent);
+    let meta = std::fs::symlink_metadata(&file).unwrap();
+    assert!(meta.file_type().is_symlink(), "the swapped-in link stays");
     assert_eq!(
         std::fs::read_to_string(&other).unwrap(),
         described(TEXT, "Other")

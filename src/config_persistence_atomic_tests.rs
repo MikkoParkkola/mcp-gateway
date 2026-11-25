@@ -47,8 +47,8 @@ fn inherit_observes_a_private_scratch() {
     let path = dir.path().join("state.json");
     std::fs::write(&path, b"old").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    // The bytes are never in a wider file: the scratch is still 0600 when
-    // the observer sees it after `sync_all`, before the mode step.
+    // The bytes are never in an open file: the scratch is still mode 0000
+    // when the observer sees it after `sync_all`, before its access settles.
     let seen = std::cell::Cell::new(0o777);
     write_atomic_observed(
         &path,
@@ -57,13 +57,12 @@ fn inherit_observes_a_private_scratch() {
         Symlink::Replace,
         |scratch| {
             let mode = scratch.metadata().unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
             seen.set(mode);
         },
         || Ok(()),
     )
     .unwrap();
-    assert_eq!(seen.get(), 0o600);
+    assert_eq!(seen.get(), 0o000);
     assert_eq!(std::fs::read(&path).unwrap(), b"new");
 }
 

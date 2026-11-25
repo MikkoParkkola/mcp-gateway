@@ -931,6 +931,39 @@ jobs:
       # lib-b: parts 1-4, each built, run and deleted before the next (the solo
       # lane: every part). The runner holds each part to its list less the OS
       # skips.
+      # The part holding the writer's root rows runs them again under sudo
+      # (shard_tests.py run_built_parts): they need the local users, and each
+      # starts its child as mcpg-c from the part binary itself, which sits in
+      # $RUNNER_TEMP/parts, outside the workspace path the composite opens.
+      - name: Local users for the writer's root rows
+        timeout-minutes: 2
+        if: matrix.shard == 'lib-b'
+        uses: ./.github/actions/access-rows-setup
+      - name: mcpg-c can reach the part binaries
+        timeout-minutes: 1
+        if: matrix.shard == 'lib-b'
+        run: |
+          set -euo pipefail
+          p="$RUNNER_TEMP/parts"
+          mkdir -p "$p"
+          while [ "$p" != / ]; do sudo chmod o+x "$p"; p="$(dirname "$p")"; done
+          # Fail here, in seconds, rather than as a root row 90 minutes in: the part binaries do not exist yet
+          # (each is built, run and deleted in the next step), so a stand-in sits where one will, in a pK folder
+          # made the same way, mode 0755 as run_built_parts leaves them.
+          probe="$RUNNER_TEMP/parts/p0/lib-tests-p0"
+          mkdir -p "${probe%/*}"
+          printf '#!/bin/sh\n' > "$probe"
+          chmod 0755 "$probe"
+          if ! sudo -u mcpg-c test -x "$probe"; then
+            d="$probe"
+            until [ "$d" = / ]; do
+              sudo -u mcpg-c test -x "$d" || bad="$d"
+              d="$(dirname "$d")"
+            done
+            echo "::error::mcpg-c cannot reach a part binary under $RUNNER_TEMP/parts; first closed path from the top: ${bad:-unknown} ($(ls -ld "${bad:-/}"))"
+            exit 1
+          fi
+          rm -r "${probe%/*}"
       - name: Lib test parts, built and run one at a time
         if: matrix.shard == 'lib-b'
         timeout-minutes: 150
@@ -939,6 +972,29 @@ jobs:
         if: matrix.shard == 'int'
         timeout-minutes: 110
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      # The writer's refusal rows that need root, from the targets the suite just built. Before part 5: its build
+      # sets the part variable, and the next plain cargo call would rebuild the crate.
+      - name: Local users for the writer's refusal rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'int' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The writer's refusal rows binary
+        timeout-minutes: 2
+        id: refusal-rows
+        if: ${{ !cancelled() && matrix.shard == 'int' }}
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --all-features --test writer_refusals --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.name == "writer_refusals" and .executable != null) | .executable')"
+          [ -x "$exe" ]
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: Writer root rows (refusal surfaces)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'int' && steps.refusal-rows.outcome == 'success' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E ${{ steps.refusal-rows.outputs.exe }}
+          filter: ""
       # int: part 5, after its own suite, in the same job; it runs when the
       # suite failed too, so part 5's tests still report.
       - name: Lib test part 5, built and run
@@ -1463,6 +1519,30 @@ jobs:
               exit 1
             fi
           done
+      # The writer's refusal rows that need root (#[ignore], so the suite above left them out). This leg has already
+      # built their target and the gateway binary they start as user C.
+      - name: Local users for the writer's refusal rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'int-b' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The writer's refusal rows binary
+        timeout-minutes: 2
+        id: refusal-rows
+        if: ${{ !cancelled() && matrix.shard == 'int-b' }}
+        run: |
+          set -euo pipefail
+          # Built by the suite already: cargo only names the executable here.
+          exe="$(cargo test --all-features --test writer_refusals --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.name == "writer_refusals" and .executable != null) | .executable')"
+          [ -x "$exe" ]
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: Writer root rows (refusal surfaces)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'int-b' && steps.refusal-rows.outcome == 'success' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E ${{ steps.refusal-rows.outputs.exe }}
+          filter: ""
 
   # The lib halves of the Linux shards, from the shared binary: no compile here. `!cancelled()` runs them even when
   # the build failed, so they end red instead of skipped (a skipped shard would read as passing).
@@ -1579,6 +1659,35 @@ jobs:
             echo "::error::upgrade_notice_tests selected no test"
             exit 1
           fi
+      # The shared writer's rows that need root and two more local users. The shard run above leaves them out
+      # (#[ignore]); here they run from the same part binaries, as root, after the users exist.
+      - name: Local users for the writer's root rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The part holding the writer's root rows, where user C can run it
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        run: |
+          set -euo pipefail
+          # The parts' own lists say which part holds them, so no part number is pinned here.
+          holder="$(grep -l -F 'config_persistence_access_tests::root::' "$RUNNER_TEMP"/lib-bin/*/p*/list.txt)" \
+            || { echo "::error::no lib test part's list names a root row"; exit 1; }
+          part_dir="$(dirname "$holder")"
+          sudo mkdir -p -m 0755 /opt/writer-rows
+          sudo cp "$part_dir/lib-tests-$(basename "$part_dir")" /opt/writer-rows/lib-tests
+          sudo chmod 0755 /opt/writer-rows/lib-tests
+          # C starts it once here, so a red row means a refusal and never a binary C could not start.
+          sudo setpriv --reuid "$ACCESS_ROWS_UID_C" --regid "$ACCESS_ROWS_GID_G" --init-groups \
+            /opt/writer-rows/lib-tests --list --ignored config_persistence_access_tests::child::save | grep -F ': test'
+      - name: Writer root rows (library)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E /opt/writer-rows/lib-tests
+          # Quoted: a plain YAML value may not end in a colon.
+          filter: "config_persistence_access_tests::root::"
 
   test:
     name: Tests

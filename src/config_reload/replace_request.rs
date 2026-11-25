@@ -142,8 +142,13 @@ pub(crate) enum ReplaceError {
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
     Stage(String),
-    /// Writing the new bytes failed; the original is back.
+    /// Writing the new bytes failed before the rename; the file was left alone.
     Write(String),
+    /// The shared writer turned the save down before replacing anything:
+    /// another user owns gateway.yaml, or another process changed it during
+    /// the save. Its code and sentence name only the file and user ids, so a
+    /// route may show them as they are.
+    WriterRefused { code: &'static str, text: String },
     /// The reload refused the new bytes, or the check of them before any
     /// entry or write did; the original stands.
     ReloadRefused { class: RefusalClass, reason: String },

@@ -152,6 +152,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),
         Err(ReplaceError::Write(_)) => failed("write"),
+        Err(ReplaceError::WriterRefused { .. }) => failed("writer_refused"),
         Err(ReplaceError::RollbackFailed { .. }) => failed("rollback_failed"),
         Err(ReplaceError::Unconfirmed { .. }) => failed("unconfirmed"),
         Err(ReplaceError::Failed(_)) => failed("failed"),
