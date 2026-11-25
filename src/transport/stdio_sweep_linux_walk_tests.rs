@@ -90,7 +90,7 @@ fn an_expired_reading_stops_at_once_whatever_the_tree() {
                     tree.proc(fake(n), fake(n - 1), 'S', 1, &next);
                 }
             }),
-            vec![who(root, 1)],
+            Vec::new(),
         ),
         (
             "one children file listing 5,000 pids",
@@ -98,7 +98,7 @@ fn an_expired_reading_stops_at_once_whatever_the_tree() {
                 let kids: Vec<u32> = (2..=5_001).map(fake).collect();
                 tree.proc(root, 1, 'S', 1, &kids);
             }),
-            vec![who(root, 1)],
+            Vec::new(),
         ),
         (
             "a process with 5,000 threads",
@@ -108,19 +108,19 @@ fn an_expired_reading_stops_at_once_whatever_the_tree() {
                     tree.thread(root, fake(tid), &[]);
                 }
             }),
-            vec![who(root, 1)],
+            Vec::new(),
         ),
         (
-            "5,000 seeds",
+            "5,000 dropped seeds",
             Box::new(move |tree| tree.proc(root, 1, 'S', 1, &[])),
-            (1..=5_000).map(|n| who(fake(n), 1)).collect(),
+            (2..=5_001).map(|n| who(fake(n), 1)).collect(),
         ),
     ];
-    for (name, build, seeds) in cases {
+    for (name, build, dropped) in cases {
         let tree = Tree::new(true);
         build(&tree);
         let mut table = LinuxTable::with_root(tree.path());
-        let listing = table.read(&seeds, Duration::ZERO);
+        let listing = table.read(&[who(root, 1)], &dropped, Duration::ZERO);
         assert!(
             !listing.complete,
             "{name}: an expired reading claimed complete"
@@ -152,7 +152,7 @@ fn a_reading_stops_at_the_read_where_until_passes() {
     }
     let mut table = LinuxTable::with_root(tree.path());
     table.expire_after_reads = Some(10);
-    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    let listing = table.read(&[who(fake(1), 1)], &[], Duration::MAX);
     assert_eq!(table.reads, 10, "the reading did not stop at the 10th read");
     assert!(!listing.complete, "a reading cut short claimed complete");
     assert!(
@@ -170,7 +170,7 @@ fn a_seed_is_gone_on_its_own_evidence() {
     tree.proc(fake(2), 1, 'S', 6, &[]);
     let mut table = LinuxTable::with_root(tree.path());
     let seeds = [who(fake(1), 1), who(fake(2), 5), who(fake(3), 1)];
-    let listing = table.read(&seeds, Duration::MAX);
+    let listing = table.read(&seeds, &[], Duration::MAX);
     assert_eq!(
         listing.gone,
         vec![who(fake(2), 5), who(fake(3), 1)],
@@ -193,7 +193,7 @@ fn every_threads_children_are_walked_and_a_vanished_thread_is_no_switch() {
     tree.proc(fake(3), fake(1), 'S', 1, &[]);
     tree.proc(fake(900), 1, 'S', 1, &[]);
     let mut table = LinuxTable::with_root(tree.path());
-    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    let listing = table.read(&[who(fake(1), 1)], &[], Duration::MAX);
     assert_eq!(pids(&listing), vec![fake(1), fake(2), fake(3)]);
     assert!(
         listing.complete,
@@ -209,7 +209,34 @@ fn without_children_files_the_table_scans_its_whole_root() {
     tree.proc(fake(1), 1, 'S', 1, &[]);
     tree.proc(fake(900), 1, 'S', 1, &[]);
     let mut table = LinuxTable::with_root(tree.path());
-    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    let listing = table.read(&[who(fake(1), 1)], &[], Duration::MAX);
     assert_eq!(pids(&listing), vec![fake(1), fake(900)]);
     assert!(listing.complete);
+}
+
+/// R-dropped: a dropped seed is read for its own death only. Its children
+/// file lists a live child, and that child is never read; a dropped seed
+/// with no entry is in `gone`.
+#[test]
+fn a_dropped_seed_is_stated_only_and_never_walked() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'S', 1, &[]);
+    tree.proc(fake(2), 1, 'S', 1, &[fake(3)]);
+    tree.proc(fake(3), fake(2), 'S', 1, &[]);
+    let mut table = LinuxTable::with_root(tree.path());
+    let dropped = [who(fake(2), 1), who(fake(4), 1)];
+    let listing = table.read(&[who(fake(1), 1)], &dropped, Duration::MAX);
+    assert!(
+        !pids(&listing).contains(&fake(3)),
+        "a dropped seed's child was read"
+    );
+    assert!(
+        pids(&listing).contains(&fake(1)),
+        "the walked root is missing from a complete reading"
+    );
+    assert_eq!(
+        listing.gone,
+        vec![who(fake(4), 1)],
+        "the missing dropped seed is not gone"
+    );
 }

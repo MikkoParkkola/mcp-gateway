@@ -329,7 +329,12 @@ impl MacTable {
 
 #[cfg(target_os = "macos")]
 impl ProcessTable for MacTable {
-    fn read(&mut self, _seeds: &[Identity], _until: std::time::Duration) -> Listing {
+    fn read(
+        &mut self,
+        _walk: &[Identity],
+        _stat_only: &[Identity],
+        _until: std::time::Duration,
+    ) -> Listing {
         table_read(&mut Libproc)
     }
 

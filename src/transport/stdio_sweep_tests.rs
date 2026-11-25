@@ -231,7 +231,7 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self, _seeds: &[Identity], _until: Duration) -> Listing {
+    fn read(&mut self, _walk: &[Identity], _stat_only: &[Identity], _until: Duration) -> Listing {
         self.operate();
         if self.blind {
             return Listing {

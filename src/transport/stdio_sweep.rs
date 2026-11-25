@@ -129,10 +129,11 @@ fn rescue_stray(table: &mut dyn ProcessTable, member: Identity, report: &mut Swe
 
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
-    /// One reading. `seeds` names the processes the reading starts from (the
-    /// root, the members, the dropped); `until` is when it must stop, on this
+    /// One reading. `walk` names the processes it starts from and walks down
+    /// (the root and the members); `stat_only` names the dropped ones, read for
+    /// their own death and never walked. `until` is when it must stop, on this
     /// table's own clock ([`Self::now`]).
-    fn read(&mut self, seeds: &[Identity], until: Duration) -> Listing;
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing;
     fn state(&mut self, id: Identity) -> ProcState;
     /// Signal `id` only if it is still that process. `held` says the sweep holds
     /// a budget slot for a handle (a pidfd) on this process; a table without
@@ -270,16 +271,18 @@ impl Sweep {
     /// Record the descendants now, before the first signal of the stop.
     pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
         let until = table.now() + SNAPSHOT_SLICE;
-        let listing = table.read(&self.seeds(), until);
+        let listing = self.read(table, until);
         self.collect(&listing);
     }
 
-    /// What a reading starts from: the root, every member, every dropped one.
-    fn seeds(&self) -> Vec<Identity> {
-        std::iter::once(self.root)
+    /// One reading: walked from the root and every member, the dropped read
+    /// for their death only.
+    fn read(&self, table: &mut dyn ProcessTable, until: Duration) -> Listing {
+        let walk: Vec<Identity> = std::iter::once(self.root)
             .chain(self.members.keys().copied())
-            .chain(self.dropped.iter().copied())
-            .collect()
+            .collect();
+        let stat_only: Vec<Identity> = self.dropped.iter().copied().collect();
+        table.read(&walk, &stat_only, until)
     }
 
     /// Add every live descendant of the root and of every member, drop the dead,
@@ -335,7 +338,7 @@ impl Sweep {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let freeze_end = table.now() + self.cfg.freeze_slice;
-        let listing = table.read(&self.seeds(), freeze_end);
+        let listing = self.read(table, freeze_end);
         self.collect(&listing);
         let root_live = !listing.complete || listing.rows.iter().any(|(who, _)| *who == self.root);
         let mut frozen: Vec<Frozen> = Vec::new();
@@ -385,7 +388,7 @@ impl Sweep {
             if table.now() >= freeze_end {
                 break;
             }
-            let listing = table.read(&self.seeds(), freeze_end);
+            let listing = self.read(table, freeze_end);
             let added = self.collect(&listing);
             // Stable only on a COMPLETE listing that adds nothing: after a failed
             // reading, keep walking until the slice ends.

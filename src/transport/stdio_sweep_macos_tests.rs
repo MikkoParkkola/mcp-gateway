@@ -217,7 +217,7 @@ fn a_record_is_decoded_only_for_the_pid_asked() {
 fn libproc_lists_this_process_and_reads_its_identity() {
     let me = std::process::id();
     let mut table = MacTable::new();
-    let listing = table.read(&[], std::time::Duration::MAX);
+    let listing = table.read(&[], &[], std::time::Duration::MAX);
     assert!(listing.complete, "a listing on a healthy host is complete");
     let mine = listing
         .rows

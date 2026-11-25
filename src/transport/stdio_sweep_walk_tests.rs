@@ -66,11 +66,15 @@ impl Walk {
 }
 
 impl ProcessTable for Walk {
-    fn read(&mut self, seeds: &[Identity], _until: Duration) -> Listing {
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], _until: Duration) -> Listing {
         self.clock += self.read_cost;
         let (mut rows, mut gone, mut settled) = (Vec::new(), Vec::new(), true);
         let mut parents = Vec::new();
-        for seed in seeds {
+        for (seed, walked) in walk
+            .iter()
+            .map(|s| (s, true))
+            .chain(stat_only.iter().map(|s| (s, false)))
+        {
             match self
                 .procs
                 .iter()
@@ -80,7 +84,9 @@ impl ProcessTable for Walk {
                     if self.hide_seed != Some(seed.pid) {
                         rows.push((p.id, p.ppid));
                     }
-                    parents.push(p.id.pid);
+                    if walked {
+                        parents.push(p.id.pid);
+                    }
                 }
                 _ => gone.push(*seed),
             }
