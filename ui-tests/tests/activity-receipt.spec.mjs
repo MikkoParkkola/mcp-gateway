@@ -79,7 +79,8 @@ const REFUSAL_FIELDS = [...COMMON, ...ON_RECEIPT, 'server', 'tool', 'trace_id', 
   'decision.reason', 'decision.scope', 'decision.capability', 'decision.grant_id', 'reach'];
 const CONFIG_FIELDS = [...COMMON, ...ON_RECEIPT, 'action', 'actor_id', 'target_id', 'outcome',
   'reason.recorded', 'reason.length', 'rollback_summary.recorded', 'rollback_summary.length'];
-const ADMIN_FIELDS = [...COMMON, ...ON_RECEIPT, 'surface', 'route', 'method', 'http_status', 'tool', 'outcome'];
+const ADMIN_FIELDS = [...COMMON, ...ON_RECEIPT, 'surface', 'route', 'method', 'http_status', 'tool', 'outcome',
+  'action', 'capability', 'pin', 'who.account', 'who.authority', 'who.subject'];
 /** Keys the Rust emits that the receipt never shows (r8f Part 2): CUT, or not sent on this route. */
 const NOT_SHOWN = ['v', 'resolved_on'];
 /** Keys that only hold other keys. */
@@ -136,6 +137,8 @@ const configReceipt = (id) => ({
 const adminReceipt = (id) => ({
   id, kind: 'admin_action', counter: 44, timestamp: '2026-11-15T08:00:00Z', ...ANCHORED,
   surface: 'ui', route: '/ui/api/backends', method: 'POST', http_status: 201, tool: 'backends.add', outcome: 'change',
+  action: 'save', capability: 'billing', pin: 'updated',
+  who: { account: 'ops', authority: 'https://issuer.example', subject: 'sub-1' },
   chain: chainOf(44),
 });
 
