@@ -91,8 +91,7 @@ async fn quoted_pin_key_is_refused_not_bypassed() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_private_file_removed_before_the_rename_is_written_private() {
-    use std::os::unix::fs::PermissionsExt;
+async fn a_private_file_removed_before_the_rename_refuses_the_save() {
     let (dir, file) = dir_with(TEXT);
     set_mode(&file, 0o600);
 
@@ -109,12 +108,14 @@ async fn a_private_file_removed_before_the_rename_is_written_private() {
     )
     .await;
 
-    assert!(result.is_ok(), "{result:?}");
-    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
-    assert_eq!(
-        mode, 0o600,
-        "the umask must not widen a file read as private"
+    // The shared writer pins the file it read: one removed under it is
+    // another writer's doing, so the save refuses and writes nothing (it
+    // never lands as a new file at the umask's wider mode).
+    assert!(
+        matches!(&result, Err(Refused::Unwritable { error, .. }) if error.starts_with("target-changed:")),
+        "{result:?}"
     );
+    assert!(!file.exists(), "nothing was written in its place");
 }
 
 #[test]

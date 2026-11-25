@@ -341,6 +341,7 @@ fn refused(name: &str, error: ReplaceError) -> Response {
         ReplaceError::Unsupported(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
+        | ReplaceError::WriterRefused { .. }
         | ReplaceError::Secrets(_) => (StatusCode::INTERNAL_SERVER_ERROR, "not_written"),
         ReplaceError::ReloadRefused { .. } => return uncertain(name, "reload_refused"),
         ReplaceError::RollbackFailed { .. } => return uncertain(name, "rollback_failed"),

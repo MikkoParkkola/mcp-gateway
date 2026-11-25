@@ -133,6 +133,9 @@ pub(crate) const RELOAD_REPLAY_OWED: &str =
     "a restart is being prepared; the reload runs when it is decided";
 pub(crate) const RELOAD_RESTARTING: &str = "the gateway is restarting";
 pub(crate) const RELOAD_STOPPING: &str = "the gateway is stopping";
+/// A write the gate refuses while a restart is being prepared: nothing was
+/// written. The one sentence for the library's writes and the web UI's.
+pub(crate) const RESTART_BUSY: &str = "a restart is being prepared; retry";
 
 /// Whether `error` is one of the restart gate's refusal texts.
 #[cfg(feature = "webui")]
@@ -352,11 +355,13 @@ impl ReloadContext {
 
     /// Reload the config file and apply the diff.
     ///
-    /// Returns a human-readable description of what changed.
+    /// Returns a human-readable description of what changed. Refused with the
+    /// gate's text while a restart is being prepared.
     ///
     /// # Errors
     ///
-    /// Returns an error string if the config file cannot be read or parsed.
+    /// The gate's refusal text, or an error string if the config file cannot
+    /// be read or parsed.
     pub async fn reload(&self) -> std::result::Result<String, String> {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
@@ -367,7 +372,7 @@ impl ReloadContext {
     ///
     /// # Errors
     ///
-    /// The gate's refusal text, or `reload_outcome`'s error.
+    /// The gate's refusal text, or `reload_outcome_from`'s error.
     pub(crate) async fn manual_reload_outcome(
         &self,
         source: Source,
@@ -396,15 +401,19 @@ impl ReloadContext {
     }
 
     /// Reload the config file and return a structured outcome for callers/UI.
+    /// Refused with the gate's text while a restart is being prepared: it is
+    /// the gated manual reload, run from the file.
     ///
     /// # Errors
     ///
-    /// Returns an error string if the config file cannot be read or parsed.
+    /// The gate's refusal text, or an error string if the config file cannot
+    /// be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
-        self.reload_outcome_from(Source::File).await
+        self.manual_reload_outcome(Source::File).await
     }
 
-    /// [`Self::reload_outcome`] recording `source` on the history event.
+    /// The shared reload transaction, recording `source` on the history event.
+    /// It asks the gate nothing: every caller already holds an admission.
     pub(crate) async fn reload_outcome_from(
         &self,
         source: crate::config_reload::history::Source,

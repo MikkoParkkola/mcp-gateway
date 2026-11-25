@@ -18,6 +18,19 @@ use super::replace::{AuditPosture, GatewayAuth};
 /// Why the older write paths refuse on an audited gateway.
 const AUDITED_ONLY: &str = "an audited gateway writes its config only through the audited writer";
 
+/// The restart gate's refusal of a write, as the write's error. While a
+/// restart is being prepared it is the write's busy sentence: the reload's
+/// own text would promise a replay, which a write never gets.
+fn gate_refused(refusal: crate::gateway::restart_config_floor::Refusal) -> ConfigWriteError {
+    use crate::gateway::restart_config_floor::Refusal;
+    let text = match refusal {
+        Refusal::Busy | Refusal::ReplayOwed => super::RESTART_BUSY,
+        Refusal::Restarting => super::RELOAD_RESTARTING,
+        Refusal::Stopping => super::RELOAD_STOPPING,
+    };
+    ConfigWriteError::Failed(text.to_owned())
+}
+
 impl ReloadContext {
     /// The older write paths append no intent, and their config lock
     /// recovers a crashed write unaudited, so a gateway whose posture
@@ -46,7 +59,10 @@ impl ReloadContext {
     ///
     /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
     /// [`ConfigWriteError::Failed`] on validation, serialization, write,
-    /// rename, or reload failure.
+    /// rename, or reload failure. Also `Failed`, with nothing written, while
+    /// the restart gate is closed: "a restart is being prepared; retry" is
+    /// worth retrying once the restart is decided; the gate's restarting and
+    /// stopping texts are not.
     ///
     /// The write must be inside the same critical section as the reload. Two
     /// admin UI edits that write first and lock second can interleave so that
@@ -83,6 +99,10 @@ impl ReloadContext {
         // One deadline for both locks: the in-process reload lock, then the
         // cross-process config lock, both held through the reload.
         self.refuse_when_audited()?;
+        // The restart gate first, before any lock, held through the reload.
+        let _admitted = (self.registry.config_gate())
+            .admit(crate::gateway::restart_config_floor::AdmitKind::Write)
+            .map_err(gate_refused)?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // Written and reloaded through the target the lock resolved: one file,
@@ -125,8 +145,9 @@ impl ReloadContext {
     /// # Errors
     ///
     /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
-    /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure. A
-    /// refusal from `mutate` is not an error; it comes back as
+    /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure,
+    /// and while the restart gate is closed, as for
+    /// [`Self::write_and_reload_outcome`]. A refusal from `mutate` is not an error; it comes back as
     /// [`ConfigMutation::Rejected`].
     ///
     /// Dropping this future after the write and before the reload publishes
@@ -176,6 +197,10 @@ impl ReloadContext {
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
         self.refuse_when_audited()?;
+        // The restart gate first, before any lock, held through the reload.
+        let _admitted = (self.registry.config_gate())
+            .admit(crate::gateway::restart_config_floor::AdmitKind::Write)
+            .map_err(gate_refused)?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // The config lock is held from the load through the reload, so another

@@ -63,6 +63,47 @@ fn save_with_logging_runs_callback() {
     assert!(called.get());
 }
 
+/// S-log: a state save the writer refuses is logged at WARN in its caller's
+/// "Failed to save ..." line, with the refusal's own text; the file another
+/// writer put there stays.
+#[cfg(unix)]
+#[test]
+fn s_log_a_refused_state_save_names_its_reason() {
+    use crate::config_persistence::writer_seams::{self as seams, Seams};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.json");
+    std::fs::write(&path, b"{}").unwrap();
+    let ranker = crate::ranking::SearchRanker::new();
+    let _armed = seams::arm(
+        dir.path(),
+        Seams {
+            before_verify: Some(Box::new(|target, _scratch| {
+                std::fs::rename(target, target.with_extension("old")).unwrap();
+                std::fs::write(target, b"other").unwrap();
+            })),
+            ..Seams::default()
+        },
+    );
+    let (saved, logs) = crate::test_log_capture::capture_warnings(|| {
+        save_with_logging(
+            &path,
+            |p| ranker.save(p),
+            "Failed to save search ranker usage data",
+            "Saved search ranking usage data",
+        )
+    });
+    assert!(!saved, "S-log: the save reports failure");
+    let line = logs
+        .lines()
+        .find(|line| line.contains("Failed to save search ranker usage data"))
+        .unwrap_or_else(|| panic!("S-log: no WARN line: {logs}"));
+    assert!(
+        line.contains("WARN") && line.contains("target-changed: refused to replace"),
+        "S-log: the line carries the refusal: {line}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"other", "S-log: file kept");
+}
+
 #[cfg(feature = "cost-governance")]
 pub(super) fn enforcer_with_spend(usd: f64) -> Arc<BudgetEnforcer> {
     let cfg = CostGovernanceConfig {
