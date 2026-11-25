@@ -217,7 +217,13 @@ fn set_ssrf(state: &AppState, on: bool) {
 #[tokio::test]
 async fn f5_the_ui_import_follows_ssrf_protection() {
     use std::sync::atomic::Ordering;
-    let (state, _dir) = Box::pin(fixture()).await;
+    let (mut state, _dir) = Box::pin(fixture()).await;
+    // The preview refuses a gateway with no capability directory before it
+    // fetches; this row is about the fetch, so it gets one.
+    let caps = crate::test_dir_keep::kept_tempdir();
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .capability_dirs = vec![caps.path().to_string_lossy().into_owned()];
     let router = create_router(Arc::clone(&state));
     let (url, hits) = spec_server().await;
 

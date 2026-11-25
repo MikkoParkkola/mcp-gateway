@@ -259,3 +259,19 @@ export function frame(event, data, id = null) {
   const head = event === 'hello' ? 'retry: 3000\n' : '';
   return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
 }
+
+/**
+ * From before the shell loads, keep a count of the live window listeners for
+ * each event type in `types`, read as window.__listeners(type).
+ */
+export const countListeners = (page, types) => page.addInitScript((watched) => {
+  const fns = new Map(watched.map((type) => [type, new Set()]));
+  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
+    const real = window[name];
+    window[name] = function (type, fn, ...more) {
+      fns.get(type)?.[op](fn);
+      return real.call(this, type, fn, ...more);
+    };
+  }
+  window.__listeners = (type) => fns.get(type).size;
+}, types);
