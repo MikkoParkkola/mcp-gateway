@@ -266,6 +266,20 @@ class Part(unittest.TestCase):
             am._lib_part = saved
         self.assertEqual(seen, [["commands::doctor"], []])
 
+    def test_p8c_the_lib_part_hands_its_list_to_the_keys(self) -> None:
+        # Patched through the function's own globals: a mutant copy of _lib_part has its own namespace.
+        from types import SimpleNamespace
+        from unittest import mock
+        done = SimpleNamespace(stdout="", stderr="", returncode=0)
+        fakes = {"subprocess": SimpleNamespace(run=lambda *a, **k: done), "run_unit": lambda *a, **k: None,
+                 "unit_record_and_reasons": lambda rec, members, *a: (unit(members, 1.0), [])}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(am._lib_part.__globals__, fakes):
+            listing = Path(tmp) / "bin" / "p1" / "list.txt"
+            listing.parent.mkdir(parents=True)
+            listing.write_text("".join(f"{n}: test\n" for n in self.NAMES))
+            doc = am._lib_part("1", Path(tmp), ["commands::doctor"])
+        self.assertEqual(set(doc["units"]), set(self.units(["commands::doctor"])[0]))
+
 
 class Workflow(unittest.TestCase):
     """P8a and P8b: the guard plans the list on every event, each lib part gets it, the merge only parses JSON."""
@@ -369,6 +383,8 @@ def _fold_mutants() -> list[tuple[str, str, dict]]:
             "lib_units", "unit_key(name, split)", "unit_key(name, [])")}),
         ("main drops the list", "Part", {"main": _edited(
             "main", "json.loads(argv[4]) if len(argv) == 5 and argv[4] else []", "[]")}),
+        ("the lib part drops the list", "Part", {"_lib_part": _edited(
+            "_lib_part", "lib_units(names, split,", "lib_units(names, [],")}),
         ("a fold that keeps duplicates", "Fold", {"merge": _edited(
             "merge", "have[key] = sorted(set(have[key]) | set(add[key]))", "have[key] = have[key] + add[key]")}),
         ("each unit traced twice", "Part", {"lib_units": _edited(
