@@ -61,6 +61,13 @@ pub(super) fn usable_log(
 
 /// The production probe: `access(2)`, which reads permissions and touches
 /// nothing.
+#[cfg_attr(
+    not(unix),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "the probe's signature; off Unix it always allows"
+    )
+)]
 pub(super) fn access(path: &Path, access: Access) -> std::io::Result<()> {
     #[cfg(unix)]
     {

@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::settings_log_check::{Access, Unusable, usable_log};
 use super::test_support::*;
-use super::{AUDIT_LOG_REQUIRED, NOT_AUDITED, SettingsStoreForTest};
+use super::{AUDIT_LOG_REQUIRED, NOT_AUDITED};
 use crate::gateway::ui::admin_audit::AuditDetail;
 
 /// `BASE` with its transparency log section holding `lines`.
@@ -208,7 +208,7 @@ async fn w4_a_log_held_elsewhere_does_not_pass() {
 async fn w4_the_check_runs_before_the_store_opens() {
     let mut route = Route::new(BASE).await;
     let unopened = super::super::secret_slots::Unopened::Unavailable;
-    route.store = Some(SettingsStoreForTest::OpenRefused(unopened));
+    route.store = Some(super::SettingsStoreForTest::OpenRefused(unopened));
     let dir = locked(&route.dir.path().join("locked"));
     let path = dir.join("sub").join("audit.jsonl");
     load_log(&route, &format!("    path: \"{}\"\n", path.display())).await;
