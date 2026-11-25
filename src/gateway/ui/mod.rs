@@ -40,6 +40,8 @@ mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
 mod errors;
+/// The `OpenAPI` import's refusal sentences, for `gateway::test_helpers`.
+pub(in crate::gateway) use errors::{CAPABILITIES_OFF, DIGEST_REQUIRED, DOCUMENT_CHANGED};
 mod events;
 mod gateway_status;
 mod gateway_upgrade;

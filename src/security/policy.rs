@@ -297,6 +297,34 @@ impl ToolPolicy {
         }
     }
 
+    /// The id this policy gave the entry `pattern` of list `list` (`allow`,
+    /// `deny` or `builtin_deny`), as written in the config. `None` on a policy
+    /// compiled without a key, and for an entry this policy does not hold (a
+    /// built-in deny while `use_default_deny` is off).
+    #[cfg(feature = "webui")]
+    pub(crate) fn entry_id(
+        &self,
+        list: &str,
+        pattern: &str,
+    ) -> Option<&crate::security::rule_id::RuleId> {
+        let ids = self.ids.as_deref()?;
+        // Looked up where `from_config_keyed` filed it: prefixes by their
+        // stripped prefix, exact patterns by name.
+        match pattern.strip_suffix('*') {
+            Some(prefix) => ids
+                .prefixes
+                .iter()
+                .find(|e| e.list.name() == list && e.prefix == prefix)
+                .map(|e| &e.id),
+            None => ids
+                .exact
+                .get(pattern)?
+                .iter()
+                .find(|(of, _, _)| of.name() == list)
+                .map(|(_, _, id)| id),
+        }
+    }
+
     /// [`Self::check`], naming the entry that decided: an explicit allow on
     /// `Ok`, the refusing deny or default action on `Err`. Ids are present only
     /// on a policy compiled with [`Self::from_config_keyed`].

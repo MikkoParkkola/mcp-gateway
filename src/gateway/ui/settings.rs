@@ -724,12 +724,12 @@ mod answer_tests;
 mod cli_tests;
 #[cfg(tp3)]
 #[cfg(test)]
-#[path = "settings_log_check_tests.rs"]
-mod log_check_tests;
-#[cfg(tp3)]
-#[cfg(test)]
 #[path = "settings_floor_tests.rs"]
 mod floor_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "settings_log_check_tests.rs"]
+mod log_check_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "restart_advice_route_tests.rs"]
