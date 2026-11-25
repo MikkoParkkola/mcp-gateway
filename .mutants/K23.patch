@@ -1,0 +1,20 @@
+diff --git a/src/commands/mod.rs b/src/commands/mod.rs
+index 3b85cdd1fa..a316339757 100644
+--- a/src/commands/mod.rs
++++ b/src/commands/mod.rs
+@@ -466,11 +466,10 @@ fn tls_init_ca(cn: &str, validity_days: u32, out: &std::path::Path) -> ExitCode
+             println!("    ca_cert: \"{}\"", out.join("ca.crt").display());
+             ExitCode::SUCCESS
+         }
+-        Err(e) => fail(
+-            CliExit::LocalFailure,
+-            &format!("CA generation failed: {e}"),
+-            "Check the --cn and --validity-days values, then rerun 'mcp-gateway tls init-ca'.",
+-        ),
++        Err(e) => {
++            eprintln!("Error: CA generation failed: {e}");
++            ExitCode::FAILURE
++        }
+     }
+ }
+ 

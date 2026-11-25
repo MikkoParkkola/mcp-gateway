@@ -1,0 +1,24 @@
+diff --git a/src/commands/stats.rs b/src/commands/stats.rs
+index 5a0f7d9c44..1b314ee206 100644
+--- a/src/commands/stats.rs
++++ b/src/commands/stats.rs
+@@ -58,6 +58,19 @@ fn stats_client() -> Result<reqwest::Client, String> {
+         })
+ }
+ 
++#[allow(dead_code)]
++fn raw_exits(code: u8) -> ExitCode {
++    struct Reply {
++        exit: u8,
++    }
++    let _ = Reply { exit: code };
++    if code == 9 {
++        std::process::exit(1);
++    }
++    ExitCode::from
++        (1)
++}
++
+ /// Doctor checks a gateway that answered badly.
+ const RUN_DOCTOR: &str = "Run 'mcp-gateway doctor' to check the gateway.";
+ 

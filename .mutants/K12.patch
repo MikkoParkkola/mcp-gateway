@@ -1,0 +1,13 @@
+diff --git a/src/commands/cli_exit.rs b/src/commands/cli_exit.rs
+index 16a98dd467..08651ed1c8 100644
+--- a/src/commands/cli_exit.rs
++++ b/src/commands/cli_exit.rs
+@@ -62,7 +62,7 @@ impl CliExit {
+         match self {
+             Self::Ok => 0,
+             Self::LocalFailure => 1,
+-            Self::Usage => 2,
++            Self::Usage => 3,
+             Self::AuthRefused => 3,
+             Self::NotFound => 4,
+             Self::Network => 5,

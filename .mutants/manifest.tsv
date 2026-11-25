@@ -1,0 +1,6 @@
+head_sha	af6d3bb86403d133ed17edecc836aa6ff6503276
+K12	linux	K12.patch	--lib -- commands::cli_exit::tests::the_local_codes_are_zero_one_and_two --exact
+K23	linux	K23.patch	--lib -- cli::command_classes::raw_exit_scan_tests::no_raw_failing_exit_in_command_code --exact
+K25	linux	K25.patch	--lib -- cli::command_classes::raw_exit_scan_tests::no_raw_failing_exit_in_command_code --exact
+K26	linux	K26.patch	--test cli_local_errors -- the_table_covers_every_local_leaf --exact
+K42	linux	K42.patch	--test cli_local_errors -- the_table_covers_every_local_leaf --exact

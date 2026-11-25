@@ -1,0 +1,25 @@
+diff --git a/tests/cli_local_errors.rs b/tests/cli_local_errors.rs
+index d37ce50b28..7fe2bd83d6 100644
+--- a/tests/cli_local_errors.rs
++++ b/tests/cli_local_errors.rs
+@@ -180,20 +180,6 @@ fn missing_input(p: &Path, leaf: &[&str], name: &str, extra: &[&str]) -> Case {
+ #[allow(clippy::too_many_lines, reason = "one entry per leaf of the real tree")]
+ fn table() -> Vec<(&'static str, Expect)> {
+     let mut rows: Vec<(&'static str, Expect)> = vec![
+-        (
+-            "init",
+-            Expect::TwoLines(|p| {
+-                let file = p.join("gateway.yaml");
+-                write(&file, "x\n");
+-                fail_case(
+-                    strings(&["init", "--output", &text(&file)]),
+-                    Pin::Exact(format!("error: {} already exists.", text(&file))),
+-                    Pin::Exact(
+-                        "Remove it first or choose a different path with --output.".to_owned(),
+-                    ),
+-                )
+-            }),
+-        ),
+         (
+             "tls init-ca",
+             Expect::TwoLines(|p| {

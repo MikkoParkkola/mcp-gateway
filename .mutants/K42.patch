@@ -1,0 +1,23 @@
+diff --git a/tests/cli_local_errors.rs b/tests/cli_local_errors.rs
+index d37ce50b28..18da026019 100644
+--- a/tests/cli_local_errors.rs
++++ b/tests/cli_local_errors.rs
+@@ -284,17 +284,7 @@ fn table() -> Vec<(&'static str, Expect)> {
+                 ..config_case(p, &["setup", "wizard", "--yes"], "--output")
+             }),
+         ),
+-        (
+-            "stats",
+-            Expect::TwoLines(|_| {
+-                let url = closed_url();
+-                fail_case(
+-                    strings(&["stats", "--gateway", &url]),
+-                    Pin::Starts("error: "),
+-                    Pin::Has(url),
+-                )
+-            }),
+-        ),
++        ("stats", Expect::Pending),
+         (
+             "upgrade",
+             Expect::TwoLines(|p| {
