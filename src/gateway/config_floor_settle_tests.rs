@@ -402,6 +402,8 @@ async fn p3_watcher_reload_queued_behind_outside_reload_lock() {
 #[derive(Clone, Copy, Debug)]
 enum Shut {
     Paused,
+    /// Paused, then checkpointed: the floor holds both locks.
+    Certified,
     Restarting,
     Stopping,
 }
@@ -411,6 +413,10 @@ async fn shut(booted: &Booted, how: Shut) -> ConfigFloor {
     let mut floor = booted.floor();
     match how {
         Shut::Paused => floor.pause(deadline()).await.expect("pause"),
+        Shut::Certified => {
+            floor.pause(deadline()).await.expect("pause");
+            floor.checkpoint(deadline()).await.expect("certified");
+        }
         Shut::Restarting => floor.commit(),
         Shut::Stopping => floor.release_for_stop(),
     }
@@ -518,6 +524,7 @@ async fn a_public_write_is_refused_while_the_gate_is_closed() {
     use crate::config_reload::{RELOAD_RESTARTING, RELOAD_STOPPING};
     let closed = [
         (Shut::Paused, "a restart is being prepared; retry"),
+        (Shut::Certified, "a restart is being prepared; retry"),
         (Shut::Restarting, RELOAD_RESTARTING),
         (Shut::Stopping, RELOAD_STOPPING),
     ];
@@ -541,6 +548,47 @@ async fn a_public_write_is_refused_while_the_gate_is_closed() {
             Some("written"),
             "{row}: the write is running"
         );
+    }
+}
+
+/// The write entries hold their admission until the reload is done: admitted
+/// before any lock, a write parked on a reload lock an outside holder keeps
+/// holds the checkpoint Pending. Kills a permit dropped at once (`let _ =`):
+/// the in-flight count reads zero.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admitted_write_holds_the_checkpoint() {
+    use crate::config::Config;
+    for entry in [Write::Replace, Write::Mutate] {
+        let row = format!("held {entry:?}");
+        let booted = Booted::new(BASE);
+        let outside = booted.registry.reload_lock_handle().lock_owned().await;
+        let (ctx, path) = (Arc::clone(&booted.ctx), booted.cfg.path.clone());
+        let writing = tokio::spawn(async move {
+            match entry {
+                Write::Replace => {
+                    let mut config = Config::load(Some(path.as_path())).expect("loads");
+                    config.environment = Some("held".to_owned());
+                    ctx.write_and_reload_outcome(&path, &config).await.map(drop)
+                }
+                Write::Mutate => ctx
+                    .mutate_and_reload_outcome(&path, |config: &mut Config| {
+                        config.environment = Some("held".to_owned());
+                        Ok::<(), ()>(())
+                    })
+                    .await
+                    .map(drop),
+            }
+        });
+        wait_until(&format!("{row}: the write was admitted"), || {
+            let log = booted.gate.decisions();
+            log.iter().any(|d| d.kind == AdmitKind::Write && d.admitted)
+        });
+        p3_case(&row, &booted, AdmitKind::Write, Probe::Busy, || {
+            drop(outside)
+        })
+        .await;
+        let landed = writing.await.expect("the write task joined");
+        assert!(landed.is_ok(), "{row}: the write landed: {landed:?}");
     }
 }
 

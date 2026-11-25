@@ -301,7 +301,9 @@ use reload_context::replace::startup_recovery_intent;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::is_gate_refusal;
 #[cfg(any(test, feature = "webui"))]
-pub(crate) use reload_context::{RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING};
+pub(crate) use reload_context::{
+    RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING, RESTART_BUSY,
+};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config`, recording the recovery in the audit log of the config it

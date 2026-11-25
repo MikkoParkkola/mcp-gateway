@@ -133,6 +133,9 @@ pub(crate) const RELOAD_REPLAY_OWED: &str =
     "a restart is being prepared; the reload runs when it is decided";
 pub(crate) const RELOAD_RESTARTING: &str = "the gateway is restarting";
 pub(crate) const RELOAD_STOPPING: &str = "the gateway is stopping";
+/// A write the gate refuses while a restart is being prepared: nothing was
+/// written. The one sentence for the library's writes and the web UI's.
+pub(crate) const RESTART_BUSY: &str = "a restart is being prepared; retry";
 
 /// Whether `error` is one of the restart gate's refusal texts.
 #[cfg(feature = "webui")]

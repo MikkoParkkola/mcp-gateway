@@ -18,15 +18,13 @@ use super::replace::{AuditPosture, GatewayAuth};
 /// Why the older write paths refuse on an audited gateway.
 const AUDITED_ONLY: &str = "an audited gateway writes its config only through the audited writer";
 
-/// A write while a restart is being prepared: nothing was written. The
-/// reload's own text would promise a replay, which a write never gets.
-const RESTART_BUSY_WRITE: &str = "a restart is being prepared; retry";
-
-/// The restart gate's refusal of a write, as the write's error.
+/// The restart gate's refusal of a write, as the write's error. While a
+/// restart is being prepared it is the write's busy sentence: the reload's
+/// own text would promise a replay, which a write never gets.
 fn gate_refused(refusal: crate::gateway::restart_config_floor::Refusal) -> ConfigWriteError {
     use crate::gateway::restart_config_floor::Refusal;
     let text = match refusal {
-        Refusal::Busy | Refusal::ReplayOwed => RESTART_BUSY_WRITE,
+        Refusal::Busy | Refusal::ReplayOwed => super::reload_context::RESTART_BUSY,
         Refusal::Restarting => super::reload_context::RELOAD_RESTARTING,
         Refusal::Stopping => super::reload_context::RELOAD_STOPPING,
     };
@@ -61,7 +59,10 @@ impl ReloadContext {
     ///
     /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
     /// [`ConfigWriteError::Failed`] on validation, serialization, write,
-    /// rename, or reload failure.
+    /// rename, or reload failure. Also `Failed`, with nothing written, while
+    /// the restart gate is closed: "a restart is being prepared; retry" is
+    /// worth retrying once the restart is decided; the gate's restarting and
+    /// stopping texts are not.
     ///
     /// The write must be inside the same critical section as the reload. Two
     /// admin UI edits that write first and lock second can interleave so that
@@ -144,8 +145,9 @@ impl ReloadContext {
     /// # Errors
     ///
     /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
-    /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure. A
-    /// refusal from `mutate` is not an error; it comes back as
+    /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure,
+    /// and while the restart gate is closed, as for
+    /// [`Self::write_and_reload_outcome`]. A refusal from `mutate` is not an error; it comes back as
     /// [`ConfigMutation::Rejected`].
     ///
     /// Dropping this future after the write and before the reload publishes
