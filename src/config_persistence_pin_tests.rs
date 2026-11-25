@@ -552,33 +552,54 @@ fn p_a_file_put_where_nothing_or_a_link_was_refuses() {
     }
 }
 
-/// Long enough for a coarse kernel clock (a few milliseconds a tick) to move
-/// on, so a file's change time after a rewrite differs from the one modelled.
-const TICK: std::time::Duration = std::time::Duration::from_millis(50);
+/// How often a row repeats another writer's step until the entry it touched
+/// shows a new change time: a coarse kernel clock keeps it for a few
+/// milliseconds, and the row waits on the file, never on a clock.
+const TRIES: usize = 1_000_000;
+
+/// An entry's identity and change time, read without following a link.
+fn stamp(path: &Path) -> (u64, u64, i64, i64) {
+    let meta = std::fs::symlink_metadata(path).expect("lstat");
+    (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+}
+
+/// Run `step` until `path`'s identity or change time differs from `before`.
+fn until_changed(path: &Path, before: (u64, u64, i64, i64), mut step: impl FnMut()) {
+    for _ in 0..TRIES {
+        step();
+        if stamp(path) != before {
+            return;
+        }
+    }
+    panic!("{} kept its change time over {TRIES} tries", path.display());
+}
 
 /// P-inplace (times put back): the rewrite in place also sets the old
-/// modification time back. The change time, which no writer can set, still
-/// moves: the save refuses and the other bytes stay.
+/// modification time back, same length. The change time, which no writer
+/// can set, still moves: the save refuses and the other bytes stay.
 #[test]
 fn p_inplace_rewrite_with_its_old_mtime_refuses() {
     for mode in MODES {
         let row = format!("P-inplace-mtime/{mode:?}");
         let (dir, target) = fixture(0o600);
-        let old = std::fs::metadata(&target)
-            .expect("stat")
-            .modified()
-            .expect("mtime");
-        std::thread::sleep(TICK);
+        let modelled = std::fs::metadata(&target).expect("stat");
+        let (old, before) = (modelled.modified().expect("mtime"), stamp(&target));
         let armed = seams::arm(
             dir.path(),
             Seams {
                 before_verify: Some(Box::new(move |target, _scratch| {
-                    std::fs::write(target, b"sub").expect("rewrite in place");
-                    let file = std::fs::File::options()
-                        .write(true)
-                        .open(target)
-                        .expect("open");
-                    file.set_modified(old).expect("set the old time back");
+                    until_changed(target, before, || {
+                        std::fs::write(target, b"sub").expect("rewrite in place");
+                        let file = std::fs::File::options().write(true).open(target);
+                        file.and_then(|f| f.set_modified(old))
+                            .expect("old time back");
+                    });
+                    let now = std::fs::metadata(target).expect("stat");
+                    assert_eq!(
+                        (now.modified().expect("mtime"), now.len()),
+                        (old, 3),
+                        "the modification time and length are as modelled"
+                    );
                 })),
                 ..Seams::default()
             },
@@ -598,45 +619,57 @@ fn p_inplace_rewrite_with_its_old_mtime_refuses() {
     }
 }
 
-/// P-relink: the target is a link, and another writer swaps in a link of its
-/// own (which may reuse the old link's inode number) before the final checks.
-/// The save refuses and the new link stays.
+/// P-relink: the target is a link, and another writer either swaps in a link
+/// of its own (which may reuse the old inode number) or renames the link away
+/// and back (same inode, a new change time) before the final checks. The
+/// save refuses and the link another writer left stays.
 #[test]
-fn p_a_link_put_where_a_link_was_refuses() {
-    for mode in MODES {
-        let row = format!("P-relink/{mode:?}");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join(TARGET);
-        for name in ["linked.json", "theirs.json"] {
-            std::fs::write(dir.path().join(name), b"old").expect("a link target");
+fn p_a_link_touched_by_another_writer_refuses() {
+    for (case, swap) in [("relink", true), ("renamed-back", false)] {
+        for mode in MODES {
+            let row = format!("P-relink/{case}/{mode:?}");
+            let dir = tempfile::tempdir().expect("tempdir");
+            let target = dir.path().join(TARGET);
+            for name in ["linked.json", "theirs.json"] {
+                std::fs::write(dir.path().join(name), b"old").expect("a link target");
+            }
+            std::os::unix::fs::symlink("linked.json", &target).expect("link");
+            let before = stamp(&target);
+            let armed = seams::arm(
+                dir.path(),
+                Seams {
+                    before_verify: Some(Box::new(move |target, _scratch| {
+                        let aside = target.with_extension("aside");
+                        until_changed(target, before, || {
+                            if swap {
+                                std::fs::remove_file(target).expect("unlink");
+                                std::os::unix::fs::symlink("theirs.json", target).expect("relink");
+                            } else {
+                                std::fs::rename(target, &aside).expect("rename away");
+                                std::fs::rename(&aside, target).expect("rename back");
+                            }
+                        });
+                    })),
+                    ..Seams::default()
+                },
+            );
+            assert_changed(
+                write_atomic(&target, b"new", mode, Symlink::Replace),
+                &target,
+                &row,
+            );
+            drop(armed);
+            let left = if swap { "theirs.json" } else { "linked.json" };
+            assert_eq!(
+                std::fs::read_link(&target).expect("still a link"),
+                Path::new(left),
+                "{row}: the link stays"
+            );
+            assert_eq!(
+                names(dir.path()),
+                ["linked.json", "state.json", "theirs.json"],
+                "{row}: no scratch left"
+            );
         }
-        std::os::unix::fs::symlink("linked.json", &target).expect("link");
-        std::thread::sleep(TICK);
-        let armed = seams::arm(
-            dir.path(),
-            Seams {
-                before_verify: Some(Box::new(|target, _scratch| {
-                    std::fs::remove_file(target).expect("unlink");
-                    std::os::unix::fs::symlink("theirs.json", target).expect("their link");
-                })),
-                ..Seams::default()
-            },
-        );
-        assert_changed(
-            write_atomic(&target, b"new", mode, Symlink::Replace),
-            &target,
-            &row,
-        );
-        drop(armed);
-        assert_eq!(
-            std::fs::read_link(&target).expect("still a link"),
-            Path::new("theirs.json"),
-            "{row}: their link stays"
-        );
-        assert_eq!(
-            names(dir.path()),
-            ["linked.json", "state.json", "theirs.json"],
-            "{row}: no scratch left"
-        );
     }
 }
