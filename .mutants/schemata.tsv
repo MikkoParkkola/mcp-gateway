@@ -1,0 +1,21 @@
+head_sha	a5b4a44cacf793a982dfa03abd22ffba8869623b
+#mutant K1
+mcp_gateway	commands::cli_exit::tests::one_line_writes_a_line_break_as_a_space	src/commands/cli_exit_tests.rs:434
+#mutant K2
+mcp_gateway	commands::cli_exit::tests::one_line_writes_a_line_break_as_a_space	src/commands/cli_exit_tests.rs:435
+#mutant K35
+mcp_gateway	commands::cli_exit::tests::one_line_writes_a_line_break_as_a_space	src/commands/cli_exit_tests.rs:439
+#mutant K3
+mcp_gateway	commands::cli_exit::tests::fail_builds_the_two_line_outcome	src/commands/cli_exit_tests.rs:499
+#mutant K4
+mcp_gateway	commands::cli_exit::tests::fail_builds_the_two_line_outcome	src/commands/cli_exit_tests.rs:499
+#mutant K6
+mcp_gateway	commands::cli_exit::tests::usage_builds_the_usage_outcome	src/commands/cli_exit_tests.rs:514
+#mutant K7
+mcp_gateway	commands::cli_exit::tests::the_usage_remedy_names_the_commands_help	src/commands/cli_exit_tests.rs:445
+#mutant K8
+mcp_gateway	commands::cli_exit::tests::verdict_returns_its_code	src/commands/cli_exit_tests.rs:521
+#mutant K10
+mcp_gateway	commands::cli_exit::tests::fail_refuses_an_empty_remedy	src/commands/cli_exit_tests.rs:472
+#mutant K11
+mcp_gateway	commands::cli_exit::tests::the_remote_error_text_is_not_folded	src/commands/cli_exit_tests.rs:492
