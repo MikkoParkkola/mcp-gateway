@@ -434,6 +434,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 403, 404],
     ),
+    // counts.rs (the same Admitted extractor; no window is refused only after admission)
+    row(
+        "/ui/api/activity/counts",
+        Method::GET,
+        "/ui/api/activity/counts",
+        Payload::None,
+        [401, 401, 403, 404],
+    ),
     // src/gateway/ui/backends.rs:132 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
