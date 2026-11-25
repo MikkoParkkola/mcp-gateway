@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/shell.60857ec1239d.js b/src/gateway/ui/shell/shell.60857ec1239d.js
+index bb90677e64..2a2d822084 100644
+--- a/src/gateway/ui/shell/shell.60857ec1239d.js
++++ b/src/gateway/ui/shell/shell.60857ec1239d.js
+@@ -363,7 +363,7 @@ export function restartAdvice(answer) {
+   }
+   if (!given(answer?.restart_advice)) return null;
+   const node = el('div', { class: 'restart-advice', 'data-kind': 'advice' }, line('waiting', '↻', answer.restart_advice));
+-  if (given(answer.start_command)) node.append(el('code', { class: 'start-command' }, answer.start_command));
++  if (given(answer.start_command) && !navigator.platform.startsWith('Win')) node.append(el('code', { class: 'start-command' }, answer.start_command));
+   return node;
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..3ad9555ecf 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -124,7 +124,7 @@ function answeredLines(a) {
+ function refusedLines(err) {
+   const head = err?.status === 409 ? 'Not reloaded. The gateway runs as before.'
+     : err?.status === 503 ? 'Not reloaded.' : UNCONFIRMED;
+-  return err?.serverMessage ? [outLine('head', head), outLine('sentence', err.serverMessage)] : [outLine('head', head)];
++  return err?.serverMessage && err?.status !== 503 ? [outLine('head', head), outLine('sentence', err.serverMessage)] : [outLine('head', head)];
+ }
+ 
+ /** What is said for drawn lines: each line's text, never the start command. */

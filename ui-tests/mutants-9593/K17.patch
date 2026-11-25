@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..e0bd862e89 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -140,6 +140,7 @@ async function reloadTab(body, ctx) {
+     outcome,
+     h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
+   button.addEventListener('click', async () => {
++    if (!window.confirm('Reload gateway.yaml now?')) return;
+     if (button.disabled) return;
+     // One reload at a time; the earlier outcome stays until this one's answer replaces it.
+     button.disabled = true;
