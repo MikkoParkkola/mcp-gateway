@@ -76,8 +76,11 @@ async function shownRows(page) {
  * Mock status and the activity list. `admin` may be a boolean or a function
  * read on each status request. The clock is installed before the caller navigates.
  */
-async function install(page, { admin = true, answer }) {
+async function install(page, { admin = true, answer, counts }) {
   const urls = [];
+  // The counts reads, apart from the list's: 404 unless a row gives `counts`,
+  // which returns {status, json} or a promise of it (a held read).
+  urls.counts = [];
   const adminNow = () => (typeof admin === 'function' ? admin() : admin);
   // Installed early, then paused at AT: Date.now() reads AT and no timer fires
   // until a row runs the clock (setFixedTime alone keeps timers running).
@@ -86,8 +89,14 @@ async function install(page, { admin = true, answer }) {
   await page.route('**/ui/api/status', (r) => r.fulfill({
     json: { auth: { enabled: true, signed_in: true, admin: adminNow() } },
   }));
-  await page.route('**/ui/api/activity**', (r) => {
+  await page.route('**/ui/api/activity**', async (r) => {
     const url = r.request().url();
+    if (new URL(url).pathname === '/ui/api/activity/counts') {
+      urls.counts.push(url);
+      const reply = await counts?.(url);
+      if (!reply) return r.fulfill({ status: 404, json: {} });
+      return r.fulfill({ status: reply.status ?? 200, json: reply.json }).catch(() => {});
+    }
     if (new URL(url).pathname !== '/ui/api/activity') return r.continue();
     urls.push(url);
     return r.fulfill({ json: answer(url) });
@@ -160,7 +169,7 @@ test('A2 outcome: blocked sends outcome=blocked, All sends none', async ({ page 
   const urls = await install(page, { answer: () => list(ROWS) });
   await open(page, urls, '/ui/activity/status');
   const outcome = page.getByRole('group', { name: 'Outcome' });
-  await expect(outcome.getByRole('button')).toHaveText(['All', 'ok', 'failed', 'blocked']);
+  await expect(outcome.getByRole('button')).toHaveText(['All', 'ok', 'failed', 'blocked', 'cleaned']);
   await expect(page.locator('#content .has-tip[data-tip="activity.status.outcome"] button')).toBeVisible();
   await outcome.getByRole('button', { name: 'blocked', exact: true }).click();
   await expect.poll(() => filters(urls.at(-1)).outcome).toBe('blocked');
