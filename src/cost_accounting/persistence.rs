@@ -360,8 +360,10 @@ mod tests {
         assert!((loaded.key_totals["dev_key"] - 2.50).abs() < 1e-9);
     }
 
-    /// Two writers saving one path at once each finish with one whole
-    /// snapshot on disk: no save fails and nothing is left half-written.
+    /// Two writers saving one path at once, without the lock production
+    /// takes (`COST_WRITE`), leave one whole snapshot on disk and nothing
+    /// half-written. A save whose file the other writer replaced meanwhile is
+    /// refused `target-changed` by the shared writer, never torn.
     /// A shared scratch name lets one writer rename the other's file away
     /// (a failed save) or interleave into it (a torn file).
     #[test]
@@ -389,11 +391,19 @@ mod tests {
                 })
             })
             .collect();
+        let mut landed = 0;
         for writer in writers {
             for result in writer.join().expect("writer thread") {
-                result.expect("a concurrent save failed");
+                match result {
+                    Ok(()) => landed += 1,
+                    Err(e) => assert!(
+                        e.contains("target-changed: refused to replace"),
+                        "a concurrent save failed otherwise: {e}"
+                    ),
+                }
             }
         }
+        assert!(landed > 0, "no save landed");
         let loaded = load(&path).expect("the file on disk is one whole snapshot");
         assert!(
             loaded.saved_at == 1 || loaded.saved_at == 2,
