@@ -5,10 +5,12 @@
 // entries (entries a failed or rolled-back save left in a secret store, named
 // by nothing) from GET /ui/api/settings/secrets/unused, and deletes one at a
 // time after the shell's confirm. A refusal shows the gateway's own sentence
-// and the list is read again, so a kept entry stays listed. Status and Actions
-// come with the rest of this page; until then they are not drawn. Every
+// and the list is read again, so a kept entry stays listed.
+// Gateway › Actions draws Reload now: one press posts /ui/api/reload and the answer shows
+// under the button, its restart block from the shell's restartAdvice(). Status
+// is the rest of this page and stays undrawn until it is built. Every
 // server-supplied string goes in with textContent.
-import { register, render, el as h } from '/ui/assets/shell.08fc113e48aa.js';
+import { register, render, restartAdvice, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);
@@ -90,14 +92,87 @@ async function settingsTab(body, ctx) {
   }
 }
 
+const INTRO = 'Changes to gateway.yaml are picked up on their own. If an edit has not taken effect, press Reload now: on a network filesystem, or a Docker bind mount from a Mac, the gateway may not see the file change.';
+const UNCONFIRMED = 'Not confirmed: whether the gateway reloaded is not known. Try again.';
+const RELOADED = 'Reloaded.';
+/** The gateway's two summaries of a reload that found nothing to apply. */
+const NO_CHANGES = new Set(['no changes detected', 'no changes']);
+
+const outLine = (kind, text) => h('p', { 'data-line': kind }, text);
+
+/**
+ * The lines a 200 reload answer draws, or null when it is not one the page
+ * understands: `changes` must be text and `restart_required` a boolean, and a
+ * pending restart must come with a refusal or advice (restartAdvice draws it).
+ */
+function answeredLines(a) {
+  if (!a || typeof a.changes !== 'string' || typeof a.restart_required !== 'boolean') return null;
+  if (!a.restart_required) {
+    return NO_CHANGES.has(a.changes)
+      ? [outLine('head', 'Nothing changed: gateway.yaml matches what the gateway runs.')]
+      : [outLine('head', RELOADED), outLine('changes', a.changes)];
+  }
+  const block = restartAdvice(a);
+  if (!block) return null;
+  // A refusal leads, and the summary sits under the page's own label; advice follows the summary.
+  return block.dataset.kind === 'refusal'
+    ? [block, outLine('label', 'These settings are not applied while a restart would not start.'), outLine('changes', a.changes)]
+    : [outLine('head', RELOADED), outLine('changes', a.changes), block];
+}
+
+/** The lines for a reload the gateway refused or did not confirm, with its own sentence when it gave one. */
+function refusedLines(err) {
+  const head = err?.status === 409 ? 'Not reloaded. The gateway runs as before.'
+    : err?.status === 503 ? 'Not reloaded.' : UNCONFIRMED;
+  return err?.serverMessage ? [outLine('head', head), outLine('sentence', err.serverMessage)] : [outLine('head', head)];
+}
+
+/** What is said for drawn lines: each line's text, never the start command. */
+const spoken = (lines) => lines.flatMap((n) => (n.classList.contains('restart-advice')
+  ? [...n.querySelectorAll('p > span:not(.glyph)')] : [n])).map((n) => n.textContent);
+
+async function reloadTab(body, ctx) {
+  const outcome = h('div', { class: 'reload-outcome' });
+  const button = h('button', { class: 'btn', type: 'button' }, 'Reload now');
+  const card = h('section', { class: 'tk reload-card', id: 'reload', 'aria-labelledby': 'reload-title' },
+    h('h2', { class: 'reload-title', id: 'reload-title' }, 'Reload gateway.yaml'),
+    h('div', { class: 'reload-row' }, h('p', { class: 't3' }, INTRO), button),
+    outcome,
+    h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
+  button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    // One reload at a time; the earlier outcome stays until this one's answer replaces it.
+    button.disabled = true;
+    button.textContent = 'Reloading…';
+    card.setAttribute('aria-busy', 'true');
+    let lines;
+    let signedOut = false;
+    try {
+      lines = answeredLines(await ctx.api('/ui/api/reload', { method: 'POST' })) ?? [outLine('head', UNCONFIRMED)];
+    } catch (err) {
+      // 401: the shell's sign-in view takes over (and the focus). 403: the shell's forbidden banner says it.
+      signedOut = err?.status === 401;
+      if (err?.status === 403) ctx.show('forbidden');
+      lines = signedOut || err?.status === 403 ? [] : refusedLines(err);
+    }
+    outcome.replaceChildren(...lines);
+    button.disabled = false;
+    button.textContent = 'Reload now';
+    card.removeAttribute('aria-busy');
+    for (const text of spoken(lines)) ctx.announce(text);
+    if (!signedOut) button.focus();
+  });
+  body.append(card);
+}
+
 register('gateway', {
   title: 'Gateway',
   // Settings is built in parts: this one draws the unused secret entries. The later parts'
   // tooltips wait in the copy's _pending_later, each naming the part that will draw it.
   tabs: {
-    // Status and Actions are the rest of this page's work; null keeps them off the tab bar.
+    // Status is the rest of this page's work; null keeps it off the tab bar.
     status: null,
-    actions: null,
+    actions: reloadTab,
     settings: settingsTab,
   },
   entries: [],

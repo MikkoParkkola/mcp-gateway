@@ -9,7 +9,7 @@
 // read. A field the API leaves out reads "Not available yet", never a zero.
 // Every value goes in with textContent. The other Overview panels (Needs you,
 // the flow map, the chart) are their own slices.
-import { register, go, el as h } from '/ui/assets/shell.08fc113e48aa.js';
+import { register, go, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
 
 // The SVG namespace, read off an element the HTML parser makes, so no asset carries a URL.
 const SVG = document.createRange().createContextualFragment('<svg></svg>').firstChild.namespaceURI;
