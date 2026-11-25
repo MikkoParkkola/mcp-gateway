@@ -294,7 +294,7 @@ fn stale(allow: &[&str], hits: &[Hit]) -> Vec<String> {
 /// way, a name holding `test_support`). A named file that is absent is an error.
 fn tree_files(root: &Path) -> Result<Vec<String>, String> {
     let mut found: Vec<PathBuf> = Vec::new();
-    crate::test_source_files::rust_files(&root.join("src/commands"), &mut found);
+    crate::test_source_files::rust_files(&mutant!("K18", root.join("src/cli"), root.join("src/commands")), &mut found);
     crate::test_source_files::rust_files(&root.join("src/cli"), &mut found);
     for named in NAMED {
         let path = root.join(named);
