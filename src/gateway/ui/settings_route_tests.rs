@@ -563,8 +563,12 @@ async fn w3_both_notices_stand_on_one_save() {
     route.write(&BASE.replace("\"dev\"", "\"staging\""));
     let (status, answer, _) = save_env(&route, "staging").await;
     assert_eq!(status, StatusCode::OK, "{answer}");
-    let want = [OUTSIDE_CHANGE_APPLIED.0, NOT_AUDITED.0];
-    assert_eq!(codes(&answer), want, "{answer}");
+    // A set (test plan W3(b)): the spec fixes which notices, not their order.
+    let mut got = codes(&answer);
+    got.sort_unstable();
+    let mut want = [OUTSIDE_CHANGE_APPLIED.0, NOT_AUDITED.0];
+    want.sort_unstable();
+    assert_eq!(got, want, "{answer}");
 }
 
 /// W3 (c): a restart-only outside edit (the port) counts as applied; the
