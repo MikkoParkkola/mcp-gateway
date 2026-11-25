@@ -75,7 +75,8 @@ async fn s4_budget_save() {
         body,
         json!({"revision": FileRevision::of(next.as_bytes()).as_str(),
         "changed":true, "reload":{"changes":"profiles/meta config changed","restart_required":false},
-        "restart_required":[], "comments":"kept"})
+        "restart_required":[], "comments":"kept",
+        "notices":[{"code":NOT_AUDITED.0,"message":NOT_AUDITED.1}]})
     );
     assert_eq!(route.text(), next);
     let running = serde_json::to_value(route.ctx.live_config.get().as_ref()).expect("config JSON");
@@ -141,7 +142,8 @@ async fn s7_restart_parent() {
         "reload":{"changes":"profiles/meta config changed — NOT YET APPLIED, restart required for: auth",
             "restart_required":true,"restart_reason":"config changed in fields that only a restart applies",
             "pending_restart_fields":["auth"]},
-        "restart_required":["auth.enabled"], "comments":"kept"})
+        "restart_required":["auth.enabled"], "comments":"kept",
+        "notices":[{"code":NOT_AUDITED.0,"message":NOT_AUDITED.1}]})
     );
     assert_eq!(
         crate::config_reload::ui_fields::FieldId::of("auth.enabled")

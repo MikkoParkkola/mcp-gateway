@@ -122,7 +122,7 @@ async fn w4_an_unwritable_directory_refuses_turning_auth_on() {
     let route = Route::new(BASE).await;
     let dir = locked(&route.dir.path().join("locked"));
     let path = dir.join("sub").join("audit.jsonl");
-    load_log(&route, &format!("    path: \"{}\"\n", path.display())).await;
+    load_log(&route, &format!("    path: '{}'\n", path.display())).await;
     let before = route.text();
     let answer = turn_on(&route, &[]).await;
     let message = answer.1["message"].as_str().unwrap_or("").to_owned();
@@ -152,7 +152,7 @@ async fn w4_an_unwritable_existing_log_refuses_turning_auth_on() {
     std::fs::write(&in_locked, b"").expect("the file");
     locked(in_locked.parent().expect("a dir"));
     for (row, path) in [("W4.5", &read_only), ("W4.6", &in_locked)] {
-        load_log(&route, &format!("    path: \"{}\"\n", path.display())).await;
+        load_log(&route, &format!("    path: '{}'\n", path.display())).await;
         let before = route.text();
         let answer = turn_on(&route, &[]).await;
         assert_required(row, &route, &before, answer);
@@ -176,7 +176,7 @@ async fn w4_a_relative_path_is_judged_from_the_working_directory() {
 async fn w4_the_held_log_lets_auth_on_audited() {
     let mut route = Route::new(BASE).await;
     let held = route.audit().path();
-    load_log(&route, &format!("    path: \"{}\"\n", held.display())).await;
+    load_log(&route, &format!("    path: '{}'\n", held.display())).await;
     let (status, answer, detail) = turn_on(&route, &[]).await;
     assert_eq!(status, StatusCode::OK, "W4.8: {answer}");
     assert!(detail.get("intent_id").is_some(), "W4.8: {detail:?}");
@@ -195,7 +195,7 @@ async fn w4_a_log_held_elsewhere_does_not_pass() {
     route.audit();
     let dir = locked(&route.dir.path().join("locked"));
     let other = dir.join("audit.jsonl");
-    load_log(&route, &format!("    path: \"{}\"\n", other.display())).await;
+    load_log(&route, &format!("    path: '{}'\n", other.display())).await;
     let before = route.text();
     let answer = turn_on(&route, &[]).await;
     assert_required("W4.9", &route, &before, answer);
@@ -211,7 +211,7 @@ async fn w4_the_check_runs_before_the_store_opens() {
     route.store = Some(super::SettingsStoreForTest::OpenRefused(unopened));
     let dir = locked(&route.dir.path().join("locked"));
     let path = dir.join("sub").join("audit.jsonl");
-    load_log(&route, &format!("    path: \"{}\"\n", path.display())).await;
+    load_log(&route, &format!("    path: '{}'\n", path.display())).await;
     let before = route.text();
     let answer = turn_on(&route, &[secret("w4-bearer-value")]).await;
     assert_required("W4.10", &route, &before, answer);

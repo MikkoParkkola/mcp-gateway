@@ -282,7 +282,10 @@ async fn s21_noop_reloads_outside_edit() {
         body,
         json!({"revision":route.revision(), "changed":false,
         "reload":{"changes":"owner changed: [a]", "restart_required":false},
-        "restart_required":[],"comments":"kept"})
+        "restart_required":[],"comments":"kept",
+        "notices":[
+            {"code":super::OUTSIDE_CHANGE_APPLIED.0,"message":super::OUTSIDE_CHANGE_APPLIED.1},
+            {"code":super::NOT_AUDITED.0,"message":super::NOT_AUDITED.1}]})
     );
     assert_eq!(
         route.ctx.live_config.get().backends["a"].owner.as_deref(),
