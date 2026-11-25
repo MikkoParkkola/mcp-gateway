@@ -63,6 +63,10 @@ pub(crate) struct UiSaved {
     pub(crate) changed: bool,
     /// No byte of this save changed, yet its reload applied a change: an edit
     /// made outside the UI that the save's reload took up (WRITE.3).
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "the web UI settings route reads it")
+    )]
     pub(crate) outside_change: bool,
     pub(crate) reload: ReloadOutcome,
 }
@@ -141,7 +145,15 @@ pub(crate) fn save_outcome(
 /// carries, and the id of the intent it appended, when it appended one.
 pub(crate) struct SaveAnswer {
     pub(crate) result: Result<UiSaved, UiRefused>,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "the web UI settings route reads it")
+    )]
     pub(crate) outcome: SaveOutcome,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "the web UI settings route reads it")
+    )]
     pub(crate) intent_id: Option<super::IntentId>,
 }
 
