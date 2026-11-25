@@ -45,9 +45,17 @@ pub async fn run_identity_command(cmd: IdentityCommand) -> ExitCode {
 
 /// Why a grants command stopped: its arguments were wrong (exit 2, checked before the file is touched), or the
 /// work on the file failed (exit 1). A plain `String` error is a failure.
+#[derive(Debug)]
 enum GrantsError {
     Usage(String),
     Failure(String),
+}
+
+impl std::fmt::Display for GrantsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Usage(message) | Self::Failure(message)) = self;
+        f.write_str(message)
+    }
 }
 
 impl From<String> for GrantsError {
