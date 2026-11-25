@@ -203,15 +203,11 @@ fn some(text: &str) -> Option<String> {
 
 /// The window's query with a parameter the counts route does not take.
 fn sent(name: &str, value: &str) -> CountsQuery {
-    let value = Some(value.to_owned());
-    with(|q| match name {
-        "outcome" => q.outcome = value,
-        "cursor" => q.cursor = value,
-        "limit" => q.limit = value,
-        _ => {
-            q.other.insert(name.to_owned(), value.unwrap_or_default());
-        }
-    })
+    // Deserialized as the route reads it, so the row holds whichever field
+    // takes the name: a named one, or the catch-all.
+    let (from, to) = bounds();
+    serde_json::from_value(serde_json::json!({ "from": from, "to": to, name: value }))
+        .expect("a counts query")
 }
 
 /// The rows the Activity list gives for `query`, paged to the end.
