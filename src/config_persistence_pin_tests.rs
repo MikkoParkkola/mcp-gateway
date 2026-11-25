@@ -625,51 +625,59 @@ fn p_inplace_rewrite_with_its_old_mtime_refuses() {
 /// save refuses and the link another writer left stays.
 #[test]
 fn p_a_link_touched_by_another_writer_refuses() {
-    for (case, swap) in [("relink", true), ("renamed-back", false)] {
-        for mode in MODES {
-            let row = format!("P-relink/{case}/{mode:?}");
-            let dir = tempfile::tempdir().expect("tempdir");
-            let target = dir.path().join(TARGET);
-            for name in ["linked.json", "theirs.json"] {
-                std::fs::write(dir.path().join(name), b"old").expect("a link target");
-            }
-            std::os::unix::fs::symlink("linked.json", &target).expect("link");
-            let before = stamp(&target);
-            let armed = seams::arm(
-                dir.path(),
-                Seams {
-                    before_verify: Some(Box::new(move |target, _scratch| {
-                        let aside = target.with_extension("aside");
-                        until_changed(target, before, || {
-                            if swap {
-                                std::fs::remove_file(target).expect("unlink");
-                                std::os::unix::fs::symlink("theirs.json", target).expect("relink");
-                            } else {
-                                std::fs::rename(target, &aside).expect("rename away");
-                                std::fs::rename(&aside, target).expect("rename back");
-                            }
-                        });
-                    })),
-                    ..Seams::default()
-                },
-            );
-            assert_changed(
-                write_atomic(&target, b"new", mode, Symlink::Replace),
-                &target,
-                &row,
-            );
-            drop(armed);
-            let left = if swap { "theirs.json" } else { "linked.json" };
-            assert_eq!(
-                std::fs::read_link(&target).expect("still a link"),
-                Path::new(left),
-                "{row}: the link stays"
-            );
-            assert_eq!(
-                names(dir.path()),
-                ["linked.json", "state.json", "theirs.json"],
-                "{row}: no scratch left"
-            );
+    link_touched("relink", true);
+}
+
+/// P-relink, renamed-back on its own: deterministic, so its red stands alone.
+#[test]
+fn p_a_link_renamed_away_and_back_refuses() {
+    link_touched("renamed-back", false);
+}
+
+fn link_touched(case: &str, swap: bool) {
+    for mode in MODES {
+        let row = format!("P-relink/{case}/{mode:?}");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join(TARGET);
+        for name in ["linked.json", "theirs.json"] {
+            std::fs::write(dir.path().join(name), b"old").expect("a link target");
         }
+        std::os::unix::fs::symlink("linked.json", &target).expect("link");
+        let before = stamp(&target);
+        let armed = seams::arm(
+            dir.path(),
+            Seams {
+                before_verify: Some(Box::new(move |target, _scratch| {
+                    let aside = target.with_extension("aside");
+                    until_changed(target, before, || {
+                        if swap {
+                            std::fs::remove_file(target).expect("unlink");
+                            std::os::unix::fs::symlink("theirs.json", target).expect("relink");
+                        } else {
+                            std::fs::rename(target, &aside).expect("rename away");
+                            std::fs::rename(&aside, target).expect("rename back");
+                        }
+                    });
+                })),
+                ..Seams::default()
+            },
+        );
+        assert_changed(
+            write_atomic(&target, b"new", mode, Symlink::Replace),
+            &target,
+            &row,
+        );
+        drop(armed);
+        let left = if swap { "theirs.json" } else { "linked.json" };
+        assert_eq!(
+            std::fs::read_link(&target).expect("still a link"),
+            Path::new(left),
+            "{row}: the link stays"
+        );
+        assert_eq!(
+            names(dir.path()),
+            ["linked.json", "state.json", "theirs.json"],
+            "{row}: no scratch left"
+        );
     }
 }
