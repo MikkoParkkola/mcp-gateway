@@ -542,7 +542,9 @@ async fn c6_each_stop_reaches_the_answer() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let blocked = |tag: &str, i: usize, t| at(ended(&format!("{tag}-{i}"), "denied"), t);
     let mut entries: Vec<Value> = (0..2).map(|i| blocked("low", i, minutes(40))).collect();
-    entries.extend(filler(3 * MIB, minutes(30)));
+    // Four MiB: `line_len` sizes rows with a five-digit counter, so a filler
+    // asked for three comes out a few KiB short of it.
+    entries.extend(filler(4 * MIB, minutes(30)));
     entries.extend((0..6).map(|i| blocked("high", i, minutes(20))));
     let logs = written(&dir, entries, Vec::new());
     // Premise: the six lie in the first MiB read, the two over 3 MiB down.
