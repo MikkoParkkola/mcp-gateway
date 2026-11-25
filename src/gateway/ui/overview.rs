@@ -128,7 +128,9 @@ pub(super) async fn overview(
     );
     source.add_tool_tried(&mut checklist);
     body.insert("checklist".into(), checklist.into());
-    degraded.extend_from_slice(source.degraded());
+    if mutant!("M31", !degraded.contains(&"needs_you.decisions"), true) {
+        degraded.extend_from_slice(source.degraded());
+    }
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
     }
@@ -170,7 +172,22 @@ fn kpi_and_servers(
         .collect();
     let sign_ins = backends
         .iter()
-        .filter(|b| b.needs_sign_in())
+        .filter(|b| {
+            use crate::oauth::client::sign_in::SignIn;
+            mutant!(
+                "M25",
+                !b.needs_sign_in(),
+                mutant!(
+                    "M26b",
+                    b.startup_denial().is_none() && b.needs_sign_in(),
+                    mutant!(
+                        "M32",
+                        matches!(b.sign_in(), SignIn::WaitingElsewhere) || b.has_oauth(),
+                        b.needs_sign_in()
+                    )
+                )
+            )
+        })
         .map(|b| sign_in_row(&b.name))
         .collect();
     let mut kpi = Map::new();
@@ -193,8 +210,12 @@ fn kpi_and_servers(
 /// A server a person must sign in to. The name is clipped, and `clipped`
 /// says so when the cut removed anything.
 fn sign_in_row(name: &str) -> Value {
-    let subject = clip(name);
-    let detail = if subject.len() < name.len() {
+    let subject = mutant!("M24", name.to_owned(), clip(name));
+    let detail = if mutant!(
+        "M28",
+        name.chars().count() > TEXT_BYTES,
+        subject.len() < name.len()
+    ) {
         json!({ "clipped": true })
     } else {
         json!({})
@@ -448,9 +469,14 @@ fn needs_you(
     let denied = startup
         .iter()
         .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
+    let sign_ins: Vec<Value> = mutant!("M29", sign_ins.into_iter().rev().collect(), sign_ins);
     rows.splice(0..0, denied);
-    rows.splice(0..0, decisions_row(state, degraded));
-    rows.splice(0..0, invalid);
+    let decisions = decisions_row(state, degraded);
+    let (first, second) = mutant!("M26", (decisions, invalid), (invalid, decisions));
+    {
+        rows.splice(0..0, second);
+    };
+    rows.splice(0..0, first);
     rows.extend(sign_ins);
     rows.extend(limit_rows(state, generation));
     let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
@@ -458,7 +484,7 @@ fn needs_you(
     let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
     for row in &folded {
         *by_kind
-            .entry(row["kind"].as_str().unwrap_or(""))
+            .entry(mutant!("M27", row["subject"].as_str(), row["kind"].as_str()).unwrap_or(""))
             .or_default() += 1;
     }
     if !by_kind.is_empty() {
@@ -471,7 +497,20 @@ fn needs_you(
 /// no set or nothing open. An unreadable source gives no row, never a zero,
 /// and its name goes into `degraded`.
 fn decisions_row(state: &AppState, degraded: &mut Vec<&'static str>) -> Option<Value> {
-    let Some((count, revision)) = state.meta_mcp.decisions()?.snapshot() else {
+    let Some(set) = state.meta_mcp.decisions() else {
+        return None;
+    };
+    let snapshot = mutant!(
+        "M30",
+        set.snapshot().map(|(_, r)| {
+            let adopt = |v: crate::decisions::View| {
+                v.decisions.iter().filter(|d| d["kind"] == "adopt").count()
+            };
+            (set.view().map_or(0, adopt), r)
+        }),
+        set.snapshot()
+    );
+    let Some((count, revision)) = snapshot else {
         degraded.push("needs_you.decisions");
         return None;
     };
