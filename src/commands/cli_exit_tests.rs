@@ -146,10 +146,13 @@ fn the_error_gate_checks_every_secret() {
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
 
+#[cfg(feature = "webui")]
 const UNSAFE_WHAT: &str = "The response could not be printed safely.";
+#[cfg(feature = "webui")]
 const UNSAFE_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
 
 /// T9a, successes: the stderr note is redacted per secret under either rule; stdout is printed as given.
+#[cfg(feature = "webui")]
 #[test]
 fn the_success_note_is_redacted_per_secret() {
     let corpus = [
@@ -180,6 +183,7 @@ fn the_success_note_is_redacted_per_secret() {
 
 /// T9a, D6: `RefuseToken` refuses stdout still holding the token, in both forms; it does not refuse the email (data);
 /// `RedactedJsonBody` (api) prints its already-checked body as given.
+#[cfg(feature = "webui")]
 #[test]
 fn stdout_rules_refuse_only_the_token() {
     let mut misses = Vec::new();
@@ -244,8 +248,10 @@ fn stdout_rules_refuse_only_the_token() {
 }
 
 /// A writer that fails every write with `kind`.
+#[cfg(feature = "webui")]
 struct Failing(std::io::ErrorKind);
 
+#[cfg(feature = "webui")]
 impl std::io::Write for Failing {
     fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
         Err(std::io::Error::from(self.0))
@@ -257,6 +263,7 @@ impl std::io::Write for Failing {
 }
 
 /// `emit_to` with a stdout failing with `kind`: the exit and what reached stderr.
+#[cfg(feature = "webui")]
 fn emitted_with_stdout(kind: std::io::ErrorKind, json: bool, token: &str) -> (CliExit, String) {
     let ok = CliOutcome::success(
         b"data\n".to_vec(),
@@ -270,9 +277,11 @@ fn emitted_with_stdout(kind: std::io::ErrorKind, json: bool, token: &str) -> (Cl
     (exit, String::from_utf8(stderr).expect("utf-8"))
 }
 
+#[cfg(feature = "webui")]
 const WRITE_FAILED: &str = "error: Could not write command output.\nCheck the output destination before repeating the command.\n";
 
 /// T10: a closed reader ends quietly with 0; any other stdout failure is the gated write error, exit 1.
+#[cfg(feature = "webui")]
 #[test]
 fn the_emitter_maps_write_failures() {
     use std::io::ErrorKind::{BrokenPipe, Other};
@@ -355,6 +364,7 @@ fn the_emitter_maps_write_failures() {
 /// escaped by JSON, so the byte search alone cannot see it: each case first proves the raw token is absent from the
 /// bytes, then that the gate still refuses it in a nested object value, an array item and an object key (each
 /// alone), and that the same shapes without it pass.
+#[cfg(feature = "webui")]
 #[test]
 fn the_json_gate_scans_decoded_strings() {
     let mut misses = Vec::new();
@@ -414,4 +424,122 @@ fn the_json_gate_scans_decoded_strings() {
         ));
     }
     assert!(misses.is_empty(), "{}", misses.join("\n"));
+}
+
+// The three local exits (rows U1-U9). Every expected value is a literal.
+
+/// U1: every line break becomes one space, so content cannot split the two-line shape.
+#[test]
+fn one_line_writes_a_line_break_as_a_space() {
+    assert_eq!(one_line("a\nb"), "a b", "LF");
+    assert_eq!(one_line("a\r\nb"), "a b", "CR LF is one break");
+    assert_eq!(one_line("a\n\nb"), "a  b", "one space per break");
+    assert_eq!(one_line("a b"), "a b", "no break, no change");
+    assert_eq!(one_line(""), "", "empty stays empty");
+    assert_eq!(one_line("a\rb"), "a b", "a lone CR");
+}
+
+/// U2: the usage remedy names the command's own help; two commands, so a fixed sentence fails.
+#[test]
+fn the_usage_remedy_names_the_commands_help() {
+    assert_eq!(
+        usage_remedy("cap list"),
+        "Run 'mcp-gateway cap list --help' for usage."
+    );
+    assert_eq!(
+        usage_remedy("doctor"),
+        "Run 'mcp-gateway doctor --help' for usage."
+    );
+}
+
+/// U3: an empty remedy is a bug at the call site, caught before anything is written. Caught with `catch_unwind`
+/// rather than `should_panic`, so a missing panic fails as an assertion the rows tooling can judge; driven through
+/// `error_outcome`, where the check lives, so the row writes nothing to the process stderr either way.
+#[test]
+fn fail_refuses_an_empty_remedy() {
+    let caught = std::panic::catch_unwind(|| error_outcome(CliExit::LocalFailure, "m", ""));
+    let message = caught.err().map(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+            })
+            .unwrap_or_default()
+    });
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|text| text.contains("remedy")),
+        "an empty remedy must panic, naming the remedy: {message:?}"
+    );
+}
+
+/// U4: the local codes are the literals 0, 1 and 2.
+#[test]
+fn the_local_codes_are_zero_one_and_two() {
+    assert_eq!(CliExit::Ok.code(), 0);
+    assert_eq!(CliExit::LocalFailure.code(), 1);
+    assert_eq!(CliExit::Usage.code(), 2);
+}
+
+/// U5: the remote commands' error text is not folded: `outcome` writes what it is given.
+#[test]
+fn the_remote_error_text_is_not_folded() {
+    let out = CliError::new(CliExit::Usage, "a\nb", "r").outcome(false, &[]);
+    assert_eq!(out.stderr(), "error: a\nb\nr\n");
+}
+
+/// U6: `fail`'s outcome folds both lines and keeps the kind it is given.
+#[test]
+fn fail_builds_the_two_line_outcome() {
+    let out = error_outcome(CliExit::LocalFailure, "m\nx", "r\ny");
+    assert_eq!(out.stderr(), "error: m x\nr y\n", "both fields folded");
+    assert!(out.stdout().is_empty(), "nothing on stdout");
+    assert_eq!(out.exit(), CliExit::LocalFailure);
+    let usage_kind = error_outcome(CliExit::Usage, "m", "r");
+    assert_eq!(usage_kind.exit(), CliExit::Usage, "the kind passes through");
+}
+
+/// U7: `usage`'s outcome is exit 2 with the help remedy.
+#[test]
+fn usage_builds_the_usage_outcome() {
+    let out = usage_outcome("tls issue-server", "bad");
+    assert_eq!(
+        out.stderr(),
+        "error: bad\nRun 'mcp-gateway tls issue-server --help' for usage.\n"
+    );
+    assert_eq!(out.exit(), CliExit::Usage);
+}
+
+/// U8: `verdict` returns the code it is given (compared as the repo does, by Debug text).
+#[test]
+fn verdict_returns_its_code() {
+    let code = |exit: std::process::ExitCode| format!("{exit:?}");
+    assert_eq!(code(verdict(3)), code(std::process::ExitCode::from(3)));
+    assert_eq!(code(verdict(1)), code(std::process::ExitCode::from(1)));
+    assert_ne!(code(verdict(1)), code(verdict(3)), "two codes stay apart");
+}
+
+/// U9: `fail` leaves with its kind's code, 2 for usage and 1 for a local failure. Driven through `fail`'s own two
+/// steps (`error_outcome`, then the emitter on in-memory streams): `fail` writes to the process stderr, which the
+/// test harness does not capture, and a log line starting `error: ` reads to the rows tooling as a build error. The
+/// binary rows pin `fail`'s process exit codes end to end.
+#[test]
+fn fail_returns_the_kinds_code() {
+    for (kind, code) in [(CliExit::Usage, 2), (CliExit::LocalFailure, 1)] {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let exit = emit_to(
+            &error_outcome(kind, "m", "r"),
+            false,
+            &[],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(exit.code(), code, "{kind:?}");
+        assert_eq!(err, b"error: m\nr\n", "{kind:?}");
+        assert!(out.is_empty(), "{kind:?}");
+    }
 }
