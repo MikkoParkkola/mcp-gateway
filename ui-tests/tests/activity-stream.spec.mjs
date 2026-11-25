@@ -634,3 +634,23 @@ test('A34 cleaned lists exactly the calls the list answers for outcome=cleaned',
   expect(filters(urls[before]).outcome).toBe('cleaned');
   await expect(cleaned).toHaveAttribute('aria-pressed', 'true');
 });
+
+for (const [why, reply] of [
+  ['a 500', { status: 500, json: {} }],
+  ['the rotation 503', { status: 503, json: { error: 'the log rotated while it was being counted: try again' } }],
+]) {
+  test(`A33 a failed counts read (${why}) leaves the words and the list`, async ({ page }) => {
+    const urls = await install(page, { answer: () => list(ROWS), counts: () => reply });
+    await open(page, urls, '/ui/activity/status');
+    await expect.poll(() => urls.counts.length, 'the premise: a counts read went out').toBe(1);
+    await expect.poll(async () => (await shownRows(page)).length).toBe(ROWS.length);
+    await expect(outcomeButtons(page)).toHaveText(['All', 'ok', 'failed', 'blocked', 'cleaned']);
+  });
+}
+
+test('A38 the counts arrive with no animation', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS), counts: () => counted(FIVE) });
+  await open(page, urls, '/ui/activity/status');
+  await expect(outcomeButtons(page).first()).toHaveText('All 12');
+  expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+});
