@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::error;
 
-use super::child_tree::{ChildTree, Ending, NESTED_TERM_NEED, REAP_DEADLINE, Reap};
+use super::child_tree::{ChildTree, Ending, REAP_DEADLINE, Reap};
 
 /// What a stop leaves a backend's tree after its stdin closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
