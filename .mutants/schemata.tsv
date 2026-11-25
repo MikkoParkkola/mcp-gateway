@@ -1,0 +1,23 @@
+head_sha	7008a983a5a89ea5c14c78da7fab1d11390b4489
+#mutant M1
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:481
+#mutant M2
+mcp_gateway	gateway::router::overview_needs_you_tests::n2_sign_in_rows_sit_after_refusals_and_before_budgets	src/gateway/router/overview_needs_you_tests.rs:545
+#mutant M3
+mcp_gateway	gateway::router::overview_needs_you_tests::n2_sign_in_rows_sit_after_refusals_and_before_budgets	src/gateway/router/overview_needs_you_tests.rs:545
+#mutant M4
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:566
+#mutant M5
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:482
+#mutant M6
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:566
+#mutant M7
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:492
+#mutant M8
+mcp_gateway	gateway::router::overview_needs_you_tests::n4_a_name_longer_than_the_clip_is_marked	src/gateway/router/overview_needs_you_tests.rs:605
+#mutant M9
+mcp_gateway	gateway::router::overview_needs_you_tests::n4_a_name_longer_than_the_clip_is_marked	src/gateway/router/overview_needs_you_tests.rs:605
+#mutant M10
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:483
+#mutant M11
+mcp_gateway	gateway::router::overview_decisions_tests::d6_the_decisions_row_survives_a_full_list	src/gateway/router/overview_decisions_tests.rs:189
