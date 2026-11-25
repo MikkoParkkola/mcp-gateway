@@ -59,9 +59,9 @@ HASHED, TABLE, FRAME_STYLE = _rehash_patterns()
 # The extensions rehash hashes, read from its own name pattern; a hash is stripped only before one of them.
 EXTS = re.search(r"\(\?P<ext>([^)]*)\)", HASHED.pattern)[1]
 HASH_IN_REF = re.compile(r"(/ui/assets/[^\s\"'`()<>]+?)\.[0-9a-f]{12}(\.(?:" + EXTS + r"))(?![\w.-])")
-# A reference as rehash defines one: a name (any characters; rehash allows any stem) ending in one of its
-# extensions. Prose such as "served under /ui/assets/, by name" is not a reference.
-REF = re.compile(r"/ui/assets/([^\s\"'`()<>,;]+?\.(?:" + EXTS + r"))(?![\w.-])")
+# A reference as rehash defines one: a name (any characters but whitespace, quotes and brackets; rehash allows any
+# stem) ending in one of its extensions. Prose such as "served under /ui/assets/, by name" never ends in one.
+REF = re.compile(r"/ui/assets/([^\s\"'`()<>]+?\.(?:" + EXTS + r"))(?![\w.-])")
 
 
 class Refused(Exception):
@@ -128,13 +128,16 @@ def tree_files(rev: str, root: str) -> dict:
         meta, path = entry.split("\t", 1)
         found = key_of(path)
         if found:
-            wanted[found[0]] = (found[1], meta.split()[2])
+            if found[0] in wanted:
+                # Two files for one asset (a stale copy beside the current one): keying would silently drop one.
+                raise Refused("R8", f"one asset under two file names at {rev[:10]}", [wanted[found[0]][2], path])
+            wanted[found[0]] = (found[1], meta.split()[2], path)
     if not wanted:
         return {}
     batch = git("cat-file", "--batch", cwd=root, binary=True,
-                stdin="".join(oid + "\n" for _, oid in wanted.values()).encode()).stdout
+                stdin="".join(oid + "\n" for _, oid, _ in wanted.values()).encode()).stdout
     files, pos = {}, 0
-    for key, (kind, oid) in wanted.items():
+    for key, (kind, oid, _) in wanted.items():
         header_end = batch.index(b"\n", pos)
         size = int(batch[pos:header_end].split()[2])
         data = batch[header_end + 1: header_end + 1 + size]

@@ -661,6 +661,15 @@ class Rows(unittest.TestCase):
         # "@" is outside \\w: the reference check must read whole reference tokens, not just word characters.
         self.refuse("R7", "@missing.js", reason="missing asset", script=shim)
 
+    def test_t7f_a_reference_whose_name_holds_a_comma(self):
+        self.fx.setup(edit_a, edit_b)
+        shim = self.shim("""\
+            if not state['done'] and '<p>shell</p>' in text:
+                state['done'] = True
+                text = text.replace('<p>shell</p>', '<p>shell</p>\\n<script src="/ui/assets/a,b.js"></script>', 1)
+            """)
+        self.refuse("R7", "a,b.js", reason="missing asset", script=shim)
+
     def test_t8_the_same_new_asset_on_both_sides(self):
         def add(fx):
             fx.write(f"{SHELL}/new.js", "export const n = 1;\n")
@@ -706,6 +715,28 @@ class Rows(unittest.TestCase):
         self.fx.setup(branch, edit_b)
         self.refuse("R9", "csp.golden")
         self.assertEqual(outside.read_text(), "outside\n")
+
+    def test_t17b_a_symlinked_folder_above_a_generated_file(self):
+        outside = self.fx.tmp / "outside-src"
+        shutil.copytree(self.fx.root / f"{UI}/shell-src", outside)
+
+        def branch(fx):
+            folder = fx.root / f"{UI}/shell-src"
+            shutil.rmtree(folder)
+            folder.symlink_to(outside, target_is_directory=True)
+            fx.skip_rehash_once = True  # the fixture's own rehash would write through the link
+
+        self.fx.setup(branch, edit_b)
+        before = (outside / "frame.css").read_bytes()
+        self.refuse("R9", "shell-src")
+        self.assertEqual((outside / "frame.css").read_bytes(), before)
+
+    def test_t12c_one_asset_under_two_file_names(self):
+        # A second, correctly hashed copy of a.js beside the first: rehash names it a.<its hash>.js.
+        self.rebase_fixture(lambda fx: fx.write(f"{SHELL}/a.js", "export const stale = 1;\n"))
+        self.assertEqual(len(list((self.fx.root / SHELL).glob("a.*.js"))), 2)
+        self.fx.setup(edit_b, lambda fx: fx.edit(f"{SHELL}/app.css", "gray", "silver"))
+        self.refuse("R8", "one asset under two file names")
 
     def test_t18_a_merge_that_never_starts(self):
         self.fx.setup(edit_a, edit_b)
