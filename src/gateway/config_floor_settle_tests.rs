@@ -563,7 +563,7 @@ async fn an_admitted_write_holds_the_checkpoint() {
         let booted = Booted::new(BASE);
         let outside = booted.registry.reload_lock_handle().lock_owned().await;
         let (ctx, path) = (Arc::clone(&booted.ctx), booted.cfg.path.clone());
-        let writing = tokio::spawn(async move {
+        let mut writing: futures::future::BoxFuture<'static, _> = Box::pin(async move {
             match entry {
                 Write::Replace => {
                     let mut config = Config::load(Some(path.as_path())).expect("loads");
@@ -579,10 +579,11 @@ async fn an_admitted_write_holds_the_checkpoint() {
                     .map(drop),
             }
         });
-        wait_until(&format!("{row}: the write was admitted"), || {
-            let log = booted.gate.decisions();
-            log.iter().any(|d| d.kind == AdmitKind::Write && d.admitted)
-        });
+        // Polled here until it parks on the held reload lock: past its
+        // admission, so a permit dropped at once is dropped by now.
+        let parked = futures::poll!(&mut writing).is_pending();
+        assert!(parked, "{row}: the write parked on the reload lock");
+        let writing = tokio::spawn(writing);
         p3_case(&row, &booted, AdmitKind::Write, Probe::Busy, || {
             drop(outside)
         })
