@@ -26,15 +26,15 @@ fn grants_path(config: Option<&Path>) -> Result<Option<std::path::PathBuf>, Stri
 pub(super) enum GrantsCheck {
     /// Grants are off, or the grants file loads.
     Passed,
-    /// The grants file would not load; the loader's refusal was printed.
-    Refused,
+    /// The grants file would not load: the loader's refusal, for the caller to print.
+    Refused(String),
     /// The config itself does not load, so no grants file could be named.
     ConfigDoesNotLoad(String),
 }
 
 /// Read the grants file through the loader, on its own thread so this runs
-/// inside or outside an async runtime. The loader's refusal is printed; a
-/// config that does not load is returned for the caller to judge.
+/// inside or outside an async runtime. Prints nothing: a refusal and a config
+/// that does not load are both returned for the caller to report.
 pub(super) fn check_grant_rows(config: Option<&Path>) -> GrantsCheck {
     let path = match grants_path(config) {
         Ok(Some(path)) => path,
@@ -56,10 +56,7 @@ pub(super) fn check_grant_rows(config: Option<&Path>) -> GrantsCheck {
     .unwrap_or_else(|_| Err("the identity grants check panicked".to_string()));
     match read {
         Ok(()) => GrantsCheck::Passed,
-        Err(refusal) => {
-            eprintln!("Error: {refusal}");
-            GrantsCheck::Refused
-        }
+        Err(refusal) => GrantsCheck::Refused(refusal),
     }
 }
 

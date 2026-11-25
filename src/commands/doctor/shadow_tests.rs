@@ -140,7 +140,8 @@ fn render_yaml_contains_disclaimer() {
 #[test]
 fn shadow_command_invalid_format_returns_failure() {
     let code = run_doctor_shadow_command("iptables");
-    assert_eq!(code, ExitCode::FAILURE);
+    // A format the command does not know is a wrong invocation: exit 2, not 1.
+    assert_eq!(code, ExitCode::from(2));
 }
 
 #[test]
