@@ -199,11 +199,16 @@ fn with(set: impl FnOnce(&mut CountsQuery)) -> CountsQuery {
 
 /// The window's query with a parameter the counts route does not take.
 fn sent(name: &str, value: &str) -> CountsQuery {
-    // Deserialized as the route reads it, so the row holds whichever field
-    // takes the name: a named one, or the catch-all.
+    // Decoded from a form-encoded query, as the route's `Query` decodes it, so
+    // the row holds whichever field takes the name: a named one, or the catch-all.
     let (from, to) = bounds();
-    serde_json::from_value(serde_json::json!({ "from": from, "to": to, name: value }))
-        .expect("a counts query")
+    let pairs = [
+        ("from", from.unwrap_or_default()),
+        ("to", to.unwrap_or_default()),
+        (name, value.to_owned()),
+    ];
+    let query = serde_urlencoded::to_string(pairs).expect("an encoded query");
+    serde_urlencoded::from_str(&query).expect("a counts query")
 }
 
 /// The rows the Activity list gives for `query`, paged to the end.
