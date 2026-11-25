@@ -298,12 +298,12 @@ pub(crate) use reload_context::SurfacedHook;
 use reload_context::replace::startup_recovery_intent;
 // The refusal texts: the web UI answers them, and the gate rows of every
 // test build assert them.
-#[cfg(feature = "webui")]
-pub(crate) use reload_context::is_gate_refusal;
+#[cfg(test)]
+pub(crate) use reload_context::RELOAD_REPLAY_OWED;
 #[cfg(any(test, feature = "webui"))]
-pub(crate) use reload_context::{
-    RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING, RESTART_BUSY,
-};
+pub(crate) use reload_context::{RELOAD_RESTARTING, RELOAD_STOPPING};
+#[cfg(feature = "webui")]
+pub(crate) use reload_context::{RESTART_BUSY, is_gate_refusal};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config`, recording the recovery in the audit log of the config it
