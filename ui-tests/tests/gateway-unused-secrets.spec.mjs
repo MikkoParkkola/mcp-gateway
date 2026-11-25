@@ -61,20 +61,22 @@ async function open(page) {
   await shellReady(page);
 }
 
-test('G1: /ui/gateway, its Status and Actions links and the sidebar all land on Settings; no empty tab is drawn', async ({ page }) => {
+test('R-TABS: /ui/gateway, its Status link and the sidebar land on Actions; Settings keeps its own address; no empty tab is drawn', async ({ page }) => {
   await unusedScreen(page);
   for (const from of ['/ui/gateway', '/ui/gateway/status', '/ui/gateway/actions']) {
     await page.goto(from);
     await shellReady(page);
-    await expect(page).toHaveURL('/ui/gateway/settings');
-    await expect(page.locator('nav.tabs a')).toHaveText(['Settings']);
-    await expect(section(page)).toBeVisible();
+    await expect(page).toHaveURL('/ui/gateway/actions');
+    await expect(page.locator('nav.tabs a')).toHaveText(['Actions', 'Settings']);
   }
+  await open(page);
+  await expect(page).toHaveURL('/ui/gateway/settings');
+  await expect(page.locator('nav.tabs a')).toHaveText(['Actions', 'Settings']);
+  await expect(section(page).getByRole('heading', { level: 2 })).toHaveText('Unused secret entries');
   await page.goto('/ui/tools/status');
   await shellReady(page);
   await page.locator('#pages').getByRole('link', { name: 'Gateway' }).click();
-  await expect(page).toHaveURL('/ui/gateway/settings');
-  await expect(section(page).getByRole('heading', { level: 2 })).toHaveText('Unused secret entries');
+  await expect(page).toHaveURL('/ui/gateway/actions');
 });
 
 test('G2: each entry shows its name, store and written time; a store that could not be read shows why', async ({ page }) => {

@@ -263,6 +263,9 @@ mod f13_text_a_tests;
 mod firewall_publish_fixture;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
+mod gateway_health_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// Identity-grant refusals through `/mcp`, read back as Activity rows.
 #[cfg(tp1)]

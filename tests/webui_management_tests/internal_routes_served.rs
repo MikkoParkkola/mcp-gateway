@@ -343,6 +343,22 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
             ),
         ],
     ),
+    // The fixture starts no health history, so its row pins the 503; the
+    // served answer is a history's body, and a non-admin stays refused.
+    (
+        "/ui/api/gateway/health",
+        Method::GET,
+        &[
+            (
+                "src/gateway/ui/gateway_health_tests.rs",
+                "g7_no_history_or_a_clock_before_1970_is_503",
+            ),
+            (
+                "src/gateway/router/gateway_health_tests.rs",
+                "g6_a_non_admin_key_is_refused_and_no_credential_is_401",
+            ),
+        ],
+    ),
 ];
 
 /// Whether `status` on `path` is a served admin answer: success, or `/sse`'s
