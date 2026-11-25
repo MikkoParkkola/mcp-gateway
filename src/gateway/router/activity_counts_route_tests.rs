@@ -394,9 +394,13 @@ fn c14_counts_leave_the_list_two_slots() {
         let held: Vec<_> = (0..3).map(|_| fx.send(&counts_uri())).collect();
         let two_held = || fx.arrivals() == 2;
         wait_until("two counts reads at the hook", two_held);
-        let settle = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < settle {
-            assert_eq!(fx.arrivals(), 2, "a third counts read got past its permit");
+        for sample in 0..50 {
+            let seen = fx.arrivals();
+            assert_eq!(
+                seen, 2,
+                "a third counts read got past its permit ({sample})"
+            );
+            // timing: absence
             std::thread::sleep(Duration::from_millis(10));
         }
         let list = format!("{}?server=srv", routes::UI_ACTIVITY);

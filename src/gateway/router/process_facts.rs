@@ -101,6 +101,10 @@ pub(crate) const COUNT_READS: usize = 2;
 /// the bytes the pass examined, and the request's drop flag. It returns
 /// nothing, so it cannot stop the read.
 #[derive(Clone)]
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(dead_code, reason = "only the web UI's counts route calls it")
+)]
 pub(crate) struct CountsHook(pub(crate) Arc<CountsPass>);
 
 /// The pass callback a [`CountsHook`] holds.
