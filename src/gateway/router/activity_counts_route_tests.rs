@@ -104,11 +104,12 @@ fn watched(leg: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// Wait on the wall clock until `ready`, or fail naming `what`.
-fn wait_until(what: &str, within: Duration, ready: impl Fn() -> bool) {
-    let deadline = Instant::now() + within;
+/// Wait on the wall clock until `ready`, or fail naming `what` after
+/// [`PATIENCE`].
+fn wait_until(what: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + PATIENCE;
     while !ready() {
-        assert!(Instant::now() < deadline, "{what}: not within {within:?}");
+        assert!(Instant::now() < deadline, "{what}: not within {PATIENCE:?}");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -332,7 +333,7 @@ fn c13_an_aborted_request_stops_reading() {
         let fx = fixture(Hold::UntilDropped, COUNT_READS);
         fx.fill(12 * MIB);
         let (_answered, task) = fx.send(&counts_uri());
-        wait_until("the read's first pass", PATIENCE, || fx.arrivals() >= 1);
+        wait_until("the read's first pass", || fx.arrivals() >= 1);
         task.abort();
         assert_stopped_after_one_pass(&fx, "dropped future");
     });
@@ -359,7 +360,7 @@ fn c13_an_aborted_request_stops_reading() {
             counts_uri()
         );
         client.write_all(head.as_bytes()).expect("sent");
-        wait_until("the read's first pass", PATIENCE, || fx.arrivals() >= 1);
+        wait_until("the read's first pass", || fx.arrivals() >= 1);
         drop(client);
         assert_stopped_after_one_pass(&fx, "closed connection");
     });
@@ -392,7 +393,7 @@ fn c14_counts_leave_the_list_two_slots() {
         let fx = fixture(Hold::UntilReleased, COUNT_READS);
         let held: Vec<_> = (0..3).map(|_| fx.send(&counts_uri())).collect();
         let two_held = || fx.arrivals() == 2;
-        wait_until("two counts reads at the hook", PATIENCE, two_held);
+        wait_until("two counts reads at the hook", two_held);
         let settle = Instant::now() + Duration::from_millis(500);
         while Instant::now() < settle {
             assert_eq!(fx.arrivals(), 2, "a third counts read got past its permit");
@@ -404,7 +405,7 @@ fn c14_counts_leave_the_list_two_slots() {
         assert_eq!(served.map(|(status, _)| status), Ok(StatusCode::OK));
         fx.release();
         // Premise: the third was waiting, not lost.
-        wait_until("the third counts read", PATIENCE, || fx.arrivals() == 3);
+        wait_until("the third counts read", || fx.arrivals() == 3);
         answer_all(held);
         assert!(!fx.timed_out());
     });
@@ -413,11 +414,12 @@ fn c14_counts_leave_the_list_two_slots() {
         let fx = fixture(Hold::UntilReleased, COUNT_READS);
         let held: Vec<_> = (0..6).map(|_| fx.send(&counts_uri())).collect();
         let two_held = || fx.arrivals() == 2;
-        wait_until("two counts reads at the hook", PATIENCE, two_held);
+        wait_until("two counts reads at the hook", two_held);
         for sample in 0..20 {
             // Free shared slots, and counts reads at the hook.
             let seen = (fx.read_slots(), fx.arrivals());
             assert_eq!(seen, (2, 2), "sample {sample}");
+            // timing: absence
             std::thread::sleep(Duration::from_millis(10));
         }
         fx.release();
@@ -429,7 +431,7 @@ fn c14_counts_leave_the_list_two_slots() {
         let fx = fixture(Hold::UntilReleased, 3);
         let held: Vec<_> = (0..3).map(|_| fx.send(&counts_uri())).collect();
         let three_held = || fx.arrivals() == 3;
-        wait_until("three counts reads at the hook", PATIENCE, three_held);
+        wait_until("three counts reads at the hook", three_held);
         fx.release();
         answer_all(held);
     });

@@ -197,10 +197,6 @@ fn with(set: impl FnOnce(&mut CountsQuery)) -> CountsQuery {
     query
 }
 
-fn some(text: &str) -> Option<String> {
-    Some(text.to_owned())
-}
-
 /// The window's query with a parameter the counts route does not take.
 fn sent(name: &str, value: &str) -> CountsQuery {
     // Deserialized as the route reads it, so the row holds whichever field
@@ -394,7 +390,7 @@ async fn c2_counts_span_more_than_one_page() {
     );
     // One list page holds 200 of them and points past itself.
     let mut query = list_window(Some("blocked"));
-    query.limit = some("200");
+    query.limit = Some("200".into());
     let page = body(list_page(&logs, &Access::All, &query)).await;
     assert_eq!(page["rows"].as_array().map(Vec::len), Some(200));
     assert!(page["next_cursor"].is_string(), "{}", page["next_cursor"]);
@@ -439,17 +435,17 @@ async fn c3_filters_apply() {
         q.from = Some((n() - hours(3)).to_rfc3339());
         q.to = Some((n() + hours(1)).to_rfc3339());
     });
-    let legs = [
-        ("server=a", with(|q| q.server = some("a")), 6),
-        ("caller=y", with(|q| q.caller = some("y")), 5),
-        ("q=kb.", with(|q| q.q = some("kb.")), 4),
-        ("rule=R", with(|q| q.rule = some("R")), 2),
+    let cases = [
+        ("server=a", with(|q| q.server = Some("a".into())), 6),
+        ("caller=y", with(|q| q.caller = Some("y".into())), 5),
+        ("q=kb.", with(|q| q.q = Some("kb.".into())), 4),
+        ("rule=R", with(|q| q.rule = Some("R".into())), 2),
         // The record stamped `to` is counted; the one a second after is not.
-        ("server=d", with(|q| q.server = some("d")), 1),
+        ("server=d", with(|q| q.server = Some("d".into())), 1),
         ("no filter", window(), 10),
         ("wide window", wide, 12),
     ];
-    for (leg, query, all) in legs {
+    for (leg, query, all) in cases {
         assert_eq!(counts(&logs, query).await["counts"]["all"], all, "{leg}");
     }
 
@@ -462,7 +458,7 @@ async fn c3_filters_apply() {
         delivered("e-2", "delivered"),
     ];
     let logs = written(&dir, effects, Vec::new());
-    let annotated = with(|q| q.effect = some("annotated"));
+    let annotated = with(|q| q.effect = Some("annotated".into()));
     assert_eq!(counts(&logs, annotated).await["counts"]["all"], 1);
     assert_eq!(counts(&logs, window()).await["counts"]["all"], 2);
 }

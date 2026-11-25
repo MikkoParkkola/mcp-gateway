@@ -101,7 +101,10 @@ pub(crate) const COUNT_READS: usize = 2;
 /// the bytes the pass examined, and the request's drop flag. It returns
 /// nothing, so it cannot stop the read.
 #[derive(Clone)]
-pub(crate) struct CountsHook(pub(crate) Arc<dyn Fn(u64, u64, &AtomicBool) + Send + Sync>);
+pub(crate) struct CountsHook(pub(crate) Arc<CountsPass>);
+
+/// The pass callback a [`CountsHook`] holds.
+pub(crate) type CountsPass = dyn Fn(u64, u64, &AtomicBool) + Send + Sync;
 
 impl std::fmt::Debug for CountsHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
