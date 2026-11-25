@@ -1,0 +1,40 @@
+name: macOS cache probe
+
+# Throwaway measurement for one ticket, never merged: how big one macOS Rust
+# cache is, and which entries the repository's cache limit evicts for it.
+# The job id, toolchain, environment and cache step match ci.yml's
+# macos-shards lib-b leg, so the saved entry is the one a fix would save.
+on:
+  push:
+    branches: [throwaway/maccache-10312]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+permissions:
+  contents: read
+
+jobs:
+  macos-shards:
+    name: macOS cache probe (lib-b build)
+    runs-on: macos-latest
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 2
+      MACOS_LIB_SOLO: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: true
+          # The size is the measurement, so save even if a test fails.
+          cache-on-failure: true
+      - name: Lib test parts, built and run one at a time
+        timeout-minutes: 150
+        run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-b --build "$RUNNER_TEMP/parts"
