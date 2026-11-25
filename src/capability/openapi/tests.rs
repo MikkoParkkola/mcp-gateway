@@ -585,3 +585,153 @@ fn redirect_decision_follows_five_hops_and_stops_the_sixth() {
         RedirectDecision::Stop
     );
 }
+
+// ── One document converts the same way every time ───────────────────────────
+
+/// Runs per leg: each parses the text afresh, so each walks a new map with
+/// its own hash seed; a pick left on map order fails a run about half the
+/// time with two candidates, so all 32 pass by chance about once in 2^32.
+const RUNS: usize = 32;
+
+/// `text` converted [`RUNS`] times, each from a fresh parse.
+fn converted_afresh(text: &str) -> Vec<Vec<GeneratedCapability>> {
+    (0..RUNS)
+        .map(|_| {
+            OpenApiConverter::new()
+                .convert_string(text)
+                .expect("the document converts")
+        })
+        .collect()
+}
+
+/// A one-operation document whose components hold `schemes` (a YAML block
+/// indented for `securitySchemes`).
+fn with_schemes(schemes: &str) -> String {
+    format!(
+        "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /x:\n    get:\n      operationId: getX\n      responses:\n        \"200\":\n          description: ok\ncomponents:\n  securitySchemes:\n{schemes}"
+    )
+}
+
+/// Every run writes `key: <key>` in its one capability's auth block.
+fn assert_every_run_picks(schemes: &str, key: &str) {
+    for (run, caps) in converted_afresh(&with_schemes(schemes)).iter().enumerate() {
+        let line = format!("  key: {key}");
+        assert!(
+            caps[0].yaml.lines().any(|l| l == line),
+            "run {run}: not {key}:\n{}",
+            caps[0].yaml
+        );
+    }
+}
+
+/// IMPBIND.6 leg 1: two bearer schemes; the name that sorts first is named.
+#[test]
+fn impbind6_two_bearer_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: http\n      scheme: bearer\n    alpha:\n      type: http\n      scheme: bearer\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 2: no bearer, two apiKey schemes.
+#[test]
+fn impbind6_two_api_key_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: apiKey\n      in: header\n      name: X-Zeta\n    alpha:\n      type: apiKey\n      in: header\n      name: X-Alpha\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 3: two schemes no pass prefers reach the final fallback.
+#[test]
+fn impbind6_the_fallback_names_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: openIdConnect\n      openIdConnectUrl: https://id.example/zeta\n    alpha:\n      type: openIdConnect\n      openIdConnectUrl: https://id.example/alpha\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 7: two oauth2 schemes and nothing preferred above them.
+#[test]
+fn impbind6_two_oauth2_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: oauth2\n      flows: {}\n    alpha:\n      type: oauth2\n      flows: {}\n",
+        "oauth:alpha",
+    );
+}
+
+/// IMPBIND.6 leg 8: two basic schemes and nothing else.
+#[test]
+fn impbind6_two_basic_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: http\n      scheme: basic\n    alpha:\n      type: http\n      scheme: basic\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 4: a request body with two media types, neither JSON nor
+/// form: the input takes the one whose name sorts first.
+#[test]
+fn impbind6_the_media_type_fallback_takes_the_first_by_name() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /x:\n    post:\n      operationId: putX\n      requestBody:\n        content:\n          text/plain:\n            schema:\n              type: object\n              properties:\n                zeta_field:\n                  type: string\n          application/xml:\n            schema:\n              type: object\n              properties:\n                alpha_field:\n                  type: string\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let yaml = &caps[0].yaml;
+        assert!(yaml.contains("alpha_field"), "run {run}:\n{yaml}");
+        assert!(!yaml.contains("zeta_field"), "run {run}:\n{yaml}");
+    }
+}
+
+/// The `path:` and `method:` lines of each capability, in list order.
+fn endpoints(caps: &[GeneratedCapability]) -> Vec<(String, String)> {
+    let field = |yaml: &str, key: &str| {
+        yaml.lines()
+            .find_map(|l| l.trim().strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+    caps.iter()
+        .map(|c| (field(&c.yaml, "path: "), field(&c.yaml, "method: ")))
+        .collect()
+}
+
+/// IMPBIND.6 leg 5: two operations whose tool names are equal, on two paths:
+/// the one on the path that sorts first comes first, every run.
+#[test]
+fn impbind6_equal_names_on_two_paths_order_by_path() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /b:\n    get:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n  /a:\n    get:\n      operationId: ListUsers\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let got = endpoints(caps);
+        let want = [("/a", "GET"), ("/b", "GET")].map(|(p, m)| (p.to_string(), m.to_string()));
+        assert_eq!(got, want, "run {run}");
+    }
+}
+
+/// IMPBIND.6 leg 6: two equal-named operations on one path: GET before POST.
+#[test]
+fn impbind6_equal_names_on_one_path_order_by_method() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /a:\n    post:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n    get:\n      operationId: ListUsers\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let got = endpoints(caps);
+        let want = [("/a", "GET"), ("/a", "POST")].map(|(p, m)| (p.to_string(), m.to_string()));
+        assert_eq!(got, want, "run {run}");
+    }
+}
+
+/// IMPBIND.6 leg 6b: one path keyed both `GET` and `get`, the two equal-named
+/// operations told apart by summary: the key as written decides, every run.
+#[test]
+fn impbind6_method_keys_that_differ_only_in_case_keep_one_order() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /a:\n    get:\n      operationId: listUsers\n      summary: lower key\n      responses:\n        \"200\":\n          description: ok\n    GET:\n      operationId: ListUsers\n      summary: upper key\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        assert_eq!(caps.len(), 2, "run {run}");
+        assert!(
+            caps[0].yaml.contains("upper key"),
+            "run {run}:\n{}",
+            caps[0].yaml
+        );
+        assert!(
+            caps[1].yaml.contains("lower key"),
+            "run {run}:\n{}",
+            caps[1].yaml
+        );
+    }
+}

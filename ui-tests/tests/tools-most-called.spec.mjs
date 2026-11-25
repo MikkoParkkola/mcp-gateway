@@ -154,7 +154,7 @@ test('M5b: an hour that was not measured says so, never "no calls"', async ({ pa
 
 test('M6: typing on Status opens the A-to-Z list and keeps every key', async ({ page }) => {
   // bravo_lookup matches by name. catalog_fetch matches by description.
-  // delta_ping's server is bravo; today's search does not read the server.
+  // delta_ping's server is bravo, and the search reads the server too.
   await toolsScreen(page, { tools: [
     tool('echo_time', 'alpha', 6, 1, 'Tells the time'),
     tool('delta_ping', 'bravo', 7, 1, 'Ping a host'),
@@ -170,7 +170,7 @@ test('M6: typing on Status opens the A-to-Z list and keeps every key', async ({ 
   await expect(page).toHaveURL('/ui/tools/status?view=all');
   await expect(search(page)).toHaveValue('bravo');
   await expect(search(page)).toBeFocused();
-  await expect.poll(() => catalogueNames(page)).toEqual(['bravo_lookup', 'catalog_fetch']);
+  await expect.poll(() => catalogueNames(page)).toEqual(['bravo_lookup', 'catalog_fetch', 'delta_ping']);
   // One history entry: Back returns to the panel in one step.
   await page.goBack();
   await expect(page).toHaveURL('/ui/tools/status');

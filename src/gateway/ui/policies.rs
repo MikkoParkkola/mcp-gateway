@@ -5,30 +5,79 @@
 //! entries and lose where each came from). Admin only: it shows every rule
 //! and key name.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
+use super::activity::access::{self, Access};
+use super::activity::counts::{COUNT_SCAN_BYTES, Days, Pass, RuleHits, Stopped, count_rule_hits};
+use super::activity::{log_paths, stream_read};
 use super::guard::Guard;
 use crate::config::Config;
+use crate::config_reload::Generation;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 use crate::security::policy::{ToolPolicy, ToolPolicyConfig};
+use crate::security::rule_id::RuleId;
 
 /// The policies route.
 pub(super) fn policies_router() -> Router<Arc<AppState>> {
     Router::new().route(routes::UI_POLICIES, get(read_policies))
 }
 
-pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
+pub(super) async fn read_policies(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
+    guard: Guard,
+) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    Json(read_model(&Sources::of(&state.live_config))).into_response()
+    let access = caller_access(&generation, &guard);
+    let logs = log_paths(&state);
+    let served = Arc::clone(&state);
+    let reader = access.clone();
+    // The log read holds one of Activity's read slots, off the runtime.
+    let read = stream_read(&state, move |_| {
+        let logs = logs
+            .as_ref()
+            .map(|(inv, gov)| (inv.as_path(), gov.as_deref()));
+        let now = crate::clock::utc_now().map(|t| t.fixed_offset());
+        Ok(read_model_with_hits(
+            &Sources::of(&served.live_config),
+            logs,
+            &reader,
+            now,
+            COUNT_SCAN_BYTES,
+            |_| ControlFlow::Continue(()),
+        ))
+    })
+    .await;
+    let model = read.unwrap_or_else(|error| {
+        tracing::warn!(%error, "the policy hits read did not run");
+        let sources = Sources::of(&state.live_config);
+        with_hits(read_model(&sources), &sources, &RuleHits::unread(&access))
+    });
+    Json(model).into_response()
+}
+
+/// Whose calls the hits count: the caller's Activity access, as the Activity
+/// list applies it, resolved with the request's pinned role mapping. The
+/// route admits only a gateway admin, so in practice this is every row; a
+/// resolver refusal counts no one's calls.
+fn caller_access(generation: &Generation, guard: &Guard) -> Access {
+    let mapping = &generation.config().control_plane.role_mapping;
+    access::resolve(guard.client.as_ref(), guard.identity.as_ref(), mapping).unwrap_or(
+        Access::Scoped {
+            owner: None,
+            backends: Vec::new(),
+        },
+    )
 }
 
 /// What the read model reads: one published generation (the file's values,
@@ -97,6 +146,101 @@ pub(super) fn read_model(sources: &Sources<'_>) -> Value {
         model[section] = value;
     }
     model
+}
+
+/// [`read_model`] with each rule's id, its hits in the last 24 hours and the
+/// 24 hours before, and its exception count, counted in `logs` (invocation,
+/// governance; `None` when no log is kept) under `access`.
+pub(super) fn read_model_with_hits(
+    sources: &Sources<'_>,
+    logs: Option<(&std::path::Path, Option<&std::path::Path>)>,
+    access: &Access,
+    now: Result<chrono::DateTime<chrono::FixedOffset>, crate::clock::ClockBeforeEpoch>,
+    byte_cap: u64,
+    after_pass: impl FnMut(Pass) -> ControlFlow<()>,
+) -> Value {
+    let hits = match logs {
+        Some((invocation, governance)) => {
+            count_rule_hits(now, invocation, governance, access, byte_cap, after_pass)
+                .unwrap_or_else(|error| {
+                    // The rule list is configuration: it is served whatever
+                    // happened to the log, with every count unknown.
+                    tracing::warn!(%error, "policy hits could not be counted");
+                    RuleHits::unread(access)
+                })
+        }
+        None => RuleHits::unread(access),
+    };
+    with_hits(read_model(sources), sources, &hits)
+}
+
+/// `model` with the four members on every rule entry and the `hits` object.
+/// The ids come from the policies `sources.generation` compiled, joined by
+/// each entry's list and pattern or position; never hashed here.
+fn with_hits(mut model: Value, sources: &Sources<'_>, hits: &RuleHits) -> Value {
+    let generation = &sources.generation;
+    let policy = generation.tool_policy();
+    let add = |entry: &mut Value, id: Option<&RuleId>, exceptions: usize| {
+        let id = id.map(RuleId::as_str);
+        let counts = hits.counts(id);
+        entry["rule_id"] = id.into();
+        entry["hits_24h"] = counts.map(|(newer, _)| newer).into();
+        entry["hits_prev_24h"] = counts.map(|(_, older)| older).into();
+        entry["exceptions"] = exceptions.into();
+    };
+    // A deny's exceptions are the allows that override it, wholly or partly.
+    let overriding = |entry: &Value| {
+        ["overridden_by", "partly_overridden_by"]
+            .iter()
+            .map(|list| entry[list].as_array().map_or(0, Vec::len))
+            .sum::<usize>()
+    };
+    let lists = &mut model["tool_policy"];
+    for entry in each(&mut lists["deny"]) {
+        let id = entry["entry"]
+            .as_str()
+            .and_then(|p| policy.entry_id("deny", p));
+        let exceptions = overriding(entry);
+        add(entry, id, exceptions);
+    }
+    for entry in each(&mut lists["allow"]) {
+        let id = entry["entry"]
+            .as_str()
+            .and_then(|p| policy.entry_id("allow", p));
+        add(entry, id, 0);
+    }
+    for entry in each(&mut lists["default_denies"]) {
+        let id = entry["name"]
+            .as_str()
+            .and_then(|p| policy.entry_id("builtin_deny", p));
+        let exceptions = overriding(entry);
+        add(entry, id, exceptions);
+    }
+    #[cfg(feature = "firewall")]
+    for (i, entry) in each(&mut model["finding_rules"]).enumerate() {
+        let id = generation.firewall_policy().rule_id(i);
+        let exceptions = entry["except"].as_array().map_or(0, Vec::len);
+        add(entry, id, exceptions);
+    }
+    let days = hits.days();
+    let bound = |at: fn(&Days) -> chrono::DateTime<chrono::FixedOffset>| {
+        days.as_ref().map(|d| at(d).to_rfc3339())
+    };
+    model["hits"] = json!({
+        "complete": hits.stop == Some(Stopped::End),
+        "stopped": hits.stop.map(Stopped::word),
+        "from": bound(|d| d.from),
+        "older_to": bound(|d| d.older_to),
+        "split": bound(|d| d.split),
+        "to": bound(|d| d.to),
+        "scope": hits.scope,
+    });
+    model
+}
+
+/// The entries of a list member, none when it is not a list.
+fn each(list: &mut Value) -> impl Iterator<Item = &mut Value> {
+    list.as_array_mut().into_iter().flatten()
 }
 
 /// The scan types, guards, credentials and relay sections: `null` in a
