@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..ee74f473ce 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -112,7 +112,7 @@ function answeredLines(a) {
+       ? [outLine('head', 'Nothing changed: gateway.yaml matches what the gateway runs.')]
+       : [outLine('head', RELOADED), outLine('changes', a.changes)];
+   }
+-  const block = restartAdvice(a);
++  const block = restartAdvice({ ...a, start_command: a.start_command });
+   if (!block) return null;
+   // A refusal leads, and the summary sits under the page's own label; advice follows the summary.
+   return block.dataset.kind === 'refusal'

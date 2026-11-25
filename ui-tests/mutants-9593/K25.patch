@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..38a66f825f 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -144,7 +144,6 @@ async function reloadTab(body, ctx) {
+     // One reload at a time; the earlier outcome stays until this one's answer replaces it.
+     button.disabled = true;
+     button.textContent = 'Reloading…';
+-    card.setAttribute('aria-busy', 'true');
+     let lines;
+     let signedOut = false;
+     try {
