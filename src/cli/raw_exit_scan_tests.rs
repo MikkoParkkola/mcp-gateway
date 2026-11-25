@@ -129,7 +129,7 @@ impl Scan {
                 }
                 _ => None,
             };
-            match (first.to_string().as_str(), second.as_str(), args) {
+            match (first.to_string().as_str(), second.as_str(), mutant!("K39", None, args)) {
                 ("ExitCode", "FAILURE", _) => {
                     self.hit(line_of(first.span()), "ExitCode::FAILURE in a macro");
                 }
@@ -159,10 +159,10 @@ fn path_step(trees: &[TokenTree], i: usize) -> Option<String> {
 
 impl<'ast> Visit<'ast> for Scan {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if crate::test_source_text::test_only(item_attrs(item)) {
+        if mutant!("K38", item_attrs(item).iter().any(|a| a.path().is_ident("cfg") && a.meta.require_list().is_ok_and(|l| l.tokens.to_string().contains("test"))), crate::test_source_text::test_only(item_attrs(item))) {
             return;
         }
-        syn::visit::visit_item(self, item);
+        mutant!("K21", { if let syn::Item::Struct(s) = item { if s.fields.iter().any(|f| f.ident.as_ref().is_some_and(|i| i == "exit")) { self.hit(1, "exit field"); } } syn::visit::visit_item(self, item) }, syn::visit::visit_item(self, item));
     }
 
     fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
@@ -200,7 +200,7 @@ impl<'ast> Visit<'ast> for Scan {
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let syn::Expr::Path(func) = call.func.as_ref() {
-            if ends_with(&func.path, "ExitCode", "from") {
+            if mutant!("K37", ends_with(&func.path, "ExitCode", "from") && !(call.args.len() == 1 && call.args.first().is_some_and(is_literal_zero)), ends_with(&func.path, "ExitCode", "from")) {
                 self.hit(line_of(call.span()), "ExitCode::from");
             }
             let zero = call.args.len() == 1 && call.args.first().is_some_and(is_literal_zero);
@@ -214,7 +214,7 @@ impl<'ast> Visit<'ast> for Scan {
     fn visit_expr_struct(&mut self, literal: &'ast syn::ExprStruct) {
         for field in &literal.fields {
             let named_exit = matches!(&field.member, syn::Member::Named(n) if n == "exit");
-            if named_exit && (field.colon_token.is_none() || !is_literal_zero(&field.expr)) {
+            if named_exit && (mutant!("K15", field.colon_token.is_some() && !is_literal_zero(&field.expr), field.colon_token.is_none() || !is_literal_zero(&field.expr))) {
                 self.hit(line_of(field.span()), "exit field");
             }
         }
@@ -231,14 +231,14 @@ impl<'ast> Visit<'ast> for Scan {
                 self.hit(line_of(mac.path.span()), "Error print");
             }
         }
-        self.tokens(mac.tokens.clone());
+        mutant!("K20", (), self.tokens(mac.tokens.clone()));
         syn::visit::visit_macro(self, mac);
     }
 }
 
 /// The hits in `text` (the file at `path`). A file syn cannot parse is an error, never a clean result.
 fn scan_source(path: &str, text: &str) -> Result<Vec<Hit>, String> {
-    let file = syn::parse_file(text).map_err(|e| format!("{path} does not parse: {e}"))?;
+    let file = mutant!("K22", match syn::parse_file(text) { Ok(f) => f, Err(_) => return Ok(Vec::new()) }, syn::parse_file(text).map_err(|e| format!("{path} does not parse: {e}"))?);
     let mut scan = Scan {
         path: path.to_owned(),
         owner: Vec::new(),
@@ -246,7 +246,7 @@ fn scan_source(path: &str, text: &str) -> Result<Vec<Hit>, String> {
     };
     scan.visit_file(&file);
     scan.hits.sort_by_key(|h| h.line);
-    Ok(scan.hits)
+    mutant!("K16", Ok(text.lines().enumerate().filter(|(_, l)| l.contains("ExitCode::FAILURE")).map(|(n, _)| Hit { path: path.to_owned(), line: n + 1, owner: String::new(), what: "grep" }).collect()), Ok(scan.hits))
 }
 
 /// Hits outside the allowed places. A counted function keeps its first `count` hits allowed; the rest are hits.
@@ -254,7 +254,7 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
     let mut used: BTreeMap<(&str, &str), usize> = BTreeMap::new();
     let mut out = Vec::new();
     for hit in hits {
-        if hit.path == "src/commands/cli_exit.rs" {
+        if mutant!("K17", (hit.path == "src/commands/cli_exit.rs" || hit.path == "src/cli/output.rs"), hit.path == "src/commands/cli_exit.rs") {
             continue;
         }
         if hit.path == "src/cli/output.rs"
@@ -267,7 +267,7 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
         }
         let place = COUNTED
             .iter()
-            .find(|(file, owner, _)| hit.path == *file && hit.owner == *owner);
+            .find(|(file, owner, _)| mutant!("K30", hit.path == *file, hit.path == *file && hit.owner == *owner));
         if let Some((file, owner, count)) = place {
             let seen = used.entry((file, owner)).or_default();
             *seen += 1;
@@ -284,7 +284,7 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
 fn stale(allow: &[&str], hits: &[Hit]) -> Vec<String> {
     allow
         .iter()
-        .filter(|path| !hits.iter().any(|h| h.path == **path))
+        .filter(|path| mutant!("K19", false, !hits.iter().any(|h| h.path == **path)))
         .map(|path| (*path).to_owned())
         .collect()
 }
@@ -294,11 +294,11 @@ fn stale(allow: &[&str], hits: &[Hit]) -> Vec<String> {
 /// way, a name holding `test_support`). A named file that is absent is an error.
 fn tree_files(root: &Path) -> Result<Vec<String>, String> {
     let mut found: Vec<PathBuf> = Vec::new();
-    crate::test_source_files::rust_files(&root.join("src/commands"), &mut found);
+    crate::test_source_files::rust_files(&mutant!("K18", root.join("src/commandz"), root.join("src/commands")), &mut found);
     crate::test_source_files::rust_files(&root.join("src/cli"), &mut found);
     for named in NAMED {
         let path = root.join(named);
-        if !path.is_file() {
+        if mutant!("K41", false, !path.is_file()) {
             return Err(format!("{named} is missing"));
         }
         found.push(path);
@@ -309,7 +309,7 @@ fn tree_files(root: &Path) -> Result<Vec<String>, String> {
         .map(|rel| rel.to_string_lossy().replace('\\', "/"))
         .filter(|rel| {
             let name = rel.rsplit('/').next().unwrap_or(rel);
-            let test_file = name.ends_with("_tests.rs") || name == "tests.rs";
+            let test_file = mutant!("K40", name.contains("test"), name.ends_with("_tests.rs") || name == "tests.rs");
             let test_dir = rel.split('/').any(|part| part == "tests");
             !(test_file || test_dir || name.contains("test_support"))
         })
