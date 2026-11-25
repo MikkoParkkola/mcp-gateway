@@ -217,13 +217,14 @@ fn l3_a_read_back_that_differs_refuses_label_not_kept() {
 }
 
 /// L4: a label the writer cannot read (an error other than "none" or "not
-/// supported") refuses before any byte is written.
+/// supported") refuses before any byte is written; one failed read is
+/// enough, and no retry passes over it.
 #[test]
 fn l4_an_unreadable_label_refuses_before_any_byte() {
     for name in NAMES {
         let row = format!("L4/{name}");
         let (dir, target, labels) =
-            labelled(|labels| labels.fail(Call::Read, name, libc::EIO, Times::Always));
+            labelled(|labels| labels.fail(Call::Read, name, libc::EIO, Times::Once));
         let armed = arm(dir.path(), &labels);
         let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
         let events = armed.events();

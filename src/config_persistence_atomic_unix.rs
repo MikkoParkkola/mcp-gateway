@@ -578,7 +578,7 @@ pub(crate) mod seams {
 
     /// The label store and its knobs, for the label rows.
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub(crate) use super::linux::{Call, FakeLabels, SetSeen, Times};
+    pub(crate) use super::linux::{Call, FakeLabels, Times};
 
     /// Runs with (target or destination, scratch or source).
     pub(crate) type PathHook = Box<dyn FnMut(&Path, &Path) + Send>;
@@ -605,6 +605,7 @@ pub(crate) mod seams {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         pub(crate) labels: Option<super::linux::FakeLabels>,
         /// Right after a save reads the labels it keeps: (target, scratch).
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         pub(crate) after_labels_read: Option<PathHook>,
     }
 

@@ -201,7 +201,7 @@ fn acl_absent(target: &Path, scratch: &File) -> bool {
     #[cfg(not(test))]
     let _ = target;
     matches!(
-        rustix::fs::fgetxattr(scratch, ACCESS_ACL, &mut []),
+        rustix::fs::fgetxattr(scratch, ACCESS_ACL, &mut [0u8; 0][..]),
         Err(e) if absent(e)
     )
 }
@@ -275,7 +275,7 @@ fn identity(at: At<'_>) -> Result<(u64, u64), Errno> {
 }
 
 #[cfg(test)]
-pub(crate) use fake::{Call, FakeLabels, SetSeen, Times};
+pub(crate) use fake::{Call, FakeLabels, Times};
 
 /// The label store the writer rows inject in place of the kernel's
 /// `security.*` calls, keyed by file identity. Test builds only.
