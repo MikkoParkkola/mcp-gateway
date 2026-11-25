@@ -4,16 +4,17 @@
 """The per-test file map: for each test unit, the repository files it executed, opened, listed or probed.
 
 Built on Linux on release-line pushes (.github/workflows/affected-map.yml) and published as a cache; nothing reads
-it yet. A unit is one integration target, or a group of lib tests: grouped by module path at depth 2, and any
-group over SPLIT_SHARE of the run's lib test time split one level deeper, down to single tests (the times are
-this run's own). Each unit runs as its own process with coverage on (a killed child still writes its counters)
-under a file-access trace. A unit is unmapped, and selects with every change, when its traced run failed or left
-no trace, when its coverage is missing or a coverage tool failed, when its listing failed, or when its pass count
-differs from its listing.
+it yet. A unit is one integration target, or a group of lib tests: grouped by module path at depth 2, except that
+the SPLIT_MAX lib groups with the most seconds in the previous published map go one level deeper (recomputed on
+every run, never a second level; the guard job plans the list). Each unit runs as its own process with coverage on
+(a killed child still writes its counters) under a file-access trace. A unit is unmapped, and selects with every
+change, when its traced run failed or left no trace, when its coverage is missing or a coverage tool failed, when its
+listing failed, or when its pass count differs from its listing.
 
     affected_map.py guard MAP NOW_ISO           prints build=true|false: false while MAP is younger than MAP_AGE
-    affected_map.py part PART OUT               one part (lib-K, int-a or int-b): its depth-2 units, OUT/part.json
-    affected_map.py merge SHA PART_DIRS... OUT  the run's lib total, the deeper splits, OUT/affected-map.json
+    affected_map.py plan MAP                    prints split=<json list>: the groups this run splits one level
+    affected_map.py part PART OUT [SPLIT]       one part (lib-K, int-a or int-b): its units, OUT/part.json
+    affected_map.py merge SHA PART_DIRS... OUT  folds the parts' units into OUT/affected-map.json; runs nothing
 """
 from __future__ import annotations
 
@@ -30,8 +31,10 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# A group heavier than this share of the run's lib test time is split one level deeper (r6 R2).
-SPLIT_SHARE = 0.10
+# At most this many lib groups split one level deeper: the largest by the previous map's seconds. A fixed count
+# bounds the map's cost by construction (any two groups fit MAP.3's 412 runner-minutes); revisit after the slow
+# redactor rows are fixed at their source.
+SPLIT_MAX = 2
 # The map is rebuilt at most once in this long: the workflow ends early while the newest map is younger (D5). Not a
 # full day: a run that starts a little late must still build the next day.
 MAP_AGE = timedelta(hours=20)
@@ -82,32 +85,28 @@ def should_build(newest_built_at: str | None, now: datetime) -> bool:
 
 # ---- units by weight (r6 R2) --------------------------------------------------------------------------------------
 
-def group(names: list[str], depth: int) -> dict[str, list[str]]:
-    """Names grouped by their first `depth` path segments; a name with no more segments is its own group."""
-    out: dict[str, list[str]] = {}
-    for name in names:
-        out.setdefault("::".join(name.split("::")[:depth]), []).append(name)
-    return out
+def plan(previous: dict | None, split_max: int | None = None) -> list[str]:
+    """The depth-2 lib groups this run splits one level: the `split_max` (SPLIT_MAX unless given) with the most
+    seconds in the previous map, a group's seconds summed over its units (an already split group over its depth-3
+    children), ties by name. No map, or an unreadable one, splits nothing; integration units never count."""
+    split_max = SPLIT_MAX if split_max is None else split_max
+    units = previous.get("units") if isinstance(previous, dict) else None
+    if not isinstance(units, dict):
+        return []
+    seconds: dict[str, float] = {}
+    for label, u in units.items():
+        if label.startswith("lib:") and isinstance(u, dict) and u.get("binary") == LIB_BINARY:
+            prefix = "::".join(label[len("lib:"):].split("::")[:2])
+            seconds[prefix] = seconds.get(prefix, 0.0) + float(u.get("seconds", 0.0))
+    return sorted(seconds, key=lambda k: (-seconds[k], k))[:split_max]
 
 
-def split_heavy(prefix: str, members: list[str], depth: int, total: float,
-                measure: Callable[[str, list[str]], float], share: float | None = None) -> dict[str, list[str]]:
-    """The units one group becomes: itself when it weighs at most `share` (SPLIT_SHARE unless given) of `total` or
-    is a single test, else each of its next-level groups, split again the same way. `measure` runs a candidate
-    and returns its seconds."""
-    share = SPLIT_SHARE if share is None else share
-    units: dict[str, list[str]] = {}
-    pending = [(prefix, members, depth)]
-    while pending:
-        key, names, d = pending.pop()
-        seconds = measure(key, names)
-        # One test cannot be split, whatever its group is called: re-running it would only spend time.
-        single = len(names) == 1
-        if seconds > share * total and not single:
-            pending.extend((k, v, d + 1) for k, v in group(names, d + 1).items())
-        else:
-            units[key] = sorted(names)
-    return units
+def unit_key(name: str, split: list[str]) -> str:
+    """A lib test's unit: its first two path segments, or three when those two are on the split list. Whole segments
+    only, so a listed commands::doctor never touches commands::doctor_extra; a shorter name is its own unit."""
+    parts = name.split("::")
+    depth = 3 if "::".join(parts[:2]) in split and len(parts) > 2 else 2
+    return "::".join(parts[:depth])
 
 
 # ---- the trace ----------------------------------------------------------------------------------------------------
@@ -523,9 +522,22 @@ def _workspace_inputs(artifacts: list[dict]) -> set[str]:
     return out
 
 
-def _lib_part(k: str, out: Path) -> dict:
+def lib_units(names: list[str], split: list[str],
+              run: Callable[[str, list[str]], tuple[dict, list[str]]]) -> tuple[dict, dict]:
+    """A lib part's units: its tests grouped by unit_key, each group run once by `run` (one traced process per
+    unit, every test in exactly one), keyed "lib:<unit>"."""
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        groups.setdefault(unit_key(name, split), []).append(name)
+    units, reasons = {}, {}
+    for key, members in sorted(groups.items()):
+        units["lib:" + key], reasons["lib:" + key] = run(key, members)
+    return units, reasons
+
+
+def _lib_part(k: str, out: Path, split: list[str]) -> dict:
     """lib-K: the part's binary, built instrumented by lib-parts.sh (the one place the part is chosen), its
-    depth-2 groups each run as a unit."""
+    units (depth 2, or 3 under a split group) each run once."""
     proc = subprocess.run(["bash", str(ROOT / "scripts/ci/lib-parts.sh"), "export", k, str(out / "bin")],
                           capture_output=True, text=True, env=_coverage_env(), cwd=ROOT)
     sys.stdout.write(proc.stdout[-4000:])
@@ -536,11 +548,9 @@ def _lib_part(k: str, out: Path) -> dict:
     built = re.search(r"export-lib: (\S+) -> ", proc.stdout + proc.stderr)
     names = [line[: -len(": test")] for line in (out / "bin" / f"p{k}" / "list.txt").read_text().splitlines()
              if line.endswith(": test")]
-    units, reasons = {}, {}
-    for key, members in sorted(group(names, 2).items()):
-        run = run_unit(str(binary), ["--exact", *members], len(members), str(out / "units" / key), [str(binary)])
-        units["lib:" + key], reasons["lib:" + key] = unit_record_and_reasons(run, members, LIB_BINARY, set(),
-                                                                             str(ROOT))
+    units, reasons = lib_units(names, split, lambda key, members: unit_record_and_reasons(
+        run_unit(str(binary), ["--exact", *members], len(members), str(out / "units" / key), [str(binary)]),
+        members, LIB_BINARY, set(), str(ROOT)))
     return {"part": f"lib-{k}", "binary": str(binary.relative_to(out)), "units": units, "unmapped_reasons": reasons,
             "extra_files": sorted(_depinfo(built.group(1)) if built else set())}
 
@@ -580,11 +590,11 @@ def parts() -> list[str]:
     return [f"lib-{k}" for k in range(1, lib_union.part_count(lib_union.BUILD_SCRIPT) + 1)] + ["int-a", "int-b"]
 
 
-def part(name: str, out_dir: str) -> int:
+def part(name: str, out_dir: str, split: list[str] | None = None) -> int:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     if name.startswith("lib-") and name[4:].isdigit():
-        doc = _lib_part(name[4:], out)
+        doc = _lib_part(name[4:], out, split or [])
     elif name in ("int-a", "int-b"):
         doc = _int_part(name, out)
     else:
@@ -597,36 +607,28 @@ def part(name: str, out_dir: str) -> int:
 
 
 def merge(sha: str, part_dirs: list[str], out_dir: str, now: datetime | None = None) -> int:
-    """The run's lib total over every part; each lib group heavier than SPLIT_SHARE of it re-run deeper on its
-    part's binary (the same run's times), then the map. A lib group's extra (non-.rs) inputs reach all its units."""
-    parts = [(Path(d), json.loads((Path(d) / "part.json").read_text(encoding="utf-8"))) for d in part_dirs]
-    total = sum(u["seconds"] for _, doc in parts for u in doc["units"].values() if u["binary"] == LIB_BINARY)
+    """The map from the parts' part.json files; runs nothing. One label in several parts (a lib group whose tests
+    the parts divide) becomes one unit: tests, files, dirs and probes joined, seconds summed, unmapped if any part's
+    is, reasons joined. A lib group's extra (non-.rs) inputs reach all its units."""
+    parts = [json.loads((Path(d) / "part.json").read_text(encoding="utf-8")) for d in part_dirs]
     units: dict[str, dict] = {}
     why: dict[str, list[str]] = {}
-    for where, doc in parts:
+    for doc in parts:
         extra = set(doc["extra_files"])
         for label, unit in doc["units"].items():
-            single = len(unit["tests"]) == 1
-            if unit["binary"] != LIB_BINARY or unit["seconds"] <= SPLIT_SHARE * total or single:
-                units[label] = {**unit, "files": sorted(set(unit["files"]) | extra)}
-                why[label] = doc.get("unmapped_reasons", {}).get(label, ["unknown"] if unit["unmapped"] else [])
-                continue
-            binary = str(where / doc["binary"])
-            key = label[len("lib:"):]
-            runs: dict[str, tuple[Run, list[str]]] = {}
-
-            def measure(k: str, names: list[str], key: str = key, seconds: float = unit["seconds"],
-                        binary: str = binary, runs: dict = runs) -> float:
-                if k == key:
-                    return seconds
-                run = run_unit(binary, ["--exact", *names], len(names), str(Path(out_dir) / "deep" / k), [binary])
-                runs[k] = (run, names)
-                return run.seconds
-
-            for leaf in split_heavy(key, unit["tests"], len(key.split("::")), total, measure):
-                run, names = runs[leaf]
-                units["lib:" + leaf], why["lib:" + leaf] = unit_record_and_reasons(run, names, LIB_BINARY, extra,
-                                                                                   str(ROOT))
+            reasons = doc.get("unmapped_reasons", {}).get(label, ["unknown"] if unit["unmapped"] else [])
+            add = {**unit, "files": sorted(set(unit["files"]) | extra)}
+            if label in units:
+                have = units[label]
+                for key in ("tests", "files", "dirs", "probes"):
+                    have[key] = sorted(set(have[key]) | set(add[key]))
+                have["seconds"] += add["seconds"]
+                have["unmapped"] = have["unmapped"] or add["unmapped"]
+                why[label] = sorted(set(why[label]) | set(reasons))
+            else:
+                units[label] = add
+                why[label] = sorted(set(reasons))
+    total = sum(u["seconds"] for u in units.values() if u["binary"] == LIB_BINARY)
     stamp = (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     doc = map_document(sha, stamp, units)
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -663,14 +665,26 @@ def guard(map_path: str, now_iso: str) -> int:
     return 0
 
 
+def plan_command(map_path: str) -> int:
+    """Prints split=<json list> for the workflow's first job; no map, or an unreadable one, gives []."""
+    try:
+        previous = json.loads(Path(map_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = None
+    print("split=" + json.dumps(plan(previous)))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) == 4 and argv[1] == "guard":
         return guard(argv[2], argv[3])
+    if len(argv) == 3 and argv[1] == "plan":
+        return plan_command(argv[2])
     if len(argv) == 2 and argv[1] == "parts":
         print(json.dumps(parts()))
         return 0
-    if len(argv) == 4 and argv[1] == "part":
-        return part(argv[2], argv[3])
+    if len(argv) in (4, 5) and argv[1] == "part":
+        return part(argv[2], argv[3], json.loads(argv[4]) if len(argv) == 5 and argv[4] else [])
     if len(argv) >= 5 and argv[1] == "merge":
         return merge(argv[2], argv[3:-1], argv[-1])
     print(__doc__, file=sys.stderr)

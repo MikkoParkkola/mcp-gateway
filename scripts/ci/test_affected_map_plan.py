@@ -69,8 +69,9 @@ class Plan(unittest.TestCase):
         self.assertEqual(am.plan(doc, 1), ["k::m"])
 
     def test_p2c_equal_seconds_break_by_label(self) -> None:
-        doc = lib_map({"b::b": (2, 10.0), "a::a": (2, 10.0), "c::c": (2, 10.0)})
-        self.assertEqual(am.plan(doc, 2), ["a::a", "b::b"])
+        # Labels whose reversed text sorts the other way, so only a by-name tie-break picks a::z and b::y.
+        doc = lib_map({"b::y": (2, 10.0), "a::z": (2, 10.0), "c::x": (2, 10.0)})
+        self.assertEqual(am.plan(doc, 2), ["a::z", "b::y"])
 
     def test_p2d_integration_units_never_rank(self) -> None:
         doc = lib_map(self.GROUPS)
@@ -136,7 +137,8 @@ class Plans(unittest.TestCase):
 
     def test_p3c_the_merged_map_plans_the_same_list_by_seconds(self) -> None:
         doc, _ = merged([part_doc({"lib:a::a": unit(["a::a::t"], 1.0), "lib:m::m": unit(["m::m::t", "m::m::u"], 30.0),
-                                   "lib:z::z": unit(["z::z::t", "z::z::u"], 20.0), "lib:b::b": unit(["b::b::t"], 2.0)})])
+                                   "lib:z::z": unit(["z::z::t", "z::z::u"], 20.0),
+                                   "lib:b::b": unit(["b::b::t"], 2.0)})])
         self.assertEqual(am.plan(doc, 2), ["m::m", "z::z"])
 
     def test_p2b1_a_label_ranks_in_only_on_its_sum_over_two_parts(self) -> None:
@@ -256,7 +258,8 @@ class Workflow(unittest.TestCase):
 
     def test_p8a_parts_upload_only_part_json_and_the_merge_is_lean(self) -> None:
         upload = next(s for s in self.jobs["part"]["steps"] if str(s.get("uses", "")).startswith("actions/upload"))
-        self.assertEqual(upload["with"]["path"].split(), ["${{ runner.temp }}/part/part.json"])
+        paths = [p.strip() for p in upload["with"]["path"].splitlines() if p.strip()]
+        self.assertEqual(paths, ["${{ runner.temp }}/part/part.json"])
         merge = self.runs("merge")
         for gone in ("strace", "rust-toolchain", "add-swap", "chmod"):
             self.assertNotIn(gone, merge)
@@ -283,6 +286,72 @@ class Workflow(unittest.TestCase):
                                   capture_output=True, text=True, check=True).stdout
         self.assertEqual(out.strip(), 'split=["a::a", "b::b"]')
         self.assertEqual(none.strip(), "split=[]")
+
+
+def _edited(name: str, old: str, new: str):
+    """A one-edit copy of the builder's function `name`, made from its own source in the builder's namespace."""
+    import inspect
+    src = inspect.getsource(getattr(am, name))
+    assert src.count(old) == 1, f"{name}: anchor {old!r} matches {src.count(old)} times"
+    ns = dict(vars(am))
+    exec(src.replace(old, new), ns)
+    return ns[name]
+
+
+def _plan_mutants() -> list[tuple[str, str, dict]]:
+    return [
+        ("rank by label", "Plan", {"plan": _edited("plan", "key=lambda k: (-seconds[k], k)", "key=lambda k: k")}),
+        ("rank by test count", "Plan", {"plan": _edited(
+            "plan", "seconds[prefix] = seconds.get(prefix, 0.0) + float(u.get(\"seconds\", 0.0))",
+            "seconds[prefix] = seconds.get(prefix, 0.0) + len(u.get(\"tests\", []))")}),
+        ("a literal cap of 2", "Plan", {"plan": _edited("plan", "[:split_max]", "[:2]")}),
+        ("the 10% threshold kept", "Plan", {"plan": _edited(
+            "plan", "    return sorted(seconds,",
+            "    seconds = {k: v for k, v in seconds.items() if v > 0.1 * sum(seconds.values())}\n"
+            "    return sorted(seconds,")}),
+        ("depth-3 children not summed", "Plan", {"plan": _edited("plan", '.split("::")[:2])', '.split("::"))')}),
+        ("ties broken in reverse", "Plan", {"plan": _edited("plan", "(-seconds[k], k)", "(-seconds[k], k[::-1])")}),
+        ("integration units ranked", "Plan", {"plan": _edited(
+            "plan", 'label.startswith("lib:") and isinstance(u, dict) and u.get("binary") == LIB_BINARY',
+            "isinstance(u, dict)")}),
+        ("a second level", "Plans", {"unit_key": _edited("unit_key", "3 if", "min(len(parts) - 1, 4) if")}),
+        ("the list ignored by the key", "Keys", {"unit_key": _edited("unit_key", "3 if", "2 if")}),
+        ("a string-prefix match", "Keys", {"unit_key": _edited(
+            "unit_key", '"::".join(parts[:2]) in split', "any(name.startswith(s) for s in split)")}),
+        ("one unit per long test", "Keys", {"unit_key": _edited(
+            "unit_key", 'return "::".join(parts[:depth])', 'return name if depth == 3 else "::".join(parts[:2])')}),
+    ]
+
+
+def _fold_mutants() -> list[tuple[str, str, dict]]:
+    return [
+        ("a short name dropped", "Keys", {"unit_key": _edited(
+            "unit_key", "    depth = ", "    if len(parts) < 2:\n        return \"\"\n    depth = ")}),
+        ("an overwriting fold", "Fold", {"merge": _edited("merge", "if label in units:", "if False:")}),
+        ("a fold over two parts only", "Fold", {"merge": _edited("merge", "for doc in parts:",
+                                                                  "for doc in parts[:2]:")}),
+        ("unmapped always true", "Fold", {"merge": _edited(
+            "merge", 'have["unmapped"] = have["unmapped"] or add["unmapped"]', 'have["unmapped"] = True')}),
+        ("a reason counted twice", "Fold", {"merge": _edited(
+            "merge", "why[label] = sorted(set(why[label]) | set(reasons))", "why[label] = why[label] + reasons")}),
+        ("seconds dropped in the fold", "Fold", {"merge": _edited(
+            "merge", 'have["seconds"] += add["seconds"]', "pass")}),
+        ("the merge runs a unit", "Merge", {"merge": _edited(
+            "merge", "    parts = [json.loads(", '    run_unit("x", [], 0, "x", [])\n    parts = [json.loads(')}),
+        ("the part ignores the list", "Part", {"lib_units": _edited(
+            "lib_units", "unit_key(name, split)", "unit_key(name, [])")}),
+        ("each unit traced twice", "Part", {"lib_units": _edited(
+            "lib_units", "        units[\"lib:\" + key], reasons[\"lib:\" + key] = run(key, members)",
+            "        run(key, members)\n        units[\"lib:\" + key], reasons[\"lib:\" + key] = run(key, members)")}),
+    ]
+
+
+class Mutants(unittest.TestCase):
+    """The test plan's kill matrix: each break, applied in this process, fails an assertion in its owner row."""
+
+    def test_the_kill_matrix(self) -> None:
+        from mutant_rows import check_mutants
+        check_mutants(self, am, _plan_mutants() + _fold_mutants(), globals())
 
 
 if __name__ == "__main__":
