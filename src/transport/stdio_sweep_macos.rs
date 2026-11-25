@@ -327,15 +327,23 @@ impl MacTable {
     }
 }
 
+/// One reading for the sweep: the whole table, with the seeds a complete scan
+/// does not list named in `gone` (the full-scan tables' shared rule).
+fn scan_for(probe: &mut dyn Probe, walk: &[Identity], stat_only: &[Identity]) -> Listing {
+    // Red-first stub: the walk commit fills `gone` here.
+    let _ = (walk, stat_only);
+    table_read(probe)
+}
+
 #[cfg(target_os = "macos")]
 impl ProcessTable for MacTable {
     fn read(
         &mut self,
-        _walk: &[Identity],
-        _stat_only: &[Identity],
+        walk: &[Identity],
+        stat_only: &[Identity],
         _until: std::time::Duration,
     ) -> Listing {
-        table_read(&mut Libproc)
+        scan_for(&mut Libproc, walk, stat_only)
     }
 
     fn state(&mut self, id: Identity) -> ProcState {
