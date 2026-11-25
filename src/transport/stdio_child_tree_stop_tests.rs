@@ -95,7 +95,7 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     let started_at = std::time::Instant::now();
     let cut = super::super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
     deadline.move_earlier(started_at + cut);
-    // A hang guard, not a timing claim: the kill comes about 7 s after the cut.
+    // A hang guard, not a timing claim: the kill is due about 1 s after the cut is made.
     // It sits under the reap deadline the row lifts to HANG_BOUND, so a stop
     // that ignored the cut fails here, never at the reaper's give-up instead.
     tokio::time::timeout(HANG_BOUND / 2, assert_killed(pid))
