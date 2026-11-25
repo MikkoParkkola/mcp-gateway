@@ -71,7 +71,8 @@ fn the_table_lists_a_child_under_this_process() {
     let mut child = sleeper();
     let id = identity(&child);
     let me = std::process::id();
-    let rows = LinuxTable::new().read(&[], &[], Duration::MAX).rows;
+    let parent = LinuxTable::identity_of(me).expect("this process has a stat");
+    let rows = LinuxTable::new().read(&[parent], &[], Duration::MAX).rows;
     assert!(rows.contains(&(id, me)), "child {id:?} under {me}");
     child.kill().expect("kill");
     child.wait().expect("reap");
@@ -210,7 +211,7 @@ fn measure_one(n: usize) {
     };
     let kids = |table: &mut Timed| {
         table
-            .read(&[], &[], Duration::MAX)
+            .read(&[root_id], &[], Duration::MAX)
             .rows
             .iter()
             .filter(|(_, ppid)| *ppid == root_id.pid)

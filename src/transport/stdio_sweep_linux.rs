@@ -72,8 +72,12 @@ fn lookup_of(read: std::io::Result<String>) -> Lookup {
     }
 }
 
+fn stat_file(path: &std::path::Path) -> Lookup {
+    lookup_of(std::fs::read_to_string(path))
+}
+
 fn read_stat(pid: u32) -> Lookup {
-    lookup_of(std::fs::read_to_string(format!("/proc/{pid}/stat")))
+    stat_file(std::path::Path::new(&format!("/proc/{pid}/stat")))
 }
 
 /// Whether `proc_root` has the per-task `children` files: the probe reads this
@@ -161,6 +165,12 @@ pub(in crate::transport::stdio) struct LinuxTable {
     /// Test only: read by the full scan even where children files exist.
     #[cfg(test)]
     pub(super) force_full_scan: bool,
+    /// Test only: after read number `.0`, write text `.2` to file `.1`, once;
+    /// `rewrite_fired` records that it happened, so a row can assert it.
+    #[cfg(test)]
+    pub(super) rewrite_after_read: Option<(usize, std::path::PathBuf, String)>,
+    #[cfg(test)]
+    pub(super) rewrite_fired: bool,
 }
 
 impl LinuxTable {
@@ -181,6 +191,10 @@ impl LinuxTable {
             expire_after_reads: None,
             #[cfg(test)]
             force_full_scan: false,
+            #[cfg(test)]
+            rewrite_after_read: None,
+            #[cfg(test)]
+            rewrite_fired: false,
         }
     }
 
@@ -226,25 +240,72 @@ impl LinuxTable {
 
     /// One `stat` read under this table's proc root.
     fn stat_at(&mut self, pid: u32) -> Lookup {
+        let path = self.proc_root.join(format!("{pid}/stat"));
+        self.counted_stat(&path)
+    }
+
+    /// One task's own `stat` under this table's proc root.
+    fn task_stat_at(&mut self, pid: u32, tid: &std::ffi::OsStr) -> Lookup {
+        let mut path = self.proc_root.join(format!("{pid}/task"));
+        path.push(tid);
+        path.push("stat");
+        self.counted_stat(&path)
+    }
+
+    fn counted_stat(&mut self, path: &std::path::Path) -> Lookup {
+        let read = stat_file(path);
+        self.tick();
+        read
+    }
+
+    /// Count one stat or children-file read, after its bytes were read. Test
+    /// only: the count drives `expire_after_reads`, and `rewrite_after_read`
+    /// writes its one file right after its one read returned, so a row can
+    /// change a file between two reads.
+    fn tick(&mut self) {
         #[cfg(test)]
         {
             self.reads += 1;
+            if let Some((at, path, text)) = &self.rewrite_after_read
+                && self.reads == *at
+            {
+                // A new task directory needs its parent made first.
+                let made = path
+                    .parent()
+                    .is_none_or(|dir| std::fs::create_dir_all(dir).is_ok());
+                self.rewrite_fired = made && std::fs::write(path, text).is_ok();
+            }
         }
-        lookup_of(std::fs::read_to_string(
-            self.proc_root.join(format!("{pid}/stat")),
-        ))
+    }
+
+    /// One task's own state (design delta D5'), read before and again after
+    /// its children file: `None` when the task is gone. An unreadable stat
+    /// leaves the reading incomplete and counts as `Unknown`, which settles
+    /// nothing.
+    fn task_state(
+        &mut self,
+        pid: u32,
+        tid: &std::ffi::OsStr,
+        listing: &mut Listing,
+    ) -> Option<ProcState> {
+        match self.task_stat_at(pid, tid) {
+            Lookup::Found(stat) => Some(stat.state),
+            Lookup::Gone => None,
+            Lookup::Unreadable => {
+                listing.complete = false;
+                Some(ProcState::Unknown)
+            }
+        }
     }
 
     /// One task's `children` file under this table's proc root.
     fn children_at(&mut self, pid: u32, tid: &std::ffi::OsStr) -> Result<Option<Vec<u32>>, ()> {
-        #[cfg(test)]
-        {
-            self.reads += 1;
-        }
         let mut path = self.proc_root.join(format!("{pid}/task"));
         path.push(tid);
         path.push("children");
-        children_in(std::fs::read_to_string(path))
+        let read = children_in(std::fs::read_to_string(path));
+        self.tick();
+        read
     }
 
     fn expired(&mut self, until: Duration) -> bool {
@@ -263,21 +324,21 @@ impl LinuxTable {
             gone: Vec::new(),
             settled: true,
         };
-        let mut queue: Vec<(u32, ProcState)> = Vec::new();
+        let mut queue: Vec<u32> = Vec::new();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for seed in walk {
             if self.expired(until) {
                 return cut(listing);
             }
-            if let Some(state) = self.seed(*seed, &mut listing) {
-                listing.rows.push((*seed, state.1));
+            if let Some(parent) = self.seed(*seed, &mut listing) {
+                listing.rows.push((*seed, parent));
                 if seen.insert(seed.pid) {
-                    queue.push((seed.pid, state.0));
+                    queue.push(seed.pid);
                 }
             }
         }
-        while let Some((pid, before)) = queue.pop() {
-            if !self.walk_one(pid, before, until, &mut listing, &mut queue, &mut seen) {
+        while let Some(pid) = queue.pop() {
+            if !self.walk_one(pid, until, &mut listing, &mut queue, &mut seen) {
                 return cut(listing);
             }
         }
@@ -290,11 +351,11 @@ impl LinuxTable {
         listing
     }
 
-    /// Stat a seed: its state and parent when it is still that process; else it
-    /// is named gone (or unreadable, which proves nothing).
-    fn seed(&mut self, seed: Identity, listing: &mut Listing) -> Option<(ProcState, u32)> {
+    /// Stat a seed: its parent when it is still that process; else it is
+    /// named gone (or unreadable, which proves nothing).
+    fn seed(&mut self, seed: Identity, listing: &mut Listing) -> Option<u32> {
         match self.stat_at(seed.pid) {
-            Lookup::Found(stat) if stat.start == seed.start => Some((stat.state, stat.ppid)),
+            Lookup::Found(stat) if stat.start == seed.start => Some(stat.ppid),
             Lookup::Found(_) | Lookup::Gone => {
                 listing.gone.push(seed);
                 None
@@ -308,78 +369,137 @@ impl LinuxTable {
     }
 
     /// Read every task's children of `pid` and stat each new child. `false`
-    /// when `until` passed (the caller cuts the reading short). The reading
-    /// stays settled only if `pid` was stopped, a zombie or gone both before and
-    /// after its children were read: the kernel's children file is reliable only
-    /// for a parent that cannot fork or reap meanwhile.
+    /// when `until` passed (the caller cuts the reading short). The kernel's
+    /// children file is complete only while the task cannot fork or reap AND
+    /// its listed children are stopped, so the reading settles only under
+    /// design delta D5''': (i) each task's own state, read before and after its
+    /// file, is Stopped both times (the leader's state alone does not cover its
+    /// threads: an exited leader is a zombie while they run); (ii) every listed
+    /// child is still this pid's child and Stopped at its listing stat; (iii)
+    /// the task set did not grow during the walk. A Zombie anywhere settles nothing: it cannot tell
+    /// a dead process from a zombie leader whose threads still run, and a
+    /// child that died may have handed its children to a parent already read.
     fn walk_one(
         &mut self,
         pid: u32,
-        before: ProcState,
         until: Duration,
         listing: &mut Listing,
-        queue: &mut Vec<(u32, ProcState)>,
+        queue: &mut Vec<u32>,
         seen: &mut std::collections::HashSet<u32>,
     ) -> bool {
+        if self.expired(until) {
+            return false;
+        }
         let tasks = match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
             Ok(tasks) => tasks,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
+            // Gone since it was listed: its state was never judged here, and
+            // it may have handed its children to a parent already read.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                listing.settled = false;
+                return true;
+            }
             Err(_) => {
                 listing.complete = false;
                 return true;
             }
         };
+        let mut tids: Vec<std::ffi::OsString> = Vec::new();
         for task in tasks {
             let Ok(task) = task else {
                 listing.complete = false;
                 continue;
             };
+            let tid = task.file_name();
+            tids.push(tid.clone());
             if self.expired(until) {
                 return false;
             }
-            let children = match self.children_at(pid, &task.file_name()) {
+            // (i) A task gone before its read is skipped (its file went with
+            // it) but still unsettles: its children went to a sibling task.
+            let Some(before) = self.task_state(pid, &tid, listing) else {
+                listing.settled = false;
+                continue;
+            };
+            if self.expired(until) {
+                return false;
+            }
+            let children = match self.children_at(pid, &tid) {
                 Ok(Some(children)) => children,
-                Ok(None) => continue,
+                Ok(None) => {
+                    listing.settled = false;
+                    continue;
+                }
                 Err(()) => {
                     listing.complete = false;
+                    listing.settled = false;
                     continue;
                 }
             };
             for child in children {
-                if !seen.insert(child) {
+                // Seen only once added: a child turned away here (it names
+                // another parent) must still be taken when its real parent's
+                // file lists it later in this same reading.
+                if seen.contains(&child) {
                     continue;
                 }
                 if self.expired(until) {
                     return false;
                 }
+                // (ii) Every listed child, stat'ed after the whole file was
+                // read: a removal mid-read (the kernel then skips a sibling)
+                // shows as gone, a reused pid or a reparent as another parent.
+                // It must also be Stopped HERE, not only at its own later walk:
+                // the parent's children file is reliable only while the
+                // children are stopped during that read.
                 match self.stat_at(child) {
-                    Lookup::Found(stat) => {
+                    Lookup::Found(stat) if stat.ppid == pid => {
+                        if stat.state != ProcState::Stopped {
+                            listing.settled = false;
+                        }
                         let id = Identity {
                             pid: child,
                             start: stat.start,
                         };
+                        seen.insert(child);
                         listing.rows.push((id, stat.ppid));
-                        queue.push((child, stat.state));
+                        queue.push(child);
                     }
-                    Lookup::Gone => {}
+                    Lookup::Found(_) | Lookup::Gone => listing.settled = false,
                     Lookup::Unreadable => {
                         listing.complete = false;
+                        listing.settled = false;
                         listing.unreadable.push(child);
                     }
                 }
             }
-        }
-        if matches!(before, ProcState::Running | ProcState::Unknown) {
-            listing.settled = false;
-        } else {
             if self.expired(until) {
                 return false;
             }
-            if let Lookup::Found(stat) = self.stat_at(pid)
-                && matches!(stat.state, ProcState::Running | ProcState::Unknown)
-            {
+            // (i) Stopped at both reads: a task that cannot fork or reap.
+            let after = self.task_state(pid, &tid, listing);
+            if before != ProcState::Stopped || after != Some(ProcState::Stopped) {
                 listing.settled = false;
             }
+        }
+        if self.expired(until) {
+            return false;
+        }
+        // (iii) A thread created after the first directory read was never
+        // walked: a tid only the second read lists unsettles the reading.
+        match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
+            Ok(again) => {
+                for task in again {
+                    match task {
+                        Ok(task) if tids.contains(&task.file_name()) => {}
+                        Ok(_) => listing.settled = false,
+                        Err(_) => {
+                            listing.complete = false;
+                            listing.settled = false;
+                        }
+                    }
+                }
+            }
+            Err(_) => listing.settled = false,
         }
         true
     }

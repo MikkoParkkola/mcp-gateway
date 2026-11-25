@@ -81,8 +81,11 @@ pub(super) struct Listing {
     /// Seeds with their own evidence of death: gone, or a different start
     /// time at their pid. The only identities a reading may prune.
     pub(super) gone: Vec<Identity>,
-    /// Every pid whose children were read was stopped, a zombie or gone,
-    /// before and after that read. A full scan is always settled.
+    /// A walked reading: every walked task's own state was Stopped before and
+    /// after its children read; every listed child was still that process's
+    /// child and Stopped when listed; the task set did not grow. A Zombie
+    /// anywhere settles nothing (design delta D5'''). A full scan is always
+    /// settled.
     pub(super) settled: bool,
 }
 

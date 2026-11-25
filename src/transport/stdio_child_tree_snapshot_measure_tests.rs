@@ -37,11 +37,19 @@ async fn measure_the_first_snapshot_on_the_handover_path() {
         .stderr(std::process::Stdio::null())
         .status()
         .expect("padding");
-    while procs() < 1_000 {
+    // A host whose limits stop the padding short says so instead of hanging.
+    for _ in 0..200 {
+        if procs() >= 1_000 {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let host = procs();
     println!("host processes: {host}");
+    if host < 1_000 {
+        println!("M-SNAP UNAVAILABLE procs={host}");
+        return;
+    }
     let mut worst = Duration::ZERO;
     for (what, tail) in [
         ("lone process", "exec sleep 60"),

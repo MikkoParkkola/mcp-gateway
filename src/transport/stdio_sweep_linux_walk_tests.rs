@@ -19,6 +19,12 @@ fn who(pid: u32, start: u64) -> Identity {
     Identity { pid, start }
 }
 
+/// A `stat` line: state, parent, start time in field 22.
+fn stat_line(pid: u32, parent: u32, state: char, start: u64) -> String {
+    let fillers = "0 ".repeat(17);
+    format!("{pid} (fake) {state} {parent} {fillers}{start}\n")
+}
+
 /// A `/proc`-shaped directory. `walkable` writes the probe file the table
 /// checks for at creation (`self/task/<tid>/children`); without it, the table
 /// has no children files and must fall back to the full scan.
@@ -45,17 +51,26 @@ impl Tree {
     }
 
     /// One process: its `stat` (state, parent, start time in field 22) and its
-    /// main thread's `children`.
+    /// main thread (same state).
     fn proc(&self, pid: u32, parent: u32, state: char, start: u64, children: &[u32]) {
-        let fillers = "0 ".repeat(17);
         self.write(
             &format!("{pid}/stat"),
-            &format!("{pid} (fake) {state} {parent} {fillers}{start}\n"),
+            &stat_line(pid, parent, state, start),
         );
-        self.thread(pid, pid, children);
+        self.task(pid, pid, state, children);
     }
 
+    /// A second thread, sleeping.
     fn thread(&self, pid: u32, tid: u32, children: &[u32]) {
+        self.task(pid, tid, 'S', children);
+    }
+
+    /// One task: its own `stat` and its `children`.
+    fn task(&self, pid: u32, tid: u32, state: char, children: &[u32]) {
+        self.write(
+            &format!("{pid}/task/{tid}/stat"),
+            &stat_line(tid, 1, state, 1),
+        );
         let list: Vec<String> = children.iter().map(u32::to_string).collect();
         self.write(&format!("{pid}/task/{tid}/children"), &list.join(" "));
     }
@@ -443,3 +458,6 @@ fn a_stopped_trees_walk_equals_the_scan_of_it() {
     }
     let _ = sh.wait();
 }
+
+#[path = "stdio_sweep_linux_settle_tests.rs"]
+mod settle;
