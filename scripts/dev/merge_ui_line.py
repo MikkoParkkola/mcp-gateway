@@ -295,8 +295,10 @@ def preconditions(root: str) -> None:
 
 
 def paths_z(*args, cwd) -> list:
-    """A path list from git's NUL-separated output (no quoting of unusual names)."""
-    return [p for p in git(*args, "-z", cwd=cwd).stdout.split("\0") if p]
+    """A path list from git's NUL-separated output (no quoting of unusual names). -z goes right after the
+    subcommand: after a `--` git would read it as a path and print newline-separated names."""
+    command, *rest = args
+    return [p for p in git(command, "-z", *rest, cwd=cwd).stdout.split("\0") if p]
 
 
 def source_conflicts(root: str, line: str) -> None:

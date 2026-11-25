@@ -623,6 +623,17 @@ class Rows(unittest.TestCase):
         self.refuse("R10", line1[:10], ui1[:10])
         self.assertNotIn("worktree add", self.fx.calls())
 
+    def test_t9c_merge_leftovers_are_listed_one_path_each(self):
+        # The leftover sweep's own call shape (paths after `--`): git must get -z as an option, never as a path,
+        # or the list comes back newline-joined and a `name~HEAD` side copy is committed (grok confirm on #5356).
+        spec = importlib.util.spec_from_file_location("mul", self.fx.root / "scripts/dev/merge_ui_line.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        for name in ("a.js~HEAD", "b.js~line"):
+            self.fx.write(f"{m.UI}/{name}", "side copy\n")
+        got = m.paths_z("ls-files", "--others", "--exclude-standard", "--", m.UI, cwd=str(self.fx.root))
+        self.assertEqual(sorted(got), [f"{m.UI}/a.js~HEAD", f"{m.UI}/b.js~line"])
+
     def test_t4e_a_second_run_on_a_merged_line_changes_nothing(self):
         tip, line = self.fx.setup(edit_a, edit_b)
         self.succeed(tip, line)
