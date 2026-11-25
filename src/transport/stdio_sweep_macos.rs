@@ -330,9 +330,10 @@ impl MacTable {
 /// One reading for the sweep: the whole table, with the seeds a complete scan
 /// does not list named in `gone` (the full-scan tables' shared rule).
 fn scan_for(probe: &mut dyn Probe, walk: &[Identity], stat_only: &[Identity]) -> Listing {
-    // Red-first stub: the walk commit fills `gone` here.
-    let _ = (walk, stat_only);
-    table_read(probe)
+    let mut listing = table_read(probe);
+    let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
+    listing.gone = super::full_scan_gone(&seeds, &listing);
+    listing
 }
 
 #[cfg(target_os = "macos")]

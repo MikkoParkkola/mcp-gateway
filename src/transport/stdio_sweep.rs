@@ -69,7 +69,6 @@ pub(super) fn by_pid_gate(sig: Sig, state: ProcState) -> Result<(), SignalError>
 }
 
 /// One reading of the process table.
-#[allow(dead_code)] // red-first stub: `gone` and `settled` are read once the walk lands
 pub(super) struct Listing {
     /// Every process the table could read, with its parent pid.
     pub(super) rows: Vec<(Identity, u32)>,
@@ -89,9 +88,18 @@ pub(super) struct Listing {
 
 /// The full-scan tables' one pruning rule: the seeds a COMPLETE scan does not
 /// list, and could read, are gone; an incomplete scan names none.
-#[allow(dead_code)] // red-first stub: the walk commit wires it into every full-scan table
-pub(super) fn full_scan_gone(_seeds: &[Identity], _listing: &Listing) -> Vec<Identity> {
-    Vec::new()
+pub(super) fn full_scan_gone(seeds: &[Identity], listing: &Listing) -> Vec<Identity> {
+    if !listing.complete {
+        return Vec::new();
+    }
+    seeds
+        .iter()
+        .filter(|seed| {
+            !listing.rows.iter().any(|(who, _)| who == *seed)
+                && !listing.unreadable.contains(&seed.pid)
+        })
+        .copied()
+        .collect()
 }
 
 /// What a rescue did for a member whose pid no longer names it.
@@ -285,17 +293,16 @@ impl Sweep {
         table.read(&walk, &stat_only, until)
     }
 
-    /// Add every live descendant of the root and of every member, drop the dead,
-    /// and hold the cap (lowest pids kept).
+    /// Add every live descendant of the root and of every member, drop exactly
+    /// the identities the reading names gone (a member or dropped one leaves
+    /// only on its own evidence, never for being absent), and hold the cap
+    /// (lowest pids kept).
     fn collect(&mut self, listing: &Listing) -> usize {
         let rows = &listing.rows;
-        if listing.complete {
-            let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
-            let keep = |who: &Identity| live.contains(who) || listing.unreadable.contains(&who.pid);
-            self.members.retain(|who, _| keep(who));
-            self.dropped.retain(|who| keep(who));
-        } else {
-            // A member missing from a listing that failed may well be alive.
+        let gone: BTreeSet<Identity> = listing.gone.iter().copied().collect();
+        self.members.retain(|who, _| !gone.contains(who));
+        self.dropped.retain(|who| !gone.contains(who));
+        if !listing.complete {
             self.incomplete_reads += 1;
         }
         let mut parents: BTreeSet<u32> = self.members.keys().map(|who| who.pid).collect();
@@ -338,9 +345,11 @@ impl Sweep {
     ) -> SweepReport {
         let mut report = SweepReport::default();
         let freeze_end = table.now() + self.cfg.freeze_slice;
-        let listing = self.read(table, freeze_end);
-        self.collect(&listing);
-        let root_live = !listing.complete || listing.rows.iter().any(|(who, _)| *who == self.root);
+        // Freeze first: the root and every member the snapshot recorded are
+        // stopped before any reading, so a reading cannot spend the slice
+        // before anything is frozen. Anything but Gone (Unknown included)
+        // counts as live.
+        let root_live = table.state(self.root) != ProcState::Gone;
         let mut frozen: Vec<Frozen> = Vec::new();
         let mut permits: Vec<Permit<'_>> = Vec::new();
         // Freeze: the root first, then the members, re-walking from the frozen
@@ -390,9 +399,10 @@ impl Sweep {
             }
             let listing = self.read(table, freeze_end);
             let added = self.collect(&listing);
-            // Stable only on a COMPLETE listing that adds nothing: after a failed
-            // reading, keep walking until the slice ends.
-            if listing.complete && added == 0 {
+            // Stable only on a COMPLETE and SETTLED reading that adds nothing: a
+            // running parent's children file may leave a child out, and after a
+            // failed or cut-short reading the walk goes on until the slice ends.
+            if listing.complete && listing.settled && added == 0 {
                 break;
             }
             pending = self

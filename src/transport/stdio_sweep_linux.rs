@@ -76,6 +76,29 @@ fn read_stat(pid: u32) -> Lookup {
     lookup_of(std::fs::read_to_string(format!("/proc/{pid}/stat")))
 }
 
+/// Whether `proc_root` has the per-task `children` files: the probe reads this
+/// process's own main-thread entry, which exists exactly when the kernel was
+/// built with them (CONFIG_PROC_CHILDREN).
+fn has_children_files(proc_root: &std::path::Path) -> bool {
+    let tid = rustix::thread::gettid().as_raw_nonzero().get();
+    proc_root.join(format!("self/task/{tid}/children")).exists()
+}
+
+/// One children file: the pids it lists, `Ok(None)` when the task is gone
+/// (the file vanished with it), `Err` for any other failure.
+fn children_in(text: std::io::Result<String>) -> Result<Option<Vec<u32>>, ()> {
+    match text {
+        Ok(text) => Ok(Some(
+            text.split_ascii_whitespace()
+                .filter_map(|pid| pid.parse().ok())
+                .collect(),
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) if err.raw_os_error() == Some(ESRCH) => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
 /// Whether `id` still names the process it was taken from.
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
@@ -126,6 +149,9 @@ pub(in crate::transport::stdio) struct LinuxTable {
     origin: Instant,
     /// Where the process table is read from: `/proc`, or a test's fake tree.
     proc_root: std::path::PathBuf,
+    /// Whether this kernel has the per-task `children` files (probed once, at
+    /// creation): without them every reading is the full scan, for life.
+    walkable: bool,
     /// Test only: stat and children-file reads so far, and the read count at
     /// which this table's clock jumps past every `until`.
     #[cfg(test)]
@@ -139,10 +165,16 @@ pub(in crate::transport::stdio) struct LinuxTable {
 
 impl LinuxTable {
     pub(in crate::transport::stdio) fn new() -> Self {
+        Self::at(std::path::PathBuf::from("/proc"))
+    }
+
+    fn at(proc_root: std::path::PathBuf) -> Self {
+        let walkable = has_children_files(&proc_root);
         Self {
             fds: HashMap::new(),
             origin: Instant::now(),
-            proc_root: std::path::PathBuf::from("/proc"),
+            proc_root,
+            walkable,
             #[cfg(test)]
             reads: 0,
             #[cfg(test)]
@@ -155,10 +187,7 @@ impl LinuxTable {
     /// Test only: a table over a fake process tree at `root`.
     #[cfg(test)]
     pub(super) fn with_root(root: &std::path::Path) -> Self {
-        Self {
-            proc_root: root.to_path_buf(),
-            ..Self::new()
-        }
+        Self::at(root.to_path_buf())
     }
 
     /// The pid with the start time that tells it from a later process.
@@ -194,13 +223,169 @@ impl LinuxTable {
         };
         Ok(Some(&*fd))
     }
-}
 
-impl ProcessTable for LinuxTable {
-    fn read(&mut self, _walk: &[Identity], _stat_only: &[Identity], _until: Duration) -> Listing {
-        // Red-first stub: every reading is the full scan, forced or not.
+    /// One `stat` read under this table's proc root.
+    fn stat_at(&mut self, pid: u32) -> Lookup {
         #[cfg(test)]
-        let _ = self.force_full_scan;
+        {
+            self.reads += 1;
+        }
+        lookup_of(std::fs::read_to_string(
+            self.proc_root.join(format!("{pid}/stat")),
+        ))
+    }
+
+    /// One task's `children` file under this table's proc root.
+    fn children_at(&mut self, pid: u32, tid: &std::ffi::OsStr) -> Result<Option<Vec<u32>>, ()> {
+        #[cfg(test)]
+        {
+            self.reads += 1;
+        }
+        let mut path = self.proc_root.join(format!("{pid}/task"));
+        path.push(tid);
+        path.push("children");
+        children_in(std::fs::read_to_string(path))
+    }
+
+    fn expired(&mut self, until: Duration) -> bool {
+        ProcessTable::now(self) >= until
+    }
+
+    /// The walk: each walked seed stat'ed directly, then every task's children
+    /// file of every live one, down the tree; each stat-only seed stat'ed for its
+    /// own death. `until` is checked before every read: a reading cut short is
+    /// neither complete nor settled, and keeps what it found.
+    fn walk(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing {
+        let mut listing = Listing {
+            rows: Vec::new(),
+            complete: true,
+            unreadable: Vec::new(),
+            gone: Vec::new(),
+            settled: true,
+        };
+        let mut queue: Vec<(u32, ProcState)> = Vec::new();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for seed in walk {
+            if self.expired(until) {
+                return cut(listing);
+            }
+            if let Some(state) = self.seed(*seed, &mut listing) {
+                listing.rows.push((*seed, state.1));
+                if seen.insert(seed.pid) {
+                    queue.push((seed.pid, state.0));
+                }
+            }
+        }
+        while let Some((pid, before)) = queue.pop() {
+            if !self.walk_one(pid, before, until, &mut listing, &mut queue, &mut seen) {
+                return cut(listing);
+            }
+        }
+        for seed in stat_only {
+            if self.expired(until) {
+                return cut(listing);
+            }
+            let _ = self.seed(*seed, &mut listing);
+        }
+        listing
+    }
+
+    /// Stat a seed: its state and parent when it is still that process; else it
+    /// is named gone (or unreadable, which proves nothing).
+    fn seed(&mut self, seed: Identity, listing: &mut Listing) -> Option<(ProcState, u32)> {
+        match self.stat_at(seed.pid) {
+            Lookup::Found(stat) if stat.start == seed.start => Some((stat.state, stat.ppid)),
+            Lookup::Found(_) | Lookup::Gone => {
+                listing.gone.push(seed);
+                None
+            }
+            Lookup::Unreadable => {
+                listing.complete = false;
+                listing.unreadable.push(seed.pid);
+                None
+            }
+        }
+    }
+
+    /// Read every task's children of `pid` and stat each new child. `false`
+    /// when `until` passed (the caller cuts the reading short). The reading
+    /// stays settled only if `pid` was stopped, a zombie or gone both before and
+    /// after its children were read: the kernel's children file is reliable only
+    /// for a parent that cannot fork or reap meanwhile.
+    fn walk_one(
+        &mut self,
+        pid: u32,
+        before: ProcState,
+        until: Duration,
+        listing: &mut Listing,
+        queue: &mut Vec<(u32, ProcState)>,
+        seen: &mut std::collections::HashSet<u32>,
+    ) -> bool {
+        let tasks = match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
+            Ok(tasks) => tasks,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(_) => {
+                listing.complete = false;
+                return true;
+            }
+        };
+        for task in tasks {
+            let Ok(task) = task else {
+                listing.complete = false;
+                continue;
+            };
+            if self.expired(until) {
+                return false;
+            }
+            let children = match self.children_at(pid, &task.file_name()) {
+                Ok(Some(children)) => children,
+                Ok(None) => continue,
+                Err(()) => {
+                    listing.complete = false;
+                    continue;
+                }
+            };
+            for child in children {
+                if !seen.insert(child) {
+                    continue;
+                }
+                if self.expired(until) {
+                    return false;
+                }
+                match self.stat_at(child) {
+                    Lookup::Found(stat) => {
+                        let id = Identity {
+                            pid: child,
+                            start: stat.start,
+                        };
+                        listing.rows.push((id, stat.ppid));
+                        queue.push((child, stat.state));
+                    }
+                    Lookup::Gone => {}
+                    Lookup::Unreadable => {
+                        listing.complete = false;
+                        listing.unreadable.push(child);
+                    }
+                }
+            }
+        }
+        if matches!(before, ProcState::Running | ProcState::Unknown) {
+            listing.settled = false;
+        } else {
+            if self.expired(until) {
+                return false;
+            }
+            if let Lookup::Found(stat) = self.stat_at(pid)
+                && matches!(stat.state, ProcState::Running | ProcState::Unknown)
+            {
+                listing.settled = false;
+            }
+        }
+        true
+    }
+
+    /// The full scan: every process under the proc root, one `stat` each.
+    fn scan(&mut self) -> Listing {
         let Ok(dir) = std::fs::read_dir(&self.proc_root) else {
             return Listing {
                 rows: Vec::new(),
@@ -230,7 +415,7 @@ impl ProcessTable for LinuxTable {
             else {
                 continue;
             };
-            match read_stat(pid) {
+            match self.stat_at(pid) {
                 Lookup::Found(stat) => listing.rows.push((
                     Identity {
                         pid,
@@ -245,6 +430,30 @@ impl ProcessTable for LinuxTable {
                 }
             }
         }
+        listing
+    }
+}
+
+/// A reading cut short by its `until`: neither complete nor settled.
+fn cut(mut listing: Listing) -> Listing {
+    listing.complete = false;
+    listing.settled = false;
+    listing
+}
+
+impl ProcessTable for LinuxTable {
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing {
+        #[cfg(test)]
+        let forced = self.force_full_scan;
+        #[cfg(not(test))]
+        let forced = false;
+        if self.walkable && !forced {
+            return self.walk(walk, stat_only, until);
+        }
+        // The fallback reads to the end of the root: until does not cut it.
+        let mut listing = self.scan();
+        let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
+        listing.gone = super::full_scan_gone(&seeds, &listing);
         listing
     }
 

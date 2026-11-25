@@ -231,7 +231,7 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self, _walk: &[Identity], _stat_only: &[Identity], _until: Duration) -> Listing {
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], _until: Duration) -> Listing {
         self.operate();
         if self.blind {
             return Listing {
@@ -242,7 +242,7 @@ impl ProcessTable for Fake {
                 settled: true,
             };
         }
-        Listing {
+        let mut listing = Listing {
             rows: self
                 .procs
                 .iter()
@@ -253,7 +253,10 @@ impl ProcessTable for Fake {
             unreadable: self.foreign.into_iter().collect(),
             gone: Vec::new(),
             settled: true,
-        }
+        };
+        let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
+        listing.gone = super::full_scan_gone(&seeds, &listing);
+        listing
     }
 
     fn state(&mut self, who: Identity) -> ProcState {
