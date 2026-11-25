@@ -84,6 +84,21 @@ pub(super) struct Page {
     pub(super) above_end: Seen,
 }
 
+/// For a read in passes: `page`, read from `cursor`, restarted at the newest
+/// line because retention removed the segment the read was in. A first pass
+/// (no cursor) has nothing to restart from. After a restart, what follows
+/// would join newer rows onto older ones, so the read stops with
+/// `Interrupted`, and its caller says the log moved on.
+pub(super) fn restarted_mid_read(cursor: Option<&Cursor>, page: &Page) -> io::Result<()> {
+    if cursor.is_some() && page.cursor_reset {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "the log rotated past this read while it ran",
+        ));
+    }
+    Ok(())
+}
+
 /// What bounds one page.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::gateway::ui) struct Limits {
@@ -332,7 +347,8 @@ fn open_tails(
     Ok(Some((inv_tail, gov_tail)))
 }
 
-fn timestamp(entry: &Value) -> Option<DateTime<FixedOffset>> {
+/// An entry's `timestamp`, when it is an RFC 3339 time.
+pub(super) fn timestamp(entry: &Value) -> Option<DateTime<FixedOffset>> {
     entry
         .get("timestamp")
         .and_then(Value::as_str)

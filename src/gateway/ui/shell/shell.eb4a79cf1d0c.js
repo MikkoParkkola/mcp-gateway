@@ -1804,7 +1804,8 @@ function streamFrame(frame) {
   // screens to follow. The To do count is not in a status frame, so refreshCounts()
   // is not run here.
   // An activity frame only tells Activity that the log moved; the screen asks its list again.
-  if (!['hello', 'status', 'reload', 'activity'].includes(frame.event)) return;
+  // A reset frame names the log the stream started over on; a screen showing that log reloads it.
+  if (!['hello', 'status', 'reload', 'activity', 'reset'].includes(frame.event)) return;
   let detail;
   try {
     detail = JSON.parse(frame.data);

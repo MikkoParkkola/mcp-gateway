@@ -466,6 +466,34 @@ pub(super) fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
+/// How long the executor's workers get to finish, in tokio time.
+const JOIN_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Await `wait` with tokio's clock paused, then restart it.
+///
+/// A bound inside `wait` then counts only runtime time: it passes when no
+/// task can run, never because the host stalled, and work on the blocking
+/// pool holds the clock still while it runs. A row whose clock is already
+/// paused must not call this: pausing twice panics.
+pub(super) async fn on_paused_clock<T>(wait: impl std::future::Future<Output = T>) -> T {
+    tokio::time::pause();
+    let out = wait.await;
+    tokio::time::resume();
+    out
+}
+
+/// Drain the executor and require every worker to have finished within
+/// [`JOIN_BOUND`] of tokio time, on whatever clock the row runs.
+pub(super) async fn drain_clean(state: &Arc<AppState>) {
+    let outcome = state.task_executor.drain(JOIN_BOUND).await;
+    std::assert!(outcome.is_clean(), "the worker must finish: {outcome:?}");
+}
+
+/// [`drain_clean`] on a paused clock, for rows that run on the real one.
+pub(super) async fn join_workers(state: &Arc<AppState>) {
+    on_paused_clock(drain_clean(state)).await;
+}
+
 /// Poll `tasks/get` until the task is terminal, bounded by a deadline.
 ///
 /// Not a sleep and not a timeout: every row that needs the worker to have
@@ -592,4 +620,18 @@ pub(super) fn observe_dispatched(state: &Arc<AppState>) -> (Arc<HoldObserver>, H
             release,
         },
     )
+}
+
+/// Run a join that must fail and return its panic message.
+///
+/// A join that returns instead fails here, at a line of its own: a row built
+/// on `should_panic` would fail with no panic location at all.
+pub(super) async fn join_panic(join: impl std::future::Future<Output = ()>) -> String {
+    use futures::FutureExt as _;
+    let joined = std::panic::AssertUnwindSafe(join).catch_unwind().await;
+    let payload = joined.expect_err("a worker that is never released must fail the join");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("the join panics with a formatted message")
 }

@@ -10,7 +10,7 @@
 // under the button, its restart block from the shell's restartAdvice(). Status
 // is the rest of this page and stays undrawn until it is built. Every
 // server-supplied string goes in with textContent.
-import { register, render, restartAdvice, el as h } from '/ui/assets/shell.60857ec1239d.js';
+import { register, render, restartAdvice, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
 
 const STORES = { files: 'Files', keychain: 'Keychain' };
 const storeWord = (s) => STORES[s] ?? String(s);

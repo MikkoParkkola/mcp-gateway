@@ -7,7 +7,7 @@
 // page. It reads GET /ui/api/tools once per render. Every server-supplied
 // string goes in with textContent. The shell is imported by its exact hashed
 // name, so this page registers in the same module instance the document loaded.
-import { go, register, ApiError } from '/ui/assets/shell.60857ec1239d.js';
+import { go, register, ApiError } from '/ui/assets/shell.eb4a79cf1d0c.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -92,7 +92,8 @@ function schemaBlock(t, { compact = false } = {}) {
 function matching(list, query, server) {
   const q = query.trim().toLowerCase();
   return list.filter((t) => (!server || t.server === server)
-    && (!q || t.name.toLowerCase().includes(q) || (t.description ?? '').toLowerCase().includes(q)));
+    && (!q || t.name.toLowerCase().includes(q) || t.server.toLowerCase().includes(q)
+      || (t.description ?? '').toLowerCase().includes(q)));
 }
 
 // The search and the server choice survive a visit to a tool's page and
