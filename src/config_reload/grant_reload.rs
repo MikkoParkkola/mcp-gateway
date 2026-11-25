@@ -155,6 +155,10 @@ impl ReloadContext {
     /// slot is evicted, a concurrent request refills it against the old grants
     /// still in the store, and the refilled catalogue is stale again — an
     /// eviction that ran and achieved nothing.
+    ///
+    /// NOT GATED, ON PURPOSE. The restart gate stops config reloads while a
+    /// restart is being prepared; a revocation must still apply then. This
+    /// reloads the grants file only, never gateway.yaml.
     pub async fn reload_identity_grants(&self) -> Option<std::result::Result<String, String>> {
         let sink = self.identity_grants.as_ref()?;
         // Bounded like `lock_reload_within`: busy is its own refusal, so an

@@ -8,16 +8,16 @@
 //! (stored bytes) both write through [`replace_audited`]. It refuses a write
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
-//! accepted the new bytes, and puts the original back on a refused reload or
-//! a failed write. A crash anywhere is recovered by the next holder of the
-//! config lock.
+//! accepted the new bytes, and puts the original back on a refused reload; a
+//! failed write never replaced the file, so it drops the journal and staged copy. A crash
+//! anywhere is recovered by the next holder of the config lock.
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
 //! ranked earlier is taken while a later one is held: the config sidecar
 //! before the vault, never the reverse.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -194,6 +194,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
+        | ReplaceError::WriterRefused { .. }
         | ReplaceError::ReloadRefused { .. } => Settle::Discard,
         // The file on disk may name them; `Failed` proves nothing either way.
         ReplaceError::RollbackFailed { .. }
@@ -509,6 +510,7 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
+        let journal_file = journal::journal_path(target);
         if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
@@ -520,7 +522,7 @@ impl ReloadContext {
         // From here the file on disk may name this save's entries: set before
         // the write, so a death inside it keeps them (listed as unused)
         // rather than deleting what the new file may already name. A write
-        // error comes back after a proven rollback and discards.
+        // error leaves the file alone, drops the journal, and discards.
         entries.renamed = true;
         // From here the new bytes may be on disk.
         entries.trace.written.store(true, Ordering::SeqCst);
@@ -540,9 +542,14 @@ impl ReloadContext {
         };
         if let Err(e) = written {
             unkeep();
-            return Err(Self::roll_back(
+            let error = match crate::config_persistence::writer_refusal(&e) {
+                Some((code, text)) => ReplaceError::WriterRefused { code, text },
+                None => ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+            };
+            return Err(Self::abandon(
                 target,
-                ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+                [&journal_file, &original],
+                error,
                 &entries.trace,
             ));
         }
@@ -678,6 +685,26 @@ impl ReloadContext {
                 error: rollback.into_message(),
             },
         }
+    }
+
+    /// Our rename never ran: drop what this save staged, by the names it gave
+    /// them before the write (never re-resolved), and never the file.
+    fn abandon(
+        target: &Path,
+        staged: [&Path; 2],
+        error: ReplaceError,
+        trace: &WriteTrace,
+    ) -> ReplaceError {
+        let Err(e) = journal::finish_exact(target, staged[0], staged[1]) else {
+            // The file was never replaced: the original stands, as after a
+            // proven rollback.
+            if trace.written.load(Ordering::SeqCst) {
+                trace.restored.store(true, Ordering::SeqCst);
+            }
+            return error;
+        };
+        let (journal, error) = (staged[0].to_path_buf(), e.to_string());
+        ReplaceError::RollbackFailed { journal, error }
     }
 }
 

@@ -244,12 +244,12 @@ fn a_key_write_keeps_its_subject_and_a_recovery_names_the_gateway() {
     assert!(recovered.get("subject").is_none(), "{recovered}");
 }
 
-/// W2c: one outcome word for every writer answer and trace, all sixteen
+/// W2c: one outcome word for every writer answer and trace, all seventeen
 /// errors named.
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one table naming all sixteen writer errors, so a missing one shows in one place"
+    reason = "one table naming all seventeen writer errors, so a missing one shows in one place"
 )]
 fn every_writer_answer_has_one_save_outcome() {
     use super::super::{SaveOutcome, save_outcome};
@@ -331,6 +331,14 @@ fn every_writer_answer_has_one_save_outcome() {
             ReplaceError::Write("w".to_owned()),
             trace(true, true, false),
             "indeterminate",
+        ),
+        (
+            ReplaceError::WriterRefused {
+                code: "c",
+                text: "t".to_owned(),
+            },
+            trace(true, true, true),
+            "rolled_back",
         ),
         (reload(), trace(false, false, false), "refused"),
         (reload(), trace(true, false, false), "refused"),

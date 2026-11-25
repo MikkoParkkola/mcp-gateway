@@ -1,4 +1,4 @@
 # file	function	kind	count	class	reason
 src/gateway/ui/keys_create.rs	create_key	persist:write_audited	1	no-backend-values	admin key create writes a key digest spec into auth.api_keys; no backend value
 src/gateway/ui/keys_create.rs	write_audited	persist:replace_audited	1	no-backend-values	the key write under its audit; writes only auth.api_keys, no backend value
-src/config_reload/ui_save.rs	ui_save	persist:replace_traced	1	stores	the settings save: a secret field's bytes go to the secret store (ui_save.rs:183-188, 207-213) and gateway.yaml gets its reference slot (ui_diff.rs:338); a secret field refuses a plain Set (ui_fields.rs:300-301)
+src/config_reload/ui_save.rs	ui_save	persist:replace_traced	1	stores	the settings save: a secret field's bytes go to the secret store (ui_save.rs:184-189, 208-214) and gateway.yaml gets its reference slot (ui_diff.rs:338); a secret field refuses a plain Set (ui_fields.rs:300-301)

@@ -124,6 +124,7 @@ pub(crate) fn save_outcome(
         | ReplaceError::Unsupported(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
+        | ReplaceError::WriterRefused { .. }
         | ReplaceError::ReloadRefused { .. }
         | ReplaceError::Failed(_)
         | ReplaceError::Secrets(_)
@@ -399,6 +400,7 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::Unsupported(why) => UiRefused::Preview(PreviewRefused::Untrusted(why)),
         ReplaceError::Stage(_) => write_failed("stage"),
         ReplaceError::Write(_) => write_failed("write"),
+        ReplaceError::WriterRefused { .. } => write_failed("writer_refused"),
         ReplaceError::Failed(_) => write_failed("failed"),
         ReplaceError::RollbackFailed { .. } => write_failed("rollback_failed"),
         ReplaceError::Unconfirmed { .. } => write_failed("unconfirmed"),

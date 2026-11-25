@@ -43,6 +43,7 @@ mod errors;
 /// The `OpenAPI` import's refusal sentences, for `gateway::test_helpers`.
 pub(in crate::gateway) use errors::{CAPABILITIES_OFF, DIGEST_REQUIRED, DOCUMENT_CHANGED};
 mod events;
+mod gateway_health;
 mod gateway_status;
 mod gateway_upgrade;
 mod guard;
@@ -170,6 +171,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
+        .route(
+            routes::UI_GATEWAY_HEALTH,
+            get(gateway_health::gateway_health),
+        )
         .route(
             routes::UI_KEYS,
             get(keys::keys).post(keys_create::create_key),
