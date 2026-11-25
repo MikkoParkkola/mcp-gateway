@@ -346,6 +346,27 @@ export function serverBanner(server) {
   return node;
 }
 
+/**
+ * The restart block for an answer carrying the gateway's restart keys, shared by
+ * a reload's outcome and the settings save. restartBanner (the waiting-keys
+ * banner below) still draws the same keys itself until the two are unified:
+ * `start_refusal` alone as a warning; else `restart_advice` as a waiting line,
+ * with `start_command` as one code line that selects whole when it came too.
+ * null when the answer has neither a refusal nor advice. Text only.
+ */
+export function restartAdvice(answer) {
+  const given = (v) => typeof v === 'string' && v.trim() !== '';
+  const line = (tone, glyph, text) => el('p', { 'data-tone': tone },
+    el('span', { class: 'glyph', 'aria-hidden': 'true' }, glyph), ' ', el('span', {}, text));
+  if (given(answer?.start_refusal)) {
+    return el('div', { class: 'restart-advice', 'data-kind': 'refusal' }, line('warning', '⚠', answer.start_refusal));
+  }
+  if (!given(answer?.restart_advice)) return null;
+  const node = el('div', { class: 'restart-advice', 'data-kind': 'advice' }, line('waiting', '↻', answer.restart_advice));
+  if (given(answer.start_command)) node.append(el('code', { class: 'start-command' }, answer.start_command));
+  return node;
+}
+
 /** The stale banner's title: when updates stopped, and that it reconnects. */
 export function staleTitle(since) {
   return since instanceof Date && !Number.isNaN(since.getTime())
@@ -1900,7 +1921,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.cd1750e8bd65.js');
+    m = await import('/ui/assets/tooltip.7d5614b14a79.js');
   } catch {
     return;
   }

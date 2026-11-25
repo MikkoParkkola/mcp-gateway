@@ -30,6 +30,16 @@ pub(super) const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/gateway_health.rs (the gateway's health history; admin
+    // only as the read above). This fixture starts no history, so the admin is
+    // told it is not running (503); the served body is cited in `SERVED_BY`.
+    row(
+        "/ui/api/gateway/health",
+        Method::GET,
+        "/ui/api/gateway/health",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
     // src/gateway/ui/keys.rs (keys; admin-only read of the configured keys)
     row(
         "/ui/api/keys",
