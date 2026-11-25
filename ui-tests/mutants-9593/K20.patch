@@ -1,0 +1,14 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..f5df1dae6d 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -152,8 +152,7 @@ async function reloadTab(body, ctx) {
+     } catch (err) {
+       // 401: the shell's sign-in view takes over (and the focus). 403: the shell's forbidden banner says it.
+       signedOut = err?.status === 401;
+-      if (err?.status === 403) ctx.show('forbidden');
+-      lines = signedOut || err?.status === 403 ? [] : refusedLines(err);
++      lines = signedOut ? [] : refusedLines(err);
+     }
+     outcome.replaceChildren(...lines);
+     button.disabled = false;

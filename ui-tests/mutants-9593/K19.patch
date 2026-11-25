@@ -1,0 +1,35 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..9eb6824bfa 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -10,7 +10,7 @@
+ // under the button, its restart block from the shell's restartAdvice(). Status
+ // is the rest of this page and stays undrawn until it is built. Every
+ // server-supplied string goes in with textContent.
+-import { register, render, restartAdvice, el as h } from '/ui/assets/shell.60857ec1239d.js';
++import { register, render, el as h } from '/ui/assets/shell.60857ec1239d.js';
+ 
+ const STORES = { files: 'Files', keychain: 'Keychain' };
+ const storeWord = (s) => STORES[s] ?? String(s);
+@@ -112,7 +112,7 @@ function answeredLines(a) {
+       ? [outLine('head', 'Nothing changed: gateway.yaml matches what the gateway runs.')]
+       : [outLine('head', RELOADED), outLine('changes', a.changes)];
+   }
+-  const block = restartAdvice(a);
++  const block = null;
+   if (!block) return null;
+   // A refusal leads, and the summary sits under the page's own label; advice follows the summary.
+   return block.dataset.kind === 'refusal'
+diff --git a/src/gateway/ui/shell/shell.60857ec1239d.js b/src/gateway/ui/shell/shell.60857ec1239d.js
+index bb90677e64..87f8b6c0db 100644
+--- a/src/gateway/ui/shell/shell.60857ec1239d.js
++++ b/src/gateway/ui/shell/shell.60857ec1239d.js
+@@ -354,7 +354,7 @@ export function serverBanner(server) {
+  * with `start_command` as one code line that selects whole when it came too.
+  * null when the answer has neither a refusal nor advice. Text only.
+  */
+-export function restartAdvice(answer) {
++function restartAdvice(answer) {
+   const given = (v) => typeof v === 'string' && v.trim() !== '';
+   const line = (tone, glyph, text) => el('p', { 'data-tone': tone },
+     el('span', { class: 'glyph', 'aria-hidden': 'true' }, glyph), ' ', el('span', {}, text));

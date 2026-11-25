@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..ae9e32de3d 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -123,7 +123,7 @@ function answeredLines(a) {
+ /** The lines for a reload the gateway refused or did not confirm, with its own sentence when it gave one. */
+ function refusedLines(err) {
+   const head = err?.status === 409 ? 'Not reloaded. The gateway runs as before.'
+-    : err?.status === 503 ? 'Not reloaded.' : UNCONFIRMED;
++    : err?.status === 503 ? 'Not reloaded.' : err?.status === 500 ? RELOADED : UNCONFIRMED;
+   return err?.serverMessage ? [outLine('head', head), outLine('sentence', err.serverMessage)] : [outLine('head', head)];
+ }
+ 
