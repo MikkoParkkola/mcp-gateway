@@ -1,0 +1,3 @@
+head_sha	16bba4996e625397ac961bfe60acee9892ce7fd1
+#mutant M19
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:562
