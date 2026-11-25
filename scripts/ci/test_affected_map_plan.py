@@ -312,6 +312,15 @@ class Workflow(unittest.TestCase):
         self.assertIn("needs.guard.outputs.split", str(part.get("env", {})))
         self.assertIn('"$SPLIT"', part["run"])
 
+    def test_p8b_the_plan_reads_the_map_the_run_restores_and_publishes(self) -> None:
+        # A plan aimed at any other path reads no map, so it would never split and no other row would notice.
+        def cache(job: str, kind: str) -> str:
+            return next(s for s in self.jobs[job]["steps"] if f"actions/cache/{kind}@" in str(s.get("uses", "")))[
+                "with"]["path"]
+        plan = next(s for s in self.jobs["guard"]["steps"] if s.get("id") == "split")["run"]
+        arg = plan.split("affected_map.py plan ", 1)[1].split()[0]
+        self.assertEqual([cache("guard", "restore"), cache("merge", "save")], [arg, arg])
+
     def test_p8b_the_plan_command_prints_the_list(self) -> None:
         import subprocess
         doc = lib_map({"a::a": (2, 40.0), "b::b": (2, 30.0), "c::c": (2, 20.0)})
