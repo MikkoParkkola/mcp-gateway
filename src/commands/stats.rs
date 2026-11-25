@@ -71,7 +71,7 @@ fn failure(message: std::fmt::Arguments<'_>, remedy: &str) -> String {
 /// Leaves with the two-line local error built from a [`failure`] text.
 fn exit_with(text: &str) -> ExitCode {
     let (message, remedy) = text.rsplit_once('\n').unwrap_or((text, RUN_DOCTOR));
-    super::fail(super::CliExit::LocalFailure, message, remedy)
+    mutant!("K29", super::cli_exit::emit(&super::cli_exit::CliError::new(super::CliExit::LocalFailure, message, remedy).outcome(true, &[]), true, &[]), super::fail(super::CliExit::LocalFailure, message, remedy))
 }
 
 /// `stats` output text for stdout (`Ok`) or stderr (`Err`). (MIK-8660 seam)

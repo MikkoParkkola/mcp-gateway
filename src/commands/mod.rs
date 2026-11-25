@@ -622,7 +622,7 @@ fn read_ca_files(
     // the PEM `issue_leaf` takes; both accept PKCS#8 only, as before.
     let key_path = ca_key
         .to_str()
-        .ok_or_else(|| usage(leaf, "CA key path is not valid UTF-8"))?;
+        .ok_or_else(|| mutant!("K28", fail(CliExit::LocalFailure, "CA key path is not valid UTF-8", "Check the CA key path."), usage(leaf, "CA key path is not valid UTF-8")))?;
     let key = mcp_gateway::mtls::cert_manager::load_private_key(key_path)
         .map_err(|e| e.to_string())
         .and_then(|der| {

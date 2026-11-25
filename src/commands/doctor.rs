@@ -221,7 +221,7 @@ pub async fn run_doctor_command(
     // The report is the answer; a config that does not load is one of its failed checks.
     let Some(config) = config else {
         print_results(&results, format);
-        return super::verdict(1);
+        return mutant!("K9a", super::fail(super::CliExit::LocalFailure, "doctor found problems", "See the report above."), super::verdict(1));
     };
     if let Some(path) = resolve_config_path(config_path) {
         results.extend(hidden_keys::check_hidden_keys(&path));
@@ -288,7 +288,7 @@ pub async fn run_doctor_command(
         .filter(|r| r.status == CheckStatus::Fail)
         .count();
     if failed > 0 {
-        super::verdict(1)
+        mutant!("K9b", super::fail(super::CliExit::LocalFailure, "doctor found problems", "See the report above."), super::verdict(1))
     } else {
         ExitCode::SUCCESS
     }

@@ -177,10 +177,10 @@ pub fn run_doctor_shadow_command(format: &str) -> ExitCode {
         "nginx" | "haproxy" => render_nginx(DLP_RULES),
         "yaml" => render_yaml(DLP_RULES),
         other => {
-            return crate::commands::usage(
+            return mutant!("K27", crate::commands::fail(crate::commands::CliExit::LocalFailure, &format!("unknown --shadow-format '{other}'. Valid values: grep, nginx, yaml"), "Choose grep, nginx or yaml."), crate::commands::usage(
                 "doctor",
                 &format!("unknown --shadow-format '{other}'. Valid values: grep, nginx, yaml"),
-            );
+            ));
         }
     };
     print!("{output}");

@@ -543,7 +543,7 @@ pub(crate) fn usage(command: &str, message: &str) -> std::process::ExitCode {
 /// A command that ran and whose answer is negative (a check failed, a file has findings): prints nothing, returns
 /// `code`. The command has already printed its result.
 pub(crate) fn verdict(code: u8) -> std::process::ExitCode {
-    std::process::ExitCode::from(code)
+    mutant!("K36", { eprintln!("verdict {code}"); std::process::ExitCode::from(code) }, std::process::ExitCode::from(code))
 }
 
 #[cfg(tp2)]
