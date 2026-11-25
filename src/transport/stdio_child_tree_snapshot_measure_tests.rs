@@ -26,12 +26,16 @@ async fn measure_the_first_snapshot_on_the_handover_path() {
         })
     };
     let pad = 1_050_usize.saturating_sub(procs());
-    let _padder = std::process::Command::new("sh")
+    // The shell exits once its sleeps are started (reaped here); they hold no
+    // pipe of ours.
+    std::process::Command::new("sh")
         .arg("-c")
         .arg(format!(
-            "i=0; while [ $i -lt {pad} ]; do sleep 900 & i=$((i+1)); done; wait"
+            "i=0; while [ $i -lt {pad} ]; do sleep 900 & i=$((i+1)); done"
         ))
-        .spawn()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
         .expect("padding");
     while procs() < 1_000 {
         tokio::time::sleep(Duration::from_millis(50)).await;

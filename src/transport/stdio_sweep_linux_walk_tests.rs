@@ -46,11 +46,11 @@ impl Tree {
 
     /// One process: its `stat` (state, parent, start time in field 22) and its
     /// main thread's `children`.
-    fn proc(&self, pid: u32, ppid: u32, state: char, start: u64, children: &[u32]) {
+    fn proc(&self, pid: u32, parent: u32, state: char, start: u64, children: &[u32]) {
         let fillers = "0 ".repeat(17);
         self.write(
             &format!("{pid}/stat"),
-            &format!("{pid} (fake) {state} {ppid} {fillers}{start}\n"),
+            &format!("{pid} (fake) {state} {parent} {fillers}{start}\n"),
         );
         self.thread(pid, pid, children);
     }
@@ -77,7 +77,8 @@ fn pids(listing: &Listing) -> Vec<u32> {
 #[test]
 fn an_expired_reading_stops_at_once_whatever_the_tree() {
     let root = fake(1);
-    let cases: [(&str, Box<dyn Fn(&Tree)>, Vec<Identity>); 4] = [
+    type Case = (&'static str, Box<dyn Fn(&Tree)>, Vec<Identity>);
+    let cases: [Case; 4] = [
         (
             "a 5,000-link chain",
             Box::new(move |tree| {

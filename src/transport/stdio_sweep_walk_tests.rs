@@ -46,10 +46,10 @@ struct Walk {
 }
 
 impl Walk {
-    fn add(&mut self, pid: u32, ppid: u32) {
+    fn add(&mut self, pid: u32, parent: u32) {
         self.procs.push(Proc {
             id: id(pid),
-            ppid,
+            ppid: parent,
             state: ProcState::Running,
         });
     }

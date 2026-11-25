@@ -78,7 +78,7 @@ fn read_stat(pid: u32) -> Lookup {
 
 /// Whether `proc_root` has the per-task `children` files: the probe reads this
 /// process's own main-thread entry, which exists exactly when the kernel was
-/// built with them (CONFIG_PROC_CHILDREN).
+/// built with them (`CONFIG_PROC_CHILDREN`).
 fn has_children_files(proc_root: &std::path::Path) -> bool {
     let tid = rustix::thread::gettid().as_raw_nonzero().get();
     proc_root.join(format!("self/task/{tid}/children")).exists()
