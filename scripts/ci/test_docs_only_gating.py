@@ -346,25 +346,36 @@ def post_merge_errors(jobs: dict) -> list[str]:
     return errors
 
 
+SAVE_FLAGS = {"Swatinem/rust-cache@": "save-if", "astral-sh/setup-uv@": "save-cache"}
+SAVING_PUSHES = (f"refs/heads/{RELEASE_LINE}", "refs/heads/main")
+
+
 def dead_save_errors(jobs: dict) -> list[str]:
-    """Only jobs that run on the release-line push save a Rust cache: by policy, that push is the saving run (a
-    manual dispatch on the line would also write a cache pull requests can restore, but dispatches are rare and are
-    not a warming route). Any other job's rust-cache step must say `save-if: false`. A release-line save there never
-    fires on a push but reads as warming: macos-shards built cold on every train while its step looked like it kept a
-    cache (measured 2026-11-25). Clippy's `check` runs on that push for exactly that reason (comment above
+    """A cache step may save only on a push to the release line or main, the runs whose caches pull requests restore
+    (by policy: a manual dispatch on the line would also write a restorable cache, but dispatches are rare and are not a
+    warming route). A step whose save condition is true on none of the pushes its job runs on never saves, yet reads as
+    warming: macos-shards built cold on every train while its step looked like it kept a cache (measured 2026-11-25).
+    Such a step must say false. Clippy's `check` runs on the release-line push for exactly that reason (comment above
     POST_MERGE_SKIPPED)."""
-    c = ctx("push", "success", "false")
-    c["github"].update(POST_MERGE_PUSH)
-    on_line_push = simulate(jobs, c)
+    runs_on = {}
+    for ref in SAVING_PUSHES:
+        c = ctx("push", "success", "false")
+        c["github"].update({"event_name": "push", "ref": ref})
+        runs_on[ref] = (c, simulate(jobs, c))
     errors = []
-    for job_id in sorted(set(jobs) - on_line_push):
-        for step in jobs[job_id].get("steps") or []:
-            if not str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
+    for job_id, job in sorted(jobs.items()):
+        for step in job.get("steps") or []:
+            uses = str(step.get("uses", ""))
+            flag = next((f for prefix, f in SAVE_FLAGS.items() if uses.startswith(prefix)), None)
+            if flag is None:
                 continue
-            save_if = (step.get("with") or {}).get("save-if", True)
-            if save_if is not False and str(save_if).strip() != "false":
-                errors.append(f"{job_id}: its rust-cache step can save, but this job does not run on the "
-                              f"release-line push, the only run allowed to save; write save-if: false")
+            value = (step.get("with") or {}).get(flag, True)
+            if value is False or str(value).strip() == "false":
+                continue
+            if not any(job_id in ran and (value is True or bool(evaluate(str(value), c)))
+                       for c, ran in runs_on.values()):
+                errors.append(f"{job_id}: its {uses.split('@')[0]} step's {flag} is true on no push this job runs "
+                              f"on (release line, main), so it never saves; write {flag}: false")
     return errors
 
 
@@ -631,17 +642,18 @@ def main() -> int:
         mutate(mutated)
         if not post_merge_errors(mutated):
             errors.append(f"post-merge self-test: '{label}' was not caught")
-    # The dead-save check must be able to fail: a release-line save put back on macos-shards is caught, and so is a
-    # step with no save-if at all (the action's default saves on every run).
+    # The dead-save check must be able to fail: a release-line save put back on macos-shards (it runs on main pushes
+    # only, where that condition is false) is caught, and so is a step with no save-if in macos-int-lane (it runs on
+    # no push, so even the action's save-always default never fires).
     line_save = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
-    for label, edit in (("a release-line save", lambda w: w.update({"save-if": line_save})),
-                        ("no save-if", lambda w: w.pop("save-if", None))):
+    for label, job, edit in (("a release-line save", "macos-shards", lambda w: w.update({"save-if": line_save})),
+                             ("no save-if", "macos-int-lane", lambda w: w.pop("save-if", None))):
         mutated = copy.deepcopy(jobs)
-        for step in mutated["macos-shards"]["steps"]:
+        for step in mutated[job]["steps"]:
             if str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
                 edit(step["with"])
-        if not any(e.startswith("macos-shards:") for e in dead_save_errors(mutated)):
-            errors.append(f"dead-save self-test: {label} on macos-shards was not caught")
+        if not any(e.startswith(f"{job}:") for e in dead_save_errors(mutated)):
+            errors.append(f"dead-save self-test: {label} on {job} was not caught")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
