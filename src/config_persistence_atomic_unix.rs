@@ -12,6 +12,11 @@ use std::path::Path;
 
 use super::FileMode;
 
+// Linux: the target's access labels and the scratch's inherited ACL.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[path = "config_persistence_atomic_linux.rs"]
+mod linux;
+
 /// Whether the scratch ended up in the target's group.
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +127,22 @@ fn unreadable(target: &Path) -> io::Error {
             "acl-not-kept: refused to replace {shown}: this gateway cannot read the file to \
              check its access control list. Nothing was written. To save it, give uid {me} \
              read access to the file."
+        ),
+    )
+}
+
+/// Linux: the new copy could not be given one of the target's security
+/// labels (`name`), or did not read it back. Never names the label itself.
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn label_not_kept(target: &Path, name: &str) -> io::Error {
+    let shown = target.display();
+    let me = rustix::process::geteuid().as_raw();
+    refusal(
+        "label-not-kept",
+        format!(
+            "label-not-kept: refused to replace {shown}: the new copy could not be given the \
+             file's {name} security label as uid {me}. Nothing was written. To save it, give \
+             uid {me} the right to set that label, or remove the label from the file."
         ),
     )
 }
@@ -534,6 +555,10 @@ pub(crate) mod seams {
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, PoisonError};
 
+    /// The label store and its knobs, for the label rows.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) use super::linux::{Call, FakeLabels, SetSeen, Times};
+
     /// Runs with (target or destination, scratch or source).
     pub(crate) type PathHook = Box<dyn FnMut(&Path, &Path) + Send>;
     /// Runs with the scratch's own descriptor.
@@ -554,6 +579,12 @@ pub(crate) mod seams {
         pub(crate) before_verify: Option<PathHook>,
         /// A backup, after its source is modelled: (source, destination).
         pub(crate) after_model: Option<PathHook>,
+        /// Linux: the injected label store that stands in for the kernel's
+        /// `security.*` calls (no LSM or CAP_SYS_ADMIN on the test hosts).
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        pub(crate) labels: Option<super::linux::FakeLabels>,
+        /// Right after a save reads the labels it keeps: (target, scratch).
+        pub(crate) after_labels_read: Option<PathHook>,
     }
 
     /// One armed folder: its seams and what its saves did.
@@ -640,6 +671,7 @@ pub(crate) mod seams {
             "foreign-owner" => super::foreign_owner(target, 4101),
             "target-changed" => super::changed(target),
             "acl-not-kept" => super::unreadable(target),
+            "label-not-kept" => super::label_not_kept(target, "security.selinux"),
             other => panic!("no writer refusal has the code {other}"),
         })
     }

@@ -33,8 +33,8 @@ fn mode_of(path: &Path) -> u32 {
     std::fs::symlink_metadata(path).expect("lstat").mode() & 0o7777
 }
 
-/// Every name in `dir`, sorted.
-fn names(dir: &Path) -> Vec<String> {
+/// Every name in `dir`, sorted. Also used by the label rows.
+pub(super) fn names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .expect("list")
         .map(|entry| {
@@ -395,11 +395,15 @@ fn the_writer_seams_are_compiled_out_of_production() {
     for file in [
         "config_persistence_atomic.rs",
         "config_persistence_atomic_unix.rs",
+        "config_persistence_atomic_linux.rs",
     ] {
         let raw = std::fs::read_to_string(root.join(file)).expect("read the writer");
-        // The calls live in the unix half; the parent only re-exports them.
+        // The calls live in the unix half; the parent only re-exports them;
+        // the linux half holds the label store.
         let used_here = if file.ends_with("_unix.rs") {
             "seams::"
+        } else if file.ends_with("_linux.rs") {
+            "FakeLabels"
         } else {
             "unix::seams"
         };
@@ -414,6 +418,8 @@ fn the_writer_seams_are_compiled_out_of_production() {
             "open_error",
             "before_verify",
             "first_write",
+            "after_labels_read",
+            "FakeLabels",
         ] {
             assert!(
                 !production.contains(seam),
