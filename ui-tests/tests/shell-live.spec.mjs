@@ -7,28 +7,11 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
-import { PAGES, withFixturePages, shellReady, shellModuleUrl } from './shell.mjs';
+import { PAGES, withFixturePages, shellReady, shellModuleUrl, recordAnnouncements, announced } from './shell.mjs';
 
 const PROBE = '**/ui/api/page-probe*';
 const COUNT = '**/ui/api/decisions/count';
 const LIVE = '[aria-live], [role="status"], [role="alert"], [role="log"], [role="marquee"], [role="timer"], output';
-
-/** Record the text of every entry added to the announcer, from first paint. */
-async function recordAnnouncements(page) {
-  await page.addInitScript(() => {
-    window.__writes = [];
-    addEventListener('DOMContentLoaded', () => {
-      const region = document.getElementById('announcer');
-      if (!region) return;
-      new MutationObserver((records) => {
-        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
-      }).observe(region, { childList: true });
-    });
-  });
-}
-
-const writes = (page) => page.evaluate(() => window.__writes ?? []);
-const announced = async (page) => (await writes(page)).filter(Boolean);
 
 /** Call an export of the shell module inside the page. */
 async function callShell(page, name, ...args) {
