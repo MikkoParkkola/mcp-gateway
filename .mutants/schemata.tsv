@@ -1,0 +1,3 @@
+head_sha	728da01429a3ec1178f94022c1590cf4f0ac1c72
+#mutant K18
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::no_raw_failing_exit_in_command_code	src/cli/raw_exit_scan_tests.rs:536
