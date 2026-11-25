@@ -280,3 +280,25 @@ export const countListeners = (page, types) => page.addInitScript((watched) => {
   }
   window.__listeners = (type) => fns.get(type).size;
 }, types);
+
+/** Record the text of every entry added to the announcer, from first paint. */
+export async function recordAnnouncements(page) {
+  await page.addInitScript(() => {
+    window.__writes = [];
+    addEventListener('DOMContentLoaded', () => {
+      const region = document.getElementById('announcer');
+      if (!region) return;
+      new MutationObserver((records) => {
+        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
+      }).observe(region, { childList: true });
+    });
+  });
+}
+
+export const writes = (page) => page.evaluate(() => window.__writes ?? []);
+export const announced = async (page) => (await writes(page)).filter(Boolean);
+
+/** A signed-in admin: the status read the shell makes first. */
+export async function signedInAdmin(page) {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+}

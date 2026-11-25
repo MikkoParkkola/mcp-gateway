@@ -30,7 +30,6 @@
    "costs.status.webhook-events"
   ],
   "gateway": [
-   "gateway.actions.configuration-versions",
    "gateway.status.11-47-edit-not-applied",
    "gateway.status.2-restarts-6-s-down",
    "gateway.status.4-0-0",
@@ -94,6 +93,7 @@
   "activity.status.prompt-injection-medium-found-in": "Activity › Status: the call receipt",
   "activity.status.signature-valid": "Activity › Status: the call receipt",
   "activity.status.the-chart-shows-the-same": "Activity › Status: the firewall chart",
+  "gateway.actions.configuration-versions": "Gateway › Actions: configuration versions",
   "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
   "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
   "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
