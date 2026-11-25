@@ -91,10 +91,10 @@ pub(super) fn labels_first(save: &super::Save<'_>, file: &File) -> io::Result<Wa
     #[cfg(test)]
     super::seams::after_labels_read(save.target, save.scratch);
     // Read by name, so the name must still be the modelled file.
-    let same = save.seen.is_none()
+    let still_modelled = save.seen.is_none()
         || std::fs::symlink_metadata(save.target)
             .is_ok_and(|at| (at.dev(), at.ino()) == (model.dev, model.ino));
-    if !same {
+    if !still_modelled {
         return Err(super::changed(save.target));
     }
     set_labels(save.target, &wanted, file)?;

@@ -4,7 +4,7 @@
 //! (`security.selinux`, `security.SMACK64`), set on the still-empty scratch
 //! and read back, or refuses `label-not-kept`. The kernel's label calls are
 //! replaced by an injected store: setting `security.*` needs an LSM policy or
-//! CAP_SYS_ADMIN that the test hosts lack. The real-LSM proof is a VM job.
+//! `CAP_SYS_ADMIN` that the test hosts lack. The real-LSM proof is a VM job.
 
 use std::path::{Path, PathBuf};
 
@@ -141,7 +141,7 @@ fn l1b_a_label_the_scratch_already_has_needs_no_set() {
     assert!(labels.sets().is_empty(), "L1b: nothing was set");
 }
 
-/// L1c: an ordinary SELinux file (no SMACK label) keeps its context.
+/// L1c: an ordinary `SELinux` file (no SMACK label) keeps its context.
 #[test]
 fn l1c_one_label_present_and_one_absent_keeps_the_present_one() {
     let (dir, target) = fixture();

@@ -601,7 +601,7 @@ pub(crate) mod seams {
         /// A backup, after its source is modelled: (source, destination).
         pub(crate) after_model: Option<PathHook>,
         /// Linux: the injected label store that stands in for the kernel's
-        /// `security.*` calls (no LSM or CAP_SYS_ADMIN on the test hosts).
+        /// `security.*` calls (no LSM or `CAP_SYS_ADMIN` on the test hosts).
         #[cfg(any(target_os = "linux", target_os = "android"))]
         pub(crate) labels: Option<super::linux::FakeLabels>,
         /// Right after a save reads the labels it keeps: (target, scratch).
