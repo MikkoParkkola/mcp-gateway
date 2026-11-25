@@ -1,0 +1,16 @@
+head_sha	afd87e0faabc749785ad54a55d26a60fbe4ddeae
+#mutant K9a
+cli_local_errors	scenarios::doctor_missing_config_verdict	tests/cli_local_errors/scenarios.rs:26
+#mutant K9b
+cli_local_errors	scenarios::doctor_failed_check_verdict	tests/cli_local_errors/scenarios.rs:59
+#mutant K24
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:563
+#mutant K27
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:563
+#mutant K28
+cli_local_errors	a_bad_ca_key_path_is_a_usage_error	tests/cli_local_errors.rs:626
+#mutant K29
+cli_local_errors	local_errors_ignore_json	tests/cli_local_errors.rs:639
+#mutant K36
+cli_local_errors	scenarios::doctor_missing_config_verdict	tests/cli_local_errors/scenarios.rs:26
+cli_local_errors	scenarios::doctor_failed_check_verdict	tests/cli_local_errors/scenarios.rs:59
