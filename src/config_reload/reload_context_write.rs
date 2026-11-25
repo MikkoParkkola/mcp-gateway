@@ -24,9 +24,9 @@ const AUDITED_ONLY: &str = "an audited gateway writes its config only through th
 fn gate_refused(refusal: crate::gateway::restart_config_floor::Refusal) -> ConfigWriteError {
     use crate::gateway::restart_config_floor::Refusal;
     let text = match refusal {
-        Refusal::Busy | Refusal::ReplayOwed => super::reload_context::RESTART_BUSY,
-        Refusal::Restarting => super::reload_context::RELOAD_RESTARTING,
-        Refusal::Stopping => super::reload_context::RELOAD_STOPPING,
+        Refusal::Busy | Refusal::ReplayOwed => super::RESTART_BUSY,
+        Refusal::Restarting => super::RELOAD_RESTARTING,
+        Refusal::Stopping => super::RELOAD_STOPPING,
     };
     ConfigWriteError::Failed(text.to_owned())
 }
