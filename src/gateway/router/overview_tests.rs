@@ -92,7 +92,16 @@ pub(super) async fn fixture(
 }
 
 pub(super) async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String) {
-    let mut builder = Request::builder().method("GET").uri(OVERVIEW);
+    get_at(state, OVERVIEW, bearer).await
+}
+
+/// A GET of `uri` through the router, as `bearer` when one is given.
+pub(super) async fn get_at(
+    state: &Arc<AppState>,
+    uri: &str,
+    bearer: Option<&str>,
+) -> (StatusCode, String) {
+    let mut builder = Request::builder().method("GET").uri(uri);
     if let Some(credential) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {credential}"));
     }

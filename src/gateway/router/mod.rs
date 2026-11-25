@@ -327,6 +327,9 @@ mod metrics_scrape_tests;
 mod mik8154_lease_rows_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
+mod overview_decisions_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
 mod overview_needs_you_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
