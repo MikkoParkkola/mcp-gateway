@@ -1,0 +1,5 @@
+head_sha	f166004b069be3139d40950b8d0098634b515df6
+#mutant m14
+mcp_gateway	gateway::router::gateway_health_tests::g6_a_non_admin_key_is_refused_and_no_credential_is_401	src/gateway/ui/guard.rs:248
+#mutant m17
+mcp_gateway	gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean	src/gateway/server/health_start_tests.rs:65
