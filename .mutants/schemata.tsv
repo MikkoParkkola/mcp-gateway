@@ -1,0 +1,21 @@
+head_sha	ce97cf16c4077e0c0f3ff8f12bc78e44c4bd685e
+#mutant M24
+mcp_gateway	gateway::router::overview_needs_you_tests::n4_a_name_longer_than_the_clip_is_marked	src/gateway/router/overview_needs_you_tests.rs:605
+#mutant M25
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:481
+#mutant M26
+mcp_gateway	gateway::router::overview_decisions_tests::d6_the_decisions_row_survives_a_full_list	src/gateway/router/overview_decisions_tests.rs:187
+#mutant M26b
+mcp_gateway	gateway::router::overview_needs_you_tests::n5_a_refused_server_that_waits_is_both_rows	src/gateway/router/overview_needs_you_tests.rs:625
+#mutant M27
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:566
+#mutant M28
+mcp_gateway	gateway::router::overview_needs_you_tests::n4_a_name_longer_than_the_clip_is_marked	src/gateway/router/overview_needs_you_tests.rs:605
+#mutant M29
+mcp_gateway	gateway::router::overview_needs_you_tests::n3_folded_sign_ins_are_counted_by_kind	src/gateway/router/overview_needs_you_tests.rs:565
+#mutant M30
+mcp_gateway	gateway::router::overview_decisions_tests::d1_open_decisions_are_one_row_with_count_and_revision	src/gateway/router/overview_decisions_tests.rs:96
+#mutant M31
+mcp_gateway	gateway::router::overview_decisions_tests::d2_an_unreadable_decision_source_is_degraded_never_zero	src/gateway/router/overview_decisions_tests.rs:156
+#mutant M32
+mcp_gateway	gateway::router::overview_needs_you_tests::n1_a_backend_waiting_for_sign_in_is_one_needs_you_row	src/gateway/router/overview_needs_you_tests.rs:508
