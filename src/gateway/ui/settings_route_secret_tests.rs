@@ -278,14 +278,24 @@ async fn s21_noop_reloads_outside_edit() {
     route.write(&outside);
     let (status, body) = route.save(json!([set("environment", &json!("dev"))])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The notices are a set (test plan W3(b)): compared apart, without order.
+    let mut body = body;
+    let notices = body
+        .as_object_mut()
+        .and_then(|answer| answer.remove("notices"));
+    let notices = notices.expect("the saved answer carries notices");
+    let got = notices.as_array().expect("a notices array");
+    let want = [
+        json!({"code":super::OUTSIDE_CHANGE_APPLIED.0,"message":super::OUTSIDE_CHANGE_APPLIED.1}),
+        json!({"code":super::NOT_AUDITED.0,"message":super::NOT_AUDITED.1}),
+    ];
+    assert_eq!(got.len(), want.len(), "{notices}");
+    assert!(want.iter().all(|notice| got.contains(notice)), "{notices}");
     assert_eq!(
         body,
         json!({"revision":route.revision(), "changed":false,
         "reload":{"changes":"owner changed: [a]", "restart_required":false},
-        "restart_required":[],"comments":"kept",
-        "notices":[
-            {"code":super::OUTSIDE_CHANGE_APPLIED.0,"message":super::OUTSIDE_CHANGE_APPLIED.1},
-            {"code":super::NOT_AUDITED.0,"message":super::NOT_AUDITED.1}]})
+        "restart_required":[],"comments":"kept"})
     );
     assert_eq!(
         route.ctx.live_config.get().backends["a"].owner.as_deref(),
