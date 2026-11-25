@@ -453,7 +453,10 @@ fn needs_you(
     rows.splice(0..0, invalid);
     rows.extend(sign_ins);
     rows.extend(limit_rows(state, generation));
-    let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
+    let folded = rows.split_off(
+        rows.len()
+            .min(mutant!("M19", NEEDS_YOU_ROWS + 1, NEEDS_YOU_ROWS)),
+    );
     let mut more = json!({ "count": folded.len() });
     let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
     for row in &folded {
