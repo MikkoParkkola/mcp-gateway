@@ -11,10 +11,12 @@ fn audit_log() -> (Arc<crate::security::TransparencyLogger>, std::path::PathBuf)
     use crate::security::transparency_log::TransparencyLogConfig;
     let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("w0.jsonl");
-    let mut config = TransparencyLogConfig::default();
-    config.key_id = "w0".to_owned();
-    config.path = log.to_string_lossy().into_owned();
-    config.enabled = true;
+    let config = TransparencyLogConfig {
+        key_id: "w0".to_owned(),
+        path: log.to_string_lossy().into_owned(),
+        enabled: true,
+        ..TransparencyLogConfig::default()
+    };
     let logger = crate::security::TransparencyLogger::open(Arc::new(config)).expect("open the log");
     logger.keep_test_dir(Arc::clone(&dir));
     (Arc::new(logger), log)
@@ -245,6 +247,10 @@ fn a_key_write_keeps_its_subject_and_a_recovery_names_the_gateway() {
 /// W2c: one outcome word for every writer answer and trace, all sixteen
 /// errors named.
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one table naming all sixteen writer errors, so a missing one shows in one place"
+)]
 fn every_writer_answer_has_one_save_outcome() {
     use super::super::{SaveOutcome, save_outcome};
     use crate::config_reload::reload_context::replace::{IntentId, ReplaceError, Trace};

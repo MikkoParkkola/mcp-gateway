@@ -147,6 +147,10 @@ pub(crate) struct SaveAnswer {
 
 /// Save `edit` over the file at revision `base`. A refusal before the
 /// writer answered reads `refused`, with no intent id.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one save, one exit path: every refusal and the write must leave exactly one outcome word, so they share one scope"
+)]
 pub(crate) async fn ui_save(
     ctx: Arc<ReloadContext>,
     posture: AuditPosture,

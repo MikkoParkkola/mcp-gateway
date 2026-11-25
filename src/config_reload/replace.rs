@@ -265,6 +265,11 @@ async fn create_entries(
     )
 )]
 impl ReloadContext {
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one write transaction under both locks: its order is the guarantee, so it reads top to bottom in one place"
+    )]
     async fn replace_locked(
         &self,
         replace: Replace,
@@ -467,6 +472,10 @@ impl ReloadContext {
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "stage, journal, write, reload, then keep or roll back: each step's place is the crash guarantee"
+    )]
     async fn commit(
         &self,
         target: &std::path::Path,

@@ -209,6 +209,10 @@ pub(crate) fn caller_is_cli_key(
         || session.is_some_and(|minter| auth.is_cli_key_quota(&minter.quota))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "every refusal must come before the store opens, and the outcome is attached on every exit: one scope keeps both"
+)]
 pub(super) async fn settings_save(
     State(state): State<Arc<AppState>>,
     #[cfg(test)] store_for_test: Option<Extension<SettingsStoreForTest>>,
