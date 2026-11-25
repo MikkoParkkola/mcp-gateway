@@ -249,6 +249,23 @@ test('T15: about 1,300 tools render and filter within budget', async ({ page }) 
   await search(page).fill('tool_1299');
   await expect(rows(page)).toHaveCount(1);
   const filtered = Date.now() - t0;
+  // A server name found in no tool name or description: every 28th tool, held to the same ceiling.
+  const t2 = Date.now();
+  await search(page).fill('server_27');
+  await expect(rows(page)).toHaveCount(46);
+  const byServer = Date.now() - t2;
+  await expect(rows(page).first().locator('td:nth-child(1)')).toContainText('tool_0027');
+  await expect(rows(page).last().locator('td:nth-child(1)')).toContainText('tool_1287');
+  // A word in nothing: no rows, and the panel says so.
+  const t3 = Date.now();
+  await search(page).fill('zzz_none');
+  await expect(rows(page)).toHaveCount(0);
+  await expect(page.locator('#content .tools-none')).toBeVisible();
+  const byNothing = Date.now() - t3;
+  await expect(page.locator('#content .tools-none p.muted')).toHaveText('No tool matches');
+  console.log(`T15: server-only query in ${byServer} ms, no-match query in ${byNothing} ms`);
+  expect(byServer).toBeLessThan(1000);
+  expect(byNothing).toBeLessThan(1000);
   // A broad query, then clearing it: the full list is drawn again.
   const t1 = Date.now();
   await search(page).fill('tool_');
@@ -262,6 +279,50 @@ test('T15: about 1,300 tools render and filter within budget', async ({ page }) 
   // Generous ceilings for a loaded CI runner; the printed numbers go in the PR.
   expect(rendered).toBeLessThan(4000);
   expect(filtered).toBeLessThan(1000);
+});
+
+test('T19: the search also finds a server by name, in either letter case', async ({ page }) => {
+  const tool = (name, onServer, description) => ({
+    name, server: onServer, description, schema: { type: 'object', properties: {} }, class: 'read', class_source: 'inferred',
+  });
+  // No name or description holds "zeta", "crm" or "web": only the server can match them.
+  await toolsScreen(page, { tools: [
+    tool('log_call', 'Zeta-CRM', 'Record a phone conversation'),
+    tool('read_page', 'web', 'Get a document by address'),
+    tool('find_contact', 'Zeta-CRM', 'Look up a person'),
+  ] });
+  await page.goto('/ui/tools/status?view=all');
+  const meta = page.locator('#content .tools-meta');
+  const none = page.locator('#content .tools-none');
+  // Wait for the step's count before reading names: a text read does not retry.
+  const names = async (n) => {
+    await expect(rows(page)).toHaveCount(n);
+    return (await rows(page).locator('td:nth-child(1)').allTextContents()).map((t) => t.replace(/^[▸▾]\s*/, '').trim());
+  };
+  expect(await names(3)).toEqual(['find_contact', 'log_call', 'read_page']);
+  await expect(meta).toHaveText('3 · A to Z · name, server, description');
+  // Upper-case query, mixed-case server: neither side may be compared as written.
+  await search(page).fill('ZETA');
+  expect(await names(2)).toEqual(['find_contact', 'log_call']);
+  await expect(rows(page).locator('td:nth-child(2)')).toHaveText(['Zeta-CRM', 'Zeta-CRM']);
+  await expect(meta).toHaveText('2 of 3 match');
+  // A piece from inside the server name, not its start.
+  await search(page).fill('crm');
+  expect(await names(2)).toEqual(['find_contact', 'log_call']);
+  await search(page).fill('web');
+  expect(await names(1)).toEqual(['read_page']);
+  await expect(meta).toHaveText('1 of 3 match');
+  await search(page).fill('qqq');
+  await expect(rows(page)).toHaveCount(0);
+  await expect(none).toBeVisible();
+  await expect(none.locator('p.muted')).toHaveText('No tool matches');
+  // The picker still takes one exact server, and a row must pass both.
+  await server(page).selectOption('web');
+  await search(page).fill('zeta');
+  await expect(rows(page)).toHaveCount(0);
+  await expect(none).toBeVisible();
+  await server(page).selectOption('Zeta-CRM');
+  expect(await names(2)).toEqual(['find_contact', 'log_call']);
 });
 
 test('T8: an empty gateway, and a key without access', async ({ page }) => {
